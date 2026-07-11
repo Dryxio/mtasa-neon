@@ -18,7 +18,7 @@ class CEntitySAInterface;
 
 #define ARRAY_CORONAS 0xC3E058
 
-class CRegisteredCoronaSAInterface  // coronas are 104 bytes long, and theres 56 of them
+class CRegisteredCoronaSAInterface  // GTA SA stores 64 entries of 0x3C bytes each by default
 {
 public:
     CVector    Coordinates;        // Where is it exactly.
@@ -50,13 +50,18 @@ public:
     CEntitySAInterface* pEntityAttachedTo;
 };
 
+static_assert(sizeof(CRegisteredCoronaSAInterface) == 0x3C, "Invalid CRegisteredCoronaSAInterface size");
+static_assert(offsetof(CRegisteredCoronaSAInterface, JustCreated) == 0x35, "Invalid CRegisteredCoronaSAInterface flag layout");
+static_assert(offsetof(CRegisteredCoronaSAInterface, pEntityAttachedTo) == 0x38, "Invalid CRegisteredCoronaSAInterface pointer layout");
+
 class CRegisteredCoronaSA : public CRegisteredCorona
 {
 private:
     CRegisteredCoronaSAInterface* internalInterface;
+    DWORD                         m_ID;
 
 public:
-    CRegisteredCoronaSA(CRegisteredCoronaSAInterface* coronaInterface);
+    CRegisteredCoronaSA(CRegisteredCoronaSAInterface* coronaInterface, DWORD ID);
     CVector* GetPosition();
     void     SetPosition(CVector* vector);
     float    GetSize();

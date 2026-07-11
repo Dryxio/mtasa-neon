@@ -16,11 +16,12 @@
 
 class CRegisteredCorona;
 class CRegisteredCoronaSA;
+class CRegisteredCoronaSAInterface;
 struct RwTexture;
 
 #define FUNC_DoSunAndMoon 0x6FC5A0
 
-#define MAX_CORONAS           64
+#define MAX_CORONAS           4096
 #define MAX_CORONA_TEXTURES   9
 #define ARRAY_CORONAS         0xC3E058  // also in CRegisteredCoronasSA.h
 #define ARRAY_CORONA_TEXTURES 0xC3E000
@@ -28,8 +29,11 @@ struct RwTexture;
 class CCoronasSA : public CCoronas
 {
 private:
-    CRegisteredCoronaSA* Coronas[MAX_CORONAS];
+    CRegisteredCoronaSA* Coronas[MAX_CORONAS]{};
     unsigned char        m_ucCoronaReflectionsEnabled;
+
+    static CRegisteredCoronaSAInterface* GetCoronaArray();
+    static void                          RelocateCoronaArray();
 
 public:
     CCoronasSA();

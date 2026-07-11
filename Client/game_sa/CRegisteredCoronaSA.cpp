@@ -16,9 +16,10 @@
 
 extern CGameSA* pGame;
 
-CRegisteredCoronaSA::CRegisteredCoronaSA(CRegisteredCoronaSAInterface* coronaInterface)
+CRegisteredCoronaSA::CRegisteredCoronaSA(CRegisteredCoronaSAInterface* coronaInterface, DWORD ID)
 {
     internalInterface = coronaInterface;
+    m_ID = ID;
 }
 
 CVector* CRegisteredCoronaSA::GetPosition()
@@ -104,7 +105,7 @@ void CRegisteredCoronaSA::SetReflectionType(BYTE reflectionType)
 
 DWORD CRegisteredCoronaSA::GetID()
 {
-    return ((DWORD)internalInterface - ARRAY_CORONAS) / sizeof(CRegisteredCoronaSAInterface);
+    return m_ID;
 }
 
 void CRegisteredCoronaSA::Init(DWORD Identifier)

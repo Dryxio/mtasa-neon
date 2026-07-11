@@ -389,7 +389,9 @@ bool CClientMarker::TypeToString(unsigned int uiType, SString& strOutString)
 
 bool CClientMarker::IsLimitReached()
 {
-    return m_uiStreamedInMarkers >= 32;
+    // Let the MTA streamer use the enlarged native marker capacity. Keeping
+    // this at 32 would mask higher GTA corona limits from scripts and tests.
+    return m_uiStreamedInMarkers >= 4096;
 }
 
 void CClientMarker::StreamIn(bool bInstantly)
