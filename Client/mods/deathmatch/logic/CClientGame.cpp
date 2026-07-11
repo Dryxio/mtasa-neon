@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <shellapi.h>
 #include <net/SyncStructures.h>
 #include <game/C3DMarkers.h>
 #include <game/CAnimBlendAssocGroup.h>
@@ -423,6 +424,10 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
 CClientGame::~CClientGame()
 {
     m_bBeingDeleted = true;
+
+    // Restore the preview before the client managers it references are torn down.
+    m_pDroppedSkinDFF.reset();
+    m_pDroppedSkinTXD.reset();
     // Remove active projectile references to local player
     if (auto pLocalPlayer = g_pClientGame->GetLocalPlayer())
         g_pGame->GetProjectileInfo()->RemoveEntityReferences(pLocalPlayer->GetGameEntity());
@@ -5088,12 +5093,132 @@ bool CClientGame::StaticProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
 
 bool CClientGame::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    // Registering here avoids coupling this prototype to the core window hook. The
+    // call is idempotent and normal input messages reach here before a user can drop.
+    static HWND s_dropWindow = nullptr;
+    if (s_dropWindow != hwnd)
+    {
+        DragAcceptFiles(hwnd, TRUE);
+        s_dropWindow = hwnd;
+    }
+
+    if (uMsg == WM_DROPFILES)
+    {
+        HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+        std::vector<SString> paths;
+        const UINT           fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+
+        for (UINT i = 0; i < fileCount; ++i)
+        {
+            const UINT length = DragQueryFileW(hDrop, i, nullptr, 0);
+            std::vector<wchar_t> path(length + 1);
+            if (DragQueryFileW(hDrop, i, path.data(), static_cast<UINT>(path.size())))
+                paths.emplace_back(ToUTF8(path.data()));
+        }
+        DragFinish(hDrop);
+
+        OnFilesDropped(paths);
+        return true;
+    }
+
     if (ProcessMessageForCursorEvents(hwnd, uMsg, wParam, lParam))
     {
         return true;
     }
 
     return false;
+}
+
+void CClientGame::OnFilesDropped(const std::vector<SString>& paths)
+{
+    // WARNING: This is an intentionally insecure developer prototype for quickly
+    // previewing local ped skins. The server does not grant this capability, the
+    // dropped files are untrusted, and replacing a base model affects every ped
+    // using that model on this client. Do not ship this in a production or
+    // competitive client without server-side permission and stricter validation.
+    constexpr size_t MAX_DFF_SIZE = 64 * 1024 * 1024;
+    constexpr size_t MAX_TXD_SIZE = 128 * 1024 * 1024;
+
+    SString dffPath;
+    SString txdPath;
+    for (const SString& path : paths)
+    {
+        if (path.EndsWithI(".dff"))
+        {
+            if (!dffPath.empty())
+            {
+                g_pCore->ChatEchoColor("Skin preview: drop only one DFF at a time.", 255, 100, 100);
+                return;
+            }
+            dffPath = path;
+        }
+        else if (path.EndsWithI(".txd"))
+        {
+            if (!txdPath.empty())
+            {
+                g_pCore->ChatEchoColor("Skin preview: drop only one TXD at a time.", 255, 100, 100);
+                return;
+            }
+            txdPath = path;
+        }
+    }
+
+    if (dffPath.empty())
+    {
+        g_pCore->ChatEchoColor("Skin preview: drop a DFF, optionally with its TXD.", 255, 180, 80);
+        return;
+    }
+    if (!m_pLocalPlayer)
+    {
+        g_pCore->ChatEchoColor("Skin preview: no local player is available yet.", 255, 100, 100);
+        return;
+    }
+
+    SString dffData;
+    SString txdData;
+    if (!FileLoad(std::nothrow, dffPath, dffData) || dffData.empty() || dffData.size() > MAX_DFF_SIZE)
+    {
+        g_pCore->ChatEchoColor("Skin preview: the DFF could not be read or is too large.", 255, 100, 100);
+        return;
+    }
+    if (!txdPath.empty() && (!FileLoad(std::nothrow, txdPath, txdData) || txdData.empty() || txdData.size() > MAX_TXD_SIZE))
+    {
+        g_pCore->ChatEchoColor("Skin preview: the TXD could not be read or is too large.", 255, 100, 100);
+        return;
+    }
+
+    const auto modelId = static_cast<unsigned short>(m_pLocalPlayer->GetModel());
+    if (!CClientPlayerManager::IsValidModel(modelId))
+    {
+        g_pCore->ChatEchoColor("Skin preview: the current player model is not replaceable.", 255, 100, 100);
+        return;
+    }
+
+    // Destroying these elements restores the previous model and textures.
+    m_pDroppedSkinDFF.reset();
+    m_pDroppedSkinTXD.reset();
+
+    if (!txdData.empty())
+    {
+        auto txd = std::make_unique<CClientTXD>(m_pManager, INVALID_ELEMENT_ID);
+        if (!txd->Load(true, std::move(txdData), true) || !txd->Import(modelId))
+        {
+            g_pCore->ChatEchoColor("Skin preview: TXD validation/import failed.", 255, 100, 100);
+            return;
+        }
+        m_pDroppedSkinTXD = std::move(txd);
+    }
+
+    auto dff = std::make_unique<CClientDFF>(m_pManager, INVALID_ELEMENT_ID);
+    if (!dff->Load(true, std::move(dffData)) || !dff->ReplaceModel(modelId, false))
+    {
+        m_pDroppedSkinTXD.reset();
+        g_pCore->ChatEchoColor("Skin preview: DFF validation/replacement failed (is it a ped skin?).", 255, 100, 100);
+        return;
+    }
+
+    m_pDroppedSkinDFF = std::move(dff);
+    g_pCore->ChatEchoColor(SString("Skin preview: applied locally to model %u.", modelId), 120, 255, 120);
 }
 
 // Shot compensation (Jax):

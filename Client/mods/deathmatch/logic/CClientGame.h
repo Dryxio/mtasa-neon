@@ -50,6 +50,8 @@
 #define INVALID_DOWNLOAD_PRIORITY_GROUP (INT_MIN)
 
 class CClientModelCacheManager;
+class CClientDFF;
+class CClientTXD;
 class CDebugHookManager;
 class CResourceFileDownloadManager;
 class CServerInfo;
@@ -666,6 +668,7 @@ private:
 
     static bool StaticProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     bool        ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    void        OnFilesDropped(const std::vector<SString>& paths);
 
     static bool PreWeaponFire(CPlayerPed* pPlayerPed, bool bStopIfUsingBulletSync);
     static void PostWeaponFire();
@@ -930,6 +933,11 @@ private:
     MultiCommandHandlerPolicy m_allowMultiCommandHandlers;
 
     long long m_timeLastDiscordStateUpdate;
+
+    // Insecure developer prototype: these replacements are loaded directly from
+    // local drag-and-drop files and are intentionally not authorized by the server.
+    std::unique_ptr<CClientDFF> m_pDroppedSkinDFF;
+    std::unique_ptr<CClientTXD> m_pDroppedSkinTXD;
 };
 
 extern CClientGame* g_pClientGame;
