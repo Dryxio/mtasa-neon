@@ -20,6 +20,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Main world-sector grid | 120 x 120 | 400 x 400 |
 | LOD world-sector grid | 30 x 30 | 100 x 100 |
 | Supported extended-world XY | Approximately -3,000 to +3,000 | -10,000 to +9,999 |
+| MTA pickup visual XY | -4,096 to +4,095.875 | -10,000 to +9,999 |
 | Low-precision networked XY | Approximately -8,192 to +8,192 | -10,000 to +10,000 for Neon-capable connections |
 | Absolute networked camera range | Approximately -8,192 to +8,192 | Approximately -16,384 to +16,384 for Neon-capable connections |
 | Custom-water block grid | 12 x 12 (144 blocks) | 40 x 40 (1,600 blocks) |

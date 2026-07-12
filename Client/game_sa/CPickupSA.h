@@ -39,11 +39,19 @@ public:
     BYTE                TextIndex : 3;        // What text label do we print out above it.
 };
 
+static_assert(sizeof(CPickupSAInterface) == 0x20, "Invalid size for CPickupSAInterface");
+static_assert(offsetof(CPickupSAInterface, CoorsX) == 0x10, "Invalid coordinate offset for CPickupSAInterface");
+static_assert(offsetof(CPickupSAInterface, ReferenceIndex) == 0x1A, "Invalid reference offset for CPickupSAInterface");
+
 class CPickupSA : public CPickup
 {
 private:
     CPickupSAInterface* internalInterface;
     CObjectSA*          object;
+    // GTA compresses pickup coordinates into signed 16-bit eighth-units. MTA keeps the
+    // authoritative position here so the visual object can cover Neon's extended world.
+    CVector m_vecPosition;
+    bool    m_bHasExtendedPosition;
 
 public:
     CPickupSA(CPickupSAInterface* pickupInterface);

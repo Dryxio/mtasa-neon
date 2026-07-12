@@ -735,6 +735,79 @@ plus adjusted constants, API validation, network bounds, and a new full test
 pass. Quantized XY would need enough signed integer bits for that range; simply
 changing `WORLD_MAP_SIZE` without updating every connected layer is invalid.
 
+## Extended-world MTA pickup positions
+
+MTA pickup elements now keep their visual object at the authoritative floating-
+point position throughout Neon's supported world. GTA's native `CPickup`
+structure remains unchanged at 0x20 bytes and the independent 620-entry pickup
+capacity is not raised.
+
+### Limit and affected layers
+
+GTA stores each pickup coordinate as a signed 16-bit integer in eighth-units.
+The exact native range is therefore `[-4096, +4095.875]` independently on X,
+Y, and Z. The local GTA SA 1.0 US executable confirms that `CPickup::SetPosn`
+at `0x454960` writes three words at offsets 0x10, 0x12, and 0x14, while
+`CPickup::GiveUsAPickUpObject` at `0x4567E0` expands those words and initially
+places the associated `CObject` from them.
+
+The server element, client pickup streamer, MTA collision sphere, and entity-add
+packet already retain the requested position. `SPositionSync` uses Neon's
+version-gated 15-integer-bit XY encoding for capable peers and the original
+14-integer-bit encoding for legacy peers. No pickup-specific network format or
+compatibility change is needed. The visible wrap beginning at +4096 was solely
+the native wrapper/object-creation boundary.
+
+### MTA-integrated design
+
+`CPickupSA` stores an additional MTA-side `CVector` beside its pointer to the
+unchanged native slot. `SetPosition` updates that authoritative vector and
+saturates the native eighth-unit fields, avoiding the undefined out-of-range
+float-to-short conversion that previously wrapped on the target compiler.
+In-range conversion and GTA's original structure layout remain unchanged.
+
+After GTA creates an associated object, `GiveUsAPickUpObject` immediately moves
+the `CObjectSA` wrapper to the authoritative vector when any component exceeds
+the native range. In-range pickups retain GTA's original eighth-unit placement
+and therefore preserve default San Andreas behavior. Repositioning happens before
+`CPickupsSA::CreatePickup` adds the object to `CWorld`, so the object is linked
+to the sector for its real position rather than to the saturated placeholder.
+The same path covers a later object retry or recreation.
+
+This deliberately does not relocate `CPickups::aPickUps` or patch every native
+coordinate access. MTA disables GTA's `CPickups::Update` for the multiplayer
+session and uses `CClientPickup`'s own collision sphere plus server-confirmed
+hit handling. GTA therefore neither performs native collection nor resets the
+visual object's transform from the compressed fields. Fastman92's broader IPL
+pickup patch instead expands and relocates the structure and patches dozens of
+native iteration and coordinate sites; that is appropriate when native GTA
+pickup processing, save/load, or a raised pool capacity is required, but is
+unnecessary risk for MTA-created pickups under the existing disabled-processing
+contract.
+
+### Reproducible validation
+
+The opt-in resource is `test-resources/pickup-position-test`. It covers the
+positive and negative native boundaries and extended-world positions with:
+
+```text
+/pickuppostest [x]                 create at a listed boundary
+/pickupposmove [x]                 move the active pickup (client recreation)
+/pickupposrecreate                 destroy and recreate the server elements
+/pickupposstream                   force a player-away/player-back stream cycle
+/pickupposcontext [dimension] [interior]
+/pickupposwalk                     unfreeze nearby for hit/leave testing
+/pickupposnative                   inspect the saturated native placeholder
+/pickupposback                     clean up and restore player state
+```
+
+Recommended X values are `-9999`, `-8192`, `-4097`, `-4096`, `4095`, `4096`,
+`8192`, `9500`, and `9999`. At every value the pickup core must remain inside
+the red reference cylinder. For extended values, `/pickupposnative` must show
+no duplicate or misplaced visual. Use `/pickupposwalk`, then walk through the
+pickup to observe the server-side `onPickupHit` and `onPickupLeave` reports. Repeat after resource
+restart and reconnect, and check crash artifacts before and after the run.
+
 ## Extended 3D markers and checkpoints
 
 Neon expands the GTA storage used by scripted MTA cylinders, arrows,
