@@ -20,6 +20,9 @@ RenderWare reimplementation
 
 fastman92 Limit Adjuster source and documentation
 /Users/salimtrouve/Documents/GitHub/mta-misc/fastman
+
+Open Limit Adjuster (Project2DFX dependency/reference)
+/Users/salimtrouve/Documents/GitHub/III.VC.SA.LimitAdjuster
 ```
 
 Useful subpaths include:
@@ -162,6 +165,91 @@ Client Deathmatch.vcxproj      Release|Win32
 It was tested in the Parallels VM against the local MTA server. Progressive
 tests visibly produced 32, then 62, then 120 coronas as the independent limits
 were removed. The final 4096 configuration was also tested in game successfully.
+
+## Implemented reference: distant renderer capacity
+
+The Project2DFX prerequisite patch expands three independent GTA renderer and
+streaming capacities without changing the player's far clip, model LOD
+distances, or server resource behavior:
+
+```text
+Visible entity pointer list       1000 -> 8192
+Visible LOD pointer list          1000 -> 8192
+Streaming RwObject instance list  2500 -> 30000
+```
+
+The authoritative constants are in `Client/sdk/game/Common.h`. GTA's two fixed
+visible-pointer arrays are redirected to process-lifetime MTA storage in
+`Client/multiplayer_sa/CMultiplayerSA_Rendering.cpp`. An extra, non-counted
+sentinel entry is allocated for each list because GTA stores a candidate before
+the existing MTA counter hook clamps the count. The known GTA SA 1.0 US pointer
+operands are:
+
+```text
+Visible LOD list       0x5534F5  0x553923  0x553CB3
+Visible entity list    0x553529  0x553944  0x553A53  0x553B03
+```
+
+The address inventory and the 30000-entry Project2DFX default come from the
+MIT-licensed Open Limit Adjuster. Its implementation is in:
+
+```text
+/Users/salimtrouve/Documents/GitHub/III.VC.SA.LimitAdjuster/src/limits/EntityPtrs
+```
+
+The streaming list was already expanded by MTA from GTA's original 1000 entries
+to 2500, but MTA wrote only the low 16 bits of GTA's 32-bit allocation-size
+immediates. `Client/game_sa/CGameSA.cpp` now writes the complete DWORD at
+`0x5B8E55` and `0x5B8EB0`, making the 30000-entry allocation (360000 bytes)
+well-defined.
+
+Sparse high-water telemetry reports visible entities, visible LODs, and used
+streaming RwObject links. `/renderstats` prints both current and session
+high-water values to chat and `console.log`; `/renderstats reset` starts a new
+measurement window. The reusable, opt-in test resource is:
+
+```text
+test-resources/renderer-limit-test
+```
+
+Use `/renderlimittest [distance]` to extend far clip and valid model LOD
+distances temporarily. `/renderdensitytest [count]` creates an opt-in wedge of
+non-colliding test buildings inside the current camera frustum, allowing the
+visible-entity list to be tested above its old boundary. `/renderlimitclear`
+destroys those buildings and restores the original rendering settings.
+
+The first density test exposed a null-child dereference in
+`CQuadTreeNodesSAInterface::RemoveAllItems` while the building pool removed the
+world for resizing. GTA's quadtree children are allocated lazily, so a non-leaf
+node can legitimately contain null child pointers. The traversal now skips
+missing children, matching GTA's other recursive quadtree operations and making
+pool resize cleanup safe for partially populated IPL trees.
+
+This patch raises capacity only. Defaults remain visually unchanged until a
+resource or player setting requests longer draw distances, so it is a safe
+prerequisite for a later native Project2DFX port rather than Project2DFX itself.
+
+### Renderer-capacity validation
+
+The opt-in density test created 1400 buildings in the camera frustum and
+recorded a visible-entity high-water of 1033/8192, proving that rendering
+continues beyond the old 1000-entry allocation. Cleanup destroyed all 1400 test
+buildings and restored the original far clip and model LOD distances. A separate
+5000-unit draw-distance run measured 4677 streaming RwObject links, exceeding
+MTA's previous 2500-entry allocation. No new crash dump was produced.
+
+The following Release|Win32 projects were built successfully:
+
+```text
+Game SA.vcxproj
+Multiplayer SA.vcxproj
+Client Deathmatch.vcxproj
+```
+
+`Client Core.vcxproj` remains independently blocked in the VM copy by the
+missing `vendor/discord-rpc/discord/include/discord_rpc.h`; renderer statistics
+therefore use the client Lua API and test resource rather than requiring a core
+command.
 
 ## Workflow for the next limit
 

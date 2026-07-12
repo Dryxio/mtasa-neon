@@ -104,6 +104,8 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineGetModelLODDistance", EngineGetModelLODDistance},
         {"engineSetModelLODDistance", EngineSetModelLODDistance},
         {"engineResetModelLODDistance", EngineResetModelLODDistance},
+        {"engineGetRendererStats", EngineGetRendererStats},
+        {"engineResetRendererStats", EngineResetRendererStats},
         {"engineSetAsynchronousLoading", EngineSetAsynchronousLoading},
         {"engineApplyShaderToWorldTexture", EngineApplyShaderToWorldTexture},
         {"engineRemoveShaderFromWorldTexture", EngineRemoveShaderFromWorldTexture},
@@ -1170,6 +1172,35 @@ int CLuaEngineDefs::EngineResetModelLODDistance(lua_State* luaVM)
     }
 
     lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineGetRendererStats(lua_State* luaVM)
+{
+    const SRendererStats stats = g_pMultiplayer->GetRendererStats();
+    lua_newtable(luaVM);
+
+    const auto setField = [luaVM](const char* name, uint32_t value) {
+        lua_pushnumber(luaVM, value);
+        lua_setfield(luaVM, -2, name);
+    };
+
+    setField("visibleEntities", stats.visibleEntities);
+    setField("visibleEntityHighWater", stats.visibleEntityHighWater);
+    setField("visibleEntityCapacity", stats.visibleEntityCapacity);
+    setField("visibleLods", stats.visibleLods);
+    setField("visibleLodHighWater", stats.visibleLodHighWater);
+    setField("visibleLodCapacity", stats.visibleLodCapacity);
+    setField("streamingRwObjects", stats.streamingRwObjects);
+    setField("streamingRwObjectHighWater", stats.streamingRwObjectHighWater);
+    setField("streamingRwObjectCapacity", stats.streamingRwObjectCapacity);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineResetRendererStats(lua_State* luaVM)
+{
+    g_pMultiplayer->ResetRendererStats();
+    lua_pushboolean(luaVM, true);
     return 1;
 }
 

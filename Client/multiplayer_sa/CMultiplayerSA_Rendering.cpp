@@ -10,6 +10,7 @@
 
 #include "StdInc.h"
 #include <game/RenderWare.h>
+#include <array>
 extern CCoreInterface*           g_pCore;
 GameEntityRenderHandler*         pGameEntityRenderHandler = nullptr;
 PreRenderSkyHandler*             pPreRenderSkyHandlerHandler = nullptr;
@@ -25,6 +26,94 @@ namespace
     CEntitySAInterface* ms_RenderingOneNonRoad = NULL;
     bool                ms_bIsMinimizedAndNotConnected = false;
     int                 ms_iSavedNumMirrorZones = 0;
+
+    // GTA writes a candidate before it increments and clamps the corresponding
+    // counter. The extra slot absorbs that uncounted write after the usable list
+    // reaches its limit, preventing an out-of-bounds write without sacrificing a
+    // visible entry.
+    std::array<CEntitySAInterface*, MAX_VISIBLE_ENTITY_PTRS + 1> ms_VisibleEntityPtrs{};
+    std::array<CEntitySAInterface*, MAX_VISIBLE_LOD_PTRS + 1>    ms_VisibleLodPtrs{};
+
+    struct StreamingObjectInstanceLink
+    {
+        CEntitySAInterface*          entity;
+        StreamingObjectInstanceLink* prev;
+        StreamingObjectInstanceLink* next;
+    };
+
+    struct StreamingObjectInstanceList
+    {
+        StreamingObjectInstanceLink usedHead;
+        StreamingObjectInstanceLink usedTail;
+        StreamingObjectInstanceLink freeHead;
+        StreamingObjectInstanceLink freeTail;
+        StreamingObjectInstanceLink* links;
+    };
+
+    static_assert(sizeof(StreamingObjectInstanceLink) == 0xC, "Invalid GTA streaming link size");
+    static_assert(sizeof(StreamingObjectInstanceList) == 0x34, "Invalid GTA streaming list size");
+
+    DWORD ms_dwVisibleEntityHighWater = 0;
+    DWORD ms_dwVisibleLodHighWater = 0;
+    DWORD ms_dwStreamingInstanceCurrent = 0;
+    DWORD ms_dwStreamingInstanceHighWater = 0;
+    DWORD ms_dwVisibleEntityLoggedBucket = 0;
+    DWORD ms_dwVisibleLodLoggedBucket = 0;
+    DWORD ms_dwStreamingInstanceLoggedBucket = 0;
+    DWORD ms_dwLastStreamingTelemetryTime = 0;
+
+    void OutputRendererLimitTelemetry(const SString& message)
+    {
+        OutputReleaseLine(message);
+        if (g_pCore)
+            g_pCore->DebugEcho(message);
+    }
+
+    void UpdateHighWaterTelemetry(const char* name, DWORD usage, DWORD limit, DWORD bucketSize, DWORD& highWater, DWORD& loggedBucket)
+    {
+        if (usage <= highWater)
+            return;
+
+        highWater = usage;
+        const DWORD bucket = usage / bucketSize;
+        if (bucket > loggedBucket || usage >= limit)
+        {
+            loggedBucket = bucket;
+            OutputRendererLimitTelemetry(SString("[Renderer limits] %s high-water %u/%u", name, usage, limit));
+        }
+    }
+
+    DWORD CountStreamingObjectInstances()
+    {
+        auto& list = *reinterpret_cast<StreamingObjectInstanceList*>(0x9654F0);
+        if (!list.links || !list.usedHead.next)
+            return 0;
+
+        DWORD count = 0;
+        for (auto* link = list.usedHead.next; link && link != &list.usedTail && count <= MAX_RWOBJECT_INSTANCES; link = link->next)
+            ++count;
+
+        return count;
+    }
+
+    void UpdateRendererLimitTelemetry()
+    {
+        const DWORD visibleLods = *reinterpret_cast<DWORD*>(0xB76840);
+        const DWORD visibleEntities = *reinterpret_cast<DWORD*>(0xB76844);
+
+        UpdateHighWaterTelemetry("visible entities", visibleEntities, MAX_VISIBLE_ENTITY_PTRS, 512, ms_dwVisibleEntityHighWater,
+                                 ms_dwVisibleEntityLoggedBucket);
+        UpdateHighWaterTelemetry("visible LODs", visibleLods, MAX_VISIBLE_LOD_PTRS, 512, ms_dwVisibleLodHighWater, ms_dwVisibleLodLoggedBucket);
+
+        const DWORD now = GetTickCount32();
+        if (now - ms_dwLastStreamingTelemetryTime < 1000)
+            return;
+
+        ms_dwLastStreamingTelemetryTime = now;
+        ms_dwStreamingInstanceCurrent = CountStreamingObjectInstances();
+        UpdateHighWaterTelemetry("streaming RwObjects", ms_dwStreamingInstanceCurrent, MAX_RWOBJECT_INSTANCES, 1000, ms_dwStreamingInstanceHighWater,
+                                 ms_dwStreamingInstanceLoggedBucket);
+    }
 }  // namespace
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -361,7 +450,7 @@ static void __declspec(naked) HOOK_Check_NoOfVisibleLods()
     // clang-format off
     __asm
     {
-        cmp     eax, 999            // Array limit is 1000
+        cmp     eax, MAX_VISIBLE_LOD_PTRS
         jge     limit
         inc     eax
 limit:
@@ -389,7 +478,7 @@ static void __declspec(naked) HOOK_Check_NoOfVisibleEntities()
     // clang-format off
     __asm
     {
-        cmp     eax, 999        // Array limit is 1000
+        cmp     eax, MAX_VISIBLE_ENTITY_PTRS
         jge     limit
         inc     eax
 limit:
@@ -777,6 +866,42 @@ void CMultiplayerSA::SetRenderEverythingBarRoadsHandler(RenderEverythingBarRoads
     pRenderEverythingBarRoadsHandler = pHandler;
 }
 
+SRendererStats CMultiplayerSA::GetRendererStats()
+{
+    const DWORD visibleEntities = *reinterpret_cast<DWORD*>(0xB76844);
+    const DWORD visibleLods = *reinterpret_cast<DWORD*>(0xB76840);
+    ms_dwVisibleEntityHighWater = std::max(ms_dwVisibleEntityHighWater, visibleEntities);
+    ms_dwVisibleLodHighWater = std::max(ms_dwVisibleLodHighWater, visibleLods);
+    ms_dwStreamingInstanceCurrent = CountStreamingObjectInstances();
+    ms_dwStreamingInstanceHighWater = std::max(ms_dwStreamingInstanceHighWater, ms_dwStreamingInstanceCurrent);
+
+    return {
+        visibleEntities,
+        ms_dwVisibleEntityHighWater,
+        MAX_VISIBLE_ENTITY_PTRS,
+        visibleLods,
+        ms_dwVisibleLodHighWater,
+        MAX_VISIBLE_LOD_PTRS,
+        ms_dwStreamingInstanceCurrent,
+        ms_dwStreamingInstanceHighWater,
+        MAX_RWOBJECT_INSTANCES,
+    };
+}
+
+void CMultiplayerSA::ResetRendererStats()
+{
+    ms_dwVisibleEntityHighWater = *reinterpret_cast<DWORD*>(0xB76844);
+    ms_dwVisibleLodHighWater = *reinterpret_cast<DWORD*>(0xB76840);
+    ms_dwStreamingInstanceCurrent = CountStreamingObjectInstances();
+    ms_dwStreamingInstanceHighWater = ms_dwStreamingInstanceCurrent;
+
+    // Reset notification buckets as well so future threshold crossings remain
+    // meaningful relative to this new measurement window.
+    ms_dwVisibleEntityLoggedBucket = ms_dwVisibleEntityHighWater / 512;
+    ms_dwVisibleLodLoggedBucket = ms_dwVisibleLodHighWater / 512;
+    ms_dwStreamingInstanceLoggedBucket = ms_dwStreamingInstanceHighWater / 1000;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////
 //
 // CMultiplayerSA::SetIsMinimizedAndNotConnected
@@ -914,6 +1039,7 @@ static void __declspec(naked) HOOK_CRenderer_EverythingBarRoads()
     }
     // clang-format on
 
+    UpdateRendererLimitTelemetry();
     if (pRenderEverythingBarRoadsHandler) pRenderEverythingBarRoadsHandler();
 
     // clang-format off
@@ -936,6 +1062,23 @@ static void __declspec(naked) HOOK_CRenderer_EverythingBarRoads()
 //////////////////////////////////////////////////////////////////////////////////////////
 void CMultiplayerSA::InitHooks_Rendering()
 {
+    // Relocate GTA's fixed 1000-entry renderer lists. The address inventory is
+    // derived from the MIT-licensed Open Limit Adjuster and verified against GTA
+    // SA 1.0 US; MTA's hooks below retain ownership of the counter bounds.
+    const DWORD visibleLodArray = reinterpret_cast<DWORD>(ms_VisibleLodPtrs.data());
+    MemPut<DWORD>(0x5534F5, visibleLodArray);
+    MemPut<DWORD>(0x553923, visibleLodArray);
+    MemPut<DWORD>(0x553CB3, visibleLodArray);
+
+    const DWORD visibleEntityArray = reinterpret_cast<DWORD>(ms_VisibleEntityPtrs.data());
+    MemPut<DWORD>(0x553529, visibleEntityArray);
+    MemPut<DWORD>(0x553944, visibleEntityArray);
+    MemPut<DWORD>(0x553A53, visibleEntityArray);
+    MemPut<DWORD>(0x553B03, visibleEntityArray);
+
+    OutputRendererLimitTelemetry(SString("[Renderer limits] capacities: visible entities=%u, visible LODs=%u, streaming RwObjects=%u",
+                                         MAX_VISIBLE_ENTITY_PTRS, MAX_VISIBLE_LOD_PTRS, MAX_RWOBJECT_INSTANCES));
+
     EZHookInstall(CallIdle);
     EZHookInstall(CEntity_Render);
     EZHookInstall(CEntity_RenderOneNonRoad);

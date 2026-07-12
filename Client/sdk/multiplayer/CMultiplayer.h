@@ -190,6 +190,19 @@ public:
 /**
  * \todo Remove the commented out functions if they aren't actually needed (from here and the source)
  */
+struct SRendererStats
+{
+    uint32_t visibleEntities;
+    uint32_t visibleEntityHighWater;
+    uint32_t visibleEntityCapacity;
+    uint32_t visibleLods;
+    uint32_t visibleLodHighWater;
+    uint32_t visibleLodCapacity;
+    uint32_t streamingRwObjects;
+    uint32_t streamingRwObjectHighWater;
+    uint32_t streamingRwObjectCapacity;
+};
+
 class CMultiplayer
 {
 public:
@@ -469,4 +482,9 @@ public:
 
     virtual unsigned int EntryInfoNodePool_NoOfUsedSpaces() const noexcept = 0;
     virtual unsigned int PtrNodeDoubleLinkPool_NoOfUsedSpaces() const noexcept = 0;
+
+    // Keep diagnostics at the end of the module interface so existing virtual
+    // method slots remain stable for independently rebuilt client modules.
+    virtual SRendererStats GetRendererStats() = 0;
+    virtual void           ResetRendererStats() = 0;
 };

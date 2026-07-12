@@ -41,6 +41,8 @@ public:
     LUA_DECLARE(EngineGetModelLODDistance);
     LUA_DECLARE(EngineSetModelLODDistance);
     LUA_DECLARE(EngineResetModelLODDistance);
+    LUA_DECLARE(EngineGetRendererStats);
+    LUA_DECLARE(EngineResetRendererStats);
     LUA_DECLARE(EngineSetAsynchronousLoading);
     LUA_DECLARE(EngineApplyShaderToWorldTexture);
     LUA_DECLARE(EngineRemoveShaderFromWorldTexture);

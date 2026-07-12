@@ -224,9 +224,11 @@ CGameSA::CGameSA()
         m_Pools->SetPoolCapacity(POINTER_DOUBLE_LINK_POOL, MAX_POINTER_DOUBLE_LINKS);  // Default is 3200
         dassert(m_Pools->GetPoolCapacity(POINTER_SINGLE_LINK_POOL) == MAX_POINTER_SINGLE_LINKS);
 
-        // Increase streaming object instances list size
-        MemPut<WORD>(0x05B8E55, MAX_RWOBJECT_INSTANCES * 12);  // Default is 1000 * 12
-        MemPut<WORD>(0x05B8EB0, MAX_RWOBJECT_INSTANCES * 12);  // Default is 1000 * 12
+        // GTA passes the list allocation size through two 32-bit immediates. Keep
+        // enough RwObject links for distant LOD preloading without changing when
+        // the streamer creates or removes an instance.
+        MemPut<DWORD>(0x05B8E55, MAX_RWOBJECT_INSTANCES * 12);  // Default is 1000 * 12
+        MemPut<DWORD>(0x05B8EB0, MAX_RWOBJECT_INSTANCES * 12);  // Default is 1000 * 12
 
         // Increase matrix array size
         MemPut<int>(0x054F3A1, MAX_OBJECTS * 3);  // Default is 900

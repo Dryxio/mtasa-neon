@@ -277,6 +277,8 @@ public:
     void SetPreRenderSkyHandler(PreRenderSkyHandler* pHandler);
     void SetRenderHeliLightHandler(RenderHeliLightHandler* pHandler);
     void SetRenderEverythingBarRoadsHandler(RenderEverythingBarRoadsHandler* pHandler) override;
+    SRendererStats GetRendererStats() override;
+    void           ResetRendererStats() override;
 
     void Reset();
 

@@ -39,7 +39,11 @@ void CQuadTreeNodesSAInterface<T>::RemoveAllItems()
     {
         for (size_t i = 0; i < 4; i++)
         {
-            m_childrens[i]->RemoveAllItems();
+            // GTA allocates quadtree children lazily, so a non-leaf node does
+            // not imply that all four child pointers exist. Pool resizing can
+            // clear the IPL tree while some quadrants are still empty.
+            if (m_childrens[i])
+                m_childrens[i]->RemoveAllItems();
         }
     }
     else
