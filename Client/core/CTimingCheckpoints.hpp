@@ -29,6 +29,7 @@ public:
     TIMEUS                       m_CheckpointsStartUs;
     TIMEUS                       m_FrameStartTimeUs;
     TIMEUS                       m_PrevFrameTimeUs;
+    TIMEUS                       m_NextPeriodicDumpUs;
     SString                      m_LogFileName;
     std::vector<SString>         m_DetailLines;
     std::vector<SCheckpointItem> m_CheckpointList;
@@ -39,6 +40,7 @@ public:
         m_bEnabled = false;
         m_FrameStartTimeUs = 0;
         m_PrevFrameTimeUs = 0;
+        m_NextPeriodicDumpUs = 0;
         m_CheckpointsStartUs = 0;
         m_LogFileName = CalcMTASAPath("timings.log");
     }
@@ -58,6 +60,7 @@ public:
             if (bEnabled)
             {
                 ClearLog();
+                m_NextPeriodicDumpUs = GetTimeUs() + 1000000;
                 AppendLog(SString("Started timing checkpoints [Ver:%d.%d.%d-%d.%05d] [Date:%s]", MTASA_VERSION_MAJOR, MTASA_VERSION_MINOR,
                                   MTASA_VERSION_MAINTENANCE, MTASA_VERSION_TYPE, MTASA_VERSION_BUILD, *GetLocalTimeString(true).SplitLeft(" ")));
             }
@@ -83,20 +86,31 @@ public:
     void EndTimingCheckpoints()
     {
         TIMEUS frameTimeUs = GetTimeUs() - m_FrameStartTimeUs;
+        TIMEUS currentTimeUs = GetTimeUs();
 
         // Record if frame over 30ms and over double previous frame
-        if (frameTimeUs > (1000 / 30 * 1000) && frameTimeUs > m_PrevFrameTimeUs * 2)
+        const bool bSlowFrame = frameTimeUs > (1000 / 30 * 1000) && frameTimeUs > m_PrevFrameTimeUs * 2;
+        const bool bPeriodicDump = m_bEnabled && currentTimeUs >= m_NextPeriodicDumpUs;
+        if (bSlowFrame || bPeriodicDump)
         {
             if (m_bEnabled)
             {
                 uchar ucHour, ucMin;
                 CCore::GetSingleton().GetGame()->GetClock()->Get(&ucHour, &ucMin);
 
-                AppendLog(SString(">Detected slow frame: %dms    (Prev frame was %dms)  (Game time %02d:%02d)", frameTimeUs / 1000, m_PrevFrameTimeUs / 1000,
-                                  ucHour, ucMin));
-                DumpTimingCheckpoints();
+                if (bSlowFrame)
+                    AppendLog(SString(">Detected slow frame: %dms    (Prev frame was %dms)  (Game time %02d:%02d)", frameTimeUs / 1000,
+                                      m_PrevFrameTimeUs / 1000, ucHour, ucMin));
+                else
+                    AppendLog(SString(">Periodic timing frame: %dms  (Game time %02d:%02d)", frameTimeUs / 1000, ucHour, ucMin));
+
+                // Periodic samples need sub-5ms sections to distinguish ped
+                // animation, collision, and PreRender without logging every frame.
+                DumpTimingCheckpoints(bPeriodicDump ? 500 : 5000);
             }
         }
+        if (bPeriodicDump)
+            m_NextPeriodicDumpUs = currentTimeUs + 1000000;
         m_PrevFrameTimeUs = frameTimeUs;
     }
 
@@ -184,7 +198,7 @@ public:
     // Output last frame stats
     //
     ////////////////////////////////////////
-    void DumpTimingCheckpoints()
+    void DumpTimingCheckpoints(TIMEUS minimumSectionUs)
     {
         if (!m_bEnabled)
             return;
@@ -239,7 +253,7 @@ public:
         for (uint i = 0; i < resultList.size(); i++)
         {
             SSectionInfo& info = *resultList[i];
-            if (info.totalTime < 5000)
+            if (info.totalTime < minimumSectionUs)
                 break;
             if (info.iEnterCount == info.iLeaveCount)
                 strStatus += SString("[%s %dms (calls:%d)]   ", *info.strName, info.totalTime / 1000, info.iEnterCount);

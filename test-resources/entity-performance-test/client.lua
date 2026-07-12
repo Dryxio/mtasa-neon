@@ -404,37 +404,52 @@ local profileStages = {
     "mixed 192 moving visible separate on",
 }
 
+local attributionStages = {
+    "baseline 0 static visible separate off",
+    "vehicle 64 idle visible separate on",
+    "vehicle 64 idle hidden separate on",
+    "vehicle 64 idle far separate on",
+    "vehicle 64 moving visible touching on",
+    "ped 110 moving visible separate on",
+    "ped 110 moving hidden separate on",
+    "ped 110 moving far separate on",
+}
+
 runNextProfile = function()
     if not profile or benchmark then
         return
     end
-    if profile.index > #profileStages then
+    if profile.index > #profile.stages then
         output(("[entitybench profile] Complete: %d stages recorded"):format(#profile.results))
         profile = nil
         return
     end
 
-    local stage = profileStages[profile.index]
-    output(("[entitybench profile] Stage %d/%d: %s"):format(profile.index, #profileStages, stage))
+    local stage = profile.stages[profile.index]
+    output(("[entitybench profile] Stage %d/%d: %s"):format(profile.index, #profile.stages, stage))
     profile.index = profile.index + 1
     executeCommandHandler("entitybench", stage .. " " .. profile.seconds)
 end
 
-local function runProfile(_, secondsText)
+local function startProfile(stages, secondsText, profileName)
     if benchmark or profile then
         output("[entitybench profile] A benchmark or profile is already running", true)
         return
     end
     local seconds = math.floor(tonumber(secondsText) or 10)
     if seconds < 5 or seconds > MAX_SECONDS then
-        output("[entitybench profile] /entitybenchprofile [5-60 seconds per stage]", true)
+        output(("[entitybench profile] /%s [5-60 seconds per stage]"):format(profileName), true)
         return
     end
 
-    profile = {index = 1, seconds = seconds, results = {}}
+    profile = {index = 1, seconds = seconds, results = {}, stages = stages}
     testOrigin = nil
-    output(("[entitybench profile] Starting %d stages with %d-second samples"):format(#profileStages, seconds))
+    output(("[entitybench profile] Starting %d stages with %d-second samples"):format(#stages, seconds))
     runNextProfile()
+end
+
+local function runProfile(_, secondsText)
+    startProfile(profileStages, secondsText, "entitybenchprofile")
 end
 
 local function runVariedProfile(_, secondsText)
@@ -442,6 +457,13 @@ local function runVariedProfile(_, secondsText)
         return
     end
     runProfile(nil, secondsText)
+end
+
+local function runAttributionProfile(_, secondsText)
+    if not setModelSet(nil, "varied") then
+        return
+    end
+    startProfile(attributionStages, secondsText, "entitybenchattributionprofile")
 end
 
 addEventHandler("onClientPreRender", root, function(frameTime)
@@ -453,6 +475,7 @@ end)
 addCommandHandler("entitybench", runBenchmark)
 addCommandHandler("entitybenchprofile", runProfile)
 addCommandHandler("entitybenchvariedprofile", runVariedProfile)
+addCommandHandler("entitybenchattributionprofile", runAttributionProfile)
 addCommandHandler("entitybenchmodels", setModels)
 addCommandHandler("entitybenchmodelset", setModelSet)
 addCommandHandler("entitybenchcancel", function()

@@ -39,11 +39,19 @@ VOID HOOK_CHeli__ProcessControl();
 // gta's stuff
 #define VAR_Keystates 0x7DBCB0
 
-#define FUNC_CPlayerPed__ProcessControl 0x60EA90
-#define VTBL_CPlayerPed__ProcessControl 0x86D190
+#define FUNC_CPlayerPed__ProcessControl   0x60EA90
+#define VTBL_CPlayerPed__ProcessControl   0x86D190
+#define FUNC_CPlayerPed__ProcessCollision 0x54DFB0
+#define VTBL_CPlayerPed__ProcessCollision 0x86D194
+#define FUNC_CPlayerPed__PreRender        0x5E8A20
+#define VTBL_CPlayerPed__PreRender        0x86D1AC
 
-#define FUNC_CAutomobile__ProcessControl 0x6B1880
-#define VTBL_CAutomobile__ProcessControl 0x871148
+#define FUNC_CAutomobile__ProcessControl   0x6B1880
+#define VTBL_CAutomobile__ProcessControl   0x871148
+#define FUNC_CAutomobile__ProcessCollision 0x54DFB0
+#define VTBL_CAutomobile__ProcessCollision 0x87114C
+#define FUNC_CAutomobile__PreRender        0x6AAB50
+#define VTBL_CAutomobile__PreRender        0x871164
 
 #define FUNC_CMonsterTruck__ProcessControl 0x6C8250
 #define VTBL_CMonsterTruck__ProcessControl 0x871800

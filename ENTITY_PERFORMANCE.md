@@ -179,34 +179,38 @@ required to prove GPU saturation or present/VSync waiting.
 
 ## Remaining attribution priority
 
-1. **Split native collision from the rest of `CWorld_Process`.** The on/off
-   delta proves the subsystem, but a GTA hook or profiler capture should now
-   separate broad-phase candidate scans, `ProcessEntityCollision`, collision
-   retries, and shift passes. Optimize only after identifying which phase
-   explodes when contacts remain unsafe.
-2. **Split near-ped native work from MTA ped pulses.** Visible versus hidden
-   changed little, while far removed almost all of the added cost. Add aggregate
-   native `CPed/CPlayerPed::ProcessControl`, `UpdateAnim`, and collision scopes,
-   then compare them with `MTA_PedManager`. This is more important than an
-   immediate skinning LOD based on the current evidence.
-3. **Measure vehicle render CPU versus GPU.** Separated and touching visible
+Targeted native checkpoints and an eight-stage attribution pass are archived in
+`test-resources/entity-performance-test/results/2026-07-12-vm-native-attribution.md`.
+They resolve two earlier questions: collision consumed 19-25 ms of a 21-30 ms
+`CWorld_Process` in the 64-vehicle touching case, and 7-10 ms of a 10-15 ms
+`CWorld_Process` for 110 near moving peds. MTA managers, native ProcessControl,
+animation, and PreRender were individually much smaller in those samples.
+
+1. **Split native collision internally.** The entity-level scope now proves the
+   dominant native function and records more collision calls than entities per
+   frame because unsafe entities are retried. The next hook should separate
+   broad-phase sector scans, `ProcessEntityCollision`, retry passes, and shift
+   passes before changing collision semantics.
+2. **Measure vehicle render CPU versus GPU.** Separated and touching visible
    vehicles are expensive, and native PreRender includes suspension, lighting,
-   occupants, reflections, and effects. Use a GPU capture and shadows/effects
-   toggles before attributing that cost specifically to GPU saturation.
-4. **Measure real synchronization.** The current resource intentionally has no
+   occupants, reflections, and effects. The measured automobile PreRender scope
+   was only 0-1 ms while visible vehicles still added substantial frame time;
+   time `Render`/atomic traversal and use a GPU capture before attributing the
+   remaining delta specifically to GPU saturation.
+3. **Measure real synchronization.** The current resource intentionally has no
    remote packet decoding, sync-owner traffic, or realistic interpolation
    targets. A recorded packet workload or multiple clients must compare
    `NetPulse`, MTA manager scopes, and native world work under the same camera.
-5. **Measure streamer sorting directly.** Source complexity is linear plus a
+4. **Measure streamer sorting directly.** Source complexity is linear plus a
    sort per active streamer each frame, but the current frame-level profile
    cannot rank it against native ped work. Use the new aggregate per-streamer
    scopes before implementing dirty-state caching or replacing containers.
-6. **Add a fixed-frustum object density profile.** Standard-object runs proved
+5. **Add a fixed-frustum object density profile.** Standard-object runs proved
    total and streaming counts are cheap, not that 1000 visible custom objects
    are cheap. Keep the camera and footprint fixed, increase actual visible
    high-water, then repeat with controlled custom geometry, shaders, shadows,
    and attachments.
-7. **Measure production scripts separately.** Existing Lua timing statistics
+6. **Measure production scripts separately.** Existing Lua timing statistics
    should be captured with a representative resource set. The clean baseline
    prevents scripts from contaminating engine attribution but cannot dismiss
    them as a production-server bottleneck.

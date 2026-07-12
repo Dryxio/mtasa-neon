@@ -159,6 +159,23 @@ void CCommandFuncs::Time(const char* szParameters)
     CCore::GetSingleton().ChatEchoColor(strTimeAndDate, 255, 100, 100);
 }
 
+void CCommandFuncs::TimingDebug(const char* szParameters)
+{
+    const SString argument = SString("%s", szParameters ? szParameters : "").TrimStart(" \t\r\n").TrimEnd(" \t\r\n").ToLower();
+    if (argument != "on" && argument != "off")
+    {
+        const bool enabled = g_pCore->GetDiagnosticDebug() == EDiagnosticDebug::LOG_TIMING_0000;
+        g_pCore->GetConsole()->Printf("timingdebug: %s; syntax: timingdebug [on|off]", enabled ? "on" : "off");
+        return;
+    }
+
+    // This local console command makes controlled profiling reproducible
+    // without exposing the diagnostic switch to downloaded Lua resources.
+    const bool enabled = argument == "on";
+    g_pCore->SetDiagnosticDebug(enabled ? EDiagnosticDebug::LOG_TIMING_0000 : EDiagnosticDebug::NONE);
+    g_pCore->GetConsole()->Printf("timingdebug: %s", enabled ? "on" : "off");
+}
+
 // this fails randomly, see comments in CConsole
 void CCommandFuncs::Clear(const char* szParameters)
 {

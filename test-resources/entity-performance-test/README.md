@@ -22,6 +22,7 @@ between scenarios even when the resource itself is unchanged.
 /entitybenchmodelset [homogeneous|varied]
 /entitybenchprofile [5-60 seconds per stage]
 /entitybenchvariedprofile [5-60 seconds per stage]
+/entitybenchattributionprofile [5-60 seconds per stage]
 /entitybenchresetorigin
 /entitybenchcancel
 /entitybenchclear
@@ -46,6 +47,12 @@ steady-state frame cost. `/entitybenchvariedprofile` selects that set and runs
 the same 33-stage matrix as `/entitybenchprofile`; this makes homogeneous and
 varied results directly comparable. Switching back to `homogeneous` releases
 the held references.
+
+`/entitybenchattributionprofile` runs only eight varied-model stages covering
+the visible/hidden/far vehicle and ped controls plus the realistic touching
+vehicle case. Use it with the local `timingdebug on` console command after a
+client build containing the native timing hooks; it is the short attribution
+matrix and does not replace the 33-stage regression profile.
 
 `hidden` keeps the entities near the camera but points the camera away. This
 preserves near-entity simulation while removing most entity rendering. `far`
@@ -119,3 +126,11 @@ resource output for average/p95/p99/worst distributions and `timings.log` to
 attribute the worst frames. GPU saturation is inferred only when visible cost
 grows while `CWorld_Process` and MTA scopes do not; confirm it with an external
 GPU capture before treating that inference as proof.
+
+Neon also provides the local F8 command `timingdebug [on|off]`. While enabled,
+the logger writes one aggregate snapshot per second in addition to anomalous
+frames, including sections down to 0.5 ms. The per-entity native checkpoints
+add diagnostic overhead, so compare subsystem shares and call counts from this
+mode; use a run with timing disabled for authoritative FPS distributions. Keep
+the client in the foreground so a long Present gap is not aggregated as one
+artificial multi-second frame.

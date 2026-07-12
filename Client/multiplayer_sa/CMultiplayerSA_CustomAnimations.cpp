@@ -10,6 +10,8 @@
 
 #include "StdInc.h"
 
+extern CCoreInterface* g_pCore;
+
 #include <../game_sa/CAnimBlendAssocGroupSA.h>
 #include <../game_sa/CAnimManagerSA.h>
 
@@ -139,6 +141,16 @@ static void __declspec(naked) HOOK_RpAnimBlendClumpUpdateAnimations()
         jmp     RETURN_RpAnimBlendClumpUpdateAnimations_NORMALFLOW
     }
     // clang-format on
+}
+
+// CEntity::UpdateAnim calls the global blend updater at this one verified call
+// site. Timing the call site retains the custom-animation entry hook while
+// aggregating the animation cost once under the diagnostic timing logger.
+static void __cdecl RpAnimBlendClumpUpdateAnimationsWithTiming(RpClump* clump, float timeDelta, bool onScreen)
+{
+    TIMING_CHECKPOINT("+GTA_AnimBlendUpdate");
+    reinterpret_cast<void(__cdecl*)(RpClump*, float, bool)>(HOOKPOS_RpAnimBlendClumpUpdateAnimations)(clump, timeDelta, onScreen);
+    TIMING_CHECKPOINT("-GTA_AnimBlendUpdate");
 }
 
 CAnimBlendAssociationSAInterface* __cdecl CAnimBlendAssocGroup_CopyAnimation(RpClump* pClump, eAnimGroup u32AnimGroupID, eAnimID animID)
@@ -361,4 +373,5 @@ void CMultiplayerSA::InitHooks_CustomAnimations()
     HookInstall(HOOKPOS_CAnimManager_AddAnimation, (DWORD)HOOK_CAnimManager_AddAnimation, 10);
     HookInstall(HOOKPOS_CAnimManager_AddAnimationAndSync, (DWORD)HOOK_CAnimManager_AddAnimationAndSync, 10);
     HookInstall(HOOKPOS_CAnimManager_BlendAnimation_Hierarchy, (DWORD)HOOK_CAnimManager_BlendAnimation_Hierarchy, 5);
+    HookInstallCall(0x535F94, (DWORD)RpAnimBlendClumpUpdateAnimationsWithTiming);
 }

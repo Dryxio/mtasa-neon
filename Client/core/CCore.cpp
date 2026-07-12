@@ -1523,6 +1523,7 @@ void CCore::RegisterCommands()
     m_pCommands->Add("test", "", CCommandFuncs::Test);
     m_pCommands->Add("showmemstat", _("shows the memory statistics"), CCommandFuncs::ShowMemStat);
     m_pCommands->Add("showframegraph", _("shows the frame timing graph"), CCommandFuncs::ShowFrameGraph);
+    m_pCommands->Add("timingdebug", "enables or disables native timing checkpoints", CCommandFuncs::TimingDebug);
     m_pCommands->Add("jinglebells", "", CCommandFuncs::JingleBells);
     m_pCommands->Add("fakelag", "", CCommandFuncs::FakeLag);
 
@@ -1965,7 +1966,6 @@ void CCore::OnFPSLimitChange(std::uint16_t fps)
 //
 void CCore::DoReliablePulse()
 {
-    ms_TimingCheckpoints.BeginTimingCheckpoints();
     TIMING_CHECKPOINT("+CallIdle2");
 
     UpdateIsWindowMinimized();
@@ -1988,6 +1988,14 @@ bool CCore::IsTimingCheckpoints()
 void CCore::OnTimingCheckpoint(const char* szTag)
 {
     ms_TimingCheckpoints.OnTimingCheckpoint(szTag);
+    // D3D emits one empty checkpoint after Present as the canonical frame
+    // boundary. Finish the frame that just rendered, then begin the next one
+    // here so GTA simulation is included before the following Present.
+    if (!szTag || !szTag[0])
+    {
+        ms_TimingCheckpoints.EndTimingCheckpoints();
+        ms_TimingCheckpoints.BeginTimingCheckpoints();
+    }
 }
 
 void CCore::OnTimingDetail(const char* szTag)

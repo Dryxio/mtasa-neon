@@ -14,6 +14,7 @@
 #include <game/CWeaponStatManager.h>
 
 extern CMultiplayerSA* pMultiplayer;
+extern CCoreInterface* g_pCore;
 
 DWORD dwCurrentPlayerPed = 0;  // stores the player ped temporarily during hooks
 DWORD dwCurrentVehicle = 0;    // stores the current vehicle during the hooks
@@ -45,6 +46,138 @@ extern PostContextSwitchHandler* m_pPostContextSwitchHandler;
 
 namespace
 {
+    void BeginPlayerPedProcessControlTiming()
+    {
+        TIMING_CHECKPOINT("+GTA_PlayerPedProcessControl");
+    }
+    void EndPlayerPedProcessControlTiming()
+    {
+        TIMING_CHECKPOINT("-GTA_PlayerPedProcessControl");
+    }
+    void BeginPlayerPedProcessCollisionTiming()
+    {
+        TIMING_CHECKPOINT("+GTA_PlayerPedProcessCollision");
+    }
+    void EndPlayerPedProcessCollisionTiming()
+    {
+        TIMING_CHECKPOINT("-GTA_PlayerPedProcessCollision");
+    }
+    void BeginPlayerPedPreRenderTiming()
+    {
+        TIMING_CHECKPOINT("+GTA_PlayerPedPreRender");
+    }
+    void EndPlayerPedPreRenderTiming()
+    {
+        TIMING_CHECKPOINT("-GTA_PlayerPedPreRender");
+    }
+    void BeginAutomobileProcessControlTiming()
+    {
+        TIMING_CHECKPOINT("+GTA_AutomobileProcessControl");
+    }
+    void EndAutomobileProcessControlTiming()
+    {
+        TIMING_CHECKPOINT("-GTA_AutomobileProcessControl");
+    }
+    void BeginAutomobileProcessCollisionTiming()
+    {
+        TIMING_CHECKPOINT("+GTA_AutomobileProcessCollision");
+    }
+    void EndAutomobileProcessCollisionTiming()
+    {
+        TIMING_CHECKPOINT("-GTA_AutomobileProcessCollision");
+    }
+    void BeginAutomobilePreRenderTiming()
+    {
+        TIMING_CHECKPOINT("+GTA_AutomobilePreRender");
+    }
+    void EndAutomobilePreRenderTiming()
+    {
+        TIMING_CHECKPOINT("-GTA_AutomobilePreRender");
+    }
+
+    // These virtual hooks aggregate native work by entity category in the
+    // opt-in timing log. Calling the verified GTA functions directly preserves
+    // the original vtable semantics while avoiding per-entity log messages.
+    static void __declspec(naked) HOOK_CPlayerPed__ProcessCollisionTiming()
+    {
+        MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+        // clang-format off
+        __asm
+        {
+            pushad
+            call    BeginPlayerPedProcessCollisionTiming
+            popad
+            mov     eax, FUNC_CPlayerPed__ProcessCollision
+            call    eax
+            pushad
+            call    EndPlayerPedProcessCollisionTiming
+            popad
+            retn
+        }
+        // clang-format on
+    }
+
+    static void __declspec(naked) HOOK_CPlayerPed__PreRenderTiming()
+    {
+        MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+        // clang-format off
+        __asm
+        {
+            pushad
+            call    BeginPlayerPedPreRenderTiming
+            popad
+            mov     eax, FUNC_CPlayerPed__PreRender
+            call    eax
+            pushad
+            call    EndPlayerPedPreRenderTiming
+            popad
+            retn
+        }
+        // clang-format on
+    }
+
+    static void __declspec(naked) HOOK_CAutomobile__ProcessCollisionTiming()
+    {
+        MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+        // clang-format off
+        __asm
+        {
+            pushad
+            call    BeginAutomobileProcessCollisionTiming
+            popad
+            mov     eax, FUNC_CAutomobile__ProcessCollision
+            call    eax
+            pushad
+            call    EndAutomobileProcessCollisionTiming
+            popad
+            retn
+        }
+        // clang-format on
+    }
+
+    static void __declspec(naked) HOOK_CAutomobile__PreRenderTiming()
+    {
+        MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+        // clang-format off
+        __asm
+        {
+            pushad
+            call    BeginAutomobilePreRenderTiming
+            popad
+            mov     eax, FUNC_CAutomobile__PreRender
+            call    eax
+            pushad
+            call    EndAutomobilePreRenderTiming
+            popad
+            retn
+        }
+        // clang-format on
+    }
+
     bool HasValidVehicleAudioContext(const CAEVehicleAudioEntitySAInterface* pAudioInterface) noexcept
     {
         if (!pAudioInterface)
@@ -87,6 +220,10 @@ VOID InitKeysyncHooks()
     HookInstallMethod(VTBL_CBoat__ProcessControl, (DWORD)HOOK_CBoat__ProcessControl);
     HookInstallMethod(VTBL_CBike__ProcessControl, (DWORD)HOOK_CBike__ProcessControl);
     HookInstallMethod(VTBL_CHeli__ProcessControl, (DWORD)HOOK_CHeli__ProcessControl);
+    HookInstallMethod(VTBL_CPlayerPed__ProcessCollision, (DWORD)HOOK_CPlayerPed__ProcessCollisionTiming);
+    HookInstallMethod(VTBL_CPlayerPed__PreRender, (DWORD)HOOK_CPlayerPed__PreRenderTiming);
+    HookInstallMethod(VTBL_CAutomobile__ProcessCollision, (DWORD)HOOK_CAutomobile__ProcessCollisionTiming);
+    HookInstallMethod(VTBL_CAutomobile__PreRender, (DWORD)HOOK_CAutomobile__PreRenderTiming);
 
     // not strictly for keysync, to make CPlayerPed::GetPlayerInfoForThisPlayerPed always return the local playerinfo
     // 00609FF2     EB 1F          JMP SHORT gta_sa_u.0060A013
@@ -575,9 +712,13 @@ static void __declspec(naked) HOOK_CPlayerPed__ProcessControl()
     __asm
     {
         popad
+        pushad
+        call    BeginPlayerPedProcessControlTiming
+        popad
         mov     edx, FUNC_CPlayerPed__ProcessControl
         call    edx
         pushad
+        call    EndPlayerPedProcessControlTiming
     }
     // clang-format on
 
@@ -643,9 +784,13 @@ static void __declspec(naked) HOOK_CAutomobile__ProcessControl()
     __asm
     {
         popad
+        pushad
+        call    BeginAutomobileProcessControlTiming
+        popad
         mov     edx, FUNC_CAutomobile__ProcessControl
         call    edx
         pushad
+        call    EndAutomobileProcessControlTiming
     }
     // clang-format on
 
