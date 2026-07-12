@@ -205,16 +205,24 @@ void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse
         }
 
         if (bDoVehicleManagerPulse)
+        {
+            TIMING_CHECKPOINT("+MTA_VehicleManager");
             m_pVehicleManager->DoPulse();
+            TIMING_CHECKPOINT("-MTA_VehicleManager");
+        }
 
         if (bDoStandardPulses)
         {
             m_pPathManager->DoPulse();
             m_pRadarMarkerManager->DoPulse();
+            TIMING_CHECKPOINT("+MTA_PedManager");
             m_pPedManager->DoPulse(true);
+            TIMING_CHECKPOINT("-MTA_PedManager");
             m_pProjectileManager->DoPulse();
             m_pSoundManager->DoPulse();
+            TIMING_CHECKPOINT("+MTA_PlayerManager");
             m_pPlayerManager->DoPulse();
+            TIMING_CHECKPOINT("-MTA_PlayerManager");
             m_pColManager->DoPulse();
             m_pGUIManager->DoPulse();
             m_pWeaponManager->DoPulse();
@@ -243,14 +251,32 @@ void CClientManager::UpdateStreamers()
         CVector vecTemp;
         GetCamera()->GetPosition(vecTemp);
 
-        // Update the streamers
+        // Keep these scopes at streamer granularity. Entity-density profiling needs to
+        // distinguish spatial maintenance from the per-entity manager and GTA world costs,
+        // while per-element timers would perturb the hot loops being measured.
+        TIMING_CHECKPOINT("+MTA_Streamers");
+        TIMING_CHECKPOINT("+MTA_MarkerStreamer");
         m_pMarkerStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_MarkerStreamer");
+        TIMING_CHECKPOINT("+MTA_ObjectStreamer");
         m_pObjectStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_ObjectStreamer");
+        TIMING_CHECKPOINT("+MTA_ObjectLodStreamer");
         m_pObjectLodStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_ObjectLodStreamer");
+        TIMING_CHECKPOINT("+MTA_PickupStreamer");
         m_pPickupStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_PickupStreamer");
+        TIMING_CHECKPOINT("+MTA_PlayerStreamer");
         m_pPlayerStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_PlayerStreamer");
+        TIMING_CHECKPOINT("+MTA_VehicleStreamer");
         m_pVehicleStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_VehicleStreamer");
+        TIMING_CHECKPOINT("+MTA_LightStreamer");
         m_pLightStreamer->DoPulse(vecTemp);
+        TIMING_CHECKPOINT("-MTA_LightStreamer");
+        TIMING_CHECKPOINT("-MTA_Streamers");
     }
 }
 

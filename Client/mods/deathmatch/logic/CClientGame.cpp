@@ -3948,10 +3948,14 @@ void CClientGame::PreWorldProcessHandler()
 
 void CClientGame::PostWorldProcessHandler()
 {
+    TIMING_CHECKPOINT("+MTA_PostWorldManagers");
     m_pManager->GetMarkerManager()->DoPulse();
     g_pGame->GetCoronas()->DoPulseDistantLights();
     m_pManager->GetPointLightsManager()->DoPulse();
+    TIMING_CHECKPOINT("+MTA_ObjectManager");
     m_pManager->GetObjectManager()->DoPulse();
+    TIMING_CHECKPOINT("-MTA_ObjectManager");
+    TIMING_CHECKPOINT("-MTA_PostWorldManagers");
 
     double dTimeSlice = m_TimeSliceTimer.Get();
     m_TimeSliceTimer.Reset();
