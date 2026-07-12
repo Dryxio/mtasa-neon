@@ -19,7 +19,9 @@ between scenarios even when the resource itself is unchanged.
              [static|idle|moving] [visible|hidden|far]
              [separate|touching|contact] [on|off collisions] [5-60 seconds]
 /entitybenchmodels [vehicle model] [ped model] [object model]
+/entitybenchmodelset [homogeneous|varied]
 /entitybenchprofile [5-60 seconds per stage]
+/entitybenchvariedprofile [5-60 seconds per stage]
 /entitybenchresetorigin
 /entitybenchcancel
 /entitybenchclear
@@ -35,6 +37,15 @@ the complete benchmark to a new location.
 mixed matrix sequentially. It cleans up and restores the camera between stages,
 then advances only after the preceding measurement really finishes; very slow
 collision frames therefore cannot make stages overlap.
+
+By default, every entity of a given type uses one model. Use
+`/entitybenchmodelset varied` to cycle deterministic built-in GTA model lists:
+20 vehicles, 16 peds, and 18 objects. The resource loads and holds references
+to the complete set before measuring so one-off model I/O is not mistaken for
+steady-state frame cost. `/entitybenchvariedprofile` selects that set and runs
+the same 33-stage matrix as `/entitybenchprofile`; this makes homogeneous and
+varied results directly comparable. Switching back to `homogeneous` releases
+the held references.
 
 `hidden` keeps the entities near the camera but points the camera away. This
 preserves near-entity simulation while removing most entity rendering. `far`

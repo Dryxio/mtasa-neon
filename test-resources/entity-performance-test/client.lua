@@ -8,10 +8,19 @@ local profile = nil
 local runNextProfile
 local savedCamera = nil
 local testOrigin = nil
+local modelSetName = "homogeneous"
+local preloadedModels = {}
 local models = {
     vehicle = 411,
     ped = 7,
     object = 1271,
+}
+-- Fixed native sets make model diversity reproducible instead of depending on
+-- whichever production resources happen to be running during a profile.
+local variedModels = {
+    vehicle = {400, 401, 404, 409, 411, 415, 429, 445, 451, 470, 477, 482, 495, 506, 541, 560, 579, 580, 587, 589},
+    ped = {7, 9, 14, 21, 28, 46, 60, 73, 105, 120, 147, 170, 190, 211, 240, 270},
+    object = {1210, 1212, 1225, 1230, 1235, 1264, 1271, 1299, 1337, 1344, 1352, 1431, 1440, 1458, 1558, 1654, 1685, 2912},
 }
 
 local function output(message, errorMessage)
@@ -124,13 +133,22 @@ local function applyState(element, kind, state, collisions, index)
     end
 end
 
-local function createOne(kind, x, y, z, heading)
-    if kind == "vehicle" then
-        return createVehicle(models.vehicle, x, y, z + 0.5, 0, 0, heading)
-    elseif kind == "ped" then
-        return createPed(models.ped, x, y, z, heading)
+local function getModel(kind, index)
+    if modelSetName == "varied" then
+        local list = variedModels[kind]
+        return list[((index - 1) % #list) + 1]
     end
-    return createObject(models.object, x, y, z + 0.5)
+    return models[kind]
+end
+
+local function createOne(kind, index, x, y, z, heading)
+    local model = getModel(kind, index)
+    if kind == "vehicle" then
+        return createVehicle(model, x, y, z + 0.5, 0, 0, heading)
+    elseif kind == "ped" then
+        return createPed(model, x, y, z, heading)
+    end
+    return createObject(model, x, y, z + 0.5)
 end
 
 local function createScenario(config)
@@ -146,7 +164,7 @@ local function createScenario(config)
         end
 
         local offsetX, offsetY = getGridOffset(index, config.count, config.layout)
-        local element = createOne(kind, anchorX + offsetX, anchorY + offsetY, anchorZ, 0)
+        local element = createOne(kind, index, anchorX + offsetX, anchorY + offsetY, anchorZ, 0)
         if element then
             table.insert(entities, element)
             applyState(element, kind, config.state, config.collisions, index)
@@ -183,8 +201,8 @@ local function finishBenchmark(cancelled)
         local config = benchmark.config
         if profile then
             table.insert(profile.results, {
-                label = ("%s %d %s/%s/%s collisions=%s"):format(
-                    config.kind, config.count, config.state, config.view, config.layout, tostring(config.collisions)
+                label = ("%s %d %s/%s/%s collisions=%s models=%s"):format(
+                    config.kind, config.count, config.state, config.view, config.layout, tostring(config.collisions), config.modelSet
                 ),
                 fps = fps,
                 average = average,
@@ -193,9 +211,9 @@ local function finishBenchmark(cancelled)
                 worst = worst,
             })
         end
-        output(("[entitybench] %s requested=%d created=%d %s/%s/%s collisions=%s: %.1f FPS | avg %.2f ms | p95 %.2f | p99 %.2f | worst %.2f"):format(
+        output(("[entitybench] %s requested=%d created=%d %s/%s/%s collisions=%s models=%s: %.1f FPS | avg %.2f ms | p95 %.2f | p99 %.2f | worst %.2f"):format(
             config.kind, config.count, benchmark.created, config.state, config.view,
-            config.layout, tostring(config.collisions), fps, average, p95, p99, worst
+            config.layout, tostring(config.collisions), config.modelSet, fps, average, p95, p99, worst
         ))
 
         if engineGetRendererStats then
@@ -265,6 +283,7 @@ local function runBenchmark(_, kind, countText, state, view, layout, collisionTe
         view = view,
         layout = layout,
         collisions = collisionText == "on",
+        modelSet = modelSetName,
     }
     local created = createScenario(config)
     if created == 0 and kind ~= "baseline" then
@@ -296,6 +315,57 @@ local function setModels(_, vehicleText, pedText, objectText)
     end
     models.vehicle, models.ped, models.object = math.floor(vehicle), math.floor(ped), math.floor(object)
     output(("[entitybench] models set: vehicle=%d ped=%d object=%d"):format(models.vehicle, models.ped, models.object))
+end
+
+local function releasePreloadedModels()
+    for _, model in ipairs(preloadedModels) do
+        engineStreamingReleaseModel(model, true)
+    end
+    preloadedModels = {}
+end
+
+local function preloadVariedModels()
+    -- Hold every model through the profile so first-use streaming I/O cannot be
+    -- mistaken for steady-state per-frame entity cost.
+    releasePreloadedModels()
+    local seen = {}
+    local requested = 0
+    for _, list in pairs(variedModels) do
+        for _, model in ipairs(list) do
+            if not seen[model] then
+                seen[model] = true
+                local callSucceeded, loaded = pcall(engineStreamingRequestModel, model, true, true)
+                if callSucceeded and loaded then
+                    table.insert(preloadedModels, model)
+                    requested = requested + 1
+                else
+                    output(("[entitybench] Could not preload model %d"):format(model), true)
+                end
+            end
+        end
+    end
+    output(("[entitybench] Preloaded %d varied GTA models"):format(requested))
+end
+
+local function setModelSet(_, requestedSet)
+    requestedSet = requestedSet and requestedSet:lower() or ""
+    if requestedSet ~= "homogeneous" and requestedSet ~= "varied" then
+        output(("[entitybench] model set=%s; usage /entitybenchmodelset [homogeneous|varied]"):format(modelSetName))
+        return false
+    end
+    if benchmark or profile then
+        output("[entitybench] Cancel the active benchmark/profile before changing model set", true)
+        return false
+    end
+
+    modelSetName = requestedSet
+    if modelSetName == "varied" then
+        preloadVariedModels()
+    else
+        releasePreloadedModels()
+    end
+    output(("[entitybench] model set=%s"):format(modelSetName))
+    return true
 end
 
 local profileStages = {
@@ -367,6 +437,13 @@ local function runProfile(_, secondsText)
     runNextProfile()
 end
 
+local function runVariedProfile(_, secondsText)
+    if not setModelSet(nil, "varied") then
+        return
+    end
+    runProfile(nil, secondsText)
+end
+
 addEventHandler("onClientPreRender", root, function(frameTime)
     if benchmark and benchmark.phase == "measure" and frameTime and frameTime > 0 then
         table.insert(benchmark.samples, frameTime)
@@ -375,7 +452,9 @@ end)
 
 addCommandHandler("entitybench", runBenchmark)
 addCommandHandler("entitybenchprofile", runProfile)
+addCommandHandler("entitybenchvariedprofile", runVariedProfile)
 addCommandHandler("entitybenchmodels", setModels)
+addCommandHandler("entitybenchmodelset", setModelSet)
 addCommandHandler("entitybenchcancel", function()
     if benchmark then
         finishBenchmark(true)
@@ -410,6 +489,7 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     benchmark = nil
     profile = nil
     clearTest(false)
+    releasePreloadedModels()
 end)
 
 output("[entitybench] Ready. Use /entitybench or read test-resources/entity-performance-test/README.md")
