@@ -10,6 +10,8 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/C3DMarkers.h>
+#include <game/CCheckpoints.h>
 #include "lua/CLuaFunctionParser.h"
 
 void CLuaMarkerDefs::LoadFunctions()
@@ -18,6 +20,7 @@ void CLuaMarkerDefs::LoadFunctions()
         {"createMarker", CreateMarker},
 
         {"getMarkerCount", GetMarkerCount},
+        {"getMarkerLimitStats", GetMarkerLimitStats},
         {"getMarkerType", GetMarkerType},
         {"getMarkerSize", GetMarkerSize},
         {"getMarkerColor", GetMarkerColor},
@@ -122,6 +125,27 @@ int CLuaMarkerDefs::GetMarkerCount(lua_State* luaVM)
 {
     unsigned int uiCount = m_pMarkerManager->Count();
     lua_pushnumber(luaVM, static_cast<lua_Number>(uiCount));
+    return 1;
+}
+
+int CLuaMarkerDefs::GetMarkerLimitStats(lua_State* luaVM)
+{
+    lua_newtable(luaVM);
+
+    const auto setField = [luaVM](const char* name, unsigned int value)
+    {
+        lua_pushnumber(luaVM, static_cast<lua_Number>(value));
+        lua_setfield(luaVM, -2, name);
+    };
+
+    setField("streamedMarkers", CClientMarker::GetStreamedInCount());
+    setField("streamedMarkerLimit", CClientMarker::STREAMED_MARKER_LIMIT);
+    setField("allocated3DMarkers", g_pGame->Get3DMarkers()->GetCount());
+    setField("marker3DLimit", g_pGame->Get3DMarkers()->GetCapacity());
+    setField("activeCheckpoints", g_pGame->GetCheckpoints()->GetCount());
+    setField("checkpointLimit", g_pGame->GetCheckpoints()->GetCapacity());
+    setField("directionArrowLimit", g_pGame->Get3DMarkers()->GetCapacity());
+
     return 1;
 }
 

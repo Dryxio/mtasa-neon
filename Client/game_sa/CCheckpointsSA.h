@@ -14,19 +14,23 @@
 #include <game/CCheckpoints.h>
 
 class CCheckpointSA;
+class CCheckpointSAInterface;
 class CVector;
 
 // 00722c40      public: static class CCheckpoint * __cdecl CCheckpoints::PlaceMarker(unsigned int,unsigned short,class CVector &,class CVector &,float,unsigned
 // char,unsigned char,unsigned char,unsigned char,unsigned short,float,short)
 #define FUNC_CCheckpoints__PlaceMarker 0x722c40
 
-#define MAX_CHECKPOINTS   32
+#define MAX_CHECKPOINTS   4096
 #define ARRAY_CHECKPOINTS 0xC7F158
 
 class CCheckpointsSA : public CCheckpoints
 {
 private:
-    CCheckpointSA* Checkpoints[MAX_CHECKPOINTS];
+    CCheckpointSA* Checkpoints[MAX_CHECKPOINTS]{};
+
+    static CCheckpointSAInterface* GetCheckpointArray();
+    static void                    RelocateCheckpointArray();
 
 public:
     CCheckpointsSA();
@@ -36,4 +40,6 @@ public:
                                   const SharedUtil::SColor color);
     CCheckpoint* FindFreeMarker();
     CCheckpoint* FindMarker(DWORD identifier);
+    unsigned int GetCount() const override;
+    unsigned int GetCapacity() const override { return MAX_CHECKPOINTS; }
 };

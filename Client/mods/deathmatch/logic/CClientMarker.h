@@ -27,6 +27,8 @@ class CClientMarker final : public CClientStreamElement, private CClientColCallb
     friend class CClientColShape;
 
 public:
+    static constexpr unsigned int STREAMED_MARKER_LIMIT = 4096;
+
     enum eMarkerType
     {
         MARKER_CHECKPOINT,
@@ -75,7 +77,8 @@ public:
     static int  StringToType(const char* szString);
     static bool TypeToString(unsigned int uiType, SString& strOutString);
 
-    static bool IsLimitReached();
+    static bool         IsLimitReached();
+    static unsigned int GetStreamedInCount() { return m_uiStreamedInMarkers; }
 
     CClientColShape* GetColShape() { return m_pCollision; }
 

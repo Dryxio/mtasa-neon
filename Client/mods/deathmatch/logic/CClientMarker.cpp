@@ -391,7 +391,7 @@ bool CClientMarker::IsLimitReached()
 {
     // Let the MTA streamer use the enlarged native marker capacity. Keeping
     // this at 32 would mask higher GTA corona limits from scripts and tests.
-    return m_uiStreamedInMarkers >= 4096;
+    return m_uiStreamedInMarkers >= STREAMED_MARKER_LIMIT;
 }
 
 void CClientMarker::StreamIn(bool bInstantly)
