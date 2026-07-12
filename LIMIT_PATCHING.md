@@ -735,6 +735,158 @@ plus adjusted constants, API validation, network bounds, and a new full test
 pass. Quantized XY would need enough signed integer bits for that range; simply
 changing `WORLD_MAP_SIZE` without updating every connected layer is invalid.
 
+## Extended 3D markers and checkpoints
+
+Neon expands the GTA storage used by scripted MTA cylinders, arrows,
+checkpoints, and rings while retaining the existing global MTA marker-streaming
+budget:
+
+```text
+GTA 3D markers             32 -> 4096 (0xA0 bytes each)
+GTA checkpoints            32 -> 4096 (0x38 bytes each)
+GTA direction arrows        5 -> 4096 (0x30 bytes each)
+MTA streamed markers             4096 (unchanged by this patch)
+```
+
+The three replacements consume 1,081,344 bytes in total. They have process
+lifetime because permanent GTA code pointers must remain valid across resource
+stops, reconnects, marker reinitialization, and recreation of MTA wrappers.
+The implementation is in `C3DMarkersSA.cpp`, `CCheckpointsSA.cpp`, and their
+interface headers. Structure sizes and the fields used by native assembly are
+protected with `static_assert` checks.
+
+### Independent limits and marker-type interactions
+
+MTA coronas use the separately relocated corona pool. MTA cylinders and arrows
+call `C3dMarkers::PlaceMarker` directly every pulse. Checkpoints and rings first
+occupy `CCheckpoint` entries, then `CCheckpoint::Render` calls
+`C3dMarkers::PlaceMarker` every frame, so they also consume the 3D marker pool.
+A normal checkpoint with an arrow icon additionally calls
+`C3dMarkers::DirectionArrowSet`; GTA originally kept only five transient
+direction arrows. Raising only either of the two visible 32-entry wrapper
+constants would therefore leave independent 3D-marker and direction-arrow
+ceilings in place.
+
+The MTA streamer still applies one 4096-entry budget to all marker types. The
+native pools use the same capacity so a worst-case homogeneous set, or any
+mixture selected by the distance-sorted streamer, cannot exceed its specialized
+storage solely because coronas previously raised the global budget. The old
+five-entry `ms_user3dMarkers` save-game array is unrelated to MTA marker
+elements and remains unchanged.
+
+### Relocation and address inventory
+
+The GTA SA 1.0 US HOODLUM arrays begin at `0xC7DD58` (3D markers),
+`0xC7F158` (checkpoints), and `0xC802E8` (direction arrows). Neon initializes
+the additional slots with GTA's native sentinel type 257 and default pulse,
+size, color, map-height, and rotation values, then copies the already
+initialized vanilla 32/32/5 entries before installing executable patches.
+
+The 3D-marker operands are:
+
+```text
+Shutdown / update       0x722714 0x722756 0x7227BE 0x7227F9
+Init / render           0x724E64 0x724ED9 0x72506D 0x7250FF
+PlaceMarker             0x72518B 0x7251A1 0x7251DE 0x7251EB
+                        0x7251FE 0x72520E 0x725234 0x725480
+```
+
+`PlaceMarker` has an eight-entry unrolled replacement scan. The capacity is
+therefore deliberately a multiple of eight, and a compile-time assertion
+protects that constraint.
+
+The checkpoint operands are:
+
+```text
+Init                    0x722881 0x7228E1
+UpdatePos               0x722907 0x72291A 0x72292C 0x722935
+                        0x72293C 0x722948 0x722951 0x722961
+SetHeading / update     0x722977 0x722989 0x7229A3 0x7229D7 0x722C28
+PlaceMarker             0x722C82 0x722CA8 0x722CBC 0x722D7D
+                        0x722D8D 0x722D9A 0x722DA7 0x722EF0
+Delete / render         0x722FCB 0x722FEF 0x726062 0x726079
+```
+
+The direction-arrow operands are:
+
+```text
+Init / find / set       0x721101 0x72110C 0x721123 0x721132
+                        0x721143 0x721151 0x72117B 0x721181
+                        0x72118B 0x721195 0x72119F 0x7211A9
+                        0x7211B3 0x7211BD 0x7211C7 0x7211D1
+                        0x7211D7 0x7211DD
+Draw / global reset     0x721218 0x7215F0 0x72691E 0x726928
+```
+
+This inventory was derived from the local GTA executable with SHA-256
+`72ae59e44c761389e354a50dc6215e964fe771121e2f4b1877273a493ceecc9b`
+and checked against the corresponding `gta-reversed` functions. The local Open
+Limit Adjuster and fastman92 trees do not implement these three limits, so they
+provided no address list for this patch.
+
+Two apparent references are intentionally excluded. `0x855321` and `0x856BDC`
+are CRT constructor/destructor calls for the original 32-entry 3D-marker array,
+not runtime iteration paths. Addresses at and after `0xC803D8` also hold
+unrelated renderer globals immediately following the five direction arrows;
+patching every occurrence of the old end address would corrupt those globals.
+
+### Telemetry and reproducible test
+
+The client-only `getMarkerLimitStats` function returns the current MTA streamed
+marker count, allocated native 3D markers, active checkpoints, and all relevant
+capacities. The opt-in resource is:
+
+```text
+test-resources/marker-limit-test
+```
+
+It provides `/markerlimittest [type] [count]`, `/markerlimitstats`, and
+`/markerlimitclear`. Supported types are `cylinder`, `arrow`, `checkpoint`,
+`checkpoint-arrow`, `ring`, and `mixed`. Boundary runs should use 31, 32, 33,
+then 128 entries for every type before attempting higher performance tests.
+
+### Build and validation status
+
+The following projects build successfully as `Release|Win32` in the VM-local
+copy:
+
+```text
+Game SA.vcxproj
+Client Deathmatch.vcxproj
+```
+
+The address operands were also checked directly against the reference
+executable before the build. Manual in-game tests crossed the old boundary with
+31 and 32 cylinders, then exercised 128 cylinders, checkpoints, checkpoint
+arrows, arrows, rings, and mixed markers. Once the distance streamer settled,
+the mixed test reported 128 allocated 3D markers and 76 active checkpoints,
+which is the expected three checkpoint-backed types out of the five-type test
+cycle. Repeating the same test after reconnect produced the same 128/76 result.
+
+Repeated `/markerlimitclear` runs destroyed all 128 test elements and returned
+the native 3D-marker and checkpoint counts to zero. The global streamed-marker
+count correctly included unrelated active marker resources: the post-reconnect
+mixed run reported 248 streamed entries because the 120-corona test resource
+was also active. Early automatic samples under-counted newly created markers
+because the original test delay was only 100 ms; the resource now waits two
+seconds for the streamer rather than describing that sample as a two-frame
+measurement.
+
+No marker-related warning or error appeared in the client or server logs, and
+no new crash dump was created after the pre-test artifact baseline of
+2026-07-12 15:45:26. The only current-session warnings were unrelated existing
+test configuration issues: a duplicate `gp` command and the unset server owner
+email. Resource hot-restart with active markers and marker-model
+reinitialization remain useful follow-up coverage; creation, old-limit
+crossing, clear/recreate, reconnect, and normal mixed rendering are validated.
+
+The patch changes capacity, not recommended density. GTA performs linear marker
+searches and allocates a RenderWare atomic for each active 3D marker, so very
+large visible sets can be CPU/GPU expensive even though their storage is safe.
+The marker streamer also keeps its 600-unit default range. Absolute addresses
+remain GTA SA 1.0 US-specific and have the same executable-version-gating caveat
+as the other Neon limit patches.
+
 ## Candidate areas for future work
 
 Radar, paths, zones/population, native IPL support, object/model pools,

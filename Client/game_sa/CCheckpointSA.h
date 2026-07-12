@@ -34,6 +34,11 @@ public:
     float   m_multiSize;
 };
 
+static_assert(sizeof(CCheckpointSAInterface) == 0x38, "Invalid CCheckpointSAInterface size");
+static_assert(offsetof(CCheckpointSAInterface, m_nIdentifier) == 0x4, "Invalid CCheckpointSAInterface identifier offset");
+static_assert(offsetof(CCheckpointSAInterface, m_pos) == 0x10, "Invalid CCheckpointSAInterface position offset");
+static_assert(offsetof(CCheckpointSAInterface, m_multiSize) == 0x34, "Invalid CCheckpointSAInterface tail layout");
+
 class CCheckpointSA : public CCheckpoint
 {
 private:

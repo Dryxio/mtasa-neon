@@ -24,6 +24,7 @@ public:
 
     WORD  m_nType;        // 80
     bool  m_bIsUsed;      // has this marker been allocated this frame?    // 82
+    bool  m_bIsActive;    // kept for one render pass after use             // 83
     DWORD m_nIdentifier;  // 84
 
     DWORD rwColour;          // 88
@@ -45,6 +46,11 @@ public:
     CVector m_lastPosition;                  // 144
     DWORD   m_OnScreenTestTime;              // time last screen check was done // 156
 };
+
+static_assert(sizeof(C3DMarkerSAInterface) == 0xA0, "Invalid C3DMarkerSAInterface size");
+static_assert(offsetof(C3DMarkerSAInterface, m_nType) == 0x50, "Invalid C3DMarkerSAInterface type offset");
+static_assert(offsetof(C3DMarkerSAInterface, m_nIdentifier) == 0x54, "Invalid C3DMarkerSAInterface identifier offset");
+static_assert(offsetof(C3DMarkerSAInterface, m_OnScreenTestTime) == 0x9C, "Invalid C3DMarkerSAInterface tail layout");
 
 class C3DMarkerSA : public C3DMarker
 {

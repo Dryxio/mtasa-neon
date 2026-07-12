@@ -17,19 +17,26 @@
 #define FUNC_PlaceMarker 0x725120
 #define ARRAY_3D_MARKERS 0xC7DD58
 
-#define MAX_3D_MARKERS 32
+// GTA's native replacement search processes eight entries per iteration, so
+// this capacity must remain a multiple of eight unless that routine is replaced.
+#define MAX_3D_MARKERS 4096
 
 class C3DMarkersSA : public C3DMarkers
 {
 private:
-    C3DMarkerSA* Markers[MAX_3D_MARKERS];
+    C3DMarkerSA* Markers[MAX_3D_MARKERS]{};
+
+    static C3DMarkerSAInterface* GetMarkerArray();
+    static void                  RelocateMarkerArrays();
 
 public:
     C3DMarkersSA();
     ~C3DMarkersSA();
 
-    C3DMarker* CreateMarker(DWORD Identifier, T3DMarkerType dwType, CVector* vecPosition, float fSize, float fPulseFraction, BYTE r, BYTE g, BYTE b, BYTE a);
-    C3DMarker* FindFreeMarker();
-    C3DMarker* FindMarker(DWORD Identifier) override;
-    void       ReinitMarkers();
+    C3DMarker*   CreateMarker(DWORD Identifier, T3DMarkerType dwType, CVector* vecPosition, float fSize, float fPulseFraction, BYTE r, BYTE g, BYTE b, BYTE a);
+    C3DMarker*   FindFreeMarker();
+    C3DMarker*   FindMarker(DWORD Identifier) override;
+    void         ReinitMarkers();
+    unsigned int GetCount() const override;
+    unsigned int GetCapacity() const override { return MAX_3D_MARKERS; }
 };

@@ -22,6 +22,7 @@ public:
     LUA_DECLARE(CreateMarker);
 
     LUA_DECLARE(GetMarkerCount);
+    LUA_DECLARE(GetMarkerLimitStats);
     LUA_DECLARE(GetMarkerType);
     LUA_DECLARE(GetMarkerSize);
     LUA_DECLARE(GetMarkerColor);
