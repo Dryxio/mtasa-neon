@@ -73,21 +73,21 @@ large enough to guide the next instrumentation and optimization work.
 ### Varied built-in model profile
 
 The same matrix was also run with deterministic cycles of 20 GTA vehicles,
-16 peds, and 18 objects, all requested before measurement. The raw table is in
+16 peds, and 18 objects, all requested before measurement. The raw tables are in
 `test-resources/entity-performance-test/results/2026-07-12-vm-varied-profile.md`.
 It establishes that a one-model workload is not a sufficient production proxy:
-64 separated idle varied vehicles measured 27.16 ms average, 64 touching moving
-vehicles measured 63.81 ms, and 110 moving visible varied peds measured
-31.48 ms. The varied object runs also raised actual visible high-water well
-above the simple one-model run.
+at the original profile location, 64 separated idle varied vehicles measured
+23.60 ms average versus 18.60 ms homogeneous, and 64 touching moving vehicles
+measured 52.10 versus 38.89 ms. Moving 110 varied peds measured 24.91 versus
+22.78 ms, while the moving 192-entity mixture measured 35.58 versus 31.24 ms.
+The visible baseline was effectively unchanged at 9.49 versus 9.57 ms.
 
-Do not treat the difference from the first profile as a pure model-diversity
-delta. The varied pass used a different origin on uneven terrain, and physical
-entities could settle, roll, or leave the view during warm-up. That is visible
-in the mixed and moving-object results. A strict causal comparison requires a
-paired homogeneous/varied ABBA run at one locked flat origin. The varied pass
-is nevertheless enough to retain both workloads in the benchmark suite rather
-than optimizing exclusively for duplicate models.
+Deep contact behaved in the opposite direction: 16 varied vehicles measured
+17.70 ms versus 157.23 ms for identical models. The model-411 stack remained in
+a pathological unresolved collision state, while varied collision shapes could
+separate during warm-up. Both workloads must therefore remain in the suite:
+normal varied density represents production better, while identical deep
+overlap remains a targeted collision-retry stress case.
 
 ## Confirmed per-frame paths
 

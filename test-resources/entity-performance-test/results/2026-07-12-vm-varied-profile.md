@@ -1,5 +1,75 @@
 # 2026-07-12 Windows VM varied-model entity profile
 
+## Reference pass at the original profile location
+
+This is the primary varied-model comparison. It ran at origin
+`(-694.34, 957.69, 12.25)`, about four metres from the homogeneous profile's
+`(-698.46, 958.41, 12.31)` origin. The visible baselines were 9.49 and 9.57 ms,
+respectively. MTA remained in the foreground for the complete pass from
+20:59:29 through 21:08:19.
+
+| # | Scenario | FPS | avg ms | p95 ms | p99 ms | worst ms |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | baseline static/visible | 105.4 | 9.49 | 10.30 | 10.77 | 13.33 |
+| 2 | baseline static/hidden | 89.6 | 11.16 | 12.21 | 13.47 | 17.67 |
+| 3 | vehicle 16 idle/visible/separate | 75.3 | 13.27 | 14.62 | 15.51 | 20.79 |
+| 4 | vehicle 32 idle/visible/separate | 56.8 | 17.61 | 18.72 | 21.03 | 26.40 |
+| 5 | vehicle 48 idle/visible/separate | 49.0 | 20.39 | 21.78 | 24.61 | 28.08 |
+| 6 | vehicle 64 idle/visible/separate | 42.4 | 23.60 | 24.95 | 26.99 | 30.57 |
+| 7 | vehicle 64 idle/hidden/separate | 60.3 | 16.60 | 18.14 | 19.20 | 26.13 |
+| 8 | vehicle 64 idle/far/separate | 80.7 | 12.38 | 13.65 | 16.83 | 36.10 |
+| 9 | vehicle 64 moving/visible/separate | 40.7 | 24.54 | 26.25 | 28.43 | 31.80 |
+| 10 | vehicle 16 moving/visible/touching | 73.5 | 13.61 | 14.83 | 15.68 | 20.01 |
+| 11 | vehicle 32 moving/visible/touching | 40.5 | 24.66 | 28.99 | 31.56 | 35.06 |
+| 12 | vehicle 64 moving/visible/touching | 19.2 | 52.10 | 61.61 | 66.20 | 67.09 |
+| 13 | vehicle 4 moving/visible/deep-contact | 93.7 | 10.67 | 11.65 | 12.47 | 17.21 |
+| 14 | vehicle 8 moving/visible/deep-contact | 84.4 | 11.84 | 13.34 | 15.01 | 21.84 |
+| 15 | vehicle 16 moving/visible/deep-contact | 56.5 | 17.70 | 23.49 | 32.34 | 53.75 |
+| 16 | vehicle 16 moving/visible/deep-contact, collision off | 75.0 | 13.34 | 15.62 | 22.52 | 255.36 |
+| 17 | ped 32 idle/visible/separate | 72.2 | 13.85 | 15.00 | 16.04 | 18.14 |
+| 18 | ped 64 idle/visible/separate | 56.5 | 17.71 | 18.95 | 21.59 | 32.36 |
+| 19 | ped 96 idle/visible/separate | 47.0 | 21.29 | 22.94 | 24.65 | 28.73 |
+| 20 | ped 110 idle/visible/separate | 44.7 | 22.35 | 23.86 | 27.77 | 30.06 |
+| 21 | ped 110 moving/visible/separate | 40.1 | 24.91 | 26.15 | 27.16 | 33.89 |
+| 22 | ped 110 moving/hidden/separate | 45.5 | 21.98 | 23.54 | 25.09 | 28.55 |
+| 23 | ped 110 moving/far/separate | 80.9 | 12.35 | 13.67 | 14.60 | 19.77 |
+| 24 | object 128 static/visible/separate | 93.5 | 10.69 | 11.85 | 12.93 | 17.70 |
+| 25 | object 512 static/visible/separate | 89.5 | 11.18 | 12.37 | 13.75 | 17.61 |
+| 26 | object 900 static/visible/separate | 91.6 | 10.91 | 11.97 | 13.54 | 16.58 |
+| 27 | object 1000 static/visible/separate | 91.3 | 10.95 | 11.97 | 13.13 | 18.20 |
+| 28 | object 1000 static/hidden/separate | 80.6 | 12.41 | 13.47 | 14.99 | 34.15 |
+| 29 | object 1000 static/far/separate | 84.5 | 11.83 | 13.01 | 14.31 | 18.06 |
+| 30 | object 900 moving/visible/separate | 89.0 | 11.23 | 12.35 | 13.36 | 17.82 |
+| 31 | mixed 96 idle/visible/separate | 43.5 | 23.01 | 24.71 | 26.12 | 30.63 |
+| 32 | mixed 192 idle/visible/separate | 34.5 | 28.95 | 31.05 | 35.90 | 37.81 |
+| 33 | mixed 192 moving/visible/separate | 28.1 | 35.58 | 37.84 | 41.62 | 45.49 |
+
+Key average-frame comparisons with the homogeneous pass:
+
+| Scenario | Homogeneous ms | Varied ms | Change |
+| --- | ---: | ---: | ---: |
+| baseline visible | 9.57 | 9.49 | -0.8% |
+| vehicle 64 idle/visible/separate | 18.60 | 23.60 | +26.9% |
+| vehicle 64 moving/visible/separate | 19.68 | 24.54 | +24.7% |
+| vehicle 64 moving/visible/touching | 38.89 | 52.10 | +34.0% |
+| vehicle 16 moving/visible/deep-contact | 157.23 | 17.70 | -88.7% |
+| ped 110 moving/visible/separate | 22.78 | 24.91 | +9.4% |
+| object 1000 static/visible/separate | 10.03 | 10.95 | +9.2% |
+| mixed 192 moving/visible/separate | 31.24 | 35.58 | +13.9% |
+
+The normal separated/touching rows show a real diversity penalty, especially
+for vehicles. The reversed deep-contact result is also meaningful: identical
+collision shapes can remain locked in one pathological unresolved stack,
+whereas varied shapes separate during warm-up. Deep overlap is therefore a
+collision-geometry stress case, not a general count-only slope. The 255.36 ms
+collision-off worst frame is an isolated outlier; its 22.52 ms p99 is retained.
+
+Renderer high-water reached 89 visible pointers for 64 touching vehicles,
+121 for 110 idle peds, and 120 for the 512-object row. All 33 stages completed,
+the client stayed responsive, and no crash was observed.
+
+## Earlier exploratory pass on uneven terrain
+
 Environment:
 
 - GTA SA 1.0 US under the Neon `Release|Win32` client;
