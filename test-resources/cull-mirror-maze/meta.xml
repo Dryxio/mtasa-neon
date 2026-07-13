@@ -1,0 +1,6 @@
+<meta>
+    <info author="MTA Neon" name="Native CULL mirror maze" type="script" version="1.0.0" />
+    <script src="shared.lua" type="shared" cache="false" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>
