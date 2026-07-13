@@ -31,6 +31,8 @@ public:
     bool              Import(unsigned short usModelID);
     static bool       IsImportableModel(unsigned short usModelID);
     static bool       IsTXDData(const SString& strData);
+    bool              CopyDataForRadar(SString& output);
+    bool              IsFilteringEnabled() const { return m_bFilteringEnabled; }
 
 private:
     bool LoadFromFile(SString filePath);

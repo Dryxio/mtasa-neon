@@ -13,6 +13,7 @@
 #include <game/CCoronas.h>
 #include <game/CColPoint.h>
 #include <game/CObjectGroupPhysicalProperties.h>
+#include <game/CRadar.h>
 #include <game/CStreaming.h>
 #include <game/CPtrNodeSingleLinkPool.h>
 #include <lua/CLuaFunctionParser.h>
@@ -93,6 +94,9 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineLoadDFF", EngineLoadDFF},
         {"engineLoadIFP", EngineLoadIFP},
         {"engineImportTXD", EngineImportTXD},
+        {"engineSetRadarMapTile", EngineSetRadarMapTile},
+        {"engineResetRadarMapTile", EngineResetRadarMapTile},
+        {"engineGetRadarMapStats", EngineGetRadarMapStats},
         {"engineAddClothingTXD", ArgumentParser<EngineAddClothingTXD>},
         {"engineReplaceCOL", EngineReplaceCOL},
         {"engineRestoreCOL", EngineRestoreCOL},
@@ -516,6 +520,96 @@ int CLuaEngineDefs::EngineLoadTXD(lua_State* luaVM)
     }
 
     lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineSetRadarMapTile(lua_State* luaVM)
+{
+    int              column = -1;
+    int              row = -1;
+    CClientTXD*      txd = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(column);
+    argStream.ReadNumber(row);
+    argStream.ReadUserData(txd);
+
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    if (column < 0 || column >= 40 || row < 0 || row >= 40)
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    CLuaMain*  luaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* resource = luaMain ? luaMain->GetResource() : nullptr;
+    if (!resource)
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    // Tie registration ownership to the TXD element's resource so stopping
+    // that resource always destroys the source and unregisters its tiles.
+    if (txd->GetParent() != resource->GetResourceTXDRoot())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SString data;
+    if (!txd->CopyDataForRadar(data))
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    const bool result = g_pGame->GetRadar()->SetMapTile(static_cast<unsigned int>(column), static_cast<unsigned int>(row), resource, txd, data.data(),
+                                                        data.size(), txd->IsFilteringEnabled());
+    lua_pushboolean(luaVM, result);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineResetRadarMapTile(lua_State* luaVM)
+{
+    int              column = -1;
+    int              row = -1;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(column);
+    argStream.ReadNumber(row);
+
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    if (column < 0 || column >= 40 || row < 0 || row >= 40)
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    CLuaMain*  luaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* resource = luaMain ? luaMain->GetResource() : nullptr;
+    const bool result = resource && g_pGame->GetRadar()->ResetMapTile(static_cast<unsigned int>(column), static_cast<unsigned int>(row), resource);
+    lua_pushboolean(luaVM, result);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineGetRadarMapStats(lua_State* luaVM)
+{
+    const SRadarMapStats stats = g_pGame->GetRadar()->GetMapStats();
+    lua_newtable(luaVM);
+
+    lua_pushboolean(luaVM, stats.hooksInstalled);
+    lua_setfield(luaVM, -2, "hooksInstalled");
+    lua_pushnumber(luaVM, stats.registeredTiles);
+    lua_setfield(luaVM, -2, "registeredTiles");
+    lua_pushnumber(luaVM, stats.loadedTiles);
+    lua_setfield(luaVM, -2, "loadedTiles");
+    lua_pushnumber(luaVM, stats.failedTiles);
+    lua_setfield(luaVM, -2, "failedTiles");
+    lua_pushnumber(luaVM, static_cast<lua_Number>(stats.sourceBytes));
+    lua_setfield(luaVM, -2, "sourceBytes");
     return 1;
 }
 

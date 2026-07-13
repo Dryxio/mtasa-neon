@@ -24,6 +24,9 @@ public:
     LUA_DECLARE(EngineLoadCOL);
     LUA_DECLARE(EngineLoadIFP);
     LUA_DECLARE(EngineImportTXD);
+    LUA_DECLARE(EngineSetRadarMapTile);
+    LUA_DECLARE(EngineResetRadarMapTile);
+    LUA_DECLARE(EngineGetRadarMapStats);
     LUA_DECLARE(EngineReplaceCOL);
     LUA_DECLARE(EngineRestoreCOL);
     LUA_DECLARE(EngineReplaceModel);

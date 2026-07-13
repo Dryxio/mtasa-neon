@@ -1,0 +1,14 @@
+<meta>
+    <info author="MTA Neon" name="Extended native radar test" type="script" version="1.0.0" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+    <file src="assets/tile_37_18.txd" />
+    <file src="assets/tile_38_18.txd" />
+    <file src="assets/tile_39_18.txd" />
+    <file src="assets/tile_37_19.txd" />
+    <file src="assets/tile_38_19.txd" />
+    <file src="assets/tile_39_19.txd" />
+    <file src="assets/tile_37_20.txd" />
+    <file src="assets/tile_38_20.txd" />
+    <file src="assets/tile_39_20.txd" />
+</meta>

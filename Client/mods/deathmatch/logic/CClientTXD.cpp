@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include <game/CRadar.h>
 
 CClientTXD::CClientTXD(class CClientManager* pManager, ElementID ID) : ClassInit(this), CClientEntity(ID)
 {
@@ -19,6 +20,10 @@ CClientTXD::CClientTXD(class CClientManager* pManager, ElementID ID) : ClassInit
 
 CClientTXD::~CClientTXD()
 {
+    // A radar registration keeps an opaque reference to this element for
+    // lifecycle cleanup, while owning its own copy of the compressed TXD.
+    g_pGame->GetRadar()->RemoveMapTilesForSource(this);
+
     // Remove us from all the models
     g_pGame->GetRenderWare()->ModelInfoTXDRemoveTextures(&m_ReplacementTextures);
 
@@ -33,6 +38,26 @@ CClientTXD::~CClientTXD()
 
     // Remove us from all the clothes
     g_pGame->GetRenderWare()->ClothesRemoveFile(m_FileData.data());
+}
+
+bool CClientTXD::CopyDataForRadar(SString& output)
+{
+    if (!m_FileData.empty())
+    {
+        output = m_FileData;
+        return true;
+    }
+
+    // Raw buffers may have been released by Import(). File-backed TXDs can be
+    // validated and read again without trusting a stale path.
+    if (m_bIsRawData)
+        return false;
+
+    SString filename;
+    if (!GetFilenameToUse(filename))
+        return false;
+
+    return FileLoad(std::nothrow, filename, output);
 }
 
 bool CClientTXD::Load(bool isRaw, SString input, bool enableFiltering)

@@ -13,6 +13,7 @@
 
 #include <game/CRadar.h>
 #include "CMarkerSA.h"
+#include <memory>
 
 #define ARRAY_CMarker 0xBA86F0
 #define MAX_MARKERS   175
@@ -25,7 +26,20 @@ class CRadarSA : public CRadar
 public:
     CRadarSA();
     ~CRadarSA();
-    CMarker* CreateMarker(CVector* vecPosition);
-    CMarker* GetFreeMarker();
-    void     DrawAreaOnRadar(float fX1, float fY1, float fX2, float fY2, const SharedUtil::SColor color);
+    CMarker*       CreateMarker(CVector* vecPosition);
+    CMarker*       GetFreeMarker();
+    void           DrawAreaOnRadar(float fX1, float fY1, float fX2, float fY2, const SharedUtil::SColor color);
+    bool           SetMapTile(unsigned int column, unsigned int row, const void* owner, const void* source, const char* data, std::size_t size,
+                              bool filteringEnabled) override;
+    bool           ResetMapTile(unsigned int column, unsigned int row, const void* owner) override;
+    void           RemoveMapTilesForSource(const void* source) override;
+    SRadarMapStats GetMapStats() const override;
+
+    // Internal entry points used by the validated GTA call-site hooks.
+    void DrawMapSection(int x, int y);
+    void UpdateMapStreaming(int centerX, int centerY);
+
+private:
+    struct SExtendedRadar;
+    std::unique_ptr<SExtendedRadar> m_ExtendedRadar;
 };
