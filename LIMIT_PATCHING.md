@@ -960,6 +960,96 @@ The marker streamer also keeps its 600-unit default range. Absolute addresses
 remain GTA SA 1.0 US-specific and have the same executable-version-gating caveat
 as the other Neon limit patches.
 
+## Editable native CULL zones
+
+Neon relocates GTA's three native CULL arrays and exposes their loaded IPL
+entries to client Lua. The implemented capacities are:
+
+```text
+Attribute zones       1300 -> 4096 (0x12 bytes each)
+Tunnel zones            40 -> 256  (0x12 bytes each)
+Mirror zones            72 -> 256  (0x18 bytes each)
+```
+
+The implementation is in `Client/game_sa/CCullZonesSA.cpp`. It patches the 37
+GTA SA 1.0 US operands used by the native lookup and loader functions, based on
+Fastman92's `IPLsectionLimits::SetCull*AttributeZones` address inventory. The
+native count globals remain authoritative because GTA's lookup loops already
+use them rather than fixed immediate limits.
+
+On first Lua access, Neon adopts every loaded vanilla entry into a stable-ID
+catalog. Native arrays remain packed, but Lua IDs do not move when another zone
+is removed. Custom entries belong to the resource that created them. Stopping
+that resource deletes its custom entries and restores any vanilla entries it
+edited or disabled. A vanilla entry can be claimed by only one resource at a
+time, preventing two resources from leaving conflicting restoration state.
+
+The client functions are:
+
+```text
+engineGetCullZones([type])
+engineCreateCullZone(type, x, y, z, width, depth, height, flags,
+                     [rotation=0, mirrorV=0, normalX=0, normalY=0, normalZ=1])
+engineSetCullZone(id, type, x, y, z, width, depth, height, flags,
+                  [rotation=0, mirrorV=0, normalX=0, normalY=0, normalZ=1])
+engineSetCullZoneEnabled(id, enabled)
+engineRemoveCullZone(id)
+engineRestoreCullZone(id)
+```
+
+Types are `attribute`, `tunnel`, and `mirror`. `engineGetCullZones` returns the
+stable ID, type, compressed native geometry expressed as center/size/rotation,
+raw flag mask, enabled/original state, and mirror-plane fields. Raw flags are
+retained because stock data uses behavior bits not fully named by the current
+`gta-reversed` enum.
+
+Geometry intentionally retains GTA's signed 16-bit whole-unit representation.
+The supported extended-world range fits it, but fractional inputs are truncated
+and coordinates or derived vector components outside `[-32768,32767]` are
+rejected. Attribute and tunnel overlap combines flags; mirror lookup preserves
+native first-match ordering.
+
+MTA's minimize-time mirror toggle now delegates to the CULL manager rather than
+temporarily saving the count itself. This keeps mirror additions and deletions
+made while minimized from being lost when rendering resumes.
+
+Two runtime integration details are required for the API to work reliably:
+
+- MTA can disable mirrors before GTA has loaded the IPL CULL sections. The
+  mirror toggle therefore preserves the native count without initializing the
+  stable-ID catalog. Catalog adoption is deferred until the loaded vanilla
+  entries are available; otherwise the first early toggle permanently adopts
+  an empty catalog.
+- MTA's multiplayer processing path does not reach GTA's later
+  `CCullZones::Update` call before weather processing. The pre-weather handler
+  explicitly refreshes the current player and camera attribute masks through
+  `UpdateCullZoneFlags`. Without this update, custom entries are present in the
+  relocated array but effects such as `NO_RAIN` and `CAM_CLOSE_IN` do not
+  activate.
+
+The opt-in resource `test-resources/cull-zone-test` provides CRUD, original-zone
+restore, resource cleanup, old-capacity boundary commands, and a 3D visualizer.
+The visualizer can draw custom zones alone or nearby custom and vanilla zones;
+it labels their stable IDs, types, dimensions, enabled/original state, raw and
+decoded flags, and highlights the zone containing the player.
+
+`Game SA`, `Multiplayer SA`, and `Client Deathmatch` build successfully as
+`Release|Win32`. Live testing against MTA:SA Server 1.7 on Windows reported
+1180 attribute, 36 tunnel, and 65 mirror vanilla zones. The next custom entry
+received ID 1282, matching the 1281 adopted originals. The following behavior
+was verified in-game:
+
+- create, move/edit, disable, re-enable, and delete a custom attribute zone;
+- automatic custom-zone cleanup across resource restarts;
+- `NO_RAIN` with rainy weather and `CAM_CLOSE_IN` while inside their volumes;
+- custom and nearby-vanilla 3D visualization with decoded flags; and
+- reconnecting after rebuilding and restarting the client resource.
+
+Dedicated follow-up validation is still appropriate for the 39/40/41 tunnel
+and 71/72/73 mirror capacity boundaries, visible mirror-plane behavior,
+vanilla disable/restore, and mirror off/on transitions. These remain test cases,
+not confirmed runtime results.
+
 ## Candidate areas for future work
 
 Radar, paths, zones/population, native IPL support, object/model pools,

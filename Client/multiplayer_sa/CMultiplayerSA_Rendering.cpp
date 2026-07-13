@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CWorld.h>
 #include <game/RenderWare.h>
 #include <array>
 extern CCoreInterface*           g_pCore;
@@ -17,15 +18,11 @@ PreRenderSkyHandler*             pPreRenderSkyHandlerHandler = nullptr;
 RenderHeliLightHandler*          pRenderHeliLightHandler = nullptr;
 RenderEverythingBarRoadsHandler* pRenderEverythingBarRoadsHandler = nullptr;
 
-#define VAR_CCullZones_NumMirrorAttributeZones 0x0C87AC4  // int
-#define VAR_CMirrors_d3dRestored               0x0C7C729  // uchar
-
 namespace
 {
     CEntitySAInterface* ms_Rendering = NULL;
     CEntitySAInterface* ms_RenderingOneNonRoad = NULL;
     bool                ms_bIsMinimizedAndNotConnected = false;
-    int                 ms_iSavedNumMirrorZones = 0;
 
     // GTA writes a candidate before it increments and clamps the corresponding
     // counter. The extra slot absorbs that uncounted write after the usable list
@@ -923,27 +920,9 @@ void CMultiplayerSA::SetIsMinimizedAndNotConnected(bool bIsMinimizedAndNotConnec
 //////////////////////////////////////////////////////////////////////////////////////////
 void CMultiplayerSA::SetMirrorsEnabled(bool bEnabled)
 {
-    int&   iNumMirrorZones = *(int*)VAR_CCullZones_NumMirrorAttributeZones;
-    uchar& bResetMirror = *(uchar*)VAR_CMirrors_d3dRestored;
-
-    if (!bEnabled)
-    {
-        // Remove mirror zones
-        ms_iSavedNumMirrorZones += iNumMirrorZones;
-        iNumMirrorZones = 0;
-    }
-    else
-    {
-        if (ms_iSavedNumMirrorZones)
-        {
-            // Restore mirror zones
-            iNumMirrorZones += ms_iSavedNumMirrorZones;
-            ms_iSavedNumMirrorZones = 0;
-
-            // Recreate render buffers
-            bResetMirror = true;
-        }
-    }
+    // The CULL manager owns the published mirror count so Lua edits made while
+    // mirrors are disabled cannot be lost when the setting is enabled again.
+    pGameInterface->GetWorld()->SetCullMirrorZonesEnabled(bEnabled);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////

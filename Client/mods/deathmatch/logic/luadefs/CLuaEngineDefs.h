@@ -47,6 +47,12 @@ public:
     LUA_DECLARE(EngineSetDistantLightsDrawDistance);
     LUA_DECLARE(EngineRebuildDistantLights);
     LUA_DECLARE(EngineGetDistantLightStats);
+    LUA_DECLARE(EngineGetCullZones);
+    LUA_DECLARE(EngineCreateCullZone);
+    LUA_DECLARE(EngineSetCullZone);
+    LUA_DECLARE(EngineSetCullZoneEnabled);
+    LUA_DECLARE(EngineRemoveCullZone);
+    LUA_DECLARE(EngineRestoreCullZone);
     LUA_DECLARE(EngineSetAsynchronousLoading);
     LUA_DECLARE(EngineApplyShaderToWorldTexture);
     LUA_DECLARE(EngineRemoveShaderFromWorldTexture);

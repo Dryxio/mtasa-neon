@@ -98,6 +98,11 @@ CResource::CResource(unsigned short usNetID, const char* szResourceName, CClient
 
 CResource::~CResource()
 {
+    // Custom CULL zones are client-native state rather than elements, so restore
+    // vanilla edits and remove this resource's additions explicitly.
+    if (g_pGame && g_pGame->GetWorld())
+        g_pGame->GetWorld()->RemoveCullZoneChangesByOwner(this);
+
     // Remove refrences from requested models
     m_modelStreamer.ReleaseAll();
 
@@ -424,6 +429,9 @@ void CResource::Stop()
     CLuaArguments Arguments;
     Arguments.PushResource(this);
     m_pResourceEntity->CallEvent("onClientResourceStop", Arguments, true);
+
+    if (g_pGame && g_pGame->GetWorld())
+        g_pGame->GetWorld()->RemoveCullZoneChangesByOwner(this);
 
     // When a custom application is used - reset discord stuff
     const auto discord = g_pCore->GetDiscord();

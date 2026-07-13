@@ -111,6 +111,12 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineSetDistantLightsDrawDistance", EngineSetDistantLightsDrawDistance},
         {"engineRebuildDistantLights", EngineRebuildDistantLights},
         {"engineGetDistantLightStats", EngineGetDistantLightStats},
+        {"engineGetCullZones", EngineGetCullZones},
+        {"engineCreateCullZone", EngineCreateCullZone},
+        {"engineSetCullZone", EngineSetCullZone},
+        {"engineSetCullZoneEnabled", EngineSetCullZoneEnabled},
+        {"engineRemoveCullZone", EngineRemoveCullZone},
+        {"engineRestoreCullZone", EngineRestoreCullZone},
         {"engineSetAsynchronousLoading", EngineSetAsynchronousLoading},
         {"engineApplyShaderToWorldTexture", EngineApplyShaderToWorldTexture},
         {"engineRemoveShaderFromWorldTexture", EngineRemoveShaderFromWorldTexture},
@@ -1256,6 +1262,197 @@ int CLuaEngineDefs::EngineGetDistantLightStats(lua_State* luaVM)
     lua_setfield(luaVM, -2, "coronaCapacity");
     lua_pushnumber(luaVM, stats.drawDistance);
     lua_setfield(luaVM, -2, "drawDistance");
+    return 1;
+}
+
+namespace
+{
+    bool ParseCullZoneType(const SString& name, ECullZoneType& output)
+    {
+        if (name == "attribute")
+            output = ECullZoneType::ATTRIBUTE;
+        else if (name == "tunnel")
+            output = ECullZoneType::TUNNEL;
+        else if (name == "mirror")
+            output = ECullZoneType::MIRROR;
+        else
+            return false;
+        return true;
+    }
+
+    const char* CullZoneTypeName(ECullZoneType type)
+    {
+        switch (type)
+        {
+            case ECullZoneType::ATTRIBUTE:
+                return "attribute";
+            case ECullZoneType::TUNNEL:
+                return "tunnel";
+            case ECullZoneType::MIRROR:
+                return "mirror";
+        }
+        return "attribute";
+    }
+
+    void PushCullZone(lua_State* luaVM, const SCullZoneInfo& info)
+    {
+        lua_createtable(luaVM, 0, 17);
+        const auto setNumber = [luaVM](const char* name, double value)
+        {
+            lua_pushnumber(luaVM, value);
+            lua_setfield(luaVM, -2, name);
+        };
+        setNumber("id", info.id);
+        lua_pushstring(luaVM, CullZoneTypeName(info.type));
+        lua_setfield(luaVM, -2, "type");
+        setNumber("x", info.centerX);
+        setNumber("y", info.centerY);
+        setNumber("z", info.centerZ);
+        setNumber("width", info.width);
+        setNumber("depth", info.depth);
+        setNumber("height", info.height);
+        setNumber("rotation", info.rotationDegrees);
+        setNumber("flags", info.flags);
+        setNumber("mirrorV", info.mirrorV);
+        setNumber("normalX", info.mirrorNormalX);
+        setNumber("normalY", info.mirrorNormalY);
+        setNumber("normalZ", info.mirrorNormalZ);
+        lua_pushboolean(luaVM, info.enabled);
+        lua_setfield(luaVM, -2, "enabled");
+        lua_pushboolean(luaVM, info.original);
+        lua_setfield(luaVM, -2, "original");
+    }
+
+    bool ReadCullZoneDefinition(CScriptArgReader& argStream, SCullZoneDefinition& definition)
+    {
+        SString      typeName;
+        unsigned int flags = 0;
+        argStream.ReadString(typeName);
+        argStream.ReadNumber(definition.centerX);
+        argStream.ReadNumber(definition.centerY);
+        argStream.ReadNumber(definition.centerZ);
+        argStream.ReadNumber(definition.width);
+        argStream.ReadNumber(definition.depth);
+        argStream.ReadNumber(definition.height);
+        argStream.ReadNumber(flags);
+        argStream.ReadNumber(definition.rotationDegrees, 0.0f);
+        argStream.ReadNumber(definition.mirrorV, 0.0f);
+        argStream.ReadNumber(definition.mirrorNormalX, 0.0f);
+        argStream.ReadNumber(definition.mirrorNormalY, 0.0f);
+        argStream.ReadNumber(definition.mirrorNormalZ, 1.0f);
+
+        if (!argStream.HasErrors() && (!ParseCullZoneType(typeName, definition.type) || flags > 0xFFFF))
+        {
+            argStream.SetCustomError("Expected type 'attribute', 'tunnel', or 'mirror' and flags in range 0..65535");
+            return false;
+        }
+        definition.flags = static_cast<std::uint16_t>(flags);
+        return !argStream.HasErrors();
+    }
+
+    CResource* GetCullZoneOwner(lua_State* luaVM)
+    {
+        CLuaMain* luaMain = CLuaEngineDefs::m_pLuaManager->GetVirtualMachine(luaVM);
+        return luaMain ? luaMain->GetResource() : nullptr;
+    }
+}  // namespace
+
+int CLuaEngineDefs::EngineGetCullZones(lua_State* luaVM)
+{
+    SString          typeName;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadString(typeName, "");
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    ECullZoneType filter{};
+    const bool    filtered = !typeName.empty();
+    if (filtered && !ParseCullZoneType(typeName, filter))
+        return luaL_error(luaVM, "Expected type 'attribute', 'tunnel', or 'mirror'");
+
+    CWorld* world = g_pGame->GetWorld();
+    lua_newtable(luaVM);
+    int outputIndex = 1;
+    for (std::size_t i = 0; i < world->GetCullZoneCount(); ++i)
+    {
+        SCullZoneInfo info;
+        if (world->GetCullZoneByIndex(i, info) && (!filtered || info.type == filter))
+        {
+            PushCullZone(luaVM, info);
+            lua_rawseti(luaVM, -2, outputIndex++);
+        }
+    }
+    return 1;
+}
+
+int CLuaEngineDefs::EngineCreateCullZone(lua_State* luaVM)
+{
+    SCullZoneDefinition definition;
+    CScriptArgReader    argStream(luaVM);
+    if (!ReadCullZoneDefinition(argStream, definition))
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    CResource* owner = GetCullZoneOwner(luaVM);
+    const auto id = owner ? g_pGame->GetWorld()->CreateCullZone(definition, owner) : 0;
+    if (id)
+        lua_pushnumber(luaVM, id);
+    else
+        lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineSetCullZone(lua_State* luaVM)
+{
+    std::uint32_t       id = 0;
+    SCullZoneDefinition definition;
+    CScriptArgReader    argStream(luaVM);
+    argStream.ReadNumber(id);
+    if (!ReadCullZoneDefinition(argStream, definition))
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    CResource* owner = GetCullZoneOwner(luaVM);
+    lua_pushboolean(luaVM, owner && g_pGame->GetWorld()->SetCullZone(id, definition, owner));
+    return 1;
+}
+
+int CLuaEngineDefs::EngineSetCullZoneEnabled(lua_State* luaVM)
+{
+    std::uint32_t    id = 0;
+    bool             enabled = false;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(id);
+    argStream.ReadBool(enabled);
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    CResource* owner = GetCullZoneOwner(luaVM);
+    lua_pushboolean(luaVM, owner && g_pGame->GetWorld()->SetCullZoneEnabled(id, enabled, owner));
+    return 1;
+}
+
+int CLuaEngineDefs::EngineRemoveCullZone(lua_State* luaVM)
+{
+    std::uint32_t    id = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(id);
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    CResource* owner = GetCullZoneOwner(luaVM);
+    lua_pushboolean(luaVM, owner && g_pGame->GetWorld()->RemoveCullZone(id, owner));
+    return 1;
+}
+
+int CLuaEngineDefs::EngineRestoreCullZone(lua_State* luaVM)
+{
+    std::uint32_t    id = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(id);
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    CResource* owner = GetCullZoneOwner(luaVM);
+    lua_pushboolean(luaVM, owner && g_pGame->GetWorld()->RestoreCullZone(id, owner));
     return 1;
 }
 
