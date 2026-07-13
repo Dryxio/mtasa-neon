@@ -174,6 +174,7 @@ public:
     static bool      IsPedOnGround(CPed* pPed, bool& bOnGround);
     static bool      GetPedFightingStyle(CPed* pPed, unsigned char& ucStyle);
     static bool      GetPedMoveAnim(CPed* pPed, unsigned int& iMoveAnim);
+    static bool      IsPedUsingNativeWalkingStyle(CPed* pPed, bool& bEnabled);
     static bool      GetPedGravity(CPed* pPed, float& fGravity);
     static CElement* GetPedContactElement(CPed* pPed);
     static bool      GetPedWeaponSlot(CPed* pPed, unsigned char& ucWeaponSlot);
@@ -210,6 +211,7 @@ public:
     static bool SetPedWearingJetpack(CElement* pElement, bool bJetPack);
     static bool SetPedFightingStyle(CElement* pElement, unsigned char ucStyle);
     static bool SetPedMoveAnim(CElement* pElement, unsigned int iMoveAnim);
+    static bool SetPedUseNativeWalkingStyle(CElement* pElement, bool bEnabled);
     static bool SetPedGravity(CElement* pElement, float fGravity);
     static bool SetPedChoking(CElement* pElement, bool bChoking);
     static bool SetPedWeaponSlot(CElement* pElement, unsigned char ucWeaponSlot);

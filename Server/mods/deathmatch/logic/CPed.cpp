@@ -65,6 +65,7 @@ CPed::CPed(CPedManager* pPedManager, CElement* pParent, unsigned short usModel) 
     m_pTargetedEntity = NULL;
     m_ucFightingStyle = 15;  // STYLE_GRAB_KICK
     m_iMoveAnim = MOVE_DEFAULT;
+    m_bUseNativeWalkingStyle = false;
     m_fGravity = 0.008f;
     m_bDoingGangDriveby = false;
     m_bStealthAiming = false;
@@ -265,6 +266,13 @@ bool CPed::ReadSpecialData(const int iLine)
 
     // Grab the "walkingStyle" data
     GetCustomDataInt("walkingStyle", m_iMoveAnim, true);
+    if (!IsValidMoveAnim(m_iMoveAnim))
+        m_iMoveAnim = MOVE_DEFAULT;
+
+    // Model-native locomotion is opt-in and takes precedence over a numeric walking style.
+    GetCustomDataBool("useNativeWalkingStyle", m_bUseNativeWalkingStyle, true);
+    if (m_bUseNativeWalkingStyle)
+        m_iMoveAnim = MOVE_DEFAULT;
 
     return true;
 }

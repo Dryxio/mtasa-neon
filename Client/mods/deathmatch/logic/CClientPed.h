@@ -404,6 +404,9 @@ public:
     eMoveAnim GetMoveAnim();
     void      SetMoveAnim(eMoveAnim iAnim);
 
+    bool IsUsingNativeWalkingStyle() const { return m_bUseNativeWalkingStyle; }
+    void SetUseNativeWalkingStyle(bool bEnabled);
+
     void                                    AddProjectile(CClientProjectile* pProjectile) { m_Projectiles.push_back(pProjectile); }
     void                                    RemoveProjectile(CClientProjectile* pProjectile) { m_Projectiles.remove(pProjectile); }
     std::list<CClientProjectile*>::iterator ProjectilesBegin() { return m_Projectiles.begin(); }
@@ -715,6 +718,7 @@ public:
     CClientPlayerClothes*                    m_pClothes;
     eFightingStyle                           m_FightingStyle;
     eMoveAnim                                m_MoveAnim;
+    bool                                     m_bUseNativeWalkingStyle{false};
     std::list<CClientProjectile*>            m_Projectiles;
     unsigned char                            m_ucAlpha;
     float                                    m_fTargetRotation;

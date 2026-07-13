@@ -151,7 +151,7 @@ bool CPlayerListPacket::Write(NetBitStreamInterface& BitStream) const
         }
 
         // Move anim
-        uchar ucMoveAnim = pPlayer->GetMoveAnim();
+        uchar ucMoveAnim = pPlayer->GetSyncedMoveAnim();
         BitStream.Write(ucMoveAnim);
 
         // Always send extra info (Was: "Write spawn info if he's spawned")

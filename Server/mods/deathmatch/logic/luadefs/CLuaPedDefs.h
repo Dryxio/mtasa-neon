@@ -41,6 +41,7 @@ public:
     LUA_DECLARE(IsPedOnGround);
     LUA_DECLARE(GetPedFightingStyle);
     LUA_DECLARE(GetPedMoveAnim);
+    LUA_DECLARE(IsPedUsingNativeWalkingStyle);
     LUA_DECLARE(GetPedGravity);
     LUA_DECLARE(GetPedContactElement);
     LUA_DECLARE(GetPedWeaponSlot);
@@ -67,6 +68,7 @@ public:
     LUA_DECLARE(SetPedWearingJetpack);
     LUA_DECLARE(SetPedFightingStyle);
     LUA_DECLARE(SetPedMoveAnim);
+    LUA_DECLARE(SetPedUseNativeWalkingStyle);
     LUA_DECLARE(SetPedGravity);
     LUA_DECLARE(SetPedChoking);
     LUA_DECLARE_OOP(WarpPedIntoVehicle);

@@ -76,6 +76,7 @@ public:
     static float GetPedAnimationLength(CClientPed* ped);
     LUA_DECLARE(GetPedMoveState);
     LUA_DECLARE(GetPedMoveAnim);
+    LUA_DECLARE(IsPedUsingNativeWalkingStyle);
     LUA_DECLARE(IsPedHeadless);
     LUA_DECLARE(IsPedFrozen);
     LUA_DECLARE(IsPedFootBloodEnabled);
@@ -90,6 +91,7 @@ public:
     LUA_DECLARE(SetPedAnimationProgress);
     LUA_DECLARE(SetPedAnimationSpeed);
     LUA_DECLARE(SetPedMoveAnim);
+    LUA_DECLARE(SetPedUseNativeWalkingStyle);
     static bool SetPedArmor(CClientPed* const ped, const float armor);
     LUA_DECLARE(SetPedWeaponSlot);
     LUA_DECLARE(GivePedWeapon);

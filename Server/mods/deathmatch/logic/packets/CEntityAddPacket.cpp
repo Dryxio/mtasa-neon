@@ -897,7 +897,7 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                     BitStream.Write(&alpha);
 
                     // Move anim
-                    uchar ucMoveAnim = pPed->GetMoveAnim();
+                    uchar ucMoveAnim = pPed->GetSyncedMoveAnim();
                     BitStream.Write(ucMoveAnim);
 
                     // clothes

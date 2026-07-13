@@ -146,6 +146,8 @@ enum eMoveAnim
     MOVE_JOGWOMAN,
     MOVE_OLDFATWOMAN,
     MOVE_SKATE,
+    // Internal network marker. Public walking styles remain numeric 0..138.
+    MOVE_NATIVE = 0xFF,
 };
 
 enum eLandedPedFoot

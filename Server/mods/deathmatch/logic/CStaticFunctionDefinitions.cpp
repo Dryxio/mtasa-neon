@@ -3738,6 +3738,14 @@ bool CStaticFunctionDefinitions::GetPedMoveAnim(CPed* pPed, unsigned int& iMoveA
     return true;
 }
 
+bool CStaticFunctionDefinitions::IsPedUsingNativeWalkingStyle(CPed* pPed, bool& bEnabled)
+{
+    assert(pPed);
+
+    bEnabled = pPed->IsUsingNativeWalkingStyle();
+    return true;
+}
+
 bool CStaticFunctionDefinitions::GetPedGravity(CPed* pPed, float& fGravity)
 {
     assert(pPed);
@@ -4190,8 +4198,9 @@ bool CStaticFunctionDefinitions::SetPedMoveAnim(CElement* pElement, unsigned int
         if (IsValidMoveAnim(iMoveAnim))
         {
             CPed* pPed = static_cast<CPed*>(pElement);
-            if (pPed->GetMoveAnim() != iMoveAnim)
+            if (pPed->GetMoveAnim() != iMoveAnim || pPed->IsUsingNativeWalkingStyle())
             {
+                pPed->SetUseNativeWalkingStyle(false);
                 pPed->SetMoveAnim(iMoveAnim);
 
                 CBitStream BitStream;
@@ -4201,6 +4210,30 @@ bool CStaticFunctionDefinitions::SetPedMoveAnim(CElement* pElement, unsigned int
                 return true;
             }
         }
+    }
+    return false;
+}
+
+bool CStaticFunctionDefinitions::SetPedUseNativeWalkingStyle(CElement* pElement, bool bEnabled)
+{
+    assert(pElement);
+    RUN_CHILDREN(SetPedUseNativeWalkingStyle(*iter, bEnabled))
+
+    if (IS_PED(pElement))
+    {
+        CPed* pPed = static_cast<CPed*>(pElement);
+        if (pPed->IsUsingNativeWalkingStyle() != bEnabled)
+        {
+            // Native mode is an alternative to a custom numeric style. Resetting
+            // the stored style keeps the two setters deterministic: last call wins.
+            pPed->SetMoveAnim(MOVE_DEFAULT);
+            pPed->SetUseNativeWalkingStyle(bEnabled);
+
+            CBitStream BitStream;
+            BitStream.pBitStream->WriteCompressed(static_cast<unsigned int>(bEnabled ? MOVE_NATIVE : MOVE_DEFAULT));
+            m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pPed, SET_PED_MOVE_ANIM, *BitStream.pBitStream));
+        }
+        return true;
     }
     return false;
 }

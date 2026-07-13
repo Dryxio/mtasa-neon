@@ -39,6 +39,7 @@ void CLuaPedDefs::LoadFunctions()
         {"isPedOnGround", IsPedOnGround},
         {"getPedFightingStyle", GetPedFightingStyle},
         {"getPedWalkingStyle", GetPedMoveAnim},
+        {"isPedUsingNativeWalkingStyle", IsPedUsingNativeWalkingStyle},
         {"getPedGravity", GetPedGravity},
         {"getPedContactElement", GetPedContactElement},
         {"isPedDoingGangDriveby", IsPedDoingGangDriveby},
@@ -61,6 +62,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedWearingJetpack", SetPedWearingJetpack},  // introduced in 1.5.5-9.13846
         {"setPedFightingStyle", SetPedFightingStyle},
         {"setPedWalkingStyle", SetPedMoveAnim},
+        {"setPedUseNativeWalkingStyle", SetPedUseNativeWalkingStyle},
         {"setPedGravity", SetPedGravity},
         {"setPedChoking", SetPedChoking},
         {"warpPedIntoVehicle", WarpPedIntoVehicle},
@@ -120,6 +122,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "isHeadless", "isPedHeadless");
     lua_classfunction(luaVM, "isWearingJetpack", "isPedWearingJetpack");  // introduced in 1.5.5-9.13846
     lua_classfunction(luaVM, "isReloadingWeapon", "isPedReloadingWeapon");
+    lua_classfunction(luaVM, "isUsingNativeWalkingStyle", "isPedUsingNativeWalkingStyle");
 
     lua_classfunction(luaVM, "getArmor", "getPedArmor");
     lua_classfunction(luaVM, "getFightingStyle", "getPedFightingStyle");
@@ -147,6 +150,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setStat", "setPedStat");
     lua_classfunction(luaVM, "setWeaponSlot", "setPedWeaponSlot");
     lua_classfunction(luaVM, "setWalkingStyle", "setPedWalkingStyle");
+    lua_classfunction(luaVM, "setUseNativeWalkingStyle", "setPedUseNativeWalkingStyle");
     lua_classfunction(luaVM, "setAnimation", "setPedAnimation");
     lua_classfunction(luaVM, "setAnimationProgress", "setPedAnimationProgress");
     lua_classfunction(luaVM, "setAnimationSpeed", "setPedAnimationSpeed");
@@ -170,6 +174,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classvariable(luaVM, "contactElement", NULL, "getPedContactElement");
     lua_classvariable(luaVM, "vehicle", "warpPedIntoVehicle", "getPedOccupiedVehicle", OOP_WarpPedIntoVehicle, GetPedOccupiedVehicle);
     lua_classvariable(luaVM, "walkingStyle", "setPedWalkingStyle", "getPedWalkingStyle");
+    lua_classvariable(luaVM, "usingNativeWalkingStyle", "setPedUseNativeWalkingStyle", "isPedUsingNativeWalkingStyle");
     lua_classvariable(luaVM, "jetpack", "setPedWearingJetpack", "isPedWearingJetpack");  // introduced in 1.5.5-9.13846
     lua_classvariable(luaVM, "reloadingWeapon", nullptr, "isPedReloadingWeapon");
 
@@ -959,6 +964,29 @@ int CLuaPedDefs::GetPedMoveAnim(lua_State* luaVM)
     return 1;
 }
 
+int CLuaPedDefs::IsPedUsingNativeWalkingStyle(lua_State* luaVM)
+{
+    CPed* pPed;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPed);
+
+    if (!argStream.HasErrors())
+    {
+        bool bEnabled;
+        if (CStaticFunctionDefinitions::IsPedUsingNativeWalkingStyle(pPed, bEnabled))
+        {
+            lua_pushboolean(luaVM, bEnabled);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
 int CLuaPedDefs::GetPedGravity(lua_State* luaVM)
 {
     CPed* pPed;
@@ -1281,6 +1309,32 @@ int CLuaPedDefs::SetPedMoveAnim(lua_State* luaVM)
         LogWarningIfPlayerHasNotJoinedYet(luaVM, pElement);
 
         if (CStaticFunctionDefinitions::SetPedMoveAnim(pElement, iMoveAnim))
+        {
+            lua_pushboolean(luaVM, true);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::SetPedUseNativeWalkingStyle(lua_State* luaVM)
+{
+    CElement* pElement;
+    bool      bEnabled;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pElement);
+    argStream.ReadBool(bEnabled);
+
+    if (!argStream.HasErrors())
+    {
+        LogWarningIfPlayerHasNotJoinedYet(luaVM, pElement);
+
+        if (CStaticFunctionDefinitions::SetPedUseNativeWalkingStyle(pElement, bEnabled))
         {
             lua_pushboolean(luaVM, true);
             return 1;

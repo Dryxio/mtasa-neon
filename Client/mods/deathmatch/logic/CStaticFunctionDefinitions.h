@@ -147,6 +147,7 @@ public:
     static bool           IsPedDoingGangDriveby(CClientPed& Ped, bool& bDoingGangDriveby);
     static bool           GetPedFightingStyle(CClientPed& Ped, unsigned char& ucStyle);
     static bool           GetPedMoveAnim(CClientPed& Ped, unsigned int& iMoveAnim);
+    static bool           IsPedUsingNativeWalkingStyle(CClientPed& Ped, bool& bEnabled);
     static bool           GetPedMoveState(CClientPed& Ped, std::string& strMoveState);
     static bool           IsPedHeadless(CClientPed& Ped, bool& bHeadless);
     static bool           IsPedFrozen(CClientPed& Ped, bool& bFrozen);
@@ -177,6 +178,7 @@ public:
     static bool SetPedAnimationSpeed(CClientEntity& Entity, const SString& strAnimName, float fSpeed);
 
     static bool SetPedMoveAnim(CClientEntity& Entity, unsigned int iMoveAnim);
+    static bool SetPedUseNativeWalkingStyle(CClientEntity& Entity, bool bEnabled);
     static bool AddPedClothes(CClientEntity& Entity, const char* szTexture, const char* szModel, unsigned char ucType);
     static bool RemovePedClothes(CClientEntity& Entity, unsigned char ucType);
     static bool SetPedControlState(CClientPed& ped, const std::string& control, bool state) noexcept;

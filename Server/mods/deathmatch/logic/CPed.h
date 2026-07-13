@@ -64,6 +64,8 @@ enum ePedMoveAnim
     MOVE_JOGWOMAN,
     MOVE_OLDFATWOMAN,
     MOVE_SKATE,
+    // Internal network marker. Public walking styles remain numeric 0..138.
+    MOVE_NATIVE = 0xFF,
 };
 
 inline bool IsValidMoveAnim(uint iMoveAnim)
@@ -252,6 +254,18 @@ public:
     unsigned char GetMoveAnim() { return static_cast<unsigned char>(m_iMoveAnim); }
     void          SetMoveAnim(int iMoveAnim) { m_iMoveAnim = iMoveAnim; }
 
+    bool          IsUsingNativeWalkingStyle() const { return m_bUseNativeWalkingStyle; }
+    void          SetUseNativeWalkingStyle(bool bEnabled) { m_bUseNativeWalkingStyle = bEnabled; }
+    unsigned char GetSyncedMoveAnim()
+    {
+        if (m_bUseNativeWalkingStyle)
+            return MOVE_NATIVE;
+
+        // MOVE_NATIVE is reserved for the explicit boolean policy and must
+        // never be enabled by malformed map data or an unchecked internal call.
+        return IsValidMoveAnim(m_iMoveAnim) ? GetMoveAnim() : MOVE_DEFAULT;
+    }
+
     float GetGravity() { return m_fGravity; }
     void  SetGravity(float fGravity) { m_fGravity = fGravity; }
 
@@ -343,6 +357,7 @@ protected:
     CElement*                            m_pTargetedEntity;
     unsigned char                        m_ucFightingStyle;
     int                                  m_iMoveAnim;
+    bool                                 m_bUseNativeWalkingStyle;
     float                                m_fGravity;
     CVector                              m_vecVelocity;
     bool                                 m_bDoingGangDriveby;

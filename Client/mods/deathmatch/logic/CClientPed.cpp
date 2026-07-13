@@ -3706,7 +3706,7 @@ void CClientPed::_CreateModel()
 
         m_pPlayerPed->SetCurrentWeaponSlot(m_CurrentWeaponSlot);
         m_pPlayerPed->SetFightingStyle(m_FightingStyle, 6);
-        m_pPlayerPed->SetMoveAnim(m_MoveAnim);
+        m_pPlayerPed->SetMoveAnim(m_bUseNativeWalkingStyle ? MOVE_NATIVE : m_MoveAnim);
         SetHasJetPack(m_bHasJetPack);
         SetInterior(m_ucInterior);
         SetAlpha(m_ucAlpha);
@@ -3790,7 +3790,7 @@ void CClientPed::_CreateLocalModel()
 
         // Give him the default fighting style
         m_pPlayerPed->SetFightingStyle(m_FightingStyle, 6);
-        m_pPlayerPed->SetMoveAnim(m_MoveAnim);
+        m_pPlayerPed->SetMoveAnim(m_bUseNativeWalkingStyle ? MOVE_NATIVE : m_MoveAnim);
         SetHasJetPack(m_bHasJetPack);
 
         // Rebuild him so he gets his clothes
@@ -4953,6 +4953,11 @@ void CClientPed::SetFightingStyle(eFightingStyle style)
 
 eMoveAnim CClientPed::GetMoveAnim()
 {
+    // Keep getPedWalkingStyle consistent with the server while the model-native
+    // policy is active. The dedicated boolean getter exposes that policy.
+    if (m_bUseNativeWalkingStyle)
+        return m_MoveAnim;
+
     if (m_pPlayerPed)
     {
         return m_pPlayerPed->GetMoveAnim();
@@ -4962,11 +4967,40 @@ eMoveAnim CClientPed::GetMoveAnim()
 
 void CClientPed::SetMoveAnim(eMoveAnim iAnim)
 {
+    if (iAnim == MOVE_NATIVE)
+    {
+        SetUseNativeWalkingStyle(true);
+        return;
+    }
+
+    if (!IsValidMoveAnim(iAnim))
+        return;
+
+    const bool bWasUsingNativeWalkingStyle = m_bUseNativeWalkingStyle;
+    m_bUseNativeWalkingStyle = false;
     if (m_pPlayerPed)
     {
+        // Clear the internal marker first. If loading an explicit animation
+        // block fails, the engine must not silently remain in native mode.
+        if (bWasUsingNativeWalkingStyle)
+            m_pPlayerPed->SetMoveAnim(MOVE_DEFAULT);
         m_pPlayerPed->SetMoveAnim(iAnim);
     }
     m_MoveAnim = iAnim;
+}
+
+void CClientPed::SetUseNativeWalkingStyle(bool bEnabled)
+{
+    if (m_bUseNativeWalkingStyle == bEnabled)
+        return;
+
+    // Native mode and explicit numeric styles are mutually exclusive. This
+    // mirrors the server's last-setter-wins behavior and avoids hidden state.
+    m_bUseNativeWalkingStyle = bEnabled;
+    m_MoveAnim = MOVE_DEFAULT;
+
+    if (m_pPlayerPed)
+        m_pPlayerPed->SetMoveAnim(bEnabled ? MOVE_NATIVE : MOVE_DEFAULT);
 }
 
 unsigned int CClientPed::CountProjectiles(eWeaponType weaponType)

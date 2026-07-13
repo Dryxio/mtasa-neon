@@ -46,6 +46,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedAnimationProgress", SetPedAnimationProgress},
         {"setPedAnimationSpeed", SetPedAnimationSpeed},
         {"setPedWalkingStyle", SetPedMoveAnim},
+        {"setPedUseNativeWalkingStyle", SetPedUseNativeWalkingStyle},
         {"setPedControlState", ArgumentParserWarn<false, SetPedControlState>},
         {"setPedAnalogControlState", SetPedAnalogControlState},
         {"setPedDoingGangDriveby", SetPedDoingGangDriveby},
@@ -77,6 +78,7 @@ void CLuaPedDefs::LoadFunctions()
         {"getPedAnimationSpeed", ArgumentParser<GetPedAnimationSpeed>},
         {"getPedAnimationLength", ArgumentParser<GetPedAnimationLength>},
         {"getPedWalkingStyle", GetPedMoveAnim},
+        {"isPedUsingNativeWalkingStyle", IsPedUsingNativeWalkingStyle},
         {"getPedControlState", ArgumentParserWarn<false, GetPedControlState>},
         {"getPedAnalogControlState", GetPedAnalogControlState},
         {"isPedDoingGangDriveby", IsPedDoingGangDriveby},
@@ -184,6 +186,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "getWeaponSlot", "getPedWeaponSlot");
     lua_classfunction(luaVM, "getWalkingStyle", "getPedWalkingStyle");
     lua_classfunction(luaVM, "isBleeding", "isPedBleeding");
+    lua_classfunction(luaVM, "isUsingNativeWalkingStyle", "isPedUsingNativeWalkingStyle");
 
     lua_classfunction(luaVM, "setCanBeKnockedOffBike", "setPedCanBeKnockedOffBike");
     lua_classfunction(luaVM, "setAnalogControlState", "setPedAnalogControlState");
@@ -206,6 +209,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setAimTarget", "setPedAimTarget");
     lua_classfunction(luaVM, "setLookAt", "setPedLookAt");
     lua_classfunction(luaVM, "setWalkingStyle", "setPedWalkingStyle");
+    lua_classfunction(luaVM, "setUseNativeWalkingStyle", "setPedUseNativeWalkingStyle");
     lua_classfunction(luaVM, "setStat", "setPedStat");
     lua_classfunction(luaVM, "giveWeapon", "givePedWeapon");
     lua_classfunction(luaVM, "isReloadingWeapon", "isPedReloadingWeapon");
@@ -244,6 +248,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     // lua_classvariable ( luaVM, "muzzlePosition", NULL, "getPedWeaponMuzzlePosition" ); // TODO: needs to return a vector3 for oop
     lua_classvariable(luaVM, "weaponSlot", "setPedWeaponSlot", "getPedWeaponSlot");
     lua_classvariable(luaVM, "walkingStyle", "setPedWalkingStyle", "getPedWalkingStyle");
+    lua_classvariable(luaVM, "usingNativeWalkingStyle", "setPedUseNativeWalkingStyle", "isPedUsingNativeWalkingStyle");
     lua_classvariable(luaVM, "reloadingWeapon", nullptr, "isPedReloadingWeapon");
 
     lua_registerclass(luaVM, "Ped", "Element");
@@ -1503,6 +1508,29 @@ int CLuaPedDefs::GetPedMoveAnim(lua_State* luaVM)
     return 1;
 }
 
+int CLuaPedDefs::IsPedUsingNativeWalkingStyle(lua_State* luaVM)
+{
+    CClientPed* pPed = nullptr;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPed);
+
+    if (!argStream.HasErrors())
+    {
+        bool bEnabled;
+        if (CStaticFunctionDefinitions::IsPedUsingNativeWalkingStyle(*pPed, bEnabled))
+        {
+            lua_pushboolean(luaVM, bEnabled);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
 int CLuaPedDefs::IsPedHeadless(lua_State* luaVM)
 {
     // Verify the argument
@@ -2431,6 +2459,30 @@ int CLuaPedDefs::SetPedMoveAnim(lua_State* luaVM)
         m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
 
     // Failed
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::SetPedUseNativeWalkingStyle(lua_State* luaVM)
+{
+    CClientEntity* pEntity = nullptr;
+    bool           bEnabled;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pEntity);
+    argStream.ReadBool(bEnabled);
+
+    if (!argStream.HasErrors())
+    {
+        if (CStaticFunctionDefinitions::SetPedUseNativeWalkingStyle(*pEntity, bEnabled))
+        {
+            lua_pushboolean(luaVM, true);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
     lua_pushboolean(luaVM, false);
     return 1;
 }

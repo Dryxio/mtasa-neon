@@ -1850,6 +1850,12 @@ bool CStaticFunctionDefinitions::GetPedMoveAnim(CClientPed& Ped, unsigned int& i
     return true;
 }
 
+bool CStaticFunctionDefinitions::IsPedUsingNativeWalkingStyle(CClientPed& Ped, bool& bEnabled)
+{
+    bEnabled = Ped.IsUsingNativeWalkingStyle();
+    return true;
+}
+
 bool CStaticFunctionDefinitions::GetPedMoveState(CClientPed& Ped, std::string& strMoveState)
 {
     if (Ped.GetMovementState(strMoveState))
@@ -2364,6 +2370,21 @@ bool CStaticFunctionDefinitions::SetPedMoveAnim(CClientEntity& Entity, unsigned 
             Ped.SetMoveAnim((eMoveAnim)iMoveAnim);
             return true;
         }
+    }
+
+    return false;
+}
+
+bool CStaticFunctionDefinitions::SetPedUseNativeWalkingStyle(CClientEntity& Entity, bool bEnabled)
+{
+    RUN_CHILDREN(SetPedUseNativeWalkingStyle(**iter, bEnabled))
+
+    if (IS_PED(&Entity))
+    {
+        CClientPed& Ped = static_cast<CClientPed&>(Entity);
+        if (Ped.IsUsingNativeWalkingStyle() != bEnabled)
+            Ped.SetUseNativeWalkingStyle(bEnabled);
+        return true;
     }
 
     return false;

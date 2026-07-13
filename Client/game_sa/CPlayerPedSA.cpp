@@ -10,11 +10,13 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <optional>
 #include <core/CCoreInterface.h>
 #include <multiplayer/CMultiplayer.h>
 #include "CAnimBlendAssocGroupSA.h"
 #include "CAnimManagerSA.h"
 #include "CGameSA.h"
+#include "CPedModelInfoSA.h"
 #include "CPlayerInfoSA.h"
 #include "CPlayerPedSA.h"
 #include "CWorldSA.h"
@@ -219,8 +221,55 @@ bool IsBlendAssocGroupValid(int iGroup)
     return true;
 }
 
+static std::optional<int> GetNativeMoveAnimGroup(CPedSAInterface* pedInterface)
+{
+    if (!pedInterface)
+        return std::nullopt;
+
+    CModelInfo* modelInfo = pGame->GetModelInfo(pedInterface->m_nModelIndex);
+    if (!modelInfo || modelInfo->GetModelType() != eModelInfoType::PED)
+        return std::nullopt;
+
+    auto* pedModelInfo = static_cast<CPedModelInfoSAInterface*>(modelInfo->GetInterface());
+    if (!pedModelInfo)
+        return std::nullopt;
+
+    const int moveAnimGroup = static_cast<int>(pedModelInfo->motionAnimGroup);
+    if (!IsValidMoveAnim(moveAnimGroup))
+        return std::nullopt;
+
+    return moveAnimGroup;
+}
+
+static void ApplyMoveAnimGroup(CPedSAInterface* pedInterface, int moveAnimGroup)
+{
+    pedInterface->iMoveAnimGroup = moveAnimGroup;
+
+    DWORD dwThis = reinterpret_cast<DWORD>(pedInterface);
+    DWORD dwFunc = FUNC_CPlayerPed_ReApplyMoveAnims;
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThis
+        call    dwFunc
+    }
+    // clang-format on
+}
+
 void CPlayerPedSA::SetMoveAnim(eMoveAnim iAnimGroup)
 {
+    CPedSAInterface* pedInterface = static_cast<CPedSAInterface*>(GetInterface());
+
+    if (iAnimGroup == MOVE_NATIVE)
+    {
+        // Keep the policy as MTA-side state. GTA must only ever receive the
+        // concrete animation group resolved from the current ped model.
+        m_iCustomMoveAnim = MOVE_NATIVE;
+        if (const auto nativeMoveAnim = GetNativeMoveAnimGroup(pedInterface))
+            ApplyMoveAnimGroup(pedInterface, *nativeMoveAnim);
+        return;
+    }
+
     // Range check
     if (!IsValidMoveAnim(iAnimGroup))
         return;
@@ -294,18 +343,7 @@ void CPlayerPedSA::SetMoveAnim(eMoveAnim iAnimGroup)
     m_iCustomMoveAnim = iAnimGroup;
 
     // Set the the new move animation group now, although it does get updated through the hooks as well
-    CPedSAInterface* pedInterface = (CPedSAInterface*)GetInterface();
-    pedInterface->iMoveAnimGroup = (int)iAnimGroup;
-
-    DWORD dwThis = (DWORD)pedInterface;
-    DWORD dwFunc = FUNC_CPlayerPed_ReApplyMoveAnims;
-    // clang-format off
-    __asm
-    {
-        mov     ecx, dwThis
-        call    dwFunc
-    }
-    // clang-format on
+    ApplyMoveAnimGroup(pedInterface, iAnimGroup);
 }
 
 CEntity* CPlayerPedSA::GetTargetedEntity() const
@@ -426,9 +464,17 @@ __declspec(noinline) int _cdecl OnCPlayerPed_ProcessAnimGroups_Mid(CPlayerPedSAI
         int iCustomAnim = pPed->GetCustomMoveAnim();
         if (iCustomAnim)
         {
-            // If iReqMoveAnim is jetpack, use iReqMoveAnim
+            // Jetpack locomotion must remain authoritative over every custom
+            // or model-native ground movement group.
             if (IsAnimJetPack(iReqMoveAnim))
                 return iReqMoveAnim;
+
+            if (iCustomAnim == MOVE_NATIVE)
+            {
+                if (const auto nativeMoveAnim = GetNativeMoveAnimGroup(pPlayerPedSAInterface))
+                    return *nativeMoveAnim;
+                return iReqMoveAnim;
+            }
 
             // If iCustomAnim is physique based without special pose, and iReqMoveAnim is physique based, then use pose from iReqMoveAnim and physique from
             // iCustomAnim
