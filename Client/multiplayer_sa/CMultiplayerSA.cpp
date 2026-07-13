@@ -5378,6 +5378,7 @@ static void __declspec(naked) HOOK_CWeather_Update()
 static void Pre_CGame_Process()
 {
     TIMING_CHECKPOINT("+CWorld_Process");
+    EntityPerformanceBeginWorldFrame();
 
     if (m_pPreWorldProcessHandler)
         m_pPreWorldProcessHandler();
@@ -5388,6 +5389,7 @@ static void Post_CGame_Process()
     if (m_pPostWorldProcessHandler)
         m_pPostWorldProcessHandler();
 
+    EntityPerformanceEndWorldFrame();
     TIMING_CHECKPOINT("-CWorld_Process");
 }
 
@@ -6348,6 +6350,7 @@ bool                  CPhysical_ProcessCollisionSectorList()
 {
     if (pCollisionPhysicalThis && pCollisionPhysical)
     {
+        EntityPerformanceRecordBroadPhaseCandidate(pCollisionPhysicalThis, pCollisionPhysical);
         if (m_pProcessCollisionHandler && !m_pProcessCollisionHandler(pCollisionPhysicalThis, pCollisionPhysical))
         {
             return false;
@@ -6629,7 +6632,7 @@ void SetModelSuspensionLines(CVehicleSAInterface* pVehicleIntf, void* pSuspensio
     pModelInfo->SetVehicleSuspensionData(pSuspensionLines);
 }
 // Some variables.
-DWORD                dwSuspensionChangedJump = 0x4185C0;
+DWORD                dwSuspensionChangedJump = reinterpret_cast<DWORD>(EntityPerformanceProcessColModels);
 bool                 bSuspensionChanged = false;
 CVehicleSAInterface* pSuspensionInterface = NULL;
 bool                 CheckHasSuspensionChanged()
@@ -6687,7 +6690,7 @@ static void __declspec(naked) HOOK_ProcessVehicleCollision()
                 push dword ptr [esp+0x18+0xC]
                 push dword ptr [esp+0x1C+8]
                 push dword ptr [esp+0x20+4]
-                mov eax, 0x4185C0       // CCollision::ProcessColModels
+                mov eax, EntityPerformanceProcessColModels
                 call eax
                 add esp, 0x20
 

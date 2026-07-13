@@ -16,8 +16,21 @@
 #include <game/CPlayerPed.h>
 #include <game/CStats.h>
 
+struct CColModelSAInterface;
+class CColPointSAInterface;
+
 // our stuff
 VOID InitKeysyncHooks();
+
+// Dense-entity diagnostics are collected only while timing checkpoints are
+// enabled. The world hook owns the frame boundary; the existing collision-list
+// hook reports candidates without adding another mid-function GTA hook.
+void          EntityPerformanceBeginWorldFrame();
+void          EntityPerformanceEndWorldFrame();
+void          EntityPerformanceRecordBroadPhaseCandidate(CPhysicalSAInterface* pPhysical, CPhysicalSAInterface* pCandidate);
+int32 __cdecl EntityPerformanceProcessColModels(const void* pMatrixA, CColModelSAInterface* pColModelA, const void* pMatrixB, CColModelSAInterface* pColModelB,
+                                                CColPointSAInterface* pSpherePoints, CColPointSAInterface* pLinePoints, float* pMaxTouchDistances,
+                                                bool returnAllCollisions);
 
 BOOL GetContextSwitchPedID();
 BOOL IsNotInLocalContext();

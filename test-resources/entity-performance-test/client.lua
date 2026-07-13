@@ -415,6 +415,18 @@ local attributionStages = {
     "ped 110 moving far separate on",
 }
 
+-- Keep the homogeneous unresolved stack and the varied production proxy in
+-- separate runs. Switching model sets inside one profile would add streaming
+-- and warm-up state to the comparison we are trying to attribute.
+local collisionAttributionStages = {
+    "baseline 0 static visible separate off",
+    "vehicle 64 moving visible separate on",
+    "vehicle 64 moving visible touching on",
+    "vehicle 16 moving visible contact on",
+    "vehicle 16 moving visible contact off",
+    "ped 110 moving visible separate on",
+}
+
 runNextProfile = function()
     if not profile or benchmark then
         return
@@ -466,6 +478,20 @@ local function runAttributionProfile(_, secondsText)
     startProfile(attributionStages, secondsText, "entitybenchattributionprofile")
 end
 
+local function runCollisionAttributionProfile(_, secondsText)
+    if not setModelSet(nil, "homogeneous") then
+        return
+    end
+    startProfile(collisionAttributionStages, secondsText, "entitybenchcollisionprofile")
+end
+
+local function runCollisionVariedAttributionProfile(_, secondsText)
+    if not setModelSet(nil, "varied") then
+        return
+    end
+    startProfile(collisionAttributionStages, secondsText, "entitybenchcollisionvariedprofile")
+end
+
 addEventHandler("onClientPreRender", root, function(frameTime)
     if benchmark and benchmark.phase == "measure" and frameTime and frameTime > 0 then
         table.insert(benchmark.samples, frameTime)
@@ -476,6 +502,8 @@ addCommandHandler("entitybench", runBenchmark)
 addCommandHandler("entitybenchprofile", runProfile)
 addCommandHandler("entitybenchvariedprofile", runVariedProfile)
 addCommandHandler("entitybenchattributionprofile", runAttributionProfile)
+addCommandHandler("entitybenchcollisionprofile", runCollisionAttributionProfile)
+addCommandHandler("entitybenchcollisionvariedprofile", runCollisionVariedAttributionProfile)
 addCommandHandler("entitybenchmodels", setModels)
 addCommandHandler("entitybenchmodelset", setModelSet)
 addCommandHandler("entitybenchcancel", function()

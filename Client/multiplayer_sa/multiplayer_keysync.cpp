@@ -13,6 +13,10 @@
 
 #include <game/CWeaponStatManager.h>
 
+#include "../game_sa/CColModelSA.h"
+#include "../game_sa/CColPointSA.h"
+#include "../game_sa/CPhysicalSA.h"
+
 extern CMultiplayerSA* pMultiplayer;
 extern CCoreInterface* g_pCore;
 
@@ -46,6 +50,205 @@ extern PostContextSwitchHandler* m_pPostContextSwitchHandler;
 
 namespace
 {
+    enum class EEntityPerformanceType : uint8
+    {
+        NONE,
+        VEHICLE,
+        PED,
+    };
+
+    struct SEntityPerformanceStats
+    {
+        uint32 collisionCalls{};
+        TIMEUS collisionTimeUs{};
+        uint32 uniqueEntities{};
+        uint32 unsafeAfterAttempt[6]{};
+
+        uint32 collisionStepCalls{};
+        uint32 collisionStepsTotal{};
+        uint32 collisionStepsMax{};
+
+        uint32 sectorCalls{};
+        TIMEUS sectorTimeUs{};
+        uint32 shiftSectorCalls{};
+        TIMEUS shiftSectorTimeUs{};
+        uint32 shiftCalls{};
+        TIMEUS shiftTimeUs{};
+
+        uint32 broadPhaseEntries{};
+        uint32 broadPhaseSphereTests{};
+        uint32 broadPhaseSpherePasses{};
+
+        uint32 processEntityCalls{};
+        TIMEUS processEntityTimeUs{};
+        uint32 contactsProduced{};
+
+        uint32 processColModelsCalls{};
+        TIMEUS processColModelsTimeUs{};
+        uint32 repeatedProcessColModelsQueries{};
+    };
+
+    struct SEntityAttemptRecord
+    {
+        CPhysicalSAInterface*  pEntity{};
+        EEntityPerformanceType type{EEntityPerformanceType::NONE};
+        uint32                 calls{};
+    };
+
+    struct SProcessColModelsQuery
+    {
+        EEntityPerformanceType type{EEntityPerformanceType::NONE};
+        CPhysicalSAInterface*  pEntity{};
+        CEntitySAInterface*    pCandidate{};
+        const void*            pColModelA{};
+        const void*            pColModelB{};
+        uint64                 colDataStateA{};
+        uint64                 colDataStateB{};
+        std::array<uint32, 16> matrixA{};
+        std::array<uint32, 16> matrixB{};
+        bool                   hasLineOutputs{};
+        bool                   returnAllCollisions{};
+
+        bool operator==(const SProcessColModelsQuery& other) const
+        {
+            return type == other.type && pEntity == other.pEntity && pCandidate == other.pCandidate && pColModelA == other.pColModelA &&
+                   pColModelB == other.pColModelB && colDataStateA == other.colDataStateA && colDataStateB == other.colDataStateB && matrixA == other.matrixA &&
+                   matrixB == other.matrixB && hasLineOutputs == other.hasLineOutputs && returnAllCollisions == other.returnAllCollisions;
+        }
+    };
+
+    struct SProcessColModelsQueryHash
+    {
+        size_t operator()(const SProcessColModelsQuery& query) const
+        {
+            size_t     hash = 2166136261u;
+            const auto mix = [&hash](size_t value)
+            {
+                hash ^= value;
+                hash *= 16777619u;
+            };
+
+            mix(static_cast<size_t>(query.type));
+            mix(reinterpret_cast<size_t>(query.pEntity));
+            mix(reinterpret_cast<size_t>(query.pCandidate));
+            mix(reinterpret_cast<size_t>(query.pColModelA));
+            mix(reinterpret_cast<size_t>(query.pColModelB));
+            mix(static_cast<size_t>(query.colDataStateA));
+            mix(static_cast<size_t>(query.colDataStateA >> 32));
+            mix(static_cast<size_t>(query.colDataStateB));
+            mix(static_cast<size_t>(query.colDataStateB >> 32));
+            for (uint32 value : query.matrixA)
+                mix(value);
+            for (uint32 value : query.matrixB)
+                mix(value);
+            mix(query.hasLineOutputs);
+            mix(query.returnAllCollisions);
+            return hash;
+        }
+    };
+
+    bool                                                                   g_entityPerformanceFrameActive{};
+    EEntityPerformanceType                                                 g_activeEntityPerformanceType{EEntityPerformanceType::NONE};
+    CPhysicalSAInterface*                                                  g_activeCollisionEntity{};
+    CEntitySAInterface*                                                    g_activeCollisionCandidate{};
+    TIMEUS                                                                 g_collisionAttemptStartUs{};
+    uint32                                                                 g_collisionAttemptOrdinal{};
+    std::array<SEntityPerformanceStats, 2>                                 g_entityPerformanceStats{};
+    std::vector<SEntityAttemptRecord>                                      g_entityAttemptRecords;
+    std::unordered_set<SProcessColModelsQuery, SProcessColModelsQueryHash> g_processColModelsQueries;
+
+    SEntityPerformanceStats* GetEntityPerformanceStats(EEntityPerformanceType type)
+    {
+        switch (type)
+        {
+            case EEntityPerformanceType::VEHICLE:
+                return &g_entityPerformanceStats[0];
+            case EEntityPerformanceType::PED:
+                return &g_entityPerformanceStats[1];
+            default:
+                return nullptr;
+        }
+    }
+
+    void BeginCollisionAttempt(CPhysicalSAInterface* pEntity, EEntityPerformanceType type)
+    {
+        if (!g_entityPerformanceFrameActive)
+            return;
+
+        SEntityPerformanceStats* pStats = GetEntityPerformanceStats(type);
+        if (!pStats)
+            return;
+
+        auto iter = std::find_if(g_entityAttemptRecords.begin(), g_entityAttemptRecords.end(),
+                                 [pEntity](const SEntityAttemptRecord& record) { return record.pEntity == pEntity; });
+        if (iter == g_entityAttemptRecords.end())
+        {
+            g_entityAttemptRecords.push_back({pEntity, type, 1});
+            g_collisionAttemptOrdinal = 0;
+            pStats->uniqueEntities++;
+        }
+        else
+        {
+            g_collisionAttemptOrdinal = iter->calls++;
+        }
+
+        pStats->collisionCalls++;
+        g_activeEntityPerformanceType = type;
+        g_activeCollisionEntity = pEntity;
+        g_collisionAttemptStartUs = GetTimeUs();
+    }
+
+    void EndCollisionAttempt()
+    {
+        if (!g_entityPerformanceFrameActive || !g_activeCollisionEntity)
+            return;
+
+        if (SEntityPerformanceStats* pStats = GetEntityPerformanceStats(g_activeEntityPerformanceType))
+        {
+            pStats->collisionTimeUs += GetTimeUs() - g_collisionAttemptStartUs;
+            if (!g_activeCollisionEntity->bIsInSafePosition)
+                pStats->unsafeAfterAttempt[std::min<uint32>(g_collisionAttemptOrdinal, 5)]++;
+        }
+
+        g_activeEntityPerformanceType = EEntityPerformanceType::NONE;
+        g_activeCollisionEntity = nullptr;
+        g_activeCollisionCandidate = nullptr;
+    }
+
+    void RecordCollisionSteps(EEntityPerformanceType type, uint8 steps)
+    {
+        if (!g_entityPerformanceFrameActive)
+            return;
+
+        if (SEntityPerformanceStats* pStats = GetEntityPerformanceStats(type))
+        {
+            pStats->collisionStepCalls++;
+            pStats->collisionStepsTotal += steps;
+            pStats->collisionStepsMax = std::max<uint32>(pStats->collisionStepsMax, steps);
+        }
+    }
+
+    void OutputEntityPerformanceStats(const char* name, const SEntityPerformanceStats& stats)
+    {
+        if (!stats.collisionCalls && !stats.shiftCalls)
+            return;
+
+        const uint32 retries = stats.collisionCalls > stats.uniqueEntities ? stats.collisionCalls - stats.uniqueEntities : 0;
+        const double averageSteps = stats.collisionStepCalls ? static_cast<double>(stats.collisionStepsTotal) / stats.collisionStepCalls : 0.0;
+
+        TIMING_DETAIL(
+            SString("Entity collision %s: collision=%u/%lluus entities=%u retries=%u unsafe=[%u,%u,%u,%u,%u,%u] steps=%.2f/max%u "
+                    "sector=%u/%lluus shift-sector=%u/%lluus shift=%u/%lluus broad=%u/%u/%u entity=%u/%lluus contacts=%u colmodels=%u/%lluus "
+                    "repeated=%u",
+                    name, stats.collisionCalls, static_cast<unsigned long long>(stats.collisionTimeUs), stats.uniqueEntities, retries,
+                    stats.unsafeAfterAttempt[0], stats.unsafeAfterAttempt[1], stats.unsafeAfterAttempt[2], stats.unsafeAfterAttempt[3],
+                    stats.unsafeAfterAttempt[4], stats.unsafeAfterAttempt[5], averageSteps, stats.collisionStepsMax, stats.sectorCalls,
+                    static_cast<unsigned long long>(stats.sectorTimeUs), stats.shiftSectorCalls, static_cast<unsigned long long>(stats.shiftSectorTimeUs),
+                    stats.shiftCalls, static_cast<unsigned long long>(stats.shiftTimeUs), stats.broadPhaseEntries, stats.broadPhaseSphereTests,
+                    stats.broadPhaseSpherePasses, stats.processEntityCalls, static_cast<unsigned long long>(stats.processEntityTimeUs), stats.contactsProduced,
+                    stats.processColModelsCalls, static_cast<unsigned long long>(stats.processColModelsTimeUs), stats.repeatedProcessColModelsQueries));
+    }
+
     void BeginPlayerPedProcessControlTiming()
     {
         TIMING_CHECKPOINT("+GTA_PlayerPedProcessControl");
@@ -54,12 +257,14 @@ namespace
     {
         TIMING_CHECKPOINT("-GTA_PlayerPedProcessControl");
     }
-    void BeginPlayerPedProcessCollisionTiming()
+    void BeginPlayerPedProcessCollisionTiming(CPhysicalSAInterface* pPhysical)
     {
         TIMING_CHECKPOINT("+GTA_PlayerPedProcessCollision");
+        BeginCollisionAttempt(pPhysical, EEntityPerformanceType::PED);
     }
     void EndPlayerPedProcessCollisionTiming()
     {
+        EndCollisionAttempt();
         TIMING_CHECKPOINT("-GTA_PlayerPedProcessCollision");
     }
     void BeginPlayerPedPreRenderTiming()
@@ -78,12 +283,14 @@ namespace
     {
         TIMING_CHECKPOINT("-GTA_AutomobileProcessControl");
     }
-    void BeginAutomobileProcessCollisionTiming()
+    void BeginAutomobileProcessCollisionTiming(CPhysicalSAInterface* pPhysical)
     {
         TIMING_CHECKPOINT("+GTA_AutomobileProcessCollision");
+        BeginCollisionAttempt(pPhysical, EEntityPerformanceType::VEHICLE);
     }
     void EndAutomobileProcessCollisionTiming()
     {
+        EndCollisionAttempt();
         TIMING_CHECKPOINT("-GTA_AutomobileProcessCollision");
     }
     void BeginAutomobilePreRenderTiming()
@@ -93,6 +300,193 @@ namespace
     void EndAutomobilePreRenderTiming()
     {
         TIMING_CHECKPOINT("-GTA_AutomobilePreRender");
+    }
+
+    int32 __fastcall ProcessEntityCollisionWithTiming(CPhysicalSAInterface* pPhysical, void*, CEntitySAInterface* pEntity, CColPointSAInterface* pColPoints,
+                                                      EEntityPerformanceType type, DWORD functionAddress)
+    {
+        if (!g_entityPerformanceFrameActive)
+            return reinterpret_cast<int32(__thiscall*)(CPhysicalSAInterface*, CEntitySAInterface*, CColPointSAInterface*)>(functionAddress)(pPhysical, pEntity,
+                                                                                                                                            pColPoints);
+
+        SEntityPerformanceStats* pStats = GetEntityPerformanceStats(type);
+        const TIMEUS             startUs = GetTimeUs();
+        CPhysicalSAInterface*    previousEntity = g_activeCollisionEntity;
+        CEntitySAInterface*      previousCandidate = g_activeCollisionCandidate;
+        EEntityPerformanceType   previousType = g_activeEntityPerformanceType;
+        g_activeCollisionEntity = pPhysical;
+        g_activeCollisionCandidate = pEntity;
+        g_activeEntityPerformanceType = type;
+
+        const int32 contacts = reinterpret_cast<int32(__thiscall*)(CPhysicalSAInterface*, CEntitySAInterface*, CColPointSAInterface*)>(functionAddress)(
+            pPhysical, pEntity, pColPoints);
+
+        pStats->processEntityCalls++;
+        pStats->processEntityTimeUs += GetTimeUs() - startUs;
+        if (contacts > 0)
+            pStats->contactsProduced += contacts;
+
+        g_activeCollisionEntity = previousEntity;
+        g_activeCollisionCandidate = previousCandidate;
+        g_activeEntityPerformanceType = previousType;
+        return contacts;
+    }
+
+    int32 __fastcall HOOK_CAutomobile__ProcessEntityCollisionTiming(CPhysicalSAInterface* pPhysical, void* pUnused, CEntitySAInterface* pEntity,
+                                                                    CColPointSAInterface* pColPoints)
+    {
+        return ProcessEntityCollisionWithTiming(pPhysical, pUnused, pEntity, pColPoints, EEntityPerformanceType::VEHICLE, 0x6ACE70);
+    }
+
+    int32 __fastcall HOOK_CPlayerPed__ProcessEntityCollisionTiming(CPhysicalSAInterface* pPhysical, void* pUnused, CEntitySAInterface* pEntity,
+                                                                   CColPointSAInterface* pColPoints)
+    {
+        return ProcessEntityCollisionWithTiming(pPhysical, pUnused, pEntity, pColPoints, EEntityPerformanceType::PED, 0x5E2530);
+    }
+
+    void __fastcall ProcessShiftWithTiming(CPhysicalSAInterface* pPhysical, EEntityPerformanceType type)
+    {
+        const bool               enabled = g_entityPerformanceFrameActive;
+        SEntityPerformanceStats* pStats = enabled ? GetEntityPerformanceStats(type) : nullptr;
+        const TIMEUS             startUs = enabled ? GetTimeUs() : 0;
+        const auto               previousType = g_activeEntityPerformanceType;
+        CPhysicalSAInterface*    previousEntity = g_activeCollisionEntity;
+        if (enabled)
+        {
+            g_activeEntityPerformanceType = type;
+            g_activeCollisionEntity = pPhysical;
+        }
+
+        reinterpret_cast<void(__thiscall*)(CPhysicalSAInterface*)>(0x54DB10)(pPhysical);
+
+        if (enabled)
+        {
+            pStats->shiftCalls++;
+            pStats->shiftTimeUs += GetTimeUs() - startUs;
+            g_activeEntityPerformanceType = previousType;
+            g_activeCollisionEntity = previousEntity;
+        }
+    }
+
+    void __fastcall HOOK_CAutomobile__ProcessShiftTiming(CPhysicalSAInterface* pPhysical, void*)
+    {
+        ProcessShiftWithTiming(pPhysical, EEntityPerformanceType::VEHICLE);
+    }
+
+    void __fastcall HOOK_CPlayerPed__ProcessShiftTiming(CPhysicalSAInterface* pPhysical, void*)
+    {
+        ProcessShiftWithTiming(pPhysical, EEntityPerformanceType::PED);
+    }
+
+    uint8 __fastcall CollisionStepsWithTiming(CPhysicalSAInterface* pPhysical, bool& processBeforeTimeStep, bool& unknown, EEntityPerformanceType type,
+                                              DWORD functionAddress)
+    {
+        const uint8 steps =
+            reinterpret_cast<uint8(__thiscall*)(CPhysicalSAInterface*, bool&, bool&)>(functionAddress)(pPhysical, processBeforeTimeStep, unknown);
+        RecordCollisionSteps(type, steps);
+        return steps;
+    }
+
+    uint8 __fastcall HOOK_CAutomobile__CollisionStepsTiming(CPhysicalSAInterface* pPhysical, void*, bool& processBeforeTimeStep, bool& unknown)
+    {
+        return CollisionStepsWithTiming(pPhysical, processBeforeTimeStep, unknown, EEntityPerformanceType::VEHICLE, 0x6D0E90);
+    }
+
+    uint8 __fastcall HOOK_CPlayerPed__CollisionStepsTiming(CPhysicalSAInterface* pPhysical, void*, bool& processBeforeTimeStep, bool& unknown)
+    {
+        return CollisionStepsWithTiming(pPhysical, processBeforeTimeStep, unknown, EEntityPerformanceType::PED, 0x5E3E90);
+    }
+
+    bool __fastcall ProcessCollisionSectorListWithTiming(CPhysicalSAInterface* pPhysical, void*, int32 sectorX, int32 sectorY, bool shift)
+    {
+        if (!g_entityPerformanceFrameActive)
+            return reinterpret_cast<bool(__thiscall*)(CPhysicalSAInterface*, int32, int32)>(0x54BA60)(pPhysical, sectorX, sectorY);
+
+        const TIMEUS startUs = GetTimeUs();
+        const bool   result = reinterpret_cast<bool(__thiscall*)(CPhysicalSAInterface*, int32, int32)>(0x54BA60)(pPhysical, sectorX, sectorY);
+        if (SEntityPerformanceStats* pStats = GetEntityPerformanceStats(g_activeEntityPerformanceType))
+        {
+            if (shift)
+            {
+                pStats->shiftSectorCalls++;
+                pStats->shiftSectorTimeUs += GetTimeUs() - startUs;
+            }
+            else
+            {
+                pStats->sectorCalls++;
+                pStats->sectorTimeUs += GetTimeUs() - startUs;
+            }
+        }
+        return result;
+    }
+
+    bool __fastcall HOOK_CPhysical__ProcessCollisionSectorListTiming(CPhysicalSAInterface* pPhysical, void* pUnused, int32 sectorX, int32 sectorY)
+    {
+        return ProcessCollisionSectorListWithTiming(pPhysical, pUnused, sectorX, sectorY, false);
+    }
+
+    bool __fastcall HOOK_CPhysical__ProcessShiftCollisionSectorListTiming(CPhysicalSAInterface* pPhysical, void* pUnused, int32 sectorX, int32 sectorY)
+    {
+        return ProcessCollisionSectorListWithTiming(pPhysical, pUnused, sectorX, sectorY, true);
+    }
+
+    bool __fastcall HOOK_CEntity__GetIsTouchingCollisionTiming(CEntitySAInterface* pEntity, void*, const CVector& centre, float radius)
+    {
+        SEntityPerformanceStats* pStats = g_entityPerformanceFrameActive ? GetEntityPerformanceStats(g_activeEntityPerformanceType) : nullptr;
+        if (pStats)
+            pStats->broadPhaseSphereTests++;
+
+        const bool touching = reinterpret_cast<bool(__thiscall*)(CEntitySAInterface*, const CVector&, float)>(0x5344B0)(pEntity, centre, radius);
+        if (pStats && touching)
+            pStats->broadPhaseSpherePasses++;
+        return touching;
+    }
+
+    uint64 ReadColDataState(const CColModelSAInterface* pColModel)
+    {
+        if (!pColModel || !pColModel->m_data)
+            return 0;
+
+        uint64 state{};
+        MemCpyFast(&state, pColModel->m_data, sizeof(state));
+        return state;
+    }
+
+    int32 __cdecl HOOK_CCollision__ProcessColModelsTiming(const void* pMatrixA, CColModelSAInterface* pColModelA, const void* pMatrixB,
+                                                          CColModelSAInterface* pColModelB, CColPointSAInterface* pSpherePoints,
+                                                          CColPointSAInterface* pLinePoints, float* pMaxTouchDistances, bool returnAllCollisions)
+    {
+        SEntityPerformanceStats* pStats = g_entityPerformanceFrameActive ? GetEntityPerformanceStats(g_activeEntityPerformanceType) : nullptr;
+        if (!pStats)
+        {
+            return reinterpret_cast<int32(__cdecl*)(const void*, CColModelSAInterface*, const void*, CColModelSAInterface*, CColPointSAInterface*,
+                                                    CColPointSAInterface*, float*, bool)>(0x4185C0)(pMatrixA, pColModelA, pMatrixB, pColModelB, pSpherePoints,
+                                                                                                    pLinePoints, pMaxTouchDistances, returnAllCollisions);
+        }
+
+        SProcessColModelsQuery query;
+        query.type = g_activeEntityPerformanceType;
+        query.pEntity = g_activeCollisionEntity;
+        query.pCandidate = g_activeCollisionCandidate;
+        query.pColModelA = pColModelA;
+        query.pColModelB = pColModelB;
+        query.colDataStateA = ReadColDataState(pColModelA);
+        query.colDataStateB = ReadColDataState(pColModelB);
+        query.hasLineOutputs = pLinePoints && pMaxTouchDistances;
+        query.returnAllCollisions = returnAllCollisions;
+        MemCpyFast(query.matrixA.data(), pMatrixA, sizeof(query.matrixA));
+        MemCpyFast(query.matrixB.data(), pMatrixB, sizeof(query.matrixB));
+
+        if (!g_processColModelsQueries.emplace(query).second)
+            pStats->repeatedProcessColModelsQueries++;
+
+        const TIMEUS startUs = GetTimeUs();
+        const int32  contacts = reinterpret_cast<int32(__cdecl*)(const void*, CColModelSAInterface*, const void*, CColModelSAInterface*, CColPointSAInterface*,
+                                                                CColPointSAInterface*, float*, bool)>(0x4185C0)(
+            pMatrixA, pColModelA, pMatrixB, pColModelB, pSpherePoints, pLinePoints, pMaxTouchDistances, returnAllCollisions);
+        pStats->processColModelsCalls++;
+        pStats->processColModelsTimeUs += GetTimeUs() - startUs;
+        return contacts;
     }
 
     // These virtual hooks aggregate native work by entity category in the
@@ -106,7 +500,9 @@ namespace
         __asm
         {
             pushad
+            push    ecx
             call    BeginPlayerPedProcessCollisionTiming
+            add     esp, 4
             popad
             mov     eax, FUNC_CPlayerPed__ProcessCollision
             call    eax
@@ -146,7 +542,9 @@ namespace
         __asm
         {
             pushad
+            push    ecx
             call    BeginAutomobileProcessCollisionTiming
+            add     esp, 4
             popad
             mov     eax, FUNC_CAutomobile__ProcessCollision
             call    eax
@@ -206,6 +604,56 @@ namespace
     }
 }
 
+void EntityPerformanceBeginWorldFrame()
+{
+    g_entityPerformanceFrameActive = IS_TIMING_CHECKPOINTS();
+    g_activeEntityPerformanceType = EEntityPerformanceType::NONE;
+    g_activeCollisionEntity = nullptr;
+    g_activeCollisionCandidate = nullptr;
+    g_collisionAttemptStartUs = 0;
+    g_collisionAttemptOrdinal = 0;
+
+    if (!g_entityPerformanceFrameActive)
+        return;
+
+    g_entityPerformanceStats = {};
+    g_entityAttemptRecords.clear();
+    g_processColModelsQueries.clear();
+    if (!g_entityAttemptRecords.capacity())
+        g_entityAttemptRecords.reserve(256);
+    g_processColModelsQueries.reserve(1024);
+}
+
+int32 __cdecl EntityPerformanceProcessColModels(const void* pMatrixA, CColModelSAInterface* pColModelA, const void* pMatrixB, CColModelSAInterface* pColModelB,
+                                                CColPointSAInterface* pSpherePoints, CColPointSAInterface* pLinePoints, float* pMaxTouchDistances,
+                                                bool returnAllCollisions)
+{
+    return HOOK_CCollision__ProcessColModelsTiming(pMatrixA, pColModelA, pMatrixB, pColModelB, pSpherePoints, pLinePoints, pMaxTouchDistances,
+                                                   returnAllCollisions);
+}
+
+void EntityPerformanceEndWorldFrame()
+{
+    if (!g_entityPerformanceFrameActive)
+        return;
+
+    OutputEntityPerformanceStats("vehicle", g_entityPerformanceStats[0]);
+    OutputEntityPerformanceStats("ped", g_entityPerformanceStats[1]);
+    g_entityPerformanceFrameActive = false;
+    g_activeEntityPerformanceType = EEntityPerformanceType::NONE;
+    g_activeCollisionEntity = nullptr;
+    g_activeCollisionCandidate = nullptr;
+}
+
+void EntityPerformanceRecordBroadPhaseCandidate(CPhysicalSAInterface* pPhysical, CPhysicalSAInterface*)
+{
+    if (!g_entityPerformanceFrameActive || pPhysical != g_activeCollisionEntity)
+        return;
+
+    if (SEntityPerformanceStats* pStats = GetEntityPerformanceStats(g_activeEntityPerformanceType))
+        pStats->broadPhaseEntries++;
+}
+
 VOID InitKeysyncHooks()
 {
     // OutputDebugString("InitKeysyncHooks");
@@ -224,6 +672,21 @@ VOID InitKeysyncHooks()
     HookInstallMethod(VTBL_CPlayerPed__PreRender, (DWORD)HOOK_CPlayerPed__PreRenderTiming);
     HookInstallMethod(VTBL_CAutomobile__ProcessCollision, (DWORD)HOOK_CAutomobile__ProcessCollisionTiming);
     HookInstallMethod(VTBL_CAutomobile__PreRender, (DWORD)HOOK_CAutomobile__PreRenderTiming);
+    HookInstallMethod(0x86D198, (DWORD)HOOK_CPlayerPed__ProcessShiftTiming);
+    HookInstallMethod(0x871150, (DWORD)HOOK_CAutomobile__ProcessShiftTiming);
+    HookInstallMethod(0x86D1A8, (DWORD)HOOK_CPlayerPed__CollisionStepsTiming);
+    HookInstallMethod(0x871160, (DWORD)HOOK_CAutomobile__CollisionStepsTiming);
+    HookInstallMethod(0x86D1C0, (DWORD)HOOK_CPlayerPed__ProcessEntityCollisionTiming);
+    HookInstallMethod(0x871178, (DWORD)HOOK_CAutomobile__ProcessEntityCollisionTiming);
+
+    // These verified GTA SA 1.0 US call sites split sector traversal from the
+    // virtual narrow phase while leaving the original functions intact.
+    HookInstallCall(0x54DA84, (DWORD)HOOK_CPhysical__ProcessCollisionSectorListTiming);
+    HookInstallCall(0x54DDA4, (DWORD)HOOK_CPhysical__ProcessShiftCollisionSectorListTiming);
+    HookInstallCall(0x54BBD2, (DWORD)HOOK_CEntity__GetIsTouchingCollisionTiming);
+    HookInstallCall(0x546D56, (DWORD)HOOK_CCollision__ProcessColModelsTiming);
+    HookInstallCall(0x5E2837, (DWORD)HOOK_CCollision__ProcessColModelsTiming);
+    HookInstallCall(0x5E3127, (DWORD)HOOK_CCollision__ProcessColModelsTiming);
 
     // not strictly for keysync, to make CPlayerPed::GetPlayerInfoForThisPlayerPed always return the local playerinfo
     // 00609FF2     EB 1F          JMP SHORT gta_sa_u.0060A013

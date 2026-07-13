@@ -23,6 +23,8 @@ between scenarios even when the resource itself is unchanged.
 /entitybenchprofile [5-60 seconds per stage]
 /entitybenchvariedprofile [5-60 seconds per stage]
 /entitybenchattributionprofile [5-60 seconds per stage]
+/entitybenchcollisionprofile [5-60 seconds per stage]
+/entitybenchcollisionvariedprofile [5-60 seconds per stage]
 /entitybenchresetorigin
 /entitybenchcancel
 /entitybenchclear
@@ -53,6 +55,13 @@ the visible/hidden/far vehicle and ped controls plus the realistic touching
 vehicle case. Use it with the local `timingdebug on` console command after a
 client build containing the native timing hooks; it is the short attribution
 matrix and does not replace the 33-stage regression profile.
+
+`/entitybenchcollisionprofile` and `/entitybenchcollisionvariedprofile` run a
+six-stage collision attribution matrix with homogeneous and varied models,
+respectively. They include separated and touching populations, deep contact,
+the collision-off control, and near moving peds. Run both with `timingdebug on`
+after a build containing the internal collision counters; keep their model sets
+separate so streaming and warm-up state do not contaminate the comparison.
 
 `hidden` keeps the entities near the camera but points the camera away. This
 preserves near-entity simulation while removing most entity rendering. `far`
@@ -134,3 +143,23 @@ add diagnostic overhead, so compare subsystem shares and call counts from this
 mode; use a run with timing disabled for authoritative FPS distributions. Keep
 the client in the foreground so a long Present gap is not aggregated as one
 artificial multi-second frame.
+
+Builds with deep collision instrumentation also write one `Entity collision`
+detail line per category and snapshot. It includes unique entities, retries,
+unsafe counts after attempts one through six, sector and shift work,
+broad-phase candidates, `ProcessEntityCollision`, returned contacts,
+`ProcessColModels`, and exact repeated query counts. These fields are
+diagnostic counters, not a stable public log format.
+
+## Archived results
+
+- `results/2026-07-12-vm-profile.md`: homogeneous 33-stage baseline;
+- `results/2026-07-12-vm-varied-profile.md`: deterministic varied-model profile;
+- `results/2026-07-12-vm-native-attribution.md`: entity-level native scopes;
+- `results/2026-07-12-vm-deep-collision-attribution.md`: internal collision
+  counters, paired homogeneous/varied collision profiles, and the rejected
+  AABB-prefilter experiment.
+
+The AABB experiment recorded zero useful rejections, failed its go/no-go gate,
+and was rolled back. It is preserved only as an archived negative result; no
+AABB prefilter is active in the current instrumented collision path.
