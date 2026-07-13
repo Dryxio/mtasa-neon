@@ -483,8 +483,9 @@ public:
     virtual unsigned int EntryInfoNodePool_NoOfUsedSpaces() const noexcept = 0;
     virtual unsigned int PtrNodeDoubleLinkPool_NoOfUsedSpaces() const noexcept = 0;
 
-    // Keep diagnostics at the end of the module interface so existing virtual
+    // Keep new methods at the end of the module interface so existing virtual
     // method slots remain stable for independently rebuilt client modules.
     virtual SRendererStats GetRendererStats() = 0;
     virtual void           ResetRendererStats() = 0;
+    virtual void           SetFastWeaponStrafeEnabled(bool bEnabled) = 0;
 };

@@ -44,6 +44,10 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-11
     ExtendedWorldPositions,
 
+    // Adds "fastweaponstrafe" to setGlitchEnabled and the rejoin map state.
+    // 2026-07-12
+    Glitch_FastWeaponStrafe,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

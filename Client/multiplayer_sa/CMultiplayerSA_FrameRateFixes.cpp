@@ -15,6 +15,60 @@ static unsigned int nLastFrameTime = 0;
 
 constexpr float kOriginalTimeStep = 50.0f / 30.0f;
 
+static bool         g_fastWeaponStrafeEnabled = false;
+static float        g_fastWeaponStrafeTimeStep = 3.0f;
+static unsigned int g_fastWeaponStrafeFrameCount = 0;
+static unsigned int g_fastWeaponStrafeSampleTime = 0;
+
+// SA-MP keeps a private timestep for weapon movement. It samples the rendered
+// frame rate over windows longer than 250 ms, quantizes it to four-FPS steps,
+// and keeps the resulting value stable until the next sample.
+static void UpdateFastWeaponStrafeTimeStep()
+{
+    const unsigned int currentTime = SharedUtil::GetTickCount32();
+    if (g_fastWeaponStrafeSampleTime == 0)
+    {
+        g_fastWeaponStrafeSampleTime = currentTime;
+        return;
+    }
+
+    ++g_fastWeaponStrafeFrameCount;
+
+    if (currentTime - g_fastWeaponStrafeSampleTime <= 250)
+        return;
+
+    const unsigned int sampledFrameRate = 4 * g_fastWeaponStrafeFrameCount - 4;
+    const float        sampledTimeStep = sampledFrameRate > 16 ? 50.0f / static_cast<float>(sampledFrameRate) : 3.0f;
+
+    g_fastWeaponStrafeTimeStep = sampledTimeStep * 3.0f;
+    g_fastWeaponStrafeFrameCount = 0;
+    g_fastWeaponStrafeSampleTime = currentTime;
+}
+
+// Reproduces SA-MP's faster response when changing direction while aiming.
+// SA-MP redirects CTaskSimpleUseGun::ControlGunMove to its private timestep.
+#define HOOKPOS_CTaskSimpleUseGun__ControlGunMove  0x61E0C0
+#define HOOKSIZE_CTaskSimpleUseGun__ControlGunMove 0x6
+static const unsigned int     RETURN_CTaskSimpleUseGun__ControlGunMove = 0x61E0C6;
+static void __declspec(naked) HOOK_CTaskSimpleUseGun__ControlGunMove()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // clang-format off
+    __asm
+    {
+        fld ds:[0xB7CB5C]                          // CTimer::ms_fTimeStep
+        cmp byte ptr [g_fastWeaponStrafeEnabled], 0
+        je disabled
+        fstp st(0)
+        fld g_fastWeaponStrafeTimeStep
+
+    disabled:
+        jmp RETURN_CTaskSimpleUseGun__ControlGunMove
+    }
+    // clang-format on
+}
+
 // Fixes player movement issue while aiming and walking on high FPS.
 #define HOOKPOS_CTaskSimpleUseGun__SetMoveAnim  0x61E4F2
 #define HOOKSIZE_CTaskSimpleUseGun__SetMoveAnim 0x6
@@ -26,9 +80,21 @@ static void __declspec(naked) HOOK_CTaskSimpleUseGun__SetMoveAnim()
     // clang-format off
     __asm
     {
+        cmp byte ptr [g_fastWeaponStrafeEnabled], 0
+        jne fixedThreshold
+
         fld ds:[0xB7CB5C]           // CTimer::ms_fTimeStep
         fdiv kOriginalTimeStep      // 1.666f
         fmul ds:[0x858B1C]          // 0.1f
+        jmp compareThreshold
+
+    fixedThreshold:
+        // SA-MP leaves GTA's original fixed 0.1 threshold untouched. MTA's
+        // high-FPS fix scales it down, which delays the zero crossing while
+        // reversing strafe direction.
+        fld ds:[0x858B1C]
+
+    compareThreshold:
         fxch
         fcom
         fxch
@@ -214,6 +280,10 @@ static void __declspec(naked) HOOK_CTimer__Update()
     // clang-format off
     __asm
     {
+        pushad
+        call UpdateFastWeaponStrafeTimeStep
+        popad
+
         add esp, 0x4
 
         mov bWouldBeNewFrame, 0
@@ -841,6 +911,7 @@ void CMultiplayerSA::SetRapidVehicleStopFixEnabled(bool enabled)
 
 void CMultiplayerSA::InitHooks_FrameRateFixes()
 {
+    EZHookInstall(CTaskSimpleUseGun__ControlGunMove);
     EZHookInstall(CTaskSimpleUseGun__SetMoveAnim);
     EZHookInstall(CCamera__Process);
     EZHookInstall(CHeli__ProcessFlyingCarStuff);
@@ -888,4 +959,12 @@ void CMultiplayerSA::InitHooks_FrameRateFixes()
     EZHookInstall(CTaskSimpleSwim__ProcessEffectsBubbleFix);
 
     EZHookInstall(CWeapon_Update);
+}
+
+void CMultiplayerSA::SetFastWeaponStrafeEnabled(bool bEnabled)
+{
+    if (g_fastWeaponStrafeEnabled == bEnabled)
+        return;
+
+    g_fastWeaponStrafeEnabled = bEnabled;
 }

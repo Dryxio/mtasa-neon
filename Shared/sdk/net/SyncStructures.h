@@ -1967,10 +1967,21 @@ struct SFunBugsStateSync : public ISyncStructure
     {
         BITCOUNT = 10
     };
+    // Keep post-release additions versioned and separate so older clients
+    // continue reading the following MapInfo fields at the same bit offset.
+    enum
+    {
+        BITCOUNT2 = 1
+    };
 
     bool Read(NetBitStreamInterface& bitStream)
     {
         bool bOk = bitStream.ReadBits(reinterpret_cast<char*>(&data), BITCOUNT);
+
+        if (bitStream.Can(eBitStreamVersion::Glitch_FastWeaponStrafe))
+            bOk &= bitStream.ReadBits(reinterpret_cast<char*>(&data2), BITCOUNT2);
+        else
+            data2.bFastWeaponStrafe = false;
 
         //// Example for adding item:
         // if (bitStream.Can(eBitStreamVersion::PLACEHOLDER))
@@ -1984,6 +1995,9 @@ struct SFunBugsStateSync : public ISyncStructure
     void Write(NetBitStreamInterface& bitStream) const
     {
         bitStream.WriteBits(reinterpret_cast<const char*>(&data), BITCOUNT);
+
+        if (bitStream.Can(eBitStreamVersion::Glitch_FastWeaponStrafe))
+            bitStream.WriteBits(reinterpret_cast<const char*>(&data2), BITCOUNT2);
 
         //// Example for adding item:
         // if (bitStream.Can(eBitStreamVersion::PLACEHOLDER))
@@ -2005,6 +2019,10 @@ struct SFunBugsStateSync : public ISyncStructure
     } data;
 
     // Add new ones in separate structs
+    struct
+    {
+        bool bFastWeaponStrafe : 1;
+    } data2;
 };
 
 //////////////////////////////////////////
