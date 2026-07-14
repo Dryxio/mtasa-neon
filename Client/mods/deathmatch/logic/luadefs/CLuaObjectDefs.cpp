@@ -97,7 +97,11 @@ int CLuaObjectDefs::CreateObject(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        if (CClientObjectManager::IsValidModel(usModelID))
+        unsigned short usRuntimeModel = 0;
+        // Server IDs live outside GTA's native model range. Validate the
+        // client-specific runtime slot here, while preserving the logical ID
+        // for CreateObject to expose on the resulting element.
+        if (m_pManager->GetModelManager()->ResolveModelID(usModelID, usRuntimeModel) && CClientObjectManager::IsValidModel(usRuntimeModel))
         {
             CLuaMain* pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
             if (pLuaMain)

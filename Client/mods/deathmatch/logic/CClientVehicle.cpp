@@ -1036,8 +1036,12 @@ void CClientVehicle::SetTurretRotation(float fHorizontal, float fVertical)
     m_fTurretVertical = fVertical;
 }
 
-void CClientVehicle::SetModelBlocking(unsigned short usModel, unsigned char ucVariant, unsigned char ucVariant2)
+void CClientVehicle::SetModelBlocking(unsigned short usModel, unsigned char ucVariant, unsigned char ucVariant2, unsigned short usLogicalModel)
 {
+    // The logical identity can change while the fallback runtime model stays
+    // the same (for example when this client has no free custom slot).
+    m_usLogicalModel = usLogicalModel;
+
     // Different vehicle ID than we have now?
     if (m_usModel != usModel)
     {

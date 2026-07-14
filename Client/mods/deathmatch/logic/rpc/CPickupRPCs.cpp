@@ -65,9 +65,12 @@ void CPickupRPCs::SetPickupType(CClientEntity* pSource, NetBitStreamInterface& b
             {
                 unsigned short usModel;
                 bitStream.Read(usModel);
-                if (CClientObjectManager::IsValidModel(usModel))
+                unsigned short usRuntimeModel = 0;
+                unsigned short usLogicalModel = 0xFFFF;
+                if (m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) &&
+                    CClientObjectManager::IsValidModel(usRuntimeModel))
                 {
-                    pPickup->SetModel(usModel);
+                    pPickup->SetModel(usRuntimeModel, usLogicalModel);
                     pPickup->m_ucType = ucType;
                 }
             }

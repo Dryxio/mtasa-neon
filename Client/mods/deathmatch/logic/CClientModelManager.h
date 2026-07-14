@@ -56,7 +56,13 @@ public:
     std::uint16_t GetServerModelID(std::uint16_t runtimeModelId) const;
     int           GetServerModelRuntimeID(std::uint16_t logicalModelId) const;
 
+    // Resolve IDs supplied by scripts without ever allowing an unknown logical
+    // ID to reach GTA's fixed-size model arrays. runtimeModelId is always safe
+    // to pass to native engine APIs when this function succeeds.
+    bool ResolveModelID(std::uint32_t modelId, std::uint16_t& runtimeModelId, std::uint16_t* logicalModelId = nullptr, bool allowParentFallback = true) const;
+
     const SServerModelDefinition* FindServerModelDefinition(std::uint16_t logicalModelId) const;
+    const SServerModelDefinition* FindServerModelDefinition(const std::string& name) const;
 
 private:
     struct SServerModelEntry

@@ -20,4 +20,9 @@ public:
     LUA_DECLARE(EngineFreeModel)
     LUA_DECLARE(EngineGetModelParent)
     LUA_DECLARE(EngineGetModelName)
+    LUA_DECLARE(EngineGetModelType)
+    LUA_DECLARE(EngineGetModelIDFromName)
+    LUA_DECLARE(EngineGetModels)
+    LUA_DECLARE(EngineIsModelAllocated)
+    LUA_DECLARE(EngineGetModelAvailableCount)
 };

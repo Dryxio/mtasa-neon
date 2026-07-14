@@ -527,11 +527,16 @@ void CElementRPCs::SetElementModel(CClientEntity* pSource, NetBitStreamInterface
         case CCLIENTPLAYER:
         {
             CClientPed*          pPed = static_cast<CClientPed*>(pSource);
-            const unsigned short usCurrentModel = static_cast<ushort>(pPed->GetModel());
+            const unsigned short usCurrentModel = pPed->GetLogicalModel();
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
+
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel))
+                break;
 
             if (usCurrentModel != usModel)
             {
-                if (pPed->SetModel(usModel))
+                if (pPed->SetModel(usRuntimeModel, false, usLogicalModel))
                 {
                     CLuaArguments Arguments;
                     Arguments.PushNumber(usCurrentModel);
@@ -553,16 +558,20 @@ void CElementRPCs::SetElementModel(CClientEntity* pSource, NetBitStreamInterface
             }
 
             CClientVehicle*      pVehicle = static_cast<CClientVehicle*>(pSource);
-            const unsigned short usCurrentModel = pVehicle->GetModel();
-            const unsigned short usRuntimeModel = m_pManager->GetModelManager()->ResolveServerModelID(usModel);
+            const unsigned short usCurrentModel = pVehicle->GetLogicalModel();
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
 
-            if (usCurrentModel != usRuntimeModel)
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel))
+                break;
+
+            if (usCurrentModel != usModel)
             {
-                pVehicle->SetModelBlocking(usRuntimeModel, ucVariant, ucVariant2);
+                pVehicle->SetModelBlocking(usRuntimeModel, ucVariant, ucVariant2, usLogicalModel);
 
                 CLuaArguments Arguments;
                 Arguments.PushNumber(usCurrentModel);
-                Arguments.PushNumber(usRuntimeModel);
+                Arguments.PushNumber(usModel);
                 pVehicle->CallEvent("onClientElementModelChange", Arguments, true);
             }
 
@@ -573,15 +582,19 @@ void CElementRPCs::SetElementModel(CClientEntity* pSource, NetBitStreamInterface
         case CCLIENTWEAPON:
         {
             CClientObject*       pObject = static_cast<CClientObject*>(pSource);
-            const unsigned short usCurrentModel = pObject->GetModel();
-            const unsigned short usRuntimeModel = m_pManager->GetModelManager()->ResolveServerModelID(usModel);
+            const unsigned short usCurrentModel = pObject->GetLogicalModel();
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
 
-            if (usCurrentModel != usRuntimeModel)
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel))
+                break;
+
+            if (usCurrentModel != usModel)
             {
-                pObject->SetModel(usRuntimeModel);
+                pObject->SetModel(usRuntimeModel, usLogicalModel);
                 CLuaArguments Arguments;
                 Arguments.PushNumber(usCurrentModel);
-                Arguments.PushNumber(usRuntimeModel);
+                Arguments.PushNumber(usModel);
                 pObject->CallEvent("onClientElementModelChange", Arguments, true);
             }
 
@@ -590,11 +603,18 @@ void CElementRPCs::SetElementModel(CClientEntity* pSource, NetBitStreamInterface
         case CCLIENTBUILDING:
         {
             CClientBuilding* building = static_cast<CClientBuilding*>(pSource);
-            const auto       currentModel = building->GetModel();
+            const auto       currentModel = building->GetLogicalModel();
+            unsigned short   runtimeModel = 0;
+            unsigned short   logicalModel = 0xFFFF;
+
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, runtimeModel, &logicalModel) || !CClientBuildingManager::IsValidModel(runtimeModel))
+            {
+                break;
+            }
 
             if (currentModel != usModel)
             {
-                building->SetModel(usModel);
+                building->SetModel(runtimeModel, logicalModel);
                 CLuaArguments Arguments;
                 Arguments.PushNumber(currentModel);
                 Arguments.PushNumber(usModel);

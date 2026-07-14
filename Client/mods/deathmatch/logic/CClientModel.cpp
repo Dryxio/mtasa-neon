@@ -158,12 +158,13 @@ void CClientModel::RestoreDFF(CModelInfo* pModelInfo)
             if (element.GetModel() != m_iModelID)
                 continue;
 
+            const unsigned short logicalModel = element.GetLogicalModel();
             if (element.IsStreamedIn())
                 element.StreamOutForABit();
 
             setElementModelLambda(element);
 
-            callElementChangeEvent(element, usParentID, m_iModelID);
+            callElementChangeEvent(element, usParentID, logicalModel);
         }
     };
 
@@ -176,8 +177,9 @@ void CClientModel::RestoreDFF(CModelInfo* pModelInfo)
             if (element.GetModel() != m_iModelID)
                 continue;
 
+            const unsigned short logicalModel = element.GetLogicalModel();
             setElementModelLambda(element);
-            callElementChangeEvent(element, usParentID, m_iModelID);
+            callElementChangeEvent(element, usParentID, logicalModel);
         }
     };
 

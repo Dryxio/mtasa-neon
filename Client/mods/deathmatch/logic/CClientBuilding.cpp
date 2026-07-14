@@ -10,11 +10,13 @@
 
 #include "StdInc.h"
 
-CClientBuilding::CClientBuilding(class CClientManager* pManager, ElementID ID, uint16_t usModelId, const CVector& pos, const CVector& rot, uint8_t interior)
+CClientBuilding::CClientBuilding(class CClientManager* pManager, ElementID ID, uint16_t usModelId, const CVector& pos, const CVector& rot, uint8_t interior,
+                                 uint16_t usLogicalModelId)
     : ClassInit(this),
       CClientEntity(ID),
       m_pBuildingManager(pManager->GetBuildingManager()),
       m_usModelId(usModelId),
+      m_usLogicalModelId(usLogicalModelId),
       m_vPos(pos),
       m_vRot(rot),
       m_interior(interior),
@@ -97,8 +99,12 @@ void CClientBuilding::SetInterior(uint8_t ucInterior)
     Recreate();
 }
 
-void CClientBuilding::SetModel(uint16_t model)
+void CClientBuilding::SetModel(uint16_t model, uint16_t logicalModel)
 {
+    // Buildings retain the stable registry identity separately because their
+    // game entity can only ever be constructed from a client runtime slot.
+    m_usLogicalModelId = logicalModel;
+
     if (CClientBuildingManager::IsValidModel(model))
     {
         if (model != m_usModelId)

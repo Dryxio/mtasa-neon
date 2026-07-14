@@ -22,6 +22,7 @@
 #include "CBlip.h"
 #include "CWater.h"
 #include "CBuilding.h"
+#include "CBuildingManager.h"
 #include "CPlayerCamera.h"
 #include <cmath>
 #include "CElementDeleter.h"
@@ -694,7 +695,7 @@ bool CStaticFunctionDefinitions::GetElementModel(CElement* pElement, unsigned sh
         case CElement::PLAYER:
         {
             CPed* pPed = static_cast<CPed*>(pElement);
-            usModel = pPed->GetModel();
+            usModel = pPed->GetSyncModel();
             break;
         }
         case CElement::VEHICLE:
@@ -712,7 +713,13 @@ bool CStaticFunctionDefinitions::GetElementModel(CElement* pElement, unsigned sh
         case CElement::PICKUP:
         {
             CPickup* pPickup = static_cast<CPickup*>(pElement);
-            usModel = pPickup->GetModel();
+            usModel = pPickup->GetSyncModel();
+            break;
+        }
+        case CElement::BUILDING:
+        {
+            CBuilding* pBuilding = static_cast<CBuilding*>(pElement);
+            usModel = pBuilding->GetSyncModel();
             break;
         }
         default:
@@ -1846,24 +1853,35 @@ bool CStaticFunctionDefinitions::SetElementModel(CElement* pElement, unsigned sh
         case CElement::PLAYER:
         {
             CPed* pPed = static_cast<CPed*>(pElement);
-            if (pPed->GetModel() == usModel)
+            if (pPed->GetSyncModel() == usModel)
                 return false;
-            if (!CPlayerManager::IsValidPlayerModel(usModel))
+
+            const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+            if (pDefinition ? pDefinition->type != eServerModelType::PED : !CPlayerManager::IsValidPlayerModel(usModel))
                 return false;
-            unsigned short usOldModel = pPed->GetModel();  // Get the old model
-            CLuaArguments  Arguments;
+
+            const unsigned short usOldModel = pPed->GetSyncModel();
+            const unsigned short usOldParentModel = pPed->GetModel();
+            CLuaArguments        Arguments;
             Arguments.PushNumber(usOldModel);
-            pPed->SetModel(usModel);        // Set the new model
+            if (pDefinition)
+                pPed->SetCustomModel(usModel, pDefinition->parent);
+            else
+                pPed->SetModel(usModel);
             Arguments.PushNumber(usModel);  // Get the new model
             bool bContinue = pPed->CallEvent("onElementModelChange", Arguments);
             // Check for another call to setElementModel
-            if (usModel != pPed->GetModel())
+            if (usModel != pPed->GetSyncModel())
                 return false;
 
             if (!bContinue)
             {
                 // Change canceled
-                pPed->SetModel(usOldModel);
+                const CServerModelManager::Definition* pOldDefinition = g_pGame->GetServerModelManager()->Find(usOldModel);
+                if (pOldDefinition && pOldDefinition->type == eServerModelType::PED)
+                    pPed->SetCustomModel(usOldModel, usOldParentModel);
+                else
+                    pPed->SetModel(usOldParentModel);
                 return false;
             }
             break;
@@ -1958,6 +1976,41 @@ bool CStaticFunctionDefinitions::SetElementModel(CElement* pElement, unsigned sh
             }
             break;
         }
+        case CElement::BUILDING:
+        {
+            CBuilding* pBuilding = static_cast<CBuilding*>(pElement);
+            if (pBuilding->GetSyncModel() == usModel)
+                return false;
+
+            const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+            if (pDefinition ? pDefinition->type != eServerModelType::OBJECT : !CBuildingManager::IsValidModel(usModel))
+                return false;
+
+            const unsigned short usOldModel = pBuilding->GetSyncModel();
+            const unsigned short usOldParentModel = pBuilding->GetModel();
+            CLuaArguments        Arguments;
+            Arguments.PushNumber(usOldModel);
+            if (pDefinition)
+                pBuilding->SetCustomModel(usModel, pDefinition->parent);
+            else
+                pBuilding->SetModel(usModel);
+            Arguments.PushNumber(usModel);
+            const bool bContinue = pBuilding->CallEvent("onElementModelChange", Arguments);
+
+            if (usModel != pBuilding->GetSyncModel())
+                return false;
+
+            if (!bContinue)
+            {
+                const CServerModelManager::Definition* pOldDefinition = g_pGame->GetServerModelManager()->Find(usOldModel);
+                if (pOldDefinition && pOldDefinition->type == eServerModelType::OBJECT)
+                    pBuilding->SetCustomModel(usOldModel, usOldParentModel);
+                else
+                    pBuilding->SetModel(usOldParentModel);
+                return false;
+            }
+            break;
+        }
         default:
             return false;
     }
@@ -1984,7 +2037,12 @@ bool CStaticFunctionDefinitions::SetElementModel(CElement* pElement, unsigned sh
         {
             CPlayer* pPlayer = *it;
             if (pPlayer->IsJoined())
-                sendModelChange(pPlayer, pPlayer->CanBitStream(eBitStreamVersion::ServerModelRegistry) ? usModel : pDefinition->parent);
+            {
+                const bool requiresV2 = pDefinition->type == eServerModelType::PED || pElement->GetType() == CElement::BUILDING;
+                const bool supportsLogical =
+                    pPlayer->CanBitStream(requiresV2 ? eBitStreamVersion::ServerModelRegistryV2 : eBitStreamVersion::ServerModelRegistry);
+                sendModelChange(pPlayer, supportsLogical ? usModel : pDefinition->parent);
+            }
         }
     }
     else
@@ -2304,11 +2362,16 @@ bool CStaticFunctionDefinitions::DetonateSatchels(CElement* pElement)
 
 CPed* CStaticFunctionDefinitions::CreatePed(CResource* pResource, unsigned short usModel, const CVector& vecPosition, float fRotation, bool bSynced)
 {
-    if (CPlayerManager::IsValidPlayerModel(usModel))
+    const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+    if (pDefinition ? pDefinition->type == eServerModelType::PED : CPlayerManager::IsValidPlayerModel(usModel))
     {
-        CPed* pPed = m_pPedManager->Create(usModel, pResource->GetDynamicElementRoot());
+        const unsigned short usParentModel = pDefinition ? pDefinition->parent : usModel;
+        CPed*                pPed = m_pPedManager->Create(usParentModel, pResource->GetDynamicElementRoot());
         if (pPed)
         {
+            if (pDefinition)
+                pPed->SetCustomModel(usModel, usParentModel);
+
             // Convert the rotation to radians
             float fRotationRadians = ConvertDegreesToRadians(fRotation);
             // Clamp it to -PI .. PI
@@ -3345,8 +3408,9 @@ bool CStaticFunctionDefinitions::SpawnPlayer(CPlayer* pPlayer, const CVector& ve
                                              unsigned short usDimension, CTeam* pTeam)
 {
     // Valid model?
-    unsigned short usSkin = static_cast<unsigned short>(ulSkin);
-    if (CPlayerManager::IsValidPlayerModel(usSkin))
+    unsigned short                         usSkin = static_cast<unsigned short>(ulSkin);
+    const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usSkin);
+    if (pDefinition ? pDefinition->type == eServerModelType::PED : CPlayerManager::IsValidPlayerModel(usSkin))
     {
         // Spawn him
         m_pMapManager->SpawnPlayer(*pPlayer, vecPosition, ConvertDegreesToRadians(fRotation), usSkin, ucInterior, usDimension, pTeam);
@@ -8893,8 +8957,10 @@ CPickup* CStaticFunctionDefinitions::CreatePickup(CResource* pResource, const CV
     else if (ucType == CPickup::CUSTOM)
     {
         // Get the model id
-        unsigned short usModel = static_cast<unsigned short>(dFive);
-        if (CObjectManager::IsValidModel(usModel))
+        const unsigned short                   usModel = static_cast<unsigned short>(dFive);
+        const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+        const unsigned short                   usParentModel = pDefinition ? pDefinition->parent : usModel;
+        if ((!pDefinition || pDefinition->type == eServerModelType::OBJECT) && CObjectManager::IsValidModel(usParentModel))
         {
             // Create the pickup
             // pPickup = m_pPickupManager->Create ( m_pMapManager->GetRootElement () );
@@ -8902,7 +8968,10 @@ CPickup* CStaticFunctionDefinitions::CreatePickup(CResource* pResource, const CV
             if (pPickup)
             {
                 // Set the model id
-                pPickup->SetModel(usModel);
+                if (pDefinition)
+                    pPickup->SetCustomModel(usModel, usParentModel);
+                else
+                    pPickup->SetModel(usParentModel);
             }
         }
     }
@@ -9027,19 +9096,45 @@ bool CStaticFunctionDefinitions::SetPickupType(CElement* pElement, unsigned char
         }
         else if (ucType == CPickup::CUSTOM)
         {
-            // Get the weapon id
-            unsigned short usModel = static_cast<unsigned short>(dThree);
-            if (CObjectManager::IsValidModel(usModel))
+            const unsigned short                   usModel = static_cast<unsigned short>(dThree);
+            const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+            const unsigned short                   usParentModel = pDefinition ? pDefinition->parent : usModel;
+            if ((!pDefinition || pDefinition->type == eServerModelType::OBJECT) && CObjectManager::IsValidModel(usParentModel))
             {
                 // Set the type, weapon type and ammo
                 pPickup->SetPickupType(ucType);
-                pPickup->SetModel(usModel);
+                if (pDefinition)
+                    pPickup->SetCustomModel(usModel, usParentModel);
+                else
+                    pPickup->SetModel(usParentModel);
 
                 // Tell all the players about the new type and weapontype
-                CBitStream BitStream;
-                BitStream.pBitStream->Write(ucType);
-                BitStream.pBitStream->Write(usModel);
-                m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pPickup, SET_PICKUP_TYPE, *BitStream.pBitStream));
+                const auto sendPickupType = [pPickup, ucType](CPlayer* pPlayer, unsigned short networkModel)
+                {
+                    CBitStream bitStream;
+                    bitStream.pBitStream->Write(ucType);
+                    bitStream.pBitStream->Write(networkModel);
+                    pPlayer->Send(CElementRPCPacket(pPickup, SET_PICKUP_TYPE, *bitStream.pBitStream));
+                };
+
+                if (pDefinition)
+                {
+                    // The custom pickup RPC predates the registry and cannot
+                    // encode two IDs, so select logical or parent per client.
+                    for (auto it = m_pPlayerManager->IterBegin(); it != m_pPlayerManager->IterEnd(); ++it)
+                    {
+                        CPlayer* pPlayer = *it;
+                        if (pPlayer->IsJoined())
+                            sendPickupType(pPlayer, pPlayer->CanBitStream(eBitStreamVersion::ServerModelRegistryV2) ? usModel : usParentModel);
+                    }
+                }
+                else
+                {
+                    CBitStream bitStream;
+                    bitStream.pBitStream->Write(ucType);
+                    bitStream.pBitStream->Write(usParentModel);
+                    m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pPickup, SET_PICKUP_TYPE, *bitStream.pBitStream));
+                }
 
                 return true;
             }

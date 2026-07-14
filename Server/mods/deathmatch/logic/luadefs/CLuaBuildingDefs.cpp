@@ -11,6 +11,8 @@
 
 #include "StdInc.h"
 #include "CLuaBuildingDefs.h"
+#include "CGame.h"
+#include "CServerModelManager.h"
 #include "Utils.h"
 #include "CDummy.h"
 #include <packets/CEntityAddPacket.h>
@@ -45,7 +47,12 @@ CBuilding* CLuaBuildingDefs::CreateBuilding(lua_State* const luaVM, std::uint16_
     if (!pResource)
         throw std::logic_error("Cannot be done in current environment");
 
-    if (!CBuildingManager::IsValidModel(modelId))
+    const CServerModelManager::Definition* modelDefinition = g_pGame->GetServerModelManager()->Find(modelId);
+    if (modelDefinition && modelDefinition->type != eServerModelType::OBJECT)
+        throw std::invalid_argument("Model is not an object model");
+
+    const std::uint16_t parentModel = modelDefinition ? modelDefinition->parent : modelId;
+    if (!CBuildingManager::IsValidModel(parentModel))
         throw std::invalid_argument("Invalid building model id");
 
     if (!CBuildingManager::IsValidPosition(pos))
@@ -69,7 +76,10 @@ CBuilding* CLuaBuildingDefs::CreateBuilding(lua_State* const luaVM, std::uint16_
 
     pBuilding->SetPosition(pos);
     pBuilding->SetRotation(rot.value());
-    pBuilding->SetModel(modelId);
+    if (modelDefinition)
+        pBuilding->SetCustomModel(modelId, parentModel);
+    else
+        pBuilding->SetModel(parentModel);
 
     if (pResource->IsClientSynced())
     {

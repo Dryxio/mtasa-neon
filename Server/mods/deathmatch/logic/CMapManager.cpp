@@ -22,6 +22,7 @@
 #include "CGame.h"
 #include "CMainConfig.h"
 #include "CResource.h"
+#include "CServerModelManager.h"
 #include "CPerfStatManager.h"
 #include "lua/CLuaFunctionParseHelpers.h"
 #include "packets/CEntityAddPacket.h"
@@ -619,7 +620,10 @@ void CMapManager::SpawnPlayer(CPlayer& Player, const CVector& vecPosition, float
     Player.SetHasJetPack(false);
     Player.SetPosition(vecPosition);
     Player.SetRotation(fRotation);
-    Player.SetModel(usModel);
+    if (const CServerModelManager::Definition* definition = g_pGame->GetServerModelManager()->Find(usModel))
+        Player.SetCustomModel(usModel, definition->parent);
+    else
+        Player.SetModel(usModel);
     Player.SetVehicleAction(CPlayer::VEHICLEACTION_NONE);
     Player.SetTeam(pTeam, true);
     Player.SetInterior(ucInterior);

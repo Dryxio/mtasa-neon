@@ -43,7 +43,20 @@ public:
     void SetMatrix(const CMatrix& matrix) override;
 
     std::uint16_t GetModel() const noexcept { return m_model; }
-    void          SetModel(std::uint16_t model) noexcept { m_model = model; }
+    std::uint16_t GetSyncModel() const noexcept { return m_customModel != 0xFFFF ? m_customModel : m_model; }
+    bool          HasCustomModel() const noexcept { return m_customModel != 0xFFFF; }
+    void          SetModel(std::uint16_t model) noexcept
+    {
+        m_model = model;
+        m_customModel = 0xFFFF;
+    }
+    void SetCustomModel(std::uint16_t model, std::uint16_t parentModel) noexcept
+    {
+        // Buildings retain the native parent for server-side IDE/world rules,
+        // while clients synchronize the registry identity used for replacement.
+        m_model = parentModel;
+        m_customModel = model;
+    }
 
     bool GetCollisionEnabled() const noexcept { return m_bCollisionsEnabled; }
     void SetCollisionEnabled(bool bCollisionEnabled) noexcept { m_bCollisionsEnabled = bCollisionEnabled; }
@@ -61,6 +74,7 @@ private:
     CBuildingManager* m_pBuildingManager;
     CVector           m_vecRotation;
     std::uint16_t     m_model;
+    std::uint16_t     m_customModel = 0xFFFF;
 
 protected:
     bool m_bCollisionsEnabled;

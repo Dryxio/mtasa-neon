@@ -1142,8 +1142,8 @@ bool CResource::Stop(bool bManualStop)
     // Remove us from the running resources list
     m_StartedResources.remove(this);
 
-    // Tell all the players that have joined that this resource is stopped
-    g_pGame->GetPlayerManager()->BroadcastOnlyJoined(CResourceStopPacket(m_usNetID));
+    // Prevent stop handlers from creating new client-synced state while the
+    // existing client resource remains alive long enough for model teardown.
     m_bClientSync = false;
 
     // Call the onResourceStop event on this resource element
@@ -1157,6 +1157,11 @@ bool CResource::Stop(bool bManualStop)
     // their runtime model slots, so no surviving entity can retain a freed ID.
     if (CServerModelManager* modelManager = g_pGame->GetServerModelManager())
         modelManager->FreeAllOwnedBy(*this);
+
+    // Retire models while the client resource can still service model-change
+    // events and before its DFF/TXD/COL files are restored locally. Reliable
+    // packet ordering then guarantees remap/FREE precede RESOURCE_STOP.
+    g_pGame->GetPlayerManager()->BroadcastOnlyJoined(CResourceStopPacket(m_usNetID));
 
     // Remove us from the resources we depend on (they might unload too first)
     for (CIncludedResources* pIncludedResources : m_IncludedResources)

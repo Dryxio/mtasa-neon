@@ -69,7 +69,9 @@ public:
     void SetVisible(bool bVisible);
 
     unsigned short GetModel() const { return m_usModel; };
-    void           SetModel(unsigned short usModel);
+    unsigned short GetLogicalModel() const { return m_usLogicalModel != 0xFFFF ? m_usLogicalModel : m_usModel; }
+    void           SetLogicalModel(unsigned short usLogicalModel) { m_usLogicalModel = usLogicalModel; }
+    void           SetModel(unsigned short usModel, unsigned short usLogicalModel = 0xFFFF);
 
     bool           IsLowLod();
     bool           SetLowLodObject(CClientObject* pLowLodObject);
@@ -138,6 +140,7 @@ protected:
     class CClientModelRequestManager* m_pModelRequester;
 
     unsigned short m_usModel;
+    unsigned short m_usLogicalModel = 0xFFFF;
 
     CVector       m_vecPosition;
     CVector       m_vecRotation;

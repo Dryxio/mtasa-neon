@@ -565,7 +565,7 @@ void CPlayer::Reset()
     RemoveNametagOverrideColor();
 
     m_bNametagShowing = true;
-    m_usModel = 0;
+    SetModel(0);
 }
 
 void CPlayer::SetNametagText(const char* szText)

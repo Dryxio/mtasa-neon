@@ -37,9 +37,10 @@ public:
     using Definitions = std::map<ModelId, Definition>;
     using BeforeFreeCallback = std::function<void(const Definition&)>;
 
-    static constexpr ModelId FIRST_MODEL_ID = SERVER_MODEL_ID_MIN;
-    static constexpr ModelId LAST_MODEL_ID = 65534;
-    static constexpr ModelId INVALID_MODEL_ID = 65535;
+    static constexpr ModelId     FIRST_MODEL_ID = SERVER_MODEL_ID_MIN;
+    static constexpr ModelId     LAST_MODEL_ID = 65534;
+    static constexpr ModelId     INVALID_MODEL_ID = 65535;
+    static constexpr std::size_t MAX_ALLOCATIONS_PER_RESOURCE = 4096;
 
     explicit CServerModelManager(CPlayerManager& playerManager);
 
@@ -48,9 +49,12 @@ public:
     void    FreeAllOwnedBy(CResource& owner);
 
     const Definition*  Find(ModelId model) const;
+    const Definition*  FindByName(const std::string& name) const;
     ModelId            ResolveParent(ModelId model) const;
     bool               IsModelOfType(ModelId model, eServerModelType type) const;
     const Definitions& GetDefinitions() const noexcept { return m_definitions; }
+    std::size_t        GetRemainingCapacity() const noexcept;
+    std::size_t        GetRemainingCapacity(const CResource& owner) const noexcept;
 
     // Model users must be moved back to the native parent before clients release
     // their runtime allocation. CGame installs this hook once entity remapping is
@@ -62,10 +66,11 @@ private:
     bool IsNameAvailable(const std::string& name) const;
     bool FreeDefinition(Definitions::iterator definition);
     void BroadcastAllocate(const Definition& definition) const;
-    void BroadcastFree(ModelId model) const;
+    void BroadcastFree(const Definition& definition) const;
 
-    CPlayerManager&    m_playerManager;
-    Definitions        m_definitions;
-    ModelId            m_nextModelId{FIRST_MODEL_ID};
-    BeforeFreeCallback m_beforeFreeCallback;
+    CPlayerManager&                    m_playerManager;
+    Definitions                        m_definitions;
+    std::map<std::string, std::size_t> m_allocationsByResourceName;
+    ModelId                            m_nextModelId{FIRST_MODEL_ID};
+    BeforeFreeCallback                 m_beforeFreeCallback;
 };

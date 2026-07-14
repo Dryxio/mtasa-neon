@@ -163,9 +163,23 @@ public:
 
     bool HasValidModel();
 
-    bool           IsPlayer() { return m_bIsPlayer; }
-    unsigned short GetModel() { return m_usModel; };
-    void           SetModel(unsigned short usModel) { m_usModel = usModel; };
+    bool IsPlayer() { return m_bIsPlayer; }
+    // Keep the native parent separate from the logical registry ID: server-side
+    // gameplay still relies on GTA skin metadata while capable clients receive
+    // their independently allocated runtime slot.
+    unsigned short GetModel() const { return m_usModel; };
+    unsigned short GetSyncModel() const { return m_usCustomModel != 0xFFFF ? m_usCustomModel : m_usModel; }
+    bool           HasCustomModel() const { return m_usCustomModel != 0xFFFF; }
+    void           SetModel(unsigned short usModel)
+    {
+        m_usModel = usModel;
+        m_usCustomModel = 0xFFFF;
+    }
+    void SetCustomModel(unsigned short usModel, unsigned short usParentModel)
+    {
+        m_usModel = usParentModel;
+        m_usCustomModel = usModel;
+    }
 
     bool IsDucked() { return m_bDucked; };
     void SetDucked(bool bDucked) { m_bDucked = bDucked; };
@@ -331,6 +345,7 @@ protected:
 
 protected:
     unsigned short                       m_usModel;
+    unsigned short                       m_usCustomModel = 0xFFFF;
     CMatrix                              m_Matrix;
     bool                                 m_bDucked;
     bool                                 m_bIsChoking;

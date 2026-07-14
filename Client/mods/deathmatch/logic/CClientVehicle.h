@@ -232,8 +232,12 @@ public:
     void GetTurretRotation(float& fHorizontal, float& fVertical);
     void SetTurretRotation(float fHorizontal, float fVertical);
 
+    // GetModel remains the GTA runtime slot. Lua-facing code uses
+    // GetLogicalModel so native systems never see a server ID.
     unsigned short GetModel() { return m_usModel; };
-    void           SetModelBlocking(unsigned short usModel, unsigned char ucVariant, unsigned char ucVariant2);
+    unsigned short GetLogicalModel() const { return m_usLogicalModel != 0xFFFF ? m_usLogicalModel : m_usModel; }
+    void           SetLogicalModel(unsigned short usLogicalModel) { m_usLogicalModel = usLogicalModel; }
+    void           SetModelBlocking(unsigned short usModel, unsigned char ucVariant, unsigned char ucVariant2, unsigned short usLogicalModel = 0xFFFF);
 
     unsigned char GetVariant() { return m_ucVariation; };
     unsigned char GetVariant2() { return m_ucVariation2; };
@@ -580,6 +584,7 @@ protected:
     CClientVehicleManager*      m_pVehicleManager;
     CClientModelRequestManager* m_pModelRequester;
     unsigned short              m_usModel;
+    unsigned short              m_usLogicalModel = 0xFFFF;
     bool                        m_bHasLandingGear;
     eClientVehicleType          m_eVehicleType;
     unsigned char               m_ucMaxPassengers;

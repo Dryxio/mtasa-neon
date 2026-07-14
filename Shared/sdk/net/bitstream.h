@@ -52,6 +52,10 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-14
     ServerModelRegistry,
 
+    // Adds named models, ped slots, and object-model consumers such as buildings and pickups.
+    // 2026-07-14
+    ServerModelRegistryV2,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

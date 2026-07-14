@@ -11,6 +11,10 @@
 
 #include "StdInc.h"
 #include "CPlayerSpawnPacket.h"
+#include "CGame.h"
+#include "CServerModelManager.h"
+
+extern CGame* g_pGame;
 
 CPlayerSpawnPacket::CPlayerSpawnPacket()
 {
@@ -43,7 +47,11 @@ bool CPlayerSpawnPacket::Write(NetBitStreamInterface& BitStream) const
     BitStream.Write(m_vecSpawnPosition.fY);
     BitStream.Write(m_vecSpawnPosition.fZ);
     BitStream.Write(m_fSpawnRotation);
-    BitStream.Write(m_usPlayerSkin);
+    // Spawn packets are version-grouped by CPlayerManager. Only registry-aware
+    // clients can interpret the logical ID; legacy clients receive its parent.
+    const unsigned short networkSkin =
+        BitStream.Can(eBitStreamVersion::ServerModelRegistryV2) ? m_usPlayerSkin : g_pGame->GetServerModelManager()->ResolveParent(m_usPlayerSkin);
+    BitStream.Write(networkSkin);
     BitStream.Write(m_ucInterior);
     BitStream.Write(m_usDimension);
     BitStream.Write(m_Team);

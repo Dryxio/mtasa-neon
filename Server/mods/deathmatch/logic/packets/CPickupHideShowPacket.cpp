@@ -45,7 +45,7 @@ bool CPickupHideShowPacket::Write(NetBitStreamInterface& BitStream) const
                     usPickupModelID = CPickupManager::GetWeaponModel(pPickup->GetWeaponType());
                     break;
                 case CPickup::CUSTOM:
-                    usPickupModelID = pPickup->GetModel();
+                    usPickupModelID = BitStream.Can(eBitStreamVersion::ServerModelRegistryV2) ? pPickup->GetSyncModel() : pPickup->GetModel();
                     break;
                 default:
                     break;

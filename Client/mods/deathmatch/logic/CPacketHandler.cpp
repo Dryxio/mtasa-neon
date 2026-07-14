@@ -857,6 +857,7 @@ void CPacketHandler::Packet_PlayerList(NetBitStreamInterface& bitStream)
 
         // Read out the spawndata if he has spawned
         unsigned short   usPlayerModelID;
+        unsigned short   usPlayerLogicalModelID = 0xFFFF;
         ElementID        TeamID = INVALID_ELEMENT_ID;
         ElementID        ID = INVALID_ELEMENT_ID;
         unsigned char    ucVehicleSeat = 0xFF;
@@ -870,6 +871,11 @@ void CPacketHandler::Packet_PlayerList(NetBitStreamInterface& bitStream)
         {
             // Read out the player model id
             bitStream.ReadCompressed(usPlayerModelID);
+            if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usPlayerModelID, usPlayerModelID, &usPlayerLogicalModelID))
+            {
+                RaiseProtocolError(10);
+                return;
+            }
             if (!CClientPlayerManager::IsValidModel(usPlayerModelID))
             {
                 RaiseProtocolError(10);
@@ -973,7 +979,7 @@ void CPacketHandler::Packet_PlayerList(NetBitStreamInterface& bitStream)
         if (bIsSpawned)  // Always true for newer server builds.
         {
             // Give him the correct skin
-            pPlayer->SetModel(usPlayerModelID);
+            pPlayer->SetModel(usPlayerModelID, false, usPlayerLogicalModelID);
 
             // Not in a vehicle?
             if (ID == INVALID_ELEMENT_ID)
@@ -1110,7 +1116,13 @@ void CPacketHandler::Packet_PlayerSpawn(NetBitStreamInterface& bitStream)
 
     // Player model id
     unsigned short usPlayerModelID;
+    unsigned short usPlayerLogicalModelID = 0xFFFF;
     bitStream.Read(usPlayerModelID);
+    if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usPlayerModelID, usPlayerModelID, &usPlayerLogicalModelID))
+    {
+        RaiseProtocolError(16);
+        return;
+    }
     if (!CClientPlayerManager::IsValidModel(usPlayerModelID))
     {
         RaiseProtocolError(16);
@@ -1161,7 +1173,7 @@ void CPacketHandler::Packet_PlayerSpawn(NetBitStreamInterface& bitStream)
         pPlayer->SetHasJetPack(false);
 
         // Spawn him
-        pPlayer->Spawn(vecPosition, fRotation, usPlayerModelID, ucInterior);
+        pPlayer->Spawn(vecPosition, fRotation, usPlayerModelID, ucInterior, usPlayerLogicalModelID);
 
         // Set his dimension
         pPlayer->SetDimension(usDimension);
@@ -3001,6 +3013,7 @@ retry:
                 case CClientGame::WEAPON:
                 {
                     unsigned short       usObjectID;
+                    unsigned short       usLogicalObjectID = 0xFFFF;
                     SEntityAlphaSync     alpha;
                     SRotationRadiansSync rotationRadians(false);
 
@@ -3010,8 +3023,10 @@ retry:
                     if (bitStream.ReadCompressed(usObjectID) && bitStream.Read(&alpha))
                     {
                         // A server model ID is a connection-wide identity, not a GTA pool slot.
-                        // Resolve it before any native model validation or object construction.
-                        usObjectID = g_pClientGame->m_pManager->GetModelManager()->ResolveServerModelID(usObjectID);
+                        // Resolve it before any native model validation or object construction,
+                        // while retaining the identity exposed to client scripts.
+                        if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usObjectID, usObjectID, &usLogicalObjectID))
+                            usObjectID = 1700;
 
                         // Valid object id?
                         if (!CClientObjectManager::IsValidModel(usObjectID))
@@ -3041,6 +3056,8 @@ retry:
                         pEntity = pObject;
                         if (pObject)
                         {
+                            if (ucEntityTypeID == CClientGame::OBJECT)
+                                pObject->SetLogicalModel(usLogicalObjectID);
                             pObject->SetOrientation(position.data.vecPosition, rotationRadians.data.vecRotation);
                             pObject->SetAlpha(alpha.data.ucAlpha);
                         }
@@ -3221,8 +3238,18 @@ retry:
                     bitStream.Read(&position);
                     if (bitStream.ReadCompressed(usModel) && bitStream.ReadBit(bIsVisible) && bitStream.Read(&pickupType))
                     {
+                        unsigned short usRuntimeModel = 0;
+                        unsigned short usLogicalModel = 0xFFFF;
+                        if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) ||
+                            !CClientObjectManager::IsValidModel(usRuntimeModel))
+                        {
+                            usRuntimeModel = CClientPickupManager::GetWeaponModel(CClientPickup::WEAPON_BRASSKNUCKLE);
+                            usLogicalModel = 0xFFFF;
+                        }
+
                         // Create the pickup with the given position and model
-                        CClientPickup* pPickup = new CClientPickup(g_pClientGame->m_pManager, EntityID, usModel, position.data.vecPosition);
+                        CClientPickup* pPickup =
+                            new CClientPickup(g_pClientGame->m_pManager, EntityID, usRuntimeModel, position.data.vecPosition, usLogicalModel);
                         pEntity = pPickup;
 
                         pPickup->m_ucType = pickupType.data.ucType;
@@ -3282,9 +3309,14 @@ retry:
 
                     // Read out the vehicle model
                     std::uint16_t usModel = 0xFFFF;
+                    std::uint16_t usLogicalModel = 0xFFFF;
                     bitStream.Read(usModel);
 
-                    usModel = g_pClientGame->m_pManager->GetModelManager()->ResolveServerModelID(usModel);
+                    if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usModel, usModel, &usLogicalModel))
+                    {
+                        RaiseEntityAddError(39);
+                        return;
+                    }
 
                     if (!CClientVehicleManager::IsValidModel(usModel))
                     {
@@ -3372,6 +3404,7 @@ retry:
                         RaiseEntityAddError(65);
                         return;
                     }
+                    pVehicle->SetLogicalModel(usLogicalModel);
 
                     // Set the health, blow state, color and paintjob
                     pVehicle->SetHealth(health.data.fValue);
@@ -3841,7 +3874,13 @@ retry:
 
                     // Read out the model
                     unsigned short usModel;
+                    unsigned short usLogicalModel = 0xFFFF;
                     bitStream.ReadCompressed(usModel);
+                    if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usModel, usModel, &usLogicalModel))
+                    {
+                        RaiseEntityAddError(51);
+                        return;
+                    }
                     if (!CClientPlayerManager::IsValidModel(usModel))
                     {
                         RaiseEntityAddError(51);
@@ -3883,6 +3922,7 @@ retry:
 
                     CClientPed* pPed = new CClientPed(g_pClientGame->m_pManager, usModel, EntityID);
                     pEntity = pPed;
+                    pPed->SetLogicalModel(usLogicalModel);
 
                     pPed->SetPosition(position.data.vecPosition);
                     pPed->SetCurrentRotation(pedRotation.data.fRotation, true);
@@ -4208,12 +4248,19 @@ retry:
                     bitStream.Read(&rotationRadians);
                     bitStream.ReadCompressed(modelId);
 
-                    if (!CClientBuildingManager::IsValidModel(modelId))
-                        modelId = 1700;
+                    unsigned short logicalModelId = 0xFFFF;
+                    unsigned short runtimeModelId = 0;
+                    if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(modelId, runtimeModelId, &logicalModelId) ||
+                        !CClientBuildingManager::IsValidModel(runtimeModelId))
+                    {
+                        runtimeModelId = 1700;
+                        logicalModelId = 0xFFFF;
+                    }
 
                     bitStream.Read(LowLodObjectID);
-                    CClientBuilding* pBuilding = new CClientBuilding(g_pClientGame->m_pManager, EntityID, modelId, position.data.vecPosition,
-                                                                     rotationRadians.data.vecRotation, ucInterior);
+                    CClientBuilding* pBuilding = new CClientBuilding(g_pClientGame->m_pManager, EntityID, runtimeModelId, position.data.vecPosition,
+                                                                     rotationRadians.data.vecRotation, ucInterior, logicalModelId);
+                    pEntity = pBuilding;
 
                     pBuilding->SetUsesCollision(bCollisonsEnabled);
                     break;
@@ -4414,10 +4461,18 @@ void CPacketHandler::Packet_PickupHideShow(NetBitStreamInterface& bitStream)
             CClientPickup* pPickup = g_pClientGame->m_pPickupManager->Get(PickupID);
             if (pPickup)
             {
-                // Only update model if it changed (avoids unnecessary recreate)
-                if (pPickup->GetModel() != usPickupModel)
+                unsigned short usRuntimeModel = 0;
+                unsigned short usLogicalModel = 0xFFFF;
+                if (!g_pClientGame->m_pManager->GetModelManager()->ResolveModelID(usPickupModel, usRuntimeModel, &usLogicalModel) ||
+                    !CClientObjectManager::IsValidModel(usRuntimeModel))
                 {
-                    pPickup->SetModel(usPickupModel);
+                    continue;
+                }
+
+                // Only update model if it changed (avoids unnecessary recreate)
+                if (pPickup->GetLogicalModel() != usPickupModel)
+                {
+                    pPickup->SetModel(usRuntimeModel, usLogicalModel);
                 }
                 // Show/hide it
                 pPickup->SetVisible(bShow);

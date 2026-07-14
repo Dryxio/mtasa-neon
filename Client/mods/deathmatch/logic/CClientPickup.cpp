@@ -14,13 +14,14 @@
 
 extern CClientGame* g_pClientGame;
 
-CClientPickup::CClientPickup(CClientManager* pManager, ElementID ID, unsigned short usModel, CVector vecPosition)
+CClientPickup::CClientPickup(CClientManager* pManager, ElementID ID, unsigned short usModel, CVector vecPosition, unsigned short usLogicalModel)
     : ClassInit(this), CClientStreamElement(pManager->GetPickupStreamer(), ID)
 {
     // Initialize
     m_pManager = pManager;
     m_pPickupManager = pManager->GetPickupManager();
     m_usModel = usModel;
+    m_usLogicalModel = usLogicalModel;
     m_bVisible = true;
     m_pPickup = NULL;
     m_pObject = NULL;
@@ -82,8 +83,12 @@ void CClientPickup::SetPosition(const CVector& vecPosition)
     }
 }
 
-void CClientPickup::SetModel(unsigned short usModel)
+void CClientPickup::SetModel(unsigned short usModel, unsigned short usLogicalModel)
 {
+    // The logical ID is script-visible identity; the runtime model remains the
+    // only value that may reach GTA's pickup pools.
+    m_usLogicalModel = usLogicalModel;
+
     // Different from our current model?
     if (m_usModel != usModel)
     {

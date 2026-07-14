@@ -763,32 +763,32 @@ bool CStaticFunctionDefinitions::GetElementModel(CClientEntity& Entity, unsigned
         case CCLIENTPLAYER:
         {
             CClientPed& Ped = static_cast<CClientPed&>(Entity);
-            usModel = static_cast<unsigned short>(Ped.GetModel());
+            usModel = Ped.GetLogicalModel();
             break;
         }
         case CCLIENTVEHICLE:
         {
             CClientVehicle& Vehicle = static_cast<CClientVehicle&>(Entity);
-            usModel = Vehicle.GetModel();
+            usModel = Vehicle.GetLogicalModel();
             break;
         }
         case CCLIENTOBJECT:
         case CCLIENTWEAPON:
         {
             CClientObject& Object = static_cast<CClientObject&>(Entity);
-            usModel = Object.GetModel();
+            usModel = Object.GetLogicalModel();
             break;
         }
         case CCLIENTPICKUP:
         {
             CClientPickup& pPickup = static_cast<CClientPickup&>(Entity);
-            usModel = pPickup.GetModel();
+            usModel = pPickup.GetLogicalModel();
             break;
         }
         case CCLIENTBUILDING:
         {
             CClientBuilding& pBuilding = static_cast<CClientBuilding&>(Entity);
-            usModel = pBuilding.GetModel();
+            usModel = pBuilding.GetLogicalModel();
             break;
         }
         case CCLIENTPROJECTILE:
@@ -1557,30 +1557,52 @@ bool CStaticFunctionDefinitions::SetElementModel(CClientEntity& Entity, unsigned
         case CCLIENTPED:
         case CCLIENTPLAYER:
         {
-            // Grab the model
             CClientPed&          Ped = static_cast<CClientPed&>(Entity);
-            const unsigned short usCurrentModel = static_cast<ushort>(Ped.GetModel());
+            const unsigned short usCurrentModel = Ped.GetLogicalModel();
+            const unsigned short usCurrentRuntimeModel = static_cast<unsigned short>(Ped.GetModel());
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
 
             if (usCurrentModel == usModel)
                 return false;
 
-            if (!Ped.SetModel(usModel))
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) ||
+                !Ped.SetModel(usRuntimeModel, false, usLogicalModel))
                 return false;
 
-            return callOnChangeEvent(Ped, usCurrentModel, usModel);
+            CLuaArguments Arguments;
+            Arguments.PushNumber(usCurrentModel);
+            Arguments.PushNumber(usModel);
+            const bool bContinue = Ped.CallEvent("onClientElementModelChange", Arguments, true);
+
+            if (usModel != Ped.GetLogicalModel())
+                return false;
+
+            if (!bContinue)
+            {
+                const unsigned short usCurrentLogicalModel = usCurrentModel == usCurrentRuntimeModel ? 0xFFFF : usCurrentModel;
+                Ped.SetModel(usCurrentRuntimeModel, false, usCurrentLogicalModel);
+                return false;
+            }
+
+            return true;
         }
         case CCLIENTVEHICLE:
         {
             CClientVehicle&      Vehicle = static_cast<CClientVehicle&>(Entity);
-            const unsigned short usCurrentModel = Vehicle.GetModel();
+            const unsigned short usCurrentModel = Vehicle.GetLogicalModel();
+            const unsigned short usCurrentRuntimeModel = Vehicle.GetModel();
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
 
             if (usCurrentModel == usModel)
                 return false;
 
-            if (!CClientVehicleManager::IsValidModel(usModel))
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) ||
+                !CClientVehicleManager::IsValidModel(usRuntimeModel))
                 return false;
 
-            Vehicle.SetModelBlocking(usModel, 255, 255);
+            Vehicle.SetModelBlocking(usRuntimeModel, 255, 255, usLogicalModel);
 
             CLuaArguments Arguments;
             Arguments.PushNumber(usCurrentModel);
@@ -1588,13 +1610,14 @@ bool CStaticFunctionDefinitions::SetElementModel(CClientEntity& Entity, unsigned
             bool bContinue = Vehicle.CallEvent("onClientElementModelChange", Arguments, true);
 
             // Check for another call to setElementModel
-            if (usModel != Vehicle.GetModel())
+            if (usModel != Vehicle.GetLogicalModel())
                 return false;
 
             if (!bContinue)
             {
                 // Change canceled
-                Vehicle.SetModelBlocking(usCurrentModel, 255, 255);
+                const unsigned short usCurrentLogicalModel = usCurrentModel == usCurrentRuntimeModel ? 0xFFFF : usCurrentModel;
+                Vehicle.SetModelBlocking(usCurrentRuntimeModel, 255, 255, usCurrentLogicalModel);
                 return false;
             }
 
@@ -1604,32 +1627,69 @@ bool CStaticFunctionDefinitions::SetElementModel(CClientEntity& Entity, unsigned
         case CCLIENTWEAPON:
         {
             CClientObject&       Object = static_cast<CClientObject&>(Entity);
-            const unsigned short usCurrentModel = Object.GetModel();
+            const unsigned short usCurrentModel = Object.GetLogicalModel();
+            const unsigned short usCurrentRuntimeModel = Object.GetModel();
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
 
             if (usCurrentModel == usModel)
                 return false;
 
-            if (!CClientObjectManager::IsValidModel(usModel))
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) || !CClientObjectManager::IsValidModel(usRuntimeModel))
                 return false;
 
-            Object.SetModel(usModel);
+            Object.SetModel(usRuntimeModel, usLogicalModel);
 
-            return callOnChangeEvent(Object, usCurrentModel, usModel);
+            CLuaArguments Arguments;
+            Arguments.PushNumber(usCurrentModel);
+            Arguments.PushNumber(usModel);
+            const bool bContinue = Object.CallEvent("onClientElementModelChange", Arguments, true);
+
+            if (usModel != Object.GetLogicalModel())
+                return false;
+
+            if (!bContinue)
+            {
+                const unsigned short usCurrentLogicalModel = usCurrentModel == usCurrentRuntimeModel ? 0xFFFF : usCurrentModel;
+                Object.SetModel(usCurrentRuntimeModel, usCurrentLogicalModel);
+                return false;
+            }
+
+            return true;
         }
         case CCLIENTBUILDING:
         {
-            CClientBuilding&     Object = static_cast<CClientBuilding&>(Entity);
-            const unsigned short usCurrentModel = Object.GetModel();
+            CClientBuilding&     Building = static_cast<CClientBuilding&>(Entity);
+            const unsigned short usCurrentModel = Building.GetLogicalModel();
+            const unsigned short usCurrentRuntimeModel = Building.GetModel();
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
 
             if (usCurrentModel == usModel)
                 return false;
 
-            if (!CClientObjectManager::IsValidModel(usModel))
+            if (!m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) ||
+                !CClientBuildingManager::IsValidModel(usRuntimeModel))
                 return false;
 
-            Object.SetModel(usModel);
+            Building.SetModel(usRuntimeModel, usLogicalModel);
 
-            return callOnChangeEvent(Object, usCurrentModel, usModel);
+            CLuaArguments Arguments;
+            Arguments.PushNumber(usCurrentModel);
+            Arguments.PushNumber(usModel);
+            const bool bContinue = Building.CallEvent("onClientElementModelChange", Arguments, true);
+
+            if (usModel != Building.GetLogicalModel())
+                return false;
+
+            if (!bContinue)
+            {
+                const unsigned short usCurrentLogicalModel = usCurrentModel == usCurrentRuntimeModel ? 0xFFFF : usCurrentModel;
+                Building.SetModel(usCurrentRuntimeModel, usCurrentLogicalModel);
+                return false;
+            }
+
+            return true;
         }
         case CCLIENTPROJECTILE:
         {
@@ -2741,8 +2801,11 @@ bool CStaticFunctionDefinitions::GetClothesTypeName(unsigned char ucType, SStrin
 
 CClientPed* CStaticFunctionDefinitions::CreatePed(CResource& Resource, unsigned long ulModel, const CVector& vecPosition, float fRotation)
 {
+    unsigned short usRuntimeModel = 0;
+    unsigned short usLogicalModel = 0xFFFF;
+
     // Valid model?
-    if (CClientPlayerManager::IsValidModel(ulModel))
+    if (m_pManager->GetModelManager()->ResolveModelID(ulModel, usRuntimeModel, &usLogicalModel) && CClientPlayerManager::IsValidModel(usRuntimeModel))
     {
         // Convert the rotation to radians
         float fRotationRadians = ConvertDegreesToRadians(fRotation);
@@ -2763,7 +2826,8 @@ CClientPed* CStaticFunctionDefinitions::CreatePed(CResource& Resource, unsigned 
         }
 
         // Create it
-        CClientPed* pPed = new CClientPed(m_pManager, ulModel, INVALID_ELEMENT_ID);
+        CClientPed* pPed = new CClientPed(m_pManager, usRuntimeModel, INVALID_ELEMENT_ID);
+        pPed->SetLogicalModel(usLogicalModel);
         pPed->SetParent(Resource.GetResourceDynamicEntity());
         Resource.AddToElementGroup(pPed);
         pPed->SetPosition(vecPosition);
@@ -2890,14 +2954,18 @@ bool CStaticFunctionDefinitions::IsTrainChainEngine(CClientVehicle& Vehicle, boo
 CClientVehicle* CStaticFunctionDefinitions::CreateVehicle(CResource& Resource, unsigned short usModel, const CVector& vecPosition, const CVector& vecRotation,
                                                           const char* szRegPlate, unsigned char ucVariant, unsigned char ucVariant2)
 {
-    if (CClientVehicleManager::IsValidModel(usModel) && (ucVariant <= 5 || ucVariant == 255) && (ucVariant2 <= 5 || ucVariant2 == 255))
+    unsigned short usRuntimeModel = 0;
+    unsigned short usLogicalModel = 0xFFFF;
+    if (m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) && CClientVehicleManager::IsValidModel(usRuntimeModel) &&
+        (ucVariant <= 5 || ucVariant == 255) && (ucVariant2 <= 5 || ucVariant2 == 255))
     {
         unsigned char ucVariation = ucVariant;
         unsigned char ucVariation2 = ucVariant2;
         if (ucVariant2 == 255 && ucVariant == 255)
-            CClientVehicleManager::GetRandomVariation(usModel, ucVariation, ucVariation2);
+            CClientVehicleManager::GetRandomVariation(usRuntimeModel, ucVariation, ucVariation2);
 
-        CClientVehicle* pVehicle = new CDeathmatchVehicle(m_pManager, NULL, INVALID_ELEMENT_ID, usModel, ucVariation, ucVariation2);
+        CClientVehicle* pVehicle = new CDeathmatchVehicle(m_pManager, NULL, INVALID_ELEMENT_ID, usRuntimeModel, ucVariation, ucVariation2);
+        pVehicle->SetLogicalModel(usLogicalModel);
 
         pVehicle->SetParent(Resource.GetResourceDynamicEntity());
         pVehicle->SetPosition(vecPosition);
@@ -4054,13 +4122,16 @@ bool CStaticFunctionDefinitions::IsElementFrozenWaitingForGroundToLoad(CClientEn
 CClientObject* CStaticFunctionDefinitions::CreateObject(CResource& Resource, unsigned short usModelID, const CVector& vecPosition, const CVector& vecRotation,
                                                         bool bLowLod)
 {
-    if (CClientObjectManager::IsValidModel(usModelID))
+    unsigned short usRuntimeModel = 0;
+    unsigned short usLogicalModel = 0xFFFF;
+    if (m_pManager->GetModelManager()->ResolveModelID(usModelID, usRuntimeModel, &usLogicalModel) && CClientObjectManager::IsValidModel(usRuntimeModel))
     {
 #ifdef WITH_OBJECT_SYNC
-        CClientObject* pObject = new CDeathmatchObject(m_pManager, m_pMovingObjectsManager, m_pClientGame->GetObjectSync(), INVALID_ELEMENT_ID, usModelID);
+        CClientObject* pObject = new CDeathmatchObject(m_pManager, m_pMovingObjectsManager, m_pClientGame->GetObjectSync(), INVALID_ELEMENT_ID, usRuntimeModel);
 #else
-        CClientObject* pObject = new CDeathmatchObject(m_pManager, m_pMovingObjectsManager, INVALID_ELEMENT_ID, usModelID, bLowLod);
+        CClientObject* pObject = new CDeathmatchObject(m_pManager, m_pMovingObjectsManager, INVALID_ELEMENT_ID, usRuntimeModel, bLowLod);
 #endif
+        pObject->SetLogicalModel(usLogicalModel);
 
         pObject->SetParent(Resource.GetResourceDynamicEntity());
         pObject->SetPosition(vecPosition);
@@ -4536,9 +4607,11 @@ CClientPickup* CStaticFunctionDefinitions::CreatePickup(CResource& Resource, con
         {
             // Get the model id
             usModel = static_cast<unsigned short>(dFive);
-            if (CClientObjectManager::IsValidModel(usModel))
+            unsigned short usRuntimeModel = 0;
+            unsigned short usLogicalModel = 0xFFFF;
+            if (m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) && CClientObjectManager::IsValidModel(usRuntimeModel))
             {
-                pPickup = new CClientPickup(m_pManager, INVALID_ELEMENT_ID, usModel, vecPosition);
+                pPickup = new CClientPickup(m_pManager, INVALID_ELEMENT_ID, usRuntimeModel, vecPosition, usLogicalModel);
             }
             break;
         }
@@ -4601,13 +4674,13 @@ bool CStaticFunctionDefinitions::SetPickupType(CClientEntity& Entity, unsigned c
         }
         else if (ucType == CClientPickup::CUSTOM)
         {
-            // Get the weapon id
-            unsigned short usModel = static_cast<unsigned short>(dThree);
-            if (CClientObjectManager::IsValidModel(usModel))
+            const unsigned short usModel = static_cast<unsigned short>(dThree);
+            unsigned short       usRuntimeModel = 0;
+            unsigned short       usLogicalModel = 0xFFFF;
+            if (m_pManager->GetModelManager()->ResolveModelID(usModel, usRuntimeModel, &usLogicalModel) && CClientObjectManager::IsValidModel(usRuntimeModel))
             {
-                Pickup.SetModel(usModel);
+                Pickup.SetModel(usRuntimeModel, usLogicalModel);
                 Pickup.m_ucType = ucType;
-                Pickup.SetModel(usModel);
 
                 return true;
             }

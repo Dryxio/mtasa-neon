@@ -158,7 +158,8 @@ bool CPlayerListPacket::Write(NetBitStreamInterface& BitStream) const
         if (true)
         {
             // Player model ID
-            BitStream.WriteCompressed(pPlayer->GetModel());
+            const unsigned short model = BitStream.Can(eBitStreamVersion::ServerModelRegistryV2) ? pPlayer->GetSyncModel() : pPlayer->GetModel();
+            BitStream.WriteCompressed(model);
 
             // Team id
             CTeam* pTeam = pPlayer->GetTeam();

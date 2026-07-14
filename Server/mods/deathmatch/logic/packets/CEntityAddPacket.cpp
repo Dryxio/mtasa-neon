@@ -390,8 +390,9 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                     SilentlyFixIndeterminate(position.data.vecPosition);  // Crash fix for pre r6459 clients
                     BitStream.Write(&position);
 
-                    // Grab the model and write it
-                    unsigned short usModel = pPickup->GetModel();
+                    // Registry-aware clients retain the logical identity; old
+                    // clients still receive the native parent model.
+                    unsigned short usModel = BitStream.Can(eBitStreamVersion::ServerModelRegistryV2) ? pPickup->GetSyncModel() : pPickup->GetModel();
                     BitStream.WriteCompressed(usModel);
 
                     // Write if it's visible
@@ -858,7 +859,9 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                     BitStream.Write(&position);
 
                     // model
-                    unsigned short usModel = pPed->GetModel();
+                    // Registry-aware clients resolve the logical ID to a local
+                    // ped slot; legacy clients must continue seeing the parent.
+                    unsigned short usModel = BitStream.Can(eBitStreamVersion::ServerModelRegistryV2) ? pPed->GetSyncModel() : pPed->GetModel();
                     BitStream.WriteCompressed(usModel);
 
                     // rotation
@@ -1132,7 +1135,8 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                     BitStream.Write(&rotationRadians);
 
                     // Model id
-                    BitStream.WriteCompressed(pBuilding->GetModel());
+                    const std::uint16_t model = BitStream.Can(eBitStreamVersion::ServerModelRegistryV2) ? pBuilding->GetSyncModel() : pBuilding->GetModel();
+                    BitStream.WriteCompressed(model);
 
                     CBuilding* pLowLodBuilding = pBuilding->GetLowLodElement();
                     ElementID  lowLodBuildingID = pLowLodBuilding ? pLowLodBuilding->GetID() : INVALID_ELEMENT_ID;

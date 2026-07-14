@@ -39,6 +39,7 @@ CPickup::CPickup(CElement* pParent, CPickupManager* pPickupManager, CColManager*
     m_ucType = CPickup::WEAPON;
     m_ucWeaponType = CPickup::WEAPON_BRASSKNUCKLE;
     m_usAmmo = 0;
+    m_usCustomModel = 0xFFFF;
     m_fAmount = 0;
     m_ulRespawnIntervals = 30000;
     m_CreationTime = CTickCount::Now();
@@ -70,7 +71,10 @@ CElement* CPickup::Clone(bool* bAddEntity, CResource* pResource)
     if (pTemp)
     {
         pTemp->SetPickupType(GetPickupType());
-        pTemp->SetModel(GetModel());
+        if (HasCustomModel())
+            pTemp->SetCustomModel(GetSyncModel(), GetModel());
+        else
+            pTemp->SetModel(GetModel());
         pTemp->SetWeaponType(GetWeaponType());
         pTemp->SetAmmo(GetAmmo());
         pTemp->SetRespawnIntervals(GetRespawnIntervals());
@@ -287,6 +291,11 @@ void CPickup::SetPosition(const CVector& vecPosition)
 void CPickup::SetPickupType(unsigned char ucType)
 {
     m_ucType = ucType;
+
+    // A registry identity only applies to custom pickups. Changing back to a
+    // gameplay pickup must not leave a stale logical model visible or synced.
+    if (ucType != CPickup::CUSTOM)
+        m_usCustomModel = 0xFFFF;
 
     switch (ucType)
     {

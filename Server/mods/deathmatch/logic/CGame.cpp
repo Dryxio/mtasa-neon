@@ -648,7 +648,7 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
                         m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(vehicle, SET_ELEMENT_MODEL, *bitStream.pBitStream));
                     }
                 }
-                else
+                else if (definition.type == eServerModelType::OBJECT)
                 {
                     for (auto it = m_pObjectManager->IterBegin(); it != m_pObjectManager->IterEnd(); ++it)
                     {
@@ -662,6 +662,57 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
                         bitStream.pBitStream->Write(definition.parent);
                         m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(object, SET_ELEMENT_MODEL, *bitStream.pBitStream));
                     }
+
+                    // Buildings and custom pickups consume object model slots
+                    // too, but live outside CObjectManager and need their own
+                    // parent remap before the slot is released.
+                    for (auto it = m_pBuildingManager->IterBegin(); it != m_pBuildingManager->IterEnd(); ++it)
+                    {
+                        CBuilding* building = *it;
+                        if (building->GetSyncModel() != definition.id)
+                            continue;
+
+                        building->SetModel(definition.parent);
+
+                        CBitStream bitStream;
+                        bitStream.pBitStream->Write(definition.parent);
+                        m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(building, SET_ELEMENT_MODEL, *bitStream.pBitStream));
+                    }
+
+                    for (auto it = m_pPickupManager->IterBegin(); it != m_pPickupManager->IterEnd(); ++it)
+                    {
+                        CPickup* pickup = *it;
+                        if (pickup->GetPickupType() != CPickup::CUSTOM || pickup->GetSyncModel() != definition.id)
+                            continue;
+
+                        pickup->SetModel(definition.parent);
+
+                        CBitStream bitStream;
+                        bitStream.pBitStream->Write(static_cast<unsigned char>(CPickup::CUSTOM));
+                        bitStream.pBitStream->Write(definition.parent);
+                        m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pickup, SET_PICKUP_TYPE, *bitStream.pBitStream));
+                    }
+                }
+                else if (definition.type == eServerModelType::PED)
+                {
+                    // Players are intentionally not members of CPedManager, so
+                    // remap both collections before freeing the client slot.
+                    const auto remapPed = [this, &definition](CPed* ped)
+                    {
+                        if (ped->GetSyncModel() != definition.id)
+                            return;
+
+                        ped->SetModel(definition.parent);
+
+                        CBitStream bitStream;
+                        bitStream.pBitStream->Write(definition.parent);
+                        m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(ped, SET_ELEMENT_MODEL, *bitStream.pBitStream));
+                    };
+
+                    for (auto it = m_pPedManager->IterBegin(); it != m_pPedManager->IterEnd(); ++it)
+                        remapPed(*it);
+                    for (auto it = m_pPlayerManager->IterBegin(); it != m_pPlayerManager->IterEnd(); ++it)
+                        remapPed(*it);
                 }
 
                 m_HandlingManager->RemoveModelHandling(definition.id);
@@ -1482,12 +1533,18 @@ void CGame::InitialDataStream(CPlayer& Player)
     // clients that were online when the model was requested.
     if (Player.CanBitStream(eBitStreamVersion::ServerModelRegistry))
     {
+        const bool supportsV2 = Player.CanBitStream(eBitStreamVersion::ServerModelRegistryV2);
         for (const auto& [id, definition] : m_ServerModelManager->GetDefinitions())
         {
+            if (!supportsV2 && definition.type == eServerModelType::PED)
+                continue;
+
             CBitStream bitStream;
             bitStream.pBitStream->Write(id);
             bitStream.pBitStream->Write(definition.parent);
             bitStream.pBitStream->Write(static_cast<std::uint8_t>(definition.type));
+            if (supportsV2)
+                bitStream.pBitStream->WriteString(definition.name.c_str());
             Player.Send(CLuaPacket(ALLOCATE_SERVER_MODEL, *bitStream.pBitStream));
         }
     }

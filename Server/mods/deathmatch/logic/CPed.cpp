@@ -133,6 +133,8 @@ CElement* CPed::Clone(bool* bAddEntity, CResource* pResource)
 
     if (pTemp)
     {
+        if (HasCustomModel())
+            pTemp->SetCustomModel(GetSyncModel(), GetModel());
         pTemp->SetPosition(GetPosition());
         pTemp->SetRotation(GetRotation());
         pTemp->SetHealth(GetHealth());

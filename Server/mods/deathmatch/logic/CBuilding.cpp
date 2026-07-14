@@ -25,6 +25,7 @@ CBuilding::CBuilding(CElement* pParent, CBuildingManager* pBuildingManager) : CE
 
     m_pBuildingManager = pBuildingManager;
     m_model = 0xFFFF;
+    m_customModel = 0xFFFF;
     m_bDoubleSided = false;
     m_bCollisionsEnabled = true;
     m_pLowLodBuilding = nullptr;
@@ -42,6 +43,7 @@ CBuilding::CBuilding(const CBuilding& Copy) : CElement(Copy.m_pParent), m_pLowLo
 
     m_pBuildingManager = Copy.m_pBuildingManager;
     m_model = Copy.m_model;
+    m_customModel = Copy.m_customModel;
     m_bDoubleSided = Copy.m_bDoubleSided;
     m_vecPosition = Copy.m_vecPosition;
     m_vecRotation = Copy.m_vecRotation;

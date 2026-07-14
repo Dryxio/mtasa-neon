@@ -20,6 +20,27 @@
 #include "CLuaEngineDefs.h"
 #include <enums/VehicleType.h>
 
+namespace
+{
+    bool ResolveEngineModelID(std::uint32_t suppliedModelId, std::uint16_t& runtimeModelId)
+    {
+        // All engine-facing APIs share this boundary so a server ID can never be
+        // used as an index into GTA's fixed model arrays.
+        // Asset/model mutation must fail if this client could not allocate a slot;
+        // mutating the vanilla fallback parent would affect unrelated entities.
+        return g_pClientGame->GetManager()->GetModelManager()->ResolveModelID(suppliedModelId, runtimeModelId, nullptr, false);
+    }
+
+    bool ResolveEngineModelID(const SString& suppliedModel, std::uint16_t& runtimeModelId)
+    {
+        CClientModelManager* modelManager = g_pClientGame->GetManager()->GetModelManager();
+        if (const auto* definition = modelManager->FindServerModelDefinition(std::string(suppliedModel.c_str())))
+            return modelManager->ResolveModelID(definition->logicalModelId, runtimeModelId, nullptr, false);
+
+        return ResolveEngineModelID(CModelNames::ResolveModelID(suppliedModel), runtimeModelId);
+    }
+}  // namespace
+
 //! Set the CModelCacheManager limits
 //! By passing `nil`/no value the original values are restored
 void EngineStreamingSetModelCacheLimits(std::optional<size_t> numVehicles, std::optional<size_t> numPeds)
@@ -108,6 +129,8 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineRequestModel", EngineRequestModel},
         {"engineGetModelRuntimeID", EngineGetModelRuntimeID},
         {"engineGetModelServerID", EngineGetModelServerID},
+        {"engineGetModelParent", EngineGetModelParent},
+        {"engineGetModelType", EngineGetModelType},
         {"engineGetModelLODDistance", EngineGetModelLODDistance},
         {"engineSetModelLODDistance", EngineSetModelLODDistance},
         {"engineResetModelLODDistance", EngineResetModelLODDistance},
@@ -694,7 +717,7 @@ int CLuaEngineDefs::EngineReplaceCOL(lua_State* luaVM)
     if (!argStream.HasErrors())
     {
         // Valid client DFF and model?
-        if (CClientColModelManager::IsReplacableModel(usModel))
+        if (ResolveEngineModelID(usModel, usModel) && CClientColModelManager::IsReplacableModel(usModel))
         {
             // Replace the colmodel
             if (pCol->Replace(usModel))
@@ -722,9 +745,9 @@ int CLuaEngineDefs::EngineRestoreCOL(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        uint32_t modelId = CModelNames::ResolveModelID(strModelName);
+        std::uint16_t modelId = 0;
 
-        if (m_pColModelManager->RestoreModel(static_cast<unsigned short>(modelId)))
+        if (ResolveEngineModelID(strModelName, modelId) && m_pColModelManager->RestoreModel(modelId))
         {
             // Success
             lua_pushboolean(luaVM, true);
@@ -750,15 +773,16 @@ int CLuaEngineDefs::EngineImportTXD(lua_State* luaVM)
     if (!argStream.HasErrors())
     {
         // Valid importable model?
-        uint32_t modelId = CModelNames::ResolveModelID(strModelName);
+        uint32_t      suppliedModelId = CModelNames::ResolveModelID(strModelName);
+        std::uint16_t modelId = 0;
 
-        if (modelId == INVALID_MODEL_ID)
-            modelId = CModelNames::ResolveClothesTexID(strModelName);
+        if (suppliedModelId == INVALID_MODEL_ID)
+            suppliedModelId = CModelNames::ResolveClothesTexID(strModelName);
 
-        if (CClientTXD::IsImportableModel(static_cast<unsigned short>(modelId)))
+        if (ResolveEngineModelID(suppliedModelId, modelId) && CClientTXD::IsImportableModel(modelId))
         {
             // Try to import
-            if (pTXD->Import(static_cast<unsigned short>(modelId)))
+            if (pTXD->Import(modelId))
             {
                 // Success
                 lua_pushboolean(luaVM, true);
@@ -881,6 +905,11 @@ std::string CLuaEngineDefs::EngineImageGetFile(CClientIMG* pIMG, std::variant<si
 
 bool CLuaEngineDefs::EngineImageLinkDFF(CClientIMG* pIMG, std::variant<size_t, std::string_view> file, uint uiModelID)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument(SString("Expected a valid model ID, got %u", uiModelID));
+    uiModelID = runtimeModelId;
+
     if (uiModelID >= 20000)
         throw std::invalid_argument(SString("Expected modelid in range 0 - 19999, got %d", uiModelID));
 
@@ -913,6 +942,11 @@ bool CLuaEngineDefs::EngineImageLinkTXD(CClientIMG* pIMG, std::variant<size_t, s
 
 bool CLuaEngineDefs::EngineRestoreDFFImage(uint uiModelID)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
+
     if (uiModelID >= 20000)
         throw std::invalid_argument("Expected model ID in range [0-19999] at argument 1");
 
@@ -946,9 +980,9 @@ int CLuaEngineDefs::EngineReplaceModel(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        const auto modelId = static_cast<unsigned short>(CModelNames::ResolveModelID(strModelName));
+        std::uint16_t modelId = 0;
 
-        if (modelId != INVALID_MODEL_ID)
+        if (ResolveEngineModelID(strModelName, modelId))
         {
             // Fixes vehicle dff leak problem with engineReplaceModel
             m_pDFFManager->RestoreModel(modelId);
@@ -989,11 +1023,11 @@ bool CLuaEngineDefs::EngineAddClothingModel(CClientDFF* pDFF, std::string strMod
 
 int CLuaEngineDefs::EngineRestoreModel(lua_State* luaVM)
 {
-    // Grab the model ID
-    const auto usModelID = static_cast<unsigned short>(CModelNames::ResolveModelID(lua_tostring(luaVM, 1)));
+    std::uint16_t usModelID = 0;
+    const SString modelName("%s", lua_tostring(luaVM, 1));
 
     // Valid client DFF and model?
-    if (CClientDFFManager::IsReplacableModel(usModelID))
+    if (ResolveEngineModelID(modelName, usModelID) && CClientDFFManager::IsReplacableModel(usModelID))
     {
         // Restore the model
         if (m_pDFFManager->RestoreModel(usModelID))
@@ -1171,6 +1205,58 @@ int CLuaEngineDefs::EngineGetModelServerID(lua_State* luaVM)
     return 1;
 }
 
+int CLuaEngineDefs::EngineGetModelParent(lua_State* luaVM)
+{
+    std::uint16_t logicalModelId = 0;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(logicalModelId);
+
+    if (!argStream.HasErrors())
+    {
+        const auto* definition = m_pManager->GetModelManager()->FindServerModelDefinition(logicalModelId);
+        if (definition)
+        {
+            lua_pushinteger(luaVM, definition->parentModelId);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineGetModelType(lua_State* luaVM)
+{
+    std::uint16_t logicalModelId = 0;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(logicalModelId);
+
+    if (!argStream.HasErrors())
+    {
+        const auto* definition = m_pManager->GetModelManager()->FindServerModelDefinition(logicalModelId);
+        if (definition)
+        {
+            const char* type = "object";
+            if (definition->type == eServerModelType::VEHICLE)
+                type = "vehicle";
+            else if (definition->type == eServerModelType::PED)
+                type = "ped";
+
+            lua_pushstring(luaVM, type);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
 int CLuaEngineDefs::EngineReplaceAnimation(lua_State* luaVM)
 {
     CClientEntity* pEntity = nullptr;
@@ -1251,9 +1337,9 @@ int CLuaEngineDefs::EngineGetModelLODDistance(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        uint32_t modelId = CModelNames::ResolveModelID(strModelId);
+        std::uint16_t modelId = 0;
         // Ensure we have a good model (GitHub #446)
-        if (modelId < g_pGame->GetBaseIDforTXD())
+        if (ResolveEngineModelID(strModelId, modelId) && modelId < g_pGame->GetBaseIDforTXD())
         {
             CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
             if (pModelInfo)
@@ -1287,9 +1373,9 @@ int CLuaEngineDefs::EngineSetModelLODDistance(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        uint32_t modelId = CModelNames::ResolveModelID(strModelId);
+        std::uint16_t modelId = 0;
         // Ensure we have a good model (GitHub #446)
-        if (modelId < g_pGame->GetBaseIDforTXD())
+        if (ResolveEngineModelID(strModelId, modelId) && modelId < g_pGame->GetBaseIDforTXD())
         {
             CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
             if (pModelInfo && fDistance > 0.0f)
@@ -1319,7 +1405,12 @@ int CLuaEngineDefs::EngineResetModelLODDistance(lua_State* luaVM)
     if (argStream.HasErrors())
         return luaL_error(luaVM, argStream.GetFullErrorMessage());
 
-    uint32_t    modelId = CModelNames::ResolveModelID(strModel);
+    std::uint16_t modelId = 0;
+    if (!ResolveEngineModelID(strModel, modelId))
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
     if (pModelInfo)
     {
@@ -1791,6 +1882,11 @@ int CLuaEngineDefs::EngineRemoveShaderFromWorldTexture(lua_State* luaVM)
 
 uint CLuaEngineDefs::EngineGetModelTXDID(uint uiModelID)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
     if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
@@ -1801,6 +1897,11 @@ uint CLuaEngineDefs::EngineGetModelTXDID(uint uiModelID)
 
 bool CLuaEngineDefs::EngineSetModelTXDID(uint uiModelID, unsigned short usTxdId)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
     if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
@@ -1812,6 +1913,11 @@ bool CLuaEngineDefs::EngineSetModelTXDID(uint uiModelID, unsigned short usTxdId)
 
 bool CLuaEngineDefs::EngineResetModelTXDID(uint uiModelID)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
     if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
@@ -1831,6 +1937,16 @@ int CLuaEngineDefs::EngineGetModelNameFromID(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
+        if (iModelID >= 0 && iModelID <= std::numeric_limits<std::uint16_t>::max())
+        {
+            const auto* definition = g_pClientGame->GetManager()->GetModelManager()->FindServerModelDefinition(static_cast<std::uint16_t>(iModelID));
+            if (definition)
+            {
+                lua_pushstring(luaVM, definition->name.c_str());
+                return 1;
+            }
+        }
+
         SString strModelName = CModelNames::GetModelName(iModelID);
         if (!strModelName.empty())
         {
@@ -1857,6 +1973,25 @@ int CLuaEngineDefs::EngineGetModelIDFromName(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
+        CClientModelManager*          modelManager = g_pClientGame->GetManager()->GetModelManager();
+        const SServerModelDefinition* definition = modelManager->FindServerModelDefinition(std::string(strModelName.c_str()));
+
+        if (!definition && !strModelName.Contains(":"))
+        {
+            CResource* resource = g_pClientGame->GetResourceManager()->GetResourceFromLuaState(luaVM);
+            if (resource)
+            {
+                const std::string qualifiedName = std::string(resource->GetName()) + ":" + strModelName.c_str();
+                definition = modelManager->FindServerModelDefinition(qualifiedName);
+            }
+        }
+
+        if (definition)
+        {
+            lua_pushnumber(luaVM, definition->logicalModelId);
+            return 1;
+        }
+
         int iModelID = CModelNames::GetModelID(strModelName);
         if (iModelID != INVALID_MODEL_ID)
         {
@@ -1884,8 +2019,8 @@ int CLuaEngineDefs::EngineGetModelTextureNames(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        uint32_t modelId = CModelNames::ResolveModelID(strModelName);
-        if (modelId != INVALID_MODEL_ID)
+        std::uint16_t modelId = 0;
+        if (ResolveEngineModelID(strModelName, modelId))
         {
             std::vector<SString> nameList;
             g_pGame->GetRenderWare()->GetModelTextureNames(nameList, static_cast<ushort>(modelId));
@@ -1921,8 +2056,8 @@ int CLuaEngineDefs::EngineGetVisibleTextureNames(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        uint32_t modelId = CModelNames::ResolveModelID(strModelName);
-        if (modelId != INVALID_MODEL_ID || strModelName == "")
+        std::uint16_t modelId = INVALID_MODEL_ID;
+        if (strModelName == "" || ResolveEngineModelID(strModelName, modelId))
         {
             std::vector<SString> nameList;
             g_pCore->GetGraphics()->GetRenderItemManager()->GetVisibleTextureNames(nameList, strTextureNameMatch, static_cast<ushort>(modelId));
@@ -1948,7 +2083,9 @@ int CLuaEngineDefs::EngineGetVisibleTextureNames(lua_State* luaVM)
 
 bool CLuaEngineDefs::EngineSetModelVisibleTime(std::string strModelId, char cHourOn, char cHourOff)
 {
-    uint32_t    modelId = CModelNames::ResolveModelID(strModelId);
+    std::uint16_t modelId = 0;
+    if (!ResolveEngineModelID(SString(strModelId), modelId))
+        return false;
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
     if (pModelInfo)
     {
@@ -1962,7 +2099,9 @@ bool CLuaEngineDefs::EngineSetModelVisibleTime(std::string strModelId, char cHou
 
 std::variant<bool, CLuaMultiReturn<char, char>> CLuaEngineDefs::EngineGetModelVisibleTime(std::string strModelId)
 {
-    uint32_t    modelId = CModelNames::ResolveModelID(strModelId);
+    std::uint16_t modelId = 0;
+    if (!ResolveEngineModelID(SString(strModelId), modelId))
+        return false;
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
     if (pModelInfo)
     {
@@ -1999,9 +2138,9 @@ int CLuaEngineDefs::EngineGetModelTextures(lua_State* luaVM)
     else if (argStream.NextIsTable())
         argStream.ReadStringTable(vTextureNames);
 
-    uint32_t modelId = CModelNames::ResolveModelID(strModelName);
+    std::uint16_t modelId = 0;
 
-    if (modelId == INVALID_MODEL_ID || !g_pGame->GetRenderWare()->GetModelTextures(textureList, static_cast<ushort>(modelId), vTextureNames))
+    if (!ResolveEngineModelID(strModelName, modelId) || !g_pGame->GetRenderWare()->GetModelTextures(textureList, modelId, vTextureNames))
     {
         argStream.SetCustomError("Invalid model ID");
         lua_pushboolean(luaVM, false);
@@ -2441,6 +2580,11 @@ int CLuaEngineDefs::EngineGetModelPhysicalPropertiesGroup(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
+        std::uint16_t runtimeModelId = 0;
+        if (!ResolveEngineModelID(modelId, runtimeModelId))
+            return luaL_error(luaVM, "Expected a valid model ID at argument 1");
+        modelId = runtimeModelId;
+
         if (modelId >= g_pGame->GetBaseIDforTXD())
         {
             argStream.SetCustomError(SString("Expected model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
@@ -2472,6 +2616,11 @@ int CLuaEngineDefs::EngineSetModelPhysicalPropertiesGroup(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
+        std::uint16_t runtimeModelId = 0;
+        if (!ResolveEngineModelID(modelId, runtimeModelId))
+            return luaL_error(luaVM, "Expected a valid model ID at argument 1");
+        modelId = runtimeModelId;
+
         if (modelId > g_pGame->GetBaseIDforTXD() - 1)
         {
             argStream.SetCustomError(SString("Expected model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
@@ -2507,6 +2656,11 @@ int CLuaEngineDefs::EngineRestoreModelPhysicalPropertiesGroup(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
+        std::uint16_t runtimeModelId = 0;
+        if (!ResolveEngineModelID(modelId, runtimeModelId))
+            return luaL_error(luaVM, "Expected a valid model ID at argument 1");
+        modelId = runtimeModelId;
+
         if (modelId > g_pGame->GetBaseIDforTXD() - 1)
         {
             argStream.SetCustomError(SString("Expected model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
@@ -2869,6 +3023,11 @@ int CLuaEngineDefs::EngineRestoreObjectGroupPhysicalProperties(lua_State* luaVM)
 
 uint CLuaEngineDefs::EngineGetModelFlags(uint uiModelId)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelId, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelId = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelId);
 
     if (uiModelId >= 20000 || !pModelInfo)
@@ -2879,6 +3038,11 @@ uint CLuaEngineDefs::EngineGetModelFlags(uint uiModelId)
 
 bool CLuaEngineDefs::EngineGetModelFlag(uint uiModelId, eModelIdeFlag eFlag)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelId, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelId = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelId);
 
     if (uiModelId >= 20000 || !pModelInfo)
@@ -2890,6 +3054,11 @@ bool CLuaEngineDefs::EngineGetModelFlag(uint uiModelId, eModelIdeFlag eFlag)
 bool CLuaEngineDefs::EngineSetModelFlags(uint uiModelID, uint uiFlags, std::optional<bool> bIdeFlags)
 {
     // bool engineSetModelFlags ( int modelID, int flags [, bool isIde ] )
+
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
@@ -2908,6 +3077,11 @@ bool CLuaEngineDefs::EngineSetModelFlag(uint uiModelID, eModelIdeFlag eFlag, boo
 {
     // bool engineSetModelFlags ( int modelID, int flags [, bool isIde ] )
 
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
     if (uiModelID >= 20000 || !pModelInfo)
@@ -2920,6 +3094,11 @@ bool CLuaEngineDefs::EngineSetModelFlag(uint uiModelID, eModelIdeFlag eFlag, boo
 
 bool CLuaEngineDefs::EngineResetModelFlags(uint uiModelID)
 {
+    std::uint16_t runtimeModelId = 0;
+    if (!ResolveEngineModelID(uiModelID, runtimeModelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+    uiModelID = runtimeModelId;
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
     if (uiModelID >= 20000 || !pModelInfo)
@@ -3024,6 +3203,9 @@ bool CLuaEngineDefs::EngineStreamingRequestModel(lua_State* const luaVM, std::ui
     // Grab the lua main and the resource belonging to this script
     CLuaMain* pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
 
+    if (!ResolveEngineModelID(modelId, modelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
 
     if (modelId >= g_pGame->GetBaseIDforCOL() || !pModelInfo)
@@ -3040,6 +3222,9 @@ bool CLuaEngineDefs::EngineStreamingReleaseModel(lua_State* const luaVM, std::ui
     // Grab the lua main and the resource belonging to this script
     CLuaMain* pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
 
+    if (!ResolveEngineModelID(modelId, modelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelId);
 
     if (modelId >= g_pGame->GetBaseIDforCOL() || !pModelInfo)
@@ -3053,7 +3238,9 @@ bool CLuaEngineDefs::EngineStreamingReleaseModel(lua_State* const luaVM, std::ui
 
 eModelLoadState CLuaEngineDefs::EngineStreamingGetModelLoadState(std::uint16_t modelId)
 {
-    const auto allCount = g_pGame->GetCountOfAllFileIDs();
+    if (!ResolveEngineModelID(modelId, modelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+
     if (modelId >= g_pGame->GetCountOfAllFileIDs())
         throw std::invalid_argument("Expected a valid model ID at argument 1");
 
@@ -3074,6 +3261,9 @@ void CLuaEngineDefs::EnginePreloadWorldArea(CVector position, std::optional<Prel
 
 bool CLuaEngineDefs::EngineRestreamModel(std::uint16_t modelId)
 {
+    if (!ResolveEngineModelID(modelId, modelId))
+        throw std::invalid_argument("Expected a valid model ID at argument 1");
+
     return g_pClientGame->RestreamModel(modelId);
 }
 

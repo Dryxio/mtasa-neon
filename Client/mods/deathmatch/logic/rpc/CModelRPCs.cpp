@@ -21,13 +21,22 @@ void CModelRPCs::AllocateServerModel(NetBitStreamInterface& bitStream)
 {
     SServerModelDefinition definition;
     std::uint8_t           rawType = 0;
+    SString                name;
     if (!bitStream.Read(definition.logicalModelId) || !bitStream.Read(definition.parentModelId) || !bitStream.Read(rawType))
         return;
 
-    if (rawType > static_cast<std::uint8_t>(eServerModelType::VEHICLE))
+    if (rawType > static_cast<std::uint8_t>(eServerModelType::PED))
         return;
 
     definition.type = static_cast<eServerModelType>(rawType);
+    // V1 allocations ended after type. V2 appends a qualified name, so the
+    // current client remains able to join a server using the original schema.
+    if (bitStream.GetNumberOfUnreadBits() > 0)
+    {
+        if (!bitStream.ReadString(name))
+            return;
+        definition.name = name.c_str();
+    }
     m_pManager->GetModelManager()->AllocateServerModel(definition);
 }
 

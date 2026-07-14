@@ -43,7 +43,9 @@ CClientBuilding* CLuaBuildingDefs::CreateBuilding(lua_State* const luaVM, std::u
     if (!pResource)
         return nullptr;
 
-    if (!CClientBuildingManager::IsValidModel(modelId))
+    unsigned short runtimeModelId = 0;
+    unsigned short logicalModelId = 0xFFFF;
+    if (!m_pManager->GetModelManager()->ResolveModelID(modelId, runtimeModelId, &logicalModelId) || !CClientBuildingManager::IsValidModel(runtimeModelId))
         throw std::invalid_argument("Invalid building model id");
 
     if (!CClientBuildingManager::IsValidPosition(pos))
@@ -54,7 +56,7 @@ CClientBuilding* CLuaBuildingDefs::CreateBuilding(lua_State* const luaVM, std::u
     else
         rot.emplace(CVector(0, 0, 0));
 
-    CClientBuilding* pBuilding = new CClientBuilding(m_pManager, INVALID_ELEMENT_ID, modelId, pos, rot.value(), interior.value_or(0));
+    CClientBuilding* pBuilding = new CClientBuilding(m_pManager, INVALID_ELEMENT_ID, runtimeModelId, pos, rot.value(), interior.value_or(0), logicalModelId);
 
     CClientEntity* pRoot = pResource->GetResourceDynamicEntity();
     pBuilding->SetParent(pRoot);

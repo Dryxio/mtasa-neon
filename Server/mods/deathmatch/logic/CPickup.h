@@ -121,7 +121,20 @@ public:
     CTickCount GetCreationTime() { return m_CreationTime; }
 
     unsigned short GetModel() { return m_usModel; };
-    void           SetModel(unsigned short usModel) { m_usModel = usModel; };
+    unsigned short GetSyncModel() const { return m_usCustomModel != 0xFFFF ? m_usCustomModel : m_usModel; }
+    bool           HasCustomModel() const { return m_usCustomModel != 0xFFFF; }
+    void           SetModel(unsigned short usModel)
+    {
+        m_usModel = usModel;
+        m_usCustomModel = 0xFFFF;
+    };
+    void SetCustomModel(unsigned short usModel, unsigned short usParentModel)
+    {
+        // Pickup gameplay validation still needs the native object parent, but
+        // its rendered entity must retain the stable server registry identity.
+        m_usModel = usParentModel;
+        m_usCustomModel = usModel;
+    }
 
     bool IsVisible() { return m_bVisible; };
     void SetVisible(bool bVisible);
@@ -158,6 +171,7 @@ private:
     unsigned char  m_ucType;
     unsigned char  m_ucWeaponType;
     unsigned short m_usAmmo;
+    unsigned short m_usCustomModel = 0xFFFF;
     float          m_fAmount;
     unsigned long  m_ulRespawnIntervals;
     CTickCount     m_LastUsedTime;

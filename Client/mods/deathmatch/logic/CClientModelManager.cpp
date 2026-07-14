@@ -156,6 +156,11 @@ bool CClientModelManager::AllocateServerModel(const SServerModelDefinition& defi
     eClientModelType clientType;
     switch (definition.type)
     {
+        case eServerModelType::PED:
+            clientType = eClientModelType::PED;
+            if (!CClientPlayerManager::IsValidModel(definition.parentModelId))
+                return false;
+            break;
         case eServerModelType::OBJECT:
             if (!g_pClientGame->GetObjectManager()->IsValidModel(definition.parentModelId))
                 return false;
@@ -236,9 +241,28 @@ bool CClientModelManager::FreeServerModel(std::uint16_t logicalModelId)
     if (entry == m_ServerModels.end())
         return false;
 
+    const int                     runtimeModelId = entry->second.runtimeModelId;
     std::shared_ptr<CClientModel> model = entry->second.model;
-    if (entry->second.runtimeModelId != INVALID_MODEL_ID)
-        m_ServerModelByRuntime.erase(static_cast<std::uint16_t>(entry->second.runtimeModelId));
+    if (model && model->GetModelType() == eClientModelType::PED && runtimeModelId != INVALID_MODEL_ID)
+    {
+        const auto preparePed = [runtimeModelId](CClientPed* ped)
+        {
+            if (ped)
+                ped->PrepareForModelFree(static_cast<std::uint16_t>(runtimeModelId));
+        };
+
+        // Players are not owned by CClientPedManager. Both collections may
+        // still contain a native ped using the retiring runtime slot even
+        // though their public logical model has already been remapped.
+        CClientManager* manager = g_pClientGame->GetManager();
+        for (auto iter = manager->GetPedManager()->IterBegin(); iter != manager->GetPedManager()->IterEnd(); ++iter)
+            preparePed(*iter);
+        for (auto iter = manager->GetPlayerManager()->IterBegin(); iter != manager->GetPlayerManager()->IterEnd(); ++iter)
+            preparePed(*iter);
+    }
+
+    if (runtimeModelId != INVALID_MODEL_ID)
+        m_ServerModelByRuntime.erase(static_cast<std::uint16_t>(runtimeModelId));
 
     m_ServerModels.erase(entry);
     if (model)
@@ -288,6 +312,45 @@ int CClientModelManager::GetServerModelRuntimeID(std::uint16_t logicalModelId) c
     return entry->second.runtimeModelId;
 }
 
+bool CClientModelManager::ResolveModelID(std::uint32_t modelId, std::uint16_t& runtimeModelId, std::uint16_t* logicalModelId, bool allowParentFallback) const
+{
+    if (modelId > std::numeric_limits<std::uint16_t>::max())
+        return false;
+
+    const auto suppliedModelId = static_cast<std::uint16_t>(modelId);
+    if (const auto definition = m_ServerModels.find(suppliedModelId); definition != m_ServerModels.end())
+    {
+        if (definition->second.runtimeModelId == INVALID_MODEL_ID && !allowParentFallback)
+            return false;
+
+        runtimeModelId = definition->second.runtimeModelId != INVALID_MODEL_ID ? static_cast<std::uint16_t>(definition->second.runtimeModelId)
+                                                                               : definition->second.definition.parentModelId;
+        if (logicalModelId)
+            *logicalModelId = suppliedModelId;
+        return true;
+    }
+
+    // A runtime slot is useful for diagnostics and remains accepted for
+    // backwards compatibility, but preserve its logical identity on elements.
+    if (const auto serverModel = m_ServerModelByRuntime.find(suppliedModelId); serverModel != m_ServerModelByRuntime.end())
+    {
+        runtimeModelId = suppliedModelId;
+        if (logicalModelId)
+            *logicalModelId = serverModel->second;
+        return true;
+    }
+
+    // GTA model/file IDs stop below the server registry range. Rejecting an
+    // unknown registry ID here prevents an out-of-bounds native lookup.
+    if (suppliedModelId >= SERVER_MODEL_ID_MIN)
+        return false;
+
+    runtimeModelId = suppliedModelId;
+    if (logicalModelId)
+        *logicalModelId = 0xFFFF;
+    return true;
+}
+
 const SServerModelDefinition* CClientModelManager::FindServerModelDefinition(std::uint16_t logicalModelId) const
 {
     const auto entry = m_ServerModels.find(logicalModelId);
@@ -295,4 +358,10 @@ const SServerModelDefinition* CClientModelManager::FindServerModelDefinition(std
         return nullptr;
 
     return &entry->second.definition;
+}
+
+const SServerModelDefinition* CClientModelManager::FindServerModelDefinition(const std::string& name) const
+{
+    const auto entry = std::find_if(m_ServerModels.begin(), m_ServerModels.end(), [&name](const auto& pair) { return pair.second.definition.name == name; });
+    return entry != m_ServerModels.end() ? &entry->second.definition : nullptr;
 }

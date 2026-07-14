@@ -107,6 +107,7 @@ void CClientPed::Init(CClientManager* pManager, unsigned long ulModelID, bool bI
 
     // Store the model we're going to use
     m_ulModel = ulModelID;
+    m_usLogicalModel = 0xFFFF;
     m_pModelInfo = g_pGame->GetModelInfo(ulModelID);
 
     m_bIsLocalPlayer = bIsLocalPlayer;
@@ -738,7 +739,7 @@ void CClientPed::SetCurrentRotationNew(float fRotation)
     SetRotationRadiansNew(CVector(0, 0, fRotation));
 }
 
-void CClientPed::Spawn(const CVector& vecPosition, float fRotation, unsigned short usModel, unsigned char ucInterior)
+void CClientPed::Spawn(const CVector& vecPosition, float fRotation, unsigned short usModel, unsigned char ucInterior, unsigned short usLogicalModel)
 {
     // Remove us from our car
     RemoveFromVehicle();
@@ -755,7 +756,7 @@ void CClientPed::Spawn(const CVector& vecPosition, float fRotation, unsigned sho
     KillAnimation();
 
     // Give him the correct model
-    SetModel(usModel);
+    SetModel(usModel, false, usLogicalModel);
 
     // Detach from any entities
     AttachTo(NULL);
@@ -1052,7 +1053,7 @@ void CClientPed::SetTargetTarget(unsigned long ulDelay, const CVector& vecSource
     }
 }
 
-bool CClientPed::SetModel(unsigned long ulModel, bool bTemp)
+bool CClientPed::SetModel(unsigned long ulModel, bool bTemp, unsigned short usLogicalModel)
 {
     // Valid model?
     if (CClientPlayerManager::IsValidModel(ulModel))
@@ -1066,9 +1067,13 @@ bool CClientPed::SetModel(unsigned long ulModel, bool bTemp)
             }
 
             if (bTemp)
+            {
                 m_ulStoredModel = m_ulModel;
+                m_usStoredLogicalModel = m_usLogicalModel;
+            }
 
             // Set the model we're changing to
+            m_usLogicalModel = usLogicalModel;
             m_ulModel = ulModel;
             m_pModelInfo = g_pGame->GetModelInfo(ulModel);
             UpdateSpatialData();
@@ -1085,11 +1090,38 @@ bool CClientPed::SetModel(unsigned long ulModel, bool bTemp)
                 }
             }
         }
+        else
+        {
+            // Logical identity can change while a slot-exhausted client keeps
+            // using the same parent runtime model.
+            m_usLogicalModel = usLogicalModel;
+        }
 
         return true;
     }
 
     return false;
+}
+
+void CClientPed::PrepareForModelFree(unsigned short usRuntimeModel)
+{
+    if (!m_pPlayerPed || m_pPlayerPed->GetModelIndex() != usRuntimeModel)
+        return;
+
+    // Remote ped model changes normally recreate the native ped on the next
+    // pulse. A server FREE can follow SET_ELEMENT_MODEL in the same packet
+    // batch, so destroy the old native ped while its model-info slot still
+    // exists. It will stream back in with the already selected parent model.
+    if (!m_bIsLocalPlayer)
+    {
+        StreamOutForABit();
+        m_shouldRecreate = false;
+        return;
+    }
+
+    // Local player changes are normally immediate. This also covers the rare
+    // case where the model request callback has not run before the FREE RPC.
+    _ChangeModel();
 }
 
 bool CClientPed::GetCanBeKnockedOffBike()
@@ -2960,10 +2992,11 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
             if (m_ulModel == 0)
             {
                 // Give him back his previous model
-                SetModel(m_ulStoredModel);
+                SetModel(m_ulStoredModel, false, m_usStoredLogicalModel);
             }
             // Reset the stored model
             m_ulStoredModel = 0;
+            m_usStoredLogicalModel = 0xFFFF;
         }
         // Fix for unloading weapon models which are currently streamed in (DO NOT REMOVE or weapons will not reset to the default models!)
         while (!m_RestoreWeaponList.empty())
