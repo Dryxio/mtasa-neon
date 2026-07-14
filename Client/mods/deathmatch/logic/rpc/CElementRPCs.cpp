@@ -554,14 +554,15 @@ void CElementRPCs::SetElementModel(CClientEntity* pSource, NetBitStreamInterface
 
             CClientVehicle*      pVehicle = static_cast<CClientVehicle*>(pSource);
             const unsigned short usCurrentModel = pVehicle->GetModel();
+            const unsigned short usRuntimeModel = m_pManager->GetModelManager()->ResolveServerModelID(usModel);
 
-            if (usCurrentModel != usModel)
+            if (usCurrentModel != usRuntimeModel)
             {
-                pVehicle->SetModelBlocking(usModel, ucVariant, ucVariant2);
+                pVehicle->SetModelBlocking(usRuntimeModel, ucVariant, ucVariant2);
 
                 CLuaArguments Arguments;
                 Arguments.PushNumber(usCurrentModel);
-                Arguments.PushNumber(usModel);
+                Arguments.PushNumber(usRuntimeModel);
                 pVehicle->CallEvent("onClientElementModelChange", Arguments, true);
             }
 
@@ -573,13 +574,14 @@ void CElementRPCs::SetElementModel(CClientEntity* pSource, NetBitStreamInterface
         {
             CClientObject*       pObject = static_cast<CClientObject*>(pSource);
             const unsigned short usCurrentModel = pObject->GetModel();
+            const unsigned short usRuntimeModel = m_pManager->GetModelManager()->ResolveServerModelID(usModel);
 
-            if (usCurrentModel != usModel)
+            if (usCurrentModel != usRuntimeModel)
             {
-                pObject->SetModel(usModel);
+                pObject->SetModel(usRuntimeModel);
                 CLuaArguments Arguments;
                 Arguments.PushNumber(usCurrentModel);
-                Arguments.PushNumber(usModel);
+                Arguments.PushNumber(usRuntimeModel);
                 pObject->CallEvent("onClientElementModelChange", Arguments, true);
             }
 

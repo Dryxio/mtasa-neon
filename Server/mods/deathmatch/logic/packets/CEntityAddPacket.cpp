@@ -226,7 +226,10 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                     BitStream.Write(&rotationRadians);
 
                     // Object id
-                    BitStream.WriteCompressed(pObject->GetModel());
+                    // Legacy peers only understand native GTA IDs. Capable clients resolve the stable
+                    // server ID to a free local runtime slot before constructing the element.
+                    const unsigned short usObjectModel = BitStream.Can(eBitStreamVersion::ServerModelRegistry) ? pObject->GetSyncModel() : pObject->GetModel();
+                    BitStream.WriteCompressed(usObjectModel);
 
                     // Alpha
                     SEntityAlphaSync alpha;
@@ -447,7 +450,9 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                     BitStream.Write(&position);
                     BitStream.Write(&rotationDegrees);
 
-                    BitStream.Write(static_cast<std::uint16_t>(pVehicle->GetModel()));
+                    const unsigned short usVehicleModel =
+                        BitStream.Can(eBitStreamVersion::ServerModelRegistry) ? pVehicle->GetSyncModel() : pVehicle->GetModel();
+                    BitStream.Write(static_cast<std::uint16_t>(usVehicleModel));
 
                     // Health
                     SVehicleHealthSync health;
@@ -596,7 +601,7 @@ bool CEntityAddPacket::Write(NetBitStreamInterface& BitStream) const
                         BitStream.WriteBit(false);
 
                     // Write handling
-                    if (g_pGame->GetHandlingManager()->HasModelHandlingChanged(pVehicle->GetModel()) || pVehicle->HasHandlingChanged())
+                    if (g_pGame->GetHandlingManager()->HasModelHandlingChanged(pVehicle->GetSyncModel()) || pVehicle->HasHandlingChanged())
                     {
                         BitStream.WriteBit(true);
                         SVehicleHandlingSync handling;

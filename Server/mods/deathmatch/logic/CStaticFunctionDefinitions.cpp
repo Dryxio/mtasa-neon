@@ -44,6 +44,7 @@
 #include "CResourceManager.h"
 #include "CWeaponStatManager.h"
 #include "CHandlingManager.h"
+#include "CServerModelManager.h"
 #include "CCustomWeaponManager.h"
 #include "CBuildingRemovalManager.h"
 #include "CTickRateSettings.h"
@@ -699,13 +700,13 @@ bool CStaticFunctionDefinitions::GetElementModel(CElement* pElement, unsigned sh
         case CElement::VEHICLE:
         {
             CVehicle* pVehicle = static_cast<CVehicle*>(pElement);
-            usModel = pVehicle->GetModel();
+            usModel = pVehicle->GetSyncModel();
             break;
         }
         case CElement::OBJECT:
         {
             CObject* pObject = static_cast<CObject*>(pElement);
-            usModel = pObject->GetModel();
+            usModel = pObject->GetSyncModel();
             break;
         }
         case CElement::PICKUP:
@@ -1870,24 +1871,35 @@ bool CStaticFunctionDefinitions::SetElementModel(CElement* pElement, unsigned sh
         case CElement::VEHICLE:
         {
             CVehicle* pVehicle = static_cast<CVehicle*>(pElement);
-            if (pVehicle->GetModel() == usModel)
+            if (pVehicle->GetSyncModel() == usModel)
                 return false;
-            if (!CVehicleManager::IsValidModel(usModel))
+
+            const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+            if (pDefinition ? pDefinition->type != eServerModelType::VEHICLE : !CVehicleManager::IsValidModel(usModel))
                 return false;
-            unsigned short usOldModel = pVehicle->GetModel();  // Get the old model
-            CLuaArguments  Arguments;
+
+            const unsigned short usOldModel = pVehicle->GetSyncModel();
+            const unsigned short usOldParentModel = pVehicle->GetModel();
+            CLuaArguments        Arguments;
             Arguments.PushNumber(usOldModel);
-            pVehicle->SetModel(usModel);    // Set the new model
+            if (pDefinition)
+                pVehicle->SetCustomModel(usModel, pDefinition->parent);
+            else
+                pVehicle->SetModel(usModel);
             Arguments.PushNumber(usModel);  // Get the new model
             bool bContinue = pVehicle->CallEvent("onElementModelChange", Arguments);
             // Check for another call to setElementModel
-            if (usModel != pVehicle->GetModel())
+            if (usModel != pVehicle->GetSyncModel())
                 return false;
 
             if (!bContinue)
             {
                 // Change canceled
-                pVehicle->SetModel(usOldModel);
+                const CServerModelManager::Definition* pOldDefinition = g_pGame->GetServerModelManager()->Find(usOldModel);
+                if (pOldDefinition && pOldDefinition->type == eServerModelType::VEHICLE)
+                    pVehicle->SetCustomModel(usOldModel, usOldParentModel);
+                else
+                    pVehicle->SetModel(usOldParentModel);
                 return false;
             }
 
@@ -1913,24 +1925,35 @@ bool CStaticFunctionDefinitions::SetElementModel(CElement* pElement, unsigned sh
         case CElement::OBJECT:
         {
             CObject* pObject = static_cast<CObject*>(pElement);
-            if (pObject->GetModel() == usModel)
+            if (pObject->GetSyncModel() == usModel)
                 return false;
-            if (!CObjectManager::IsValidModel(usModel))
+
+            const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+            if (pDefinition ? pDefinition->type != eServerModelType::OBJECT : !CObjectManager::IsValidModel(usModel))
                 return false;
-            unsigned short usOldModel = pObject->GetModel();  // Get the old model
-            CLuaArguments  Arguments;
+
+            const unsigned short usOldModel = pObject->GetSyncModel();
+            const unsigned short usOldParentModel = pObject->GetModel();
+            CLuaArguments        Arguments;
             Arguments.PushNumber(usOldModel);
-            pObject->SetModel(usModel);     // Set the new model
+            if (pDefinition)
+                pObject->SetCustomModel(usModel, pDefinition->parent);
+            else
+                pObject->SetModel(usModel);
             Arguments.PushNumber(usModel);  // Get the new model
             bool bContinue = pObject->CallEvent("onElementModelChange", Arguments);
             // Check for another call to setElementModel
-            if (usModel != pObject->GetModel())
+            if (usModel != pObject->GetSyncModel())
                 return false;
 
             if (!bContinue)
             {
                 // Change canceled
-                pObject->SetModel(usOldModel);
+                const CServerModelManager::Definition* pOldDefinition = g_pGame->GetServerModelManager()->Find(usOldModel);
+                if (pOldDefinition && pOldDefinition->type == eServerModelType::OBJECT)
+                    pObject->SetCustomModel(usOldModel, usOldParentModel);
+                else
+                    pObject->SetModel(usOldParentModel);
                 return false;
             }
             break;
@@ -1939,15 +1962,43 @@ bool CStaticFunctionDefinitions::SetElementModel(CElement* pElement, unsigned sh
             return false;
     }
 
-    CBitStream BitStream;
-    BitStream.pBitStream->Write(usModel);
-    if (pElement->GetType() == CElement::VEHICLE)
+    const auto sendModelChange = [pElement](CPlayer* pPlayer, unsigned short usNetworkModel)
     {
-        CVehicle* pVehicle = static_cast<CVehicle*>(pElement);
-        BitStream.pBitStream->Write(pVehicle->GetVariant());
-        BitStream.pBitStream->Write(pVehicle->GetVariant2());
+        CBitStream bitStream;
+        bitStream.pBitStream->Write(usNetworkModel);
+        if (pElement->GetType() == CElement::VEHICLE)
+        {
+            CVehicle* pVehicle = static_cast<CVehicle*>(pElement);
+            bitStream.pBitStream->Write(pVehicle->GetVariant());
+            bitStream.pBitStream->Write(pVehicle->GetVariant2());
+        }
+
+        pPlayer->Send(CElementRPCPacket(pElement, SET_ELEMENT_MODEL, *bitStream.pBitStream));
+    };
+
+    if (const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel))
+    {
+        // Old clients never receive registry RPCs, so preserve their native-parent
+        // view while capable clients receive the stable logical ID.
+        for (auto it = m_pPlayerManager->IterBegin(); it != m_pPlayerManager->IterEnd(); ++it)
+        {
+            CPlayer* pPlayer = *it;
+            if (pPlayer->IsJoined())
+                sendModelChange(pPlayer, pPlayer->CanBitStream(eBitStreamVersion::ServerModelRegistry) ? usModel : pDefinition->parent);
+        }
     }
-    m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pElement, SET_ELEMENT_MODEL, *BitStream.pBitStream));
+    else
+    {
+        CBitStream bitStream;
+        bitStream.pBitStream->Write(usModel);
+        if (pElement->GetType() == CElement::VEHICLE)
+        {
+            CVehicle* pVehicle = static_cast<CVehicle*>(pElement);
+            bitStream.pBitStream->Write(pVehicle->GetVariant());
+            bitStream.pBitStream->Write(pVehicle->GetVariant2());
+        }
+        m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pElement, SET_ELEMENT_MODEL, *bitStream.pBitStream));
+    }
 
     return true;
 }
@@ -5145,18 +5196,26 @@ bool CStaticFunctionDefinitions::SetWeaponAmmo(CElement* pElement, unsigned char
 CVehicle* CStaticFunctionDefinitions::CreateVehicle(CResource* pResource, unsigned short usModel, const CVector& vecPosition, const CVector& vecRotation,
                                                     const char* szRegPlate, unsigned char ucVariant, unsigned char ucVariant2, bool bSynced)
 {
-    unsigned char ucVariation = ucVariant;
-    unsigned char ucVariation2 = ucVariant2;
+    const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModel);
+    if (pDefinition && pDefinition->type != eServerModelType::VEHICLE)
+        return nullptr;
+
+    const unsigned short usParentModel = pDefinition ? pDefinition->parent : usModel;
+    unsigned char        ucVariation = ucVariant;
+    unsigned char        ucVariation2 = ucVariant2;
 
     if (ucVariant == 254 && ucVariant2 == 254)
-        CVehicleManager::GetRandomVariation(usModel, ucVariation, ucVariation2);
+        CVehicleManager::GetRandomVariation(usParentModel, ucVariation, ucVariation2);
 
-    if (CVehicleManager::IsValidModel(usModel) && (ucVariation <= 5 || ucVariation == 255) && (ucVariation2 <= 5 || ucVariation2 == 255))
+    if (CVehicleManager::IsValidModel(usParentModel) && (ucVariation <= 5 || ucVariation == 255) && (ucVariation2 <= 5 || ucVariation2 == 255))
     {
-        CVehicle* const pVehicle = m_pVehicleManager->Create(pResource->GetDynamicElementRoot(), usModel, ucVariation, ucVariation2);
+        CVehicle* const pVehicle = m_pVehicleManager->Create(pResource->GetDynamicElementRoot(), usParentModel, ucVariation, ucVariation2);
 
         if (!pVehicle)
             return nullptr;
+
+        if (pDefinition)
+            pVehicle->SetCustomModel(usModel, usParentModel, true);
 
         pVehicle->SetPosition(vecPosition);
         pVehicle->SetRotationDegrees(vecRotation);
@@ -7672,7 +7731,7 @@ bool CStaticFunctionDefinitions::ResetVehicleHandling(CVehicle* pVehicle, bool b
 {
     try
     {
-        const std::uint16_t   model = pVehicle->GetModel();
+        const std::uint16_t   model = pVehicle->GetSyncModel();
         CHandlingEntry*       pEntry = pVehicle->GetHandlingData();
         const CHandlingEntry* pNewEntry = nullptr;
         CBitStream            BitStream;
@@ -7758,7 +7817,7 @@ bool CStaticFunctionDefinitions::ResetVehicleHandlingProperty(CVehicle* pVehicle
 
         CBitStream BitStream;
 
-        const std::uint32_t model = pVehicle->GetModel();
+        const std::uint32_t model = pVehicle->GetSyncModel();
 
         float         fValue;
         CVector       vecValue;
@@ -8373,6 +8432,14 @@ bool CStaticFunctionDefinitions::SetBlipVisibleDistance(CElement* pElement, unsi
 CObject* CStaticFunctionDefinitions::CreateObject(CResource* pResource, unsigned short usModelID, const CVector& vecPosition, const CVector& vecRotation,
                                                   bool bIsLowLod)
 {
+    const CServerModelManager::Definition* pDefinition = g_pGame->GetServerModelManager()->Find(usModelID);
+    if (pDefinition && pDefinition->type != eServerModelType::OBJECT)
+        return nullptr;
+
+    const unsigned short usParentModel = pDefinition ? pDefinition->parent : usModelID;
+    if (!CObjectManager::IsValidModel(usParentModel))
+        return nullptr;
+
     CObject* const pObject = m_pObjectManager->Create(pResource->GetDynamicElementRoot(), bIsLowLod);
 
     if (!pObject)
@@ -8384,9 +8451,12 @@ CObject* CStaticFunctionDefinitions::CreateObject(CResource* pResource, unsigned
 
     pObject->SetPosition(vecPosition);
     pObject->SetRotation(vecRadians);
-    pObject->SetModel(usModelID);
+    if (pDefinition)
+        pObject->SetCustomModel(usModelID, usParentModel);
+    else
+        pObject->SetModel(usParentModel);
 
-    if (CObjectManager::IsBreakableModel(usModelID))
+    if (CObjectManager::IsBreakableModel(usParentModel))
         pObject->SetBreakable(true);
 
     if (pResource->IsClientSynced())

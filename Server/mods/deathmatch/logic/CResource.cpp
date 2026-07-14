@@ -36,6 +36,7 @@
 #include <zip.h>
 #include <glob/glob.h>
 #include "CStaticFunctionDefinitions.h"
+#include "CServerModelManager.h"
 
 #ifdef WIN32
     #include <zip/iowin32.h>
@@ -1150,6 +1151,12 @@ bool CResource::Stop(bool bManualStop)
     Arguments.PushResource(this);
     Arguments.PushBoolean(m_bDestroyed);
     m_pResourceElement->CallEvent("onResourceStop", Arguments);
+
+    // Let onResourceStop perform its own cleanup first, then retire any models
+    // that remain. The registry remap hook runs before clients are told to free
+    // their runtime model slots, so no surviving entity can retain a freed ID.
+    if (CServerModelManager* modelManager = g_pGame->GetServerModelManager())
+        modelManager->FreeAllOwnedBy(*this);
 
     // Remove us from the resources we depend on (they might unload too first)
     for (CIncludedResources* pIncludedResources : m_IncludedResources)

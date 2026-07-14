@@ -26,6 +26,7 @@
 #include "luadefs/CLuaColShapeDefs.h"
 #include "luadefs/CLuaDatabaseDefs.h"
 #include "luadefs/CLuaMarkerDefs.h"
+#include "luadefs/CLuaModelDefs.h"
 #include "luadefs/CLuaObjectDefs.h"
 #include "luadefs/CLuaPedDefs.h"
 #include "luadefs/CLuaPickupDefs.h"
@@ -221,6 +222,7 @@ void CLuaManager::LoadCFunctions()
     CLuaElementDefs::LoadFunctions();
     CLuaHandlingDefs::LoadFunctions();
     CLuaMarkerDefs::LoadFunctions();
+    CLuaModelDefs::LoadFunctions();
     CLuaNetworkDefs::LoadFunctions();
     CLuaObjectDefs::LoadFunctions();
     CLuaPedDefs::LoadFunctions();

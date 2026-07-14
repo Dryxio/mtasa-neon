@@ -12,6 +12,8 @@
 #include "StdInc.h"
 #include "CHandlingManager.h"
 #include "CCommon.h"
+#include "CGame.h"
+#include "CServerModelManager.h"
 #include "CVehicleManager.h"
 
 // Original handling data
@@ -96,6 +98,8 @@ bool CHandlingManager::ApplyHandlingData(std::uint32_t model, CHandlingEntry* pE
 
 const CHandlingEntry* CHandlingManager::GetOriginalHandlingData(std::uint32_t model) const noexcept
 {
+    model = g_pGame->GetServerModelManager()->ResolveParent(model);
+
     // Within range?
     if (!CVehicleManager::IsValidModel(model))
         return nullptr;
@@ -109,15 +113,18 @@ const CHandlingEntry* CHandlingManager::GetOriginalHandlingData(std::uint32_t mo
 
 CHandlingEntry* CHandlingManager::GetModelHandlingData(std::uint32_t model) const noexcept
 {
-    // Within range?
-    if (!CVehicleManager::IsValidModel(model))
+    const std::uint32_t nativeModel = g_pGame->GetServerModelManager()->ResolveParent(model);
+
+    // A custom vehicle gets its own mutable entry, initially cloned from the
+    // native parent. This makes setModelHandling custom-ID specific.
+    if (!CVehicleManager::IsValidModel(nativeModel))
         return nullptr;
 
     auto entries = m_ModelEntries.find(model);
     if (entries == m_ModelEntries.end())
     {
         // Get our Handling ID
-        const eHandlingTypes eHandling = GetHandlingID(model);
+        const eHandlingTypes eHandling = GetHandlingID(nativeModel);
 
         m_ModelEntries[model] = std::make_unique<CHandlingEntry>(&m_OriginalHandlingData[eHandling]);
         if (!m_ModelEntries[model])
@@ -137,8 +144,7 @@ eHandlingProperty CHandlingManager::GetPropertyEnumFromName(const std::string& n
 
 bool CHandlingManager::HasModelHandlingChanged(std::uint32_t model) const noexcept
 {
-    // Within range?
-    if (!CVehicleManager::IsValidModel(model))
+    if (!CVehicleManager::IsValidModel(g_pGame->GetServerModelManager()->ResolveParent(model)))
         return false;
 
     // Return if we have changed
@@ -147,12 +153,17 @@ bool CHandlingManager::HasModelHandlingChanged(std::uint32_t model) const noexce
 
 void CHandlingManager::SetModelHandlingHasChanged(std::uint32_t model, bool bChanged) const noexcept
 {
-    // Within range?
-    if (!CVehicleManager::IsValidModel(model))
+    if (!CVehicleManager::IsValidModel(g_pGame->GetServerModelManager()->ResolveParent(model)))
         return;
 
     // Return if we have changed.
     m_bModelHandlingChanged[model] = bChanged;
+}
+
+void CHandlingManager::RemoveModelHandling(std::uint32_t model) const noexcept
+{
+    m_ModelEntries.erase(model);
+    m_bModelHandlingChanged.erase(model);
 }
 
 // Return the handling manager id

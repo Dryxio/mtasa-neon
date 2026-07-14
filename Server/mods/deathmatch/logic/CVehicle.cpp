@@ -29,6 +29,7 @@ CVehicle::CVehicle(CVehicleManager* pVehicleManager, CElement* pParent, unsigned
     // Init
     m_pVehicleManager = pVehicleManager;
     m_usModel = usModel;
+    m_usCustomModel = 0xFFFF;
     m_pUpgrades = new CVehicleUpgrades(this);
 
     m_iType = CElement::VEHICLE;
@@ -196,6 +197,8 @@ CElement* CVehicle::Clone(bool* bAddEntity, CResource* pResource)
         pTemp->SetHealth(GetHealth());
         pTemp->SetColor(GetColor());
         pTemp->SetUpgrades(GetUpgrades());
+        if (HasCustomModel())
+            pTemp->SetCustomModel(GetSyncModel(), GetModel(), true);
         pTemp->m_ucDoorStates = m_ucDoorStates;
         pTemp->m_ucWheelStates = m_ucWheelStates;
         pTemp->m_ucPanelStates = m_ucPanelStates;
@@ -506,7 +509,10 @@ void CVehicle::SetRotationDegrees(const CVector& vecRotation)
 
 void CVehicle::SetModel(unsigned short usModel)
 {
-    if (usModel != m_usModel)
+    const bool bModelChanged = usModel != m_usModel || HasCustomModel();
+    m_usCustomModel = 0xFFFF;
+
+    if (bModelChanged)
     {
         m_usModel = usModel;
         m_eVehicleType = CVehicleManager::GetVehicleType(m_usModel);
@@ -515,6 +521,23 @@ void CVehicle::SetModel(unsigned short usModel)
         CVehicleManager::GetRandomVariation(m_usModel, m_ucVariant, m_ucVariant2);
 
         // Generate new handling data to fit the vehicle
+        GenerateHandlingData();
+    }
+}
+
+void CVehicle::SetCustomModel(unsigned short usModel, unsigned short usParentModel, bool bPreserveVariants)
+{
+    const bool bModelChanged = usParentModel != m_usModel || usModel != m_usCustomModel;
+    m_usModel = usParentModel;
+    m_usCustomModel = usModel;
+
+    if (bModelChanged)
+    {
+        m_eVehicleType = CVehicleManager::GetVehicleType(m_usModel);
+        RandomizeColor();
+        ResetDoors();
+        if (!bPreserveVariants)
+            CVehicleManager::GetRandomVariation(m_usModel, m_ucVariant, m_ucVariant2);
         GenerateHandlingData();
     }
 }
@@ -862,7 +885,7 @@ void CVehicle::GenerateHandlingData() noexcept
         m_HandlingEntry = handlingManager->CreateHandlingData();
 
     // Apply the model handling info
-    m_HandlingEntry->ApplyHandlingData(handlingManager->GetModelHandlingData(m_usModel));
+    m_HandlingEntry->ApplyHandlingData(handlingManager->GetModelHandlingData(GetSyncModel()));
 
     m_bHandlingChanged = false;
 }

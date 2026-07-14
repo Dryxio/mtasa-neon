@@ -48,6 +48,10 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-12
     Glitch_FastWeaponStrafe,
 
+    // Synchronizes server-owned logical model IDs which clients map to locally free GTA model slots.
+    // 2026-07-14
+    ServerModelRegistry,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

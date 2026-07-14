@@ -3009,6 +3009,10 @@ retry:
                     bitStream.Read(&rotationRadians);
                     if (bitStream.ReadCompressed(usObjectID) && bitStream.Read(&alpha))
                     {
+                        // A server model ID is a connection-wide identity, not a GTA pool slot.
+                        // Resolve it before any native model validation or object construction.
+                        usObjectID = g_pClientGame->m_pManager->GetModelManager()->ResolveServerModelID(usObjectID);
+
                         // Valid object id?
                         if (!CClientObjectManager::IsValidModel(usObjectID))
                         {
@@ -3279,6 +3283,8 @@ retry:
                     // Read out the vehicle model
                     std::uint16_t usModel = 0xFFFF;
                     bitStream.Read(usModel);
+
+                    usModel = g_pClientGame->m_pManager->GetModelManager()->ResolveServerModelID(usModel);
 
                     if (!CClientVehicleManager::IsValidModel(usModel))
                     {

@@ -11,6 +11,8 @@
 
 #include "StdInc.h"
 #include "CLuaHandlingDefs.h"
+#include "CGame.h"
+#include "CServerModelManager.h"
 #include "CScriptArgReader.h"
 #include "CStaticFunctionDefinitions.h"
 
@@ -623,7 +625,7 @@ int CLuaHandlingDefs::GetModelHandling(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        if (CVehicleManager::IsValidModel(model))
+        if (g_pGame->GetServerModelManager()->IsModelOfType(model, eServerModelType::VEHICLE))
         {
             if (const auto* const entry = m_pHandlingManager->GetModelHandlingData(model))
             {
@@ -794,7 +796,7 @@ int CLuaHandlingDefs::GetOriginalHandling(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        if (CVehicleManager::IsValidModel(model))
+        if (g_pGame->GetServerModelManager()->IsModelOfType(model, eServerModelType::VEHICLE))
         {
             if (const auto* const entry = m_pHandlingManager->GetOriginalHandlingData(model))
             {

@@ -35,6 +35,7 @@ public:
     eHandlingProperty GetPropertyEnumFromName(const std::string& name) const noexcept;
     bool              HasModelHandlingChanged(std::uint32_t model) const noexcept;
     void              SetModelHandlingHasChanged(std::uint32_t model, bool bChanged) const noexcept;
+    void              RemoveModelHandling(std::uint32_t model) const noexcept;
 
 private:
     void InitializeDefaultHandlings() noexcept;

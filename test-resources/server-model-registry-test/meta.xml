@@ -1,0 +1,5 @@
+<meta>
+    <info author="MTA Neon" name="Server model registry test" type="script" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>

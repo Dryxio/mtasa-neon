@@ -44,6 +44,7 @@
 #include "CMapManager.h"
 #include "CMarkerManager.h"
 #include "CHandlingManager.h"
+#include "CServerModelManager.h"
 #include "CScriptDebugging.h"
 #include "CBandwidthSettings.h"
 #include "CMainConfig.h"
@@ -391,6 +392,7 @@ CGame::~CGame()
     SAFE_DELETE(m_pPacketTranslator);
     SAFE_DELETE(m_pMarkerManager);
     SAFE_DELETE(m_pRadarAreaManager);
+    m_ServerModelManager.reset();
     SAFE_DELETE(m_pPlayerManager);
     SAFE_DELETE(m_pVehicleManager);
     SAFE_DELETE(m_pPickupManager);
@@ -617,10 +619,53 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
         m_pBuildingManager = new CBuildingManager();
         m_pPickupManager = new CPickupManager(m_pColManager);
         m_pPlayerManager = new CPlayerManager;
+        // Server model IDs belong to the game process, not to a single map or
+        // resource VM, so late joiners and resource restarts share one registry.
+        m_ServerModelManager = std::make_unique<CServerModelManager>(*m_pPlayerManager);
         m_pRadarAreaManager = new CRadarAreaManager;
         m_pMarkerManager = new CMarkerManager(m_pColManager);
         m_HandlingManager = std::make_unique<CHandlingManager>();
         m_pVehicleManager = new CVehicleManager;
+        m_ServerModelManager->SetBeforeFreeCallback(
+            [this](const CServerModelManager::Definition& definition)
+            {
+                // A runtime slot can only be released after every entity has switched back
+                // to the native parent. This transition is lifecycle cleanup and therefore
+                // intentionally cannot be cancelled by an element-model-change event.
+                if (definition.type == eServerModelType::VEHICLE)
+                {
+                    for (CVehicle* vehicle : m_pVehicleManager->GetVehicles())
+                    {
+                        if (vehicle->GetSyncModel() != definition.id)
+                            continue;
+
+                        vehicle->SetModel(definition.parent);
+
+                        CBitStream bitStream;
+                        bitStream.pBitStream->Write(definition.parent);
+                        bitStream.pBitStream->Write(vehicle->GetVariant());
+                        bitStream.pBitStream->Write(vehicle->GetVariant2());
+                        m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(vehicle, SET_ELEMENT_MODEL, *bitStream.pBitStream));
+                    }
+                }
+                else
+                {
+                    for (auto it = m_pObjectManager->IterBegin(); it != m_pObjectManager->IterEnd(); ++it)
+                    {
+                        CObject* object = *it;
+                        if (object->GetSyncModel() != definition.id)
+                            continue;
+
+                        object->SetModel(definition.parent);
+
+                        CBitStream bitStream;
+                        bitStream.pBitStream->Write(definition.parent);
+                        m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(object, SET_ELEMENT_MODEL, *bitStream.pBitStream));
+                    }
+                }
+
+                m_HandlingManager->RemoveModelHandling(definition.id);
+            });
         m_pPacketTranslator = new CPacketTranslator(m_pPlayerManager);
         m_pBanManager = new CBanManager;
         m_pTeamManager = new CTeamManager;
@@ -1431,6 +1476,21 @@ void CGame::InitialDataStream(CPlayer& Player)
 
     // Tell him current bullet sync enabled weapons and vehicle extrapolation settings
     SendSyncSettings(&Player);
+
+    // Allocate this client's GTA slots before any entity packet can reference a
+    // stable server model ID. Late joiners therefore observe the same ordering as
+    // clients that were online when the model was requested.
+    if (Player.CanBitStream(eBitStreamVersion::ServerModelRegistry))
+    {
+        for (const auto& [id, definition] : m_ServerModelManager->GetDefinitions())
+        {
+            CBitStream bitStream;
+            bitStream.pBitStream->Write(id);
+            bitStream.pBitStream->Write(definition.parent);
+            bitStream.pBitStream->Write(static_cast<std::uint8_t>(definition.type));
+            Player.Send(CLuaPacket(ALLOCATE_SERVER_MODEL, *bitStream.pBitStream));
+        }
+    }
 
     // Tell the other players about him
     CPlayerListPacket PlayerNotice;

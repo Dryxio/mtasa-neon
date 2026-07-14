@@ -94,6 +94,7 @@ class CRegistry;
 class CRemoteCalls;
 class CResourceManager;
 class CScriptDebugging;
+class CServerModelManager;
 class CSettings;
 class CTeamManager;
 class CUnoccupiedVehicleSync;
@@ -221,6 +222,7 @@ public:
 
     CMainConfig*            GetConfig() { return m_pMainConfig; }
     CHandlingManager*       GetHandlingManager() const noexcept { return m_HandlingManager.get(); }
+    CServerModelManager*    GetServerModelManager() const noexcept { return m_ServerModelManager.get(); }
     CMapManager*            GetMapManager() { return m_pMapManager; }
     CPlayerManager*         GetPlayerManager() { return m_pPlayerManager; }
     CObjectManager*         GetObjectManager() { return m_pObjectManager; }
@@ -558,29 +560,30 @@ private:
 #ifdef WITH_OBJECT_SYNC
     CObjectSync* m_pObjectSync;
 #endif
-    CMarkerManager*                   m_pMarkerManager;
-    CClock*                           m_pClock;
-    CBanManager*                      m_pBanManager;
-    CTeamManager*                     m_pTeamManager;
-    CCommandLineParser                m_CommandLineParser;
-    CRegisteredCommands*              m_pRegisteredCommands;
-    CDatabaseManager*                 m_pDatabaseManager;
-    CLuaCallbackManager*              m_pLuaCallbackManager;
-    CRegistryManager*                 m_pRegistryManager;
-    CRegistry*                        m_pRegistry;
-    CAccountManager*                  m_pAccountManager;
-    CLatentTransferManager*           m_pLatentTransferManager;
-    CDebugHookManager*                m_pDebugHookManager;
-    CPedManager*                      m_pPedManager;
-    CResourceManager*                 m_pResourceManager;
-    CAccessControlListManager*        m_pACLManager;
-    CSettings*                        m_pSettings;
-    CZoneNames*                       m_pZoneNames;
-    ASE*                              m_pASE;
-    std::unique_ptr<CHandlingManager> m_HandlingManager;
-    CRPCFunctions*                    m_pRPCFunctions;
-    CLanBroadcast*                    m_pLanBroadcast;
-    CWaterManager*                    m_pWaterManager;
+    CMarkerManager*                      m_pMarkerManager;
+    CClock*                              m_pClock;
+    CBanManager*                         m_pBanManager;
+    CTeamManager*                        m_pTeamManager;
+    CCommandLineParser                   m_CommandLineParser;
+    CRegisteredCommands*                 m_pRegisteredCommands;
+    CDatabaseManager*                    m_pDatabaseManager;
+    CLuaCallbackManager*                 m_pLuaCallbackManager;
+    CRegistryManager*                    m_pRegistryManager;
+    CRegistry*                           m_pRegistry;
+    CAccountManager*                     m_pAccountManager;
+    CLatentTransferManager*              m_pLatentTransferManager;
+    CDebugHookManager*                   m_pDebugHookManager;
+    CPedManager*                         m_pPedManager;
+    CResourceManager*                    m_pResourceManager;
+    CAccessControlListManager*           m_pACLManager;
+    CSettings*                           m_pSettings;
+    CZoneNames*                          m_pZoneNames;
+    ASE*                                 m_pASE;
+    std::unique_ptr<CHandlingManager>    m_HandlingManager;
+    std::unique_ptr<CServerModelManager> m_ServerModelManager;
+    CRPCFunctions*                       m_pRPCFunctions;
+    CLanBroadcast*                       m_pLanBroadcast;
+    CWaterManager*                       m_pWaterManager;
 
     CWeaponStatManager*      m_pWeaponStatsManager;
     CBuildingRemovalManager* m_pBuildingRemovalManager;

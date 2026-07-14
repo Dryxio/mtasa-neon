@@ -33,6 +33,8 @@ public:
     LUA_DECLARE(EngineRestoreModel);
     LUA_DECLARE(EngineRequestModel);
     LUA_DECLARE(EngineFreeModel);
+    LUA_DECLARE(EngineGetModelRuntimeID);
+    LUA_DECLARE(EngineGetModelServerID);
     LUA_DECLARE(EngineReplaceAnimation);
     LUA_DECLARE(EngineRestoreAnimation);
     LUA_DECLARE(EngineReplaceMatchingAtomics);

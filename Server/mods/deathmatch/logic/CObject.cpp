@@ -27,6 +27,7 @@ CObject::CObject(CElement* pParent, CObjectManager* pObjectManager, bool bIsLowL
 
     m_pObjectManager = pObjectManager;
     m_usModel = 0xFFFF;
+    m_usCustomModel = 0xFFFF;
     m_pMoveAnimation = NULL;
     m_ucAlpha = 255;
     m_vecScale = CVector(1.0f, 1.0f, 1.0f);
@@ -52,6 +53,7 @@ CObject::CObject(const CObject& Copy) : CElement(Copy.m_pParent), m_bIsLowLod(Co
 
     m_pObjectManager = Copy.m_pObjectManager;
     m_usModel = Copy.m_usModel;
+    m_usCustomModel = Copy.m_usCustomModel;
     m_ucAlpha = Copy.m_ucAlpha;
     m_vecScale = CVector(Copy.m_vecScale.fX, Copy.m_vecScale.fY, Copy.m_vecScale.fZ);
     m_fHealth = Copy.m_fHealth;

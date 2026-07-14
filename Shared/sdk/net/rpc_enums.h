@@ -295,5 +295,8 @@ enum eElementRPCFunctions
 
     SET_WORLD_SEABED_OUTER_BOUNDARY,
 
+    ALLOCATE_SERVER_MODEL,
+    FREE_SERVER_MODEL,
+
     NUM_RPC_FUNCS  // Add above this line
 };

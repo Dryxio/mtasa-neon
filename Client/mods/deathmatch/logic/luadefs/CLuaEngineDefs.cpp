@@ -106,6 +106,8 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineReplaceAnimation", EngineReplaceAnimation},
         {"engineRestoreAnimation", EngineRestoreAnimation},
         {"engineRequestModel", EngineRequestModel},
+        {"engineGetModelRuntimeID", EngineGetModelRuntimeID},
+        {"engineGetModelServerID", EngineGetModelServerID},
         {"engineGetModelLODDistance", EngineGetModelLODDistance},
         {"engineSetModelLODDistance", EngineSetModelLODDistance},
         {"engineResetModelLODDistance", EngineResetModelLODDistance},
@@ -1113,6 +1115,58 @@ int CLuaEngineDefs::EngineFreeModel(lua_State* luaVM)
     return 1;
 }
 
+int CLuaEngineDefs::EngineGetModelRuntimeID(lua_State* luaVM)
+{
+    std::uint16_t logicalModelId = 0;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(logicalModelId);
+
+    if (!argStream.HasErrors())
+    {
+        // Server IDs are stable network identities, but replacement APIs must
+        // receive the GTA slot allocated locally on this specific client.
+        const int runtimeModelId = m_pManager->GetModelManager()->GetServerModelRuntimeID(logicalModelId);
+        if (runtimeModelId != INVALID_MODEL_ID)
+        {
+            lua_pushinteger(luaVM, runtimeModelId);
+            return 1;
+        }
+    }
+    else
+    {
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    }
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineGetModelServerID(lua_State* luaVM)
+{
+    std::uint16_t runtimeModelId = 0;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(runtimeModelId);
+
+    if (!argStream.HasErrors())
+    {
+        const std::uint16_t logicalModelId = m_pManager->GetModelManager()->GetServerModelID(runtimeModelId);
+        if (logicalModelId != 0xFFFF)
+        {
+            lua_pushinteger(luaVM, logicalModelId);
+            return 1;
+        }
+    }
+    else
+    {
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    }
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
 int CLuaEngineDefs::EngineReplaceAnimation(lua_State* luaVM)
 {
     CClientEntity* pEntity = nullptr;
@@ -1285,7 +1339,8 @@ int CLuaEngineDefs::EngineGetRendererStats(lua_State* luaVM)
     const SRendererStats stats = g_pMultiplayer->GetRendererStats();
     lua_newtable(luaVM);
 
-    const auto setField = [luaVM](const char* name, uint32_t value) {
+    const auto setField = [luaVM](const char* name, uint32_t value)
+    {
         lua_pushnumber(luaVM, value);
         lua_setfield(luaVM, -2, name);
     };
@@ -1311,7 +1366,7 @@ int CLuaEngineDefs::EngineResetRendererStats(lua_State* luaVM)
 
 int CLuaEngineDefs::EngineSetDistantLightsEnabled(lua_State* luaVM)
 {
-    bool enabled = false;
+    bool             enabled = false;
     CScriptArgReader argStream(luaVM);
     argStream.ReadBool(enabled);
     if (argStream.HasErrors())
@@ -1324,7 +1379,7 @@ int CLuaEngineDefs::EngineSetDistantLightsEnabled(lua_State* luaVM)
 
 int CLuaEngineDefs::EngineSetDistantLightsDrawDistance(lua_State* luaVM)
 {
-    float distance = 0.0f;
+    float            distance = 0.0f;
     CScriptArgReader argStream(luaVM);
     argStream.ReadNumber(distance);
     if (argStream.HasErrors())

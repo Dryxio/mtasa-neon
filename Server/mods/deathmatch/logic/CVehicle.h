@@ -205,7 +205,10 @@ public:
     void DoPulse();
 
     unsigned short GetModel() { return m_usModel; };
+    unsigned short GetSyncModel() const { return m_usCustomModel != 0xFFFF ? m_usCustomModel : m_usModel; }
+    bool           HasCustomModel() const { return m_usCustomModel != 0xFFFF; }
     void           SetModel(unsigned short usModel);
+    void           SetCustomModel(unsigned short usModel, unsigned short usParentModel, bool bPreserveVariants = false);
     bool           HasValidModel();
 
     unsigned char GetVariant() { return m_ucVariant; };
@@ -418,6 +421,8 @@ private:
     SFixedArray<CPed*, MAX_VEHICLE_SEATS> m_pOccupants;
 
     unsigned short m_usModel;
+    // Gameplay rules still use the native parent while the stable server ID is synchronized to clients.
+    unsigned short m_usCustomModel = 0xFFFF;
     eVehicleType   m_eVehicleType;
     CVector        m_vecPosition;
     CVector        m_vecRotationDegrees;

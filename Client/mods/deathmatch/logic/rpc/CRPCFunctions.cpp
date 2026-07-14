@@ -19,6 +19,7 @@
 #include "CHandlingRPCs.h"
 #include "CInputRPCs.h"
 #include "CMarkerRPCs.h"
+#include "CModelRPCs.h"
 #include "CObjectRPCs.h"
 #include "COutputRPCs.h"
 #include "CPedRPCs.h"
@@ -88,6 +89,7 @@ void CRPCFunctions::AddHandlers()
     CHandlingRPCs::LoadFunctions();
     CInputRPCs::LoadFunctions();
     CMarkerRPCs::LoadFunctions();
+    CModelRPCs::LoadFunctions();
     CObjectRPCs::LoadFunctions();
     COutputRPCs::LoadFunctions();
     CPedRPCs::LoadFunctions();

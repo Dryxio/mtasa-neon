@@ -13,6 +13,7 @@
 #include "CLuaVehicleDefs.h"
 #include "CVehicleNames.h"
 #include "CTrainTrack.h"
+#include "CServerModelManager.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
 #include "packets/CElementRPCPacket.h"
@@ -383,6 +384,7 @@ int CLuaVehicleDefs::GetVehicleType(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
+        ulModel = g_pGame->GetServerModelManager()->ResolveParent(static_cast<unsigned short>(ulModel));
         lua_pushstring(luaVM, CVehicleNames::GetVehicleTypeName(ulModel));
         return 1;
     }
@@ -806,14 +808,14 @@ int CLuaVehicleDefs::GetVehicleMaxPassengers(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        if (!CVehicleManager::IsValidModel(uiModel))
+        if (!g_pGame->GetServerModelManager()->IsModelOfType(static_cast<unsigned short>(uiModel), eServerModelType::VEHICLE))
         {
             m_pScriptDebugging->LogBadType(luaVM);
             lua_pushboolean(luaVM, false);
             return 1;
         }
 
-        unsigned int uiMaxPassengers = CVehicleManager::GetMaxPassengers(uiModel);
+        unsigned int uiMaxPassengers = CVehicleManager::GetMaxPassengers(g_pGame->GetServerModelManager()->ResolveParent(static_cast<unsigned short>(uiModel)));
 
         if (uiMaxPassengers != 0xFF)
         {

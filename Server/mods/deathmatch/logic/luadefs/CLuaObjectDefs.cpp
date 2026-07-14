@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "../CServerModelManager.h"
 #include "CLuaObjectDefs.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
@@ -84,7 +85,7 @@ int CLuaObjectDefs::CreateObject(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        if (CObjectManager::IsValidModel(usModelID))
+        if (g_pGame->GetServerModelManager()->IsModelOfType(usModelID, eServerModelType::OBJECT))
         {
             CLuaMain* pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
             if (pLuaMain)

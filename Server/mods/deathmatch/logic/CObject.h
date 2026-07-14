@@ -51,7 +51,18 @@ public:
     void          SetAlpha(unsigned char ucAlpha) { m_ucAlpha = ucAlpha; }
 
     unsigned short GetModel() { return m_usModel; }
-    void           SetModel(unsigned short usModel) { m_usModel = usModel; }
+    unsigned short GetSyncModel() const { return m_usCustomModel != 0xFFFF ? m_usCustomModel : m_usModel; }
+    bool           HasCustomModel() const { return m_usCustomModel != 0xFFFF; }
+    void           SetModel(unsigned short usModel)
+    {
+        m_usModel = usModel;
+        m_usCustomModel = 0xFFFF;
+    }
+    void SetCustomModel(unsigned short usModel, unsigned short usParentModel)
+    {
+        m_usModel = usParentModel;
+        m_usCustomModel = usModel;
+    }
 
     const CVector& GetScale() { return m_vecScale; }
     void           SetScale(const CVector& vecScale) { m_vecScale = vecScale; }
@@ -92,14 +103,16 @@ private:
     CVector         m_vecRotation;
     unsigned char   m_ucAlpha;
     unsigned short  m_usModel;
-    CVector         m_vecScale;
-    bool            m_bIsFrozen;
-    float           m_fHealth;
-    bool            m_bBreakable;
-    bool            m_bSyncable;
-    CPlayer*        m_pSyncer;
-    bool            m_bVisibleInAllDimensions = false;
-    bool            m_bRespawnable;
+    // Kept separate so native object behavior remains inherited from the parent model.
+    unsigned short m_usCustomModel = 0xFFFF;
+    CVector        m_vecScale;
+    bool           m_bIsFrozen;
+    float          m_fHealth;
+    bool           m_bBreakable;
+    bool           m_bSyncable;
+    CPlayer*       m_pSyncer;
+    bool           m_bVisibleInAllDimensions = false;
+    bool           m_bRespawnable;
 
     void NotifyMovementComplete();
 

@@ -25,6 +25,11 @@ CClientModel::~CClientModel(void)
 
 bool CClientModel::Allocate(ushort usParentID)
 {
+    // Allocate() creates DFF model info. TXD and COL file-ID slots have a
+    // different layout and must never be passed to Make*Model below.
+    if (m_iModelID < 0 || static_cast<unsigned int>(m_iModelID) >= g_pGame->GetBaseIDforTXD())
+        return false;
+
     m_bAllocatedByUs = true;
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(m_iModelID, true);

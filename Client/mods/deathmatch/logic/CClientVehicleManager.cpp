@@ -54,6 +54,22 @@ static const SFixedArray<unsigned long, 212> g_ulVehicleAttributes = {
 
 static SFixedArray<unsigned char, 212> g_ucVariants;
 
+namespace
+{
+    unsigned long ResolveVehicleParentModel(unsigned long model)
+    {
+        if (model >= 400 && model <= 611)
+            return model;
+
+        CModelInfo* modelInfo = g_pGame->GetModelInfo(model);
+        if (!modelInfo || modelInfo->GetModelType() != eModelInfoType::VEHICLE)
+            return model;
+
+        const unsigned long parent = modelInfo->GetParentID();
+        return parent >= 400 && parent <= 611 ? parent : model;
+    }
+}
+
 CClientVehicleManager::CClientVehicleManager(CClientManager* pManager)
 {
     assert(NUMELMS(g_ucMaxPassengers) == 212);
@@ -419,6 +435,7 @@ CClientVehicle* CClientVehicleManager::GetClosest(CVector& vecPosition, float fR
 
 bool CClientVehicleManager::IsTrainModel(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (ulModel == 449 || ulModel == 537 || ulModel == 538 || ulModel == 569 || ulModel == 590 || ulModel == 570);
 }
 
@@ -479,9 +496,7 @@ eClientVehicleType CClientVehicleManager::GetVehicleType(unsigned long ulModel)
 
 unsigned char CClientVehicleManager::GetMaxPassengerCount(unsigned long ulModel)
 {
-    // Use parent model ID for non-standard vehicle model IDs.
-    if ((ulModel < 400 || ulModel > 611) && IsValidModel(ulModel))
-        ulModel = g_pGame->GetModelInfo(ulModel)->GetParentID();
+    ulModel = ResolveVehicleParentModel(ulModel);
 
     // Valid model?
     if (IsStandardModel(ulModel))
@@ -495,6 +510,8 @@ unsigned char CClientVehicleManager::GetMaxPassengerCount(unsigned long ulModel)
 
 bool CClientVehicleManager::IsValidSeat(unsigned long ulModel, unsigned char ucSeat)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
+
     // Camper only has 3 seats (0-2)
     if (static_cast<VehicleType>(ulModel) == VehicleType::VT_CAMPER && ucSeat > 2)
         return false;
@@ -513,6 +530,7 @@ bool CClientVehicleManager::IsValidSeat(unsigned long ulModel, unsigned char ucS
 
 void CClientVehicleManager::GetRandomVariation(unsigned short usModel, unsigned char& ucVariant, unsigned char& ucVariant2)
 {
+    usModel = static_cast<unsigned short>(ResolveVehicleParentModel(usModel));
     RandomizeRandomSeed();
     ucVariant = 255;
     ucVariant2 = 255;
@@ -651,36 +669,43 @@ unsigned char CClientVehicleManager::ConvertIndexToGameSeat(unsigned long ulMode
 
 bool CClientVehicleManager::HasTurret(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_TURRENT));
 }
 
 bool CClientVehicleManager::HasSirens(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_SIRENS));
 }
 
 bool CClientVehicleManager::HasTaxiLight(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_TAXI_LIGHTS));
 }
 
 bool CClientVehicleManager::HasSearchLight(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_SEARCH_LIGHT));
 }
 
 bool CClientVehicleManager::HasLandingGears(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_LANDING_GEARS));
 }
 
 bool CClientVehicleManager::HasAdjustableProperty(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_ADJUSTABLE_PROPERTY));
 }
 
 bool CClientVehicleManager::HasSmokeTrail(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     return (IsStandardModel(ulModel) && (g_ulVehicleAttributes[ulModel - 400] & VEHICLE_HAS_SMOKE_TRAIL));
 }
 
@@ -707,6 +732,7 @@ bool CClientVehicleManager::HasDamageModel(eClientVehicleType Type)
 
 bool CClientVehicleManager::HasDoors(unsigned long ulModel)
 {
+    ulModel = ResolveVehicleParentModel(ulModel);
     bool bHasDoors = false;
 
     if (HasDamageModel(ulModel) == true)
