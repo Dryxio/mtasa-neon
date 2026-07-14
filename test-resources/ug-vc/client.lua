@@ -391,8 +391,6 @@ local function beginBootstrap()
     placementCursor = 1
     loadingFailed = false
     readyReported = false
-    loadRadar()
-
     local ok, reason = openImages()
     if not ok then
         failBootstrap(reason)
@@ -637,7 +635,6 @@ local function releaseMap()
         engineFreeTXD(txdId)
     end
     loadedTextures = {}
-    releaseRadar()
     bootstrapStage = "standby"
     modelCursor = 1
     placementCursor = 1
@@ -647,6 +644,7 @@ end
 
 addEventHandler("onClientResourceStart", resourceRoot, function()
     buildIndexes()
+    loadRadar()
     outputDebugString("[UG VC IMG] standby; activation locale par /vctest")
     triggerServerEvent("ugVcClientReady", resourceRoot, true, "standby")
 end)
@@ -661,4 +659,7 @@ addEventHandler("ugWorldDeactivateCities", root, function(nextCity)
     outputDebugString("[UG VC IMG] released for " .. tostring(nextCity))
 end)
 
-addEventHandler("onClientResourceStop", resourceRoot, releaseMap)
+addEventHandler("onClientResourceStop", resourceRoot, function()
+    releaseMap()
+    releaseRadar()
+end)

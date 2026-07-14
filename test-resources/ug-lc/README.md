@@ -19,6 +19,10 @@ screen, asks Neon to preload the native scene around Portland, and lets the
 server teleport the player after that request returns. Returning to LC does not
 rebuild the city or reload its archives.
 
+The radar catalog has a separate lifetime: its 81 tiles are registered when
+the resource starts and remain available in the shared F11 atlas even while
+Liberty City's 3D models are not the locally resident city.
+
 ## Commands
 
 - `/lctest` preloads Portland and teleports to Liberty City.

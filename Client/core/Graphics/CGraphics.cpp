@@ -1655,6 +1655,32 @@ void CGraphics::DrawTexture(CTextureItem* pTexture, float fX, float fY, float fS
     EndDrawBatch();
 }
 
+void CGraphics::DrawTextureRaw(IDirect3DTexture9* texture, unsigned int textureWidth, unsigned int textureHeight, float fX, float fY, float fWidth,
+                               float fHeight, DWORD dwColor)
+{
+    if (g_pCore->IsWindowMinimized() || !texture || textureWidth == 0 || textureHeight == 0)
+        return;
+
+    // GTA creates RenderWare textures through CProxyDirect3DDevice9, while
+    // CGraphics deliberately renders through the raw D3D device. Passing the
+    // proxy texture to D3DXSprite makes D3D9On12 dereference the wrapper as a
+    // native runtime texture. Unwrap it before it reaches the raw device.
+    IDirect3DTexture9* realTexture = reinterpret_cast<IDirect3DTexture9*>(CDirect3DEvents9::GetRealTexture(texture));
+    if (!realTexture)
+        return;
+
+    BeginDrawBatch();
+    const RECT cutImagePos = {0, 0, static_cast<LONG>(textureWidth), static_cast<LONG>(textureHeight)};
+    const D3DXVECTOR2 scaling(fWidth / textureWidth, fHeight / textureHeight);
+    const D3DXVECTOR2 position(fX, fY);
+    D3DXMATRIX matrix;
+    D3DXMatrixTransformation2D(&matrix, nullptr, 0.0f, &scaling, nullptr, 0.0f, &position);
+    CheckModes(EDrawMode::DX_SPRITE, m_ActiveBlendMode);
+    m_pDXSprite->SetTransform(&matrix);
+    m_pDXSprite->Draw(realTexture, &cutImagePos, nullptr, nullptr, dwColor);
+    EndDrawBatch();
+}
+
 void CGraphics::OnDeviceCreate(IDirect3DDevice9* pDevice)
 {
     m_pDevice = pDevice;

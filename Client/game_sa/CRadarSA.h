@@ -26,14 +26,19 @@ class CRadarSA : public CRadar
 public:
     CRadarSA();
     ~CRadarSA();
-    CMarker*       CreateMarker(CVector* vecPosition);
-    CMarker*       GetFreeMarker();
-    void           DrawAreaOnRadar(float fX1, float fY1, float fX2, float fY2, const SharedUtil::SColor color);
-    bool           SetMapTile(unsigned int column, unsigned int row, const void* owner, const void* source, const char* data, std::size_t size,
-                              bool filteringEnabled) override;
-    bool           ResetMapTile(unsigned int column, unsigned int row, const void* owner) override;
-    void           RemoveMapTilesForSource(const void* source) override;
-    SRadarMapStats GetMapStats() const override;
+    CMarker*           CreateMarker(CVector* vecPosition);
+    CMarker*           GetFreeMarker();
+    void               DrawAreaOnRadar(float fX1, float fY1, float fX2, float fY2, const SharedUtil::SColor color);
+    bool               SetMapTile(unsigned int column, unsigned int row, const void* owner, const void* source, const char* data, std::size_t size,
+                                  bool filteringEnabled) override;
+    bool               ResetMapTile(unsigned int column, unsigned int row, const void* owner) override;
+    void               RemoveMapTilesForSource(const void* source) override;
+    SRadarMapStats     GetMapStats() const override;
+    std::uint32_t      GetMapRevision() const override;
+    bool               IsMapTileRegistered(unsigned int column, unsigned int row) const override;
+    void               PrepareMapTileTextures(const unsigned int* columns, const unsigned int* rows, std::size_t count) override;
+    IDirect3DTexture9* AcquireMapTileTexture(unsigned int column, unsigned int row, bool& unloadAfterUse) override;
+    void ReleaseMapTileTexture(unsigned int column, unsigned int row, IDirect3DTexture9* texture, bool unloadAfterUse) override;
 
     // Internal entry points used by the validated GTA call-site hooks.
     void DrawMapSection(int x, int y);

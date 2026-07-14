@@ -17,6 +17,10 @@ per-frame budget, preloads Ocean Beach, and teleports only after completion.
 Different players can be in LC and VC simultaneously because residency is
 per-client rather than global.
 
+The radar catalog has a separate lifetime: its 80 tiles are registered when
+the resource starts and remain available in the shared F11 atlas even while
+Vice City's 3D models are not the locally resident city.
+
 ## Commands
 
 - `/vctest` preloads Ocean Beach and teleports to Vice City.

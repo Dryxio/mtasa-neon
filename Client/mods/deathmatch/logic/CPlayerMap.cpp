@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CRadar.h>
 
 using SharedUtil::CalcMTASAPath;
 using std::list;
@@ -24,6 +25,24 @@ enum
 };
 
 constexpr std::array<std::uint32_t, 2> MAP_IMAGE_SIZES = {1024, 2048};
+
+namespace
+{
+    constexpr unsigned int VANILLA_MAP_MIN_CELL = 14;
+    constexpr unsigned int VANILLA_MAP_MAX_CELL = 25;
+    constexpr unsigned int VANILLA_MAP_CELL_SPAN = 12;
+    constexpr float        RADAR_MAP_WORLD_MIN = -10000.0f;
+    constexpr float        RADAR_MAP_WORLD_MAX = 10000.0f;
+    constexpr float        RADAR_MAP_TILE_SIZE = 500.0f;
+    constexpr DWORD        PLAYER_MAP_OCEAN_COLOR = D3DCOLOR_XRGB(111, 137, 170);
+    constexpr DWORD        PLAYER_MAP_TILE_BUILD_BUDGET_MS = 4;
+    constexpr unsigned int PLAYER_MAP_TILE_BUILD_BATCH_LIMIT = 16;
+
+    bool IsVanillaMapCell(unsigned int column, unsigned int row)
+    {
+        return column >= VANILLA_MAP_MIN_CELL && column <= VANILLA_MAP_MAX_CELL && row >= VANILLA_MAP_MIN_CELL && row <= VANILLA_MAP_MAX_CELL;
+    }
+}
 
 CPlayerMap::CPlayerMap(CClientManager* pManager)
 {
@@ -59,7 +78,22 @@ CPlayerMap::CPlayerMap(CClientManager* pManager)
 
     // Init texture vars
     m_mapImageTexture = nullptr;
+    m_dynamicMapTexture = nullptr;
     m_playerMarkerTexture = nullptr;
+    m_mapRegistryRevision = 0;
+    m_dynamicMapTextureRevision = 0;
+    m_dynamicMapBuildIndex = 0;
+    m_registeredMapTileCount = 0;
+    m_mapGridMinColumn = VANILLA_MAP_MIN_CELL;
+    m_mapGridMaxColumn = VANILLA_MAP_MAX_CELL;
+    m_mapGridMinRow = VANILLA_MAP_MIN_CELL;
+    m_mapGridMaxRow = VANILLA_MAP_MAX_CELL;
+    m_mapGridSpan = VANILLA_MAP_CELL_SPAN;
+    m_dynamicMapNeedsReset = false;
+    m_dynamicMapBuildPending = false;
+    m_fWorldMinX = -3000.0f;
+    m_fWorldMaxY = 3000.0f;
+    m_fWorldSize = 6000.0f;
 
     // Create all map textures
     CreateAllTextures();
@@ -100,12 +134,14 @@ CPlayerMap::CPlayerMap(CClientManager* pManager)
     // Default to attached to player
     SetAttachedToLocalPlayer(true);
 
+    RefreshMapDefinition();
     SetupMapVariables();
 }
 
 CPlayerMap::~CPlayerMap()
 {
     // Delete our images
+    ReleaseDynamicMapTexture();
     SAFE_RELEASE(m_mapImageTexture);
     SAFE_RELEASE(m_playerMarkerTexture);
     for (uint i = 0; i < m_markerTextureList.size(); i++)
@@ -134,6 +170,7 @@ void CPlayerMap::UpdateOrRevertMapTexture(std::size_t newImageIndex)
     {
         m_playerMapImageIndex = newImageIndex;
         CreateOrUpdateMapTexture();
+        m_dynamicMapNeedsReset = true;
     }
     catch (const std::exception& e)
     {
@@ -170,8 +207,232 @@ void CPlayerMap::CreateAllTextures()
     }
 }
 
+void CPlayerMap::RefreshMapDefinition()
+{
+    CRadar* radar = g_pGame->GetRadar();
+    if (!radar)
+        return;
+
+    const std::uint32_t revision = radar->GetMapRevision();
+    if (revision == m_mapRegistryRevision)
+        return;
+
+    const SRadarMapStats stats = radar->GetMapStats();
+    m_mapRegistryRevision = stats.revision;
+    m_registeredMapTileCount = stats.registeredTiles;
+
+    unsigned int minColumn = VANILLA_MAP_MIN_CELL;
+    unsigned int maxColumn = VANILLA_MAP_MAX_CELL;
+    unsigned int minRow = VANILLA_MAP_MIN_CELL;
+    unsigned int maxRow = VANILLA_MAP_MAX_CELL;
+    if (stats.registeredTiles > 0)
+    {
+        minColumn = std::min(minColumn, stats.minColumn);
+        maxColumn = std::max(maxColumn, stats.maxColumn);
+        minRow = std::min(minRow, stats.minRow);
+        maxRow = std::max(maxRow, stats.maxRow);
+    }
+
+    const unsigned int columnSpan = maxColumn - minColumn + 1;
+    const unsigned int rowSpan = maxRow - minRow + 1;
+    const unsigned int squareSpan = std::max(columnSpan, rowSpan);
+
+    auto ExpandAxis = [squareSpan](unsigned int& minimum, unsigned int& maximum)
+    {
+        const unsigned int currentSpan = maximum - minimum + 1;
+        int                targetMinimum = static_cast<int>(minimum) - static_cast<int>((squareSpan - currentSpan) / 2);
+        targetMinimum = std::max(0, std::min(targetMinimum, static_cast<int>(CRadar::MAP_GRID_SIZE - squareSpan)));
+        minimum = static_cast<unsigned int>(targetMinimum);
+        maximum = minimum + squareSpan - 1;
+    };
+    ExpandAxis(minColumn, maxColumn);
+    ExpandAxis(minRow, maxRow);
+
+    const bool boundsChanged = minColumn != m_mapGridMinColumn || maxColumn != m_mapGridMaxColumn || minRow != m_mapGridMinRow || maxRow != m_mapGridMaxRow;
+    m_mapGridMinColumn = minColumn;
+    m_mapGridMaxColumn = maxColumn;
+    m_mapGridMinRow = minRow;
+    m_mapGridMaxRow = maxRow;
+    m_mapGridSpan = squareSpan;
+    m_fWorldMinX = RADAR_MAP_WORLD_MIN + static_cast<float>(minColumn) * RADAR_MAP_TILE_SIZE;
+    m_fWorldMaxY = RADAR_MAP_WORLD_MAX - static_cast<float>(minRow) * RADAR_MAP_TILE_SIZE;
+    m_fWorldSize = static_cast<float>(squareSpan) * RADAR_MAP_TILE_SIZE;
+
+    m_dynamicMapNeedsReset = true;
+    m_dynamicMapBuildPending = true;
+    m_dynamicMapBuildIndex = 0;
+
+    if (boundsChanged)
+    {
+        m_iHorizontalMovement = 0;
+        m_iVerticalMovement = 0;
+        SetupMapVariables();
+    }
+}
+
+void CPlayerMap::ReleaseDynamicMapTexture()
+{
+    SAFE_RELEASE(m_dynamicMapTexture);
+    m_dynamicMapTextureRevision = 0;
+    m_dynamicMapBuildIndex = 0;
+    m_dynamicMapNeedsReset = false;
+    m_dynamicMapBuildPending = false;
+}
+
+bool CPlayerMap::ResetDynamicMapTexture()
+{
+    if (!m_mapImageTexture)
+    {
+        m_dynamicMapNeedsReset = true;
+        return false;
+    }
+
+    const std::uint32_t textureSize = MAP_IMAGE_SIZES[m_playerMapImageIndex];
+    if (m_dynamicMapTexture && (m_dynamicMapTexture->m_uiSizeX != textureSize || m_dynamicMapTexture->m_uiSizeY != textureSize))
+        ReleaseDynamicMapTexture();
+
+    CRenderItemManagerInterface* renderItemManager = g_pCore->GetGraphics()->GetRenderItemManager();
+    if (!m_dynamicMapTexture)
+        m_dynamicMapTexture = renderItemManager->CreateRenderTarget(textureSize, textureSize, false, false, 0, true);
+    if (!m_dynamicMapTexture || !renderItemManager->SetRenderTarget(m_dynamicMapTexture, true))
+    {
+        m_dynamicMapNeedsReset = true;
+        return false;
+    }
+
+    IDirect3DDevice9* device = g_pCore->GetGraphics()->GetDevice();
+    if (device)
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, PLAYER_MAP_OCEAN_COLOR, 1.0f, 0);
+
+    const float tileSize = static_cast<float>(textureSize) / static_cast<float>(m_mapGridSpan);
+    const float vanillaLeft = static_cast<float>(VANILLA_MAP_MIN_CELL - m_mapGridMinColumn) * tileSize;
+    const float vanillaTop = static_cast<float>(VANILLA_MAP_MIN_CELL - m_mapGridMinRow) * tileSize;
+    const float vanillaSize = static_cast<float>(VANILLA_MAP_CELL_SPAN) * tileSize;
+    g_pCore->GetGraphics()->DrawTexture(m_mapImageTexture, vanillaLeft, vanillaTop, vanillaSize / m_mapImageTexture->m_uiSizeX,
+                                        vanillaSize / m_mapImageTexture->m_uiSizeY);
+
+    renderItemManager->RestoreDefaultRenderTarget();
+    m_dynamicMapTextureRevision = m_dynamicMapTexture->GetRevision();
+    m_dynamicMapBuildIndex = 0;
+    m_dynamicMapNeedsReset = false;
+    m_dynamicMapBuildPending = true;
+    return true;
+}
+
+void CPlayerMap::ContinueDynamicMapTextureBuild()
+{
+    if (m_dynamicMapTexture && m_dynamicMapTextureRevision != m_dynamicMapTexture->GetRevision())
+        m_dynamicMapNeedsReset = true;
+    if (m_dynamicMapNeedsReset && !ResetDynamicMapTexture())
+        return;
+    if (!m_dynamicMapTexture || !m_dynamicMapBuildPending)
+        return;
+
+    struct SAcquiredTile
+    {
+        unsigned int       index;
+        IDirect3DTexture9* texture;
+        bool               unloadAfterUse;
+    };
+    std::vector<unsigned int> candidateIndices;
+    std::vector<SAcquiredTile> acquiredTiles;
+
+    CRadar*      radar = g_pGame->GetRadar();
+    const DWORD  startTime = GetTickCount32();
+    unsigned int attemptedTiles = 0;
+    while (m_dynamicMapBuildIndex < CRadar::MAP_GRID_SIZE * CRadar::MAP_GRID_SIZE)
+    {
+        const unsigned int index = m_dynamicMapBuildIndex++;
+        const unsigned int column = index % CRadar::MAP_GRID_SIZE;
+        const unsigned int row = index / CRadar::MAP_GRID_SIZE;
+        if (!IsVanillaMapCell(column, row) && !radar->IsMapTileRegistered(column, row))
+            continue;
+
+        ++attemptedTiles;
+        candidateIndices.push_back(index);
+
+        if (attemptedTiles >= PLAYER_MAP_TILE_BUILD_BATCH_LIMIT || GetTickCount32() - startTime >= PLAYER_MAP_TILE_BUILD_BUDGET_MS)
+            break;
+    }
+
+    if (!candidateIndices.empty())
+    {
+        std::vector<unsigned int> columns;
+        std::vector<unsigned int> rows;
+        columns.reserve(candidateIndices.size());
+        rows.reserve(candidateIndices.size());
+        for (const unsigned int index : candidateIndices)
+        {
+            columns.push_back(index % CRadar::MAP_GRID_SIZE);
+            rows.push_back(index / CRadar::MAP_GRID_SIZE);
+        }
+
+        radar->PrepareMapTileTextures(columns.data(), rows.data(), columns.size());
+        for (std::size_t i = 0; i < candidateIndices.size(); ++i)
+        {
+            bool unloadAfterUse = false;
+            if (IDirect3DTexture9* texture = radar->AcquireMapTileTexture(columns[i], rows[i], unloadAfterUse))
+                acquiredTiles.push_back({candidateIndices[i], texture, unloadAfterUse});
+        }
+    }
+
+    if (m_dynamicMapBuildIndex >= CRadar::MAP_GRID_SIZE * CRadar::MAP_GRID_SIZE)
+        m_dynamicMapBuildPending = false;
+    if (acquiredTiles.empty())
+        return;
+
+    CRenderItemManagerInterface* renderItemManager = g_pCore->GetGraphics()->GetRenderItemManager();
+    IDirect3DDevice9*            device = g_pCore->GetGraphics()->GetDevice();
+    if (!device || !renderItemManager->SetRenderTarget(m_dynamicMapTexture, false))
+    {
+        m_dynamicMapBuildIndex = acquiredTiles.front().index;
+        m_dynamicMapBuildPending = true;
+        for (const SAcquiredTile& tile : acquiredTiles)
+            radar->ReleaseMapTileTexture(tile.index % CRadar::MAP_GRID_SIZE, tile.index / CRadar::MAP_GRID_SIZE, tile.texture, tile.unloadAfterUse);
+        return;
+    }
+
+    const float tileSize = static_cast<float>(m_dynamicMapTexture->m_uiSizeX) / static_cast<float>(m_mapGridSpan);
+    for (const SAcquiredTile& tile : acquiredTiles)
+    {
+        const unsigned int column = tile.index % CRadar::MAP_GRID_SIZE;
+        const unsigned int row = tile.index / CRadar::MAP_GRID_SIZE;
+        const float        left = static_cast<float>(column - m_mapGridMinColumn) * tileSize;
+        const float        top = static_cast<float>(row - m_mapGridMinRow) * tileSize;
+        D3DSURFACE_DESC     description;
+        if (SUCCEEDED(tile.texture->GetLevelDesc(0, &description)))
+            g_pCore->GetGraphics()->DrawTextureRaw(tile.texture, description.Width, description.Height, left, top, tileSize, tileSize);
+    }
+
+    renderItemManager->RestoreDefaultRenderTarget();
+    for (const SAcquiredTile& tile : acquiredTiles)
+        radar->ReleaseMapTileTexture(tile.index % CRadar::MAP_GRID_SIZE, tile.index / CRadar::MAP_GRID_SIZE, tile.texture, tile.unloadAfterUse);
+    m_dynamicMapTextureRevision = m_dynamicMapTexture->GetRevision();
+}
+
+void CPlayerMap::DrawMapBackground(const SColorARGB& color)
+{
+    if (m_dynamicMapTexture)
+    {
+        g_pCore->GetGraphics()->DrawTexture(m_dynamicMapTexture, static_cast<float>(m_iMapMinX), static_cast<float>(m_iMapMinY),
+                                            m_fMapSize / m_dynamicMapTexture->m_uiSizeX, m_fMapSize / m_dynamicMapTexture->m_uiSizeY, 0.0f, 0.0f, 0.0f, color);
+        return;
+    }
+
+    // Graceful low-memory fallback while preserving the dynamic world scale.
+    g_pCore->GetGraphics()->DrawRectangle(static_cast<float>(m_iMapMinX), static_cast<float>(m_iMapMinY), m_fMapSize, m_fMapSize,
+                                          SColorARGB(color.A, 111, 137, 170));
+    const float tileSize = m_fMapSize / static_cast<float>(m_mapGridSpan);
+    const float vanillaLeft = static_cast<float>(m_iMapMinX) + static_cast<float>(VANILLA_MAP_MIN_CELL - m_mapGridMinColumn) * tileSize;
+    const float vanillaTop = static_cast<float>(m_iMapMinY) + static_cast<float>(VANILLA_MAP_MIN_CELL - m_mapGridMinRow) * tileSize;
+    const float vanillaSize = static_cast<float>(VANILLA_MAP_CELL_SPAN) * tileSize;
+    g_pCore->GetGraphics()->DrawTexture(m_mapImageTexture, vanillaLeft, vanillaTop, vanillaSize / m_mapImageTexture->m_uiSizeX,
+                                        vanillaSize / m_mapImageTexture->m_uiSizeY, 0.0f, 0.0f, 0.0f, color);
+}
+
 void CPlayerMap::DoPulse()
 {
+    RefreshMapDefinition();
     const uint uiViewportWidth = g_pCore->GetGraphics()->GetViewportWidth();
     const uint uiViewportHeight = g_pCore->GetGraphics()->GetViewportHeight();
     if (uiViewportWidth > 0 && uiViewportHeight > 0 && (m_bPendingViewportRefresh || m_uiWidth != uiViewportWidth || m_uiHeight != uiViewportHeight))
@@ -373,8 +634,9 @@ void CPlayerMap::DoRender()
             UpdateOrRevertMapTexture(mapImageIndex);
         }
 
-        g_pCore->GetGraphics()->DrawTexture(m_mapImageTexture, static_cast<float>(m_iMapMinX), static_cast<float>(m_iMapMinY),
-                                            m_fMapSize / m_mapImageTexture->m_uiSizeX, m_fMapSize / m_mapImageTexture->m_uiSizeY, 0.0f, 0.0f, 0.0f, mapColor);
+        ContinueDynamicMapTextureBuild();
+        g_pCore->GetGraphics()->ApplyMTARenderViewportIfNeeded();
+        DrawMapBackground(mapColor);
 
         // Grab the info for the local player blip
         CVector2D vecLocalPos;
@@ -414,7 +676,7 @@ void CPlayerMap::DoRender()
                 CVector2D vecSize;
                 float     fX = (*areaIter)->GetSize().fX;
                 float     fY = (*areaIter)->GetSize().fY;
-                float     fRatio = 6000.0f / m_fMapSize;
+                float     fRatio = m_fWorldSize / m_fMapSize;
 
                 // Calculate the size of the area
                 vecSize.fX = static_cast<float>(fX / fRatio);
@@ -529,13 +791,13 @@ bool CPlayerMap::CalculateEntityOnScreenPosition(CClientEntity* pEntity, CVector
         pEntity->GetPosition(vecPosition);
 
         // Adjust to the map variables and create the map ratio
-        float fX = vecPosition.fX + 3000.0f;
-        float fY = vecPosition.fY + 3000.0f;
-        float fRatio = 6000.0f / m_fMapSize;
+        float fX = vecPosition.fX - m_fWorldMinX;
+        float fY = m_fWorldMaxY - vecPosition.fY;
+        float fRatio = m_fWorldSize / m_fMapSize;
 
         // Calculate the screen position for the marker
         vecLocalPos.fX = static_cast<float>(m_iMapMinX) + (fX / fRatio);
-        vecLocalPos.fY = static_cast<float>(m_iMapMaxY) - (fY / fRatio);
+        vecLocalPos.fY = static_cast<float>(m_iMapMinY) + (fY / fRatio);
 
         // If the position is on the screen
         if (vecLocalPos.fX >= 0.0f && vecLocalPos.fX <= static_cast<float>(m_uiWidth) && vecLocalPos.fY >= 0.0f &&
@@ -553,13 +815,13 @@ bool CPlayerMap::CalculateEntityOnScreenPosition(CClientEntity* pEntity, CVector
 bool CPlayerMap::CalculateEntityOnScreenPosition(CVector vecPosition, CVector2D& vecLocalPos)
 {
     // Adjust to the map variables and create the map ratio
-    float fX = vecPosition.fX + 3000.0f;
-    float fY = vecPosition.fY + 3000.0f;
-    float fRatio = 6000.0f / m_fMapSize;
+    float fX = vecPosition.fX - m_fWorldMinX;
+    float fY = m_fWorldMaxY - vecPosition.fY;
+    float fRatio = m_fWorldSize / m_fMapSize;
 
     // Calculate the screen position for the marker
     vecLocalPos.fX = static_cast<float>(m_iMapMinX) + (fX / fRatio);
-    vecLocalPos.fY = static_cast<float>(m_iMapMaxY) - (fY / fRatio);
+    vecLocalPos.fY = static_cast<float>(m_iMapMinY) + (fY / fRatio);
 
     // If the position is on the screen
     if (vecLocalPos.fX >= 0.0f && vecLocalPos.fX <= static_cast<float>(m_uiWidth) && vecLocalPos.fY >= 0.0f && vecLocalPos.fY <= static_cast<float>(m_uiHeight))
@@ -589,9 +851,9 @@ void CPlayerMap::SetupMapVariables()
             pLocalPlayer->GetPosition(vec);
 
         // Calculate the maps min and max vector positions putting the local player in the middle of the map
-        m_iMapMinX = static_cast<int>(iMiddleX - (iMiddleY * m_fZoom) - ((vec.fX * m_fMapSize) / 6000.0f));
+        m_iMapMinX = static_cast<int>(iMiddleX - ((vec.fX - m_fWorldMinX) * m_fMapSize) / m_fWorldSize);
         m_iMapMaxX = static_cast<int>(m_iMapMinX + m_fMapSize);
-        m_iMapMinY = static_cast<int>(iMiddleY - (iMiddleY * m_fZoom) + ((vec.fY * m_fMapSize) / 6000.0f));
+        m_iMapMinY = static_cast<int>(iMiddleY - ((m_fWorldMaxY - vec.fY) * m_fMapSize) / m_fWorldSize);
         m_iMapMaxY = static_cast<int>(m_iMapMinY + m_fMapSize);
 
         // If we are moving the map too far then stop centering the local player blip
@@ -621,9 +883,9 @@ void CPlayerMap::SetupMapVariables()
     else
     {
         // Set the maps min and max vector positions relative to the movement selected
-        m_iMapMinX = static_cast<int>(iMiddleX - (iMiddleY * m_fZoom) - ((m_iHorizontalMovement * m_fMapSize) / 6000.0f));
+        m_iMapMinX = static_cast<int>(iMiddleX - (iMiddleY * m_fZoom) - ((m_iHorizontalMovement * m_fMapSize) / m_fWorldSize));
         m_iMapMaxX = static_cast<int>(m_iMapMinX + m_fMapSize);
-        m_iMapMinY = static_cast<int>(iMiddleY - (iMiddleY * m_fZoom) + ((m_iVerticalMovement * m_fMapSize) / 6000.0f));
+        m_iMapMinY = static_cast<int>(iMiddleY - (iMiddleY * m_fZoom) + ((m_iVerticalMovement * m_fMapSize) / m_fWorldSize));
         m_iMapMaxY = static_cast<int>(m_iMapMinY + m_fMapSize);
 
         // If we are zoomed in

@@ -196,4 +196,8 @@ public:
     // Texture data manipulation
     virtual bool ResizeTextureData(const void* pData, uint uiDataPitch, uint uiWidth, uint uiHeight, uint d3dFormat, uint uiNewWidth, uint uiNewHeight,
                                    CBuffer& outBuffer) = 0;
+
+    // Kept at the end to preserve the ABI of existing client modules.
+    virtual void DrawTextureRaw(IDirect3DTexture9* texture, unsigned int textureWidth, unsigned int textureHeight, float fX, float fY, float fWidth,
+                                float fHeight, DWORD dwColor = 0xFFFFFFFF) = 0;
 };

@@ -14,8 +14,10 @@
 #include <CVector2D.h>
 #include <game/CRenderWare.h>
 #include <game/RenderWare.h>
+#include <game/RenderWareD3D.h>
 #include "CGameSA.h"
 #include "CRadarSA.h"
+#include "gamesa_renderware.h"
 
 #include <array>
 #include <cmath>
@@ -27,7 +29,7 @@ CMarkerSA* Markers[MAX_MARKERS];
 
 namespace
 {
-    constexpr unsigned int RADAR_MAP_SIZE = 40;
+    constexpr unsigned int RADAR_MAP_SIZE = CRadar::MAP_GRID_SIZE;
     constexpr int          RADAR_MAP_GTA_OFFSET = 14;
     constexpr int          RADAR_MAP_MIN_GTA_TILE = -RADAR_MAP_GTA_OFFSET;
     constexpr int          RADAR_MAP_MAX_GTA_TILE = RADAR_MAP_SIZE - RADAR_MAP_GTA_OFFSET - 1;
@@ -38,6 +40,8 @@ namespace
     constexpr DWORD FUNC_ClipRadarPoly = 0x585040;
     constexpr DWORD FUNC_TransformRadarPointToScreenSpace = 0x583480;
     constexpr DWORD FUNC_DrawRadarSection = 0x586110;
+    constexpr DWORD FUNC_RequestMapSection = 0x584B50;
+    constexpr DWORD FUNC_RemoveMapSection = 0x584BB0;
     constexpr DWORD FUNC_StreamRadarSectionsXY = 0x584C50;
     constexpr DWORD FUNC_StreamRadarSectionsVector = 0x5858D0;
     constexpr DWORD FUNC_CSprite2d_SetVertices = 0x727890;
@@ -49,6 +53,7 @@ namespace
     constexpr DWORD VAR_RadarCachedSin = 0xBA830C;
     constexpr DWORD VAR_RadarRange = 0xBA8314;
     constexpr DWORD VAR_RadarOrigin = 0xBAA248;
+    constexpr DWORD VAR_RadarTextures = 0xBA8478;
 
     struct SRadarColor
     {
@@ -65,6 +70,8 @@ namespace
     // would therefore copy radar-space coordinates back as screen positions.
     using TransformRadarPointToScreenSpace_t = void(__cdecl*)(CVector2D*, const CVector2D*);
     using DrawRadarSection_t = void(__cdecl*)(int, int);
+    using RequestMapSection_t = void(__cdecl*)(int, int);
+    using RemoveMapSection_t = void(__cdecl*)(int, int);
     using StreamRadarSectionsXY_t = void(__cdecl*)(int, int);
     using StreamRadarSectionsVector_t = void(__cdecl*)(const CVector&);
     using SpriteSetVertices_t = void(__cdecl*)(int, const CVector2D*, const CVector2D*, const SRadarColor&);
@@ -76,6 +83,8 @@ namespace
     TransformRadarPointToScreenSpace_t TransformRadarPointToScreenSpace =
         reinterpret_cast<TransformRadarPointToScreenSpace_t>(FUNC_TransformRadarPointToScreenSpace);
     DrawRadarSection_t          DrawRadarSection = reinterpret_cast<DrawRadarSection_t>(FUNC_DrawRadarSection);
+    RequestMapSection_t         RequestMapSection = reinterpret_cast<RequestMapSection_t>(FUNC_RequestMapSection);
+    RemoveMapSection_t          RemoveMapSection = reinterpret_cast<RemoveMapSection_t>(FUNC_RemoveMapSection);
     StreamRadarSectionsXY_t     StreamRadarSectionsXY = reinterpret_cast<StreamRadarSectionsXY_t>(FUNC_StreamRadarSectionsXY);
     StreamRadarSectionsVector_t StreamRadarSectionsVector = reinterpret_cast<StreamRadarSectionsVector_t>(FUNC_StreamRadarSectionsVector);
     SpriteSetVertices_t         SpriteSetVertices = reinterpret_cast<SpriteSetVertices_t>(FUNC_CSprite2d_SetVertices);
@@ -86,6 +95,33 @@ namespace
     bool IsGtaTile(int x, int y)
     {
         return x >= 0 && x < 12 && y >= 0 && y < 12;
+    }
+
+    int GetGtaRadarTxdIndex(int x, int y)
+    {
+        if (!IsGtaTile(x, y))
+            return -1;
+        return reinterpret_cast<const int*>(VAR_RadarTextures)[y * 12 + x];
+    }
+
+    RwTexture* __cdecl CaptureFirstTexture(RwTexture* texture, void* data)
+    {
+        *static_cast<RwTexture**>(data) = texture;
+        return nullptr;
+    }
+
+    RwTexture* GetFirstRadarTexture(int txdIndex)
+    {
+        if (txdIndex < 0)
+            return nullptr;
+
+        RwTexDictionary* dictionary = CTxdStore_GetTxd(static_cast<unsigned int>(txdIndex));
+        if (!dictionary)
+            return nullptr;
+
+        RwTexture* texture = nullptr;
+        RwTexDictionaryForAllTextures(dictionary, CaptureFirstTexture, &texture);
+        return texture;
     }
 
     bool IsExtendedWorldTile(int x, int y)
@@ -138,7 +174,9 @@ struct CRadarSA::SExtendedRadar
     };
 
     std::array<STile, RADAR_MAP_SIZE * RADAR_MAP_SIZE> tiles;
+    std::array<bool, 12 * 12>                           gtaAtlasLoads{};
     bool                                               hooksInstalled = false;
+    std::uint32_t                                      revision = 1;
 
     ~SExtendedRadar()
     {
@@ -206,16 +244,35 @@ struct CRadarSA::SExtendedRadar
     {
         SRadarMapStats stats;
         stats.hooksInstalled = hooksInstalled;
-        for (const STile& tile : tiles)
+        stats.revision = revision;
+        for (unsigned int row = 0; row < RADAR_MAP_SIZE; ++row)
         {
-            if (!tile.owner)
-                continue;
-            ++stats.registeredTiles;
-            stats.sourceBytes += tile.data.size();
-            if (tile.loaded)
-                ++stats.loadedTiles;
-            if (tile.loadFailed)
-                ++stats.failedTiles;
+            for (unsigned int column = 0; column < RADAR_MAP_SIZE; ++column)
+            {
+                const STile& tile = tiles[GetTileIndex(column, row)];
+                if (!tile.owner)
+                    continue;
+
+                if (stats.registeredTiles == 0)
+                {
+                    stats.minColumn = stats.maxColumn = column;
+                    stats.minRow = stats.maxRow = row;
+                }
+                else
+                {
+                    stats.minColumn = std::min(stats.minColumn, column);
+                    stats.maxColumn = std::max(stats.maxColumn, column);
+                    stats.minRow = std::min(stats.minRow, row);
+                    stats.maxRow = std::max(stats.maxRow, row);
+                }
+
+                ++stats.registeredTiles;
+                stats.sourceBytes += tile.data.size();
+                if (tile.loaded)
+                    ++stats.loadedTiles;
+                if (tile.loadFailed)
+                    ++stats.failedTiles;
+            }
         }
         return stats;
     }
@@ -387,6 +444,7 @@ bool CRadarSA::SetMapTile(unsigned int column, unsigned int row, const void* own
     tile.source = source;
     tile.data.assign(data, size);
     tile.filteringEnabled = filteringEnabled;
+    ++m_ExtendedRadar->revision;
     return true;
 }
 
@@ -400,6 +458,7 @@ bool CRadarSA::ResetMapTile(unsigned int column, unsigned int row, const void* o
         return false;
 
     m_ExtendedRadar->Clear(tile);
+    ++m_ExtendedRadar->revision;
     return true;
 }
 
@@ -408,16 +467,144 @@ void CRadarSA::RemoveMapTilesForSource(const void* source)
     if (!source)
         return;
 
+    bool removed = false;
     for (SExtendedRadar::STile& tile : m_ExtendedRadar->tiles)
     {
         if (tile.source == source)
+        {
             m_ExtendedRadar->Clear(tile);
+            removed = true;
+        }
     }
+
+    if (removed)
+        ++m_ExtendedRadar->revision;
 }
 
 SRadarMapStats CRadarSA::GetMapStats() const
 {
     return m_ExtendedRadar->GetStats();
+}
+
+std::uint32_t CRadarSA::GetMapRevision() const
+{
+    return m_ExtendedRadar->revision;
+}
+
+bool CRadarSA::IsMapTileRegistered(unsigned int column, unsigned int row) const
+{
+    if (column >= RADAR_MAP_SIZE || row >= RADAR_MAP_SIZE)
+        return false;
+
+    return m_ExtendedRadar->tiles[GetTileIndex(column, row)].owner != nullptr;
+}
+
+void CRadarSA::PrepareMapTileTextures(const unsigned int* columns, const unsigned int* rows, std::size_t count)
+{
+    if (!m_ExtendedRadar->hooksInstalled || !columns || !rows)
+        return;
+
+    bool requested = false;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const int x = static_cast<int>(columns[i]) - RADAR_MAP_GTA_OFFSET;
+        const int y = static_cast<int>(rows[i]) - RADAR_MAP_GTA_OFFSET;
+        if (!IsGtaTile(x, y))
+            continue;
+
+        const int txdIndex = GetGtaRadarTxdIndex(x, y);
+        const int tileIndex = y * 12 + x;
+        if (txdIndex < 0 || GetFirstRadarTexture(txdIndex) || m_ExtendedRadar->gtaAtlasLoads[tileIndex])
+            continue;
+
+        RequestMapSection(x, y);
+        m_ExtendedRadar->gtaAtlasLoads[tileIndex] = true;
+        requested = true;
+    }
+
+    // Request the whole compositor batch before blocking so gta3.img is read
+    // once per frame instead of once per tile.
+    if (requested)
+        pGame->GetStreaming()->LoadAllRequestedModels(false, "CRadarSA::PrepareMapTileTextures");
+}
+
+IDirect3DTexture9* CRadarSA::AcquireMapTileTexture(unsigned int column, unsigned int row, bool& unloadAfterUse)
+{
+    unloadAfterUse = false;
+    if (column >= RADAR_MAP_SIZE || row >= RADAR_MAP_SIZE)
+        return nullptr;
+
+    const int gtaX = static_cast<int>(column) - RADAR_MAP_GTA_OFFSET;
+    const int gtaY = static_cast<int>(row) - RADAR_MAP_GTA_OFFSET;
+    if (IsGtaTile(gtaX, gtaY))
+    {
+        const int txdIndex = GetGtaRadarTxdIndex(gtaX, gtaY);
+        const int tileIndex = gtaY * 12 + gtaX;
+        if (!GetFirstRadarTexture(txdIndex))
+        {
+            const unsigned int oneColumn = column;
+            const unsigned int oneRow = row;
+            PrepareMapTileTextures(&oneColumn, &oneRow, 1);
+        }
+
+        RwTexture*         texture = GetFirstRadarTexture(txdIndex);
+        RwD3D9Raster*      d3dRaster = texture && texture->raster ? reinterpret_cast<RwD3D9Raster*>(&texture->raster->renderResource) : nullptr;
+        IDirect3DTexture9* d3dTexture = d3dRaster ? d3dRaster->texture : nullptr;
+        if (!d3dTexture)
+        {
+            if (m_ExtendedRadar->gtaAtlasLoads[tileIndex])
+            {
+                RemoveMapSection(gtaX, gtaY);
+                m_ExtendedRadar->gtaAtlasLoads[tileIndex] = false;
+            }
+            return nullptr;
+        }
+
+        d3dTexture->AddRef();
+        unloadAfterUse = m_ExtendedRadar->gtaAtlasLoads[tileIndex];
+        return d3dTexture;
+    }
+
+    SExtendedRadar::STile& tile = m_ExtendedRadar->tiles[GetTileIndex(column, row)];
+    if (!tile.owner)
+        return nullptr;
+
+    const bool wasLoaded = tile.loaded;
+    if (!m_ExtendedRadar->Load(tile) || tile.textures.textures.empty())
+        return nullptr;
+
+    RwTexture*         texture = tile.textures.textures.front();
+    RwD3D9Raster*      d3dRaster = texture && texture->raster ? reinterpret_cast<RwD3D9Raster*>(&texture->raster->renderResource) : nullptr;
+    IDirect3DTexture9* d3dTexture = d3dRaster ? d3dRaster->texture : nullptr;
+    if (d3dTexture)
+    {
+        d3dTexture->AddRef();
+        unloadAfterUse = !wasLoaded;
+    }
+
+    return d3dTexture;
+}
+
+void CRadarSA::ReleaseMapTileTexture(unsigned int column, unsigned int row, IDirect3DTexture9* texture, bool unloadAfterUse)
+{
+    // The compositor restores its previous D3D state before calling this.
+    // D3D9On12 can still consume raster-owned state while executing the draw,
+    // so the RenderWare raster must outlive the bound COM texture.
+    if (unloadAfterUse && column < RADAR_MAP_SIZE && row < RADAR_MAP_SIZE)
+    {
+        const int gtaX = static_cast<int>(column) - RADAR_MAP_GTA_OFFSET;
+        const int gtaY = static_cast<int>(row) - RADAR_MAP_GTA_OFFSET;
+        if (IsGtaTile(gtaX, gtaY))
+        {
+            RemoveMapSection(gtaX, gtaY);
+            m_ExtendedRadar->gtaAtlasLoads[gtaY * 12 + gtaX] = false;
+        }
+        else
+            m_ExtendedRadar->Unload(m_ExtendedRadar->tiles[GetTileIndex(column, row)]);
+    }
+
+    if (texture)
+        texture->Release();
 }
 
 void CRadarSA::DrawMapSection(int x, int y)

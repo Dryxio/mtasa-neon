@@ -192,7 +192,6 @@ local function releaseMap()
         engineFreeTXD(txdId)
     end
     loadedTextures = {}
-    releaseRadar()
     bootstrapStage = "standby"
     modelCursor = 1
     placementCursor = 1
@@ -681,8 +680,6 @@ local function beginBootstrap()
     placementCursor = 1
     loadingFailed = false
     readyReported = false
-    loadRadar()
-
     local ok, reason = openImages()
     if not ok then
         failLoad(reason)
@@ -789,6 +786,7 @@ end)
 
 addEventHandler("onClientResourceStart", resourceRoot, function()
     buildIndexes()
+    loadRadar()
     outputDebugString("[Carcer IMG] standby; activation locale par /cctest")
     triggerServerEvent("carcerCityClientReady", resourceRoot, true, "standby")
 end)
@@ -803,4 +801,7 @@ addEventHandler("ugWorldDeactivateCities", root, function(nextCity)
     outputDebugString("[Carcer IMG] released for " .. tostring(nextCity))
 end)
 
-addEventHandler("onClientResourceStop", resourceRoot, releaseMap)
+addEventHandler("onClientResourceStop", resourceRoot, function()
+    releaseMap()
+    releaseRadar()
+end)

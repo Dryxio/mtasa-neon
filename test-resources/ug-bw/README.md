@@ -16,6 +16,9 @@ the other resident-city resources, Bullworth remains active server-side while
 each client assigns its finite dynamic model/TXD slots only to the city that
 client is visiting.
 
+Its 15 radar tiles are registered for the resource lifetime, independently of
+that 3D residency, so Bullworth remains visible in the shared F11 atlas.
+
 ## Commands
 
 - `/bullytest` prepares the academy and teleports to Bullworth. (`/bwtest` is

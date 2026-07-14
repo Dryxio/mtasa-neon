@@ -48,6 +48,11 @@ protected:
     void          CreateOrUpdateMapTexture();
     void          UpdateOrRevertMapTexture(std::size_t imageIndex);
     void          CreateAllTextures();
+    void          RefreshMapDefinition();
+    void          ReleaseDynamicMapTexture();
+    bool          ResetDynamicMapTexture();
+    void          ContinueDynamicMapTextureBuild();
+    void          DrawMapBackground(const SColorARGB& color);
 
 public:
     bool IsAttachedToLocalPlayer() const { return m_bIsAttachedToLocal; };
@@ -90,13 +95,29 @@ private:
     std::size_t m_playerMapImageIndex;
 
     CTextureItem*              m_mapImageTexture;
+    CRenderTargetItem*         m_dynamicMapTexture;
     CTextureItem*              m_playerMarkerTexture;
     std::vector<CTextureItem*> m_markerTextureList;
+
+    std::uint32_t m_mapRegistryRevision;
+    int           m_dynamicMapTextureRevision;
+    unsigned int  m_dynamicMapBuildIndex;
+    unsigned int  m_registeredMapTileCount;
+    unsigned int  m_mapGridMinColumn;
+    unsigned int  m_mapGridMaxColumn;
+    unsigned int  m_mapGridMinRow;
+    unsigned int  m_mapGridMaxRow;
+    unsigned int  m_mapGridSpan;
+    bool          m_dynamicMapNeedsReset;
+    bool          m_dynamicMapBuildPending;
 
     unsigned int m_uiHeight;
     unsigned int m_uiWidth;
 
     float m_fMapSize;
+    float m_fWorldMinX;
+    float m_fWorldMaxY;
+    float m_fWorldSize;
     int   m_iMapMinX;
     int   m_iMapMaxX;
     int   m_iMapMinY;
