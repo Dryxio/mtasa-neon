@@ -6,7 +6,7 @@ The repository preserves the complete upstream history and adds proof-of-concept
 
 ## MTA:SA vs MTA:SA Neon
 
-Neon keeps MTA:SA's resource model and default gameplay behavior while lifting selected GTA:SA engine limits and exposing new opt-in features to servers. The figures below describe the currently implemented Windows client patches.
+Neon keeps MTA:SA's resource model and default gameplay behavior while lifting selected GTA:SA engine limits and exposing new opt-in features to resources. The figures below describe the currently implemented Neon client/server patches and resource workflows.
 
 | Area | MTA:SA | MTA:SA Neon |
 | --- | ---: | ---: |
@@ -25,6 +25,8 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | LOD world-sector grid | 30 x 30 | 100 x 100 |
 | Supported extended-world XY | Approximately -3,000 to +3,000 | -10,000 to +9,999 |
 | Native minimap tiles | Fixed 12 x 12 stock grid, approximately -3,000 to +3,000 | Sparse 40 x 40 logical grid covering -10,000 to +9,999, with resource-owned TXDs and protected stock tiles |
+| Extended F11 world map | Packaged San Andreas map | Dynamic atlas composed from GTA's native tiles and registered extended tiles, with catalog-derived world bounds |
+| Large IMG-backed map residency | Basic client-side IMG linking | Resource-managed per-client residency for large map packs, with bounded model/TXD allocation, scene preloading, teardown-safe slot reuse, and optional switching |
 | MTA pickup visual XY | -4,096 to +4,095.875 | -10,000 to +9,999 |
 | Low-precision networked XY | Approximately -8,192 to +8,192 | -10,000 to +10,000 for Neon-capable connections |
 | Absolute networked camera range | Approximately -8,192 to +8,192 | Approximately -16,384 to +16,384 for Neon-capable connections |
@@ -33,18 +35,24 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Procedural seabed boundary | Unlimited | Server-configurable from 3,000 to 10,000, or unlimited |
 | Project2DFX distant static lights | Not integrated | Native, resource-controlled implementation with a 300-5,000 draw-distance range |
 | Local ped-skin preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD preview for developers |
+| Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
 | SA-MP-style fast weapon strafe | Not available as a synchronized glitch | Optional `fastweaponstrafe` glitch, server-synchronized and disabled by default |
-| Neon diagnostics and stress tests | Not included | Reproducible resources for coronas, markers, rendering, Project2DFX, extended world, radar, pickups, water, seabed, CULL zones, native mirrors, and dense-entity profiling |
-| Extended-world demonstration | Not included | Perry Island slice generator and an in-game test around X=9,000 |
+| Neon diagnostics and stress tests | Not included | Reproducible resources for limits, rendering, extended-world systems, radar/F11 composition, model-registry lifecycle, IMG residency, native mirrors, and dense-entity profiling |
 
 These are capacity increases, not forced visual defaults. Distant lights are disabled by default, ordinary draw distances remain unchanged, and servers or client resources decide when to use the extended features. Legacy network connections retain MTA:SA's original position formats. The CULL relocation and Lua lifecycle have been exercised in game; dedicated tunnel and mirror capacity-boundary tests remain follow-up validation.
 
 Project2DFX support currently covers distant static coronas and timed traffic lights using `SALodLights.dat`. Searchlight cones are recorded for future work; distant cars, static shadows, and the other Project2DFX modules are not included. The drag-and-drop skin preview is an intentionally insecure local development prototype, not a production or competitive-client feature. Technical design, executable address inventories, validation results, and reproducible limit-test resources are documented in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md). Dense-entity profiling methodology and results are documented separately in [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md). The extended native minimap design and Lua API are documented in [EXTENDED_RADAR.md](./EXTENDED_RADAR.md).
 
+### Extended-world validation examples
+
+The repository includes reproducible resource pipelines that demonstrate the generic extended-world systems with concrete maps. A Perry Island slice validates terrain around X=9,000, while imported Liberty City, Vice City, Carcer City, and Bullworth resources exercise large IMG-backed map residency, per-client slot reuse, extended radar catalogs, and dynamic F11 composition.
+
+These maps are test cases, not built-in Neon worlds or engine dependencies. Their generated game assets are intentionally excluded from Git and must be produced locally from legitimately obtained source material.
+
 ## Neon Lua API additions
 
-The 21 functions below are the Lua APIs added by Neon since its fork point at `ab2313ddc3fef299e34217465f8a2f3ef1806c6a`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
+Neon has added 25 unique Lua function names since its fork point at `ab2313ddc3fef299e34217465f8a2f3ef1806c6a`, and now also exposes server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
 
 ### Extended native radar
 
@@ -55,6 +63,19 @@ The 21 functions below are the Lua APIs added by Neon since its fork point at `a
 | `engineGetRadarMapStats()` | Client | Returns hook status and registered, loaded, failed, and compressed-source tile statistics. |
 
 Radar tile registrations are resource-scoped: destroying their TXD or stopping the owning resource removes them automatically. See [EXTENDED_RADAR.md](./EXTENDED_RADAR.md) for coordinates, streaming behavior, and current constraints.
+
+### Server-authoritative custom models
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `engineRequestModel(type, parent [, name])` | Server | Allocates a stable, resource-owned logical model ID for an `object` or `vehicle` using a native GTA parent model. |
+| `engineFreeModel(model)` | Server | Releases a logical model owned by the calling resource and remaps surviving elements to their native parent before clients free their runtime slots. |
+| `engineGetModelParent(model)` | Server | Returns the native GTA parent of an active logical model, or `false` when the model is not registered. |
+| `engineGetModelName(model)` | Server | Returns the active model's resource-qualified registry name, or `false` when the model is not registered. |
+| `engineGetModelRuntimeID(serverModel)` | Client | Resolves a stable server model ID to the GTA runtime slot allocated on this client, or `false` when no slot is active. |
+| `engineGetModelServerID(runtimeModel)` | Client | Reverse-resolves a client runtime slot to its stable server model ID, or `false` when it is not a server model. |
+
+Logical IDs start at 30,000, are never reused during the server process, and remain independent from the runtime slot selected by each client. Clients without an active slot, including legacy clients, fall back to the model's native parent. Resource shutdown frees owned registrations automatically.
 
 ### Renderer and distant lights
 
