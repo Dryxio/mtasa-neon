@@ -4,6 +4,8 @@ MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://g
 
 The repository preserves the complete upstream history and adds proof-of-concept work on top of it. Neon is not affiliated with or endorsed by the Multi Theft Auto team.
 
+Readers familiar with the historical [MTA:Eir](https://wiki.multitheftauto.com/wiki/MTA:Eir) project may recognize a related ambition: using an independent MTA:BLUE-derived codebase as a laboratory for deeper GTA:SA engine integration, expanded streaming and IMG workflows, reverse-engineered native features, and new scripting APIs. Neon is not a continuation of or affiliated with MTA:Eir; the comparison is about scope and experimental spirit.
+
 ## MTA:SA vs MTA:SA Neon
 
 Neon keeps MTA:SA's resource model and default gameplay behavior while lifting selected GTA:SA engine limits and exposing new opt-in features to resources. The figures below describe the currently implemented Neon client/server patches and resource workflows.
