@@ -13,7 +13,7 @@
 #include <core/CCoreInterface.h>
 #include "CStreamingSA.h"
 #include "CModelInfoSA.h"
-#include "CNativeBullworthSA.h"
+#include "CNativeWorldPackSA.h"
 #include "Fileapi.h"
 #include "processthreadsapi.h"
 #include "CGameSA.h"
@@ -456,20 +456,16 @@ void CStreamingSA::RemoveArchive(unsigned char ucArchiveID)
 bool CStreamingSA::SetStreamingBufferSize(uint32 numBlocks)
 {
     const uint32 requestedNumBlocks = numBlocks;
-    const uint32 requiredNumBlocks = CNativeBullworthSA::GetRequiredStreamingBufferSizeBlocks();
+    const uint32 requiredNumBlocks = CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks();
     numBlocks = std::max(numBlocks, requiredNumBlocks);
     numBlocks += numBlocks % 2;  // Make sure number is even by "rounding" it upwards. [Otherwise it can't be split in half properly]
 
     if (numBlocks != requestedNumBlocks && requiredNumBlocks > requestedNumBlocks)
     {
-        // Script-managed IMG bookkeeping cannot see the native Bullworth IMG.
-        // In particular, disconnect cleanup otherwise shrinks this buffer below
-        // the largest native entry and makes GTA repeatedly retry impossible reads.
-        const SString message("[NativeBW] streamingBuffer=request-clamped requestedBlocks=%u effectiveBlocks=%u requiredBlocks=%u", requestedNumBlocks,
-                              numBlocks, requiredNumBlocks);
-        OutputDebugStringA(message.c_str());
-        OutputDebugStringA("\n");
-        SharedUtil::WriteDebugEvent(message);
+        // Script-managed IMG bookkeeping cannot see native world-pack archives.
+        // Disconnect cleanup must not shrink this buffer below their largest
+        // entry or GTA repeatedly retries impossible reads.
+        CNativeWorldPackManagerSA::LogStreamingBufferClamp(requestedNumBlocks, numBlocks, requiredNumBlocks);
     }
 
     // Check if the size is the same already

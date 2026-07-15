@@ -2,13 +2,14 @@
  *
  *  PROJECT:     Multi Theft Auto
  *  LICENSE:     See LICENSE in the top level directory
- *  FILE:        game_sa/CNativeBullworthSA.cpp
- *  PURPOSE:     Opt-in registration of the native Bullworth streaming pack
+ *  FILE:        game_sa/CNativeWorldPackSA.cpp
+ *  PURPOSE:     Native GTA streaming registration for reviewed world packs
  *
  *****************************************************************************/
 
 #include "StdInc.h"
-#include "CNativeBullworthSA.h"
+#include "CNativeWorldPackSA.h"
+#include "CNativeBullworthPackSA.h"
 
 #include "CGameSA.h"
 #include "CIplSA.h"
@@ -29,90 +30,22 @@ extern CGameSA* pGame;
 
 namespace
 {
-    // The largest native archive entry is bw.col at 4007 sectors. GTA splits
-    // its streaming allocation into two equal halves, so the total must be
-    // rounded to the next even sector count.
-    constexpr unsigned int REQUIRED_STREAMING_BUFFER_BLOCKS = 4008;
-
-    constexpr const char* FEATURE_ENVIRONMENT = "MTA_NATIVE_BW_MODEL_STORES";
-    constexpr const char* PACK_DIRECTORY = "MTA\\data\\extended-world\\bullworth";
-    constexpr DWORD       LOAD_CD_DIRECTORY_CALL = 0x5B8E1B;
-    constexpr BYTE        LOAD_CD_DIRECTORY_CALL_BYTES[] = {0xE8, 0xA0, 0xF4, 0xFF, 0xFF};
-    constexpr DWORD       LOAD_CD_DIRECTORY = 0x5B82C0;
-    constexpr DWORD       LOAD_NAMED_CD_DIRECTORY = 0x5B6170;
-    constexpr DWORD       LOAD_OBJECT_TYPES = 0x5B8400;
-    constexpr DWORD       FIND_TXD_SLOT = 0x731850;
-    constexpr DWORD       ADD_TXD_SLOT = 0x731C80;
-    constexpr DWORD       FIND_IPL_SLOT = 0x404AC0;
-    constexpr DWORD       ENABLE_IPL_DYNAMIC_STREAMING = 0x404D30;
-    constexpr DWORD       TXD_FIND_CACHE = 0xC88014;
-    constexpr DWORD       GET_UPPERCASE_KEY = 0x53CF30;
-    constexpr DWORD       FATAL_EXIT_CODE = 0x4E425746;  // "NBWF"
-    constexpr const char* IDE_SHA256 = "0bdf5aeb17eaefe6e2f42e47d38f82d65526c580f3eecc223b7b65f8b905eeb4";
-    constexpr const char* IMG_SHA256 = "bc7f3ad5ce47bbd8a9018c9743142582cd458875d2100f31c0d96aac7f4bbfc0";
-
-    constexpr unsigned int MODEL_FIRST = 18631;
-    constexpr unsigned int MODEL_LAST = 19582;
-    constexpr unsigned int MODEL_COUNT = 952;
-    constexpr unsigned int TXD_COUNT = 166;
-    constexpr unsigned int TXD_POOL_CAPACITY = 5000;
-    constexpr unsigned int COL_STOCK_OCCUPIED = 252;
-    constexpr unsigned int IPL_STOCK_OCCUPIED = 191;
-    constexpr unsigned int IPL_COUNT = 7;
-    constexpr unsigned int IMG_ENTRY_COUNT = 1126;
-    constexpr unsigned int IMG_SECTOR_COUNT = 82786;
-    constexpr unsigned int EXPECTED_ATOMIC = 13984;
-    constexpr unsigned int EXPECTED_DAMAGE = 69;
-    constexpr unsigned int EXPECTED_TIME = 160;
-    constexpr unsigned int ADDED_ATOMIC = 870;
-    constexpr unsigned int ADDED_DAMAGE = 67;
-    constexpr unsigned int ADDED_TIME = 15;
-    constexpr DWORD        ATOMIC_MODEL_VTABLE = 0x85BBF0;
-    constexpr DWORD        DAMAGE_MODEL_VTABLE = 0x85BC30;
-    constexpr DWORD        TIME_MODEL_VTABLE = 0x85BCB0;
-    constexpr DWORD        FLIPPED_RECT_SENTINELS[] = {0x49742400, 0xC9742400, 0xC9742400, 0x49742400};
-
-    constexpr const char* IPL_NAMES[IPL_COUNT] = {
-        "bw_tbusines", "bw_tcarni", "bw_tglobal", "bw_tindust", "bw_tjyard", "bw_trich", "bw_tschool",
-    };
-
-    struct STxdSlotFingerprint
-    {
-        bool  configured;
-        BYTE  poolFlag;
-        DWORD dictionary;
-        WORD  usages;
-        WORD  parent;
-        DWORD hash;
-        WORD  prev;
-        WORD  next;
-        WORD  nextInImg;
-        BYTE  streamingFlags;
-        BYTE  archive;
-        DWORD offset;
-        DWORD size;
-        DWORD loadState;
-    };
-
-    struct STxdPoolProfile
-    {
-        const char*         executableIdentity;
-        const char*         name;
-        unsigned int        occupied;
-        int                 firstFree;
-        int                 fingerprintSlot;
-        STxdSlotFingerprint fingerprint;
-    };
-
-    constexpr STxdPoolProfile TXD_POOL_PROFILES[] = {
-        {"hoodlum-raw", "standalone-3607", 3607, 3606, -1, {true}},
-        {"mta-programdata",
-         "mta-runtime-3608",
-         3608,
-         3607,
-         3607,
-         {true, 0x01, 0x00000000, 0, 0xFFFF, 0xEA5A8E45, 0xFFFF, 0xFFFF, 0xFFFF, 0x00, 4, 13153, 5, 0}},
-    };
+    constexpr DWORD LOAD_CD_DIRECTORY_CALL = 0x5B8E1B;
+    constexpr BYTE  LOAD_CD_DIRECTORY_CALL_BYTES[] = {0xE8, 0xA0, 0xF4, 0xFF, 0xFF};
+    constexpr DWORD LOAD_CD_DIRECTORY = 0x5B82C0;
+    constexpr DWORD LOAD_NAMED_CD_DIRECTORY = 0x5B6170;
+    constexpr DWORD LOAD_OBJECT_TYPES = 0x5B8400;
+    constexpr DWORD FIND_TXD_SLOT = 0x731850;
+    constexpr DWORD ADD_TXD_SLOT = 0x731C80;
+    constexpr DWORD FIND_IPL_SLOT = 0x404AC0;
+    constexpr DWORD ENABLE_IPL_DYNAMIC_STREAMING = 0x404D30;
+    constexpr DWORD TXD_FIND_CACHE = 0xC88014;
+    constexpr DWORD GET_UPPERCASE_KEY = 0x53CF30;
+    constexpr DWORD FATAL_EXIT_CODE = 0x4E425746;  // "NBWF"
+    constexpr DWORD ATOMIC_MODEL_VTABLE = 0x85BBF0;
+    constexpr DWORD DAMAGE_MODEL_VTABLE = 0x85BC30;
+    constexpr DWORD TIME_MODEL_VTABLE = 0x85BCB0;
+    constexpr DWORD FLIPPED_RECT_SENTINELS[] = {0x49742400, 0xC9742400, 0xC9742400, 0x49742400};
 
 #pragma pack(push, 1)
     struct SImgHeader
@@ -195,17 +128,45 @@ namespace
         Refused,
     };
 
-    CStreamingSA* g_streaming = nullptr;
-    EState        g_state = EState::Off;
+    CStreamingSA*                       g_streaming = nullptr;
+    const SNativeWorldPackDescriptorSA* g_pack = nullptr;
+    EState                              g_state = EState::Off;
+
+    const SNativeWorldPackDescriptorSA& Pack()
+    {
+        assert(g_pack);
+        return *g_pack;
+    }
+
+    const SNativeWorldPackDescriptorSA* SelectEnabledPack()
+    {
+        // Phase 1 intentionally has one reviewed descriptor. Keeping selection
+        // here makes adding another immutable descriptor independent of the
+        // registrar implementation; aggregate capacity planning comes later.
+        const SNativeWorldPackDescriptorSA* available[] = {&GetNativeBullworthPackDescriptor()};
+        const SNativeWorldPackDescriptorSA* selected = nullptr;
+        for (const SNativeWorldPackDescriptorSA* candidate : available)
+        {
+            char        value[8]{};
+            const DWORD valueLength = GetEnvironmentVariableA(candidate->featureEnvironment, value, sizeof(value));
+            if (valueLength != 1 || value[0] != '1')
+                continue;
+            if (selected)
+                return nullptr;
+            selected = candidate;
+        }
+        return selected;
+    }
 
     void Log(const char* format, ...)
     {
-        char    message[2048]{};
+        char    detail[1900]{};
         va_list arguments;
         va_start(arguments, format);
-        _vsnprintf_s(message, sizeof(message), _TRUNCATE, format, arguments);
+        _vsnprintf_s(detail, sizeof(detail), _TRUNCATE, format, arguments);
         va_end(arguments);
-        OutputDebugStringA(message);
+        const SString message("%s %s", Pack().logPrefix, detail);
+        OutputDebugStringA(message.c_str());
         OutputDebugStringA("\n");
         SharedUtil::WriteDebugEvent(message);
     }
@@ -214,7 +175,7 @@ namespace
     {
         // Native store and directory allocation has no complete inverse. A
         // post-commit mismatch must not continue with partially registered IDs.
-        Log("[NativeBW] registrar=fatal reason=%s exit=0x%08X", reason, FATAL_EXIT_CODE);
+        Log("registrar=fatal reason=%s exit=0x%08X", reason, FATAL_EXIT_CODE);
         TerminateProcess(GetCurrentProcess(), FATAL_EXIT_CODE);
         __assume(false);
     }
@@ -258,12 +219,45 @@ namespace
         return true;
     }
 
+    bool ValidateDescriptor(std::string& error)
+    {
+        const SNativeWorldPackDescriptorSA& pack = Pack();
+        if (!pack.key || !pack.displayName || !pack.logPrefix || !pack.featureEnvironment || !pack.relativeDirectory || !pack.ideFileName ||
+            !pack.imgFileName || !pack.colFileName || !pack.ideSha256 || !pack.imgSha256 || !pack.iplNames || !pack.iplCount || !pack.txdPoolProfiles ||
+            !pack.txdPoolProfileCount)
+        {
+            error = "native world-pack descriptor has a missing required field";
+            return false;
+        }
+        if (pack.modelFirst > pack.modelLast || pack.modelLast - pack.modelFirst + 1 != pack.modelCount ||
+            pack.addedModelStores.atomic + pack.addedModelStores.damageAtomic + pack.addedModelStores.time != pack.modelCount)
+        {
+            error = "native world-pack descriptor model range or store deltas are inconsistent";
+            return false;
+        }
+        if (pack.txdCount > pack.txdPoolCapacity || pack.stockColOccupied >= pack.colPoolCapacity ||
+            pack.stockIplOccupied + pack.iplCount > pack.iplPoolCapacity || !pack.imgEntryCount || !pack.imgSectorCount || !pack.largestImgEntryBlocks ||
+            pack.largestImgEntryBlocks > pack.imgSectorCount || strlen(pack.ideSha256) != 64 || strlen(pack.imgSha256) != 64)
+        {
+            error = "native world-pack descriptor pool, archive, or hash contract is inconsistent";
+            return false;
+        }
+        std::set<std::string> uniqueIpls;
+        for (unsigned int index = 0; index < pack.iplCount; ++index)
+            if (!pack.iplNames[index] || !*pack.iplNames[index] || !uniqueIpls.insert(pack.iplNames[index]).second)
+            {
+                error = "native world-pack descriptor has an empty or duplicate IPL name";
+                return false;
+            }
+        return true;
+    }
+
     bool ParseIde(const SString& path, SIdePlan& plan, std::string& error)
     {
         std::ifstream file(SharedUtil::FromUTF8(path));
         if (!file)
         {
-            error = "bw.ide cannot be opened";
+            error = SString("%s cannot be opened", Pack().ideFileName);
             return false;
         }
 
@@ -297,23 +291,23 @@ namespace
             }
             if (section == ESection::None)
             {
-                error = "bw.ide contains an unsupported section";
+                error = SString("%s contains an unsupported section", Pack().ideFileName);
                 return false;
             }
 
             const std::vector<std::string> fields = SplitCsv(line);
             if ((section == ESection::Objects && fields.size() != 6) || (section == ESection::TimedObjects && fields.size() != 8))
             {
-                error = "bw.ide contains a malformed row";
+                error = SString("%s contains a malformed row", Pack().ideFileName);
                 return false;
             }
 
             unsigned int id = 0;
             unsigned int flags = 0;
-            if (!ParseUnsigned(fields[0], id) || !ParseUnsigned(fields[5], flags) || id < MODEL_FIRST || id > MODEL_LAST || !plan.modelIds.insert(id).second ||
-                fields[1].empty() || fields[2].empty())
+            if (!ParseUnsigned(fields[0], id) || !ParseUnsigned(fields[5], flags) || id < Pack().modelFirst || id > Pack().modelLast ||
+                !plan.modelIds.insert(id).second || fields[1].empty() || fields[2].empty())
             {
-                error = "bw.ide contains an invalid or duplicate model";
+                error = SString("%s contains an invalid or duplicate model", Pack().ideFileName);
                 return false;
             }
             plan.modelNames.insert(fields[1] + ".dff");
@@ -337,11 +331,11 @@ namespace
             }
         }
 
-        if (plan.modelIds.size() != MODEL_COUNT || *plan.modelIds.begin() != MODEL_FIRST || *plan.modelIds.rbegin() != MODEL_LAST ||
-            plan.modelNames.size() != MODEL_COUNT || plan.txdNames.size() != TXD_COUNT || plan.atomic != ADDED_ATOMIC || plan.damage != ADDED_DAMAGE ||
-            plan.time != ADDED_TIME)
+        if (plan.modelIds.size() != Pack().modelCount || *plan.modelIds.begin() != Pack().modelFirst || *plan.modelIds.rbegin() != Pack().modelLast ||
+            plan.modelNames.size() != Pack().modelCount || plan.txdNames.size() != Pack().txdCount || plan.atomic != Pack().addedModelStores.atomic ||
+            plan.damage != Pack().addedModelStores.damageAtomic || plan.time != Pack().addedModelStores.time)
         {
-            error = "bw.ide counts or ID range differ from the native plan";
+            error = SString("%s counts or ID range differ from the native plan", Pack().ideFileName);
             return false;
         }
         return true;
@@ -361,7 +355,7 @@ namespace
         HANDLE        file = CreateFileW(widePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE)
         {
-            error = "bw.img cannot be opened";
+            error = SString("%s cannot be opened", Pack().imgFileName);
             return false;
         }
 
@@ -369,12 +363,12 @@ namespace
         SImgHeader    header{};
         DWORD         read = 0;
         const bool    validHeader = GetFileSizeEx(file, &fileSize) && ReadFile(file, &header, sizeof(header), &read, nullptr) && read == sizeof(header) &&
-                                 memcmp(header.magic, "VER2", 4) == 0 && header.count == IMG_ENTRY_COUNT &&
-                                 fileSize.QuadPart == static_cast<LONGLONG>(IMG_SECTOR_COUNT) * 2048;
+                                 memcmp(header.magic, "VER2", 4) == 0 && header.count == Pack().imgEntryCount &&
+                                 fileSize.QuadPart == static_cast<LONGLONG>(Pack().imgSectorCount) * 2048;
         if (!validHeader)
         {
             CloseHandle(file);
-            error = "bw.img header, count, or byte length differs from the native plan";
+            error = SString("%s header, count, or byte length differs from the native plan", Pack().imgFileName);
             return false;
         }
 
@@ -383,7 +377,7 @@ namespace
         if (!ReadFile(file, entries.data(), directoryBytes, &read, nullptr) || read != directoryBytes)
         {
             CloseHandle(file);
-            error = "bw.img directory is truncated";
+            error = SString("%s directory is truncated", Pack().imgFileName);
             return false;
         }
         CloseHandle(file);
@@ -401,9 +395,9 @@ namespace
             const size_t      dot = name.rfind('.');
             const uint64_t    endSector = static_cast<uint64_t>(entry.offset) + entry.size;
             if (name.empty() || dot == std::string::npos || !entry.size || entry.streamingSize != entry.size || entry.offset < 18 ||
-                endSector > IMG_SECTOR_COUNT || !names.insert(name).second)
+                endSector > Pack().imgSectorCount || !names.insert(name).second)
             {
-                error = "bw.img contains an invalid, duplicate, or out-of-bounds entry";
+                error = SString("%s contains an invalid, duplicate, or out-of-bounds entry", Pack().imgFileName);
                 return false;
             }
             ranges.emplace_back(entry.offset, entry.offset + entry.size);
@@ -415,13 +409,13 @@ namespace
                 dffs.insert(name);
             else if (extension == ".txd")
                 txds.insert(name.substr(0, dot));
-            else if (extension == ".col" && name == "bw.col")
+            else if (extension == ".col" && name == Pack().colFileName)
                 ++colCount;
             else if (extension == ".ipl")
                 ipls.insert(name.substr(0, dot));
             else
             {
-                error = "bw.img contains an unexpected entry type";
+                error = SString("%s contains an unexpected entry type", Pack().imgFileName);
                 return false;
             }
         }
@@ -430,17 +424,17 @@ namespace
         {
             if (ranges[i].first < ranges[i - 1].second)
             {
-                error = "bw.img contains overlapping entries";
+                error = SString("%s contains overlapping entries", Pack().imgFileName);
                 return false;
             }
         }
 
         std::set<std::string> expectedIpls;
-        for (const char* name : IPL_NAMES)
-            expectedIpls.insert(name);
-        if (dffs != ide.modelNames || txds != ide.txdNames || ipls != expectedIpls || colCount != 1 || maxEntrySize != 4007)
+        for (unsigned int index = 0; index < Pack().iplCount; ++index)
+            expectedIpls.insert(Pack().iplNames[index]);
+        if (dffs != ide.modelNames || txds != ide.txdNames || ipls != expectedIpls || colCount != 1 || maxEntrySize != Pack().largestImgEntryBlocks)
         {
-            error = "bw.img names do not match bw.ide and the seven-district plan";
+            error = SString("%s names do not match %s and descriptor %s", Pack().imgFileName, Pack().ideFileName, Pack().key);
             return false;
         }
         return true;
@@ -524,7 +518,7 @@ namespace
                 slots << ',';
             slots << plannedSlots[index];
         }
-        Log("[NativeBW] %sPool capacity=%d occupied=%u free=%u firstFree=%d highest=%d holes=%u planned=%s", name, capacity, occupied, capacity - occupied,
+        Log("%sPool capacity=%d occupied=%u free=%u firstFree=%d highest=%d holes=%u planned=%s", name, capacity, occupied, capacity - occupied,
             originalFirstFree, highest, holes, slots.str().c_str());
         return true;
     }
@@ -590,14 +584,17 @@ namespace
 
     bool BuildTxdAllocationPlan(CPoolSAInterface<CTextureDictonarySAInterface>* pool, SIdePlan& ide, std::string& error)
     {
-        const char*            executableIdentity = CNativeModelStoreSA::GetExecutableIdentityName();
-        const STxdPoolProfile* profile = nullptr;
-        for (const STxdPoolProfile& candidate : TXD_POOL_PROFILES)
+        const char*                    executableIdentity = CNativeModelStoreSA::GetExecutableIdentityName();
+        const SNativeTxdPoolProfileSA* profile = nullptr;
+        for (unsigned int index = 0; index < Pack().txdPoolProfileCount; ++index)
+        {
+            const SNativeTxdPoolProfileSA& candidate = Pack().txdPoolProfiles[index];
             if (executableIdentity && strcmp(executableIdentity, candidate.executableIdentity) == 0)
             {
                 profile = &candidate;
                 break;
             }
+        }
         if (!profile)
         {
             error = "no TXD pool profile matches the executable identity";
@@ -605,7 +602,8 @@ namespace
         }
         ide.txdProfileName = profile->name;
 
-        if (!pool || !pool->m_pObjects || !pool->m_byteMap || pool->m_nSize != TXD_POOL_CAPACITY || pool->m_nFirstFree != profile->firstFree)
+        if (!pool || !pool->m_pObjects || !pool->m_byteMap || pool->m_nSize != static_cast<int>(Pack().txdPoolCapacity) ||
+            pool->m_nFirstFree != profile->firstFree)
         {
             error = SString("TXD pool pointer, capacity, or cursor differs from profile=%s", profile->name);
             return false;
@@ -658,12 +656,12 @@ namespace
             const BYTE                          poolFlag = reinterpret_cast<const BYTE*>(pool->m_byteMap)[slot];
             const CTextureDictonarySAInterface* definition = pool->GetObject(slot);
             const CStreamingInfo*               streaming = g_streaming->GetStreamingInfo(pGame->GetBaseIDforTXD() + slot);
-            Log("[NativeBW] txdProfileFingerprint profile=%s slot=%u poolFlag=0x%02X dictionary=%p usages=%u parent=%u hash=0x%08X streamPrev=%u streamNext=%u "
+            Log("txdProfileFingerprint profile=%s slot=%u poolFlag=0x%02X dictionary=%p usages=%u parent=%u hash=0x%08X streamPrev=%u streamNext=%u "
                 "streamNextImg=%u streamFlags=0x%02X archive=%u offset=%u size=%u loadState=%u",
                 profile->name, slot, poolFlag, definition->rwTexDictonary, definition->usUsagesCount, definition->usParentIndex, definition->hash,
                 streaming->prevId, streaming->nextId, streaming->nextInImg, streaming->flg, streaming->archiveId, streaming->offsetInBlocks,
                 streaming->sizeInBlocks, static_cast<unsigned int>(streaming->loadState));
-            const STxdSlotFingerprint& expected = profile->fingerprint;
+            const SNativeTxdSlotFingerprintSA& expected = profile->fingerprint;
             if (!expected.configured)
             {
                 error = SString("TXD profile=%s requires a reviewed slot fingerprint", profile->name);
@@ -679,9 +677,9 @@ namespace
                 return false;
             }
         }
-        if (ide.txdFree < TXD_COUNT)
+        if (ide.txdFree < Pack().txdCount)
         {
-            error = "TXD pool does not have 166 free slots";
+            error = SString("TXD pool does not have %u free slots", Pack().txdCount);
             return false;
         }
 
@@ -720,19 +718,19 @@ namespace
             std::minmax_element(ide.txdSlots.begin(), ide.txdSlots.end(), [](const auto& left, const auto& right) { return left.second < right.second; });
         ide.txdPlanMin = minimum->second;
         ide.txdPlanMax = maximum->second;
-        ide.txdPlanSpanHoles = ide.txdPlanMax - ide.txdPlanMin + 1 - TXD_COUNT;
+        ide.txdPlanSpanHoles = ide.txdPlanMax - ide.txdPlanMin + 1 - Pack().txdCount;
 
         for (const auto& [name, slot] : ide.txdSlots)
         {
             if (!StreamingInfoIsFree(pGame->GetBaseIDforTXD() + slot))
             {
-                error = SString("planned Bullworth TXD streaming slot is occupied name=%s slot=%u", name.c_str(), slot);
+                error = SString("planned %s TXD streaming slot is occupied name=%s slot=%u", Pack().displayName, name.c_str(), slot);
                 return false;
             }
         }
 
-        Log("[NativeBW] txdPool profile=%s capacity=%d occupied=%u free=%u firstFree=%d highest=%d holes=%u planned=%u plannedRange=%u..%u plannedSpanHoles=%u",
-            ide.txdProfileName, pool->m_nSize, ide.txdOccupied, ide.txdFree, ide.txdOriginalFirstFree, ide.txdHighestOccupied, ide.txdHoles, TXD_COUNT,
+        Log("txdPool profile=%s capacity=%d occupied=%u free=%u firstFree=%d highest=%d holes=%u planned=%u plannedRange=%u..%u plannedSpanHoles=%u",
+            ide.txdProfileName, pool->m_nSize, ide.txdOccupied, ide.txdFree, ide.txdOriginalFirstFree, ide.txdHighestOccupied, ide.txdHoles, Pack().txdCount,
             ide.txdPlanMin, ide.txdPlanMax, ide.txdPlanSpanHoles);
         return true;
     }
@@ -746,18 +744,19 @@ namespace
     bool PreflightRuntime(SIdePlan& ide, std::string& error)
     {
         unsigned int atomic = 0, damage = 0, time = 0;
-        if (!CNativeModelStoreSA::GetUsage(atomic, damage, time) || atomic != EXPECTED_ATOMIC || damage != EXPECTED_DAMAGE || time != EXPECTED_TIME)
+        if (!CNativeModelStoreSA::GetUsage(atomic, damage, time) || atomic != Pack().stockModelStores.atomic ||
+            damage != Pack().stockModelStores.damageAtomic || time != Pack().stockModelStores.time)
         {
             error = "native model stores are not at exact stock occupancy";
             return false;
         }
 
         CBaseModelInfoSAInterface** models = reinterpret_cast<CBaseModelInfoSAInterface**>(ARRAY_ModelInfo);
-        for (unsigned int id = MODEL_FIRST; id <= MODEL_LAST; ++id)
+        for (unsigned int id = Pack().modelFirst; id <= Pack().modelLast; ++id)
         {
             if (models[id] || !StreamingInfoIsFree(id))
             {
-                error = "a Bullworth model ID or streaming slot is already occupied";
+                error = SString("a %s model ID or streaming slot is already occupied", Pack().displayName);
                 return false;
             }
         }
@@ -767,13 +766,14 @@ namespace
         auto*                     iplPool = *reinterpret_cast<CPoolSAInterface<CIplSAInterface>**>(0x8E3FB0);
         std::vector<unsigned int> colSlots;
         std::vector<unsigned int> iplSlots;
-        if (!BuildPoolAllocationPlan(colPool, 255, COL_STOCK_OCCUPIED, 1, "col", ide.colOriginallyOccupied, ide.colOriginalFlags, ide.colOriginalFirstFree,
-                                     colSlots, error) ||
-            !BuildPoolAllocationPlan(iplPool, 256, IPL_STOCK_OCCUPIED, IPL_COUNT, "ipl", ide.iplOriginallyOccupied, ide.iplOriginalFlags,
-                                     ide.iplOriginalFirstFree, iplSlots, error) ||
+        if (!BuildPoolAllocationPlan(colPool, Pack().colPoolCapacity, Pack().stockColOccupied, 1, "col", ide.colOriginallyOccupied, ide.colOriginalFlags,
+                                     ide.colOriginalFirstFree, colSlots, error) ||
+            !BuildPoolAllocationPlan(iplPool, Pack().iplPoolCapacity, Pack().stockIplOccupied, Pack().iplCount, "ipl", ide.iplOriginallyOccupied,
+                                     ide.iplOriginalFlags, ide.iplOriginalFirstFree, iplSlots, error) ||
             !BuildTxdAllocationPlan(txdPool, ide, error))
             return false;
-        if (pGame->GetBaseIDforCOL() + 255 != pGame->GetBaseIDforIPL() || pGame->GetBaseIDforIPL() + 256 > pGame->GetCountOfAllFileIDs())
+        if (pGame->GetBaseIDforCOL() + Pack().colPoolCapacity != pGame->GetBaseIDforIPL() ||
+            pGame->GetBaseIDforIPL() + Pack().iplPoolCapacity > pGame->GetCountOfAllFileIDs())
         {
             error = "COL/IPL pool capacities do not fit their streaming ID partitions";
             return false;
@@ -794,7 +794,7 @@ namespace
                 ide.iplSlots[entryName.substr(0, dot)] = iplSlots[nextIplSlot++];
             }
         }
-        if (nextIplSlot != IPL_COUNT || ide.iplSlots.size() != IPL_COUNT)
+        if (nextIplSlot != Pack().iplCount || ide.iplSlots.size() != Pack().iplCount)
         {
             error = "the IPL allocation plan does not match IMG directory order";
             return false;
@@ -809,33 +809,34 @@ namespace
             const auto [existing, inserted] = txdKeys.emplace(key, name);
             if (!inserted)
             {
-                error = SString("Bullworth TXD native-key collision key=0x%08X names=%s,%s", key, existing->second.c_str(), name.c_str());
+                error = SString("%s TXD native-key collision key=0x%08X names=%s,%s", Pack().displayName, key, existing->second.c_str(), name.c_str());
                 return false;
             }
             if (findTxd(name.c_str()) != -1)
             {
-                error = "a Bullworth TXD name already exists";
+                error = SString("a %s TXD name already exists", Pack().displayName);
                 return false;
             }
         }
         const auto findIpl = reinterpret_cast<int(__cdecl*)(const char*)>(FIND_IPL_SLOT);
-        for (const char* name : IPL_NAMES)
+        for (unsigned int index = 0; index < Pack().iplCount; ++index)
         {
+            const char* name = Pack().iplNames[index];
             if (findIpl(name) != -1)
             {
-                error = "a Bullworth IPL name already exists";
+                error = SString("a %s IPL name already exists", Pack().displayName);
                 return false;
             }
         }
         if (!StreamingInfoIsFree(pGame->GetBaseIDforCOL() + ide.colSlot))
         {
-            error = "the planned Bullworth COL streaming slot is occupied";
+            error = SString("the planned %s COL streaming slot is occupied", Pack().displayName);
             return false;
         }
-        for (unsigned int i = 0; i < IPL_COUNT; ++i)
-            if (!StreamingInfoIsFree(pGame->GetBaseIDforIPL() + ide.iplSlots.at(IPL_NAMES[i])))
+        for (unsigned int i = 0; i < Pack().iplCount; ++i)
+            if (!StreamingInfoIsFree(pGame->GetBaseIDforIPL() + ide.iplSlots.at(Pack().iplNames[i])))
             {
-                error = "a planned Bullworth IPL streaming slot is occupied";
+                error = SString("a planned %s IPL streaming slot is occupied", Pack().displayName);
                 return false;
             }
 
@@ -850,8 +851,9 @@ namespace
     void ValidateIdePostconditions(const SIdePlan& ide)
     {
         unsigned int atomic = 0, damage = 0, time = 0;
-        if (!CNativeModelStoreSA::GetUsage(atomic, damage, time) || atomic != EXPECTED_ATOMIC + ADDED_ATOMIC || damage != EXPECTED_DAMAGE + ADDED_DAMAGE ||
-            time != EXPECTED_TIME + ADDED_TIME)
+        if (!CNativeModelStoreSA::GetUsage(atomic, damage, time) || atomic != Pack().stockModelStores.atomic + Pack().addedModelStores.atomic ||
+            damage != Pack().stockModelStores.damageAtomic + Pack().addedModelStores.damageAtomic ||
+            time != Pack().stockModelStores.time + Pack().addedModelStores.time)
             Fatal("model-store occupancy mismatch after IDE commit");
 
         CBaseModelInfoSAInterface** models = reinterpret_cast<CBaseModelInfoSAInterface**>(ARRAY_ModelInfo);
@@ -859,7 +861,7 @@ namespace
         for (const std::string& name : ide.txdNames)
             if (findTxd(name.c_str()) != static_cast<int>(ide.txdSlots.at(name)))
                 Fatal("TXD slot postcondition mismatch after IDE commit");
-        for (unsigned int id = MODEL_FIRST; id <= MODEL_LAST; ++id)
+        for (unsigned int id = Pack().modelFirst; id <= Pack().modelLast; ++id)
         {
             CBaseModelInfoSAInterface* model = models[id];
             const int                  expectedTxd = findTxd(ide.modelTxdNames.at(id).c_str());
@@ -876,7 +878,7 @@ namespace
         int          highest = -1;
         if (!pool || !pool->m_pObjects || !pool->m_byteMap)
         {
-            Log("[NativeBW] colPost pool=invalid");
+            Log("colPost pool=invalid");
             return;
         }
         for (int slot = 0; slot < pool->m_nSize; ++slot)
@@ -888,7 +890,7 @@ namespace
         for (int slot = 0; slot <= highest; ++slot)
             if (!pool->IsContains(slot))
                 ++holes;
-        Log("[NativeBW] colPost capacity=%d occupied=%u free=%u firstFree=%d highest=%d holes=%u expectedSlot=%u expectedArchive=%u", pool->m_nSize, occupied,
+        Log("colPost capacity=%d occupied=%u free=%u firstFree=%d highest=%d holes=%u expectedSlot=%u expectedArchive=%u", pool->m_nSize, occupied,
             static_cast<unsigned int>(pool->m_nSize) - occupied, pool->m_nFirstFree, highest, holes, expectedSlot, archiveId);
 
         for (int slot = 0; slot < pool->m_nSize; ++slot)
@@ -898,7 +900,7 @@ namespace
                 continue;
 
             const SColDef* definition = pool->GetObject(slot);
-            Log("[NativeBW] colPost slot=%d occupied=%u poolFlag=0x%02X rectBits=%08X,%08X,%08X,%08X firstModel=%d lastModel=%d refs=%u state=%u%u%u%u "
+            Log("colPost slot=%d occupied=%u poolFlag=0x%02X rectBits=%08X,%08X,%08X,%08X firstModel=%d lastModel=%d refs=%u state=%u%u%u%u "
                 "streamPrev=%u streamNext=%u streamNextImg=%u streamFlags=0x%02X archive=%u offset=%u size=%u loadState=%u",
                 slot, pool->IsContains(slot) ? 1 : 0, reinterpret_cast<const BYTE*>(pool->m_byteMap)[slot],
                 reinterpret_cast<const DWORD*>(&definition->rect)[0], reinterpret_cast<const DWORD*>(&definition->rect)[1],
@@ -918,20 +920,22 @@ namespace
         LogColPostconditionDiagnostics(archiveId, ide.colSlot);
         const std::vector<unsigned int> colSlots = {ide.colSlot};
         std::string                     poolError;
-        if (!ValidatePoolAllocationPostcondition(colPool, 255, ide.colOriginallyOccupied, ide.colOriginalFlags, colSlots, "COL", poolError))
+        if (!ValidatePoolAllocationPostcondition(colPool, Pack().colPoolCapacity, ide.colOriginallyOccupied, ide.colOriginalFlags, colSlots, "COL", poolError))
             Fatal(poolError.c_str());
-        if (!ValidatePoolAllocationPostcondition(iplPool, 256, ide.iplOriginallyOccupied, ide.iplOriginalFlags, ide.iplAllocationSlots, "IPL", poolError))
+        if (!ValidatePoolAllocationPostcondition(iplPool, Pack().iplPoolCapacity, ide.iplOriginallyOccupied, ide.iplOriginalFlags, ide.iplAllocationSlots,
+                                                 "IPL", poolError))
             Fatal(poolError.c_str());
 
         const SColDef* col = colPool->GetObject(ide.colSlot);
         if (memcmp(&col->rect, FLIPPED_RECT_SENTINELS, sizeof(FLIPPED_RECT_SENTINELS)) != 0 || col->firstModel != 0x7FFF ||
             col->lastModel != static_cast<short>(0x8000) || col->refCount != 0 || col->active || col->required || col->procedural || col->interior)
             Fatal("COL slot structural postcondition mismatch");
-        for (unsigned int i = 0; i < IPL_COUNT; ++i)
+        for (unsigned int i = 0; i < Pack().iplCount; ++i)
         {
-            const unsigned int slot = ide.iplSlots.at(IPL_NAMES[i]);
+            const char*        name = Pack().iplNames[i];
+            const unsigned int slot = ide.iplSlots.at(name);
             const auto*        ipl = iplPool->GetObject(slot);
-            if (!iplPool->IsContains(slot) || !FixedNameEquals(ipl->name, IPL_NAMES[i]) ||
+            if (!iplPool->IsContains(slot) || !FixedNameEquals(ipl->name, name) ||
                 memcmp(&ipl->rect, FLIPPED_RECT_SENTINELS, sizeof(FLIPPED_RECT_SENTINELS)) != 0 || ipl->minBuildId != 0x7FFF ||
                 ipl->maxBuildId != static_cast<short>(0x8000) || ipl->minBummyId != 0x7FFF || ipl->maxDummyId != static_cast<short>(0x8000) ||
                 ipl->relatedIpl != -1 || ipl->interior != 0 || ipl->unk2 != 0 || ipl->bLoadReq != 0 || !ipl->bDisabledStreaming || ipl->unk3 != 0 ||
@@ -946,22 +950,22 @@ namespace
             if (!info || info->archiveId != archiveId || info->offsetInBlocks != entry.offset || info->sizeInBlocks != entry.size)
                 Fatal("streaming directory offset or size postcondition mismatch");
         };
-        for (unsigned int id = MODEL_FIRST; id <= MODEL_LAST; ++id)
+        for (unsigned int id = Pack().modelFirst; id <= Pack().modelLast; ++id)
             validateStreamingEntry(id, ide.modelFileNames.at(id));
         for (const std::string& name : ide.txdNames)
             validateStreamingEntry(pGame->GetBaseIDforTXD() + ide.txdSlots.at(name), name + ".txd");
-        validateStreamingEntry(pGame->GetBaseIDforCOL() + ide.colSlot, "bw.col");
-        for (unsigned int i = 0; i < IPL_COUNT; ++i)
-            validateStreamingEntry(pGame->GetBaseIDforIPL() + ide.iplSlots.at(IPL_NAMES[i]), SString("%s.ipl", IPL_NAMES[i]));
+        validateStreamingEntry(pGame->GetBaseIDforCOL() + ide.colSlot, Pack().colFileName);
+        for (unsigned int i = 0; i < Pack().iplCount; ++i)
+            validateStreamingEntry(pGame->GetBaseIDforIPL() + ide.iplSlots.at(Pack().iplNames[i]), SString("%s.ipl", Pack().iplNames[i]));
 
         std::map<std::string, unsigned int> streamingIds;
-        for (unsigned int id = MODEL_FIRST; id <= MODEL_LAST; ++id)
+        for (unsigned int id = Pack().modelFirst; id <= Pack().modelLast; ++id)
             streamingIds[ide.modelFileNames.at(id)] = id;
         for (const std::string& name : ide.txdNames)
             streamingIds[name + ".txd"] = pGame->GetBaseIDforTXD() + ide.txdSlots.at(name);
-        streamingIds["bw.col"] = pGame->GetBaseIDforCOL() + ide.colSlot;
-        for (unsigned int i = 0; i < IPL_COUNT; ++i)
-            streamingIds[SString("%s.ipl", IPL_NAMES[i])] = pGame->GetBaseIDforIPL() + ide.iplSlots.at(IPL_NAMES[i]);
+        streamingIds[Pack().colFileName] = pGame->GetBaseIDforCOL() + ide.colSlot;
+        for (unsigned int i = 0; i < Pack().iplCount; ++i)
+            streamingIds[SString("%s.ipl", Pack().iplNames[i])] = pGame->GetBaseIDforIPL() + ide.iplSlots.at(Pack().iplNames[i]);
 
         for (size_t i = 0; i < ide.imgOrder.size(); ++i)
         {
@@ -970,7 +974,7 @@ namespace
             if (info->nextInImg != expectedNext)
                 Fatal("streaming directory nextInImg chain postcondition mismatch");
         }
-        if (*reinterpret_cast<const unsigned int*>(0x8E4CA8) < 4007)
+        if (*reinterpret_cast<const unsigned int*>(0x8E4CA8) < Pack().largestImgEntryBlocks)
             Fatal("native maximum streaming entry size was not raised");
     }
 
@@ -978,8 +982,9 @@ namespace
     {
         auto*      iplPool = *reinterpret_cast<CPoolSAInterface<CIplSAInterface>**>(0x8E3FB0);
         const auto enableDynamicStreaming = reinterpret_cast<void(__cdecl*)(int, bool)>(ENABLE_IPL_DYNAMIC_STREAMING);
-        for (const char* name : IPL_NAMES)
+        for (unsigned int index = 0; index < Pack().iplCount; ++index)
         {
+            const char*        name = Pack().iplNames[index];
             const unsigned int slot = ide.iplSlots.at(name);
             enableDynamicStreaming(slot, true);
             const auto* ipl = iplPool->GetObject(slot);
@@ -992,34 +997,39 @@ namespace
         // Leaving each rectangle flipped here makes that native pass calculate
         // the real bounds, add the slot to the IPL quadtree, and unload it so
         // normal position-driven streaming owns the subsequent lifecycle.
-        Log("[NativeBW] iplBootstrap dynamicStreaming=enabled slots=%u,%u,%u,%u,%u,%u,%u boundingBoxes=pending-native-pass", ide.iplSlots.at(IPL_NAMES[0]),
-            ide.iplSlots.at(IPL_NAMES[1]), ide.iplSlots.at(IPL_NAMES[2]), ide.iplSlots.at(IPL_NAMES[3]), ide.iplSlots.at(IPL_NAMES[4]),
-            ide.iplSlots.at(IPL_NAMES[5]), ide.iplSlots.at(IPL_NAMES[6]));
+        std::ostringstream slots;
+        for (unsigned int index = 0; index < Pack().iplCount; ++index)
+        {
+            if (index)
+                slots << ',';
+            slots << ide.iplSlots.at(Pack().iplNames[index]);
+        }
+        Log("iplBootstrap dynamicStreaming=enabled slots=%s boundingBoxes=pending-native-pass", slots.str().c_str());
     }
 
     void RegisterPack()
     {
-        const SString idePath = SharedUtil::CalcMTASAPath(SString("%s\\bw.ide", PACK_DIRECTORY));
-        const SString imgPath = SharedUtil::CalcMTASAPath(SString("%s\\bw.img", PACK_DIRECTORY));
+        const SString idePath = SharedUtil::CalcMTASAPath(SString("%s\\%s", Pack().relativeDirectory, Pack().ideFileName));
+        const SString imgPath = SharedUtil::CalcMTASAPath(SString("%s\\%s", Pack().relativeDirectory, Pack().imgFileName));
         SIdePlan      ide;
         std::string   error;
-        Log("[NativeBW] registrar=preflight ide=%s img=%s", idePath.c_str(), imgPath.c_str());
+        Log("registrar=preflight ide=%s img=%s", idePath.c_str(), imgPath.c_str());
         if (!IsNativePathSafe(idePath) || !IsNativePathSafe(imgPath))
             error = "native loader paths must be ASCII and shorter than MAX_PATH";
         if (error.empty())
         {
             const SString ideHash = SharedUtil::GenerateSha256HexStringFromFile(idePath);
             const SString imgHash = SharedUtil::GenerateSha256HexStringFromFile(imgPath);
-            if (_stricmp(ideHash.c_str(), IDE_SHA256) != 0 || _stricmp(imgHash.c_str(), IMG_SHA256) != 0)
+            if (_stricmp(ideHash.c_str(), Pack().ideSha256) != 0 || _stricmp(imgHash.c_str(), Pack().imgSha256) != 0)
                 error = "runtime pack SHA-256 differs from the reviewed generated payload";
             else
-                Log("[NativeBW] registrar=integrity-ok ideSha256=%s imgSha256=%s", IDE_SHA256, IMG_SHA256);
+                Log("registrar=integrity-ok ideSha256=%s imgSha256=%s", Pack().ideSha256, Pack().imgSha256);
         }
         if (!error.empty() || !ParseIde(idePath, ide, error) || !ValidateImg(imgPath, ide, error) || !PreflightRuntime(ide, error))
         {
             RestoreTxdFindCache(ide);
             g_state = EState::Refused;
-            Log("[NativeBW] registrar=refused reason=%s stock-world-remains-active", error.c_str());
+            Log("registrar=refused reason=%s stock-world-remains-active", error.c_str());
             return;
         }
 
@@ -1031,15 +1041,15 @@ namespace
         {
             RestoreTxdFindCache(ide);
             g_state = EState::Refused;
-            Log("[NativeBW] registrar=refused reason=AddArchive-failed-before-pool-mutation stock-world-remains-active");
+            Log("registrar=refused reason=AddArchive-failed-before-pool-mutation stock-world-remains-active");
             return;
         }
-        if (archiveId != 6)
+        if (archiveId != Pack().expectedArchiveId)
         {
             g_streaming->RemoveArchive(archiveId);
             RestoreTxdFindCache(ide);
             g_state = EState::Refused;
-            Log("[NativeBW] registrar=refused reason=unexpected-archive-id expected=6 actual=%u rollback=complete", archiveId);
+            Log("registrar=refused reason=unexpected-archive-id expected=%u actual=%u rollback=complete", Pack().expectedArchiveId, archiveId);
             return;
         }
 
@@ -1076,8 +1086,8 @@ namespace
                 // this failed pre-IDE allocation indistinguishable from no run.
                 rollbackTxdAllocations();
                 g_state = EState::Refused;
-                Log("[NativeBW] registrar=refused reason=TXD-allocation-plan-mismatch name=%s expected=%u actual=%d rollback=complete restoredFirstFree=%d",
-                    name.c_str(), expected, allocated, ide.txdOriginalFirstFree);
+                Log("registrar=refused reason=TXD-allocation-plan-mismatch name=%s expected=%u actual=%d rollback=complete restoredFirstFree=%d", name.c_str(),
+                    expected, allocated, ide.txdOriginalFirstFree);
                 return;
             }
         }
@@ -1087,8 +1097,8 @@ namespace
             const int actualCursor = txdPool->m_nFirstFree;
             rollbackTxdAllocations();
             g_state = EState::Refused;
-            Log("[NativeBW] registrar=refused reason=TXD-allocation-cursor-mismatch expected=%u actual=%d rollback=complete restoredFirstFree=%d",
-                expectedFinalCursor, actualCursor, ide.txdOriginalFirstFree);
+            Log("registrar=refused reason=TXD-allocation-cursor-mismatch expected=%u actual=%d rollback=complete restoredFirstFree=%d", expectedFinalCursor,
+                actualCursor, ide.txdOriginalFirstFree);
             return;
         }
 
@@ -1102,14 +1112,15 @@ namespace
         EnableOwnedIplDynamicStreaming(ide);
         g_state = EState::Active;
         std::ostringstream iplSlots;
-        for (unsigned int index = 0; index < IPL_COUNT; ++index)
+        for (unsigned int index = 0; index < Pack().iplCount; ++index)
         {
             if (index)
                 iplSlots << ',';
-            iplSlots << ide.iplSlots.at(IPL_NAMES[index]);
+            iplSlots << ide.iplSlots.at(Pack().iplNames[index]);
         }
-        Log("[NativeBW] registrar=active archive=%u models=%u txds=%u txdSlots=%u..%u txdSpanHoles=%u colSlot=%u iplSlots=%s entries=%u lodLinks=none",
-            archiveId, MODEL_COUNT, TXD_COUNT, ide.txdPlanMin, ide.txdPlanMax, ide.txdPlanSpanHoles, ide.colSlot, iplSlots.str().c_str(), IMG_ENTRY_COUNT);
+        Log("registrar=active archive=%u models=%u txds=%u txdSlots=%u..%u txdSpanHoles=%u colSlot=%u iplSlots=%s entries=%u lodLinks=none", archiveId,
+            Pack().modelCount, Pack().txdCount, ide.txdPlanMin, ide.txdPlanMax, ide.txdPlanSpanHoles, ide.colSlot, iplSlots.str().c_str(),
+            Pack().imgEntryCount);
     }
 
     void __cdecl LoadCdDirectoryHook()
@@ -1120,26 +1131,33 @@ namespace
     }
 }  // namespace
 
-void CNativeBullworthSA::InstallFromEnvironment(CStreamingSA* streaming)
+void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
 {
-    char  value[8]{};
-    DWORD valueLength = GetEnvironmentVariableA(FEATURE_ENVIRONMENT, value, sizeof(value));
-    if (valueLength != 1 || value[0] != '1')
+    const SNativeWorldPackDescriptorSA* selected = SelectEnabledPack();
+    if (!selected)
         return;
+    g_pack = selected;
+    std::string descriptorError;
+    if (!ValidateDescriptor(descriptorError))
+    {
+        Log("registrar=refused reason=%s", descriptorError.c_str());
+        g_state = EState::Refused;
+        return;
+    }
     if (!CNativeModelStoreSA::IsInstalled() || !streaming)
     {
-        Log("[NativeBW] registrar=refused reason=native-model-store-foundation-inactive");
+        Log("registrar=refused reason=native-model-store-foundation-inactive");
         g_state = EState::Refused;
         return;
     }
     if (g_state != EState::Off)
     {
-        Log("[NativeBW] registrar=unchanged state=%d", static_cast<int>(g_state));
+        Log("registrar=unchanged state=%d", static_cast<int>(g_state));
         return;
     }
     if (memcmp(reinterpret_cast<const void*>(LOAD_CD_DIRECTORY_CALL), LOAD_CD_DIRECTORY_CALL_BYTES, sizeof(LOAD_CD_DIRECTORY_CALL_BYTES)) != 0)
     {
-        Log("[NativeBW] registrar=refused reason=LoadCdDirectory-call-signature-mismatch");
+        Log("registrar=refused reason=LoadCdDirectory-call-signature-mismatch");
         g_state = EState::Refused;
         return;
     }
@@ -1147,10 +1165,22 @@ void CNativeBullworthSA::InstallFromEnvironment(CStreamingSA* streaming)
     g_streaming = streaming;
     HookInstallCall(LOAD_CD_DIRECTORY_CALL, reinterpret_cast<DWORD>(&LoadCdDirectoryHook));
     g_state = EState::Hooked;
-    Log("[NativeBW] registrar=hooked call=0x%08X pack=%s runtimeFiles=bw.ide,bw.img", LOAD_CD_DIRECTORY_CALL, PACK_DIRECTORY);
+    Log("registrar=hooked call=0x%08X pack=%s runtimeFiles=%s,%s", LOAD_CD_DIRECTORY_CALL, Pack().relativeDirectory, Pack().ideFileName, Pack().imgFileName);
 }
 
-unsigned int CNativeBullworthSA::GetRequiredStreamingBufferSizeBlocks()
+unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()
 {
-    return g_state == EState::Active ? REQUIRED_STREAMING_BUFFER_BLOCKS : 0;
+    if (g_state != EState::Active)
+        return 0;
+
+    // GTA splits the allocation into two equal halves. The descriptor owns the
+    // reviewed maximum entry; derive the process floor instead of duplicating
+    // an independently editable rounded constant.
+    return (Pack().largestImgEntryBlocks + 1) & ~1U;
+}
+
+void CNativeWorldPackManagerSA::LogStreamingBufferClamp(unsigned int requestedBlocks, unsigned int effectiveBlocks, unsigned int requiredBlocks)
+{
+    if (g_state == EState::Active)
+        Log("streamingBuffer=request-clamped requestedBlocks=%u effectiveBlocks=%u requiredBlocks=%u", requestedBlocks, effectiveBlocks, requiredBlocks);
 }

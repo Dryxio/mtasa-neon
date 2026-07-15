@@ -61,6 +61,26 @@ MTA\data\extended-world\bullworth\bw.img
 runtime does not need the JSON or text validation reports. Paths passed to the
 native loaders must currently be ASCII and shorter than `MAX_PATH`.
 
+The runtime is now split into a generic static-world pack manager and an
+immutable Bullworth descriptor. `CNativeWorldPackManagerSA` owns startup-hook
+installation, exact preflight, mutable pool-allocation planning, native commit,
+postconditions, IPL bootstrap, lifecycle state, and the reconnect-safe
+streaming-buffer floor. `CNativeBullworthPackSA` contains the reviewed payload
+facts: opt-in variable, paths and filenames, hashes, model range and store
+deltas, TXD profiles, canonical IPL names, archive counts, expected archive
+slot, and maximum entry size. The manager derives the even streaming-buffer
+minimum from that validated maximum rather than storing a second 4,008-sector
+constant.
+
+This is a Phase 1 data/type refactor, not arbitrary IDE support. Descriptors
+currently represent the same constrained static-world format proven by
+Bullworth: `objs`/`tobj` IDE sections, DFF/TXD entries, exactly one merged COL,
+and standalone binary IPLs. Runtime JSON manifests, server distribution,
+cache ownership, hot registration, and multi-pack aggregate allocation are not
+implemented yet. Bullworth remains the single compiled descriptor and the
+existing environment flag, hashes, executable allowlist, pool budgets,
+registration order, diagnostics, and process-lifetime behavior are unchanged.
+
 The switch is read once, before GTA populates its model stores. In the Windows
 VM, set it in the process-start environment and then launch the client from the
 same PowerShell process:

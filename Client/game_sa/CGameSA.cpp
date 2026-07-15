@@ -39,7 +39,7 @@
 #include "CKeyGenSA.h"
 #include "CObjectGroupPhysicalPropertiesSA.h"
 #include "CNativeModelStoreSA.h"
-#include "CNativeBullworthSA.h"
+#include "CNativeWorldPackSA.h"
 #include "CPadSA.h"
 #include "CPickupsSA.h"
 #include "CPlayerInfoSA.h"
@@ -140,7 +140,7 @@ CGameSA::CGameSA()
         m_pTasks = new CTasksSA((CTaskManagementSystemSA*)m_pTaskManagementSystem);
         m_pAnimManager = new CAnimManagerSA;
         m_pStreaming = new CStreamingSA;
-        CNativeBullworthSA::InstallFromEnvironment(static_cast<CStreamingSA*>(m_pStreaming));
+        CNativeWorldPackManagerSA::InstallFromEnvironment(static_cast<CStreamingSA*>(m_pStreaming));
         m_pVisibilityPlugins = new CVisibilityPluginsSA;
         m_pKeyGen = new CKeyGenSA;
         m_pRopes = new CRopesSA;
