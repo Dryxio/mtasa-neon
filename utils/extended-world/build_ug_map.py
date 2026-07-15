@@ -16,6 +16,9 @@ from pathlib import Path
 
 
 COL_MAGICS = {b"COLL", b"COL2", b"COL3", b"COL4"}
+COL_MODEL_NAME_OFFSET = 8
+COL_MODEL_NAME_SIZE = 22
+COL_MODEL_ID_OFFSET = COL_MODEL_NAME_OFFSET + COL_MODEL_NAME_SIZE
 ALPHA_IDE_FLAGS = 0x4 | 0x8 | 0x40 | 0x200 | 0x400 | 0x2000 | 0x4000 | 0x200000
 
 
@@ -423,7 +426,39 @@ def normalized_dff_data(path: Path) -> bytes:
     return bytes(repaired)
 
 
-def parse_col_archive(path: Path) -> tuple[dict[str, bytes], dict[int, bytes]]:
+def _parse_fixed_col_name(raw_name: bytes, context: str) -> str:
+    terminator = raw_name.find(b"\0")
+    if terminator < 0:
+        raise ValueError(f"unterminated COL model name in {context}")
+    if any(raw_name[terminator + 1 :]):
+        raise ValueError(f"nonzero COL model-name tail in {context}")
+    try:
+        name = raw_name[:terminator].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"non-ASCII COL model name in {context}") from error
+    if not name or any(not (character.isalnum() or character == "_") for character in name):
+        raise ValueError(f"unsafe COL model name {name!r} in {context}")
+    return name.casefold()
+
+
+def parse_col_file_header(record: bytes, context: str) -> tuple[str, int]:
+    """Parse GTA SA's fixed FileHeader without accepting ambiguous names.
+
+    The native layout is ``char modelName[22]`` followed by the 16-bit model
+    ID. Requiring a terminator and zero-filled name tail makes generated and
+    imported records deterministic before GTA copies the fixed-width field.
+    """
+
+    if len(record) < COL_MODEL_ID_OFFSET + 2:
+        raise ValueError(f"truncated COL file header in {context}")
+    name = _parse_fixed_col_name(record[COL_MODEL_NAME_OFFSET:COL_MODEL_ID_OFFSET], context)
+    model_id = struct.unpack_from("<H", record, COL_MODEL_ID_OFFSET)[0]
+    return name, model_id
+
+
+def parse_col_archive(
+    path: Path, allow_bully_source_header: bool = False
+) -> tuple[dict[str, bytes], dict[int, bytes]]:
     data = path.read_bytes()
     by_name: dict[str, bytes] = {}
     by_id: dict[int, bytes] = {}
@@ -441,10 +476,19 @@ def parse_col_archive(path: Path) -> tuple[dict[str, bytes], dict[int, bytes]]:
         if payload_size < 24 or end > len(data):
             raise ValueError(f"invalid COL size {payload_size} at offset {offset} in {path}")
         record = data[offset:end]
-        name = record[8:28].split(b"\0", 1)[0].decode("ascii", errors="replace").casefold()
-        model_id = struct.unpack_from("<H", record, 28)[0]
+        context = f"record at offset {offset} in {path}"
+        if allow_bully_source_header and record[28:32] == b"CED2":
+            # GTA Underground's extracted Bully collision source stores this
+            # marker where GTA SA expects the end of name[22] and modelId. It
+            # is accepted only while selecting source assets; native pack
+            # generation replaces the complete field and validates it again.
+            name = _parse_fixed_col_name(record[8:28], context)
+            model_id = None
+        else:
+            name, model_id = parse_col_file_header(record, context)
         by_name[name] = record
-        by_id[model_id] = record
+        if model_id is not None:
+            by_id[model_id] = record
         offset = end
     return by_name, by_id
 
@@ -648,7 +692,7 @@ def main() -> None:
     col_by_name: dict[str, bytes] = {}
     col_by_id: dict[int, bytes] = {}
     for archive in col_archives:
-        archive_by_name, archive_by_id = parse_col_archive(archive)
+        archive_by_name, archive_by_id = parse_col_archive(archive, allow_bully_source_header=args.map == "bw")
         for name, record in archive_by_name.items():
             col_by_name.setdefault(name, record)
         for source_id, record in archive_by_id.items():

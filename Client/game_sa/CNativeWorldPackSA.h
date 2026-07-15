@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include "CNativeWorldPayloadValidatorSA.h"
+
 #include <string>
 #include <vector>
 
@@ -79,6 +81,7 @@ struct SNativeWorldPackPolicySA
 
     SNativeModelStoreUsageSA       stockModelStores;
     SNativeModelStoreUsageSA       modelStoreCapacities;
+    SNativeWorldPayloadBudgetSA    payloadBudget;
     const SNativeTxdPoolProfileSA* txdPoolProfiles;
     unsigned int                   txdPoolProfileCount;
 };

@@ -10,7 +10,9 @@ caller-selected directory so the native loader can be integrated separately.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import re
 import struct
 from collections import Counter, defaultdict
@@ -18,7 +20,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from build_ug_map import COL_MAGICS, ModelDefinition, Placement, parse_ide
+from build_ug_map import (
+    COL_MAGICS,
+    COL_MODEL_ID_OFFSET,
+    COL_MODEL_NAME_OFFSET,
+    COL_MODEL_NAME_SIZE,
+    ModelDefinition,
+    Placement,
+    parse_col_file_header,
+    parse_ide,
+)
 from pack_img import DIRECTORY_ENTRY, HEADER, SECTOR_SIZE, sectors_for, write_padding
 from native_world_manifest import build_runtime_manifest, dump_runtime_manifest
 
@@ -29,6 +40,19 @@ EXPECTED_MODELS = MODEL_ID_END - MODEL_ID_START + 1
 EXPECTED_PLACEMENTS = 2962
 EXPECTED_IPLS = 7
 NATIVE_COL_BUFFER_CAPACITY = 327_680
+RW_LIBRARY_ID = 0x1803FFFF
+EXPECTED_DFF_UV_NORMALIZATIONS = {
+    "40199.dff": 15,
+    "40204.dff": 48,
+    "40231.dff": 18,
+    "40293.dff": 4,
+    "40772.dff": 4,
+    "40813.dff": 6,
+    "41052.dff": 72,
+    "41075.dff": 16,
+    "41096.dff": 16,
+}
+EXPECTED_TXD_DUPLICATE_REMOVALS = {"0064.txd": 1}
 
 # These are the audited stock 1.0 US occupied counts. Keeping the exact
 # requirements beside the padded targets makes the runtime patch reviewable
@@ -80,6 +104,14 @@ class ImgEntry:
     offset_sector: int
     size_sectors: int
     stream_sectors: int
+
+
+@dataclass(frozen=True)
+class RwChunk:
+    chunk_type: int
+    begin: int
+    payload_begin: int
+    end: int
 
 
 @dataclass(frozen=True)
@@ -316,24 +348,359 @@ def parse_col_records(data: bytes) -> list[tuple[str, int, int, int]]:
         end = offset + 8 + payload_size
         if payload_size < 24 or end > len(data):
             raise ValueError(f"invalid COL record size at byte {offset}")
-        name = data[offset + 8 : offset + 28].split(b"\0", 1)[0].decode("ascii").casefold()
-        model_id = struct.unpack_from("<H", data, offset + 28)[0]
+        name, model_id = parse_col_file_header(data[offset:end], f"record at byte {offset}")
         records.append((name, model_id, offset, end - offset))
         offset = end
     return records
 
 
 def remap_col_record(data: bytes, native_id: int, native_name: str) -> bytes:
-    records = parse_col_records(data)
-    if len(records) != 1:
-        raise ValueError(f"expected one COL record, found {len(records)}")
+    # The extracted Bullworth source records carry Bully-specific metadata in
+    # GTA's last four FileHeader bytes. This function is the conversion
+    # boundary: validate the single record structurally, then replace the full
+    # native name/ID area before applying the strict GTA parser below.
+    if len(data) < 32 or data[:4] not in COL_MAGICS:
+        raise ValueError("expected one complete COL record")
+    payload_size = struct.unpack_from("<I", data, 4)[0]
+    record_size = 8 + payload_size
+    if payload_size < 24 or record_size > len(data) or any(data[record_size:]):
+        raise ValueError("expected one complete COL record")
     encoded_name = native_name.encode("ascii")
-    if len(encoded_name) > 19:
-        raise ValueError(f"COL model name exceeds 19 bytes: {native_name}")
-    remapped = bytearray(data[: records[0][3]])
-    remapped[8:28] = encoded_name.ljust(20, b"\0")
-    struct.pack_into("<H", remapped, 28, native_id)
-    return bytes(remapped)
+    if len(encoded_name) >= COL_MODEL_NAME_SIZE:
+        raise ValueError(f"COL model name exceeds {COL_MODEL_NAME_SIZE - 1} bytes: {native_name}")
+    if not native_name or any(not (character.isalnum() or character == "_") for character in native_name):
+        raise ValueError(f"unsafe COL model name: {native_name!r}")
+    remapped = bytearray(data[:record_size])
+    remapped[COL_MODEL_NAME_OFFSET:COL_MODEL_ID_OFFSET] = encoded_name.ljust(COL_MODEL_NAME_SIZE, b"\0")
+    struct.pack_into("<H", remapped, COL_MODEL_ID_OFFSET, native_id)
+    result = bytes(remapped)
+    parsed = parse_col_records(result)
+    if parsed != [(native_name.casefold(), native_id, 0, record_size)]:
+        raise ValueError("remapped COL FileHeader did not round-trip")
+    return result
+
+
+def _rw_chunk(data: bytes | bytearray, begin: int, parent_end: int, context: str) -> RwChunk:
+    if begin < 0 or begin + 12 > parent_end or parent_end > len(data):
+        raise ValueError(f"{context}: truncated RenderWare chunk header")
+    chunk_type, payload_bytes, library_id = struct.unpack_from("<III", data, begin)
+    end = begin + 12 + payload_bytes
+    if library_id != RW_LIBRARY_ID or end > parent_end:
+        raise ValueError(f"{context}: invalid RenderWare library ID or boundary")
+    return RwChunk(chunk_type, begin, begin + 12, end)
+
+
+def _rw_children(data: bytes | bytearray, parent: RwChunk, context: str) -> list[RwChunk]:
+    children: list[RwChunk] = []
+    offset = parent.payload_begin
+    while offset < parent.end:
+        child = _rw_chunk(data, offset, parent.end, context)
+        children.append(child)
+        offset = child.end
+    if offset != parent.end:
+        raise ValueError(f"{context}: RenderWare children do not consume their container")
+    return children
+
+
+def _finite_semantic_floats(
+    data: bytearray,
+    begin: int,
+    count: int,
+    limit: int,
+    context: str,
+    *,
+    normalize: bool = False,
+) -> list[int]:
+    end = begin + count * 4
+    if begin < 0 or end > limit:
+        raise ValueError(f"{context}: semantic float array crosses its reviewed structure")
+    changed: list[int] = []
+    for offset in range(begin, end, 4):
+        value = struct.unpack_from("<f", data, offset)[0]
+        if math.isfinite(value):
+            continue
+        if not normalize:
+            raise ValueError(f"{context}: non-finite semantic float at byte {offset}")
+        struct.pack_into("<I", data, offset, 0)
+        changed.append(offset)
+    return changed
+
+
+def _scan_material_floats(data: bytearray, material: RwChunk, context: str) -> int:
+    children = _rw_children(data, material, context)
+    if len(children) not in (2, 3) or children[0].chunk_type != 0x01 or children[0].end - children[0].payload_begin != 28:
+        raise ValueError(f"{context}: material grammar differs from the reviewed profile")
+    semantic = 3
+    _finite_semantic_floats(data, children[0].payload_begin + 16, 3, children[0].end, f"{context} surface properties")
+    extension = children[-1]
+    if extension.chunk_type != 0x03:
+        raise ValueError(f"{context}: material extension is absent")
+    for plugin in _rw_children(data, extension, context):
+        if plugin.chunk_type != 0x0253F2FC or plugin.end - plugin.payload_begin != 24:
+            raise ValueError(f"{context}: material plugin differs from the reviewed profile")
+        _finite_semantic_floats(data, plugin.payload_begin, 5, plugin.end, f"{context} material plugin")
+        semantic += 5
+    return semantic
+
+
+def _scan_geometry_plugin_floats(data: bytearray, extension: RwChunk, context: str) -> int:
+    semantic = 0
+    for plugin in _rw_children(data, extension, context):
+        payload_bytes = plugin.end - plugin.payload_begin
+        if plugin.chunk_type == 0x0253F2F8:
+            if payload_bytes < 4:
+                raise ValueError(f"{context}: truncated 2DFX plugin")
+            effects = struct.unpack_from("<I", data, plugin.payload_begin)[0]
+            if payload_bytes != 4 + effects * 100:
+                raise ValueError(f"{context}: invalid 2DFX record size")
+            for index in range(effects):
+                effect = plugin.payload_begin + 4 + index * 100
+                _finite_semantic_floats(data, effect, 3, plugin.end, f"{context} 2DFX position")
+                _finite_semantic_floats(data, effect + 24, 4, plugin.end, f"{context} 2DFX light")
+                semantic += 7
+        elif plugin.chunk_type == 0x0253F2FD:
+            if payload_bytes < 4:
+                raise ValueError(f"{context}: truncated breakable plugin")
+            section = struct.unpack_from("<I", data, plugin.payload_begin)[0]
+            if section == 0:
+                if payload_bytes != 4:
+                    raise ValueError(f"{context}: invalid empty breakable plugin")
+                continue
+            if section not in (1, 0x64646464) or payload_bytes < 56:
+                raise ValueError(f"{context}: invalid breakable plugin header")
+            vertices = struct.unpack_from("<H", data, plugin.payload_begin + 8)[0]
+            triangles = struct.unpack_from("<H", data, plugin.payload_begin + 24)[0]
+            materials = struct.unpack_from("<H", data, plugin.payload_begin + 36)[0]
+            expected = 56 + vertices * 24 + triangles * 8 + materials * 76
+            if payload_bytes != expected:
+                raise ValueError(f"{context}: invalid breakable plugin arrays")
+            cursor = plugin.payload_begin + 56
+            _finite_semantic_floats(data, cursor, vertices * 3, plugin.end, f"{context} breakable positions")
+            semantic += vertices * 3
+            cursor += vertices * 12
+            _finite_semantic_floats(data, cursor, vertices * 2, plugin.end, f"{context} breakable UVs")
+            semantic += vertices * 2
+            cursor += vertices * 12 + triangles * 8 + materials * 64
+            _finite_semantic_floats(data, cursor, materials * 3, plugin.end, f"{context} breakable materials")
+            semantic += materials * 3
+        elif plugin.chunk_type not in (0x0000050E, 0x0253F2F9):
+            raise ValueError(f"{context}: unknown geometry plugin 0x{plugin.chunk_type:08X}")
+    return semantic
+
+
+def normalize_static_dff_semantic_floats(data: bytes, name: str, *, normalize_uv: bool) -> tuple[bytes, dict[str, object]]:
+    """Normalize only non-finite geometry UVs and reject every other semantic float.
+
+    Offsets come from the closed Bullworth v1 RenderWare grammar, never from a
+    byte-pattern search. This keeps integer fields and opaque plugin bytes out
+    of the rewrite surface.
+    """
+
+    output = bytearray(data)
+    root = _rw_chunk(output, 0, len(output), name)
+    if root.chunk_type != 0x10 or any(output[root.end:]):
+        raise ValueError(f"{name}: invalid DFF root or nonzero sector padding")
+    children = _rw_children(output, root, name)
+    if len(children) < 4 or children[0].chunk_type != 0x01 or children[1].chunk_type != 0x0E or children[2].chunk_type != 0x1A:
+        raise ValueError(f"{name}: clump grammar differs from the reviewed profile")
+
+    semantic = 0
+    frame_children = _rw_children(output, children[1], f"{name} frame list")
+    if not frame_children or frame_children[0].chunk_type != 0x01:
+        raise ValueError(f"{name}: frame-list struct is absent")
+    frame_count = struct.unpack_from("<I", output, frame_children[0].payload_begin)[0]
+    if frame_children[0].end - frame_children[0].payload_begin != 4 + frame_count * 56:
+        raise ValueError(f"{name}: frame-list array has invalid bounds")
+    for index in range(frame_count):
+        begin = frame_children[0].payload_begin + 4 + index * 56
+        _finite_semantic_floats(output, begin, 12, frame_children[0].end, f"{name} frame matrix {index}")
+        semantic += 12
+
+    geometry_children = _rw_children(output, children[2], f"{name} geometry list")
+    if not geometry_children or geometry_children[0].chunk_type != 0x01 or geometry_children[0].end - geometry_children[0].payload_begin != 4:
+        raise ValueError(f"{name}: geometry-list struct is invalid")
+    geometry_count = struct.unpack_from("<I", output, geometry_children[0].payload_begin)[0]
+    if len(geometry_children) != geometry_count + 1:
+        raise ValueError(f"{name}: geometry-list count differs from its chunks")
+
+    normalized_offsets: list[int] = []
+    for geometry_index, geometry in enumerate(geometry_children[1:]):
+        if geometry.chunk_type != 0x0F:
+            raise ValueError(f"{name}: non-geometry chunk in geometry list")
+        parts = _rw_children(output, geometry, f"{name} geometry {geometry_index}")
+        if len(parts) != 3 or [part.chunk_type for part in parts] != [0x01, 0x08, 0x03]:
+            raise ValueError(f"{name}: geometry grammar differs from the reviewed profile")
+        structure = parts[0]
+        if structure.end - structure.payload_begin < 40:
+            raise ValueError(f"{name}: truncated geometry struct")
+        flags, triangles, vertices, morph_targets = struct.unpack_from("<4I", output, structure.payload_begin)
+        if flags not in (0x0001002E, 0x00010076, 0x0001007E) or not vertices or not triangles or morph_targets != 1:
+            raise ValueError(f"{name}: geometry counts/flags differ from the reviewed profile")
+        cursor = structure.payload_begin + 16
+        if flags & 8:
+            cursor += vertices * 4
+        uv_offsets = _finite_semantic_floats(
+            output,
+            cursor,
+            vertices * 2,
+            structure.end,
+            f"{name} geometry {geometry_index} UV",
+            normalize=normalize_uv,
+        )
+        normalized_offsets.extend(uv_offsets)
+        semantic += vertices * 2
+        cursor += vertices * 8 + triangles * 8
+        _finite_semantic_floats(output, cursor, 4, structure.end, f"{name} geometry {geometry_index} morph bounds")
+        semantic += 4
+        has_vertices, has_normals = struct.unpack_from("<II", output, cursor + 16)
+        if has_vertices != 1 or has_normals != (1 if flags & 0x10 else 0):
+            raise ValueError(f"{name}: geometry morph flags differ from the reviewed profile")
+        cursor += 24
+        _finite_semantic_floats(output, cursor, vertices * 3, structure.end, f"{name} geometry {geometry_index} positions")
+        semantic += vertices * 3
+        cursor += vertices * 12
+        if has_normals:
+            _finite_semantic_floats(output, cursor, vertices * 3, structure.end, f"{name} geometry {geometry_index} normals")
+            semantic += vertices * 3
+            cursor += vertices * 12
+        if cursor != structure.end:
+            raise ValueError(f"{name}: geometry struct has unreviewed trailing bytes")
+
+        materials = _rw_children(output, parts[1], f"{name} material list")
+        if not materials or materials[0].chunk_type != 0x01:
+            raise ValueError(f"{name}: material-list struct is absent")
+        material_count = struct.unpack_from("<I", output, materials[0].payload_begin)[0]
+        if len(materials) != material_count + 1:
+            raise ValueError(f"{name}: material-list count differs from its chunks")
+        for material_index, material in enumerate(materials[1:]):
+            if material.chunk_type != 0x07:
+                raise ValueError(f"{name}: non-material chunk in material list")
+            semantic += _scan_material_floats(output, material, f"{name} material {material_index}")
+        semantic += _scan_geometry_plugin_floats(output, parts[2], f"{name} geometry {geometry_index}")
+
+    for child in children[3:-1]:
+        if child.chunk_type != 0x12:
+            continue
+        light = _rw_children(output, child, f"{name} light")
+        if not light or light[0].chunk_type != 0x01 or light[0].end - light[0].payload_begin != 24:
+            raise ValueError(f"{name}: light struct differs from the reviewed profile")
+        _finite_semantic_floats(output, light[0].payload_begin, 4, light[0].end, f"{name} light color/radius")
+        _finite_semantic_floats(output, light[0].payload_begin + 16, 1, light[0].end, f"{name} light angle")
+        semantic += 5
+
+    return bytes(output), {
+        "normalized_uv_count": len(normalized_offsets),
+        "normalized_uv_byte_offsets": normalized_offsets,
+        "semantic_float_count": semantic,
+    }
+
+
+def validate_static_txd_float_grammar(data: bytes, name: str) -> None:
+    """Prove that the reviewed D3D9 native-TXD grammar has no float fields."""
+
+    root = _rw_chunk(data, 0, len(data), name)
+    if root.chunk_type != 0x16 or any(data[root.end:]):
+        raise ValueError(f"{name}: invalid TXD root or nonzero sector padding")
+    children = _rw_children(data, root, name)
+    if len(children) < 2 or children[0].chunk_type != 0x01 or children[-1].chunk_type != 0x03:
+        raise ValueError(f"{name}: TXD grammar differs from the reviewed profile")
+    textures = struct.unpack_from("<H", data, children[0].payload_begin)[0]
+    if len(children) != textures + 2 or _rw_children(data, children[-1], name):
+        raise ValueError(f"{name}: TXD count or root extension differs from the reviewed profile")
+    for texture in children[1:-1]:
+        texture_children = _rw_children(data, texture, name)
+        if texture.chunk_type != 0x15 or len(texture_children) != 2 or texture_children[0].chunk_type != 0x01 or texture_children[1].chunk_type != 0x03:
+            raise ValueError(f"{name}: native texture grammar differs from the reviewed profile")
+        if texture_children[0].end - texture_children[0].payload_begin < 92 or _rw_children(data, texture_children[1], name):
+            raise ValueError(f"{name}: native texture header/extension differs from the reviewed profile")
+
+
+def normalize_static_txd_duplicate_names(
+    data: bytes, name: str, *, drop_identical_duplicates: bool
+) -> tuple[bytes, dict[str, object]]:
+    """Remove only later case-insensitive duplicates with identical payloads.
+
+    GTA resolves texture names case-insensitively. A later duplicate is safe
+    to remove only when its complete NativeTexture chunk matches the first
+    after canonicalizing the fixed name field; any semantic difference is a
+    hard refusal rather than an implicit first/last-wins choice.
+    """
+
+    validate_static_txd_float_grammar(data, name)
+    root = _rw_chunk(data, 0, len(data), name)
+    children = _rw_children(data, root, name)
+    textures = children[1:-1]
+    seen: dict[str, tuple[int, RwChunk, bytes]] = {}
+    dropped: set[int] = set()
+    records: list[dict[str, object]] = []
+
+    for index, texture in enumerate(textures):
+        parts = _rw_children(data, texture, name)
+        structure = parts[0]
+        raw_name = data[structure.payload_begin + 8 : structure.payload_begin + 40]
+        terminator = raw_name.find(b"\0")
+        if terminator <= 0 or any(raw_name[terminator + 1 :]):
+            raise ValueError(f"{name}: unsafe native texture name at index {index}")
+        try:
+            texture_name = raw_name[:terminator].decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"{name}: non-ASCII native texture name at index {index}") from error
+        key = texture_name.casefold()
+        canonical = bytearray(data[texture.begin : texture.end])
+        relative_name = structure.payload_begin + 8 - texture.begin
+        canonical[relative_name : relative_name + 32] = key.encode("ascii").ljust(32, b"\0")
+        canonical_bytes = bytes(canonical)
+        previous = seen.get(key)
+        if previous is None:
+            seen[key] = (index, texture, canonical_bytes)
+            continue
+        previous_index, previous_texture, previous_canonical = previous
+        if canonical_bytes != previous_canonical:
+            raise ValueError(
+                f"{name}: non-identical case-insensitive duplicate texture {texture_name!r} "
+                f"at indices {previous_index} and {index}"
+            )
+        if not drop_identical_duplicates:
+            raise ValueError(
+                f"{name}: duplicate case-insensitive texture {texture_name!r} at indices {previous_index} and {index}"
+            )
+        dropped.add(index)
+        records.append(
+            {
+                "key": key,
+                "kept_index": previous_index,
+                "dropped_index": index,
+                "kept_chunk_offset": previous_texture.begin,
+                "dropped_chunk_offset": texture.begin,
+                "chunk_bytes": texture.end - texture.begin,
+                "kept_chunk_sha256": hashlib.sha256(data[previous_texture.begin : previous_texture.end]).hexdigest(),
+                "dropped_chunk_sha256": hashlib.sha256(data[texture.begin : texture.end]).hexdigest(),
+            }
+        )
+
+    if not dropped:
+        return data, {"dropped_duplicate_count": 0, "records": []}
+
+    rebuilt_children: list[bytes] = []
+    for child_index, child in enumerate(children):
+        if 1 <= child_index <= len(textures) and child_index - 1 in dropped:
+            continue
+        encoded = bytearray(data[child.begin : child.end])
+        if child_index == 0:
+            struct.pack_into("<H", encoded, child.payload_begin - child.begin, len(textures) - len(dropped))
+        rebuilt_children.append(bytes(encoded))
+    payload = b"".join(rebuilt_children)
+    root_header = bytearray(data[:12])
+    struct.pack_into("<I", root_header, 4, len(payload))
+    rebuilt_root = bytes(root_header) + payload
+    if len(rebuilt_root) > len(data):
+        raise ValueError(f"{name}: duplicate removal unexpectedly grew the TXD")
+    result = rebuilt_root.ljust(len(data), b"\0")
+    validate_static_txd_float_grammar(result, name)
+    # The second pass must prove the rebuilt dictionary has no remaining
+    # duplicate key; it cannot recurse into another mutation.
+    normalize_static_txd_duplicate_names(result, name, drop_identical_duplicates=False)
+    return result, {"dropped_duplicate_count": len(dropped), "records": records}
 
 
 def write_ide(path: Path, models: list[ResourceModel], native_ids: dict[int, int]) -> None:
@@ -580,6 +947,11 @@ def write_text_report(path: Path, report: dict[str, object]) -> None:
         f"placements: {counts['placements']} in {counts['ipls']} binary IPLs; "
         f"non--1 LODs: {counts['non_negative_lods']}",
         f"IMG entries: {counts['archive_entries']}; archive sectors: {counts['archive_sectors']}",
+        f"normalized non-finite geometry UVs: {report['normalization']['geometry_uv_nonfinite_replaced']} "
+        f"to {report['normalization']['geometry_uv_replacement_bits']}; "
+        f"verified DFF semantic floats: {report['normalization']['verified_dff_semantic_floats']}",
+        f"removed case-insensitive identical TXD duplicates: "
+        f"{report['normalization']['txd_casefold_duplicates_removed']}",
         "",
         "Projected native pool budgets:",
     ]
@@ -636,12 +1008,31 @@ def verify_pack(
             ]:
                 raise ValueError(f"archive metadata mismatch for {metadata['name']}")
 
+    verified_semantic_floats = 0
     for name in dff_names:
-        if struct.unpack_from("<I", archive_slice(archive_path, archive_by_name[name]), 0)[0] != 0x10:
+        dff_data = archive_slice(archive_path, archive_by_name[name])
+        if struct.unpack_from("<I", dff_data, 0)[0] != 0x10:
             raise ValueError(f"invalid RenderWare DFF root chunk in {name}")
+        _, float_audit = normalize_static_dff_semantic_floats(dff_data, name, normalize_uv=False)
+        verified_semantic_floats += int(float_audit["semantic_float_count"])
     for name in txd_names:
-        if struct.unpack_from("<I", archive_slice(archive_path, archive_by_name[name]), 0)[0] != 0x16:
+        txd_data = archive_slice(archive_path, archive_by_name[name])
+        if struct.unpack_from("<I", txd_data, 0)[0] != 0x16:
             raise ValueError(f"invalid RenderWare TXD root chunk in {name}")
+        validate_static_txd_float_grammar(txd_data, name)
+        normalize_static_txd_duplicate_names(txd_data, name, drop_identical_duplicates=False)
+
+    normalization = manifest.get("normalization", {})
+    if normalization.get("geometry_uv_nonfinite_replaced") != sum(EXPECTED_DFF_UV_NORMALIZATIONS.values()):
+        raise ValueError("manifest UV-normalization count differs from the audited source profile")
+    if normalization.get("geometry_uv_files") != EXPECTED_DFF_UV_NORMALIZATIONS:
+        raise ValueError("manifest UV-normalization files differ from the audited source profile")
+    if normalization.get("verified_dff_semantic_floats") != verified_semantic_floats:
+        raise ValueError("manifest semantic-float count differs from the generated DFFs")
+    if normalization.get("txd_duplicate_files") != EXPECTED_TXD_DUPLICATE_REMOVALS:
+        raise ValueError("manifest TXD duplicate-removal files differ from the audited source profile")
+    if normalization.get("txd_casefold_duplicates_removed") != sum(EXPECTED_TXD_DUPLICATE_REMOVALS.values()):
+        raise ValueError("manifest TXD duplicate-removal count differs from the audited source profile")
 
     col_data = (output / "bw.col").read_bytes()
     col_records = parse_col_records(col_data)
@@ -727,6 +1118,7 @@ def verify_pack(
             "entries": [entry.__dict__ for entry in archive_entries],
         },
         "collision_io": collision_io,
+        "normalization": normalization,
         "budgets": manifest["budgets"],
         "stock_inventory": manifest["stock_inventory"],
     }
@@ -758,34 +1150,69 @@ def build_pack(resource: Path, output: Path, gta_root: Path) -> dict[str, object
     texture_entries = entry_index(textures_archive)
     archive_inputs: list[ArchiveInput] = []
     missing_assets: list[str] = []
+    dff_float_audits: list[dict[str, object]] = []
     for model in models:
         name = Path(model.dff_path).name.casefold()
         entry = model_entries.get(name)
         if entry is None:
             missing_assets.append(model.dff_path)
             continue
-        archive_inputs.append(
-            ArchiveInput(
-                name=name,
-                path=models_archive,
-                source_offset=entry.offset_sector * SECTOR_SIZE,
-                size=entry.size_sectors * SECTOR_SIZE,
-            )
+        normalized, audit = normalize_static_dff_semantic_floats(
+            archive_slice(models_archive, entry), name, normalize_uv=True
         )
+        if audit["normalized_uv_count"]:
+            dff_float_audits.append({"name": name, **audit})
+        archive_inputs.append(ArchiveInput(name=name, data=normalized))
+    actual_normalizations = {
+        str(audit["name"]): int(audit["normalized_uv_count"]) for audit in dff_float_audits
+    }
+    if actual_normalizations != EXPECTED_DFF_UV_NORMALIZATIONS:
+        raise ValueError(
+            "source DFF UV-normalization profile changed: "
+            f"expected={EXPECTED_DFF_UV_NORMALIZATIONS} actual={actual_normalizations}"
+        )
+    verified_semantic_floats = sum(int(audit["semantic_float_count"]) for audit in dff_float_audits)
+    normalized_names = set(actual_normalizations)
+    for model in models:
+        name = Path(model.dff_path).name.casefold()
+        if name in normalized_names:
+            continue
+        entry = model_entries[name]
+        _, audit = normalize_static_dff_semantic_floats(
+            archive_slice(models_archive, entry), name, normalize_uv=False
+        )
+        verified_semantic_floats += int(audit["semantic_float_count"])
     unique_txd_paths = sorted({model.txd_path for model in models}, key=str.casefold)
+    txd_duplicate_audits: list[dict[str, object]] = []
     for txd_path in unique_txd_paths:
         name = Path(txd_path).name.casefold()
         entry = texture_entries.get(name)
         if entry is None:
             missing_assets.append(txd_path)
             continue
-        archive_inputs.append(
-            ArchiveInput(
-                name=name,
-                path=textures_archive,
-                source_offset=entry.offset_sector * SECTOR_SIZE,
-                size=entry.size_sectors * SECTOR_SIZE,
+        source_data = archive_slice(textures_archive, entry)
+        normalized_txd, duplicate_audit = normalize_static_txd_duplicate_names(
+            source_data, name, drop_identical_duplicates=True
+        )
+        if duplicate_audit["dropped_duplicate_count"]:
+            txd_duplicate_audits.append({"name": name, **duplicate_audit})
+            archive_inputs.append(ArchiveInput(name=name, data=normalized_txd))
+        else:
+            archive_inputs.append(
+                ArchiveInput(
+                    name=name,
+                    path=textures_archive,
+                    source_offset=entry.offset_sector * SECTOR_SIZE,
+                    size=entry.size_sectors * SECTOR_SIZE,
+                )
             )
+    actual_duplicate_removals = {
+        str(audit["name"]): int(audit["dropped_duplicate_count"]) for audit in txd_duplicate_audits
+    }
+    if actual_duplicate_removals != EXPECTED_TXD_DUPLICATE_REMOVALS:
+        raise ValueError(
+            "source TXD duplicate-removal profile changed: "
+            f"expected={EXPECTED_TXD_DUPLICATE_REMOVALS} actual={actual_duplicate_removals}"
         )
     if missing_assets:
         raise FileNotFoundError(f"missing packed assets: {missing_assets[:20]}")
@@ -909,6 +1336,17 @@ def build_pack(resource: Path, output: Path, gta_root: Path) -> dict[str, object
             "buffer_capacity": NATIVE_COL_BUFFER_CAPACITY,
             "max_col_record_bytes": max_col_record_bytes,
             "remaining": NATIVE_COL_BUFFER_CAPACITY - max_col_record_bytes,
+        },
+        "normalization": {
+            "geometry_uv_nonfinite_replaced": sum(actual_normalizations.values()),
+            "geometry_uv_replacement_bits": "0x00000000",
+            "geometry_uv_files": actual_normalizations,
+            "geometry_uv_records": dff_float_audits,
+            "verified_dff_semantic_floats": verified_semantic_floats,
+            "verified_txd_semantic_floats": 0,
+            "txd_casefold_duplicates_removed": sum(actual_duplicate_removals.values()),
+            "txd_duplicate_files": actual_duplicate_removals,
+            "txd_duplicate_records": txd_duplicate_audits,
         },
         "stock_inventory": stock,
         "budgets": budgets,

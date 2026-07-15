@@ -15,6 +15,7 @@
 #include "CIplSA.h"
 #include "CModelInfoSA.h"
 #include "CNativeModelStoreSA.h"
+#include "CNativeWorldPayloadValidatorSA.h"
 #include "CPoolSAInterface.h"
 #include "CStreamingSA.h"
 #include "CTextureDictonarySA.h"
@@ -1010,6 +1011,34 @@ namespace
         return true;
     }
 
+    bool ValidatePayloads(const SString& path, const SIdePlan& ide, std::string& error)
+    {
+        SNativeWorldPayloadPlanSA plan;
+        for (const auto& [name, entry] : ide.imgEntries)
+            plan.imgEntries.emplace(name, SNativeWorldPayloadImgEntrySA{entry.offset, entry.size});
+        for (const auto& [id, fileName] : ide.modelFileNames)
+            plan.modelNames.emplace(id, fileName.substr(0, fileName.size() - 4));
+        plan.txdNames = ide.txdNames;
+        plan.colFileName = Pack().colFileName;
+
+        SNativeWorldPayloadSummarySA summary;
+        const WString                widePath = SharedUtil::FromUTF8(path);
+        if (!CNativeWorldPayloadValidatorSA::Validate(widePath.c_str(), plan, g_policy->payloadBudget, summary, error))
+            return false;
+
+        // Keep this stable and compact: it proves the untrusted bytes passed
+        // the closed Bullworth profile before AddArchive or any pool mutation.
+        Log("payloadAudit=ok dff=%u txd=%u rwChunks=%u rwDepth=%u rwBytes=%llu geometry=%llu/%llu/%llu plugins=%llu/%llu/%llu/%llu "
+            "nativeTextures=%u textureBytes=%llu/%llu colRecords=%u coll=%u col3=%u colBytes=%llu maxColRecord=%u maxColVertices=%u "
+            "maxColFaces=%u maxColFaceGroups=%u",
+            summary.dffCount, summary.txdCount, summary.renderWareChunkCount, summary.maximumRenderWareDepth, summary.renderWareBytes, summary.geometryVertices,
+            summary.geometryTriangles, summary.geometryMaterials, summary.effects2d, summary.breakableVertices, summary.breakableTriangles,
+            summary.breakableMaterials, summary.nativeTextureCount, summary.nativeTextureGpuBytes, summary.nativeTextureDecodedBytes, summary.colRecordCount,
+            summary.collRecordCount, summary.col3RecordCount, summary.colBytes, summary.maximumColRecordBytes, summary.maximumColVertices,
+            summary.maximumColFaces, summary.maximumColFaceGroups);
+        return true;
+    }
+
     template <class T>
     bool BuildPoolAllocationPlan(CPoolSAInterface<T>* pool, int capacity, unsigned int expectedOccupied, unsigned int additionCount, const char* name,
                                  std::vector<bool>& originallyOccupied, std::vector<unsigned char>& originalFlags, int& originalFirstFree,
@@ -1634,7 +1663,7 @@ namespace
                 Log("registrar=integrity-ok ideSha256=%s imgSha256=%s", Pack().ideSha256, Pack().imgSha256);
         }
         if (!error.empty() || !ParseIde(idePath, ide, error) || !ValidateImg(imgPath, ide, error) || !ValidateBinaryIpls(imgPath, ide, error) ||
-            !ValidateDescriptor(error) || !PreflightRuntime(ide, error))
+            !ValidatePayloads(imgPath, ide, error) || !ValidateDescriptor(error) || !PreflightRuntime(ide, error))
         {
             RestoreTxdFindCache(ide);
             g_state = EState::Refused;
@@ -1644,6 +1673,11 @@ namespace
 
         // AddArchive is the only reversible native mutation that precedes pool
         // allocation. Keep it first so an open failure leaves every pool stock.
+        // The validators close their handles before GTA reopens either path.
+        // IDE replacement remains a TOCTOU boundary until LoadObjectTypes has
+        // consumed it. IMG replacement remains one after AddArchive as GTA
+        // later reopens/reads streamed sectors by path; eliminating it requires
+        // handle-bound registration and lifetime ownership, not another hash.
         const WString       wideImgPath = SharedUtil::FromUTF8(imgPath);
         const unsigned char archiveId = g_streaming->AddArchive(wideImgPath.c_str());
         if (archiveId == INVALID_ARCHIVE_ID)
@@ -1711,8 +1745,9 @@ namespace
             return;
         }
 
-        // LoadObjectTypes is the irreversible commit point: it constructs model
-        // store entries and binds them to the preallocated deterministic TXDs.
+        // LoadObjectTypes reopens the IDE rather than consuming the validated
+        // bytes. This is the IDE TOCTOU boundary and the irreversible commit
+        // point: it constructs model entries and binds deterministic TXDs.
         reinterpret_cast<void(__cdecl*)(const char*)>(LOAD_OBJECT_TYPES)(idePath.c_str());
         ValidateIdePostconditions(ide);
         reinterpret_cast<void(__cdecl*)(const char*, int32_t)>(LOAD_NAMED_CD_DIRECTORY)(imgPath.c_str(), archiveId);
