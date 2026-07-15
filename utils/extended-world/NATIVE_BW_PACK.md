@@ -80,10 +80,11 @@ The manager derives the even streaming-buffer
 minimum from that validated maximum rather than storing a second 4,008-sector
 constant.
 
-This is Phase 2A manifest loading, not arbitrary IDE support. Manifests
+This is the Phase 2B-2A local-cache foundation, not arbitrary IDE support.
+Manifests
 currently represent the same constrained static-world format proven by
 Bullworth: `objs`/`tobj` IDE sections, DFF/TXD entries, exactly one merged COL,
-and standalone binary IPLs. Server distribution, cache ownership, hot
+and standalone binary IPLs. Server distribution, server authentication, hot
 registration, and multi-pack aggregate allocation are not implemented yet.
 Bullworth remains the single compiled policy and the existing environment
 flag, executable allowlist, trusted pool budgets, registration order,
@@ -98,11 +99,46 @@ it derives and bounds their real names, types, counts, inventories, sizes,
 model-store types, placements, coordinates, and maximum entry.
 IDE rows additionally require safe native stems, one mesh, finite positive draw
 distance, bounded uint flags, unique/balanced sections, and valid timed-object
-hours. The three files must be direct regular non-reparse children of the
-trusted directory. GTA's native APIs reopen IDE/IMG by path at commit time, so
-a local actor able to replace those files between preflight and that reopen is
-a remaining TOCTOU boundary; server-cache ownership must prevent writes while
-activation is in progress.
+hours. The three legacy files must be direct regular non-reparse children of
+the seed directory. Before installing the GTA startup hook, the client copies
+them into the common ProgramData cache at
+`<MTA-data>/native-world-cache/v1/<policy-key>/<content-id>`. The content ID is
+the SHA-256 of a domain-separated canonical tuple containing format, compiled
+policy key, and both payload sizes and hashes. Source filenames are only locked
+seed locators; cached files always use `native-world.json`, `world.ide`, and
+`world.img`, so renaming identical source data cannot duplicate the large cache
+object. The ID is stable across JSON whitespace or key order and is content
+identity only: it does not prove who supplied or authorized the bytes. The
+exact seed-manifest hash is still checked while the seed directory and all
+three files are locked whenever a missing cache object is populated.
+
+The cache writes a fixed canonical format-1 manifest, copies the payload into
+a cryptographically random same-volume quarantine directory, flushes and
+validates every file, then closes quarantine guards and publishes with one
+directory rename. It immediately acquires final no-write/no-delete guards and
+repeats sizes and hashes before returning the path. Existing entries undergo
+the same guarded validation. A corrupt or power-loss object is moved away from
+the semantic address and rebuilt; invalid objects are never traversed because
+they could be junctions. Each directory component is opened without delete
+sharing and verified by handle as a local non-reparse directory before the
+next child is created.
+
+The published manifest, IDE, and IMG use read sharing only. Their handles and
+the verified cache-directory chain form a pending lease. Any refusal before
+the irreversible IDE commit releases that lease; successful native activation
+promotes it to process lifetime. GTA may therefore reopen the IDE at commit and
+the IMG during later streaming without a replacement or ancestor rename
+redirecting those path reads. This closes the earlier validation/use TOCTOU
+without current-session activation: a different pack still requires a clean
+client restart.
+
+The environment-flag prototype still reads the installation copy of
+`native-world.json` at each startup as its temporary local selector. After one
+successful publication, `bw.ide` and `bw.img` may be removed from the install
+seed and subsequent cache hits never read them there; keep the small selector
+manifest in place. Removing that final install dependency requires the next
+phase's authenticated, session-bound activation ticket. Cache content identity
+alone is deliberately not authorization to choose a pack.
 
 The compiled model-store policy records the relocated foundation capacities
 (`15000` Atomic, `160` DamageAtomic, and `200` Time). Preflight requires the
@@ -120,10 +156,16 @@ flags zero, no LOD link (`lodIndex == -1`), X/Y in `[-10000, 9999]`, and Z in
 preventing GTA's native extension split from disagreeing with preflight.
 
 Hashes supplied by this untrusted manifest prove that the bytes match its own
-claims; they do not authenticate a server or publisher. Phase 2B must establish
-cache provenance separately. Likewise, this phase validates container and IDE
-semantics needed before native registration, but does not exhaustively parse
-RenderWare DFF/TXD payloads or every COL record before GTA does.
+claims; they do not authenticate a server or publisher. The local installation
+remains the only provenance source in this phase. A later server activation
+record must authorize the exact semantic content ID. The closed payload
+validator also parses and bounds the reviewed RenderWare DFF/TXD and COL
+grammar before the cache path reaches GTA.
+
+Random quarantine or invalid siblings that cannot be safely verified are left
+inert and are never activation candidates. A future transport phase must add a
+verified non-reparse garbage collector plus global object/byte quotas before a
+hostile server can offer multiple genuinely different valid payloads.
 
 The switch is read once, before GTA populates its model stores. In the Windows
 VM, set it in the process-start environment and then launch the client from the

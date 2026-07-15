@@ -15,6 +15,7 @@
 #include "CIplSA.h"
 #include "CModelInfoSA.h"
 #include "CNativeModelStoreSA.h"
+#include "CNativeWorldCacheSA.h"
 #include "CNativeWorldPayloadValidatorSA.h"
 #include "CPoolSAInterface.h"
 #include "CStreamingSA.h"
@@ -155,6 +156,7 @@ namespace
     CStreamingSA*                       g_streaming = nullptr;
     const SNativeWorldPackPolicySA*     g_policy = nullptr;
     SNativeWorldPackRuntimeDataSA       g_manifest;
+    std::string                         g_activeDirectory;
     std::vector<const char*>            g_iplNamePointers;
     SNativeWorldPackDescriptorSA        g_runtimeDescriptor{};
     const SNativeWorldPackDescriptorSA* g_pack = nullptr;
@@ -580,6 +582,10 @@ namespace
         SNativeWorldPackRuntimeDataSA manifest;
         manifest.format = format->number;
         manifest.packId = packId->string;
+        // Runtime manifests require lowercase SHA-256 text. Normalize the
+        // locally generated manifest digest to the same canonical spelling.
+        manifest.manifestSha256 = SharedUtil::GenerateSha256HexString(bytes).ToLower();
+        manifest.manifestBytes = static_cast<unsigned int>(bytes.size());
         manifest.ideFileName = ideName->string;
         manifest.imgFileName = imgName->string;
         manifest.ideSha256 = ideHash->string;
@@ -597,7 +603,7 @@ namespace
             g_policy->displayName,
             g_policy->logPrefix,
             g_policy->featureEnvironment,
-            g_policy->relativeDirectory,
+            g_activeDirectory.c_str(),
             g_manifest.ideFileName.c_str(),
             g_manifest.imgFileName.c_str(),
             nullptr,
@@ -630,9 +636,8 @@ namespace
     bool ValidateDescriptor(std::string& error)
     {
         const SNativeWorldPackDescriptorSA& pack = Pack();
-        if (!pack.key || !pack.displayName || !pack.logPrefix || !pack.featureEnvironment || !pack.relativeDirectory || !pack.ideFileName ||
-            !pack.imgFileName || !pack.colFileName || !pack.ideSha256 || !pack.imgSha256 || !pack.iplNames || !pack.iplCount || !pack.txdPoolProfiles ||
-            !pack.txdPoolProfileCount)
+        if (!pack.key || !pack.displayName || !pack.logPrefix || !pack.featureEnvironment || !pack.directoryPath || !pack.ideFileName || !pack.imgFileName ||
+            !pack.colFileName || !pack.ideSha256 || !pack.imgSha256 || !pack.iplNames || !pack.iplCount || !pack.txdPoolProfiles || !pack.txdPoolProfileCount)
         {
             error = "native world-pack descriptor has a missing required field";
             return false;
@@ -1645,8 +1650,8 @@ namespace
 
     void RegisterPack()
     {
-        const SString idePath = SharedUtil::CalcMTASAPath(SString("%s\\%s", Pack().relativeDirectory, Pack().ideFileName));
-        const SString imgPath = SharedUtil::CalcMTASAPath(SString("%s\\%s", Pack().relativeDirectory, Pack().imgFileName));
+        const SString idePath = SString("%s\\%s", Pack().directoryPath, Pack().ideFileName);
+        const SString imgPath = SString("%s\\%s", Pack().directoryPath, Pack().imgFileName);
         SIdePlan      ide;
         std::string   error;
         Log("registrar=preflight ide=%s img=%s", idePath.c_str(), imgPath.c_str());
@@ -1666,6 +1671,7 @@ namespace
             !ValidatePayloads(imgPath, ide, error) || !ValidateDescriptor(error) || !PreflightRuntime(ide, error))
         {
             RestoreTxdFindCache(ide);
+            ReleaseNativeWorldCacheLease();
             g_state = EState::Refused;
             Log("registrar=refused reason=%s stock-world-remains-active", error.c_str());
             return;
@@ -1673,16 +1679,16 @@ namespace
 
         // AddArchive is the only reversible native mutation that precedes pool
         // allocation. Keep it first so an open failure leaves every pool stock.
-        // The validators close their handles before GTA reopens either path.
-        // IDE replacement remains a TOCTOU boundary until LoadObjectTypes has
-        // consumed it. IMG replacement remains one after AddArchive as GTA
-        // later reopens/reads streamed sectors by path; eliminating it requires
-        // handle-bound registration and lifetime ownership, not another hash.
+        // Cache lease handles continuously deny mutation and deletion while
+        // GTA opens the archive. CStreamingSA then owns its read handle, while
+        // the cache lease remains process-lifetime after activation so later
+        // path-based streaming cannot be redirected.
         const WString       wideImgPath = SharedUtil::FromUTF8(imgPath);
         const unsigned char archiveId = g_streaming->AddArchive(wideImgPath.c_str());
         if (archiveId == INVALID_ARCHIVE_ID)
         {
             RestoreTxdFindCache(ide);
+            ReleaseNativeWorldCacheLease();
             g_state = EState::Refused;
             Log("registrar=refused reason=AddArchive-failed-before-pool-mutation stock-world-remains-active");
             return;
@@ -1691,6 +1697,7 @@ namespace
         {
             g_streaming->RemoveArchive(archiveId);
             RestoreTxdFindCache(ide);
+            ReleaseNativeWorldCacheLease();
             g_state = EState::Refused;
             Log("registrar=refused reason=unexpected-archive-id expected=%u actual=%u rollback=complete", Pack().expectedArchiveId, archiveId);
             return;
@@ -1728,6 +1735,7 @@ namespace
                 // Releasing in reverse and restoring the saved cursor makes
                 // this failed pre-IDE allocation indistinguishable from no run.
                 rollbackTxdAllocations();
+                ReleaseNativeWorldCacheLease();
                 g_state = EState::Refused;
                 Log("registrar=refused reason=TXD-allocation-plan-mismatch name=%s expected=%u actual=%d rollback=complete restoredFirstFree=%d", name.c_str(),
                     expected, allocated, ide.txdOriginalFirstFree);
@@ -1739,21 +1747,23 @@ namespace
         {
             const int actualCursor = txdPool->m_nFirstFree;
             rollbackTxdAllocations();
+            ReleaseNativeWorldCacheLease();
             g_state = EState::Refused;
             Log("registrar=refused reason=TXD-allocation-cursor-mismatch expected=%u actual=%d rollback=complete restoredFirstFree=%d", expectedFinalCursor,
                 actualCursor, ide.txdOriginalFirstFree);
             return;
         }
 
-        // LoadObjectTypes reopens the IDE rather than consuming the validated
-        // bytes. This is the IDE TOCTOU boundary and the irreversible commit
-        // point: it constructs model entries and binds deterministic TXDs.
+        // LoadObjectTypes reopens the IDE rather than consuming validator
+        // bytes. The pending cache lease now holds that exact path immutable
+        // across this irreversible commit point.
         reinterpret_cast<void(__cdecl*)(const char*)>(LOAD_OBJECT_TYPES)(idePath.c_str());
         ValidateIdePostconditions(ide);
         reinterpret_cast<void(__cdecl*)(const char*, int32_t)>(LOAD_NAMED_CD_DIRECTORY)(imgPath.c_str(), archiveId);
 
         ValidatePostconditions(ide, archiveId);
         EnableOwnedIplDynamicStreaming(ide);
+        CommitNativeWorldCacheLease();
         g_state = EState::Active;
         std::ostringstream iplSlots;
         for (unsigned int index = 0; index < Pack().iplCount; ++index)
@@ -1796,6 +1806,7 @@ void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
         g_state = EState::Refused;
         return;
     }
+
     if (!CNativeModelStoreSA::IsInstalled() || !streaming)
     {
         Log("registrar=refused reason=native-model-store-foundation-inactive");
@@ -1809,11 +1820,57 @@ void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
         return;
     }
 
+    SNativeWorldCacheRequestSA cacheRequest;
+    cacheRequest.format = g_manifest.format;
+    cacheRequest.sourceRelativeDirectory = g_policy->relativeDirectory;
+    cacheRequest.packId = g_manifest.packId;
+    cacheRequest.manifestFileName = g_policy->runtimeManifestFileName;
+    cacheRequest.sourceManifestSha256 = g_manifest.manifestSha256;
+    cacheRequest.sourceManifestBytes = g_manifest.manifestBytes;
+    cacheRequest.maximumManifestBytes = g_policy->maximumManifestBytes;
+    cacheRequest.ide = {g_manifest.ideFileName, g_manifest.ideSha256, g_manifest.ideBytes};
+    cacheRequest.img = {g_manifest.imgFileName, g_manifest.imgSha256, g_manifest.imgBytes};
+    cacheRequest.contentId = GenerateNativeWorldContentId(cacheRequest);
+    bool cacheHit = false;
+    if (!PrepareAndLockNativeWorldCache(cacheRequest, g_activeDirectory, cacheHit, descriptorError))
+    {
+        Log("registrar=refused reason=native-world-cache-failed detail=%s", descriptorError.c_str());
+        g_state = EState::Refused;
+        return;
+    }
+
+    // Reparse the canonical published manifest while its file is locked. Its
+    // semantic identity must equal the parsed seed even when seed JSON layout
+    // differed; no seed-directory path survives beyond this point.
+    const std::string expectedContentId = cacheRequest.contentId;
+    const SString     cachedManifestPath = SString("%s\\%s", g_activeDirectory.c_str(), g_policy->runtimeManifestFileName);
+    if (!LoadRuntimeManifest(cachedManifestPath, descriptorError))
+    {
+        ReleaseNativeWorldCacheLease();
+        Log("registrar=refused reason=cached-manifest-invalid detail=%s", descriptorError.c_str());
+        g_state = EState::Refused;
+        return;
+    }
+    SNativeWorldCacheRequestSA cachedIdentity = cacheRequest;
+    cachedIdentity.format = g_manifest.format;
+    cachedIdentity.packId = g_manifest.packId;
+    cachedIdentity.ide = {g_manifest.ideFileName, g_manifest.ideSha256, g_manifest.ideBytes};
+    cachedIdentity.img = {g_manifest.imgFileName, g_manifest.imgSha256, g_manifest.imgBytes};
+    if (GenerateNativeWorldContentId(cachedIdentity) != expectedContentId)
+    {
+        ReleaseNativeWorldCacheLease();
+        Log("registrar=refused reason=cached-manifest-content-identity-mismatch expected=%s", expectedContentId.c_str());
+        g_state = EState::Refused;
+        return;
+    }
+    Log("cache=ready disposition=%s contentId=%s manifestSha256=%s directory=%s lease=pending", cacheHit ? "hit" : "published", expectedContentId.c_str(),
+        g_manifest.manifestSha256.c_str(), g_activeDirectory.c_str());
+
     g_streaming = streaming;
     HookInstallCall(LOAD_CD_DIRECTORY_CALL, reinterpret_cast<DWORD>(&LoadCdDirectoryHook));
     g_state = EState::Hooked;
-    Log("registrar=hooked call=0x%08X pack=%s manifest=%s runtimeFiles=%s,%s", LOAD_CD_DIRECTORY_CALL, Pack().relativeDirectory,
-        g_policy->runtimeManifestFileName, Pack().ideFileName, Pack().imgFileName);
+    Log("registrar=hooked call=0x%08X pack=%s manifest=%s runtimeFiles=%s,%s", LOAD_CD_DIRECTORY_CALL, Pack().directoryPath, g_policy->runtimeManifestFileName,
+        Pack().ideFileName, Pack().imgFileName);
 }
 
 unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()

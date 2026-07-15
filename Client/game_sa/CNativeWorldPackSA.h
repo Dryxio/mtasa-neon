@@ -92,6 +92,8 @@ struct SNativeWorldPackRuntimeDataSA
 {
     unsigned int format{};
     std::string  packId;
+    std::string  manifestSha256;
+    unsigned int manifestBytes{};
     std::string  ideFileName;
     std::string  imgFileName;
     std::string  colFileName;
@@ -120,7 +122,7 @@ struct SNativeWorldPackDescriptorSA
     const char* displayName;
     const char* logPrefix;
     const char* featureEnvironment;
-    const char* relativeDirectory;
+    const char* directoryPath;
     const char* ideFileName;
     const char* imgFileName;
     const char* colFileName;
