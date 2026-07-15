@@ -174,6 +174,9 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_SIMPLE_USE_GUN:
             pTaskSA = new CTaskSimpleUseGunSA;
             break;
+        case TASK_SIMPLE_GUN_CTRL:
+            pTaskSA = new CTaskSimpleGunControlSA;
+            break;
         case TASK_SIMPLE_FIGHT:
             pTaskSA = new CTaskSimpleFightSA;
             break;
@@ -229,6 +232,11 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         // GoTo
         case TASK_COMPLEX_WANDER:
             pTaskSA = new CTaskComplexWanderStandardSA;
+            break;
+        case TASK_COMPLEX_GO_TO_POINT_AND_STAND_STILL:
+            // Both verified 05D3 native variants expose the same task type, so
+            // one wrapper is sufficient when GTA creates or clones either one.
+            pTaskSA = new CTaskComplexGoToPointAndStandStillSA;
             break;
 
         // IK

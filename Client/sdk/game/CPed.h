@@ -238,6 +238,11 @@ public:
     virtual eWeaponSlot GetCurrentWeaponSlot() const = 0;
     virtual void        SetCurrentWeaponSlot(eWeaponSlot weaponSlot) = 0;
 
+    virtual std::uint8_t GetWeaponShootingRate() const noexcept = 0;
+    virtual void         SetWeaponShootingRate(std::uint8_t rate) noexcept = 0;
+    virtual std::uint8_t GetWeaponAccuracy() const noexcept = 0;
+    virtual void         SetWeaponAccuracy(std::uint8_t accuracy) noexcept = 0;
+
     virtual CVector* GetBonePosition(eBone bone, CVector* position) = 0;
     virtual CVector* GetTransformedBonePosition(eBone bone, CVector* position) = 0;
 

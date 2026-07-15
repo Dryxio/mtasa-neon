@@ -489,6 +489,35 @@ void CTaskSimpleUseGunSA::StartCountDown(unsigned char a, bool b)
     // clang-format on
 }
 
+CTaskSimpleGunControlSA::CTaskSimpleGunControlSA(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget, char nFiringTask,
+                                                 short nBurstLength, int iDuration)
+{
+    CreateTaskInterface(sizeof(CTaskSimpleGunControlSAInterface));
+    if (!IsValid())
+        return;
+
+    DWORD dwFunc = FUNC_CTaskSimpleGunControl__Constructor;
+    DWORD dwThisInterface = (DWORD)GetInterface();
+    DWORD dwTargetEntity = pTargetEntity ? (DWORD)pTargetEntity->GetInterface() : 0;
+    DWORD dwFiringTask = static_cast<DWORD>(static_cast<unsigned char>(nFiringTask));
+    DWORD dwBurstLength = static_cast<DWORD>(static_cast<unsigned short>(nBurstLength));
+    // Call GTA's verified constructor rather than reproducing its task state
+    // machine, so aiming, weapon use and cleanup retain native semantics.
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThisInterface
+        push    iDuration
+        push    dwBurstLength
+        push    dwFiringTask
+        push    pVecMoveTarget
+        push    pVecTarget
+        push    dwTargetEntity
+        call    dwFunc
+    }
+    // clang-format on
+}
+
 CTaskSimpleFightSA::CTaskSimpleFightSA(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod)
 {
     CreateTaskInterface(sizeof(CTaskSimpleFightSAInterface));

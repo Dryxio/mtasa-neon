@@ -123,6 +123,8 @@ class CObjectSA : public virtual CObject, public virtual CPhysicalSA
 private:
     unsigned char m_ucAlpha;
     bool          m_bIsAGangTag;
+    bool          m_bGangTagAlphaOverride = false;
+    unsigned char m_ucGangTagAlpha = 0;
     CVector       m_vecScale;
     bool          m_preRenderRequired = false;
 
@@ -133,7 +135,8 @@ public:
     CObjectSA(DWORD dwModel, bool bBreakingDisabled);
     ~CObjectSA();
 
-    CObjectSAInterface* GetObjectInterface() { return (CObjectSAInterface*)GetInterface(); }
+    CObjectSAInterface* GetObjectInterface() override { return static_cast<CObjectSAInterface*>(GetInterface()); }
+    CObjectSAInterface* GetObjectInterface() const { return static_cast<CObjectSAInterface*>(GetInterface()); }
 
     void  Explode();
     void  Break();
@@ -146,8 +149,13 @@ public:
     void          SetAlpha(unsigned char ucAlpha) { m_ucAlpha = ucAlpha; }
     unsigned char GetAlpha() { return m_ucAlpha; }
 
-    bool IsAGangTag() const { return m_bIsAGangTag; }
-    bool IsGlass();
+    bool          IsAGangTag() const { return m_bIsAGangTag; }
+    bool          IsGangTagModel() const;
+    bool          SetGangTagAlpha(unsigned char ucAlpha);
+    void          ClearGangTagAlphaOverride();
+    bool          HasGangTagAlphaOverride() const { return m_bGangTagAlphaOverride; }
+    unsigned char GetGangTagAlpha() const { return m_ucGangTagAlpha; }
+    bool          IsGlass();
 
     void     SetScale(float fX, float fY, float fZ);
     CVector* GetScale();

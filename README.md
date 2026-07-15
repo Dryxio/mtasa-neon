@@ -39,6 +39,8 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
+| Native ped task primitives | No direct resource API for these GTA tasks | Client-owned native go-to and coordinate-shooting tasks with verified combat parameters |
+| Per-object gang-tag rendering | Single-player tag gameplay disabled by MTA | Opt-in native Grove-material alpha for scripted tag objects without restoring gameplay progress |
 | SA-MP-style fast weapon strafe | Not available as a synchronized glitch | Optional `fastweaponstrafe` glitch, server-synchronized and disabled by default |
 | Neon diagnostics and stress tests | Not included | Reproducible resources for limits, rendering, extended-world systems, radar/F11 composition, model-registry lifecycle, IMG residency, native mirrors, and dense-entity profiling |
 
@@ -54,7 +56,7 @@ These maps are test cases, not built-in Neon worlds or engine dependencies. Thei
 
 ## Neon Lua API additions
 
-Neon has added 25 unique Lua function names since its fork point at `ab2313ddc3fef299e34217465f8a2f3ef1806c6a`, and now also exposes server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
+Neon has added 30 unique Lua function names since its fork point at `ab2313ddc3fef299e34217465f8a2f3ef1806c6a`, and now also exposes server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
 
 ### Extended native radar
 
@@ -127,6 +129,20 @@ These functions affect only the rendered procedural seabed. They do not remove t
 | `isPedUsingNativeWalkingStyle(ped)` | Client/server | Reports whether model-native walking-style selection is enabled for the ped. |
 
 The mode follows skin changes, entity recreation, joins, and streaming. The OOP equivalents are `ped:setUseNativeWalkingStyle(enabled)`, `ped:isUsingNativeWalkingStyle()`, and the `ped.usingNativeWalkingStyle` property.
+
+### Native ped tasks and gang-tag visuals
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `setPedGoTo(ped, target [, movement, radius, slowdownRadius, timeout])` | Client | Replaces the owned ped's primary task with GTA's native go-to-and-stand-still task; movement is `walk`, `run`, or `sprint`. |
+| `setPedShootAt(ped, target [, duration, burstLength])` | Client | Replaces the owned ped's primary task with GTA's native coordinate `GunControl` firing task. |
+| `setPedWeaponShootingRate(ped, rate)` | Client | Sets GTA's persistent 0-255 shooting-rate byte used by native gun tasks. |
+| `setPedWeaponAccuracy(ped, accuracy)` | Client | Sets GTA's persistent 0-255 weapon-accuracy byte used for shot spread. |
+| `setObjectGangTagAlpha(object, alpha)` | Client | Sets a logical 0-255 Grove-material alpha on a streamed native gang-tag object, or clears the opt-in override when `alpha` is `false`. |
+
+All five functions return a boolean. Ped functions require a living, streamed ped simulated by the calling client: the local player, a client-local ped, or a server ped for which that client is the current syncer. `setPedGoTo` defaults to `walk`, a `0.5` target radius, a `2.0` slowdown radius, and an untimed task; timeout `-1` selects the SCM-compatible 20-second timeout. `setPedShootAt` defaults to 1,000 ms and a burst length of five; every negative duration is indefinite, matching GTA's native task.
+
+The task calls replace the primary task but do not yet provide resource-owned handles, completion events, or reconstruction after syncer migration. Gang-tag alpha currently applies to streamed models `1490` and `1524` through `1531`; resources must reapply it after stream-in or game-object recreation and clear it with `false` when relinquishing a surviving object. The OOP equivalents are `ped:setGoTo(...)`, `ped:setShootAt(...)`, `ped:setWeaponShootingRate(rate)`, `ped:setWeaponAccuracy(accuracy)`, and `object:setGangTagAlpha(alpha)`. See [STORY_RUNTIME.md](./STORY_RUNTIME.md) for the verified GTA behavior and current architectural limits.
 
 ### Existing API extensions
 

@@ -48,6 +48,12 @@ public:
     virtual bool GetSkipAim() = 0;
 };
 
+class CTaskSimpleGunControl : public virtual CTaskSimple
+{
+public:
+    virtual ~CTaskSimpleGunControl() {};
+};
+
 class CTaskSimpleFight : public virtual CTaskSimple
 {
 public:

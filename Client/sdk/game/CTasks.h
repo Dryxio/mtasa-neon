@@ -22,6 +22,7 @@ class CTaskComplexEnterCarAsDriver;
 class CTaskComplexEnterCarAsPassenger;
 class CTaskComplexFacial;
 class CTaskComplexLeaveCar;
+class CTaskComplexGoToPointAndStandStill;
 class CTaskComplexSunbathe;
 class CTaskComplexUseMobilePhone;
 class CTaskComplexWanderStandard;
@@ -36,6 +37,7 @@ class CTaskSimpleDead;
 class CTaskSimpleDuck;
 class CTaskSimpleFight;
 class CTaskSimpleGangDriveBy;
+class CTaskSimpleGunControl;
 class CTaskSimpleIKChain;
 class CTaskSimpleIKLookAt;
 class CTaskSimpleIKManager;
@@ -74,14 +76,17 @@ public:
     virtual CTaskSimpleCarSetPedInAsPassenger* CreateTaskSimpleCarSetPedInAsPassenger(CVehicle* pVehicle, int iTargetDoor) = 0;
     virtual CTaskSimpleCarSetPedOut*           CreateTaskSimpleCarSetPedOut(CVehicle* pVehicle, int iTargetDoor, bool bSwitchOffEngine = false) = 0;
 
-    virtual CTaskComplexWanderStandard*      CreateTaskComplexWanderStandard(const int iMoveState, const char iDir, const bool bWanderSensibly = true) = 0;
-    virtual CTaskComplexEnterCarAsDriver*    CreateTaskComplexEnterCarAsDriver(CVehicle* pVehicle) = 0;
-    virtual CTaskComplexEnterCarAsPassenger* CreateTaskComplexEnterCarAsPassenger(CVehicle* pVehicle, const int iTargetSeat = 0,
-                                                                                  const bool bCarryOnAfterFallingOff = false) = 0;
-    virtual CTaskComplexEnterBoatAsDriver*   CreateTaskComplexEnterBoatAsDriver(CVehicle* pVehicle) = 0;
-    virtual CTaskComplexLeaveCar*            CreateTaskComplexLeaveCar(CVehicle* pVehicle, const int iTargetDoor = 0xFF, const int iDelayTime = 0,
-                                                                       const bool bSensibleLeaveCar = true, const bool bForceGetOut = false) = 0;
-    virtual CTaskComplexUseMobilePhone*      CreateTaskComplexUseMobilePhone(const int iDuration = -1) = 0;
+    virtual CTaskComplexWanderStandard*         CreateTaskComplexWanderStandard(const int iMoveState, const char iDir, const bool bWanderSensibly = true) = 0;
+    virtual CTaskComplexGoToPointAndStandStill* CreateTaskComplexGoToPointAndStandStill(const int iMoveState, const CVector& vecTarget,
+                                                                                        const float fTargetRadius, const float fSlowDownDistance,
+                                                                                        const int iTime = -2) = 0;
+    virtual CTaskComplexEnterCarAsDriver*       CreateTaskComplexEnterCarAsDriver(CVehicle* pVehicle) = 0;
+    virtual CTaskComplexEnterCarAsPassenger*    CreateTaskComplexEnterCarAsPassenger(CVehicle* pVehicle, const int iTargetSeat = 0,
+                                                                                     const bool bCarryOnAfterFallingOff = false) = 0;
+    virtual CTaskComplexEnterBoatAsDriver*      CreateTaskComplexEnterBoatAsDriver(CVehicle* pVehicle) = 0;
+    virtual CTaskComplexLeaveCar*               CreateTaskComplexLeaveCar(CVehicle* pVehicle, const int iTargetDoor = 0xFF, const int iDelayTime = 0,
+                                                                          const bool bSensibleLeaveCar = true, const bool bForceGetOut = false) = 0;
+    virtual CTaskComplexUseMobilePhone*         CreateTaskComplexUseMobilePhone(const int iDuration = -1) = 0;
 
     virtual CTaskSimpleDuck*    CreateTaskSimpleDuck(eDuckControlTypes nDuckControl, unsigned short nLengthOfDuck = 0,
                                                      unsigned short nUseShotsWhizzingEvents = -1) = 0;
@@ -122,5 +127,7 @@ public:
                                                                 char nDrivebyStyle, bool bSeatRHS) = 0;
     virtual CTaskSimpleUseGun*      CreateTaskSimpleUseGun(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength = 1,
                                                            unsigned char bAimImmediate = false) = 0;
+    virtual CTaskSimpleGunControl*  CreateTaskSimpleGunControl(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget,
+                                                               char nFiringTask, short nBurstLength, int iDuration) = 0;
     virtual CTaskSimpleFight*       CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000) = 0;
 };

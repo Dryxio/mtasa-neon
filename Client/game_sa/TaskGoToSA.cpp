@@ -71,3 +71,52 @@ CTaskComplexWanderStandardSA::CTaskComplexWanderStandardSA(const int iMoveState,
     }
     // clang-format on
 }
+
+CTaskComplexGoToPointAndStandStillSA::CTaskComplexGoToPointAndStandStillSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                           const float fSlowDownDistance)
+{
+    CreateTaskInterface(sizeof(CTaskComplexGoToPointAndStandStillSAInterface));
+    if (!IsValid())
+        return;
+
+    DWORD dwFunc = FUNC_CTaskComplexGoToPointAndStandStill__Constructor;
+    DWORD dwThisInterface = (DWORD)GetInterface();
+    // The final two flags reproduce TASK_GO_STRAIGHT_TO_COORD: do not force
+    // overshooting, and settle exactly at the requested point.
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThisInterface
+        push    1
+        push    0
+        push    fSlowDownDistance
+        push    fTargetRadius
+        push    vecTarget
+        push    iMoveState
+        call    dwFunc
+    }
+    // clang-format on
+}
+
+CTaskComplexGoToPointAndStandStillTimedSA::CTaskComplexGoToPointAndStandStillTimedSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                                     const float fSlowDownDistance, const int iTime)
+{
+    CreateTaskInterface(sizeof(CTaskComplexGoToPointAndStandStillTimedSAInterface));
+    if (!IsValid())
+        return;
+
+    DWORD dwFunc = FUNC_CTaskComplexGoToPointAndStandStillTimed__Constructor;
+    DWORD dwThisInterface = (DWORD)GetInterface();
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThisInterface
+        push    iTime
+        push    fSlowDownDistance
+        push    fTargetRadius
+        push    vecTarget
+        push    iMoveState
+        call    dwFunc
+    }
+    // clang-format on
+}

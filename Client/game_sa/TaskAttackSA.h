@@ -45,6 +45,7 @@ class CWeaponInfo;
 #define FUNC_CTaskSimpleUseGun_SetMoveAnim             0x61E3F0
 #define FUNC_CTaskSimpleUseGun_StartAnim               0x624F30
 #define FUNC_CTaskSimpleUseGun_StartCountDown          0x61E160
+#define FUNC_CTaskSimpleGunControl__Constructor        0x61F3F0
 
 // temporary
 class CAnimBlendAssociation;
@@ -159,6 +160,23 @@ public:
     void        SetMoveAnim(CPed* pPed);
     void        StartAnim(CPed* pPed);
     void        StartCountDown(unsigned char, bool);
+};
+
+// The verified GTA layout is intentionally opaque: Neon only constructs and
+// owns this task, while GTA remains responsible for all firing state changes.
+class CTaskSimpleGunControlSAInterface : public CTaskSimpleSAInterface
+{
+private:
+    unsigned char m_opaqueState[0x34];
+};
+static_assert(sizeof(CTaskSimpleGunControlSAInterface) == 0x3C, "Unexpected CTaskSimpleGunControlSAInterface size");
+
+class CTaskSimpleGunControlSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleGunControl
+{
+public:
+    CTaskSimpleGunControlSA() {};
+    CTaskSimpleGunControlSA(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget, char nFiringTask, short nBurstLength,
+                            int iDuration);
 };
 
 class CTaskSimpleFightSAInterface : public CTaskSimpleSAInterface

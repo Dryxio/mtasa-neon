@@ -13,7 +13,9 @@
 #include <game/CWeapon.h>
 #include "lua/CLuaFunctionParser.h"
 #include <game/CTasks.h>
+#include <game/TaskAttack.h>
 #include <game/TaskBasic.h>
+#include <game/TaskGoTo.h>
 #include <game/CAnimManager.h>
 #include "CLuaPedDefs.h"
 
@@ -62,6 +64,10 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedArmor", ArgumentParser<SetPedArmor>},
         {"setPedEnterVehicle", ArgumentParser<SetPedEnterVehicle>},
         {"setPedExitVehicle", ArgumentParser<SetPedExitVehicle>},
+        {"setPedWeaponShootingRate", ArgumentParser<SetPedWeaponShootingRate>},
+        {"setPedWeaponAccuracy", ArgumentParser<SetPedWeaponAccuracy>},
+        {"setPedGoTo", ArgumentParser<SetPedGoTo>},
+        {"setPedShootAt", ArgumentParser<SetPedShootAt>},
         {"setPedBleeding", ArgumentParser<SetPedBleeding>},
         {"playPedVoiceLine", ArgumentParser<PlayPedVoiceLine>},
 
@@ -215,6 +221,10 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "isReloadingWeapon", "isPedReloadingWeapon");
     lua_classfunction(luaVM, "setEnterVehicle", "setPedEnterVehicle");
     lua_classfunction(luaVM, "setExitVehicle", "setPedExitVehicle");
+    lua_classfunction(luaVM, "setWeaponShootingRate", "setPedWeaponShootingRate");
+    lua_classfunction(luaVM, "setWeaponAccuracy", "setPedWeaponAccuracy");
+    lua_classfunction(luaVM, "setGoTo", "setPedGoTo");
+    lua_classfunction(luaVM, "setShootAt", "setPedShootAt");
     lua_classfunction(luaVM, "setBleeding", "setPedBleeding");
     lua_classfunction(luaVM, "playVoiceLine", "playPedVoiceLine");
 
@@ -2601,6 +2611,92 @@ bool CLuaPedDefs::SetPedEnterVehicle(CClientPed* pPed, std::optional<CClientVehi
 bool CLuaPedDefs::SetPedExitVehicle(CClientPed* pPed)
 {
     return pPed->ExitVehicle();
+}
+
+bool CLuaPedDefs::SetPedWeaponShootingRate(CClientPed* ped, int rate)
+{
+    if (!ped->IsStreamedIn() || ped->IsDead() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || rate < 0 || rate > 255)
+        return false;
+
+    // Only the client that owns the ped may change the byte consumed by GTA's
+    // native GunControl task. Keeping this separate from setPedShootAt avoids a
+    // hidden persistent combat-stat side effect on otherwise generic tasks.
+    ped->GetGamePlayer()->SetWeaponShootingRate(static_cast<std::uint8_t>(rate));
+    return true;
+}
+
+bool CLuaPedDefs::SetPedWeaponAccuracy(CClientPed* ped, int accuracy)
+{
+    if (!ped->IsStreamedIn() || ped->IsDead() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || accuracy < 0 || accuracy > 255)
+        return false;
+
+    // Shot spread is evaluated inside GTA on the client simulating the ped.
+    // Restricting this persistent stat to that owner avoids divergent combat.
+    ped->GetGamePlayer()->SetWeaponAccuracy(static_cast<std::uint8_t>(accuracy));
+    return true;
+}
+
+bool CLuaPedDefs::SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
+                             std::optional<float> slowdownRadius, std::optional<int> timeout)
+{
+    if (!ped->IsStreamedIn() || ped->IsDead() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+        return false;
+
+    const float taskRadius = radius.value_or(0.5f);
+    const float taskSlowdownRadius = slowdownRadius.value_or(2.0f);
+    const int   taskTimeout = timeout.value_or(-2);
+    if (!std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) || !std::isfinite(taskRadius) ||
+        !std::isfinite(taskSlowdownRadius) || taskRadius <= 0.0f || taskSlowdownRadius < taskRadius || taskTimeout < -2)
+    {
+        return false;
+    }
+
+    int               moveState;
+    const std::string taskMovement = movement.value_or("walk");
+    if (stricmp(taskMovement.c_str(), "walk") == 0)
+        moveState = PedMoveState::PEDMOVE_WALK;
+    else if (stricmp(taskMovement.c_str(), "run") == 0)
+        moveState = PedMoveState::PEDMOVE_RUN;
+    else if (stricmp(taskMovement.c_str(), "sprint") == 0)
+        moveState = PedMoveState::PEDMOVE_SPRINT;
+    else
+        return false;
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexGoToPointAndStandStill(moveState, target, taskRadius, taskSlowdownRadius, taskTimeout);
+    if (!task)
+        return false;
+
+    // Only the client that owns this ped may replace its primary GTA task. Forcing
+    // replacement makes repeated script commands deterministic instead of waiting
+    // for an unrelated ambient task to become abortable first.
+    task->SetAsPedTask(ped->GetGamePlayer(), TASK_PRIORITY_PRIMARY, true);
+    return true;
+}
+
+bool CLuaPedDefs::SetPedShootAt(CClientPed* ped, CVector target, std::optional<int> duration, std::optional<int> burstLength)
+{
+    if (!ped->IsStreamedIn() || ped->IsDead() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+        return false;
+
+    const int taskDuration = duration.value_or(1000);
+    const int taskBurstLength = burstLength.value_or(5);
+    // The verified GTA constructor uses a zero XY pair as its "no coordinate"
+    // sentinel, so accepting (0, 0, z) would silently discard the Lua target.
+    if (!std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) || (target.fX == 0.0f && target.fY == 0.0f) ||
+        taskBurstLength < 1 || taskBurstLength > 32767)
+    {
+        return false;
+    }
+
+    auto* task = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
+                                                                 static_cast<short>(taskBurstLength), taskDuration);
+    if (!task)
+        return false;
+
+    // Gun control replaces the primary task so a syncer cannot leave an old
+    // movement or ambient task competing with the script-requested firing burst.
+    task->SetAsPedTask(ped->GetGamePlayer(), TASK_PRIORITY_PRIMARY, true);
+    return true;
 }
 
 bool CLuaPedDefs::killPedTask(CClientPed* ped, taskType taskType, std::uint8_t taskNumber, std::optional<bool> gracefully)

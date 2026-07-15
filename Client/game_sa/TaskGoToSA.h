@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <CVector.h>
 #include <game/TaskGoTo.h>
 #include "CVehicleSA.h"
 #include "TaskSA.h"
@@ -21,6 +22,9 @@ typedef DWORD CTaskUtilityLineUpPedWithCar;
 
 #define FUNC_CTaskComplexWanderStandard__Constructor 0x48E4F0
 #define FUNC_CTaskComplexWanderStandard__Destructor  0x48E600
+
+#define FUNC_CTaskComplexGoToPointAndStandStill__Constructor      0x668120
+#define FUNC_CTaskComplexGoToPointAndStandStillTimed__Constructor 0x6685E0
 
 #define FUNC_CTaskSimpleCarSetPedOut__PositionPedOutOfCollision 0x6479B0
 
@@ -88,4 +92,41 @@ class CTaskComplexWanderStandardSA : public virtual CTaskComplexWanderSA, public
 public:
     CTaskComplexWanderStandardSA() {};
     CTaskComplexWanderStandardSA(const int iMoveState, const unsigned char iDir, const bool bWanderSensibly = true);
+};
+
+// Keep these layouts explicit: GTA's constructors initialise memory allocated by
+// MTA, so allocating even one byte too little would corrupt the adjacent heap data.
+class CTaskComplexGoToPointAndStandStillSAInterface : public CTaskComplexSAInterface
+{
+public:
+    int           m_iMoveState;
+    CVector       m_vecTarget;
+    float         m_fTargetRadius;
+    float         m_fSlowDownDistance;
+    unsigned char m_ucFlags;
+    unsigned char m_ucPadding[3];
+};
+static_assert(sizeof(CTaskComplexGoToPointAndStandStillSAInterface) == 0x28, "Invalid CTaskComplexGoToPointAndStandStillSAInterface size");
+
+class CTaskComplexGoToPointAndStandStillTimedSAInterface : public CTaskComplexGoToPointAndStandStillSAInterface
+{
+public:
+    int        m_iTime;
+    CTaskTimer m_Timer;
+};
+static_assert(sizeof(CTaskComplexGoToPointAndStandStillTimedSAInterface) == 0x38, "Invalid CTaskComplexGoToPointAndStandStillTimedSAInterface size");
+
+class CTaskComplexGoToPointAndStandStillSA : public virtual CTaskComplexSA, public virtual CTaskComplexGoToPointAndStandStill
+{
+public:
+    CTaskComplexGoToPointAndStandStillSA() {};
+    CTaskComplexGoToPointAndStandStillSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance);
+};
+
+class CTaskComplexGoToPointAndStandStillTimedSA : public virtual CTaskComplexSA, public virtual CTaskComplexGoToPointAndStandStill
+{
+public:
+    CTaskComplexGoToPointAndStandStillTimedSA() {};
+    CTaskComplexGoToPointAndStandStillTimedSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance,
+                                              const int iTime);
 };

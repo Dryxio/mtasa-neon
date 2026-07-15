@@ -116,6 +116,11 @@ public:
     static bool SetPedEnterVehicle(CClientPed* pPed, std::optional<CClientVehicle*> pOptVehicle,
                                    std::optional<std::variant<bool, unsigned int>> seatOrPassenger);
     static bool SetPedExitVehicle(CClientPed* pPed);
+    static bool SetPedWeaponShootingRate(CClientPed* ped, int rate);
+    static bool SetPedWeaponAccuracy(CClientPed* ped, int accuracy);
+    static bool SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
+                           std::optional<float> slowdownRadius, std::optional<int> timeout);
+    static bool SetPedShootAt(CClientPed* ped, CVector target, std::optional<int> duration, std::optional<int> burstLength);
     static bool IsPedBleeding(CClientPed* ped);
     static bool SetPedBleeding(CClientPed* ped, bool bleeding);
 

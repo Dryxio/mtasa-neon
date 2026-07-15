@@ -3994,10 +3994,12 @@ static void __declspec(naked) HOOK_CVehicle_ResetAfterRender()
  ** Objects
  **/
 static bool bObjectIsAGangTag = false;
+static bool bObjectHasGangTagAlphaOverride = false;
 static void SetObjectAlpha()
 {
     bEntityHasAlpha = false;
     bObjectIsAGangTag = false;
+    bObjectHasGangTagAlphaOverride = false;
 
     if (dwAlphaEntity)
     {
@@ -4005,17 +4007,51 @@ static void SetObjectAlpha()
         CObject*                  pObject = pObjectClientEntity ? pObjectClientEntity->pEntity : nullptr;
         if (pObject)
         {
-            if (pObject->IsAGangTag())
+            bObjectIsAGangTag = pObject->IsAGangTag();
+            bObjectHasGangTagAlphaOverride = pObject->HasGangTagAlphaOverride();
+            if (bObjectIsAGangTag || bObjectHasGangTagAlphaOverride)
             {
                 // For some weird reason, gang tags don't appear unsprayed
                 // if we don't set their alpha to a value less than 255.
-                bObjectIsAGangTag = true;
                 GetAlphaAndSetNewValues(std::min(pObject->GetAlpha(), (unsigned char)254));
             }
             else
                 GetAlphaAndSetNewValues(pObject->GetAlpha());
         }
     }
+}
+
+static bool RenderObjectGangTagAlphaOverride(CObjectSAInterface* object)
+{
+    if (!object || !object->m_pRwObject)
+        return false;
+
+    auto* rwObject = reinterpret_cast<RwObject*>(object->m_pRwObject);
+    if (rwObject->type != RP_TYPE_ATOMIC)
+        return false;
+
+    SClientEntity<CObjectSA>* objectEntity = pGameInterface->GetPools()->GetObject(reinterpret_cast<DWORD*>(object));
+    CObject*                  gameObject = objectEntity ? objectEntity->pEntity : nullptr;
+    if (!gameObject || !gameObject->HasGangTagAlphaOverride())
+        return false;
+
+    auto* atomic = reinterpret_cast<RpAtomic*>(rwObject);
+    auto* geometry = atomic->geometry;
+    if (!geometry || !geometry->materials.materials || geometry->materials.entries <= 1 || !atomic->renderCallback)
+        return false;
+
+    auto* material = geometry->materials.materials[1];
+    if (!material)
+        return false;
+
+    // GTA 1.0's verified RenderTagForPC uses the low byte and the full
+    // 16-bit user value, yielding floor(alpha^2 / 255) for its 0..255 input.
+    // Reproducing that curve here avoids globally undoing MTA's CTagManager
+    // patches and affects only objects explicitly opted in by a resource.
+    const unsigned int alpha = gameObject->GetGangTagAlpha();
+    material->color.a = static_cast<unsigned char>((alpha * alpha) / 255);
+    atomic->renderCallback(atomic);
+    return true;
 }
 
 static void CObjectRenderWithTiming(CObjectSAInterface* object)
@@ -4025,12 +4061,13 @@ static void CObjectRenderWithTiming(CObjectSAInterface* object)
     SetObjectAlpha();
     TIMING_CHECKPOINT("+ObjRndr");
     {
-        if (bObjectIsAGangTag)
+        const bool renderedGangTagOverride = bObjectHasGangTagAlphaOverride && RenderObjectGangTagAlphaOverride(object);
+        if (!renderedGangTagOverride && bObjectIsAGangTag)
         {
             void(__cdecl * CTagManager__RenderTagForPC)(RpAtomic*) = reinterpret_cast<decltype(CTagManager__RenderTagForPC)>(0x49CE40);
             CTagManager__RenderTagForPC(reinterpret_cast<RpAtomic*>(object->m_pRwObject));
         }
-        else
+        else if (!renderedGangTagOverride)
         {
             void(__fastcall * CObject__Render)(CObjectSAInterface*) = reinterpret_cast<decltype(CObject__Render)>(0x534310);
             CObject__Render(object);

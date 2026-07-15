@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <game/CPed.h>
 #include <game/CWeapon.h>
 
@@ -353,6 +354,12 @@ public:
     int          unk_798;
 };
 static_assert(sizeof(CPedSAInterface) == 0x79C, "Invalid size for CPedSAInterface");
+// GunControl reads this exact byte to choose both burst length and the delay
+// between bursts, so a layout drift here would silently change scripted combat.
+static_assert(offsetof(CPedSAInterface, weaponShootingRate) == 0x719, "Invalid weapon shooting rate offset for CPedSAInterface");
+// GTA's weapon code reads accuracy directly from the following byte when it
+// calculates shot spread, so keep the verified executable layout explicit.
+static_assert(offsetof(CPedSAInterface, weaponAccuracy) == 0x71A, "Invalid weapon accuracy offset for CPedSAInterface");
 
 class CPedSA : public virtual CPed, public virtual CPhysicalSA
 {
@@ -410,6 +417,11 @@ public:
 
     eWeaponSlot GetCurrentWeaponSlot() const override { return static_cast<eWeaponSlot>(GetPedInterface()->bCurrentWeaponSlot); }
     void        SetCurrentWeaponSlot(eWeaponSlot weaponSlot) override;
+
+    std::uint8_t GetWeaponShootingRate() const noexcept override { return GetPedInterface()->weaponShootingRate; }
+    void         SetWeaponShootingRate(std::uint8_t rate) noexcept override { GetPedInterface()->weaponShootingRate = rate; }
+    std::uint8_t GetWeaponAccuracy() const noexcept override { return GetPedInterface()->weaponAccuracy; }
+    void         SetWeaponAccuracy(std::uint8_t accuracy) noexcept override { GetPedInterface()->weaponAccuracy = accuracy; }
 
     CVector* GetBonePosition(eBone bone, CVector* position) override;
     CVector* GetTransformedBonePosition(eBone bone, CVector* position) override;

@@ -265,6 +265,42 @@ void CObjectSA::CheckForGangTag()
             m_bIsAGangTag = false;
             break;
     }
+
+    // A model change must not carry a story/resource-owned visual override to
+    // an unrelated object which happens to reuse the same GTA object wrapper.
+    if (!IsGangTagModel())
+        ClearGangTagAlphaOverride();
+}
+
+bool CObjectSA::IsGangTagModel() const
+{
+    const auto* object = GetObjectInterface();
+    if (!object)
+        return false;
+
+    const auto model = object->m_nModelIndex;
+    return model == 1490 || (model >= 1524 && model <= 1531);
+}
+
+bool CObjectSA::SetGangTagAlpha(unsigned char ucAlpha)
+{
+    if (!IsGangTagModel())
+        return false;
+
+    // This state is deliberately separate from GTA's CTagManager. MTA keeps
+    // that single-player manager disabled, while resources still need a safe
+    // opt-in way to render an authoritative visual tag result.
+    m_ucGangTagAlpha = ucAlpha;
+    m_bGangTagAlphaOverride = true;
+    return true;
+}
+
+void CObjectSA::ClearGangTagAlphaOverride()
+{
+    // Resources must be able to relinquish the opt-in renderer without
+    // changing the object's model or reviving GTA's disabled tag manager.
+    m_bGangTagAlphaOverride = false;
+    m_ucGangTagAlpha = 0;
 }
 
 bool CObjectSA::IsGlass()

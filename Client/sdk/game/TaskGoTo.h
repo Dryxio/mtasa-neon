@@ -52,3 +52,12 @@ class CTaskComplexWanderStandard : public virtual CTaskComplexWander
 public:
     virtual ~CTaskComplexWanderStandard() {};
 };
+
+// Moves a ped to a world-space point and leaves it standing at the destination.
+// This public interface deliberately hides the GTA-specific timed/base variants so
+// callers can use one durable task contract while game_sa selects the native class.
+class CTaskComplexGoToPointAndStandStill : public virtual CTaskComplex
+{
+public:
+    virtual ~CTaskComplexGoToPointAndStandStill() {};
+};

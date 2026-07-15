@@ -19,6 +19,7 @@ class CTaskComplexEnterCarAsDriver;
 class CTaskComplexEnterCarAsPassenger;
 class CTaskComplexFacial;
 class CTaskComplexLeaveCar;
+class CTaskComplexGoToPointAndStandStill;
 class CTaskComplexSunbathe;
 class CTaskComplexUseMobilePhone;
 class CTaskComplexWanderStandard;
@@ -33,6 +34,7 @@ class CTaskSimpleDead;
 class CTaskSimpleDuck;
 class CTaskSimpleFight;
 class CTaskSimpleGangDriveBy;
+class CTaskSimpleGunControl;
 class CTaskSimpleIKChain;
 class CTaskSimpleIKLookAt;
 class CTaskSimpleJetPack;
@@ -59,12 +61,14 @@ public:
     CTaskSimpleCarSetPedInAsPassenger* CreateTaskSimpleCarSetPedInAsPassenger(CVehicle* pVehicle, int iTargetDoor);
     CTaskSimpleCarSetPedOut*           CreateTaskSimpleCarSetPedOut(CVehicle* pVehicle, int iTargetDoor, bool bSwitchOffEngine = false);
 
-    CTaskComplexWanderStandard*      CreateTaskComplexWanderStandard(const int iMoveState, const char iDir, const bool bWanderSensibly = true);
-    CTaskComplexEnterCarAsDriver*    CreateTaskComplexEnterCarAsDriver(CVehicle* pVehicle);
-    CTaskComplexEnterCarAsPassenger* CreateTaskComplexEnterCarAsPassenger(CVehicle* pVehicle, const int iTargetSeat = 0,
-                                                                          const bool bCarryOnAfterFallingOff = false);
-    CTaskComplexEnterBoatAsDriver*   CreateTaskComplexEnterBoatAsDriver(CVehicle* pVehicle);
-    CTaskComplexUseMobilePhone*      CreateTaskComplexUseMobilePhone(const int iDuration = -1);
+    CTaskComplexWanderStandard*         CreateTaskComplexWanderStandard(const int iMoveState, const char iDir, const bool bWanderSensibly = true);
+    CTaskComplexGoToPointAndStandStill* CreateTaskComplexGoToPointAndStandStill(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                                const float fSlowDownDistance, const int iTime = -2);
+    CTaskComplexEnterCarAsDriver*       CreateTaskComplexEnterCarAsDriver(CVehicle* pVehicle);
+    CTaskComplexEnterCarAsPassenger*    CreateTaskComplexEnterCarAsPassenger(CVehicle* pVehicle, const int iTargetSeat = 0,
+                                                                             const bool bCarryOnAfterFallingOff = false);
+    CTaskComplexEnterBoatAsDriver*      CreateTaskComplexEnterBoatAsDriver(CVehicle* pVehicle);
+    CTaskComplexUseMobilePhone*         CreateTaskComplexUseMobilePhone(const int iDuration = -1);
 
     CTaskComplexLeaveCar* CreateTaskComplexLeaveCar(CVehicle* pVehicle, const int iTargetDoor = 0xFF, const int iDelayTime = 0,
                                                     const bool bSensibleLeaveCar = true, const bool bForceGetOut = false);
@@ -106,6 +110,8 @@ public:
                                                         char nDrivebyStyle, bool bSeatRHS);
     CTaskSimpleUseGun*      CreateTaskSimpleUseGun(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength = 1,
                                                    unsigned char bAimImmediate = false);
+    CTaskSimpleGunControl*  CreateTaskSimpleGunControl(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget, char nFiringTask,
+                                                       short nBurstLength, int iDuration);
     CTaskSimpleFight*       CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000);
 
     static void StaticSetHooks();

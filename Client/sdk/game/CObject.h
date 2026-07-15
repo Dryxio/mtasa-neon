@@ -35,8 +35,13 @@ public:
     virtual void          SetAlpha(unsigned char ucAlpha) = 0;
     virtual unsigned char GetAlpha() = 0;
 
-    virtual bool IsAGangTag() const = 0;
-    virtual bool IsGlass() = 0;
+    virtual bool          IsAGangTag() const = 0;
+    virtual bool          IsGangTagModel() const = 0;
+    virtual bool          SetGangTagAlpha(unsigned char ucAlpha) = 0;
+    virtual void          ClearGangTagAlphaOverride() = 0;
+    virtual bool          HasGangTagAlphaOverride() const = 0;
+    virtual unsigned char GetGangTagAlpha() const = 0;
+    virtual bool          IsGlass() = 0;
 
     virtual void     SetScale(float fX, float fY, float fZ) = 0;
     virtual CVector* GetScale() = 0;

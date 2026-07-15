@@ -38,6 +38,7 @@ void CLuaObjectDefs::LoadFunctions()
         {"toggleObjectRespawn", ToggleObjectRespawn},
         {"setObjectMass", SetObjectMass},
         {"setObjectProperty", SetObjectProperty},
+        {"setObjectGangTagAlpha", ArgumentParser<SetObjectGangTagAlpha>},
     };
 
     // Add functions
@@ -68,6 +69,7 @@ void CLuaObjectDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setBreakable", "setObjectBreakable");
     lua_classfunction(luaVM, "setMass", "setObjectMass");
     lua_classfunction(luaVM, "setProperty", "setObjectProperty");
+    lua_classfunction(luaVM, "setGangTagAlpha", "setObjectGangTagAlpha");
 
     lua_classvariable(luaVM, "moving", nullptr, "isObjectMoving");
     lua_classvariable(luaVM, "scale", "setObjectScale", "getObjectScale");
@@ -724,4 +726,32 @@ bool CLuaObjectDefs::IsObjectRespawnable(CClientEntity* const pEntity) noexcept
         return false;
 
     return pObject->IsRespawnEnabled();
+}
+
+bool CLuaObjectDefs::SetObjectGangTagAlpha(CClientObject* const pObject, std::variant<bool, unsigned int> alpha)
+{
+    if (!pObject)
+        return false;
+
+    CObject* const pGameObject = pObject->GetGameObject();
+    if (!pGameObject)
+        return false;
+
+    if (std::holds_alternative<bool>(alpha))
+    {
+        // Only false has a useful boolean meaning: relinquish the opt-in
+        // renderer. Requiring an integer to enable it keeps accidental true
+        // values from silently becoming a fully painted tag.
+        if (std::get<bool>(alpha))
+            return false;
+
+        pGameObject->ClearGangTagAlphaOverride();
+        return true;
+    }
+
+    const unsigned int uiAlpha = std::get<unsigned int>(alpha);
+    if (uiAlpha > 255)
+        return false;
+
+    return pGameObject->SetGangTagAlpha(static_cast<unsigned char>(uiAlpha));
 }

@@ -43,4 +43,5 @@ public:
     LUA_DECLARE(ToggleObjectRespawn);
     LUA_DECLARE(SetObjectMass);
     LUA_DECLARE(SetObjectProperty);
+    static bool SetObjectGangTagAlpha(CClientObject* const pObject, std::variant<bool, unsigned int> alpha);
 };

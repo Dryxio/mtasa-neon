@@ -74,6 +74,27 @@ CTaskComplexWanderStandard* CTasksSA::CreateTaskComplexWanderStandard(const int 
     return pTask;
 }
 
+CTaskComplexGoToPointAndStandStill* CTasksSA::CreateTaskComplexGoToPointAndStandStill(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                                      const float fSlowDownDistance, const int iTime)
+{
+    // SCM uses -2 to request the non-timed native task. Its ordinary default
+    // timeout (-1) is normalised to 20 seconds before constructing GTA's timed
+    // variant, matching the verified 05D3 command path.
+    CTaskComplexGoToPointAndStandStill* pTask = nullptr;
+    if (iTime == -2)
+    {
+        pTask = NewTask<CTaskComplexGoToPointAndStandStillSA>(iMoveState, vecTarget, fTargetRadius, fSlowDownDistance);
+    }
+    else
+    {
+        const int iNativeTime = iTime == -1 ? 20000 : iTime;
+        pTask = NewTask<CTaskComplexGoToPointAndStandStillTimedSA>(iMoveState, vecTarget, fTargetRadius, fSlowDownDistance, iNativeTime);
+    }
+
+    m_pTaskManagementSystem->AddTask(dynamic_cast<CTaskSA*>(pTask));
+    return pTask;
+}
+
 CTaskComplexEnterCarAsDriver* CTasksSA::CreateTaskComplexEnterCarAsDriver(CVehicle* pVehicle)
 {
     CTaskComplexEnterCarAsDriverSA* pTask = NewTask<CTaskComplexEnterCarAsDriverSA>(pVehicle);
@@ -247,6 +268,14 @@ CTaskSimpleGangDriveBy* CTasksSA::CreateTaskSimpleGangDriveBy(CEntity* pTargetEn
 CTaskSimpleUseGun* CTasksSA::CreateTaskSimpleUseGun(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength, unsigned char bAimImmediate)
 {
     CTaskSimpleUseGunSA* pTask = NewTask<CTaskSimpleUseGunSA>(pTargetEntity, vecTarget, nCommand, nBurstLength, bAimImmediate);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskSimpleGunControl* CTasksSA::CreateTaskSimpleGunControl(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget, char nFiringTask,
+                                                            short nBurstLength, int iDuration)
+{
+    CTaskSimpleGunControlSA* pTask = NewTask<CTaskSimpleGunControlSA>(pTargetEntity, pVecTarget, pVecMoveTarget, nFiringTask, nBurstLength, iDuration);
     m_pTaskManagementSystem->AddTask(pTask);
     return pTask;
 }
