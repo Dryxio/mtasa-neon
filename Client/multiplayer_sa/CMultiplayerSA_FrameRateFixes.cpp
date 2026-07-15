@@ -17,6 +17,7 @@ constexpr float kOriginalTimeStep = 50.0f / 30.0f;
 
 static bool         g_fastWeaponStrafeEnabled = false;
 static float        g_fastWeaponStrafeTimeStep = 3.0f;
+static float        g_fastWeaponStrafeMoveThreshold = 0.1f;
 static unsigned int g_fastWeaponStrafeFrameCount = 0;
 static unsigned int g_fastWeaponStrafeSampleTime = 0;
 
@@ -41,6 +42,15 @@ static void UpdateFastWeaponStrafeTimeStep()
     const float        sampledTimeStep = sampledFrameRate > 16 ? 50.0f / static_cast<float>(sampledFrameRate) : 3.0f;
 
     g_fastWeaponStrafeTimeStep = sampledTimeStep * 3.0f;
+
+    // SA-MP's fixed 0.1 threshold works because its own frame pacing normally
+    // keeps ControlGunMove's first 0.07 * timestep step above that threshold.
+    // Preserve the exact threshold while that remains true. At higher MTA frame
+    // rates, retain SA-MP's 5% first-step headroom so SetMoveAnim cannot clear a
+    // cardinal movement command every frame before it starts accumulating.
+    const float firstMoveStep = g_fastWeaponStrafeTimeStep * 0.07f;
+    g_fastWeaponStrafeMoveThreshold = firstMoveStep >= 0.1f ? 0.1f : firstMoveStep * (20.0f / 21.0f);
+
     g_fastWeaponStrafeFrameCount = 0;
     g_fastWeaponStrafeSampleTime = currentTime;
 }
@@ -81,18 +91,15 @@ static void __declspec(naked) HOOK_CTaskSimpleUseGun__SetMoveAnim()
     __asm
     {
         cmp byte ptr [g_fastWeaponStrafeEnabled], 0
-        jne fixedThreshold
+        jne fastWeaponStrafeThreshold
 
         fld ds:[0xB7CB5C]           // CTimer::ms_fTimeStep
         fdiv kOriginalTimeStep      // 1.666f
         fmul ds:[0x858B1C]          // 0.1f
         jmp compareThreshold
 
-    fixedThreshold:
-        // SA-MP leaves GTA's original fixed 0.1 threshold untouched. MTA's
-        // high-FPS fix scales it down, which delays the zero crossing while
-        // reversing strafe direction.
-        fld ds:[0x858B1C]
+    fastWeaponStrafeThreshold:
+        fld g_fastWeaponStrafeMoveThreshold
 
     compareThreshold:
         fxch
