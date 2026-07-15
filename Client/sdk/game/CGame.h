@@ -61,6 +61,7 @@ class CStreaming;
 class CTasks;
 class CVisibilityPlugins;
 class CWaterManager;
+class CVehicle;
 class CWeapon;
 class CWeaponInfo;
 class CWeaponStat;
@@ -287,4 +288,14 @@ public:
     virtual void RestoreGameWorld() = 0;
 
     virtual bool SetBuildingPoolSize(size_t size) = 0;
+
+    // GTA's recorded-car player is global engine state rather than a vehicle
+    // task. Keep it behind the game interface so client.dll never calls fixed
+    // executable addresses or touches the 16-slot native pool directly.
+    virtual bool RequestVehicleRecording(int recordingId) = 0;
+    virtual bool IsVehicleRecordingLoaded(int recordingId) = 0;
+    virtual bool StartVehiclePlayback(CVehicle* vehicle, int recordingId) = 0;
+    virtual bool StopVehiclePlayback(CVehicle* vehicle) = 0;
+    virtual bool IsVehiclePlaybackActive(CVehicle* vehicle) = 0;
+    virtual bool RemoveVehicleRecording(int recordingId) = 0;
 };

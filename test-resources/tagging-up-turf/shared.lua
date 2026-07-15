@@ -53,7 +53,17 @@ TAGUP = {
         guardTimeout = 22000,
         postStartWait = 1000,
     },
-    sweetReturnPosition = {2385.44, -1529.33, 24.04, 90},
+    vehicleRecording207 = {
+        id = 207,
+        loadTimeout = 10000,
+        ownershipTimeout = 5000,
+        guardTimeout = 20000,
+        nominalElapsed = 7719,
+        minimumElapsed = 6500,
+        maximumElapsed = 12000,
+        endPosition = {2381.0720, -1528.4404, 23.6556},
+        serverEndRadius = 8,
+    },
     tags = {
         {id = 1, group = "idlewood", x = 2066.429688, y = -1652.476563, z = 14.28125, rotation = 179.5},
         {id = 2, group = "idlewood", x = 2046.40625, y = -1635.84375, z = 13.585938, rotation = 359.5},

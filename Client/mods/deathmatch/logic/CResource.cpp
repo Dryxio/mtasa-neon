@@ -13,6 +13,7 @@
 #define DECLARE_PROFILER_SECTION_CResource
 #include "profiler/SharedUtil.Profiler.h"
 #include "CServerIdManager.h"
+#include "luadefs/CLuaVehicleDefs.h"
 
 #include <limits>
 
@@ -98,6 +99,10 @@ CResource::CResource(unsigned short usNetID, const char* szResourceName, CClient
 
 CResource::~CResource()
 {
+    // Recorded-car buffers and active slots are native global state, not child
+    // elements. Stop and release them before this resource's Lua VM disappears.
+    CLuaVehicleDefs::ReleaseVehicleRecordings(this);
+
     // Custom CULL zones are client-native state rather than elements, so restore
     // vanilla edits and remove this resource's additions explicitly.
     if (g_pGame && g_pGame->GetWorld())

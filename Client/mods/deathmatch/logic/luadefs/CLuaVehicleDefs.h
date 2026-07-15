@@ -201,4 +201,13 @@ public:
 
     static bool SetSmokeTrailEnabled(CClientVehicle* vehicle, bool state);
     static bool IsSmokeTrailEnabled(CClientVehicle* vehicle) noexcept;
+
+    static bool RequestVehicleRecording(lua_State* luaVM, int recordingId);
+    static bool IsVehicleRecordingLoaded(int recordingId);
+    static bool StartVehiclePlayback(lua_State* luaVM, CClientVehicle* vehicle, int recordingId);
+    static bool StopVehiclePlayback(lua_State* luaVM, CClientVehicle* vehicle);
+    static bool IsVehiclePlaybackActive(CClientVehicle* vehicle);
+    static void PulseVehiclePlayback(CClientVehicle* vehicle);
+    static void OnVehiclePlaybackDestroy(CClientVehicle* vehicle);
+    static void ReleaseVehicleRecordings(class CResource* resource);
 };

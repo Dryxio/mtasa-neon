@@ -23,6 +23,7 @@
 #include <enums/VehicleType.h>
 #include <game_sa/CVehicleSA.h>
 #include <game_sa/CVehicleAudioSettingsEntrySA.h>
+#include "luadefs/CLuaVehicleDefs.h"
 
 using std::list;
 
@@ -2218,6 +2219,8 @@ bool CClientVehicle::IsNitroInstalled()
 
 void CClientVehicle::StreamedInPulse()
 {
+    CLuaVehicleDefs::PulseVehiclePlayback(this);
+
     // Make sure the vehicle doesn't go too far down
     if (m_pVehicle)
     {
@@ -3007,6 +3010,10 @@ void CClientVehicle::Destroy()
     // If the vehicle exists
     if (m_pVehicle)
     {
+        // A native playback stores a raw vehicle reference in GTA's global
+        // slot pool. Release it before the native entity is invalidated.
+        CLuaVehicleDefs::OnVehiclePlaybackDestroy(this);
+
 #ifdef MTA_DEBUG
         g_pCore->GetConsole()->Printf("CClientVehicle::Destroy %d", GetModel());
 #endif

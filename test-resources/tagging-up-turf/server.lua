@@ -20,6 +20,8 @@ local mission = {
     demoEnter = nil,
     ballasDepartureSerial = 0,
     ballasDeparture = nil,
+    vehiclePlaybackSerial = 0,
+    vehiclePlayback = nil,
 }
 
 -- The server owns every stage transition and spray increment so several clients can
@@ -258,6 +260,27 @@ local function cancelBallasDeparture(reason)
     end
 end
 
+local function cancelVehiclePlayback(reason)
+    local playback = mission.vehiclePlayback
+    if not playback then
+        return
+    end
+
+    mission.vehiclePlayback = nil
+    if isTimer(playback.guardTimer) then
+        killTimer(playback.guardTimer)
+    end
+    if isTimer(playback.startTimer) then
+        killTimer(playback.startTimer)
+    end
+    if isTimer(playback.completionTimer) then
+        killTimer(playback.completionTimer)
+    end
+    if isElement(mission.leader) then
+        triggerClientEvent(mission.leader, "tagup:vehiclePlaybackCancel", resourceRoot, playback.id, reason or "server_cancelled")
+    end
+end
+
 local function isPartyInVehicle()
     local vehicle = mission.entities.vehicle
     if not isElement(vehicle) then
@@ -344,38 +367,53 @@ local function currentGroupComplete()
     return true
 end
 
+local failMission
+
+local function startVehiclePlaybackReturn(extra)
+    local sweet, vehicle = mission.entities.sweet, mission.entities.vehicle
+    if mission.vehiclePlayback or not isElement(mission.leader) or not isElement(sweet) or not isElement(vehicle) then
+        return failMission("Sweet ou la Greenwood est indisponible pour le recording 207.")
+    end
+
+    mission.vehiclePlaybackSerial = mission.vehiclePlaybackSerial + 1
+    local playback = {
+        id = mission.vehiclePlaybackSerial,
+        ped = sweet,
+        vehicle = vehicle,
+        extra = extra,
+        requestedAt = getTickCount(),
+    }
+    mission.vehiclePlayback = playback
+    setElementSyncer(sweet, mission.leader, true, true)
+    setElementSyncer(vehicle, mission.leader, true, true)
+
+    playback.guardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.vehiclePlayback
+        if not mission.running or mission.stage ~= "rooftop" or not active or active.id ~= expectedId then
+            return
+        end
+        cancelVehiclePlayback("server_timeout")
+        failMission("Le recording 207 a depasse son delai de garde.")
+    end, TAGUP.vehicleRecording207.guardTimeout, 1, playback.id))
+
+    outputDebugString(("[tagging-up-turf] Requesting recorded-car return #%d (recording=%d) from %s"):format(
+                          playback.id, TAGUP.vehicleRecording207.id, getPlayerName(mission.leader)))
+    triggerClientEvent(mission.leader, "tagup:vehiclePlaybackPrepare", resourceRoot, playback.id, sweet, vehicle, TAGUP.vehicleRecording207)
+end
+
 local function advanceAfterTags(extra)
     if mission.stage == "tags_idlewood" then
         setStage("return_car", extra)
     elseif mission.stage == "tags_ballas" then
         setStage("rooftop", extra)
     elseif mission.stage == "rooftop" then
-        -- The original mission later replaces Wander with a recorded-car
-        -- playback. Until that playback service is ported, stop 05D2 and place
-        -- the same Greenwood at the SCM return-cut position so the existing
-        -- final drive remains playable without pretending this is native.
-        if isElement(mission.leader) then
-            triggerClientEvent(mission.leader, "tagup:stopBallasWander", resourceRoot)
-        end
-        rememberTimer(setTimer(function()
-            local vehicle = mission.entities.vehicle
-            if not mission.running or mission.stage ~= "rooftop" or not isElement(vehicle) then
-                return
-            end
-            local position = TAGUP.sweetReturnPosition
-            setElementPosition(vehicle, position[1], position[2], position[3])
-            setElementRotation(vehicle, 0, 0, position[4])
-            setElementVelocity(vehicle, 0, 0, 0)
-            warpSweetIntoFirstFreeSeat()
-            outputDebugString("[tagging-up-turf] Lua substitute: stopped 05D2 and placed the Greenwood at the future recorded-car return point")
-            setStage("return_after_roof", extra)
-        end, 400, 1))
+        startVehiclePlaybackReturn(extra)
     end
 end
 
 local finishMission
 
-local function failMission(reason)
+failMission = function(reason)
     if not mission.running or mission.finishing or mission.stage == "failed" then
         return
     end
@@ -386,6 +424,100 @@ local function failMission(reason)
         finishMission(false)
     end, 3500, 1))
 end
+
+addEvent("tagup:vehiclePlaybackResult", true)
+addEventHandler("tagup:vehiclePlaybackResult", resourceRoot, function(playbackId, ped, vehicle, result, details, elapsed)
+    local player = client
+    local playback = mission.vehiclePlayback
+    if source ~= resourceRoot or not mission.running or mission.stage ~= "rooftop" or player ~= mission.leader or not playback or
+        playback.id ~= tonumber(playbackId) or playback.ped ~= ped or playback.vehicle ~= vehicle or ped ~= mission.entities.sweet or
+        vehicle ~= mission.entities.vehicle then
+        outputDebugString("[tagging-up-turf] Rejected stale or unauthorized vehicle-playback result", 2)
+        return
+    end
+
+    outputDebugString(("[tagging-up-turf] Recording 207 #%d result=%s elapsed=%s (%s)"):format(
+                          playback.id, tostring(result), tostring(elapsed or "-"), tostring(details or ""):sub(1, 180)))
+
+    if result == "ready" then
+        if playback.ready or getElementSyncer(ped) ~= player or getElementSyncer(vehicle) ~= player then
+            cancelVehiclePlayback("invalid_ready")
+            return failMission("Le recording 207 n'a pas ete prepare par le double syncer attendu.")
+        end
+
+        playback.ready = true
+        -- SWEET1 clears Sweet's task and warps him into the driver seat before
+        -- 05EB. The vehicle itself is not placed here: recording frame zero
+        -- performs the native repositioning that replaces the old Lua teleport.
+        removePedFromVehicle(ped)
+        warpPedIntoVehicle(ped, vehicle, 0)
+        setElementSyncer(ped, player, true, true)
+        setElementSyncer(vehicle, player, true, true)
+        if getVehicleOccupant(vehicle, 0) ~= ped then
+            cancelVehiclePlayback("driver_warp_failed")
+            return failMission("Sweet n'a pas pu prendre le volant avant le recording 207.")
+        end
+
+        playback.startTimer = rememberTimer(setTimer(function(expectedId)
+            local active = mission.vehiclePlayback
+            if not active or active.id ~= expectedId or not isElement(mission.leader) then
+                return
+            end
+            triggerClientEvent(mission.leader, "tagup:vehiclePlaybackStart", resourceRoot, active.id, active.ped, active.vehicle,
+                               TAGUP.vehicleRecording207)
+        end, 200, 1, playback.id))
+        return
+    end
+
+    if result == "started" then
+        if not playback.ready or playback.started then
+            cancelVehiclePlayback("invalid_start")
+            return failMission("Le demarrage du recording 207 est incoherent.")
+        end
+        playback.started = true
+        playback.startedAt = getTickCount()
+        return
+    end
+
+    if result == "completed" then
+        if not playback.started or playback.completing then
+            cancelVehiclePlayback("invalid_completion")
+            return failMission("La fin du recording 207 est incoherente.")
+        end
+        playback.completing = true
+        local elapsedMs = tonumber(elapsed) or 0
+        playback.completionTimer = rememberTimer(setTimer(function(expectedId, reportedElapsed)
+            local active = mission.vehiclePlayback
+            if not active or active.id ~= expectedId or not isElement(active.vehicle) or not isElement(active.ped) then
+                return
+            end
+            local x, y, z = getElementPosition(active.vehicle)
+            local endpoint = TAGUP.vehicleRecording207.endPosition
+            local distance = getDistanceBetweenPoints3D(x, y, z, endpoint[1], endpoint[2], endpoint[3])
+            local valid = reportedElapsed >= TAGUP.vehicleRecording207.minimumElapsed and reportedElapsed <= TAGUP.vehicleRecording207.maximumElapsed and
+                              distance <= TAGUP.vehicleRecording207.serverEndRadius and getElementSyncer(active.vehicle) == mission.leader
+            if not valid then
+                cancelVehiclePlayback("invalid_completion")
+                return failMission(("Le recording 207 a fini hors profil (%.2f m, %d ms)."):format(distance, reportedElapsed))
+            end
+
+            local extra = active.extra
+            removePedFromVehicle(active.ped)
+            if not warpSweetIntoFirstFreeSeat() then
+                cancelVehiclePlayback("passenger_warp_failed")
+                return failMission("Sweet n'a pas pu reprendre sa place passager apres le recording 207.")
+            end
+            outputDebugString(("[tagging-up-turf] Recording 207 #%d completed at %.2f m after %d ms; Sweet restored as passenger"):format(
+                                  active.id, distance, reportedElapsed))
+            cancelVehiclePlayback("completed")
+            setStage("return_after_roof", extra)
+        end, 750, 1, playback.id, elapsedMs))
+        return
+    end
+
+    cancelVehiclePlayback(tostring(result))
+    failMission("Le recording 207 a echoue: " .. tostring(result) .. " (" .. tostring(details or "") .. ")")
+end)
 
 finishMission = function(passed, traceExtra)
     if not mission.running or mission.finishing then
@@ -398,6 +530,7 @@ finishMission = function(passed, traceExtra)
     cancelDemoShoot("mission_finished")
     cancelDemoEnter("mission_finished")
     cancelBallasDeparture("mission_finished")
+    cancelVehiclePlayback("mission_finished")
     clearMissionTimers()
     if passed then
         mission.stage = "complete"
@@ -437,6 +570,7 @@ finishMission = function(passed, traceExtra)
         mission.demoShoot = nil
         mission.demoEnter = nil
         mission.ballasDeparture = nil
+        mission.vehiclePlayback = nil
     end, delay, 1)
 end
 

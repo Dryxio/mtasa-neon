@@ -15,10 +15,41 @@
 #include <game/CVehicleAudioSettingsManager.h>
 #include "lua/CLuaFunctionParser.h"
 #include <CClientVehicleManager.h>
+#include <CDeathmatchVehicle.h>
+#include <CResource.h>
 
 #include "enums/HandlingProperty.h"
 
 #include <limits>
+
+namespace
+{
+    std::unordered_map<int, std::unordered_set<CResource*>> g_vehicleRecordingOwners;
+    std::unordered_map<CClientVehicle*, CResource*>         g_vehiclePlaybackOwners;
+
+    CResource* GetCallingResource(lua_State* luaVM)
+    {
+        return luaVM ? g_pClientGame->GetResourceManager()->GetResourceFromLuaState(luaVM) : nullptr;
+    }
+
+    bool IsVehicleLocallyOwned(CClientVehicle* vehicle)
+    {
+        if (vehicle->IsLocalEntity())
+            return true;
+
+        auto* deathmatchVehicle = dynamic_cast<CDeathmatchVehicle*>(vehicle);
+        return deathmatchVehicle && deathmatchVehicle->IsSyncing();
+    }
+
+    void ForgetFinishedVehiclePlayback(CClientVehicle* vehicle)
+    {
+        const auto owner = g_vehiclePlaybackOwners.find(vehicle);
+        if (owner != g_vehiclePlaybackOwners.end() && (!vehicle->GetGameVehicle() || !g_pGame->IsVehiclePlaybackActive(vehicle->GetGameVehicle())))
+        {
+            g_vehiclePlaybackOwners.erase(owner);
+        }
+    }
+}  // namespace
 
 void CLuaVehicleDefs::LoadFunctions()
 {
@@ -101,6 +132,8 @@ void CLuaVehicleDefs::LoadFunctions()
         {"getVehicleRotorState", ArgumentParser<GetVehicleRotorState>},
         {"getVehicleModelAudioSettings", ArgumentParser<GetVehicleModelAudioSettings>},
         {"getVehicleAudioSettings", ArgumentParser<GetVehicleAudioSettings>},
+        {"isVehicleRecordingLoaded", ArgumentParser<IsVehicleRecordingLoaded>},
+        {"isVehiclePlaybackActive", ArgumentParser<IsVehiclePlaybackActive>},
 
         // Vehicle set funcs
         {"createVehicle", CreateVehicle},
@@ -172,6 +205,9 @@ void CLuaVehicleDefs::LoadFunctions()
         {"resetVehicleModelAudioSettings", ArgumentParser<ResetVehicleModelAudioSettings>},
         {"setVehicleAudioSetting", ArgumentParser<SetVehicleAudioSetting>},
         {"resetVehicleAudioSettings", ArgumentParser<ResetVehicleAudioSettings>},
+        {"requestVehicleRecording", ArgumentParser<RequestVehicleRecording>},
+        {"startVehiclePlayback", ArgumentParser<StartVehiclePlayback>},
+        {"stopVehiclePlayback", ArgumentParser<StopVehiclePlayback>},
     };
 
     // Add functions
@@ -270,6 +306,7 @@ void CLuaVehicleDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "getEntryPoints", ArgumentParser<OOP_GetVehicleEntryPoints>);
     lua_classfunction(luaVM, "isSmokeTrailEnabled", "isVehicleSmokeTrailEnabled");
     lua_classfunction(luaVM, "getRotorState", "getVehicleRotorState");
+    lua_classfunction(luaVM, "isPlaybackActive", "isVehiclePlaybackActive");
 
     lua_classfunction(luaVM, "setComponentVisible", "setVehicleComponentVisible");
     lua_classfunction(luaVM, "setSirensOn", "setVehicleSirensOn");
@@ -323,6 +360,8 @@ void CLuaVehicleDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setRotorState", "setVehicleRotorState");
     lua_classfunction(luaVM, "resetAudioSettings", "resetVehicleAudioSettings");
     lua_classfunction(luaVM, "setAudioSetting", "setVehicleAudioSetting");
+    lua_classfunction(luaVM, "startPlayback", "startVehiclePlayback");
+    lua_classfunction(luaVM, "stopPlayback", "stopVehiclePlayback");
 
     lua_classfunction(luaVM, "resetComponentPosition", "resetVehicleComponentPosition");
     lua_classfunction(luaVM, "resetComponentRotation", "resetVehicleComponentRotation");
@@ -384,6 +423,7 @@ void CLuaVehicleDefs::AddClass(lua_State* luaVM)
     lua_classvariable(luaVM, "wheelScale", "setVehicleWheelScale", "getVehicleWheelScale");
     lua_classvariable(luaVM, "rotorState", "setVehicleRotorState", "getVehicleRotorState");
     lua_classvariable(luaVM, "audioSettings", nullptr, "getVehicleAudioSettings");
+    lua_classvariable(luaVM, "playbackActive", nullptr, "isVehiclePlaybackActive");
 
     lua_registerclass(luaVM, "Vehicle", "Element");
 }
@@ -4771,4 +4811,153 @@ std::unordered_map<std::string, float> CLuaVehicleDefs::GetVehicleAudioSettings(
     output["horn-volume-delta"] = pEntry.GetHornVolumeDelta();
 
     return output;
+}
+
+bool CLuaVehicleDefs::RequestVehicleRecording(lua_State* luaVM, int recordingId)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource)
+        return false;
+
+    auto& owners = g_vehicleRecordingOwners[recordingId];
+    if (owners.contains(resource))
+    {
+        // Natural playback completion releases GTA's CPath data. An owning
+        // resource may request the same recording again without first having
+        // to manufacture a separate release API.
+        return g_pGame->IsVehicleRecordingLoaded(recordingId) || g_pGame->RequestVehicleRecording(recordingId);
+    }
+    if (owners.empty() && !g_pGame->RequestVehicleRecording(recordingId))
+    {
+        g_vehicleRecordingOwners.erase(recordingId);
+        return false;
+    }
+    owners.insert(resource);
+    return true;
+}
+
+bool CLuaVehicleDefs::IsVehicleRecordingLoaded(int recordingId)
+{
+    return g_pGame->IsVehicleRecordingLoaded(recordingId);
+}
+
+bool CLuaVehicleDefs::StartVehiclePlayback(lua_State* luaVM, CClientVehicle* vehicle, int recordingId)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource || !vehicle || !vehicle->IsStreamedIn() || !vehicle->GetGameVehicle() || vehicle->IsBlown() || vehicle->IsFrozen())
+        return false;
+
+    const auto recordingOwners = g_vehicleRecordingOwners.find(recordingId);
+    if (recordingOwners == g_vehicleRecordingOwners.end() || !recordingOwners->second.contains(resource))
+        return false;
+
+    ForgetFinishedVehiclePlayback(vehicle);
+    if (g_vehiclePlaybackOwners.contains(vehicle))
+        return false;
+
+    // Recorded-car frames directly own the native vehicle transform. Only a
+    // client-local vehicle or the current unoccupied-vehicle syncer may start
+    // them; otherwise the authoritative owner's next packet would overwrite
+    // the path and different clients could run independent playback slots.
+    if (!IsVehicleLocallyOwned(vehicle))
+        return false;
+
+    // A script ped may occupy the driver seat, as SWEET1 does after clearing
+    // its driving task. A player driver would own a competing vehicle control
+    // stream and must never be combined with direct recorded playback.
+    CClientPed* driver = vehicle->GetOccupant(0);
+    if (driver && (driver->GetType() != CCLIENTPED || (!driver->IsLocalEntity() && !driver->IsSyncing())))
+        return false;
+
+    if (!g_pGame->StartVehiclePlayback(vehicle->GetGameVehicle(), recordingId))
+        return false;
+
+    g_vehiclePlaybackOwners.emplace(vehicle, resource);
+    return true;
+}
+
+bool CLuaVehicleDefs::StopVehiclePlayback(lua_State* luaVM, CClientVehicle* vehicle)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource || !vehicle || !vehicle->IsStreamedIn() || !vehicle->GetGameVehicle())
+        return false;
+
+    ForgetFinishedVehiclePlayback(vehicle);
+    const auto owner = g_vehiclePlaybackOwners.find(vehicle);
+    if (owner == g_vehiclePlaybackOwners.end() || owner->second != resource)
+        return false;
+
+    const bool stopped = g_pGame->StopVehiclePlayback(vehicle->GetGameVehicle());
+    if (stopped)
+        g_vehiclePlaybackOwners.erase(owner);
+    return stopped;
+}
+
+bool CLuaVehicleDefs::IsVehiclePlaybackActive(CClientVehicle* vehicle)
+{
+    if (!vehicle || !vehicle->IsStreamedIn() || !vehicle->GetGameVehicle())
+        return false;
+
+    ForgetFinishedVehiclePlayback(vehicle);
+    return g_pGame->IsVehiclePlaybackActive(vehicle->GetGameVehicle());
+}
+
+void CLuaVehicleDefs::PulseVehiclePlayback(CClientVehicle* vehicle)
+{
+    if (!vehicle || !g_vehiclePlaybackOwners.contains(vehicle))
+        return;
+
+    ForgetFinishedVehiclePlayback(vehicle);
+    const auto owner = g_vehiclePlaybackOwners.find(vehicle);
+    if (owner == g_vehiclePlaybackOwners.end() || IsVehicleLocallyOwned(vehicle))
+        return;
+
+    // A recording has no synchronized frame index, so ownership migration
+    // cannot resume safely. Stop the old local slot and let the resource abort
+    // or explicitly restart from frame zero.
+    if (vehicle->GetGameVehicle())
+        g_pGame->StopVehiclePlayback(vehicle->GetGameVehicle());
+    g_vehiclePlaybackOwners.erase(owner);
+}
+
+void CLuaVehicleDefs::OnVehiclePlaybackDestroy(CClientVehicle* vehicle)
+{
+    const auto owner = g_vehiclePlaybackOwners.find(vehicle);
+    if (owner == g_vehiclePlaybackOwners.end())
+        return;
+
+    if (vehicle->GetGameVehicle() && g_pGame->IsVehiclePlaybackActive(vehicle->GetGameVehicle()))
+        g_pGame->StopVehiclePlayback(vehicle->GetGameVehicle());
+    g_vehiclePlaybackOwners.erase(owner);
+}
+
+void CLuaVehicleDefs::ReleaseVehicleRecordings(CResource* resource)
+{
+    if (!resource)
+        return;
+
+    for (auto owner = g_vehiclePlaybackOwners.begin(); owner != g_vehiclePlaybackOwners.end();)
+    {
+        if (owner->second != resource)
+        {
+            ++owner;
+            continue;
+        }
+        CClientVehicle* vehicle = owner->first;
+        if (vehicle && vehicle->GetGameVehicle() && g_pGame->IsVehiclePlaybackActive(vehicle->GetGameVehicle()))
+            g_pGame->StopVehiclePlayback(vehicle->GetGameVehicle());
+        owner = g_vehiclePlaybackOwners.erase(owner);
+    }
+
+    for (auto owners = g_vehicleRecordingOwners.begin(); owners != g_vehicleRecordingOwners.end();)
+    {
+        owners->second.erase(resource);
+        if (!owners->second.empty())
+        {
+            ++owners;
+            continue;
+        }
+        g_pGame->RemoveVehicleRecording(owners->first);
+        owners = g_vehicleRecordingOwners.erase(owners);
+    }
 }

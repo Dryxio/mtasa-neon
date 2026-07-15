@@ -23,6 +23,8 @@ local state = {
     demoEnter = nil,
     ballasDeparture = nil,
     ballasWanderPed = nil,
+    vehiclePlayback = nil,
+    vehicleRecordingPreloaded = false,
     traceStarted = false,
     traceDemoTagActive = false,
     traceCurrentStep = nil,
@@ -66,6 +68,10 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "spawn_ballas", title = "CREATE BALLAS GROUP", detail = "LUA SUBSTITUTE · temporary ped AI"},
     {id = "ballas_tags", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · Ballas 0%"},
     {id = "rooftop_tag", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · rooftop 0%"},
+    {id = "request_carrec", title = "07C0 · REQUEST CAR RECORDING", detail = "NATIVE VERIFIED · recording 207"},
+    {id = "load_carrec", title = "07C1 · HAS CAR RECORDING LOADED", detail = "NATIVE VERIFIED · streamed RRR buffer"},
+    {id = "start_playback", title = "05EB · START RECORDED CAR", detail = "NATIVE VERIFIED · vehicle syncer only"},
+    {id = "playback_wait", title = "060E · CAR PLAYBACK ACTIVE", detail = "NATIVE VERIFIED · recording 207 / natural end"},
     {id = "return_after_roof", title = "REGROUP WITH SWEET", detail = "CO-OP CONDITION · party in vehicle"},
     {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "LUA CO-OP CONDITION · SCM-derived target / < 12 m"},
     {id = "mission_end", title = "MISSION PASSED", detail = "SERVER AUTHORITY · reward + restore"},
@@ -1051,6 +1057,201 @@ addEventHandler("tagup:stopBallasWander", resourceRoot, function()
     state.ballasWanderPed = nil
 end)
 
+local function clearVehiclePlayback(stopNative)
+    local playback = state.vehiclePlayback
+    if not playback then
+        return
+    end
+    if isTimer(playback.prepareTimer) then
+        killTimer(playback.prepareTimer)
+    end
+    if isTimer(playback.startTimer) then
+        killTimer(playback.startTimer)
+    end
+    if isTimer(playback.monitorTimer) then
+        killTimer(playback.monitorTimer)
+    end
+    if stopNative and isElement(playback.vehicle) and type(isVehiclePlaybackActive) == "function" and
+        isVehiclePlaybackActive(playback.vehicle) and type(stopVehiclePlayback) == "function" then
+        stopVehiclePlayback(playback.vehicle)
+    end
+    state.vehiclePlayback = nil
+end
+
+local function reportVehiclePlayback(result, details, terminal)
+    local playback = state.vehiclePlayback
+    if not playback then
+        return
+    end
+    local elapsed = playback.startedAt and getTickCount() - playback.startedAt or nil
+    triggerServerEvent("tagup:vehiclePlaybackResult", resourceRoot, playback.id, playback.ped, playback.vehicle, result, details, elapsed)
+    if terminal then
+        clearVehiclePlayback(false)
+    end
+end
+
+local function prepareVehiclePlayback()
+    local playback = state.vehiclePlayback
+    if not playback then
+        return
+    end
+    if not isElement(playback.ped) or not isElement(playback.vehicle) then
+        return reportVehiclePlayback("destroyed", "Sweet ou Greenwood absent pendant la preparation", true)
+    end
+    if not isElementStreamedIn(playback.ped) or not isElementStreamedIn(playback.vehicle) or not isElementSyncer(playback.ped) or
+        not isElementSyncer(playback.vehicle) then
+        if getTickCount() - playback.requestedAt < playback.profile.ownershipTimeout then
+            playback.prepareTimer = setTimer(prepareVehiclePlayback, 250, 1)
+            return
+        end
+        return reportVehiclePlayback("ownership_refused", "leader non double-syncer avant le recording", true)
+    end
+    if type(requestVehicleRecording) ~= "function" or type(isVehicleRecordingLoaded) ~= "function" or type(startVehiclePlayback) ~= "function" or
+        type(stopVehiclePlayback) ~= "function" or type(isVehiclePlaybackActive) ~= "function" then
+        return reportVehiclePlayback("api_unavailable", "API recorded-car absente du client Neon", true)
+    end
+
+    if isElement(state.ballasWanderPed) and isElementSyncer(state.ballasWanderPed) then
+        killPedTask(state.ballasWanderPed, "primary", 3, false)
+    end
+    state.ballasWanderPed = nil
+    if isPedDoingTask(playback.ped, BALLAS_WANDER_TASK) then
+        if getTickCount() - playback.requestedAt < playback.profile.ownershipTimeout then
+            playback.prepareTimer = setTimer(prepareVehiclePlayback, 50, 1)
+            return
+        end
+        return reportVehiclePlayback("wander_not_stopped", "TASK_COMPLEX_CAR_DRIVE_WANDER toujours active", true)
+    end
+
+    traceCurrent("request_carrec")
+    if not playback.requestAccepted then
+        if not requestVehicleRecording(playback.profile.id) then
+            return reportVehiclePlayback("request_refused", "requestVehicleRecording a retourne false", true)
+        end
+        playback.requestAccepted = true
+        traceProgress("request_carrec", 1, "NATIVE VERIFIED · recording 207 requested")
+        traceCurrent("load_carrec")
+    end
+    if not isVehicleRecordingLoaded(playback.profile.id) then
+        if getTickCount() - playback.requestedAt < playback.profile.loadTimeout then
+            playback.prepareTimer = setTimer(prepareVehiclePlayback, 100, 1)
+            return
+        end
+        return reportVehiclePlayback("load_timeout", "recording 207 non charge apres le delai", true)
+    end
+
+    traceProgress("load_carrec", 1, "NATIVE VERIFIED · recording 207 loaded")
+    playback.ready = true
+    reportVehiclePlayback("ready", "Wander arrete et recording 207 charge", false)
+end
+
+local function beginVehiclePlayback()
+    local playback = state.vehiclePlayback
+    if not playback or not playback.ready then
+        return
+    end
+    if not isElement(playback.ped) or not isElement(playback.vehicle) then
+        return reportVehiclePlayback("destroyed", "Sweet ou Greenwood absent avant 05EB", true)
+    end
+    if not isElementStreamedIn(playback.ped) or not isElementStreamedIn(playback.vehicle) or not isElementSyncer(playback.ped) or
+        not isElementSyncer(playback.vehicle) then
+        if getTickCount() - playback.startRequestedAt < playback.profile.ownershipTimeout then
+            playback.startTimer = setTimer(beginVehiclePlayback, 100, 1)
+            return
+        end
+        return reportVehiclePlayback("ownership_refused", "double sync perdu avant 05EB", true)
+    end
+    if getVehicleOccupant(playback.vehicle, 0) ~= playback.ped then
+        if getTickCount() - playback.startRequestedAt < playback.profile.ownershipTimeout then
+            playback.startTimer = setTimer(beginVehiclePlayback, 100, 1)
+            return
+        end
+        return reportVehiclePlayback("driver_missing", "Sweet non observe au volant avant 05EB", true)
+    end
+
+    traceCurrent("start_playback")
+    if not startVehiclePlayback(playback.vehicle, playback.profile.id) then
+        return reportVehiclePlayback("start_refused", "startVehiclePlayback a retourne false", true)
+    end
+    playback.startedAt = getTickCount()
+    playback.observedActive = isVehiclePlaybackActive(playback.vehicle)
+    traceProgress("start_playback", 1, "NATIVE VERIFIED · 05EB accepted by vehicle syncer")
+    traceCurrent("playback_wait")
+    reportVehiclePlayback("started", "05EB actif; attente de la fin naturelle", false)
+
+    playback.monitorTimer = setTimer(function()
+        local active = state.vehiclePlayback
+        if not active then
+            return
+        end
+        if not isElement(active.vehicle) or not isElement(active.ped) then
+            return reportVehiclePlayback("destroyed", "Sweet ou Greenwood detruit pendant 05EB", true)
+        end
+        if not isElementStreamedIn(active.vehicle) then
+            return reportVehiclePlayback("streamed_out", "Greenwood sortie du streaming pendant 05EB", true)
+        end
+        if not isElementSyncer(active.vehicle) then
+            if isVehiclePlaybackActive(active.vehicle) then
+                stopVehiclePlayback(active.vehicle)
+            end
+            return reportVehiclePlayback("ownership_lost", "sync vehicule perdu pendant 05EB", true)
+        end
+
+        local running = isVehiclePlaybackActive(active.vehicle)
+        active.observedActive = active.observedActive or running
+        local elapsed = getTickCount() - active.startedAt
+        traceProgress("playback_wait", math.min(0.99, elapsed / active.profile.nominalElapsed),
+                      ("NATIVE VERIFIED · recording 207 / %d ms"):format(elapsed))
+        if active.observedActive and not running then
+            traceProgress("playback_wait", 1, ("NATIVE VERIFIED · natural end after %d ms"):format(elapsed))
+            return reportVehiclePlayback("completed", "fin naturelle du recording 207 observee", true)
+        end
+        if elapsed > active.profile.maximumElapsed then
+            if running then
+                stopVehiclePlayback(active.vehicle)
+            end
+            return reportVehiclePlayback("playback_timeout", "recording 207 encore actif apres le plafond", true)
+        end
+    end, 50, 0)
+end
+
+addEvent("tagup:vehiclePlaybackPrepare", true)
+addEventHandler("tagup:vehiclePlaybackPrepare", resourceRoot, function(playbackId, ped, vehicle, profile)
+    clearVehiclePlayback(true)
+    if not state.active or state.stage ~= "rooftop" or localPlayer ~= state.leader or not isElement(ped) or not isElement(vehicle) or
+        type(profile) ~= "table" then
+        return
+    end
+    state.vehiclePlayback = {
+        id = playbackId,
+        ped = ped,
+        vehicle = vehicle,
+        profile = profile,
+        requestedAt = getTickCount(),
+    }
+    prepareVehiclePlayback()
+end)
+
+addEvent("tagup:vehiclePlaybackStart", true)
+addEventHandler("tagup:vehiclePlaybackStart", resourceRoot, function(playbackId, ped, vehicle, profile)
+    local playback = state.vehiclePlayback
+    if not playback or playback.id ~= playbackId or playback.ped ~= ped or playback.vehicle ~= vehicle or type(profile) ~= "table" then
+        return
+    end
+    playback.profile = profile
+    playback.startRequestedAt = getTickCount()
+    beginVehiclePlayback()
+end)
+
+addEvent("tagup:vehiclePlaybackCancel", true)
+addEventHandler("tagup:vehiclePlaybackCancel", resourceRoot, function(playbackId, reason)
+    local playback = state.vehiclePlayback
+    if playback and playback.id == playbackId then
+        outputDebugString(("[tagging-up-turf] Recording 207 #%d closed: %s"):format(playbackId, tostring(reason)))
+        clearVehiclePlayback(reason ~= "completed")
+    end
+end)
+
 addEvent("tagup:state", true)
 addEventHandler("tagup:state", resourceRoot, function(payload)
     local previousStage = state.stage
@@ -1102,6 +1303,11 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
         setStageNavigation(state.stage)
         playSoundFrontEnd(state.stage == "complete" and 43 or 11)
     end
+    if state.stage == "rooftop" and localPlayer == state.leader and not state.vehicleRecordingPreloaded and
+        type(requestVehicleRecording) == "function" then
+        state.vehicleRecordingPreloaded = requestVehicleRecording(TAGUP.vehicleRecording207.id)
+        outputDebugString(("[tagging-up-turf] Recording 207 rooftop preload: %s"):format(tostring(state.vehicleRecordingPreloaded)))
+    end
     if state.stage == "tags_ballas" and payload.enemies then
         traceCurrent("ballas_tags")
     end
@@ -1115,6 +1321,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     clearDemoShoot(true)
     clearSweetReturnEnter(true)
     clearBallasDeparture(true)
+    clearVehiclePlayback(true)
     stopIntroCamera()
     destroyNavigation()
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
@@ -1130,6 +1337,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.traceStarted = false
     state.traceDemoTagActive = false
     state.traceCurrentStep = nil
+    state.vehicleRecordingPreloaded = false
     if type(TAGUP_TRACE) == "table" then
         TAGUP_TRACE.toggle(false)
         TAGUP_TRACE.reset()
@@ -1282,6 +1490,13 @@ setTimer(function()
 end, 180, 0)
 
 addEventHandler("onClientElementStreamOut", root, function()
+    if state.vehiclePlayback and (source == state.vehiclePlayback.ped or source == state.vehiclePlayback.vehicle) then
+        if isElement(state.vehiclePlayback.vehicle) and isVehiclePlaybackActive(state.vehiclePlayback.vehicle) then
+            stopVehiclePlayback(state.vehiclePlayback.vehicle)
+        end
+        reportVehiclePlayback("streamed_out", "Sweet ou Greenwood sorti du streaming pendant 05EB", true)
+        return
+    end
     if state.demoLeave and (source == state.demoLeave.ped or source == state.demoLeave.vehicle) then
         reportDemoLeave("streamed_out", "Sweet ou la Greenwood est sorti du streaming pendant la task")
         return
@@ -1326,6 +1541,7 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     clearDemoShoot(true)
     clearSweetReturnEnter(true)
     clearBallasDeparture(true)
+    clearVehiclePlayback(true)
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
         setPedMissionActor(state.sweet, false)
     end

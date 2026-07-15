@@ -1,0 +1,5 @@
+<meta>
+    <info author="Neon" name="Native vehicle recording test" type="script" version="0.1.0" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>

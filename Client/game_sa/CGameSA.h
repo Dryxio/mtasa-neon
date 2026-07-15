@@ -319,6 +319,13 @@ public:
 
     bool SetBuildingPoolSize(size_t size);
 
+    bool RequestVehicleRecording(int recordingId) override;
+    bool IsVehicleRecordingLoaded(int recordingId) override;
+    bool StartVehiclePlayback(CVehicle* vehicle, int recordingId) override;
+    bool StopVehiclePlayback(CVehicle* vehicle) override;
+    bool IsVehiclePlaybackActive(CVehicle* vehicle) override;
+    bool RemoveVehicleRecording(int recordingId) override;
+
 private:
     std::unique_ptr<CPools>           m_Pools;
     CPlayerInfo*                      m_pPlayerInfo;

@@ -69,6 +69,49 @@ unsigned int& CGameSA::ClumpOffset = *(unsigned int*)0xB5F878;
 
 unsigned int OBJECTDYNAMICINFO_MAX = *(uint32_t*)0x59FB4C != 0x90909090 ? *(uint32_t*)0x59FB4C : 160;  // default: 160
 
+namespace
+{
+    constexpr std::uintptr_t VEHICLE_RECORDING_PATHS = 0x97D880;
+    constexpr std::uintptr_t VEHICLE_RECORDING_COUNT = 0x97F630;
+    constexpr std::uintptr_t VEHICLE_PLAYBACK_ACTIVE = 0x97D6F0;
+    constexpr std::size_t    VEHICLE_RECORDING_PATH_SIZE = 0x10;
+    constexpr int            MAX_VEHICLE_RECORDINGS = 475;
+    constexpr int            MAX_VEHICLE_PLAYBACKS = 16;
+
+    constexpr std::uintptr_t FUNC_RequestVehicleRecording = 0x45A020;
+    constexpr std::uintptr_t FUNC_RemoveVehicleRecording = 0x45A0A0;
+    constexpr std::uintptr_t FUNC_IsVehicleRecordingLoaded = 0x45A060;
+    constexpr std::uintptr_t FUNC_StartVehiclePlayback = 0x45A980;
+    constexpr std::uintptr_t FUNC_StopVehiclePlayback = 0x45A280;
+    constexpr std::uintptr_t FUNC_IsVehiclePlaybackActive = 0x4594C0;
+
+    bool IsKnownVehicleRecording(int recordingId)
+    {
+        const int count = *reinterpret_cast<const int*>(VEHICLE_RECORDING_COUNT);
+        if (count <= 0 || count > MAX_VEHICLE_RECORDINGS)
+            return false;
+
+        for (int index = 0; index < count; ++index)
+        {
+            const auto path = VEHICLE_RECORDING_PATHS + index * VEHICLE_RECORDING_PATH_SIZE;
+            if (*reinterpret_cast<const int*>(path) == recordingId)
+                return true;
+        }
+        return false;
+    }
+
+    bool HasFreeVehiclePlaybackSlot()
+    {
+        const auto active = reinterpret_cast<const bool*>(VEHICLE_PLAYBACK_ACTIVE);
+        for (int index = 0; index < MAX_VEHICLE_PLAYBACKS; ++index)
+        {
+            if (!active[index])
+                return true;
+        }
+        return false;
+    }
+}  // namespace
+
 /**
  * \todo allow the addon to change the size of the pools (see 0x4C0270 - CPools::Initialise) (in start game?)
  */
@@ -1248,4 +1291,63 @@ CObjectGroupPhysicalProperties* CGameSA::GetObjectGroupPhysicalProperties(unsign
         return &ObjectGroupsInfo[ucObjectGroup];
 
     return nullptr;
+}
+
+bool CGameSA::RequestVehicleRecording(int recordingId)
+{
+    // Vanilla silently falls back to streaming slot zero for unknown numbers.
+    // Reject them here so a resource typo cannot request or later play another
+    // recording by accident.
+    if (!IsKnownVehicleRecording(recordingId))
+        return false;
+
+    reinterpret_cast<void(__cdecl*)(int)>(FUNC_RequestVehicleRecording)(recordingId);
+    return true;
+}
+
+bool CGameSA::IsVehicleRecordingLoaded(int recordingId)
+{
+    if (!IsKnownVehicleRecording(recordingId))
+        return false;
+
+    return reinterpret_cast<bool(__cdecl*)(int)>(FUNC_IsVehicleRecordingLoaded)(recordingId);
+}
+
+bool CGameSA::StartVehiclePlayback(CVehicle* vehicle, int recordingId)
+{
+    if (!vehicle || !IsVehicleRecordingLoaded(recordingId) || IsVehiclePlaybackActive(vehicle) || !HasFreeVehiclePlaybackSlot())
+        return false;
+
+    // This is the direct 05EB path used by SWEET1. AI and looping variants are
+    // intentionally not inferred from optional Lua flags until their distinct
+    // lifecycle and synchronization behavior has its own conformance slice.
+    reinterpret_cast<void(__cdecl*)(CVehicleSAInterface*, int, bool, bool)>(FUNC_StartVehiclePlayback)(vehicle->GetVehicleInterface(), recordingId, false,
+                                                                                                       false);
+    return IsVehiclePlaybackActive(vehicle);
+}
+
+bool CGameSA::StopVehiclePlayback(CVehicle* vehicle)
+{
+    if (!vehicle || !IsVehiclePlaybackActive(vehicle))
+        return false;
+
+    reinterpret_cast<void(__cdecl*)(CVehicleSAInterface*)>(FUNC_StopVehiclePlayback)(vehicle->GetVehicleInterface());
+    return !IsVehiclePlaybackActive(vehicle);
+}
+
+bool CGameSA::IsVehiclePlaybackActive(CVehicle* vehicle)
+{
+    if (!vehicle)
+        return false;
+
+    return reinterpret_cast<bool(__cdecl*)(CVehicleSAInterface*)>(FUNC_IsVehiclePlaybackActive)(vehicle->GetVehicleInterface());
+}
+
+bool CGameSA::RemoveVehicleRecording(int recordingId)
+{
+    if (!IsKnownVehicleRecording(recordingId))
+        return false;
+
+    reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemoveVehicleRecording)(recordingId);
+    return true;
 }
