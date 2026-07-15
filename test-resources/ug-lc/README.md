@@ -23,6 +23,10 @@ The radar catalog has a separate lifetime: its 81 tiles are registered when
 the resource starts and remain available in the shared F11 atlas even while
 Liberty City's 3D models are not the locally resident city.
 
+When `city-residency-coordinator` is running, approaching Liberty City requests
+this same client loader automatically. `/lctest` remains a manual debugging
+override and no longer represents the normal arrival path.
+
 ## Commands
 
 - `/lctest` preloads Portland and teleports to Liberty City.

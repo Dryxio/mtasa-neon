@@ -21,6 +21,10 @@ The radar catalog has a separate lifetime: its 80 tiles are registered when
 the resource starts and remain available in the shared F11 atlas even while
 Vice City's 3D models are not the locally resident city.
 
+When `city-residency-coordinator` is running, approaching Vice City requests
+this same client loader automatically. `/vctest` remains a manual debugging
+override and no longer represents the normal arrival path.
+
 ## Commands
 
 - `/vctest` preloads Ocean Beach and teleports to Vice City.

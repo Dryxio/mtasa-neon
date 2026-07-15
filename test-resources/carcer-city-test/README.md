@@ -15,6 +15,10 @@ GTA's finite dynamic model/TXD slots.
 Its 63 radar tiles are registered for the resource lifetime, independently of
 that 3D residency, so Carcer remains visible in the shared F11 atlas.
 
+When `city-residency-coordinator` is running, approaching Carcer City requests
+this same client loader automatically. `/cctest` remains a manual debugging
+override and no longer represents the normal arrival path.
+
 Commands:
 
 - `/cctest` (or `/carcertest`) prepares Carcer City, then creates an Infernus.

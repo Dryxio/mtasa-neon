@@ -38,6 +38,8 @@
 #include "CHudSA.h"
 #include "CKeyGenSA.h"
 #include "CObjectGroupPhysicalPropertiesSA.h"
+#include "CNativeModelStoreSA.h"
+#include "CNativeBullworthSA.h"
 #include "CPadSA.h"
 #include "CPickupsSA.h"
 #include "CPlayerInfoSA.h"
@@ -78,6 +80,10 @@ CGameSA::CGameSA()
 
         // Find the game version and initialize m_eGameVersion so GetGameVersion() will return the correct value
         FindGameVersion();
+
+        // The opt-in native extended-world foundation must relocate GTA's
+        // inline model stores before CModelInfo::Initialise can populate them.
+        CNativeModelStoreSA::InstallFromEnvironment(m_eGameVersion);
 
         m_bAsyncScriptEnabled = false;
         m_bAsyncScriptForced = false;
@@ -134,6 +140,7 @@ CGameSA::CGameSA()
         m_pTasks = new CTasksSA((CTaskManagementSystemSA*)m_pTaskManagementSystem);
         m_pAnimManager = new CAnimManagerSA;
         m_pStreaming = new CStreamingSA;
+        CNativeBullworthSA::InstallFromEnvironment(static_cast<CStreamingSA*>(m_pStreaming));
         m_pVisibilityPlugins = new CVisibilityPluginsSA;
         m_pKeyGen = new CKeyGenSA;
         m_pRopes = new CRopesSA;
@@ -494,6 +501,8 @@ void CGameSA::Terminate()
 
 void CGameSA::Initialize()
 {
+    CNativeModelStoreSA::LogDiagnostics("CGameSA::Initialize");
+
     // Initialize garages
     m_pGarages->Initialize();
     SetupSpecialCharacters();
@@ -1143,6 +1152,13 @@ bool CGameSA::SetBuildingPoolSize(size_t size)
         static_cast<CBuildingRemovalSA*>(m_pBuildingRemoval)->DropCaches();
 
     bool status = m_Pools->GetBuildingsPool().Resize(size);
+
+    if (status && iCurrentBuildingPoolSize > 0 && size < static_cast<size_t>(iCurrentBuildingPoolSize))
+    {
+        // First let native IPL unloading remove every entity against the old
+        // capacity, then make persistent metadata safe before restoration.
+        static_cast<CIplStoreSA*>(m_pIplStore)->ClampBuildingRanges(size);
+    }
 
     if (shouldRemoveWorld)
         RestoreGameWorld();

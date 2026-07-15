@@ -1,0 +1,7 @@
+<meta>
+    <info author="MTA Neon" name="Automatic custom-city residency coordinator" type="script" version="1.0.0" />
+    <script src="policy.lua" type="client" cache="false" />
+    <script src="policy_tests.lua" type="client" cache="false" />
+    <script src="client.lua" type="client" cache="false" />
+    <export function="getCityResidencyStats" type="client" />
+</meta>

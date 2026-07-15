@@ -24,10 +24,12 @@ public:
 
     void SetDynamicIplStreamingEnabled(bool state);
     void SetDynamicIplStreamingEnabled(bool state, std::function<bool(CIplSAInterface* ipl)> filter);
+    void ClampBuildingRanges(std::size_t buildingPoolSize);
 
 private:
     void UnloadAndDisableStreaming(int iplId);
     void EnableStreaming(int iplId);
+    void ClampBuildingRange(CIplSAInterface& ipl, std::size_t buildingPoolSize);
 
 private:
     CPoolSAInterface<CIplSAInterface>** m_ppIplPoolInterface;

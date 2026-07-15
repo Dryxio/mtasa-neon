@@ -14,12 +14,41 @@
 #include "CIplStoreSA.h"
 #include "CGameSA.h"
 #include "CQuadTreeNodeSA.h"
+#include <game/CIplBuildingRange.h>
 
 static auto     gIplQuadTree = (CQuadTreeNodesSAInterface<CIplSAInterface>**)0x8E3FAC;
 extern CGameSA* pGame;
 
 CIplStoreSA::CIplStoreSA() : m_isStreamingEnabled(true), m_ppIplPoolInterface((CPoolSAInterface<CIplSAInterface>**)0x8E3FB0)
 {
+}
+
+void CIplStoreSA::ClampBuildingRange(CIplSAInterface& ipl, std::size_t buildingPoolSize)
+{
+    const SIplBuildingRange range = ClampIplBuildingRange({ipl.minBuildId, ipl.maxBuildId}, buildingPoolSize);
+    ipl.minBuildId = range.min;
+    ipl.maxBuildId = range.max;
+}
+
+void CIplStoreSA::ClampBuildingRanges(std::size_t buildingPoolSize)
+{
+    if (!m_ppIplPoolInterface)
+        return;
+
+    auto* pool = *m_ppIplPoolInterface;
+    if (!pool)
+        return;
+
+    // Every occupied IPL can outlive a server connection. After native unload
+    // and a successful shrink, make all ranges safe before streaming is restored.
+    for (int i = 0; i < pool->m_nSize; ++i)
+    {
+        if (!pool->IsContains(i))
+            continue;
+
+        if (auto* ipl = pool->GetObject(i))
+            ClampBuildingRange(*ipl, buildingPoolSize);
+    }
 }
 
 void CIplStoreSA::UnloadAndDisableStreaming(int iplId)
@@ -48,15 +77,7 @@ void CIplStoreSA::UnloadAndDisableStreaming(int iplId)
     // CStreaming::RemoveModel on the next reconnect. Keep the IPL metadata in
     // sync with the pool before handing it back to the native unload routine.
     const int buildingPoolSize = pGame->GetPools()->GetBuildingsPool().GetSize();
-    if (buildingPoolSize <= 0 || ipl->minBuildId >= buildingPoolSize)
-    {
-        ipl->minBuildId = std::numeric_limits<std::uint16_t>::max();
-        ipl->maxBuildId = std::numeric_limits<std::uint16_t>::max();
-    }
-    else if (ipl->maxBuildId >= buildingPoolSize)
-    {
-        ipl->maxBuildId = static_cast<std::uint16_t>(buildingPoolSize - 1);
-    }
+    ClampBuildingRange(*ipl, buildingPoolSize > 0 ? static_cast<std::size_t>(buildingPoolSize) : 0);
 
     typedef void*(__cdecl * Function_EnableStreaming)(int);
     ((Function_EnableStreaming)(0x405890))(iplId);

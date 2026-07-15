@@ -19,6 +19,10 @@ client is visiting.
 Its 15 radar tiles are registered for the resource lifetime, independently of
 that 3D residency, so Bullworth remains visible in the shared F11 atlas.
 
+When `city-residency-coordinator` is running, approaching Bullworth requests
+this same client loader automatically. `/bullytest` remains a manual debugging
+override and no longer represents the normal arrival path.
+
 ## Commands
 
 - `/bullytest` prepares the academy and teleports to Bullworth. (`/bwtest` is

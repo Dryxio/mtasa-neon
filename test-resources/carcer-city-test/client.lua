@@ -22,9 +22,19 @@ local placementCursor = 1
 local bootstrapStartedAt = 0
 local loadingFailed = false
 local prepareRequest = nil
+local residencyRequest = nil
 local readyReported = false
 local failLoad
 local finishPrepare
+local finishResidencyRequest
+
+-- The coordinator owns policy and fades, while this resource retains the IMG,
+-- model, TXD, collision, and placement lifetimes it knows how to tear down.
+addEvent("ugWorldCityResidencyState", false)
+
+local function reportResidencyState(state, requestToken, details)
+    triggerEvent("ugWorldCityResidencyState", root, CITY_ID, state, requestToken, details)
+end
 
 local function countKeys(values)
     local count = 0
@@ -142,14 +152,29 @@ local function releaseMap()
         end
     end
     activeTimers = {}
+    if prepareRequest then
+        reportResidencyState(
+            "manual-cancelled",
+            "manual:" .. tostring(prepareRequest.token),
+            "city residency switched"
+        )
+        triggerServerEvent("carcerCityPositionReady", resourceRoot, prepareRequest.token, false, "city residency switched")
+    end
     prepareRequest = nil
+    local residencyToken = residencyRequest and residencyRequest.token or nil
+    residencyRequest = nil
 
+    -- Break every high/low link before destroying either endpoint. Automatic
+    -- switching makes teardown frequent, so pairs() order must not decide
+    -- whether GTA briefly retains a pointer to an already-destroyed LOD.
     for placementIndex, building in pairs(createdBuildings) do
+        local placement = CARCER_CITY_PLACEMENTS[placementIndex]
+        if isElement(building) and placement and placement.lod then
+            setLowLODElement(building, nil)
+        end
+    end
+    for _, building in pairs(createdBuildings) do
         if isElement(building) then
-            local placement = CARCER_CITY_PLACEMENTS[placementIndex]
-            if placement and placement.lod then
-                setLowLODElement(building, nil)
-            end
             destroyElement(building)
         end
     end
@@ -166,9 +191,11 @@ local function releaseMap()
     -- The core drains pending GTA streaming requests before closing an IMG.
     if isElement(modelImage) then
         engineRemoveImage(modelImage)
+        destroyElement(modelImage)
     end
     if isElement(textureImage) then
         engineRemoveImage(textureImage)
+        destroyElement(textureImage)
     end
     modelImage = nil
     textureImage = nil
@@ -197,12 +224,14 @@ local function releaseMap()
     placementCursor = 1
     loadingFailed = false
     readyReported = false
+    reportResidencyState("standby", residencyToken, "dynamic slots released")
 end
 
 failLoad = function(reason)
     if loadingFailed then
         return
     end
+    local manualRequestFailed = prepareRequest ~= nil
     loadingFailed = true
     bootstrapStage = "failed"
     removeEventHandler("onClientPreRender", root, processBootstrap)
@@ -211,9 +240,22 @@ failLoad = function(reason)
     triggerServerEvent("carcerCityClientReady", resourceRoot, false, reason)
     if prepareRequest then
         triggerServerEvent("carcerCityPositionReady", resourceRoot, prepareRequest.token, false, reason)
+        reportResidencyState(
+            "manual-cancelled",
+            "manual:" .. tostring(prepareRequest.token),
+            "bootstrap failed: " .. tostring(reason)
+        )
         prepareRequest = nil
     end
-    fadeCamera(true, 0.5)
+    if residencyRequest then
+        reportResidencyState("failed", residencyRequest.token, reason)
+        residencyRequest = nil
+    end
+    -- Failed partial activation must return every slot before a retry.
+    releaseMap()
+    if manualRequestFailed then
+        fadeCamera(true, 0.5)
+    end
 end
 
 local function openImages()
@@ -458,6 +500,10 @@ local function finishLoad()
     triggerServerEvent("carcerCityClientReady", resourceRoot, true, details)
     if prepareRequest then
         prepareRequest.timer = rememberTimer(setTimer(finishPrepare, 350, 1))
+    elseif residencyRequest then
+        residencyRequest.timer = rememberTimer(setTimer(finishResidencyRequest, 350, 1))
+    else
+        reportResidencyState("ready", nil, details)
     end
 end
 
@@ -710,6 +756,11 @@ finishPrepare = function()
         local succeeded, result = pcall(enginePreloadWorldArea, request.x, request.y, request.z, "all")
         if not succeeded then
             triggerServerEvent("carcerCityPositionReady", resourceRoot, request.token, false, tostring(result))
+            reportResidencyState(
+                "manual-cancelled",
+                "manual:" .. tostring(request.token),
+                "native preload failed: " .. tostring(result)
+            )
             prepareRequest = nil
             fadeCamera(true, 0.5)
             return
@@ -726,10 +777,57 @@ finishPrepare = function()
     )
     outputDebugString("[Carcer IMG] prepare ready " .. details)
     triggerServerEvent("carcerCityPositionReady", resourceRoot, request.token, true, details)
+    -- The city is scene-ready, but automatic policy must stay suspended until
+    -- the server confirms the matching teleport commit.
+    reportResidencyState("manual-ready", "manual:" .. tostring(request.token), details)
+end
+
+finishResidencyRequest = function()
+    local request = residencyRequest
+    if not request then
+        return
+    end
+    forgetTimer(request.timer)
+    request.timer = nil
+
+    -- Preparation may begin kilometres before arrival. Preload the current
+    -- position at the final barrier so fast aircraft do not receive geometry
+    -- and collision for a stale approach point.
+    local preloadX, preloadY, preloadZ = getElementPosition(localPlayer)
+    if enginePreloadWorldArea then
+        local succeeded, result = pcall(enginePreloadWorldArea, preloadX, preloadY, preloadZ, "all")
+        if not succeeded then
+            reportResidencyState("failed", request.token, tostring(result))
+            residencyRequest = nil
+            releaseMap()
+            return
+        end
+    end
+
+    local details = ("elapsed=%dms placements=%d models=%d txds=%d memory=%.1fMiB preload=%.1f,%.1f,%.1f"):format(
+        getTickCount() - request.startedAt,
+        countKeys(createdBuildings),
+        countKeys(loadedModels),
+        countKeys(loadedTextures),
+        (engineStreamingGetUsedMemory and engineStreamingGetUsedMemory() or 0) / (1024 * 1024),
+        preloadX,
+        preloadY,
+        preloadZ
+    )
+    residencyRequest = nil
+    reportResidencyState("ready", request.token, details)
 end
 
 addEvent("carcerCityPreparePosition", true)
 addEventHandler("carcerCityPreparePosition", resourceRoot, function(x, y, z, token)
+    if residencyRequest then
+        if residencyRequest.timer and isTimer(residencyRequest.timer) then
+            killTimer(residencyRequest.timer)
+        end
+        forgetTimer(residencyRequest.timer)
+        reportResidencyState("failed", residencyRequest.token, "superseded by manual command")
+        residencyRequest = nil
+    end
     prepareRequest = {
         x = tonumber(x) or 0,
         y = tonumber(y) or 0,
@@ -738,6 +836,7 @@ addEventHandler("carcerCityPreparePosition", resourceRoot, function(x, y, z, tok
         startedAt = getTickCount(),
         reported = false,
     }
+    reportResidencyState("preparing", "manual:" .. tostring(token), "manual command")
     fadeCamera(false, 0.25)
     if bootstrapStage == "ready" then
         prepareRequest.timer = rememberTimer(setTimer(finishPrepare, 350, 1))
@@ -749,10 +848,9 @@ addEventHandler("carcerCityPreparePosition", resourceRoot, function(x, y, z, tok
     -- the remote custom city so GTA's finite dynamic DFF/TXD slots can be
     -- reused without unloading San Andreas.
     triggerEvent("ugWorldDeactivateCities", root, CITY_ID)
-    rememberTimer(setTimer(function()
-        forgetTimer(sourceTimer)
-        beginBootstrap()
-    end, 50, 1))
+    -- Local event dispatch is synchronous, so every previous owner has fully
+    -- released its slots before this bootstrap begins.
+    beginBootstrap()
 end)
 
 addEvent("carcerCityTeleportCommitted", true)
@@ -764,6 +862,7 @@ addEventHandler("carcerCityTeleportCommitted", resourceRoot, function(token)
         forgetTimer(prepareRequest.timer)
         prepareRequest = nil
     end
+    reportResidencyState("manual-committed", "manual:" .. tostring(token), "server teleport committed")
     rememberTimer(setTimer(function()
         forgetTimer(sourceTimer)
         fadeCamera(true, 0.5)
@@ -772,7 +871,10 @@ end)
 
 addEvent("carcerCityPrepareCancelled", true)
 addEventHandler("carcerCityPrepareCancelled", resourceRoot, function(token)
-    if not prepareRequest or prepareRequest.token == token then
+    -- Only the request that owns the manual fade may reveal the scene. A
+    -- delayed cancellation from a city released during a newer transition is
+    -- intentionally ignored.
+    if prepareRequest and prepareRequest.token == token then
         if prepareRequest and prepareRequest.timer and isTimer(prepareRequest.timer) then
             killTimer(prepareRequest.timer)
         end
@@ -780,6 +882,7 @@ addEventHandler("carcerCityPrepareCancelled", resourceRoot, function(token)
             forgetTimer(prepareRequest.timer)
         end
         prepareRequest = nil
+        reportResidencyState("manual-cancelled", "manual:" .. tostring(token), "server cancelled manual preparation")
         fadeCamera(true, 0.5)
     end
 end)
@@ -789,6 +892,61 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
     loadRadar()
     outputDebugString("[Carcer IMG] standby; activation locale par /cctest")
     triggerServerEvent("carcerCityClientReady", resourceRoot, true, "standby")
+    reportResidencyState("standby", nil, "resource started")
+end)
+
+addEvent("ugWorldRequestCityResidency", false)
+addEventHandler("ugWorldRequestCityResidency", root, function(cityId, requestToken, x, y, z)
+    if cityId ~= CITY_ID then
+        return
+    end
+    if prepareRequest then
+        reportResidencyState("failed", requestToken, "manual preparation owns this provider")
+        return
+    end
+    if residencyRequest then
+        if residencyRequest.timer and isTimer(residencyRequest.timer) then
+            killTimer(residencyRequest.timer)
+        end
+        forgetTimer(residencyRequest.timer)
+        if residencyRequest.token ~= requestToken then
+            reportResidencyState("failed", residencyRequest.token, "superseded by a newer residency generation")
+        end
+    end
+
+    if bootstrapStage == "failed" then
+        releaseMap()
+    end
+    residencyRequest = {
+        token = requestToken,
+        x = tonumber(x) or 0,
+        y = tonumber(y) or 0,
+        z = tonumber(z) or 0,
+        startedAt = getTickCount(),
+    }
+    reportResidencyState("preparing", requestToken, bootstrapStage)
+
+    if bootstrapStage == "ready" then
+        residencyRequest.timer = rememberTimer(setTimer(finishResidencyRequest, 350, 1))
+    elseif bootstrapStage == "standby" then
+        triggerEvent("ugWorldDeactivateCities", root, CITY_ID)
+        beginBootstrap()
+    end
+end)
+
+addEvent("ugWorldQueryCityResidency", false)
+addEventHandler("ugWorldQueryCityResidency", root, function()
+    if residencyRequest then
+        -- Registration can be complete while the final scene/collision preload
+        -- is still pending. Do not let a query publish premature readiness.
+        reportResidencyState("preparing", residencyRequest.token, "preloading")
+    elseif prepareRequest then
+        local state = prepareRequest.reported and "manual-ready" or "preparing"
+        reportResidencyState(state, "manual:" .. tostring(prepareRequest.token), "manual preload")
+    else
+        local state = bootstrapStage == "ready" and "ready" or bootstrapStage
+        reportResidencyState(state, nil, "query")
+    end
 end)
 
 addEvent("ugWorldDeactivateCities", false)
@@ -802,6 +960,11 @@ addEventHandler("ugWorldDeactivateCities", root, function(nextCity)
 end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
+    reportResidencyState(
+        "releasing",
+        residencyRequest and residencyRequest.token or (prepareRequest and ("manual:" .. tostring(prepareRequest.token)) or nil),
+        "resource stopping"
+    )
     releaseMap()
     releaseRadar()
 end)

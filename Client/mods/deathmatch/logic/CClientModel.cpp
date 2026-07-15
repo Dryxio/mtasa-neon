@@ -256,5 +256,4 @@ void CClientModel::RestoreTXD(CModelInfo* pModelInfo)
     }
 
     g_pGame->GetPools()->GetTxdPool().RemoveTextureDictonarySlot(uiTextureDictonarySlotID);
-    g_pGame->GetStreaming()->SetStreamingInfo(pModelInfo->GetModel(), 0, 0, 0, -1);
 }
