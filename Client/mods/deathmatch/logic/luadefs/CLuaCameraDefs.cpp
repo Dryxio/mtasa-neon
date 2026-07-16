@@ -15,8 +15,30 @@
 #include <game/CSettings.h>
 #include <game/CCam.h>
 #include <lua/CLuaFunctionParser.h>
+#include <CResource.h>
 
 #define MIN_CLIENT_REQ_SETCAMERATARGET_USE_ANY_ELEMENTS "1.5.8-9.20979"
+
+namespace
+{
+    CResource* GetCallingResource(lua_State* luaVM)
+    {
+        return luaVM ? g_pClientGame->GetResourceManager()->GetResourceFromLuaState(luaVM) : nullptr;
+    }
+
+    CClientCamera* GetOwnedScriptCamera(lua_State* luaVM, unsigned int token)
+    {
+        CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
+        CResource*     owner = GetCallingResource(luaVM);
+        return camera && camera->HasScriptCameraLease(owner, token) ? camera : nullptr;
+    }
+
+    bool IsScriptCameraActive()
+    {
+        CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
+        return camera && camera->IsScriptCameraActive();
+    }
+}
 
 void CLuaCameraDefs::LoadFunctions()
 {
@@ -45,6 +67,20 @@ void CLuaCameraDefs::LoadFunctions()
 
         {"shakeCamera", ArgumentParser<ShakeCamera>},
         {"resetShakeCamera", ArgumentParser<ResetShakeCamera>},
+
+        {"acquireScriptCamera", ArgumentParser<AcquireScriptCamera>},
+        {"releaseScriptCamera", ArgumentParser<ReleaseScriptCamera>},
+        {"setScriptCameraFixed", ArgumentParser<SetScriptCameraFixed>},
+        {"moveScriptCamera", ArgumentParser<MoveScriptCamera>},
+        {"trackScriptCamera", ArgumentParser<TrackScriptCamera>},
+        {"setScriptCameraPersist", ArgumentParser<SetScriptCameraPersist>},
+        {"resetScriptCamera", ArgumentParser<ResetScriptCamera>},
+        {"fadeScriptCamera", ArgumentParser<FadeScriptCamera>},
+        {"isScriptCameraFading", ArgumentParser<IsScriptCameraFading>},
+        {"isScriptCameraMoveRunning", ArgumentParser<IsScriptCameraMoveRunning>},
+        {"isScriptCameraTrackRunning", ArgumentParser<IsScriptCameraTrackRunning>},
+        {"setScriptCameraWidescreen", ArgumentParser<SetScriptCameraWidescreen>},
+        {"setScriptCameraNearClip", ArgumentParser<SetScriptCameraNearClip>},
     };
 
     // Add functions
@@ -168,6 +204,12 @@ unsigned char CLuaCameraDefs::GetCameraDrunkLevel()
 
 int CLuaCameraDefs::SetCameraMatrix(lua_State* luaVM)
 {
+    if (IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     CVector          vecPosition;
     CVector          vecLookAt;
     float            fRoll = 0.0f;
@@ -214,6 +256,12 @@ int CLuaCameraDefs::SetCameraMatrix(lua_State* luaVM)
 // Only when onfoot/invehicle
 int CLuaCameraDefs::SetCameraFieldOfView(lua_State* luaVM)
 {
+    if (IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     float            fFOV;
     eFieldOfViewMode eMode;
     bool             instant;
@@ -297,6 +345,12 @@ int CLuaCameraDefs::GetCameraFieldOfView(lua_State* luaVM)
 
 int CLuaCameraDefs::SetCameraTarget(lua_State* luaVM)
 {
+    if (IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     //  bool setCameraTarget ( element target = nil ) or setCameraTarget ( float x, float y, float z )
 
     CScriptArgReader argStream(luaVM);
@@ -362,6 +416,12 @@ int CLuaCameraDefs::SetCameraInterior(lua_State* luaVM)
 
 int CLuaCameraDefs::FadeCamera(lua_State* luaVM)
 {
+    if (IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     bool          bFadeIn = false;
     unsigned char ucRed = 0;
     unsigned char ucGreen = 0;
@@ -497,6 +557,12 @@ int CLuaCameraDefs::OOP_GetCameraPosition(lua_State* luaVM)
 
 int CLuaCameraDefs::OOP_SetCameraPosition(lua_State* luaVM)
 {
+    if (IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     CVector          vecPosition;
     CScriptArgReader argStream(luaVM);
     argStream.ReadVector3D(vecPosition);
@@ -529,6 +595,12 @@ int CLuaCameraDefs::OOP_GetCameraRotation(lua_State* luaVM)
 
 int CLuaCameraDefs::OOP_SetCameraRotation(lua_State* luaVM)
 {
+    if (IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     CVector          vecRotation;
     CScriptArgReader argStream(luaVM);
     argStream.ReadVector3D(vecRotation);
@@ -574,5 +646,126 @@ bool CLuaCameraDefs::ShakeCamera(float radius, std::optional<float> x, std::opti
 bool CLuaCameraDefs::ResetShakeCamera() noexcept
 {
     m_pManager->GetCamera()->ResetShakeCamera();
+    return true;
+}
+
+std::variant<unsigned int, bool> CLuaCameraDefs::AcquireScriptCamera(lua_State* luaVM, std::optional<bool> inhibitControls)
+{
+    CResource*     owner = GetCallingResource(luaVM);
+    CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
+    if (!owner || !camera)
+        return false;
+
+    const unsigned int token = camera->AcquireScriptCamera(owner, inhibitControls.value_or(true));
+    if (!token)
+        return false;
+    return token;
+}
+
+bool CLuaCameraDefs::ReleaseScriptCamera(lua_State* luaVM, unsigned int token)
+{
+    CResource*     owner = GetCallingResource(luaVM);
+    CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
+    return camera && camera->ReleaseScriptCamera(owner, token);
+}
+
+bool CLuaCameraDefs::SetScriptCameraFixed(lua_State* luaVM, unsigned int token, CVector position, CVector target, std::optional<CVector> upOffset,
+                                          std::optional<bool> jumpCut)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    return g_pGame->GetCamera()->SetScriptFixedCamera(position, target, upOffset.value_or(CVector()), jumpCut.value_or(true));
+}
+
+bool CLuaCameraDefs::MoveScriptCamera(lua_State* luaVM, unsigned int token, CVector from, CVector to, int durationMs, std::optional<bool> ease)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || durationMs <= 0 || durationMs > 600000 || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    return g_pGame->GetCamera()->SetScriptVectorMove(from, to, static_cast<float>(durationMs), ease.value_or(true));
+}
+
+bool CLuaCameraDefs::TrackScriptCamera(lua_State* luaVM, unsigned int token, CVector from, CVector to, int durationMs, std::optional<bool> ease)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || durationMs <= 0 || durationMs > 600000 || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    return g_pGame->GetCamera()->SetScriptVectorTrack(from, to, static_cast<float>(durationMs), ease.value_or(true));
+}
+
+bool CLuaCameraDefs::SetScriptCameraPersist(lua_State* luaVM, unsigned int token, bool position, bool target)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    g_pGame->GetCamera()->SetScriptCameraPersist(position, target);
+    return true;
+}
+
+bool CLuaCameraDefs::ResetScriptCamera(lua_State* luaVM, unsigned int token)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    g_pGame->GetCamera()->ResetScriptCameraComponents();
+    return true;
+}
+
+bool CLuaCameraDefs::FadeScriptCamera(lua_State* luaVM, unsigned int token, bool fadeIn, float durationSeconds, std::optional<unsigned char> red,
+                                      std::optional<unsigned char> green, std::optional<unsigned char> blue)
+{
+    CClientCamera* camera = GetOwnedScriptCamera(luaVM, token);
+    if (!camera || !std::isfinite(durationSeconds) || durationSeconds < 0.0f || durationSeconds > 60.0f)
+        return false;
+
+    if (fadeIn)
+        camera->FadeIn(durationSeconds);
+    else
+        camera->FadeOut(durationSeconds, red.value_or(0), green.value_or(0), blue.value_or(0));
+    return true;
+}
+
+bool CLuaCameraDefs::IsScriptCameraFading(lua_State* luaVM, unsigned int token)
+{
+    return GetOwnedScriptCamera(luaVM, token) && g_pGame && g_pGame->GetCamera() && g_pGame->GetCamera()->IsFading();
+}
+
+bool CLuaCameraDefs::IsScriptCameraMoveRunning(lua_State* luaVM, unsigned int token)
+{
+    return GetOwnedScriptCamera(luaVM, token) && g_pGame && g_pGame->GetCamera() && g_pGame->GetCamera()->IsScriptVectorMoveRunning();
+}
+
+bool CLuaCameraDefs::IsScriptCameraTrackRunning(lua_State* luaVM, unsigned int token)
+{
+    return GetOwnedScriptCamera(luaVM, token) && g_pGame && g_pGame->GetCamera() && g_pGame->GetCamera()->IsScriptVectorTrackRunning();
+}
+
+bool CLuaCameraDefs::SetScriptCameraWidescreen(lua_State* luaVM, unsigned int token, bool enabled)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    g_pGame->GetCamera()->SetScriptWidescreen(enabled);
+    return true;
+}
+
+bool CLuaCameraDefs::SetScriptCameraNearClip(lua_State* luaVM, unsigned int token, std::variant<bool, float> distance)
+{
+    if (!GetOwnedScriptCamera(luaVM, token) || !g_pGame || !g_pGame->GetCamera())
+        return false;
+
+    if (const auto enabled = std::get_if<bool>(&distance))
+    {
+        if (*enabled)
+            return false;
+        g_pGame->GetCamera()->ClearScriptNearClip();
+        return true;
+    }
+
+    const float value = std::get<float>(distance);
+    if (!std::isfinite(value) || value < 0.01f || value > 100.0f)
+        return false;
+    g_pGame->GetCamera()->SetScriptNearClip(value);
     return true;
 }

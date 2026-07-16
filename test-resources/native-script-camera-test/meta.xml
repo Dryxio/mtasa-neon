@@ -1,0 +1,8 @@
+<meta>
+    <info author="Neon" name="Native script camera test" type="script" version="0.1.0" />
+    <aclrequest>
+        <right name="function.restartResource" access="true" />
+    </aclrequest>
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>

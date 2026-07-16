@@ -68,7 +68,7 @@ These maps are test cases, not built-in Neon worlds or engine dependencies. Thei
 
 ## Neon Lua API additions
 
-Neon has added 35 unique Lua function names since its fork point at `ab2313ddc3fef299e34217465f8a2f3ef1806c6a`, and now also exposes server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
+Neon exposes the Lua additions documented below, including server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
 
 ### Extended native radar
 
@@ -160,6 +160,26 @@ The mode follows skin changes, entity recreation, joins, and streaming. The OOP 
 All ten functions return a boolean. Task and combat functions require a living, streamed ped simulated by the calling client: the local player, a client-local ped, or a server ped for which that client is the current syncer. `setPedMissionActor` and `isPedMissionActor` accept only script ped elements, never players; their client-local policy may be set while the native model is streamed out and is reapplied when it is recreated. `setPedGoTo` defaults to `walk`, a `0.5` target radius, a `2.0` slowdown radius, and an untimed task; timeout `-1` selects the SCM-compatible 20-second timeout. `setPedEnterVehicle` and `setPedExitVehicle` are existing MTA APIs rather than duplicate task constructors: Neon now verifies and locks their underlying `CTaskComplexEnterCarAsPassenger` and `CTaskComplexLeaveCar` ABIs while preserving MTA's server-confirmed occupant lifecycle. MTA seat `0` is the driver and seat `1` is the first passenger, corresponding to SCM passenger index `0`. `setPedDriveWander` accepts a finite speed from `0` through `255` and a driving style integer from `0` through `6`, or one of `stop_for_cars`, `slow_down_for_cars`, `avoid_cars`, `plough_through`, `stop_for_cars_ignore_lights`, `avoid_cars_obey_lights`, and `avoid_cars_stop_for_peds_obey_lights`; its task is indefinite and the driver seat must be free or occupied by the target ped. `setPedShootAt` defaults to 1,000 ms and a burst length of five; every negative duration is indefinite, matching GTA's native task. The OOP vehicle aliases are `ped:setEnterVehicle(...)`, `ped:setExitVehicle()`, and `ped:setDriveWander(...)`.
 
 The task calls do not yet provide resource-owned handles, completion events, or reconstruction after syncer migration. Mission-actor policy is client-local and last-writer-wins, so a synchronized resource should replicate the intended value to every client and clear it before relinquishing a surviving ped. Gang-tag alpha currently applies to streamed models `1490` and `1524` through `1531`; resources must reapply it after stream-in or game-object recreation and clear it with `false` when relinquishing a surviving object. The remaining OOP equivalents are `ped:setGoTo(...)`, `ped:setShootAt(...)`, `ped:setWeaponShootingRate(rate)`, `ped:setWeaponAccuracy(accuracy)`, `ped:setMissionActor(enabled)`, `ped:isMissionActor()`, and `object:setGangTagAlpha(alpha)`. See [STORY_RUNTIME.md](./STORY_RUNTIME.md) for the verified GTA behavior and current architectural limits.
+
+### Native script camera
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `acquireScriptCamera([inhibitControls])` | Client | Acquires the resource-exclusive GTA script camera and returns a generation token. |
+| `releaseScriptCamera(token)` | Client | Restores the captured gameplay camera, near clip, widescreen, fade visibility, and optional input inhibition. |
+| `setScriptCameraFixed(token, position, target [, upOffset, jumpCut])` | Client | Activates GTA's fixed camera and native point-at control. |
+| `moveScriptCamera(token, from, to, durationMs [, ease])` | Client | Starts GTA's native linear/eased camera-position track. |
+| `trackScriptCamera(token, from, to, durationMs [, ease])` | Client | Starts GTA's native linear/eased look-at track. |
+| `setScriptCameraPersist(token, position, target)` | Client | Selects whether completed position and target tracks persist. |
+| `resetScriptCamera(token)` | Client | Resets GTA's scriptable camera interpolation components. |
+| `fadeScriptCamera(token, fadeIn, durationSeconds [, red, green, blue])` | Client | Runs the native GTA fade owned by the current camera lease. |
+| `isScriptCameraFading(token)` | Client | Reports the native fade state for the current generation. |
+| `isScriptCameraMoveRunning(token)` | Client | Reports whether the native position track is still active. |
+| `isScriptCameraTrackRunning(token)` | Client | Reports whether the native target track is still active. |
+| `setScriptCameraWidescreen(token, enabled)` | Client | Uses GTA's native widescreen transition. |
+| `setScriptCameraNearClip(token, distanceOrFalse)` | Client | Sets GTA's scripted near clip, or clears it with `false`. |
+
+The token prevents delayed callbacks from an older run in the same resource from controlling a newer camera lease. A resource stop, restart, or disconnect revokes its lease automatically. Gameplay input inhibition is independent from `toggleAllControls`, so cleanup does not overwrite control restrictions owned by other resources. Legacy client camera setters are rejected while the lease is active; an authoritative server camera RPC revokes the lease before taking control.
 
 ### Native recorded-car playback
 

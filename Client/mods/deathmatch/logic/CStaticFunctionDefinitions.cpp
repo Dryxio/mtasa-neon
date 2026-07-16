@@ -5171,6 +5171,11 @@ bool CStaticFunctionDefinitions::SetCameraMatrix(const CVector& vecPosition, CVe
     if (!m_pCamera)
         return false;
 
+    // Server camera RPCs are authoritative. Revoke a client resource's native
+    // lease before applying them instead of letting two camera systems race.
+    if (m_pCamera->IsScriptCameraActive())
+        m_pCamera->AbortScriptCamera();
+
     if (!m_pCamera->IsInFixedMode())
         m_pCamera->ToggleCameraFixedMode(true);
 
@@ -5198,6 +5203,9 @@ bool CStaticFunctionDefinitions::SetCameraTarget(CClientEntity* pEntity)
 {
     if (!m_pCamera || !pEntity)
         return false;
+
+    if (m_pCamera->IsScriptCameraActive())
+        m_pCamera->AbortScriptCamera();
 
     if (pEntity->IsBeingDeleted())
         return false;
@@ -5242,6 +5250,9 @@ bool CStaticFunctionDefinitions::SetCameraTarget(const CVector& vecTarget)
     if (!m_pCamera)
         return false;
 
+    if (m_pCamera->IsScriptCameraActive())
+        m_pCamera->AbortScriptCamera();
+
     m_pCamera->SetOrbitTarget(vecTarget);
     return true;
 }
@@ -5264,6 +5275,9 @@ bool CStaticFunctionDefinitions::FadeCamera(bool bFadeIn, float fFadeTime, unsig
     CClientCamera* pCamera = m_pManager->GetCamera();
     if (!pCamera || !g_pClientGame)
         return false;
+
+    if (pCamera->IsScriptCameraActive())
+        pCamera->AbortScriptCamera();
 
     g_pClientGame->SetInitiallyFadedOut(false);
 

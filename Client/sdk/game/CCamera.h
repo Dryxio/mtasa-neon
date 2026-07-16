@@ -157,4 +157,18 @@ public:
     virtual bool         GetTransitionMatrix(CMatrix& matrix) const = 0;
 
     virtual bool IsSphereVisible(CVector* center, float radius) const = 0;
+
+    // GTA's script camera primitives are appended to preserve the established
+    // interface ABI used by independently built client modules.
+    virtual bool SetScriptFixedCamera(const CVector& position, const CVector& target, const CVector& upOffset, bool jumpCut) = 0;
+    virtual bool SetScriptVectorMove(const CVector& from, const CVector& to, float durationMs, bool ease) = 0;
+    virtual bool SetScriptVectorTrack(const CVector& from, const CVector& to, float durationMs, bool ease) = 0;
+    virtual void ResetScriptCameraComponents() = 0;
+    virtual void SetScriptCameraPersist(bool position, bool target) = 0;
+    virtual bool IsScriptVectorMoveRunning() const = 0;
+    virtual bool IsScriptVectorTrackRunning() const = 0;
+    virtual void SetScriptNearClip(float distance) = 0;
+    virtual void ClearScriptNearClip() = 0;
+    virtual bool GetScriptNearClip(float& distance) const = 0;
+    virtual void SetScriptWidescreen(bool enabled) = 0;
 };

@@ -21,6 +21,21 @@ namespace
     constexpr float kPi = 3.14159265358979323846f;
     constexpr float kTwoPi = 6.28318530717958647692f;
 
+    constexpr std::uintptr_t FUNC_SetCamPositionForFixedMode = 0x50BEC0;
+    constexpr std::uintptr_t FUNC_SetNearClipScript = 0x50BF90;
+    constexpr std::uintptr_t FUNC_SetWideScreenOn = 0x50C140;
+    constexpr std::uintptr_t FUNC_SetWideScreenOff = 0x50C150;
+    constexpr std::uintptr_t FUNC_VectorMoveLinear = 0x50D160;
+    constexpr std::uintptr_t FUNC_VectorTrackLinear = 0x50D1D0;
+    constexpr std::uintptr_t FUNC_InitialiseScriptableComponents = 0x50D2D0;
+    // 0x474891 is the function's internal parity branch, despite the old
+    // gta-reversed annotation. Calls must enter at the ASM-verified prologue.
+    constexpr std::uintptr_t FUNC_VectorTrackRunning = 0x474870;
+    constexpr std::uintptr_t FUNC_VectorMoveRunning = 0x4748A0;
+
+    constexpr std::size_t OFFSET_CameraPersistPosition = 0xCEE;
+    constexpr std::size_t OFFSET_CameraPersistTrack = 0xCEF;
+
     inline float WrapAngleRad(float angle) noexcept
     {
         // Wrap into [-pi, pi] using one multiplication and floor
@@ -442,6 +457,106 @@ bool CCameraSA::GetWidescreen()
     if (!cameraInterface)
         return false;
     return cameraInterface->m_WideScreenOn;
+}
+
+bool CCameraSA::SetScriptFixedCamera(const CVector& position, const CVector& target, const CVector& upOffset, bool jumpCut)
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface || !IsFiniteVector(position) || !IsFiniteVector(target) || !IsFiniteVector(upOffset))
+        return false;
+
+    reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, const CVector*, const CVector*)>(FUNC_SetCamPositionForFixedMode)(cameraInterface, &position,
+                                                                                                                              &upOffset);
+    reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, const CVector*, int, int)>(FUNC_TakeControlNoEntity)(cameraInterface, &target, jumpCut ? 2 : 1, 1);
+    return true;
+}
+
+bool CCameraSA::SetScriptVectorMove(const CVector& from, const CVector& to, float durationMs, bool ease)
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface || !IsFiniteVector(from) || !IsFiniteVector(to) || !std::isfinite(durationMs) || durationMs <= 0.0f)
+        return false;
+
+    reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, const CVector*, const CVector*, float, bool)>(FUNC_VectorMoveLinear)(cameraInterface, &to, &from,
+                                                                                                                                 durationMs, ease);
+    return true;
+}
+
+bool CCameraSA::SetScriptVectorTrack(const CVector& from, const CVector& to, float durationMs, bool ease)
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface || !IsFiniteVector(from) || !IsFiniteVector(to) || !std::isfinite(durationMs) || durationMs <= 0.0f)
+        return false;
+
+    reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, const CVector*, const CVector*, float, bool)>(FUNC_VectorTrackLinear)(cameraInterface, &to, &from,
+                                                                                                                                  durationMs, ease);
+    return true;
+}
+
+void CCameraSA::ResetScriptCameraComponents()
+{
+    if (CCameraSAInterface* cameraInterface = GetInterface())
+        reinterpret_cast<void(__thiscall*)(CCameraSAInterface*)>(FUNC_InitialiseScriptableComponents)(cameraInterface);
+}
+
+void CCameraSA::SetScriptCameraPersist(bool position, bool target)
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface)
+        return;
+
+    // These bytes have no GTA helper. Their offsets are locked to the stock
+    // 1.0 US camera layout and were checked against the opcode handlers.
+    auto* cameraBytes = reinterpret_cast<std::uint8_t*>(cameraInterface);
+    cameraBytes[OFFSET_CameraPersistPosition] = position;
+    cameraBytes[OFFSET_CameraPersistTrack] = target;
+}
+
+bool CCameraSA::IsScriptVectorMoveRunning() const
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    return cameraInterface && reinterpret_cast<bool(__thiscall*)(CCameraSAInterface*)>(FUNC_VectorMoveRunning)(cameraInterface);
+}
+
+bool CCameraSA::IsScriptVectorTrackRunning() const
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    return cameraInterface && reinterpret_cast<bool(__thiscall*)(CCameraSAInterface*)>(FUNC_VectorTrackRunning)(cameraInterface);
+}
+
+void CCameraSA::SetScriptNearClip(float distance)
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface || !std::isfinite(distance) || distance <= 0.0f)
+        return;
+
+    reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, float)>(FUNC_SetNearClipScript)(cameraInterface, distance);
+}
+
+void CCameraSA::ClearScriptNearClip()
+{
+    if (CCameraSAInterface* cameraInterface = GetInterface())
+        cameraInterface->m_bUseNearClipScript = false;
+}
+
+bool CCameraSA::GetScriptNearClip(float& distance) const
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface)
+        return false;
+
+    distance = cameraInterface->m_fNearClipScript;
+    return cameraInterface->m_bUseNearClipScript;
+}
+
+void CCameraSA::SetScriptWidescreen(bool enabled)
+{
+    CCameraSAInterface* cameraInterface = GetInterface();
+    if (!cameraInterface)
+        return;
+
+    const auto function = enabled ? FUNC_SetWideScreenOn : FUNC_SetWideScreenOff;
+    reinterpret_cast<void(__thiscall*)(CCameraSAInterface*)>(function)(cameraInterface);
 }
 
 bool CCameraSA::IsFading()

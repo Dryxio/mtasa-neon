@@ -419,6 +419,17 @@ public:
     float        GetTransitionFOV() const override;
     bool         GetTransitionMatrix(CMatrix& matrix) const override;
     bool         IsSphereVisible(CVector* center, float radius) const override;
+    bool         SetScriptFixedCamera(const CVector& position, const CVector& target, const CVector& upOffset, bool jumpCut) override;
+    bool         SetScriptVectorMove(const CVector& from, const CVector& to, float durationMs, bool ease) override;
+    bool         SetScriptVectorTrack(const CVector& from, const CVector& to, float durationMs, bool ease) override;
+    void         ResetScriptCameraComponents() override;
+    void         SetScriptCameraPersist(bool position, bool target) override;
+    bool         IsScriptVectorMoveRunning() const override;
+    bool         IsScriptVectorTrackRunning() const override;
+    void         SetScriptNearClip(float distance) override;
+    void         ClearScriptNearClip() override;
+    bool         GetScriptNearClip(float& distance) const override;
+    void         SetScriptWidescreen(bool enabled) override;
 
     // Additional overload not in base interface
     virtual CCam* GetCam(CCamSAInterface* camInterface);

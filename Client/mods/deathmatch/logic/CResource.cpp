@@ -103,6 +103,12 @@ CResource::~CResource()
     // elements. Stop and release them before this resource's Lua VM disappears.
     CLuaVehicleDefs::ReleaseVehicleRecordings(this);
 
+    // Script cameras own GTA-global camera and input state rather than child
+    // elements. Revoke the lease while the camera and resource identity still
+    // exist so stop, restart, and disconnect all share the same restoration.
+    if (g_pClientGame && g_pClientGame->GetManager() && g_pClientGame->GetManager()->GetCamera())
+        g_pClientGame->GetManager()->GetCamera()->ReleaseScriptCamera(this);
+
     // Custom CULL zones are client-native state rather than elements, so restore
     // vanilla edits and remove this resource's additions explicitly.
     if (g_pGame && g_pGame->GetWorld())

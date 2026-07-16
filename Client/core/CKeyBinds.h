@@ -164,6 +164,9 @@ public:
     static bool IsFakeCtrl_L(UINT message, WPARAM wParam, LPARAM lParam);
 
     bool TriggerKeyStrokeHandler(const SString& strKey, bool bState, bool bIsConsoleInputKey);
+    void AcquireGameplayControlInhibit() override;
+    void ReleaseGameplayControlInhibit() override;
+    bool IsGameplayControlInhibited() const override { return m_uiGameplayControlInhibitCount != 0; }
 
 private:
     CCore* m_pCore;
@@ -184,4 +187,5 @@ private:
     bool                   m_bLastStateLeft{false};
     bool                   m_bLastStateRight{false};
     bool                   m_bMoveLeft{false};
+    unsigned int           m_uiGameplayControlInhibitCount{0};
 };

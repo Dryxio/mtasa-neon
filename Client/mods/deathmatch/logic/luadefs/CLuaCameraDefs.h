@@ -47,6 +47,22 @@ public:
     static bool ShakeCamera(float radius, std::optional<float> x, std::optional<float> y, std::optional<float> z) noexcept;
     static bool ResetShakeCamera() noexcept;
 
+    static std::variant<unsigned int, bool> AcquireScriptCamera(lua_State* luaVM, std::optional<bool> inhibitControls);
+    static bool                             ReleaseScriptCamera(lua_State* luaVM, unsigned int token);
+    static bool SetScriptCameraFixed(lua_State* luaVM, unsigned int token, CVector position, CVector target, std::optional<CVector> upOffset,
+                                     std::optional<bool> jumpCut);
+    static bool MoveScriptCamera(lua_State* luaVM, unsigned int token, CVector from, CVector to, int durationMs, std::optional<bool> ease);
+    static bool TrackScriptCamera(lua_State* luaVM, unsigned int token, CVector from, CVector to, int durationMs, std::optional<bool> ease);
+    static bool SetScriptCameraPersist(lua_State* luaVM, unsigned int token, bool position, bool target);
+    static bool ResetScriptCamera(lua_State* luaVM, unsigned int token);
+    static bool FadeScriptCamera(lua_State* luaVM, unsigned int token, bool fadeIn, float durationSeconds, std::optional<unsigned char> red,
+                                 std::optional<unsigned char> green, std::optional<unsigned char> blue);
+    static bool IsScriptCameraFading(lua_State* luaVM, unsigned int token);
+    static bool IsScriptCameraMoveRunning(lua_State* luaVM, unsigned int token);
+    static bool IsScriptCameraTrackRunning(lua_State* luaVM, unsigned int token);
+    static bool SetScriptCameraWidescreen(lua_State* luaVM, unsigned int token, bool enabled);
+    static bool SetScriptCameraNearClip(lua_State* luaVM, unsigned int token, std::variant<bool, float> distance);
+
     // For OOP only
     LUA_DECLARE(OOP_GetCameraPosition);
     LUA_DECLARE(OOP_SetCameraPosition);

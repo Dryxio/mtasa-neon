@@ -145,6 +145,8 @@ CClientCamera::CClientCamera(CClientManager* pManager) : ClassInit(this), CClien
 
 CClientCamera::~CClientCamera()
 {
+    AbortScriptCamera();
+
     // We need to be ingame
     if (g_pGame && g_pGame->GetSystemState() == SystemState::GS_PLAYING_GAME)
     {
@@ -618,6 +620,105 @@ void CClientCamera::Reset()
     m_fFOV = DEFAULT_FOV;
     SetCenterOfWorldCached(NULL, 0.0f);
     InvalidateCachedTransforms();
+}
+
+std::uint32_t CClientCamera::AcquireScriptCamera(CResource* owner, bool inhibitControls)
+{
+    if (!owner || m_pScriptCameraOwner || !m_pCamera || !g_pGame || g_pGame->GetSystemState() != SystemState::GS_PLAYING_GAME)
+        return 0;
+
+    m_bScriptCameraPreviousFixed = m_bFixed;
+    GetMatrix(m_matScriptCameraPrevious);
+    m_fScriptCameraPreviousFOV = m_fFOV;
+    m_bScriptCameraPreviousWidescreen = m_pCamera->GetWidescreen();
+    m_bScriptCameraPreviousNativeNearClipEnabled = m_pCamera->GetScriptNearClip(m_fScriptCameraPreviousNativeNearClip);
+    m_fScriptCameraPreviousMtaNearClip = g_pMultiplayer ? g_pMultiplayer->GetNearClipDistance() : 0.3f;
+
+    // The MTA fixed-camera hook writes its matrix every frame. Returning to the
+    // gameplay camera first ensures GTA's native vector processors own it for
+    // the complete duration of the lease.
+    SetFocusToLocalPlayer();
+    m_pCamera->ResetScriptCameraComponents();
+    m_pCamera->SetScriptCameraPersist(false, false);
+    if (g_pMultiplayer)
+        g_pMultiplayer->SetNearClipDistance(0.3f);
+
+    m_bScriptCameraControlsInhibited = inhibitControls && g_pCore && g_pCore->GetKeyBinds();
+    if (m_bScriptCameraControlsInhibited)
+        g_pCore->GetKeyBinds()->AcquireGameplayControlInhibit();
+
+    ++m_uiScriptCameraToken;
+    if (m_uiScriptCameraToken == 0)
+        ++m_uiScriptCameraToken;
+    m_pScriptCameraOwner = owner;
+    return m_uiScriptCameraToken;
+}
+
+bool CClientCamera::ReleaseScriptCamera(CResource* owner, std::uint32_t token)
+{
+    if (!HasScriptCameraLease(owner, token))
+        return false;
+
+    RestoreScriptCameraLease();
+    return true;
+}
+
+void CClientCamera::ReleaseScriptCamera(CResource* owner)
+{
+    if (owner && owner == m_pScriptCameraOwner)
+        RestoreScriptCameraLease();
+}
+
+void CClientCamera::AbortScriptCamera()
+{
+    if (m_pScriptCameraOwner)
+        RestoreScriptCameraLease();
+}
+
+bool CClientCamera::HasScriptCameraLease(const CResource* owner, std::uint32_t token) const
+{
+    return owner && owner == m_pScriptCameraOwner && token != 0 && token == m_uiScriptCameraToken;
+}
+
+void CClientCamera::RestoreScriptCameraLease()
+{
+    if (!m_pScriptCameraOwner)
+        return;
+
+    // Clear ownership before restoring legacy MTA camera state so any internal
+    // setter reached during restoration cannot observe a stale active lease.
+    m_pScriptCameraOwner = nullptr;
+
+    if (m_pCamera)
+    {
+        m_pCamera->ResetScriptCameraComponents();
+        m_pCamera->SetScriptCameraPersist(false, false);
+        if (m_bScriptCameraPreviousNativeNearClipEnabled)
+            m_pCamera->SetScriptNearClip(m_fScriptCameraPreviousNativeNearClip);
+        else
+            m_pCamera->ClearScriptNearClip();
+        m_pCamera->SetScriptWidescreen(m_bScriptCameraPreviousWidescreen);
+        m_pCamera->RestoreWithJumpCut();
+    }
+
+    if (g_pMultiplayer)
+        g_pMultiplayer->SetNearClipDistance(m_fScriptCameraPreviousMtaNearClip);
+
+    // A cutscene abort must never strand the client behind a black overlay.
+    FadeIn(0.0f);
+    if (m_bScriptCameraPreviousFixed)
+    {
+        SetMatrix(m_matScriptCameraPrevious);
+        SetFOV(m_fScriptCameraPreviousFOV);
+    }
+    else
+    {
+        SetFocusToLocalPlayer();
+    }
+
+    if (m_bScriptCameraControlsInhibited && g_pCore && g_pCore->GetKeyBinds())
+        g_pCore->GetKeyBinds()->ReleaseGameplayControlInhibit();
+    m_bScriptCameraControlsInhibited = false;
 }
 
 void CClientCamera::SetFocusToLocalPlayerImpl()

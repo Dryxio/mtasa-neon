@@ -457,7 +457,7 @@ bool CKeyBinds::ProcessKeyStroke(const SBindableKey* pKey, bool bState)
         {
             case KeyBindType::GTA_CONTROL:
             {
-                if (bAllowed)
+                if (bAllowed && !IsGameplayControlInhibited())
                 {
                     if (!bState || (!bInputGoesToGUI && (!m_pCore->IsCursorForcedVisible() || !m_pCore->IsCursorControlsToggled())))
                     {
@@ -1288,6 +1288,19 @@ void CKeyBinds::SetAllControlsEnabled(bool bGameControls, bool bMTAControls, boo
     }
 }
 
+void CKeyBinds::AcquireGameplayControlInhibit()
+{
+    ++m_uiGameplayControlInhibitCount;
+    if (m_uiGameplayControlInhibitCount == 1)
+        CallAllGTAControlBinds(CONTROL_BOTH, false);
+}
+
+void CKeyBinds::ReleaseGameplayControlInhibit()
+{
+    if (m_uiGameplayControlInhibitCount != 0)
+        --m_uiGameplayControlInhibitCount;
+}
+
 void CKeyBinds::ResetGTAControlState(SBindableGTAControl* pControl)
 {
     // Reset the control state
@@ -1972,7 +1985,7 @@ void CKeyBinds::DoPostFramePulse()
 
     CControllerState cs;
     memset(&cs, 0, sizeof(CControllerState));
-    if (!bIsDead)
+    if (!bIsDead && !IsGameplayControlInhibited())
     {
         if (!bInVehicle)
         {

@@ -13,6 +13,7 @@
 #include <CMatrix.h>
 #include <game/CCamera.h>
 #include <cmath>
+#include <cstdint>
 #include "CClientCommon.h"
 #include "CClientEntity.h"
 
@@ -20,6 +21,7 @@ class CClientEntity;
 class CClientManager;
 class CClientPlayer;
 class CClientPlayerManager;
+class CResource;
 
 namespace EFixedCameraMode
 {
@@ -96,6 +98,13 @@ public:
     CMatrix GetInterpolatedCameraMatrix() const;
     float   GetAccurateFOV() const;
 
+    std::uint32_t AcquireScriptCamera(CResource* owner, bool inhibitControls);
+    bool          ReleaseScriptCamera(CResource* owner, std::uint32_t token);
+    void          ReleaseScriptCamera(CResource* owner);
+    void          AbortScriptCamera();
+    bool          HasScriptCameraLease(const CResource* owner, std::uint32_t token) const;
+    bool          IsScriptCameraActive() const { return m_pScriptCameraOwner != nullptr; }
+
 private:
     CClientCamera(CClientManager* pManager);
     ~CClientCamera();
@@ -107,6 +116,7 @@ private:
     void        SetGtaMatrix(const CMatrix& matInNew, CCam* pCam = NULL) const;
 
     void           SetFocusToLocalPlayerImpl();
+    void           RestoreScriptCameraLease();
     void           InvalidateCachedTransforms() const;
     void           SetCenterOfWorldCached(const CVector* pPosition, float fRotationRadians);
     void           UpdateCenterOfWorldFromFixedMatrix();
@@ -140,4 +150,15 @@ private:
     bool            m_hasCenterOfWorld;
 
     CCamera* m_pCamera;
+
+    CResource*    m_pScriptCameraOwner{};
+    std::uint32_t m_uiScriptCameraToken{};
+    bool          m_bScriptCameraControlsInhibited{};
+    bool          m_bScriptCameraPreviousFixed{};
+    CMatrix       m_matScriptCameraPrevious{};
+    float         m_fScriptCameraPreviousFOV{DEFAULT_FOV};
+    float         m_fScriptCameraPreviousMtaNearClip{0.3f};
+    float         m_fScriptCameraPreviousNativeNearClip{};
+    bool          m_bScriptCameraPreviousNativeNearClipEnabled{};
+    bool          m_bScriptCameraPreviousWidescreen{};
 };

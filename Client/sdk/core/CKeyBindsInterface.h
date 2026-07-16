@@ -264,6 +264,12 @@ public:
     virtual void PrintBindsCommand(const char* szCmdLine) = 0;
     virtual bool TriggerKeyStrokeHandler(const SString& strKey, bool bActive, bool bIsConsoleInputKey) = 0;
 
+    // Independent inhibitors avoid changing the resource-visible enabled state
+    // of individual controls while a subsystem temporarily owns gameplay input.
+    virtual void AcquireGameplayControlInhibit() = 0;
+    virtual void ReleaseGameplayControlInhibit() = 0;
+    virtual bool IsGameplayControlInhibited() const = 0;
+
     // Events
     ksignals::Event<void(const SString&)> OnPaste;
 };

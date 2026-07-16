@@ -1689,6 +1689,12 @@ int CLuaWorldDefs::GetNearClipDistance(lua_State* luaVM)
 
 int CLuaWorldDefs::SetNearClipDistance(lua_State* luaVM)
 {
+    if (g_pClientGame->GetManager()->GetCamera()->IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     //  bool setNearClipDistance ( float distance )
     float fDistance;
 
@@ -1711,6 +1717,12 @@ int CLuaWorldDefs::SetNearClipDistance(lua_State* luaVM)
 
 int CLuaWorldDefs::ResetNearClipDistance(lua_State* luaVM)
 {
+    if (g_pClientGame->GetManager()->GetCamera()->IsScriptCameraActive())
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     g_pMultiplayer->RestoreNearClipDistance();
 
     lua_pushboolean(luaVM, true);

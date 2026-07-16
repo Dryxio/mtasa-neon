@@ -222,6 +222,14 @@ The tag visual gate verified `CTagManager::SetupAtomic` (`0x49CE10`), its atomic
 
 IPL rotations must follow GTA's loader rather than a raw quaternion-to-yaw conversion. GTA conjugates the stored quaternion, so yaw-only placements use `(360 - rawYaw) % 360`. The error was nearly invisible at headings around 0 and 180 degrees but turned the alley and rooftop tags by 180 degrees, leaving their painted faces against the wall and backface-culled.
 
+## Current implementation slice: native script camera
+
+Neon now exposes GTA's verified fixed/look-at, vector position and target tracks, persistence, fade, widescreen, and scripted near-clip primitives through a client-side, resource-owned camera service. Acquisition returns a generation token, so delayed callbacks from an older run cannot control a later lease owned by the same resource. The service snapshots the previous MTA camera state and uses an independent, reference-counted gameplay-input inhibitor rather than changing resource-visible control binds.
+
+The lease is restored on explicit release, resource stop or restart, disconnect, and authoritative server camera takeover. Legacy client camera and near-clip setters are rejected while a lease is active, preventing MTA's fixed-camera hook from racing GTA's native vector processors. The isolated `test-resources/native-script-camera-test` harness validates fixed framing, simultaneous eased position and target tracks, fade out/in, explicit abort, and cleanup across resource restart. Manual validation completed the full sequence in `8620 ms`, including a `4267 ms` move/track and one-second native fades, then successfully restarted the resource after native lease cleanup.
+
+The ASM gate also corrected `CCamera::VectorTrackRunning` in `gta-reversed-dryxio`: `0x474870` is the function entry, while the former `0x474891` annotation points to an internal parity branch. The camera service is generic and local to each player; cooperative mission code must synchronize only the timeline, readiness, and skip decision at the server layer.
+
 ## Current implementation slice: recorded-car playback
 
 Neon now exposes GTA's direct recorded-car player as a generic, client-side, resource-owned service: `requestVehicleRecording`, `isVehicleRecordingLoaded`, `startVehiclePlayback`, `stopVehiclePlayback`, and `isVehiclePlaybackActive`. Only the direct non-AI, non-looped path used by opcode `05EB` is public in this slice. The game wrapper validates the registered recording table, streamed buffer, duplicate vehicle state, and all 16 native slots before calling GTA; this prevents the original executable's slot-zero fallback and full-pool out-of-bounds write from becoming public API behavior.
@@ -260,7 +268,7 @@ Manual in-game validation completed the direct playback in `8040 ms`, reached th
 ### Phase 3: native story primitives
 
 - Add a synchronized tag service with native spray progress and tag replacement.
-- Add the camera and mission-audio primitives required by `SWEET1`.
+- Integrate the generic native camera service into `SWEET1` and add its mission-audio primitives.
 - Replace Sweet's teleports and client control-state AI in the prototype with native tasks.
 - Complete Tagging Up Turf end to end as the first conformance mission.
 
