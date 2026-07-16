@@ -14,6 +14,9 @@
 #include <string>
 #include <vector>
 
+struct SNativeWorldTransportOffer;
+struct SNativeWorldTransportPublishResult;
+
 class CStreamingSA;
 
 struct SNativeTxdSlotFingerprintSA
@@ -162,6 +165,8 @@ public:
     // the pack remains registered for the GTA process lifetime, including MTA
     // disconnect/reconnect cycles.
     static unsigned int GetRequiredStreamingBufferSizeBlocks();
+
+    static SNativeWorldTransportPublishResult PublishTransportOffer(const SNativeWorldTransportOffer& offer);
 
     // Keeps lifecycle-sensitive diagnostics in one place and prefixes them
     // with the active descriptor's stable log tag.

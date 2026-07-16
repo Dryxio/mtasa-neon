@@ -26,8 +26,10 @@
 
 #include <cstdarg>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <sstream>
 
 extern CGameSA* pGame;
@@ -161,6 +163,7 @@ namespace
     SNativeWorldPackDescriptorSA        g_runtimeDescriptor{};
     const SNativeWorldPackDescriptorSA* g_pack = nullptr;
     EState                              g_state = EState::Off;
+    std::mutex                          g_transportPublisherMutex;
 
     const SNativeWorldPackDescriptorSA& Pack()
     {
@@ -1871,6 +1874,205 @@ void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
     g_state = EState::Hooked;
     Log("registrar=hooked call=0x%08X pack=%s manifest=%s runtimeFiles=%s,%s", LOAD_CD_DIRECTORY_CALL, Pack().directoryPath, g_policy->runtimeManifestFileName,
         Pack().ideFileName, Pack().imgFileName);
+}
+
+SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOffer(const SNativeWorldTransportOffer& offer)
+{
+    std::lock_guard<std::mutex>        lock(g_transportPublisherMutex);
+    SNativeWorldTransportPublishResult result;
+    const auto                         isCancelled = [&offer]() { return offer.cancelled && offer.cancelled->load(std::memory_order_acquire); };
+    if (isCancelled())
+    {
+        result.error = "transport publication was cancelled";
+        return result;
+    }
+    if (g_state != EState::Off)
+    {
+        result.error = "native registrar state is not idle; transport publication cannot share its mutable descriptor";
+        return result;
+    }
+
+    const auto resetTransportAuditState = [&]()
+    {
+        g_policy = nullptr;
+        g_manifest = {};
+        g_activeDirectory.clear();
+        g_iplNamePointers.clear();
+        g_runtimeDescriptor = {};
+        g_pack = nullptr;
+    };
+
+    const SNativeWorldPackPolicySA& policy = GetNativeBullworthPackPolicy();
+    g_policy = &policy;
+    if (offer.format != 1 || offer.resourceName.empty() || offer.resourceName.size() > 255 || offer.manifestRelativePath.empty())
+        result.error = "transport offer identity is invalid";
+
+    std::map<std::string, const SNativeWorldTransportFile*> offeredFiles;
+    for (const SNativeWorldTransportFile& file : offer.files)
+    {
+        const std::filesystem::path relative(file.relativePath);
+        if (!result.error.empty())
+            break;
+        if (file.relativePath.empty() || file.relativePath.size() > 255 || relative.has_root_path() ||
+            relative.lexically_normal().generic_string() != file.relativePath || !file.declaredBytes || !offeredFiles.emplace(file.relativePath, &file).second)
+        {
+            result.error = "transport file identity is non-canonical or duplicated";
+            break;
+        }
+    }
+
+    const auto manifestOffer = offeredFiles.find(offer.manifestRelativePath);
+    if (result.error.empty() && manifestOffer == offeredFiles.end())
+        result.error = "transport manifest is absent from its exact three-file offer";
+
+    std::filesystem::path manifestAbsolute;
+    std::filesystem::path sourceDirectory;
+    if (result.error.empty())
+    {
+        manifestAbsolute = std::filesystem::path(manifestOffer->second->absolutePath).lexically_normal();
+        sourceDirectory = manifestAbsolute.parent_path();
+        if (manifestAbsolute.filename().generic_string() != policy.runtimeManifestFileName || sourceDirectory.empty())
+            result.error = "transport manifest filename differs from the closed format-1 policy";
+    }
+
+    if (result.error.empty())
+    {
+        g_activeDirectory = sourceDirectory.string();
+        const SString manifestPath = manifestAbsolute.string().c_str();
+        if (!IsNativePathSafe(manifestPath) || !IsSafeRegularFile(manifestPath) || !LoadRuntimeManifest(manifestPath, result.error))
+        {
+            if (result.error.empty())
+                result.error = "transport manifest is not a safe regular file";
+        }
+    }
+
+    const SNativeWorldTransportFile* ideOffer = nullptr;
+    const SNativeWorldTransportFile* imgOffer = nullptr;
+    if (result.error.empty())
+    {
+        const std::string prefix = std::filesystem::path(offer.manifestRelativePath).parent_path().generic_string();
+        const auto        composeRelative = [&prefix](const std::string& leaf) { return prefix.empty() ? leaf : prefix + "/" + leaf; };
+        const auto        ideFound = offeredFiles.find(composeRelative(g_manifest.ideFileName));
+        const auto        imgFound = offeredFiles.find(composeRelative(g_manifest.imgFileName));
+        if (ideFound == offeredFiles.end() || imgFound == offeredFiles.end() || ideFound == imgFound || ideFound == manifestOffer || imgFound == manifestOffer)
+            result.error = "manifest payload names do not bind the exact three declared transport files";
+        else
+        {
+            ideOffer = ideFound->second;
+            imgOffer = imgFound->second;
+            if (manifestOffer->second->declaredBytes != g_manifest.manifestBytes || ideOffer->declaredBytes != g_manifest.ideBytes ||
+                imgOffer->declaredBytes != g_manifest.imgBytes ||
+                std::filesystem::path(ideOffer->absolutePath).lexically_normal().parent_path() != sourceDirectory ||
+                std::filesystem::path(imgOffer->absolutePath).lexically_normal().parent_path() != sourceDirectory)
+            {
+                result.error = "transport byte lengths or source directories differ from the parsed manifest";
+            }
+        }
+    }
+
+    SIdePlan    ide;
+    std::string idePathString;
+    std::string imgPathString;
+    if (result.error.empty())
+    {
+        idePathString = std::filesystem::path(ideOffer->absolutePath).lexically_normal().string();
+        imgPathString = std::filesystem::path(imgOffer->absolutePath).lexically_normal().string();
+        const SString idePath = idePathString.c_str();
+        const SString imgPath = imgPathString.c_str();
+        const SString ideHash = SharedUtil::GenerateSha256HexStringFromFile(idePath).ToLower();
+        const SString imgHash = SharedUtil::GenerateSha256HexStringFromFile(imgPath).ToLower();
+        if (!IsNativePathSafe(idePath) || !IsNativePathSafe(imgPath) || !IsSafeRegularFile(idePath) || !IsSafeRegularFile(imgPath) ||
+            !HasExactFileSize(idePath, g_manifest.ideBytes) || !HasExactFileSize(imgPath, g_manifest.imgBytes) || ideHash != g_manifest.ideSha256.c_str() ||
+            imgHash != g_manifest.imgSha256.c_str())
+        {
+            result.error = "transport payload size, hash, or regular-file identity differs from its manifest";
+        }
+        else if (!ParseIde(idePath, ide, result.error) || isCancelled() || !ValidateImg(imgPath, ide, result.error) || isCancelled() ||
+                 !ValidateBinaryIpls(imgPath, ide, result.error) || isCancelled() || !ValidatePayloads(imgPath, ide, result.error) || isCancelled() ||
+                 !ValidateDescriptor(result.error))
+        {
+            // The closed audit functions provide the precise refusal reason.
+            if (result.error.empty() && isCancelled())
+                result.error = "transport publication was cancelled";
+        }
+    }
+
+    if (result.error.empty())
+    {
+        std::ostringstream offerIdentity;
+        offerIdentity << "mta-native-world-transport-offer-v1\nresource=" << offer.resourceName << "\nformat=" << static_cast<unsigned int>(offer.format)
+                      << "\nmanifest=" << offer.manifestRelativePath << '\n';
+        for (const auto& [relativePath, file] : offeredFiles)
+            offerIdentity << "file=" << relativePath << "\nbytes=" << file->declaredBytes << '\n';
+        offerIdentity << "manifest.sha256=" << g_manifest.manifestSha256 << "\nide.sha256=" << g_manifest.ideSha256 << "\nimg.sha256=" << g_manifest.imgSha256
+                      << '\n';
+        result.offerId = SharedUtil::GenerateSha256HexString(offerIdentity.str()).ToLower();
+
+        SNativeWorldCacheRequestSA request;
+        request.format = g_manifest.format;
+        request.sourceAbsoluteDirectory = sourceDirectory.string();
+        request.packId = g_manifest.packId;
+        request.manifestFileName = policy.runtimeManifestFileName;
+        request.sourceManifestSha256 = g_manifest.manifestSha256;
+        request.sourceManifestBytes = g_manifest.manifestBytes;
+        request.maximumManifestBytes = policy.maximumManifestBytes;
+        request.ide = {g_manifest.ideFileName, g_manifest.ideSha256, g_manifest.ideBytes};
+        request.img = {g_manifest.imgFileName, g_manifest.imgSha256, g_manifest.imgBytes};
+        request.cancellation = offer.cancelled;
+        request.contentId = GenerateNativeWorldContentId(request);
+        result.contentId = request.contentId;
+
+        const auto auditQuarantine = [&request, &policy, &isCancelled](const std::string& directory, std::string& auditError)
+        {
+            if (isCancelled())
+            {
+                auditError = "transport publication was cancelled";
+                return false;
+            }
+            g_activeDirectory = directory;
+            const SString manifestPath = SString("%s\\%s", directory.c_str(), policy.runtimeManifestFileName);
+            if (!IsNativePathSafe(manifestPath) || !IsSafeRegularFile(manifestPath) || !LoadRuntimeManifest(manifestPath, auditError))
+            {
+                if (auditError.empty())
+                    auditError = "canonical quarantine manifest is not a safe regular file";
+                return false;
+            }
+
+            SNativeWorldCacheRequestSA auditedIdentity = request;
+            auditedIdentity.format = g_manifest.format;
+            auditedIdentity.packId = g_manifest.packId;
+            auditedIdentity.ide = {g_manifest.ideFileName, g_manifest.ideSha256, g_manifest.ideBytes};
+            auditedIdentity.img = {g_manifest.imgFileName, g_manifest.imgSha256, g_manifest.imgBytes};
+            if (GenerateNativeWorldContentId(auditedIdentity) != request.contentId)
+            {
+                auditError = "canonical quarantine content identity differs from the transport offer";
+                return false;
+            }
+
+            const SString idePath = SString("%s\\%s", directory.c_str(), g_manifest.ideFileName.c_str());
+            const SString imgPath = SString("%s\\%s", directory.c_str(), g_manifest.imgFileName.c_str());
+            if (!IsNativePathSafe(idePath) || !IsNativePathSafe(imgPath) || !IsSafeRegularFile(idePath) || !IsSafeRegularFile(imgPath) ||
+                !HasExactFileSize(idePath, g_manifest.ideBytes) || !HasExactFileSize(imgPath, g_manifest.imgBytes) ||
+                SharedUtil::GenerateSha256HexStringFromFile(idePath).ToLower() != g_manifest.ideSha256.c_str() ||
+                SharedUtil::GenerateSha256HexStringFromFile(imgPath).ToLower() != g_manifest.imgSha256.c_str())
+            {
+                auditError = "canonical quarantine payload identity differs from its manifest";
+                return false;
+            }
+
+            SIdePlan   ide;
+            const bool valid = ParseIde(idePath, ide, auditError) && !isCancelled() && ValidateImg(imgPath, ide, auditError) && !isCancelled() &&
+                               ValidateBinaryIpls(imgPath, ide, auditError) && !isCancelled() && ValidatePayloads(imgPath, ide, auditError) && !isCancelled() &&
+                               ValidateDescriptor(auditError);
+            if (!valid && auditError.empty() && isCancelled())
+                auditError = "transport publication was cancelled";
+            return valid;
+        };
+        result.success = PublishNativeWorldCache(request, auditQuarantine, result.publishedDirectory, result.cacheHit, result.error);
+    }
+
+    resetTransportAuditState();
+    return result;
 }
 
 unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()

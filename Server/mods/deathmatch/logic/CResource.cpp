@@ -115,6 +115,7 @@ bool CResource::Load()
     m_bClientFiles = true;
 
     m_bOOPEnabledInMetaXml = false;
+    m_nativeWorldPackTransport = {};
 
     m_pVM = nullptr;
     // @@@@@ Set some type of HTTP access here
@@ -271,7 +272,7 @@ bool CResource::Load()
 
             // Read everything that's included. If one of these fail, delete the XML we created and return
             if (!ReadIncludedResources(pRoot) || !ReadIncludedMaps(pRoot) || !ReadIncludedFiles(pRoot) || !ReadIncludedScripts(pRoot) ||
-                !ReadIncludedHTML(pRoot) || !ReadIncludedExports(pRoot) || !ReadIncludedConfigs(pRoot))
+                !ReadIncludedHTML(pRoot) || !ReadIncludedExports(pRoot) || !ReadIncludedConfigs(pRoot) || !ReadNativeWorldPack(pRoot))
             {
                 delete pMetaFile;
                 g_pGame->GetHTTPD()->UnregisterResource(m_strResourceName.c_str());
@@ -1736,6 +1737,15 @@ bool CResource::ReadIncludedFiles(CXMLNode* pRoot)
 
                     if (IsFilenameUsed(strFilePath, true))
                     {
+                        CXMLAttribute* nativeWorldAttribute = Attributes.Find("native_world");
+                        if (nativeWorldAttribute && nativeWorldAttribute->GetValue() == "true")
+                        {
+                            m_strFailureReason =
+                                SString("Resource '%s' declares duplicate native_world file '%s'\n", m_strResourceName.c_str(), strFilePath.c_str());
+                            CLogger::ErrorPrintf(m_strFailureReason);
+                            return false;
+                        }
+
                         CLogger::LogPrintf("WARNING: Ignoring duplicate client file in resource '%s': '%s'\n", m_strResourceName.c_str(), strFilePath.c_str());
                         continue;
                     }
@@ -1760,6 +1770,93 @@ bool CResource::ReadIncludedFiles(CXMLNode* pRoot)
         }
     }
 
+    return true;
+}
+
+namespace
+{
+    bool IsCanonicalNativeWorldPath(const std::string& path)
+    {
+        if (path.empty() || path.size() > 255 || path.front() == '/' || path.back() == '/' || path.find('\\') != std::string::npos ||
+            path.find_first_of(":*?\"<>|") != std::string::npos || !IsValidFilePath(path.c_str()))
+        {
+            return false;
+        }
+
+        const std::filesystem::path fsPath(path);
+        return !fsPath.has_root_path() && fsPath.lexically_normal().generic_string() == path;
+    }
+}
+
+bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
+{
+    CXMLNode* descriptor = pRoot->FindSubNode("native_world", 0);
+    if (pRoot->FindSubNode("native_world", 1))
+    {
+        m_strFailureReason = SString("Resource '%s' declares more than one native_world transport\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    std::array<CResourceFile*, 3> taggedFiles{};
+    size_t                        taggedFileCount = 0;
+    std::set<std::string>         taggedNames;
+    for (CResourceFile* resourceFile : m_ResourceFiles)
+    {
+        std::string marker;
+        if (!resourceFile->GetMetaFileAttribute("native_world", marker))
+            continue;
+
+        if (marker != "true" || resourceFile->GetType() != CResourceFile::RESOURCE_FILE_TYPE_CLIENT_FILE ||
+            !static_cast<CResourceClientFileItem*>(resourceFile)->IsAutoDownload() || !IsCanonicalNativeWorldPath(resourceFile->GetName()) ||
+            !taggedNames.emplace(resourceFile->GetName()).second || taggedFileCount >= taggedFiles.size())
+        {
+            m_strFailureReason =
+                SString("Resource '%s' has an invalid native_world file declaration for '%s'\n", m_strResourceName.c_str(), resourceFile->GetName());
+            CLogger::ErrorPrintf(m_strFailureReason);
+            return false;
+        }
+
+        taggedFiles[taggedFileCount++] = resourceFile;
+    }
+
+    if (!descriptor)
+    {
+        if (taggedFileCount != 0)
+        {
+            m_strFailureReason = SString("Resource '%s' marks native_world files without a native_world descriptor\n", m_strResourceName.c_str());
+            CLogger::ErrorPrintf(m_strFailureReason);
+            return false;
+        }
+        return true;
+    }
+
+    CXMLAttributes& attributes = descriptor->GetAttributes();
+    CXMLAttribute*  formatAttribute = attributes.Find("format");
+    CXMLAttribute*  manifestAttribute = attributes.Find("manifest");
+    if (attributes.Count() != 2 || !formatAttribute || formatAttribute->GetValue() != "1" || !manifestAttribute)
+    {
+        m_strFailureReason = SString("Resource '%s' has an invalid native_world descriptor\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    const std::string manifestPath = manifestAttribute->GetValue();
+    const bool        manifestIsTagged = std::any_of(taggedFiles.begin(), taggedFiles.begin() + taggedFileCount,
+                                                     [&manifestPath](CResourceFile* file) { return file->GetName() == manifestPath; });
+    if (taggedFileCount != taggedFiles.size() || !IsCanonicalNativeWorldPath(manifestPath) || !manifestIsTagged)
+    {
+        m_strFailureReason = SString("Resource '%s' native_world transport must reference exactly three canonical auto-download files including '%s'\n",
+                                     m_strResourceName.c_str(), manifestPath.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    // The descriptor is engine-owned: scripts cannot mutate this immutable snapshot after the resource has loaded.
+    m_nativeWorldPackTransport.present = true;
+    m_nativeWorldPackTransport.format = 1;
+    m_nativeWorldPackTransport.manifestPath = manifestPath;
+    m_nativeWorldPackTransport.files = taggedFiles;
     return true;
 }
 

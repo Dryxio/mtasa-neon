@@ -134,6 +134,48 @@ void CResourceFileDownloadManager::DoPulse()
         uiDownloadedSizeTotal += pHTTP->GetDownloadSizeNow();
     }
 
+    // netc is an external module and exposes progress/cancellation rather than
+    // its cURL write callback. Enforce the declared cap at every pump: native
+    // payloads reject chunked/unknown lengths and cannot intentionally stream
+    // beyond the exact ResourceStart size.
+    for (auto iter = m_ActiveFileDownloadList.begin(); iter != m_ActiveFileDownloadList.end();)
+    {
+        CDownloadableResource* file = *iter;
+        if (!file->IsNativeWorldTransportFile())
+        {
+            ++iter;
+            continue;
+        }
+
+        CNetHTTPDownloadManagerInterface* http = g_pNet->GetHTTPDownloadManager(m_HttpServerList[file->GetHttpServerIndex()].downloadChannel);
+        SDownloadStatus                   status;
+        if (!http->GetDownloadStatus(file, StaticDownloadFinished, status))
+        {
+            ++iter;
+            continue;
+        }
+
+        const uint declared = file->GetDownloadSize();
+        const bool refused = (status.uiContentLength != 0 && status.uiContentLength != declared) || status.uiBytesReceived > declared ||
+                             (status.uiContentLength == 0 && status.uiBytesReceived != 0);
+        if (!refused)
+        {
+            ++iter;
+            continue;
+        }
+
+        iter = m_ActiveFileDownloadList.erase(iter);
+        file->SetIsWaitingForDownload(false);
+        // Remove list ownership before cancellation so a synchronous or late
+        // callback observes an already-retired transfer and cannot erase it a
+        // second time.
+        http->CancelDownload(file, StaticDownloadFinished);
+        FileDelete(file->GetName());
+        m_strLastHTTPError = SString("Native world download exceeded or omitted its declared byte identity [%s expected=%u header=%u received=%u]",
+                                     *ConformResourcePath(file->GetName()), declared, status.uiContentLength, status.uiBytesReceived);
+        break;
+    }
+
     // Handle fatal error
     if (!m_strLastHTTPError.empty())
     {
@@ -309,18 +351,29 @@ void CResourceFileDownloadManager::DownloadFinished(const SHttpDownloadResult& r
 
     if (result.bSuccess)
     {
-        CDownloadableResource::EndChecksumBatch();
-        CChecksum checksum = pResourceFile->GenerateClientChecksum();
-        if (checksum != pResourceFile->GetServerChecksum())
+        if (pResourceFile->IsNativeWorldTransportFile() &&
+            (result.uiContentLength != pResourceFile->GetDownloadSize() || FileSize(pResourceFile->GetName()) != pResourceFile->GetDownloadSize()))
         {
-            // Checksum failed - Try download on next server
-            if (BeginResourceFileDownload(pResourceFile, pResourceFile->GetHttpServerIndex() + 1))
+            FileDelete(pResourceFile->GetName());
+            m_strLastHTTPError = SString("Native world download final length differs from ResourceStart [%s expected=%u header=%u]",
+                                         *ConformResourcePath(pResourceFile->GetName()), pResourceFile->GetDownloadSize(), result.uiContentLength);
+        }
+        else
+        {
+            CDownloadableResource::EndChecksumBatch();
+            CChecksum checksum = pResourceFile->GenerateClientChecksum();
+            if (checksum != pResourceFile->GetServerChecksum())
             {
-                // Was re-added - Add size again to total.
-                AddDownloadSize(pResourceFile->GetDownloadSize());
-                SString strMessage("External HTTP file mismatch (Retrying this file with internal HTTP) [%s]", *ConformResourcePath(pResourceFile->GetName()));
-                g_pClientGame->TellServerSomethingImportant(1011, strMessage, 3);
-                return;
+                // Checksum failed - Try download on next server
+                if (BeginResourceFileDownload(pResourceFile, pResourceFile->GetHttpServerIndex() + 1))
+                {
+                    // Was re-added - Add size again to total.
+                    AddDownloadSize(pResourceFile->GetDownloadSize());
+                    SString strMessage("External HTTP file mismatch (Retrying this file with internal HTTP) [%s]",
+                                       *ConformResourcePath(pResourceFile->GetName()));
+                    g_pClientGame->TellServerSomethingImportant(1011, strMessage, 3);
+                    return;
+                }
             }
         }
     }

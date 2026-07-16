@@ -67,7 +67,16 @@ public:
     void      SetLastChecksum(CChecksum checksum) { m_checksum = checksum; }
     void      SetLastFileSizeHint(uint64 uiFileSizeHint) { m_uiFileSizeHint = uiFileSizeHint; }
 
-    uint64  GetSizeHint() { return m_uiFileSizeHint; }  // Only used by download counters
-    string  GetMetaFileAttribute(const string& key) { return m_attributeMap[key]; }
+    uint64 GetSizeHint() { return m_uiFileSizeHint; }  // Only used by download counters
+    string GetMetaFileAttribute(const string& key) { return m_attributeMap[key]; }
+    bool   GetMetaFileAttribute(const string& key, string& value) const
+    {
+        const auto iter = m_attributeMap.find(key);
+        if (iter == m_attributeMap.end())
+            return false;
+
+        value = iter->second;
+        return true;
+    }
     SString GetCachedPathFilename(bool bForceClientCachePath = false);
 };

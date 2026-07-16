@@ -206,8 +206,9 @@ public:
     void Reset();
     void Terminate();
 
-    eGameVersion GetGameVersion();
-    eGameVersion FindGameVersion();
+    eGameVersion                       GetGameVersion();
+    eGameVersion                       FindGameVersion();
+    SNativeWorldTransportPublishResult PublishNativeWorldTransportOffer(const SNativeWorldTransportOffer& offer) override;
 
     float GetFPS();
     float GetTimeStep();

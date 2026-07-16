@@ -69,8 +69,11 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
     BitStream.WriteBit(m_pResource->IsOOPEnabledInMetaXml());
     BitStream.Write(m_pResource->GetDownloadPriorityGroup());
 
-    // Send the resource files info
-    for (CResourceFile* resourceFile : m_pResource->GetFiles())
+    const SNativeWorldPackTransport& nativeWorldPack = m_pResource->GetNativeWorldPackTransport();
+    const auto                       isNativeWorldFile = [&nativeWorldPack](const CResourceFile* resourceFile)
+    { return nativeWorldPack.present && std::find(nativeWorldPack.files.begin(), nativeWorldPack.files.end(), resourceFile) != nativeWorldPack.files.end(); };
+
+    const auto writeResourceFile = [this, &BitStream](CResourceFile* resourceFile)
     {
         if ((resourceFile->GetType() == CResourceScriptItem::RESOURCE_FILE_TYPE_CLIENT_CONFIG && m_pResource->IsClientConfigsOn()) ||
             (resourceFile->GetType() == CResourceScriptItem::RESOURCE_FILE_TYPE_CLIENT_SCRIPT && m_pResource->IsClientScriptsOn() &&
@@ -114,6 +117,27 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
                 BitStream.WriteBit(pRCFItem->IsAutoDownload());
             }
         }
+    };
+
+    // Capable clients receive an unambiguous descriptor followed immediately by its three files. Legacy clients never see either the new chunk or
+    // engine-only payloads they cannot safely interpret.
+    if (nativeWorldPack.present && m_pResource->IsClientFilesOn() && BitStream.Can(eBitStreamVersion::NativeWorldPackTransport))
+    {
+        BitStream.Write(static_cast<unsigned char>('N'));
+        BitStream.Write(nativeWorldPack.format);
+        BitStream.Write(static_cast<unsigned char>(nativeWorldPack.files.size()));
+        BitStream.Write(static_cast<unsigned char>(nativeWorldPack.manifestPath.size()));
+        BitStream.Write(nativeWorldPack.manifestPath.c_str(), static_cast<int>(nativeWorldPack.manifestPath.size()));
+
+        for (CResourceFile* resourceFile : nativeWorldPack.files)
+            writeResourceFile(resourceFile);
+    }
+
+    // Send ordinary resource files after the engine-owned native world group. Tagged files are omitted here for both capable and legacy clients.
+    for (CResourceFile* resourceFile : m_pResource->GetFiles())
+    {
+        if (!isNativeWorldFile(resourceFile))
+            writeResourceFile(resourceFile);
     }
 
     // Loop through the exported functions

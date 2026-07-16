@@ -19,6 +19,7 @@
 #include "CAclRightName.h"
 #include <unzip.h>
 #include <list>
+#include <array>
 #include <vector>
 #include <functional>
 #include "httpd/Types.h"
@@ -130,6 +131,14 @@ enum class EResourceState : unsigned char
     Starting,  // the resource is starting
     Running,   // resource items are running
     Stopping,  // the resource is stopping
+};
+
+struct SNativeWorldPackTransport
+{
+    bool                          present{};
+    unsigned char                 format{};
+    std::string                   manifestPath;
+    std::array<CResourceFile*, 3> files{};
 };
 
 // A resource is either a directory with files or a ZIP file which contains the content of such directory.
@@ -337,6 +346,8 @@ public:
 
     int GetDownloadPriorityGroup() const noexcept { return m_iDownloadPriorityGroup; }
 
+    const SNativeWorldPackTransport& GetNativeWorldPackTransport() const noexcept { return m_nativeWorldPackTransport; }
+
     void SetUsingDbConnectMysql(bool bUsingDbConnectMysql) { m_bUsingDbConnectMysql = bUsingDbConnectMysql; }
     bool IsUsingDbConnectMysql();
     bool IsFileDbConnectMysqlProtected(const SString& strFilename, bool bReadOnly);
@@ -373,6 +384,7 @@ private:
     bool ReadIncludedHTML(CXMLNode* pRoot);
     bool ReadIncludedExports(CXMLNode* pRoot);
     bool ReadIncludedFiles(CXMLNode* pRoot);
+    bool ReadNativeWorldPack(CXMLNode* pRoot);
     bool CreateVM(bool bEnableOOP);
     bool DestroyVM();
     void TidyUp();
@@ -421,6 +433,7 @@ private:
     KeyValueMap                    m_Info;
     std::list<CIncludedResources*> m_IncludedResources;  // we store them here temporarily, then read them once all the resources are loaded
     std::list<CResourceFile*>      m_ResourceFiles;
+    SNativeWorldPackTransport      m_nativeWorldPackTransport;
     std::map<std::string, int>     m_ResourceFilesCountPerDir;
     std::list<CResource*>          m_Dependents;  // resources that have "included" or loaded this one
     std::list<CExportedFunction>   m_ExportedFunctions;

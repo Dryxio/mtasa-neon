@@ -99,6 +99,14 @@ CResource::CResource(unsigned short usNetID, const char* szResourceName, CClient
 
 CResource::~CResource()
 {
+    // Resource stop invalidates this offer immediately. The manager retains
+    // the future until its cooperative worker exits so std::future destruction
+    // cannot block this lifecycle-sensitive destructor.
+    if (m_nativeWorldTransport.cancellation)
+        m_nativeWorldTransport.cancellation->store(true, std::memory_order_release);
+    if (m_nativeWorldTransport.publication.valid())
+        g_pClientGame->GetResourceManager()->RetireNativeWorldTransportPublication(std::move(m_nativeWorldTransport.publication));
+
     // Recorded-car buffers and active slots are native global state, not child
     // elements. Stop and release them before this resource's Lua VM disappears.
     CLuaVehicleDefs::ReleaseVehicleRecordings(this);
@@ -315,7 +323,185 @@ bool CResource::CanBeLoaded()
     if (VerifyPendingClientChecksums())
         return false;
 
-    return !IsWaitingForInitialDownloads();
+    return !IsWaitingForInitialDownloads() && VerifyNativeWorldTransportReady();
+}
+
+bool CResource::SetNativeWorldTransport(unsigned char format, const SString& manifestPath)
+{
+    if (m_nativeWorldTransport.present)
+        return false;
+
+    m_nativeWorldTransport.present = true;
+    m_nativeWorldTransport.format = format;
+    m_nativeWorldTransport.manifestPath = manifestPath;
+    return true;
+}
+
+bool CResource::AddNativeWorldTransportFile(CDownloadableResource* file)
+{
+    if (!m_nativeWorldTransport.present || !file || m_nativeWorldTransport.fileCount >= m_nativeWorldTransport.files.size())
+        return false;
+
+    for (size_t i = 0; i < m_nativeWorldTransport.fileCount; ++i)
+    {
+        if (m_nativeWorldTransport.files[i] == file || !strcmp(m_nativeWorldTransport.files[i]->GetShortName(), file->GetShortName()))
+            return false;
+    }
+
+    m_nativeWorldTransport.files[m_nativeWorldTransport.fileCount++] = file;
+    file->SetNativeWorldTransportFile();
+    return true;
+}
+
+bool CResource::IsNativeWorldTransportDescriptorValid() const
+{
+    if (!m_nativeWorldTransport.present || m_nativeWorldTransport.format != 1 || m_nativeWorldTransport.fileCount != m_nativeWorldTransport.files.size())
+        return false;
+
+    constexpr uint64_t MAXIMUM_MANIFEST_BYTES = 4096;
+    constexpr uint64_t MAXIMUM_IDE_BYTES = 1024 * 1024;
+    constexpr uint64_t MAXIMUM_IMG_BYTES = 256 * 1024 * 1024;
+    uint64_t           totalBytes = 0;
+    unsigned int       manifestCount = 0;
+    unsigned int       ideCount = 0;
+    unsigned int       imgCount = 0;
+
+    for (CDownloadableResource* file : m_nativeWorldTransport.files)
+    {
+        if (!file || file->GetDownloadSize() == 0)
+            return false;
+
+        const std::filesystem::path relativePath(file->GetShortName());
+        const std::string           leaf = relativePath.filename().generic_string();
+        const uint64_t              bytes = file->GetDownloadSize();
+        totalBytes += bytes;
+        if (m_nativeWorldTransport.manifestPath == file->GetShortName())
+        {
+            if (leaf != "native-world.json" || bytes > MAXIMUM_MANIFEST_BYTES)
+                return false;
+            ++manifestCount;
+        }
+        else if (relativePath.extension() == ".ide")
+        {
+            if (bytes > MAXIMUM_IDE_BYTES)
+                return false;
+            ++ideCount;
+        }
+        else if (relativePath.extension() == ".img")
+        {
+            if (bytes > MAXIMUM_IMG_BYTES)
+                return false;
+            ++imgCount;
+        }
+        else
+            return false;
+    }
+
+    return manifestCount == 1 && ideCount == 1 && imgCount == 1 && totalBytes <= MAXIMUM_MANIFEST_BYTES + MAXIMUM_IDE_BYTES + MAXIMUM_IMG_BYTES;
+}
+
+bool CResource::VerifyNativeWorldTransportReady()
+{
+    if (!m_nativeWorldTransport.present || m_nativeWorldTransport.publicationCompleted)
+        return true;
+
+    if (!IsNativeWorldTransportDescriptorValid())
+        return false;
+
+    for (CDownloadableResource* file : m_nativeWorldTransport.files)
+    {
+        if (file->GetResourceType() != CDownloadableResource::RESOURCE_FILE_TYPE_CLIENT_FILE || !file->IsAutoDownload() || file->IsWaitingForDownload() ||
+            !file->HasVerifiedClientChecksum() || !file->DoesClientAndServerChecksumMatch())
+        {
+            return false;
+        }
+    }
+
+    if (!m_nativeWorldTransport.publicationStarted)
+    {
+        SNativeWorldTransportOffer offer;
+        offer.resourceName = m_strResourceName;
+        offer.format = m_nativeWorldTransport.format;
+        offer.manifestRelativePath = m_nativeWorldTransport.manifestPath;
+        offer.cancelled = std::make_shared<std::atomic_bool>(false);
+        m_nativeWorldTransport.cancellation = offer.cancelled;
+        for (size_t index = 0; index < m_nativeWorldTransport.files.size(); ++index)
+        {
+            CDownloadableResource* file = m_nativeWorldTransport.files[index];
+            offer.files[index] = {file->GetShortName(), file->GetName(), file->GetDownloadSize()};
+        }
+
+        // Hashing and the closed IMG payload audit can process hundreds of MB.
+        // The worker owns value copies only; no CResource or downloadable
+        // pointer crosses the thread boundary.
+        try
+        {
+            m_nativeWorldTransport.publication =
+                std::async(std::launch::async, [offer = std::move(offer)]() { return g_pGame->PublishNativeWorldTransportOffer(offer); });
+            m_nativeWorldTransport.publicationStarted = true;
+        }
+        catch (const std::exception& exception)
+        {
+            m_nativeWorldTransport.publicationCompleted = true;
+            const SString message(
+                "[NativeWorldTransport] state=refused resource=%s reason=async-start-failed detail=%s activation=no lease=no "
+                "stock-behavior=preserved",
+                *m_strResourceName, exception.what());
+            AddReportLog(7472, message);
+            WriteDebugEvent(message);
+            return true;
+        }
+        const SString message("[NativeWorldTransport] state=audit-started resource=%s format=%u manifest=%s files=3 activation=no lease=no", *m_strResourceName,
+                              m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath);
+        AddReportLog(7470, message);
+        WriteDebugEvent(message);
+        return false;
+    }
+
+    if (m_nativeWorldTransport.publication.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return false;
+
+    SNativeWorldTransportPublishResult result;
+    try
+    {
+        result = m_nativeWorldTransport.publication.get();
+    }
+    catch (const std::exception& exception)
+    {
+        result.error = SString("async-publication-exception: %s", exception.what());
+    }
+    catch (...)
+    {
+        result.error = "async-publication-unknown-exception";
+    }
+    m_nativeWorldTransport.publicationCompleted = true;
+    if (result.success)
+    {
+        const SString message(
+            "[NativeWorldTransport] state=cached resource=%s format=%u manifest=%s files=3 offerId=%s contentId=%s disposition=%s directory=%s "
+            "audit=closed-bullworth publish=atomic activation=no lease=no restart-required=yes",
+            *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath, result.offerId.c_str(), result.contentId.c_str(),
+            result.cacheHit ? "hit" : "published", result.publishedDirectory.c_str());
+        AddReportLog(7471, message);
+        WriteDebugEvent(message);
+        g_pCore->GetConsole()->Printf("%s", *message);
+    }
+    else
+    {
+        const SString message(
+            "[NativeWorldTransport] state=refused resource=%s format=%u manifest=%s files=3 reason=%s activation=no lease=no "
+            "stock-behavior=preserved",
+            *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath, result.error.c_str());
+        AddReportLog(7472, message);
+        WriteDebugEvent(message);
+        g_pCore->GetConsole()->Printf("%s", *message);
+    }
+    return true;
+}
+
+bool CResource::IsNativeWorldTransportPublicationPending() const noexcept
+{
+    return m_nativeWorldTransport.present && m_nativeWorldTransport.publicationStarted && !m_nativeWorldTransport.publicationCompleted;
 }
 
 bool CResource::IsWaitingForInitialDownloads()

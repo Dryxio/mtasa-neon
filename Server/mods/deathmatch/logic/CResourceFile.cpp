@@ -61,9 +61,9 @@ HttpStatusCode CResourceFile::Request(HttpRequest* ipoHttpRequest, HttpResponse*
     // HACK - Use http-client-files if possible as the resources directory may have been changed since the resource was loaded.
     SString strDstFilePath = GetCachedPathFilename();
 
-    FILE* file = File::Fopen(strDstFilePath.c_str(), "rb");
+    FILE* file = File::FopenExclusive(strDstFilePath.c_str(), "rb");
     if (!file)
-        file = File::Fopen(m_strResourceFileName.c_str(), "rb");
+        file = File::FopenExclusive(m_strResourceFileName.c_str(), "rb");
 
     // its a raw page
     if (file)
@@ -81,30 +81,13 @@ HttpStatusCode CResourceFile::Request(HttpRequest* ipoHttpRequest, HttpResponse*
             return HTTP_STATUS_CODE_500_INTERNAL_SERVER_ERROR;
         }
 
-        // Allocate and read the entire file
-        // TODO: This is inefficient.
-        char* szBuffer = nullptr;
-        try
-        {
-            szBuffer = new char[lBufferLength + 1];
-            size_t bytesRead = fread(szBuffer, 1, lBufferLength, file);
-            fclose(file);
-            file = nullptr;
-
-            ipoHttpResponse->oResponseHeaders["content-type"] = "application/octet-stream";
-            ipoHttpResponse->SetBody(szBuffer, static_cast<int>(bytesRead));
-            delete[] szBuffer;
-            return HTTP_STATUS_CODE_200_OK;
-        }
-        catch (const std::bad_alloc&)
-        {
-            delete[] szBuffer;
-            if (file)
-                fclose(file);
-
-            ipoHttpResponse->SetBody("Server out of memory", strlen("Server out of memory"));
-            return HTTP_STATUS_CODE_500_INTERNAL_SERVER_ERROR;
-        }
+        // Keep large archives out of HttpResponse's string storage. CHTTPD
+        // takes ownership of this open handle and turns it into a bounded
+        // cpp-httplib content provider. The exclusive open also rejects
+        // concurrent writers on Windows while the response is in flight.
+        ipoHttpResponse->oResponseHeaders["content-type"] = "application/octet-stream";
+        ipoHttpResponse->SetFileBody(file, static_cast<size_t>(lBufferLength));
+        return HTTP_STATUS_CODE_200_OK;
     }
     else
     {

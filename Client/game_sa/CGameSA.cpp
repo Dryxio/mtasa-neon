@@ -561,6 +561,11 @@ eGameVersion CGameSA::GetGameVersion()
     return m_eGameVersion;
 }
 
+SNativeWorldTransportPublishResult CGameSA::PublishNativeWorldTransportOffer(const SNativeWorldTransportOffer& offer)
+{
+    return CNativeWorldPackManagerSA::PublishTransportOffer(offer);
+}
+
 eGameVersion CGameSA::FindGameVersion()
 {
     unsigned char ucA = *reinterpret_cast<unsigned char*>(0x748ADD);

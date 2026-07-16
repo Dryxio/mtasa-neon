@@ -33,6 +33,7 @@ typedef SSIZE_T ssize_t;
 #include "CAccountManager.h"
 #include "CMainConfig.h"
 #include "CResource.h"
+#include <array>
 #include <cryptopp/rsa.h>
 #include <cryptopp/osrng.h>
 #include <SharedUtil.Crypto.h>
@@ -167,6 +168,15 @@ static bool EqualsIgnoreCase(const std::string& strHeader, const char* szName)
     return i == strHeader.size() && szName[i] == '\0';
 }
 
+static bool SeekFileBody(FILE* pFile, size_t uiOffset)
+{
+#ifdef WIN32
+    return _fseeki64(pFile, static_cast<__int64>(uiOffset), SEEK_SET) == 0;
+#else
+    return fseeko(pFile, static_cast<off_t>(uiOffset), SEEK_SET) == 0;
+#endif
+}
+
 // Apply our HttpResponse to a cpp-httplib response
 static void ApplyHttpResponse(const HttpResponse& httpRes, httplib::Response& res)
 {
@@ -187,8 +197,36 @@ static void ApplyHttpResponse(const HttpResponse& httpRes, httplib::Response& re
         }
     }
 
-    const std::string& body = httpRes.GetBody();
-    res.set_content(body.data(), body.size(), strContentType);
+    if (httpRes.HasFileBody())
+    {
+        const std::shared_ptr<FILE> pFile = httpRes.GetFileBody();
+        res.set_content_provider(httpRes.GetFileBodyLength(), strContentType,
+                                 [pFile](size_t uiOffset, size_t uiLength, httplib::DataSink& sink)
+                                 {
+                                     if (!SeekFileBody(pFile.get(), uiOffset))
+                                         return false;
+
+                                     // Resource archives can be hundreds of megabytes. Feed them to
+                                     // cpp-httplib in bounded chunks so concurrent downloads do not
+                                     // each require a second archive-sized allocation.
+                                     std::array<char, 64 * 1024> buffer;
+                                     while (uiLength > 0)
+                                     {
+                                         const size_t uiRequested = std::min(buffer.size(), uiLength);
+                                         const size_t uiRead = fread(buffer.data(), 1, uiRequested, pFile.get());
+                                         if (uiRead == 0 || !sink.write(buffer.data(), uiRead))
+                                             return false;
+
+                                         uiLength -= uiRead;
+                                     }
+                                     return true;
+                                 });
+    }
+    else
+    {
+        const std::string& body = httpRes.GetBody();
+        res.set_content(body.data(), body.size(), strContentType);
+    }
 
     for (const auto& h : httpRes.oResponseHeaders)
     {
@@ -296,7 +334,7 @@ void CHTTPD::SetupHandlers()
         ApplyHttpResponse(httpRes, res);
 
         // Track bytes sent for stats
-        m_llTotalBytesSent += res.body.size();
+        m_llTotalBytesSent += httpRes.HasFileBody() ? httpRes.GetFileBodyLength() : res.body.size();
     };
 
     m_httpServer->Get(".*", handler);

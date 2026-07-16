@@ -1373,6 +1373,7 @@ void CClientGame::DoPulses()
     {
         // Pulse DownloadFiles if we're transferring stuff
         GetResourceFileDownloadManager()->DoPulse();
+        m_pResourceManager->PulseNativeWorldTransportPublications();
         DownloadSingularResourceFiles();
         GetRemoteCalls()->ProcessQueuedFiles();
     }

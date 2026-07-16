@@ -13,7 +13,9 @@
 #include "SharedUtil.File.h"
 #include "SharedUtil.Hash.h"
 #include "SharedUtil.Misc.h"
+#include "sha2.h"
 
+#include <array>
 #include <locale>
 #include <sstream>
 
@@ -60,6 +62,28 @@ namespace
     {
         return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char character)
                                                  { return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'); });
+    }
+
+    bool IsLowerHex(const std::string& value, size_t length)
+    {
+        return value.size() == length && std::all_of(value.begin(), value.end(), [](unsigned char character)
+                                                     { return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'); });
+    }
+
+    bool IsPrivateCacheSibling(const std::string& value)
+    {
+        if (value.size() < 1 + 64 + 1 + 7 + 1 + 32 || value.front() != '.' || !IsLowerSha256(value.substr(1, 64)))
+            return false;
+        const size_t separator = value.find('.', 66);
+        if (separator == std::string::npos || !IsLowerHex(value.substr(separator + 1), 32))
+            return false;
+        const std::string kind = value.substr(66, separator - 66);
+        return kind == "invalid" || kind == "quarantine";
+    }
+
+    bool IsCancelled(const SNativeWorldCacheRequestSA& request)
+    {
+        return request.cancellation && request.cancellation->load(std::memory_order_acquire);
     }
 
     bool IsSafeLeafName(const std::string& value, size_t maximumLength)
@@ -305,24 +329,70 @@ namespace
         return true;
     }
 
-    bool CopyAndFlushFile(const SString& source, const SString& destination, const std::string& name, std::string& error)
+    bool CopyHashAndFlushFile(const SString& source, const SString& destination, const SNativeWorldCacheRequestSA& request,
+                              const SNativeWorldCacheFileSA& identity, std::string& error)
     {
-        if (!CopyFileW(SharedUtil::FromUTF8(source).c_str(), SharedUtil::FromUTF8(destination).c_str(), TRUE))
+        const HANDLE input = CreateFileW(SharedUtil::FromUTF8(source).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        const HANDLE output = CreateFileW(SharedUtil::FromUTF8(destination).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (input == INVALID_HANDLE_VALUE || output == INVALID_HANDLE_VALUE)
         {
-            error = SString("cache quarantine copy failed file=%s win32=%u", name.c_str(), GetLastError());
+            const DWORD openError = GetLastError();
+            if (input != INVALID_HANDLE_VALUE)
+                CloseHandle(input);
+            if (output != INVALID_HANDLE_VALUE)
+                CloseHandle(output);
+            error = SString("cache quarantine stream open failed file=%s win32=%u", identity.name.c_str(), openError);
             return false;
         }
-        const HANDLE file = CreateFileW(SharedUtil::FromUTF8(destination).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-        if (file == INVALID_HANDLE_VALUE || !FlushFileBuffers(file))
+
+        sha256_ctx hash;
+        // Keep worker stack use modest: publication runs on an implementation-
+        // defined std::async stack and the copy is intentionally streaming.
+        std::array<unsigned char, 64 * 1024> buffer{};
+        uint64_t                             total = 0;
+        bool                                 success = true;
+        sha256_init(&hash);
+        while (success)
         {
-            const DWORD flushError = GetLastError();
-            if (file != INVALID_HANDLE_VALUE)
-                CloseHandle(file);
-            error = SString("cache quarantine flush failed file=%s win32=%u", name.c_str(), flushError);
+            if (IsCancelled(request))
+            {
+                error = "native world cache publication was cancelled";
+                success = false;
+                break;
+            }
+            DWORD read = 0;
+            if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr))
+            {
+                success = false;
+                break;
+            }
+            if (!read)
+                break;
+            total += read;
+            if (total > identity.bytes)
+            {
+                success = false;
+                break;
+            }
+            sha256_update(&hash, buffer.data(), read);
+            DWORD written = 0;
+            success = WriteFile(output, buffer.data(), read, &written, nullptr) && written == read;
+        }
+        unsigned char digest[SHA256_DIGEST_SIZE]{};
+        sha256_final(&hash, digest);
+        const SString actualHash = SharedUtil::ConvertDataToHexString(digest, sizeof(digest)).ToLower();
+        success = success && total == identity.bytes && actualHash == identity.sha256.c_str() && FlushFileBuffers(output);
+        const DWORD copyError = success ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(input);
+        CloseHandle(output);
+        if (!success)
+        {
+            if (error.empty())
+                error = SString("cache quarantine stream identity failed file=%s bytes=%llu expected=%u win32=%u", identity.name.c_str(), total, identity.bytes,
+                                copyError);
             return false;
         }
-        CloseHandle(file);
         return true;
     }
 
@@ -362,6 +432,106 @@ namespace
             return {};
         return JoinPath(paths.pack, SString(".%s.%s.%s", paths.published.SubStr(paths.published.length() - 64).c_str(), kind, token.c_str()));
     }
+
+    bool CheckTransportCacheQuota(const SCachePaths& paths, const SNativeWorldCacheRequestSA& request, std::string& error)
+    {
+        constexpr size_t   MAX_OBJECTS = 4;
+        constexpr uint64_t MAX_TOTAL_BYTES = 1024ULL * 1024ULL * 1024ULL;
+        constexpr uint32_t MAX_IDE_BYTES = 1024U * 1024U;
+        constexpr uint32_t MAX_IMG_BYTES = 256U * 1024U * 1024U;
+        constexpr uint64_t MINIMUM_FREE_MARGIN = 64ULL * 1024ULL * 1024ULL;
+
+        const uint64_t requestedBytes = static_cast<uint64_t>(request.maximumManifestBytes) + request.ide.bytes + request.img.bytes;
+        if (request.ide.bytes > MAX_IDE_BYTES || request.img.bytes > MAX_IMG_BYTES || requestedBytes > MAX_TOTAL_BYTES)
+        {
+            error = "native world cache request exceeds the transport byte policy";
+            return false;
+        }
+
+        ULARGE_INTEGER freeBytes{};
+        if (!GetDiskFreeSpaceExW(SharedUtil::FromUTF8(paths.pack).c_str(), &freeBytes, nullptr, nullptr) ||
+            freeBytes.QuadPart < requestedBytes + MINIMUM_FREE_MARGIN)
+        {
+            error = SString("native world cache has insufficient free space required=%llu margin=%llu available=%llu", requestedBytes, MINIMUM_FREE_MARGIN,
+                            freeBytes.QuadPart);
+            return false;
+        }
+
+        WIN32_FIND_DATAW data{};
+        const WString    pattern = SharedUtil::FromUTF8(JoinPath(paths.pack, "*"));
+        const HANDLE     search = FindFirstFileW(pattern.c_str(), &data);
+        size_t           objects = 0;
+        uint64_t         bytes = request.sourceManifestBytes + request.ide.bytes + request.img.bytes;
+        if (search == INVALID_HANDLE_VALUE)
+        {
+            const DWORD findError = GetLastError();
+            if (findError == ERROR_FILE_NOT_FOUND)
+                return true;
+            error = SString("native world cache quota enumeration failed win32=%u", findError);
+            return false;
+        }
+
+        bool valid = true;
+        do
+        {
+            const std::string name = SharedUtil::ToUTF8(data.cFileName);
+            if (name == "." || name == "..")
+                continue;
+            if (!name.empty() && name.front() == '.')
+            {
+                if (!IsPrivateCacheSibling(name) || !(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+                    (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                {
+                    error = "native world cache contains an unsafe private sibling";
+                    valid = false;
+                    break;
+                }
+
+                SCachePaths    remnant = MakeCachePaths(request, JoinPath(paths.pack, name));
+                CScopedHandles remnantGuard;
+                if (!LockDirectory(remnant.published, remnantGuard, error))
+                {
+                    valid = false;
+                    break;
+                }
+                RemoveVerifiedDirectory(remnant, remnantGuard);
+                if (GetFileAttributesW(SharedUtil::FromUTF8(remnant.published).c_str()) != INVALID_FILE_ATTRIBUTES)
+                {
+                    error = "native world cache private sibling could not be safely collected";
+                    valid = false;
+                    break;
+                }
+                continue;
+            }
+            if (!IsLowerSha256(name) || !(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            {
+                error = "native world cache contains an unsafe quota sibling";
+                valid = false;
+                break;
+            }
+            if (name == request.contentId)
+                continue;
+
+            ++objects;
+            SCachePaths    object = MakeCachePaths(request, JoinPath(paths.pack, name));
+            CScopedHandles locks;
+            if (!LockDirectory(object.published, locks, error) || !LockRegularFile(object.manifest, 1, request.maximumManifestBytes, locks, error) ||
+                !LockRegularFile(object.ide, 1, MAX_IDE_BYTES, locks, error) || !LockRegularFile(object.img, 1, MAX_IMG_BYTES, locks, error))
+            {
+                valid = false;
+                break;
+            }
+            bytes += FileSize(object.manifest) + FileSize(object.ide) + FileSize(object.img);
+            if (objects >= MAX_OBJECTS || bytes > MAX_TOTAL_BYTES)
+            {
+                error = "native world cache transport quota is exhausted";
+                valid = false;
+                break;
+            }
+        } while (FindNextFileW(search, &data));
+        FindClose(search);
+        return valid;
+    }
 }  // namespace
 
 std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& request)
@@ -383,172 +553,244 @@ std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& reque
     return SharedUtil::GenerateSha256HexString(identity.str()).ToLower();
 }
 
-bool PrepareAndLockNativeWorldCache(const SNativeWorldCacheRequestSA& request, std::string& publishedDirectory, bool& cacheHit, std::string& error)
+namespace
 {
-    if (g_cachePrepared || !g_pendingLocks.empty())
+    bool PrepareNativeWorldCacheImpl(const SNativeWorldCacheRequestSA& request, std::string& publishedDirectory, bool& cacheHit, std::string& error,
+                                     bool retainLease, bool recoverInvalid, const NativeWorldCacheAuditSA* audit)
     {
-        error = "native world cache can be prepared only once per startup transaction";
-        return false;
-    }
-    if (request.format != 1 || request.manifestFileName != CACHED_MANIFEST_FILE || !IsSafeLeafName(request.packId, 32) ||
-        !IsSafeLeafName(request.manifestFileName, 63) || !IsSafeLeafName(request.ide.name, 63) || !IsSafeLeafName(request.img.name, 63) ||
-        request.manifestFileName == request.ide.name || request.manifestFileName == request.img.name || request.ide.name == request.img.name ||
-        !IsLowerSha256(request.sourceManifestSha256) || !IsLowerSha256(request.ide.sha256) || !IsLowerSha256(request.img.sha256) ||
-        !IsLowerSha256(request.contentId) || !request.sourceManifestBytes || request.sourceManifestBytes > request.maximumManifestBytes || !request.ide.bytes ||
-        !request.img.bytes || GenerateNativeWorldContentId(request) != request.contentId)
-    {
-        error = "native world cache request identity is invalid";
-        return false;
-    }
-    if (BuildCanonicalManifest(request).size() > request.maximumManifestBytes)
-    {
-        error = "canonical native world manifest exceeds the compiled policy";
-        return false;
-    }
-
-    const SString dataRoot = SharedUtil::GetMTADataPath();
-    const SString root = JoinPath(dataRoot, CACHE_ROOT_DIRECTORY);
-    const SString format = JoinPath(root, CACHE_FORMAT_DIRECTORY);
-    const SString pack = JoinPath(format, request.packId);
-    const SString published = JoinPath(pack, request.contentId);
-    publishedDirectory = published.c_str();
-    SCachePaths paths = MakeCachePaths(request, published);
-    if (!EnsurePlainDirectory(paths.dataRoot, error))
-        return false;
-
-    CScopedHandles parentLocks;
-    // Lock each verified parent before creating or opening its child. This
-    // prevents a raced ancestor rename from redirecting cache writes.
-    if (!LockDirectory(paths.dataRoot, parentLocks, error) || !EnsurePlainDirectory(paths.root, error) || !LockDirectory(paths.root, parentLocks, error) ||
-        !EnsurePlainDirectory(paths.format, error) || !LockDirectory(paths.format, parentLocks, error) || !EnsurePlainDirectory(paths.pack, error) ||
-        !LockDirectory(paths.pack, parentLocks, error))
-        return false;
-
-    bool existingNeedsRecovery = GetFileAttributesW(SharedUtil::FromUTF8(paths.published).c_str()) != INVALID_FILE_ATTRIBUTES;
-    if (existingNeedsRecovery)
-    {
-        CScopedHandles existingLocks;
-        std::string    existingError;
-        if (LockDirectory(paths.published, existingLocks, existingError) && LockAndValidatePublishedFiles(request, paths, existingLocks, existingError))
+        if (IsCancelled(request))
         {
-            parentLocks.TransferTo(g_pendingLocks);
-            existingLocks.TransferTo(g_pendingLocks);
+            error = "native world cache publication was cancelled";
+            return false;
+        }
+        if (retainLease && (g_cachePrepared || !g_pendingLocks.empty()))
+        {
+            error = "native world cache can be prepared only once per startup transaction";
+            return false;
+        }
+        if (request.format != 1 || request.manifestFileName != CACHED_MANIFEST_FILE || !IsSafeLeafName(request.packId, 32) ||
+            !IsSafeLeafName(request.manifestFileName, 63) || !IsSafeLeafName(request.ide.name, 63) || !IsSafeLeafName(request.img.name, 63) ||
+            request.manifestFileName == request.ide.name || request.manifestFileName == request.img.name || request.ide.name == request.img.name ||
+            !IsLowerSha256(request.sourceManifestSha256) || !IsLowerSha256(request.ide.sha256) || !IsLowerSha256(request.img.sha256) ||
+            !IsLowerSha256(request.contentId) || !request.sourceManifestBytes || request.sourceManifestBytes > request.maximumManifestBytes ||
+            !request.ide.bytes || !request.img.bytes || GenerateNativeWorldContentId(request) != request.contentId)
+        {
+            error = "native world cache request identity is invalid";
+            return false;
+        }
+        if (BuildCanonicalManifest(request).size() > request.maximumManifestBytes)
+        {
+            error = "canonical native world manifest exceeds the compiled policy";
+            return false;
+        }
+
+        const SString dataRoot = SharedUtil::GetMTADataPath();
+        const SString root = JoinPath(dataRoot, CACHE_ROOT_DIRECTORY);
+        const SString format = JoinPath(root, CACHE_FORMAT_DIRECTORY);
+        const SString pack = JoinPath(format, request.packId);
+        const SString published = JoinPath(pack, request.contentId);
+        publishedDirectory = published.c_str();
+        SCachePaths paths = MakeCachePaths(request, published);
+        if (!EnsurePlainDirectory(paths.dataRoot, error))
+            return false;
+
+        CScopedHandles parentLocks;
+        // Lock each verified parent before creating or opening its child. This
+        // prevents a raced ancestor rename from redirecting cache writes.
+        if (!LockDirectory(paths.dataRoot, parentLocks, error) || !EnsurePlainDirectory(paths.root, error) || !LockDirectory(paths.root, parentLocks, error) ||
+            !EnsurePlainDirectory(paths.format, error) || !LockDirectory(paths.format, parentLocks, error) || !EnsurePlainDirectory(paths.pack, error) ||
+            !LockDirectory(paths.pack, parentLocks, error))
+            return false;
+
+        bool existingNeedsRecovery = GetFileAttributesW(SharedUtil::FromUTF8(paths.published).c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (!retainLease && !existingNeedsRecovery && !CheckTransportCacheQuota(paths, request, error))
+            return false;
+        if (existingNeedsRecovery)
+        {
+            CScopedHandles existingLocks;
+            std::string    existingError;
+            if (LockDirectory(paths.published, existingLocks, existingError) && LockAndValidatePublishedFiles(request, paths, existingLocks, existingError))
+            {
+                if (IsCancelled(request))
+                {
+                    error = "native world cache publication was cancelled";
+                    return false;
+                }
+                if (retainLease)
+                {
+                    parentLocks.TransferTo(g_pendingLocks);
+                    existingLocks.TransferTo(g_pendingLocks);
+                }
+                cacheHit = true;
+                g_cachePrepared = retainLease;
+                return true;
+            }
+            existingLocks.Close();
+
+            if (!recoverInvalid)
+            {
+                error = "conflicting immutable cache content already occupies the semantic address: " + existingError;
+                return false;
+            }
+
+            // A power-loss remnant or corrupt object is never loaded. Move it away
+            // from the semantic address atomically, then rebuild from the locked
+            // local seed. Unknown extra files keep the invalid sibling nonempty but
+            // cannot block or alias the final address.
+            const SString invalidPath = MakePrivateSibling(paths, "invalid", error);
+            if (invalidPath.empty())
+                return false;
+            if (!MoveFileExW(SharedUtil::FromUTF8(paths.published).c_str(), SharedUtil::FromUTF8(invalidPath).c_str(), MOVEFILE_WRITE_THROUGH))
+            {
+                error = SString("invalid cache object recovery failed prior=%s win32=%u", existingError.c_str(), GetLastError());
+                return false;
+            }
+            // Never traverse an object that failed handle validation: it may have
+            // been a junction. A later verified GC may remove this inert sibling.
+        }
+
+        SString sourceDirectory;
+        if (request.sourceAbsoluteDirectory.empty())
+            sourceDirectory = SharedUtil::CalcMTASAPath(request.sourceRelativeDirectory.c_str());
+        else
+            sourceDirectory = request.sourceAbsoluteDirectory.c_str();
+        SCachePaths sourcePaths = MakeCachePaths(request, sourceDirectory);
+        sourcePaths.manifest = JoinPath(sourceDirectory, request.manifestFileName);
+        sourcePaths.ide = JoinPath(sourceDirectory, request.ide.name);
+        sourcePaths.img = JoinPath(sourceDirectory, request.img.name);
+        CScopedHandles sourceLocks;
+        if (!IsSafeLocalPath(sourceDirectory) || !LockDirectory(sourceDirectory, sourceLocks, error) ||
+            !LockRegularFile(sourcePaths.manifest, request.sourceManifestBytes, request.sourceManifestBytes, sourceLocks, error) ||
+            !LockRegularFile(sourcePaths.ide, request.ide.bytes, request.ide.bytes, sourceLocks, error) ||
+            !LockRegularFile(sourcePaths.img, request.img.bytes, request.img.bytes, sourceLocks, error) ||
+            !HasExactHash(sourcePaths.manifest, request.sourceManifestSha256) || !HasExactHash(sourcePaths.ide, request.ide.sha256) ||
+            !HasExactHash(sourcePaths.img, request.img.sha256))
+        {
+            if (error.empty())
+                error = "local cache seed SHA-256 differs from its parsed manifest";
+            error = "local cache seed is invalid: " + error;
+            return false;
+        }
+
+        const SString quarantinePath = MakePrivateSibling(paths, "quarantine", error);
+        if (quarantinePath.empty())
+            return false;
+        if (!CreateDirectoryW(SharedUtil::FromUTF8(quarantinePath).c_str(), nullptr))
+        {
+            error = SString("cache quarantine directory creation failed win32=%u", GetLastError());
+            return false;
+        }
+        SCachePaths    quarantine = MakeCachePaths(request, quarantinePath);
+        CScopedHandles quarantineDirectoryGuard;
+        if (!LockDirectory(quarantine.published, quarantineDirectoryGuard, error))
+        {
+            // The unverified path is never traversed. Its random, non-addressable
+            // name cannot become an activation candidate.
+            return false;
+        }
+        const std::string canonicalManifest = BuildCanonicalManifest(request);
+        const bool        filled = WriteAndFlushFile(quarantine.manifest, canonicalManifest, error) &&
+                            CopyHashAndFlushFile(sourcePaths.ide, quarantine.ide, request, request.ide, error) &&
+                            CopyHashAndFlushFile(sourcePaths.img, quarantine.img, request, request.img, error);
+        if (!filled)
+        {
+            RemoveVerifiedDirectory(quarantine, quarantineDirectoryGuard);
+            return false;
+        }
+
+        CScopedHandles publishedFileLocks;
+        if (!LockAndValidatePublishedFiles(request, quarantine, publishedFileLocks, error))
+        {
+            publishedFileLocks.Close();
+            RemoveVerifiedDirectory(quarantine, quarantineDirectoryGuard);
+            error = "cache quarantine validation failed: " + error;
+            return false;
+        }
+        // Transport bytes become addressable only after the caller has performed
+        // its closed semantic audit while the verified quarantine directory and
+        // all three files are held without write/delete sharing.
+        if (IsCancelled(request) || (audit && !(*audit)(quarantine.published.c_str(), error)))
+        {
+            if (error.empty())
+                error = "native world cache publication was cancelled";
+            publishedFileLocks.Close();
+            RemoveVerifiedDirectory(quarantine, quarantineDirectoryGuard);
+            error = "cache quarantine semantic audit failed: " + error;
+            return false;
+        }
+        publishedFileLocks.Close();
+        quarantineDirectoryGuard.Close();
+
+        if (IsCancelled(request))
+        {
+            CScopedHandles cancelledGuard;
+            if (LockDirectory(quarantine.published, cancelledGuard, error))
+                RemoveVerifiedDirectory(quarantine, cancelledGuard);
+            error = "native world cache publication was cancelled";
+            return false;
+        }
+
+        // Windows refuses to rename a directory containing children opened without
+        // delete sharing. Close the private quarantine guards, publish by one
+        // same-volume rename, then acquire final guards and repeat the complete
+        // validation before the directory is returned to the registrar.
+        if (!MoveFileExW(SharedUtil::FromUTF8(quarantine.published).c_str(), SharedUtil::FromUTF8(paths.published).c_str(), MOVEFILE_WRITE_THROUGH))
+        {
+            const DWORD publishError = GetLastError();
+            // Guards were closed for publication, so this path is no longer safe
+            // to traverse. Leave the random sibling inert for verified GC.
+
+            // Windows may report ACCESS_DENIED rather than ALREADY_EXISTS for a
+            // racing directory publication. Converge only if the final object is
+            // independently lockable and exact.
+            CScopedHandles concurrentLocks;
+            if ((publishError != ERROR_ALREADY_EXISTS && publishError != ERROR_FILE_EXISTS && publishError != ERROR_ACCESS_DENIED) ||
+                !LockDirectory(paths.published, concurrentLocks, error) || !LockAndValidatePublishedFiles(request, paths, concurrentLocks, error))
+            {
+                error = SString("cache atomic publication failed win32=%u detail=%s", publishError, error.c_str());
+                return false;
+            }
+            if (retainLease)
+            {
+                parentLocks.TransferTo(g_pendingLocks);
+                concurrentLocks.TransferTo(g_pendingLocks);
+            }
             cacheHit = true;
-            g_cachePrepared = true;
+            g_cachePrepared = retainLease;
             return true;
         }
-        existingLocks.Close();
 
-        // A power-loss remnant or corrupt object is never loaded. Move it away
-        // from the semantic address atomically, then rebuild from the locked
-        // local seed. Unknown extra files keep the invalid sibling nonempty but
-        // cannot block or alias the final address.
-        const SString invalidPath = MakePrivateSibling(paths, "invalid", error);
-        if (invalidPath.empty())
-            return false;
-        if (!MoveFileExW(SharedUtil::FromUTF8(paths.published).c_str(), SharedUtil::FromUTF8(invalidPath).c_str(), MOVEFILE_WRITE_THROUGH))
+        CScopedHandles publishedLocks;
+        if (!LockDirectory(paths.published, publishedLocks, error) || !LockAndValidatePublishedFiles(request, paths, publishedLocks, error))
         {
-            error = SString("invalid cache object recovery failed prior=%s win32=%u", existingError.c_str(), GetLastError());
+            error = "published cache object cannot be locked and revalidated: " + error;
             return false;
         }
-        // Never traverse an object that failed handle validation: it may have
-        // been a junction. A later verified GC may remove this inert sibling.
-    }
-
-    const SString sourceDirectory = SharedUtil::CalcMTASAPath(request.sourceRelativeDirectory.c_str());
-    SCachePaths   sourcePaths = MakeCachePaths(request, sourceDirectory);
-    sourcePaths.manifest = JoinPath(sourceDirectory, request.manifestFileName);
-    sourcePaths.ide = JoinPath(sourceDirectory, request.ide.name);
-    sourcePaths.img = JoinPath(sourceDirectory, request.img.name);
-    CScopedHandles sourceLocks;
-    if (!IsSafeLocalPath(sourceDirectory) || !LockDirectory(sourceDirectory, sourceLocks, error) ||
-        !LockRegularFile(sourcePaths.manifest, request.sourceManifestBytes, request.sourceManifestBytes, sourceLocks, error) ||
-        !LockRegularFile(sourcePaths.ide, request.ide.bytes, request.ide.bytes, sourceLocks, error) ||
-        !LockRegularFile(sourcePaths.img, request.img.bytes, request.img.bytes, sourceLocks, error) ||
-        !HasExactHash(sourcePaths.manifest, request.sourceManifestSha256) || !HasExactHash(sourcePaths.ide, request.ide.sha256) ||
-        !HasExactHash(sourcePaths.img, request.img.sha256))
-    {
-        if (error.empty())
-            error = "local cache seed SHA-256 differs from its parsed manifest";
-        error = "local cache seed is invalid: " + error;
-        return false;
-    }
-
-    const SString quarantinePath = MakePrivateSibling(paths, "quarantine", error);
-    if (quarantinePath.empty())
-        return false;
-    if (!CreateDirectoryW(SharedUtil::FromUTF8(quarantinePath).c_str(), nullptr))
-    {
-        error = SString("cache quarantine directory creation failed win32=%u", GetLastError());
-        return false;
-    }
-    SCachePaths    quarantine = MakeCachePaths(request, quarantinePath);
-    CScopedHandles quarantineDirectoryGuard;
-    if (!LockDirectory(quarantine.published, quarantineDirectoryGuard, error))
-    {
-        // The unverified path is never traversed. Its random, non-addressable
-        // name cannot become an activation candidate.
-        return false;
-    }
-    const std::string canonicalManifest = BuildCanonicalManifest(request);
-    const bool        filled = WriteAndFlushFile(quarantine.manifest, canonicalManifest, error) &&
-                        CopyAndFlushFile(sourcePaths.ide, quarantine.ide, request.ide.name, error) &&
-                        CopyAndFlushFile(sourcePaths.img, quarantine.img, request.img.name, error);
-    if (!filled)
-    {
-        RemoveVerifiedDirectory(quarantine, quarantineDirectoryGuard);
-        return false;
-    }
-
-    CScopedHandles publishedFileLocks;
-    if (!LockAndValidatePublishedFiles(request, quarantine, publishedFileLocks, error))
-    {
-        publishedFileLocks.Close();
-        RemoveVerifiedDirectory(quarantine, quarantineDirectoryGuard);
-        error = "cache quarantine validation failed: " + error;
-        return false;
-    }
-    publishedFileLocks.Close();
-    quarantineDirectoryGuard.Close();
-
-    // Windows refuses to rename a directory containing children opened without
-    // delete sharing. Close the private quarantine guards, publish by one
-    // same-volume rename, then acquire final guards and repeat the complete
-    // validation before the directory is returned to the registrar.
-    if (!MoveFileExW(SharedUtil::FromUTF8(quarantine.published).c_str(), SharedUtil::FromUTF8(paths.published).c_str(), MOVEFILE_WRITE_THROUGH))
-    {
-        const DWORD publishError = GetLastError();
-        // Guards were closed for publication, so this path is no longer safe
-        // to traverse. Leave the random sibling inert for verified GC.
-
-        // Windows may report ACCESS_DENIED rather than ALREADY_EXISTS for a
-        // racing directory publication. Converge only if the final object is
-        // independently lockable and exact.
-        CScopedHandles concurrentLocks;
-        if ((publishError != ERROR_ALREADY_EXISTS && publishError != ERROR_FILE_EXISTS && publishError != ERROR_ACCESS_DENIED) ||
-            !LockDirectory(paths.published, concurrentLocks, error) || !LockAndValidatePublishedFiles(request, paths, concurrentLocks, error))
+        if (retainLease)
         {
-            error = SString("cache atomic publication failed win32=%u detail=%s", publishError, error.c_str());
-            return false;
+            parentLocks.TransferTo(g_pendingLocks);
+            publishedLocks.TransferTo(g_pendingLocks);
         }
-        parentLocks.TransferTo(g_pendingLocks);
-        concurrentLocks.TransferTo(g_pendingLocks);
-        cacheHit = true;
-        g_cachePrepared = true;
+        cacheHit = false;
+        g_cachePrepared = retainLease;
         return true;
     }
+}  // namespace
 
-    CScopedHandles publishedLocks;
-    if (!LockDirectory(paths.published, publishedLocks, error) || !LockAndValidatePublishedFiles(request, paths, publishedLocks, error))
+bool PrepareAndLockNativeWorldCache(const SNativeWorldCacheRequestSA& request, std::string& publishedDirectory, bool& cacheHit, std::string& error)
+{
+    return PrepareNativeWorldCacheImpl(request, publishedDirectory, cacheHit, error, true, true, nullptr);
+}
+
+bool PublishNativeWorldCache(const SNativeWorldCacheRequestSA& request, const NativeWorldCacheAuditSA& audit, std::string& publishedDirectory, bool& cacheHit,
+                             std::string& error)
+{
+    if (!audit)
     {
-        error = "published cache object cannot be locked and revalidated: " + error;
+        error = "transport cache publication requires a closed semantic audit";
         return false;
     }
-    parentLocks.TransferTo(g_pendingLocks);
-    publishedLocks.TransferTo(g_pendingLocks);
-    cacheHit = false;
-    g_cachePrepared = true;
-    return true;
+    return PrepareNativeWorldCacheImpl(request, publishedDirectory, cacheHit, error, false, false, &audit);
 }
 
 void CommitNativeWorldCacheLease()

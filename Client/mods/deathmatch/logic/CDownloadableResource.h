@@ -72,6 +72,8 @@ public:
     bool IsWaitingForDownload() { return m_bInDownloadQueue; };
     void SetModifedByScript(bool bModifedByScript) { m_bModifedByScript = bModifedByScript; };
     bool IsModifedByScript() { return m_bModifedByScript; };
+    bool IsNativeWorldTransportFile() const noexcept { return m_bNativeWorldTransportFile; }
+    void SetNativeWorldTransportFile() noexcept { m_bNativeWorldTransportFile = true; }
 
 protected:
     CResource*    m_pResource;
@@ -90,4 +92,5 @@ protected:
     uint m_uiHttpServerIndex;
     bool m_bModifedByScript;
     bool m_bClientChecksumVerified;
+    bool m_bNativeWorldTransportFile{};
 };

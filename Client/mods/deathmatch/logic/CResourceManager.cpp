@@ -127,6 +127,40 @@ void CResourceManager::OnDownloadGroupFinished()
     }
 }
 
+void CResourceManager::PulseNativeWorldTransportPublications()
+{
+    for (auto iter = m_retiredNativeWorldPublications.begin(); iter != m_retiredNativeWorldPublications.end();)
+    {
+        if (iter->wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        {
+            ++iter;
+            continue;
+        }
+        try
+        {
+            iter->get();
+        }
+        catch (...)
+        {
+            // A retired job has no resource left to consume its result. The
+            // worker already owns the refusal/cleanup boundary.
+        }
+        iter = m_retiredNativeWorldPublications.erase(iter);
+    }
+
+    for (CResource* resource : m_resources)
+    {
+        if (!resource->IsActive() && resource->IsNativeWorldTransportPublicationPending() && resource->CanBeLoaded())
+            resource->Load();
+    }
+}
+
+void CResourceManager::RetireNativeWorldTransportPublication(std::future<SNativeWorldTransportPublishResult>&& publication)
+{
+    if (publication.valid())
+        m_retiredNativeWorldPublications.emplace_back(std::move(publication));
+}
+
 bool CResourceManager::RemoveResource(unsigned short usNetID)
 {
     CResource* pResource = GetResourceFromNetID(usNetID);

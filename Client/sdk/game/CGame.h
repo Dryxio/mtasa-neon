@@ -13,6 +13,9 @@
 
 #include <memory>
 #include <map>
+#include <array>
+#include <atomic>
+#include <string>
 #include <SString.h>
 #include "Common.h"
 #include "CWeaponInfo.h"
@@ -106,6 +109,32 @@ struct SShaderReplacementStats
     std::map<uint, SMatchChannelStats> channelStatsList;
 };
 
+struct SNativeWorldTransportFile
+{
+    std::string  relativePath;
+    std::string  absolutePath;
+    unsigned int declaredBytes{};
+};
+
+struct SNativeWorldTransportOffer
+{
+    std::string                              resourceName;
+    unsigned char                            format{};
+    std::string                              manifestRelativePath;
+    std::array<SNativeWorldTransportFile, 3> files;
+    std::shared_ptr<std::atomic_bool>        cancelled;
+};
+
+struct SNativeWorldTransportPublishResult
+{
+    bool        success{};
+    bool        cacheHit{};
+    std::string offerId;
+    std::string contentId;
+    std::string publishedDirectory;
+    std::string error;
+};
+
 class __declspec(novtable) CGame
 {
     typedef std::unique_ptr<CAnimBlendAssocGroup> AssocGroup_type;
@@ -195,6 +224,10 @@ public:
     virtual bool GetJetpackWeaponEnabled(eWeaponType weaponType);
 
     virtual eGameVersion GetGameVersion() = 0;
+
+    // Audits and publishes downloaded native-world bytes only. This API never
+    // registers an archive, mutates GTA pools, or retains an activation lease.
+    virtual SNativeWorldTransportPublishResult PublishNativeWorldTransportOffer(const SNativeWorldTransportOffer& offer) = 0;
 
     virtual bool IsCheatEnabled(const char* szCheatName) = 0;
     virtual bool SetCheatEnabled(const char* szCheatName, bool bEnable) = 0;

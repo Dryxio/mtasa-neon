@@ -56,6 +56,10 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-14
     ServerModelRegistryV2,
 
+    // Advertises engine-owned native world pack files during resource start.
+    // 2026-07-16
+    NativeWorldPackTransport,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

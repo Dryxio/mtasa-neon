@@ -30,6 +30,21 @@ class CCore;
 std::wstring utf8_mbstowcs(const std::string& str);
 std::string  utf8_wcstombs(const std::wstring& wstr);
 
+namespace
+{
+    bool IsCanonicalNativeWorldTransportPath(const std::string& path)
+    {
+        if (path.empty() || path.size() > 255 || path.front() == '/' || path.back() == '/' || path.find('\\') != std::string::npos ||
+            path.find_first_of(":*?\"<>|") != std::string::npos || !IsValidFilePath(path.c_str()))
+        {
+            return false;
+        }
+
+        const std::filesystem::path fsPath(path);
+        return !fsPath.has_root_path() && fsPath.lexically_normal().generic_string() == path;
+    }
+}
+
 // TODO: Make this independent of g_pClientGame. Just moved it here to get it out of the
 //       horribly big CClientGame file.
 bool CPacketHandler::ProcessPacket(unsigned char ucPacketID, NetBitStreamInterface& bitStream)
@@ -5245,19 +5260,56 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
         // Resource Chunk checksum
         CChecksum chunkChecksum;
         // Resource Chunk File Size
-        double dChunkDataSize;
+        double        dChunkDataSize;
+        unsigned char nativeWorldFilesRemaining = 0;
+        bool          sawResourceChunk = false;
 
         while (bitStream.Read(ucChunkType))
         {
+            if ((nativeWorldFilesRemaining != 0 && ucChunkType != 'F') || (ucChunkType == 'N' && sawResourceChunk))
+            {
+                bFatalError = true;
+                AddReportLog(2081, "Interrupted or misplaced native world transport descriptor");
+                break;
+            }
+            sawResourceChunk = true;
+
             switch (ucChunkType)
             {
+                case 'N':  // Engine-owned native world transport descriptor
+                {
+                    unsigned char format = 0;
+                    unsigned char fileCount = 0;
+                    unsigned char manifestLength = 0;
+                    if (pResource->HasNativeWorldTransport() || !bitStream.Read(format) || !bitStream.Read(fileCount) || !bitStream.Read(manifestLength) ||
+                        format != 1 || fileCount != 3 || manifestLength == 0)
+                    {
+                        bFatalError = true;
+                        AddReportLog(2081, "Malformed or duplicate native world transport descriptor");
+                        break;
+                    }
+
+                    std::string manifestPath(manifestLength, '\0');
+                    if (!bitStream.Read(manifestPath.data(), manifestLength) || !IsCanonicalNativeWorldTransportPath(manifestPath) ||
+                        !pResource->SetNativeWorldTransport(format, manifestPath.c_str()))
+                    {
+                        bFatalError = true;
+                        AddReportLog(2081, "Invalid native world transport manifest path");
+                        break;
+                    }
+
+                    nativeWorldFilesRemaining = fileCount;
+                    break;
+                }
                 case 'E':  // Exported Function
                     if (bitStream.Read(ucChunkSize))
                     {
                         szChunkData = new char[ucChunkSize + 1];
-                        if (ucChunkSize > 0)
+                        if (ucChunkSize > 0 && !bitStream.Read(szChunkData, ucChunkSize))
                         {
-                            bitStream.Read(szChunkData, ucChunkSize);
+                            bFatalError = true;
+                            AddReportLog(2081, "Truncated exported function chunk");
+                            break;
                         }
                         szChunkData[ucChunkSize] = NULL;
 
@@ -5269,11 +5321,20 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
                     if (bitStream.Read(ucChunkSize))
                     {
                         szChunkData = new char[ucChunkSize + 1];
-                        if (ucChunkSize > 0)
+                        if (ucChunkSize > 0 && !bitStream.Read(szChunkData, ucChunkSize))
                         {
-                            bitStream.Read(szChunkData, ucChunkSize);
+                            bFatalError = true;
+                            AddReportLog(2081, "Truncated resource file path");
+                            break;
                         }
                         szChunkData[ucChunkSize] = NULL;
+
+                        if (nativeWorldFilesRemaining != 0 && !IsCanonicalNativeWorldTransportPath(szChunkData))
+                        {
+                            bFatalError = true;
+                            AddReportLog(2081, "Invalid native world transport file path");
+                            break;
+                        }
 
                         // Clean resource name (remove Windows unsupported characters from filename)
                         std::string          strChunkData = szChunkData;
@@ -5308,10 +5369,21 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
                         }
                         else
                         {
-                            bitStream.Read(ucChunkSubType);
-                            bitStream.Read(chunkChecksum.ulCRC);
-                            bitStream.Read(reinterpret_cast<char*>(chunkChecksum.md5.data), sizeof(chunkChecksum.md5.data));
-                            bitStream.Read(dChunkDataSize);
+                            if (!bitStream.Read(ucChunkSubType) || !bitStream.Read(chunkChecksum.ulCRC) ||
+                                !bitStream.Read(reinterpret_cast<char*>(chunkChecksum.md5.data), sizeof(chunkChecksum.md5.data)) ||
+                                !bitStream.Read(dChunkDataSize))
+                            {
+                                bFatalError = true;
+                                AddReportLog(2081, "Truncated resource file chunk");
+                                break;
+                            }
+
+                            if (!std::isfinite(dChunkDataSize) || dChunkDataSize < 0 || dChunkDataSize > std::numeric_limits<uint>::max())
+                            {
+                                bFatalError = true;
+                                AddReportLog(2081, "Invalid resource file size");
+                                break;
+                            }
 
                             uint uiDownloadSize = static_cast<uint>(dChunkDataSize);
                             uiTotalSizeProcessed += uiDownloadSize;
@@ -5320,11 +5392,13 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
 
                             // Create the resource downloadable
                             CDownloadableResource* pDownloadableResource = nullptr;
+                            bool                   bDownload = false;
+                            bool                   bDownloadRead = false;
                             switch (ucChunkSubType)
                             {
                                 case CDownloadableResource::RESOURCE_FILE_TYPE_CLIENT_FILE:
                                 {
-                                    bool bDownload = bitStream.ReadBit();
+                                    bDownloadRead = bitStream.ReadBit(bDownload);
                                     pDownloadableResource = pResource->AddResourceFile(CDownloadableResource::RESOURCE_FILE_TYPE_CLIENT_FILE, szParsedChunkData,
                                                                                        uiDownloadSize, chunkChecksum, bDownload);
 
@@ -5342,6 +5416,25 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
                                 default:
 
                                     break;
+                            }
+
+                            if (nativeWorldFilesRemaining != 0)
+                            {
+                                if (ucChunkSubType != CDownloadableResource::RESOURCE_FILE_TYPE_CLIENT_FILE || !bDownloadRead || !bDownload ||
+                                    !pResource->AddNativeWorldTransportFile(pDownloadableResource))
+                                {
+                                    bFatalError = true;
+                                    AddReportLog(2081, "Invalid native world transport file group");
+                                    break;
+                                }
+
+                                --nativeWorldFilesRemaining;
+                                if (nativeWorldFilesRemaining == 0 && !pResource->IsNativeWorldTransportDescriptorValid())
+                                {
+                                    bFatalError = true;
+                                    AddReportLog(2081, "Native world transport manifest is not one of its three files");
+                                    break;
+                                }
                             }
 
                             // Does the Client and Server checksum differ?
@@ -5385,6 +5478,12 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
             {
                 break;
             }
+        }
+
+        if (!bFatalError && nativeWorldFilesRemaining != 0)
+        {
+            bFatalError = true;
+            AddReportLog(2081, "Incomplete native world transport file group");
         }
 
         if (!bFatalError)

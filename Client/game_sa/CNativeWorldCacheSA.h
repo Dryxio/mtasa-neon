@@ -9,6 +9,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <functional>
+#include <memory>
 #include <string>
 
 struct SNativeWorldCacheFileSA
@@ -20,17 +23,21 @@ struct SNativeWorldCacheFileSA
 
 struct SNativeWorldCacheRequestSA
 {
-    unsigned int            format{};
-    std::string             sourceRelativeDirectory;
-    std::string             packId;
-    std::string             manifestFileName;
-    std::string             sourceManifestSha256;
-    unsigned int            sourceManifestBytes{};
-    unsigned int            maximumManifestBytes{};
-    std::string             contentId;
-    SNativeWorldCacheFileSA ide;
-    SNativeWorldCacheFileSA img;
+    unsigned int                      format{};
+    std::string                       sourceRelativeDirectory;
+    std::string                       sourceAbsoluteDirectory;
+    std::string                       packId;
+    std::string                       manifestFileName;
+    std::string                       sourceManifestSha256;
+    unsigned int                      sourceManifestBytes{};
+    unsigned int                      maximumManifestBytes{};
+    std::string                       contentId;
+    std::shared_ptr<std::atomic_bool> cancellation;
+    SNativeWorldCacheFileSA           ide;
+    SNativeWorldCacheFileSA           img;
 };
+
+using NativeWorldCacheAuditSA = std::function<bool(const std::string& quarantineDirectory, std::string& error)>;
 
 std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& request);
 
@@ -38,5 +45,9 @@ std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& reque
 // returns the absolute directory GTA may use. The returned pending lease must
 // be released on every precommit refusal or committed after native activation.
 bool PrepareAndLockNativeWorldCache(const SNativeWorldCacheRequestSA& request, std::string& publishedDirectory, bool& cacheHit, std::string& error);
+// Repeatable transport path: publishes exact audited bytes but deliberately
+// returns with every handle closed and no activation lease retained.
+bool PublishNativeWorldCache(const SNativeWorldCacheRequestSA& request, const NativeWorldCacheAuditSA& audit, std::string& publishedDirectory, bool& cacheHit,
+                             std::string& error);
 void CommitNativeWorldCacheLease();
 void ReleaseNativeWorldCacheLease();

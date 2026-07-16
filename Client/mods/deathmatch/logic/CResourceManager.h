@@ -13,7 +13,10 @@ class CResourceManager;
 
 #pragma once
 
+#include <game/CGame.h>
+#include <future>
 #include <list>
+#include <vector>
 
 class CClientEntity;
 class CResource;
@@ -48,6 +51,8 @@ public:
     void StopAll();
 
     void OnDownloadGroupFinished();
+    void PulseNativeWorldTransportPublications();
+    void RetireNativeWorldTransportPublication(std::future<SNativeWorldTransportPublishResult>&& publication);
 
     void                   OnAddResourceFile(CDownloadableResource* pResourceFile);
     void                   OnRemoveResourceFile(CDownloadableResource* pResourceFile);
@@ -61,7 +66,8 @@ public:
                                        bool bPassSize = false);
 
 private:
-    CMappedList<CResource*>                   m_resources;
-    std::map<ushort, CResource*>              m_NetIdResourceMap;
-    std::map<SString, CDownloadableResource*> m_ResourceFileMap;
+    CMappedList<CResource*>                                      m_resources;
+    std::map<ushort, CResource*>                                 m_NetIdResourceMap;
+    std::map<SString, CDownloadableResource*>                    m_ResourceFileMap;
+    std::vector<std::future<SNativeWorldTransportPublishResult>> m_retiredNativeWorldPublications;
 };

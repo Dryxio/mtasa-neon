@@ -10,9 +10,11 @@
  *****************************************************************************/
 #pragma once
 
+#include <cstdio>
 #include <map>
-#include <string>
 #include <list>
+#include <memory>
+#include <string>
 #include <vector>
 #include <algorithm>
 #include <utility>
@@ -238,14 +240,30 @@ public:
     /// Takes ownership of the data: copies the provided buffer into internal storage.
     void SetBody(const char* ipsBody, int inBodyLength)
     {
+        m_pFileBody.reset();
+        m_uiFileBodyLength = 0;
+
         if (ipsBody && inBodyLength > 0)
             m_strBody.assign(ipsBody, inBodyLength);
         else
             m_strBody.clear();
     }
 
+    /// Stream a response body from a file instead of copying it into memory.
+    /// Takes ownership of the open file so the exact file remains available until cpp-httplib finishes the response.
+    void SetFileBody(FILE* pFile, size_t uiBodyLength)
+    {
+        m_strBody.clear();
+        m_pFileBody.reset(pFile, [](FILE* pOwnedFile) { fclose(pOwnedFile); });
+        m_uiFileBodyLength = uiBodyLength;
+    }
+
     /// Get the response body (for CHTTPD to read back).
     const std::string& GetBody() const { return m_strBody; }
+
+    bool                         HasFileBody() const { return m_pFileBody != nullptr; }
+    const std::shared_ptr<FILE>& GetFileBody() const { return m_pFileBody; }
+    size_t                       GetFileBodyLength() const { return m_uiFileBodyLength; }
 
     /// HTTP status code to send back.
     HttpStatusCode m_nResponseCode = HTTP_STATUS_CODE_200_OK;
@@ -267,5 +285,7 @@ public:
     int m_nResponseId = 0;
 
 private:
-    std::string m_strBody;  // Internal storage for SetBody
+    std::string           m_strBody;               // Internal storage for SetBody
+    std::shared_ptr<FILE> m_pFileBody;             // Open file streamed by CHTTPD
+    size_t                m_uiFileBodyLength = 0;  // Content-Length for the file body
 };

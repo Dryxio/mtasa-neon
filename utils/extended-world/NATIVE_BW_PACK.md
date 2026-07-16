@@ -80,15 +80,14 @@ The manager derives the even streaming-buffer
 minimum from that validated maximum rather than storing a second 4,008-sector
 constant.
 
-This is the Phase 2B-2A local-cache foundation, not arbitrary IDE support.
-Manifests
-currently represent the same constrained static-world format proven by
-Bullworth: `objs`/`tobj` IDE sections, DFF/TXD entries, exactly one merged COL,
-and standalone binary IPLs. Server distribution, server authentication, hot
-registration, and multi-pack aggregate allocation are not implemented yet.
-Bullworth remains the single compiled policy and the existing environment
-flag, executable allowlist, trusted pool budgets, registration order,
-diagnostics, and process-lifetime behavior are unchanged.
+This is the Phase 2B local-cache and publish-only server-transport foundation,
+not arbitrary IDE support. Manifests currently represent the same constrained
+static-world format proven by Bullworth: `objs`/`tobj` IDE sections, DFF/TXD
+entries, exactly one merged COL, and standalone binary IPLs. Authenticated
+server authorization, hot registration, and multi-pack aggregate allocation
+are not implemented yet. Bullworth remains the single compiled policy and the
+existing environment flag, executable allowlist, trusted pool budgets,
+registration order, diagnostics, and process-lifetime behavior are unchanged.
 
 The JSON schema is closed: unknown or missing fields, duplicate JSON keys,
 unsafe leaf paths, non-ASCII strings, non-uint32 numbers, and unsupported format
@@ -140,6 +139,66 @@ manifest in place. Removing that final install dependency requires the next
 phase's authenticated, session-bound activation ticket. Cache content identity
 alone is deliberately not authorization to choose a pack.
 
+### Server transport and publish-only cache checkpoint
+
+A resource can now distribute the three files through the normal resource HTTP
+path by declaring an exact format-1 group:
+
+```xml
+<file src="native/native-world.json" download="true" native_world="true" />
+<file src="native/world.ide" download="true" native_world="true" />
+<file src="native/world.img" download="true" native_world="true" />
+<native_world format="1" manifest="native/native-world.json" />
+```
+
+The descriptor and its three tagged files use a version-gated ResourceStart
+encoding. A legacy client receives neither the descriptor nor the tagged files,
+so it cannot partially interpret the new group. The server streams large file
+bodies through a 64 KiB buffer instead of retaining an entire IMG in memory.
+
+The capable client accepts exactly three unique automatic-download files: one
+named `native-world.json`, one IDE, and one IMG. Their declared ceilings are
+4 KiB, 1 MiB, and 256 MiB respectively. The downloader rejects missing or
+mismatched Content-Length, received-byte overflow visible through the external
+net module's status API, final disk-length divergence, and checksum mismatch.
+The net module does not expose its write callback through the in-tree ABI, so
+the exact cap cannot be enforced inside that callback; the prequeue, progress,
+completion, disk-length, and checksum checks are the available in-tree
+boundaries.
+
+After normal checksum verification, a cancellable worker performs the full
+closed Bullworth audit without holding resource objects across threads. It
+copies and hashes the files into a cryptographically random same-volume
+quarantine, validates the copied bytes while verified no-write/no-delete
+handles are held, publishes with one directory rename, then reacquires and
+revalidates the immutable final object. Existing content-addressed objects take
+the same guarded validation path. Lifecycle teardown retires or cancels the
+worker without allowing it to access a destroyed resource.
+
+Transport publication is deliberately inert. It does not call `AddArchive`,
+install hooks, mutate pools or model stores, select an environment pack, acquire
+an activation lease, or authorize the content. A successful line therefore
+ends with `audit=closed-bullworth publish=atomic activation=no lease=no
+restart-required=yes`; `disposition=published` and `disposition=hit` distinguish
+a new immutable object from a validated cache hit. Publication failure retains
+stock behavior.
+
+The transport cache allows at most four other content objects under the pack
+policy, at most 1 GiB of counted data, and requires the requested bytes plus a
+64 MiB free-space margin. It safely collects only recognizable, verified
+private quarantine/recovery remnants. Unsafe siblings, reparse points,
+unverifiable entries, quota exhaustion, and immutable content conflicts are
+refused rather than deleted or reused.
+
+The repository test resource at
+`test-resources/native-world-transport-test/meta.xml` contains only the
+declaration; its audited Bullworth payload remains local test data. Validation
+covered a fresh resource download, publication after moving the previous cache
+object aside, exact SHA-256 equality with that known-good object, and reconnect
+reuse with `disposition=hit`. The Game SA and Client Deathmatch Release/Win32
+builds passed, and the extended-world Python suite reported 38 passing tests
+with two optional skips.
+
 The compiled model-store policy records the relocated foundation capacities
 (`15000` Atomic, `160` DamageAtomic, and `200` Time). Preflight requires the
 exact stock occupancy and proves each derived IDE addition fits its remaining
@@ -156,16 +215,17 @@ flags zero, no LOD link (`lodIndex == -1`), X/Y in `[-10000, 9999]`, and Z in
 preventing GTA's native extension split from disagreeing with preflight.
 
 Hashes supplied by this untrusted manifest prove that the bytes match its own
-claims; they do not authenticate a server or publisher. The local installation
-remains the only provenance source in this phase. A later server activation
-record must authorize the exact semantic content ID. The closed payload
-validator also parses and bounds the reviewed RenderWare DFF/TXD and COL
-grammar before the cache path reaches GTA.
+claims; they do not authenticate a server or publisher. Resource transport can
+now provide cache input, but it is still an unauthenticated, self-asserted
+source and cannot select or activate a pack. A later server activation record
+must authorize the exact semantic content ID. The closed payload validator also
+parses and bounds the reviewed RenderWare DFF/TXD and COL grammar before the
+cache path reaches GTA.
 
 Random quarantine or invalid siblings that cannot be safely verified are left
-inert and are never activation candidates. A future transport phase must add a
-verified non-reparse garbage collector plus global object/byte quotas before a
-hostile server can offer multiple genuinely different valid payloads.
+inert and are never activation candidates. The transport path now applies a
+verified non-reparse remnant collector and object/byte quotas; future activation
+work must still bind one exact semantic content ID to the authenticated session.
 
 The switch is read once, before GTA populates its model stores. In the Windows
 VM, set it in the process-start environment and then launch the client from the
