@@ -122,6 +122,9 @@ Custom zones are deleted and edited vanilla zones are restored when their owning
 | Function | Side | Description |
 | --- | --- | --- |
 | `getMarkerLimitStats()` | Client | Returns streamed-marker usage and limits plus allocated 3D-marker, checkpoint, and direction-arrow capacities. |
+| `renderScriptImportantArea(center, radiusX, radiusY [, localId])` | Client | Submits GTA's native SCM important-area visual for the current frame: three pulsing, additive red cylinders with native ground correction. The resource identity and optional local ID are mixed into the native marker identifier. |
+
+`renderScriptImportantArea` is a frame-submission primitive rather than an element: call it from `onClientPreRender` while the area should remain visible. It reproduces the visual emitted by the nonzero area flag of SCM `LOCATE_*` commands, but deliberately creates no collision shape; scripts must evaluate the corresponding box or radius separately.
 
 ### Procedural seabed
 
@@ -143,6 +146,10 @@ These functions affect only the rendered procedural seabed. They do not remove t
 The mode follows skin changes, entity recreation, joins, and streaming. The OOP equivalents are `ped:setUseNativeWalkingStyle(enabled)`, `ped:isUsingNativeWalkingStyle()`, and the `ped.usingNativeWalkingStyle` property.
 
 ### Native ped tasks and gang-tag visuals
+
+**Neon lets multiplayer NPCs drive with GTA:SA's original AI, fully synchronized.**
+
+Use it for story missions, convoys, escorts, scripted traffic, freeroam events, and more.
 
 | Function | Side | Description |
 | --- | --- | --- |
@@ -192,7 +199,21 @@ The token prevents delayed callbacks from an older run in the same resource from
 | `isMissionAudioFinished(handle)` | Client | Reports natural completion after playback has started. |
 | `releaseMissionAudio(handle)` | Client | Clears the owned native event and releases its physical slot. |
 
-Mission audio is local to each client: a co-op resource should preload on every participant, cross a server readiness barrier, then broadcast play and wait for every completion acknowledgement. Handles are generation-scoped to the calling resource and cannot query, play, or release another resource's slot. Resource shutdown releases its handles automatically. The service never preempts an occupied native slot and verifies the stored event after preload because GTA can silently refuse a request. Supported event IDs are the two native script-audio families (`1800..1829` and `2000..45400`); custom event `65535` is intentionally excluded.
+Mission audio is local to each client: a co-op resource should preload on every participant, cross a server readiness barrier, then broadcast play and wait for every completion acknowledgement. Handles are generation-scoped to the calling resource and cannot query, play, or release another resource's slot. Resource shutdown releases its handles automatically. The service never preempts an occupied native slot; while an owned, unplayed event remains pending, load polling periodically re-arms GTA's silently dropped hardware request. Supported event IDs are the two native script-audio families (`1800..1829` and `2000..45400`); custom event `65535` is intentionally excluded.
+
+### Native mission text
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `acquireMissionText(blockName)` | Client | Exclusively loads one GTA mission GXT block for the calling resource. |
+| `showMissionText(key, duration [, flags])` | Client | Queues the translated key through GTA's native small-message path used by `PRINT_NOW`. |
+| `showMissionHelp(key [, permanent])` | Client | Displays the translated key through GTA's native help-message HUD. |
+| `showMissionBigText(key, duration [, style, number])` | Client | Queues GTA's native big mission text, optionally substituting one number. SCM styles use the original one-based values. |
+| `clearMissionTexts()` | Client | Clears the calling resource's tracked small and big native messages. |
+| `clearMissionHelp()` | Client | Clears the calling resource's native help message. |
+| `releaseMissionText()` | Client | Clears owned messages/help and releases the exclusive mission-text lease. |
+
+GTA has one global loaded mission-text table, so this API is deliberately resource-exclusive rather than last-writer-wins. Keys and block names use GTA's seven-character GXT limit. Main-table keys remain available while a mission block is leased, spoken `~z~` lines honor the player's GTA subtitle option, and resource shutdown clears every tracked HUD pointer before relinquishing ownership. The loaded block itself remains cached until another owner replaces it.
 
 ### Native recorded-car playback
 
