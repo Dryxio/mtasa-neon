@@ -231,6 +231,16 @@ C3DMarker* C3DMarkersSA::FindFreeMarker()
     return NULL;
 }
 
+void C3DMarkersSA::RenderScriptImportantArea(DWORD identifier, const CVector& center, float radiusX, float radiusY)
+{
+    // SCM LOCATE commands submit this primitive every script frame. Calling
+    // the verified GTA routine preserves its three concentric cylinders,
+    // pulse timing, additive alpha, and per-layer ground-height correction.
+    using HighlightImportantArea = void(__cdecl*)(DWORD, float, float, float, float, float);
+    reinterpret_cast<HighlightImportantArea>(FUNC_HighlightImportantArea)(identifier, center.fX - radiusX, center.fY - radiusY, center.fX + radiusX,
+                                                                          center.fY + radiusY, center.fZ);
+}
+
 C3DMarker* C3DMarkersSA::FindMarker(DWORD Identifier)
 {
     for (int i = 0; i < MAX_3D_MARKERS; i++)

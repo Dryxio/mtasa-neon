@@ -649,7 +649,10 @@ finishMission = function(passed, traceExtra)
     local party = mission.party
     local snapshots = mission.snapshots
     destroyMissionEntities()
-    local delay = passed and 6000 or 250
+    -- failMission spends 3500 ms in the failed stage before entering this
+    -- cleanup. Retain the party for another 1500 ms so GTA's native 5000 ms
+    -- M_FAIL print is not cleared early by the client stop event.
+    local delay = passed and 6000 or 1500
     setTimer(function()
         for _, player in ipairs(party) do
             if isElement(player) then
@@ -1331,7 +1334,12 @@ local function stageDemoActors(scene)
     local profile = TAGUP.sweetDemoScene
     for index, player in ipairs(scene.players) do
         if isElement(player) then
-            removePedFromVehicle(player)
+            -- SWEET1 checks whether CJ is still in a vehicle only after the
+            -- one-second fade has completed. Keep this authoritative fallback
+            -- under black instead of visibly ejecting the player at +600 ms.
+            if getPedOccupiedVehicle(player) then
+                removePedFromVehicle(player)
+            end
             local offset = profile.partyOffsets[index - 1]
             setElementPosition(player, profile.leaderStage.x + (offset and offset.x or 0), profile.leaderStage.y + (offset and offset.y or 0),
                                profile.leaderStage.z)
@@ -1370,7 +1378,10 @@ local function startDemoSceneTimeline(scene)
         end
         for _, player in ipairs(active.players) do
             if isElement(player) then
-                removePedFromVehicle(player)
+                -- The original assigns TASK_LEAVE_CAR to CJ 600 ms after
+                -- Sweet. Each participant owns the equivalent local-player
+                -- task; the later black-screen staging remains the fallback.
+                triggerClientEvent(player, "tagup:sweetDemoPlayerExitStart", resourceRoot, active.id, mission.entities.vehicle)
             end
         end
     end, profile.sweetLeaveLead, 1, scene.id))
@@ -2141,8 +2152,40 @@ addEventHandler("tagup:ballasDriveWanderAccepted", resourceRoot, function(depart
     end, TAGUP.ballasDeparture.postStartWait, 1, departure.id))
 end)
 
+local function isFiniteNumber(value)
+    return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+
+local function validateReportedVehicleArrival(kind, vehicle, target, gate, reportedX, reportedY, reportedZ)
+    if not isFiniteNumber(reportedX) or not isFiniteNumber(reportedY) or not isFiniteNumber(reportedZ) then
+        return false
+    end
+    if math.abs(reportedX - target[1]) > gate.radiusX or math.abs(reportedY - target[2]) > gate.radiusY or
+        math.abs(reportedZ - target[3]) > gate.radiusZ then
+        return false
+    end
+
+    local serverX, serverY, serverZ = getElementPosition(vehicle)
+    local deltaX, deltaY, deltaZ = serverX - reportedX, serverY - reportedY, serverZ - reportedZ
+    local serverDrift = math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ)
+    -- The current vehicle syncer already owns the transform sent to MTA. This
+    -- generous sanity envelope rejects unrelated/stale reports without racing
+    -- the exact SCM box against a transform received in another packet.
+    if serverDrift > 40 then
+        if getTickCount() - (mission.lastArrivalRejectLog or 0) >= 1000 then
+            mission.lastArrivalRejectLog = getTickCount()
+            outputDebugString(("[tagging-up-turf] Deferred %s LOCATE_CAR_3D report: server drift %.2f m"):format(tostring(kind), serverDrift), 2)
+        end
+        return false
+    end
+
+    outputDebugString(("[tagging-up-turf] Accepted %s LOCATE_CAR_3D report=(%.2f, %.2f, %.2f), server drift=%.2f m"):format(
+                          tostring(kind), reportedX, reportedY, reportedZ, serverDrift))
+    return true
+end
+
 addEvent("tagup:vehicleReady", true)
-addEventHandler("tagup:vehicleReady", resourceRoot, function(kind)
+addEventHandler("tagup:vehicleReady", resourceRoot, function(kind, reportedX, reportedY, reportedZ)
     local player = client
     if not mission.running or not isMissionPlayer(player) or player ~= mission.leader then
         return
@@ -2159,9 +2202,8 @@ addEventHandler("tagup:vehicleReady", resourceRoot, function(kind)
             broadcastState({message = "Impossible d'installer Sweet dans la voiture."})
         end
     elseif kind == "idlewood" and mission.stage == "drive_idlewood" then
-        local x, y, z = getElementPosition(vehicle)
         local target, gate = TAGUP.idlewoodDestination, TAGUP.idlewoodArrival
-        if math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and math.abs(z - target[3]) <= gate.radiusZ then
+        if validateReportedVehicleArrival(kind, vehicle, target, gate, reportedX, reportedY, reportedZ) then
             -- The camera lease inhibits controls immediately. Neon mirrors the
             -- native bPlayerSafe pad flag, so GTA brakes the synchronized car
             -- exactly as it does after SWEET1 SET_PLAYER_CONTROL OFF.
@@ -2177,17 +2219,16 @@ addEventHandler("tagup:vehicleReady", resourceRoot, function(kind)
             failMission("Sweet n'est pas dans la Greenwood apres son entree passager native.")
         end
     elseif kind == "ballas" and mission.stage == "drive_ballas" then
-        local x, y, z = getElementPosition(vehicle)
-        local target = TAGUP.ballasDestination
-        if math.abs(x - target[1]) <= 4 and math.abs(y - target[2]) <= 4 and math.abs(z - target[3]) <= 4 then
+        local target, gate = TAGUP.ballasDestination, TAGUP.ballasArrival
+        if validateReportedVehicleArrival(kind, vehicle, target, gate, reportedX, reportedY, reportedZ) then
             startBallasDeparture()
         end
     elseif kind == "roof_return" and mission.stage == "return_after_roof" and isPartyInVehicle() then
         warpSweetIntoFirstFreeSeat()
         setStage("drive_home")
     elseif kind == "home" and mission.stage == "drive_home" then
-        local x, y, z = getElementPosition(vehicle)
-        if tagupDistance3D(x, y, z, unpack(TAGUP.homeDestination)) < 12 then
+        local target, gate = TAGUP.homeDestination, TAGUP.homeArrival
+        if validateReportedVehicleArrival(kind, vehicle, target, gate, reportedX, reportedY, reportedZ) then
             finishMission(true)
         end
     end

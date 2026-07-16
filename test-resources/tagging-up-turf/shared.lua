@@ -12,7 +12,9 @@ TAGUP = {
     idlewoodDestination = {2089.01, -1649.08, 12.54},
     idlewoodArrival = {radiusX = 4.0, radiusY = 4.0, radiusZ = 4.0},
     ballasDestination = {2338.74, -1500.31, 22.83},
+    ballasArrival = {radiusX = 4.0, radiusY = 4.0, radiusZ = 4.0},
     homeDestination = {2504.74, -1672.45, 12.38},
+    homeArrival = {radiusX = 4.0, radiusY = 4.0, radiusZ = 4.0},
     -- GTA's IPL loader applies the conjugated quaternion heading. Preserve
     -- that convention here: MTA yaw = (360 - raw IPL quaternion yaw) % 360.
     demoTag = {x = 2102.195313, y = -1648.757813, z = 13.585938, rotation = 0.3},
@@ -81,6 +83,7 @@ TAGUP = {
         leaderFinal = {x = 2097.56, y = -1651.36, z = 12.71, heading = 99},
         sweetFinal = {x = 2099.10, y = -1650.02, z = 12.57, heading = 99},
         sweetLeaveLead = 600,
+        playerExitObservationTimeout = 5000,
         fadeOutDelay = 500,
         fadeOutDuration = 1.0,
         blackStageDelay = 1100,
@@ -147,22 +150,6 @@ TAGUP = {
         {id = 3, group = "ballas", x = 2394.101563, y = -1468.367188, z = 24.78125, rotation = 89.5},
         {id = 4, group = "ballas", x = 2353.539063, y = -1508.210938, z = 24.75, rotation = 359.5},
         {id = 5, group = "rooftop", x = 2399.414063, y = -1552.03125, z = 28.75, rotation = 269.5},
-    },
-    stages = {
-        intro = {title = "TAGGING UP TURF", objective = "Grove Street. Sweet a un boulot pour vous."},
-        enter_car = {title = "La Greenwood de Sweet", objective = "Montez tous dans la voiture de Sweet."},
-        drive_idlewood = {title = "Idlewood", objective = "Conduisez Sweet jusqu'a Idlewood."},
-        demo = {title = "Regardez Sweet", objective = "Sweet vous montre comment recouvrir un tag."},
-        tags_idlewood = {title = "Deux tags", objective = "Recouvrez les deux tags de Ballas avec la bombe."},
-        return_car = {title = "On bouge", objective = "Retournez a la Greenwood de Sweet."},
-        drive_ballas = {title = "Territoire Ballas", objective = "Conduisez jusque dans le territoire Ballas."},
-        ballas_departure = {title = "Sweet s'en va", objective = "Descendez. Sweet part marquer un autre quartier."},
-        tags_ballas = {title = "Couvrez-vous", objective = "Recouvrez les deux tags. Les Ballas vont reagir."},
-        rooftop = {title = "Dernier tag", objective = "Montez sur le toit et recouvrez le dernier tag."},
-        return_after_roof = {title = "Retrouvez Sweet", objective = "Retournez a la Greenwood."},
-        drive_home = {title = "Grove Street", objective = "Ramenez Sweet chez lui."},
-        complete = {title = "MISSION PASSED", objective = "Respect +"},
-        failed = {title = "MISSION FAILED", objective = "La mission a echoue."},
     },
 }
 

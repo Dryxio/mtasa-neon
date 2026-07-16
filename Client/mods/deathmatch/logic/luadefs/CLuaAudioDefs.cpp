@@ -18,6 +18,7 @@
 namespace
 {
     constexpr unsigned int MISSION_AUDIO_SLOT_COUNT = 4;
+    constexpr uint64_t     MISSION_AUDIO_PRELOAD_RETRY_MS = 500;
     constexpr unsigned int SCRIPT_BANK_FIRST = 1800;
     constexpr unsigned int SCRIPT_BANK_LAST = 1829;
     constexpr unsigned int SCRIPT_SLOT_FIRST = 2000;
@@ -32,6 +33,8 @@ namespace
         bool         inspected{};
         bool         managed{};
         bool         played{};
+        uint64_t     lastPreloadAttempt{};
+        unsigned int preloadAttempts{};
     };
 
     std::array<SMissionAudioSlot, MISSION_AUDIO_SLOT_COUNT> g_missionAudioSlots;
@@ -153,6 +156,8 @@ namespace
         slot.handle = 0;
         slot.eventId = 0;
         slot.played = false;
+        slot.lastPreloadAttempt = 0;
+        slot.preloadAttempts = 0;
     }
 }  // namespace
 
@@ -308,8 +313,9 @@ std::variant<unsigned int, bool> CLuaAudioDefs::RequestMissionAudio(lua_State* l
         audio->PreloadMissionAudio(static_cast<unsigned short>(eventId), slotId);
 
         // Preload silently refuses busy slots, while GTA reports invalid slots
-        // as loaded. Matching the stored event is therefore the authoritative
-        // acceptance proof before a resource receives a handle.
+        // as loaded. Matching the stored event proves that this native link is
+        // ours; IsMissionAudioLoaded separately recovers a hardware request
+        // that GTA accepted into the link but failed to queue.
         const int currentEvent = audio->GetMissionAudioEvent(slotId);
         if (currentEvent != static_cast<int>(eventId))
         {
@@ -325,6 +331,8 @@ std::variant<unsigned int, bool> CLuaAudioDefs::RequestMissionAudio(lua_State* l
         slot.freeEventFingerprint = currentEvent;
         slot.managed = true;
         slot.played = false;
+        slot.lastPreloadAttempt = GetTickCount64_();
+        slot.preloadAttempts = 0;
         g_missionAudioHandles.emplace(handle, slotId);
         return handle;
     }
@@ -336,7 +344,32 @@ bool CLuaAudioDefs::IsMissionAudioLoaded(lua_State* luaVM, unsigned int handle)
     unsigned int       slotId{};
     SMissionAudioSlot* slot = GetOwnedMissionAudioSlot(luaVM, handle, &slotId);
     CAudioEngine*      audio = GetAudioEngine();
-    return slot && audio && audio->GetMissionAudioEvent(slotId) == static_cast<int>(slot->eventId) && audio->GetMissionAudioLoadingStatus(slotId) == 1;
+    if (!slot || !audio || audio->GetMissionAudioEvent(slotId) != static_cast<int>(slot->eventId))
+        return false;
+
+    if (audio->GetMissionAudioLoadingStatus(slotId) == 1)
+        return true;
+
+    const uint64_t now = GetTickCount64_();
+    if (!slot->played && now - slot->lastPreloadAttempt >= MISSION_AUDIO_PRELOAD_RETRY_MS)
+    {
+        // GTA stores the requested event even when effects loading is
+        // temporarily disabled or its fixed request ring drops the hardware
+        // request. Re-arm an owned, unplayed slot so a valid handle cannot
+        // remain pending forever; the native loader deduplicates requests that
+        // are still queued.
+        audio->PreloadMissionAudio(static_cast<unsigned short>(slot->eventId), slotId);
+        slot->lastPreloadAttempt = now;
+        ++slot->preloadAttempts;
+        if (slot->preloadAttempts == 1 || slot->preloadAttempts % 10 == 0)
+        {
+            // Keep long cold-load failures diagnosable without flooding the
+            // console on the normal path (first retry, then every five seconds).
+            g_pCore->GetConsole()->Printf("[mission audio] handle=%u event=%u slot=%u retry=%u status=0 finished=%s", slot->handle, slot->eventId, slotId,
+                                          slot->preloadAttempts, audio->IsMissionAudioSampleFinished(slotId) ? "true" : "false");
+        }
+    }
+    return false;
 }
 
 bool CLuaAudioDefs::PlayMissionAudio(lua_State* luaVM, unsigned int handle)

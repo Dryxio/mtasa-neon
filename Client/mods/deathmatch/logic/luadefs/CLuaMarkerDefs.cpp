@@ -18,6 +18,7 @@ void CLuaMarkerDefs::LoadFunctions()
 {
     constexpr static const std::pair<const char*, lua_CFunction> functions[]{
         {"createMarker", CreateMarker},
+        {"renderScriptImportantArea", ArgumentParser<RenderScriptImportantArea>},
 
         {"getMarkerCount", GetMarkerCount},
         {"getMarkerLimitStats", GetMarkerLimitStats},
@@ -42,6 +43,35 @@ void CLuaMarkerDefs::LoadFunctions()
     // Add functions
     for (const auto& [name, func] : functions)
         CLuaCFunctions::AddFunction(name, func);
+}
+
+bool CLuaMarkerDefs::RenderScriptImportantArea(lua_State* luaVM, CVector center, float radiusX, float radiusY, std::optional<std::uint32_t> localId)
+{
+    if (!luaVM || !std::isfinite(center.fX) || !std::isfinite(center.fY) || !std::isfinite(center.fZ) || !std::isfinite(radiusX) || !std::isfinite(radiusY) ||
+        radiusX <= 0.0f || radiusY <= 0.0f)
+        return false;
+
+    CLuaMain*   pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource*  pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    C3DMarkers* markers = g_pGame ? g_pGame->Get3DMarkers() : nullptr;
+    if (!pResource || !markers)
+        return false;
+
+    const float minX = center.fX - radiusX;
+    const float minY = center.fY - radiusY;
+    const float maxX = center.fX + radiusX;
+    const float maxY = center.fY + radiusY;
+    if (!std::isfinite(minX) || !std::isfinite(minY) || !std::isfinite(maxX) || !std::isfinite(maxY))
+        return false;
+
+    // Mix the local callsite ID with the resource identity so independent
+    // resources do not normally share GTA marker slots.
+    std::uint32_t identifier = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pResource));
+    identifier ^= localId.value_or(0) * 0x9E3779B9u;
+    if (identifier == 0)
+        identifier = 1;
+    markers->RenderScriptImportantArea(identifier, center, radiusX, radiusY);
+    return true;
 }
 
 void CLuaMarkerDefs::AddClass(lua_State* luaVM)

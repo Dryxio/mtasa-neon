@@ -56,4 +56,14 @@ public:
     LUA_DECLARE(IsPlayerMapVisible);
     LUA_DECLARE(GetPlayerMapBoundingBox);
     static unsigned char GetPlayerMapOpacity();
+
+    // Resource-owned access to GTA's mission GXT block and native HUD queues.
+    static bool AcquireMissionText(lua_State* luaVM, std::string blockName);
+    static bool ShowMissionText(lua_State* luaVM, std::string key, unsigned int duration, std::optional<unsigned int> flags);
+    static bool ShowMissionHelp(lua_State* luaVM, std::string key, std::optional<bool> permanent);
+    static bool ShowMissionBigText(lua_State* luaVM, std::string key, unsigned int duration, std::optional<unsigned int> style, std::optional<int> number);
+    static bool ClearMissionTexts(lua_State* luaVM);
+    static bool ClearMissionHelp(lua_State* luaVM);
+    static bool ReleaseMissionText(lua_State* luaVM);
+    static void ReleaseMissionTextForResource(class CResource* resource);
 };

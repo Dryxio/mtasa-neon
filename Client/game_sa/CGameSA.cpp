@@ -85,6 +85,20 @@ namespace
     constexpr std::uintptr_t FUNC_StopVehiclePlayback = 0x45A280;
     constexpr std::uintptr_t FUNC_IsVehiclePlaybackActive = 0x4594C0;
 
+    constexpr std::uintptr_t GTA_TEXT = 0xC1B340;
+    constexpr std::uintptr_t GTA_SETTINGS = 0xBA6748;
+    constexpr std::uintptr_t FUNC_LoadMissionText = 0x69FBF0;
+    constexpr std::uintptr_t FUNC_GetMissionText = 0x6A0050;
+    constexpr std::uintptr_t FUNC_GetLoadedMissionText = 0x69FBD0;
+    constexpr std::uintptr_t FUNC_AddMessageJump = 0x69F1E0;
+    constexpr std::uintptr_t FUNC_AddBigMessage = 0x69F2B0;
+    constexpr std::uintptr_t FUNC_AddBigMessageWithNumber = 0x69E5F0;
+    constexpr std::uintptr_t FUNC_ClearThisPrint = 0x69EA30;
+    constexpr std::uintptr_t FUNC_ClearThisBigPrint = 0x69EBE0;
+    constexpr std::uintptr_t FUNC_SetHelpMessage = 0x588BE0;
+    constexpr std::size_t    GTA_SUBTITLES_OFFSET = 0x44;
+    constexpr unsigned int   GTA_BIG_MESSAGE_STYLE_COUNT = 7;
+
     bool IsKnownVehicleRecording(int recordingId)
     {
         const int count = *reinterpret_cast<const int*>(VEHICLE_RECORDING_COUNT);
@@ -109,6 +123,14 @@ namespace
                 return true;
         }
         return false;
+    }
+
+    const char* GetMissionText(const char* key)
+    {
+        if (!key || !key[0])
+            return nullptr;
+
+        return reinterpret_cast<const char*(__thiscall*)(void*, const char*)>(FUNC_GetMissionText)(reinterpret_cast<void*>(GTA_TEXT), key);
     }
 }  // namespace
 
@@ -1355,4 +1377,86 @@ bool CGameSA::RemoveVehicleRecording(int recordingId)
 
     reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemoveVehicleRecording)(recordingId);
     return true;
+}
+
+bool CGameSA::LoadMissionTextBlock(const char* blockName)
+{
+    if (!blockName || !blockName[0])
+        return false;
+
+    // LOAD_MISSION_TEXT clears queues before replacing the backing mission
+    // block. The client-side lease manager therefore clears and relinquishes
+    // every pointer it owns before this call can be made for another block.
+    reinterpret_cast<void(__thiscall*)(void*, const char*)>(FUNC_LoadMissionText)(reinterpret_cast<void*>(GTA_TEXT), blockName);
+
+    char loadedName[8]{};
+    reinterpret_cast<void(__thiscall*)(void*, char*)>(FUNC_GetLoadedMissionText)(reinterpret_cast<void*>(GTA_TEXT), loadedName);
+    return _stricmp(loadedName, blockName) == 0;
+}
+
+bool CGameSA::ShowMissionText(const char* key, unsigned int duration, unsigned short flags)
+{
+    const char* text = GetMissionText(key);
+    if (!text)
+        return false;
+
+    // PRINT_NOW suppresses only spoken (~z~) subtitles when the player's GTA
+    // subtitle option is disabled. Objective text always enters the queue.
+    const bool subtitlesEnabled = *reinterpret_cast<const bool*>(GTA_SETTINGS + GTA_SUBTITLES_OFFSET);
+    if (!subtitlesEnabled && std::strncmp(text, "~z~", 3) == 0)
+        return true;
+
+    reinterpret_cast<void(__cdecl*)(const char*, unsigned int, unsigned short, bool)>(FUNC_AddMessageJump)(text, duration, flags, false);
+    return true;
+}
+
+bool CGameSA::ShowMissionHelp(const char* key, bool permanent)
+{
+    const char* text = GetMissionText(key);
+    if (!text)
+        return false;
+
+    reinterpret_cast<void(__cdecl*)(const char*, bool, bool, bool)>(FUNC_SetHelpMessage)(text, false, permanent, false);
+    return true;
+}
+
+bool CGameSA::ShowMissionBigText(const char* key, unsigned int duration, unsigned int style, bool hasNumber, int number)
+{
+    if (style == 0 || style > GTA_BIG_MESSAGE_STYLE_COUNT)
+        return false;
+
+    const char* text = GetMissionText(key);
+    if (!text)
+        return false;
+
+    const unsigned int nativeStyle = style - 1;
+    if (hasNumber)
+    {
+        reinterpret_cast<void(__cdecl*)(const char*, unsigned int, unsigned int, int, int, int, int, int, int)>(FUNC_AddBigMessageWithNumber)(
+            text, duration, nativeStyle, number, -1, -1, -1, -1, -1);
+    }
+    else
+    {
+        reinterpret_cast<void(__cdecl*)(const char*, unsigned int, unsigned int)>(FUNC_AddBigMessage)(text, duration, nativeStyle);
+    }
+    return true;
+}
+
+void CGameSA::ClearMissionText(const char* key, bool big)
+{
+    const char* text = GetMissionText(key);
+    if (!text)
+        return;
+
+    if (big)
+        reinterpret_cast<void(__cdecl*)(const char*)>(FUNC_ClearThisBigPrint)(text);
+    else
+        reinterpret_cast<void(__cdecl*)(const char*)>(FUNC_ClearThisPrint)(text);
+}
+
+void CGameSA::ClearMissionHelp()
+{
+    // This is the exact CLEAR_HELP argument tuple: null text, quick=true,
+    // permanent=false, and no previous-brief insertion.
+    reinterpret_cast<void(__cdecl*)(const char*, bool, bool, bool)>(FUNC_SetHelpMessage)(nullptr, true, false, false);
 }

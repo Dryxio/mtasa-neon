@@ -8,33 +8,186 @@ local state = {
     completedTags = {},
     destination = nil,
     marker = nil,
+    importantArea = nil,
     blip = nil,
-    message = nil,
-    messageUntil = 0,
+    tagBlips = {},
+    navigationMode = nil,
+    rooftopTagRevealed = false,
     stageStarted = 0,
     lastSpray = 0,
     sprayInput = false,
     sprayPulseUntil = 0,
     lastVehicleReport = 0,
+    arrivalGate = nil,
+    lastArrivalAcquireAttempt = 0,
     introCamera = false,
     demoLeave = nil,
     demoWalk = nil,
     demoShoot = nil,
     demoEnter = nil,
     demoScene = nil,
+    demoAudioPreload = nil,
     ballasDeparture = nil,
     ballasWanderPed = nil,
     ballasGangScene = nil,
     lastBallasGangTriggerReport = 0,
     vehiclePlayback = nil,
     vehicleRecordingPreloaded = false,
+    missionTextReady = false,
+    missionTextTimers = {},
+    nativeTagHelpPhase = 0,
+    nativeTagHelpStarted = 0,
+    nativeHelpFlags = {},
     traceStarted = false,
     traceDemoTagActive = false,
     traceCurrentStep = nil,
 }
 
-local screenWidth, screenHeight = guiGetScreenSize()
 local TAG_PAINT_ALPHA_DATA = "tagup.paintAlpha"
+local getActiveTags
+local nearestActiveTag
+
+local function killMissionTextTimers()
+    for _, timer in ipairs(state.missionTextTimers) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    state.missionTextTimers = {}
+end
+
+local function callMissionTextApi(name, ...)
+    local api = _G[name]
+    if type(api) ~= "function" then
+        outputDebugString(("[tagging-up-turf] Native mission-text API unavailable: %s"):format(name), 1)
+        return false
+    end
+    local ok, result = pcall(api, ...)
+    if not ok or result ~= true then
+        outputDebugString(("[tagging-up-turf] Native mission-text call refused: %s (%s)"):format(name, tostring(result)), 1)
+        return false
+    end
+    return true
+end
+
+local function ensureMissionText()
+    if state.missionTextReady then
+        return true
+    end
+    state.missionTextReady = callMissionTextApi("acquireMissionText", "SWEET1")
+    return state.missionTextReady
+end
+
+local function printMissionText(key, duration)
+    return ensureMissionText() and callMissionTextApi("showMissionText", key, duration, 1)
+end
+
+local function printMissionHelp(key, permanent)
+    return ensureMissionText() and callMissionTextApi("showMissionHelp", key, permanent == true)
+end
+
+local function scheduleMissionText(stage, delay, callback)
+    local timer = setTimer(function(expectedStage)
+        if state.active and state.stage == expectedStage and state.missionTextReady then
+            callback()
+        end
+    end, delay, 1, stage)
+    table.insert(state.missionTextTimers, timer)
+end
+
+local function beginMissionStageText(stage)
+    killMissionTextTimers()
+    state.nativeTagHelpPhase = 0
+    state.nativeTagHelpStarted = getTickCount()
+    state.nativeHelpFlags = {}
+
+    if not ensureMissionText() then
+        return
+    end
+    callMissionTextApi("clearMissionHelp")
+
+    if stage == "enter_car" then
+        printMissionText("SWE1_A", 7000)
+    elseif stage == "drive_idlewood" then
+        printMissionText("HOOD3_A", 5000)
+    elseif stage == "tags_idlewood" then
+        -- SWE1_CB normally accompanies the still-pending engine-running audio.
+        -- Keep the original PRINT_NOW timing while the native text slice lands.
+        printMissionText("SWE1_CB", 2500)
+        scheduleMissionText(stage, 2500, function()
+            printMissionText("SWE1_X", 6000)
+        end)
+    elseif stage == "return_car" or stage == "return_after_roof" then
+        printMissionText("SWE1_S", 6000)
+    elseif stage == "drive_ballas" then
+        printMissionText("SWE1_AS", 3000)
+        scheduleMissionText(stage, 3000, function()
+            printMissionText("HOOD3_B", 5000)
+        end)
+    elseif stage == "ballas_departure" then
+        printMissionText("SWE1_AV", 10000)
+    elseif stage == "tags_ballas" then
+        scheduleMissionText(stage, 2500, function()
+            printMissionText("SWE1_M", 6000)
+        end)
+    elseif stage == "rooftop" then
+        printMissionText("SWE1_Z", 5000)
+        scheduleMissionText(stage, 2500, function()
+            printMissionText("SWE1_M", 6000)
+        end)
+    elseif stage == "drive_home" then
+        printMissionText("SWEX_AH", 3000)
+        scheduleMissionText(stage, 3000, function()
+            printMissionText("SWE1_B", 6000)
+        end)
+    elseif stage == "failed" then
+        callMissionTextApi("clearMissionTexts")
+        callMissionTextApi("showMissionBigText", "M_FAIL", 5000, 1)
+    elseif stage == "complete" then
+        callMissionTextApi("clearMissionTexts")
+        callMissionTextApi("showMissionBigText", "M_PASSS", 5000, 1, 200)
+    end
+end
+
+local function updateNativeMissionHelp()
+    if not state.active or not state.missionTextReady then
+        return
+    end
+
+    local now = getTickCount()
+    if state.stage == "tags_idlewood" then
+        local tag, distance = nearestActiveTag()
+        if tag and distance <= 6 then
+            if state.nativeTagHelpPhase == 0 and now - state.nativeTagHelpStarted >= 1000 then
+                if printMissionHelp("SWE1_D") then
+                    state.nativeTagHelpPhase = 1
+                    state.nativeTagHelpStarted = now
+                end
+            elseif state.nativeTagHelpPhase == 1 and now - state.nativeTagHelpStarted >= 5000 then
+                if printMissionHelp("SWE1_F") then
+                    state.nativeTagHelpPhase = 2
+                end
+            end
+        end
+    elseif state.stage == "tags_ballas" then
+        local x, y = getElementPosition(localPlayer)
+        if not state.nativeHelpFlags.respect and math.abs(x - 2353.30) <= 3 and math.abs(y + 1508.18) <= 3 then
+            state.nativeHelpFlags.respect = printMissionHelp("SWE1_G")
+        end
+    elseif state.stage == "rooftop" then
+        local x, y, z = getElementPosition(localPlayer)
+        if not state.nativeHelpFlags.jump1 and
+            ((math.abs(x - 2374.0) <= 1.4 and math.abs(y + 1534.1) <= 1.4 and math.abs(z - 23.0) <= 2.0) or
+             (math.abs(x - 2352.3) <= 3 and math.abs(y + 1552.1) <= 3) or
+             (math.abs(x - 2420.7) <= 3 and math.abs(y + 1572.1) <= 3)) then
+            state.nativeHelpFlags.jump1 = printMissionHelp("JUMPH1")
+        elseif not state.nativeHelpFlags.radar and math.abs(x - 2373.5) <= 3 and math.abs(y + 1547.2) <= 3 then
+            state.nativeHelpFlags.radar = printMissionHelp("RADAR5")
+        elseif not state.nativeHelpFlags.jump2 and math.abs(x - 2378.7546) <= 3 and math.abs(y + 1555.8896) <= 3 then
+            state.nativeHelpFlags.jump2 = printMissionHelp("JUMPH2")
+        end
+    end
+end
 
 local function applyMissionActor(ped)
     if not isElement(ped) or getElementType(ped) ~= "ped" or type(setPedMissionActor) ~= "function" then
@@ -68,7 +221,7 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "enter_passenger", title = "05CA · ENTER CAR AS PASSENGER", detail = "NATIVE VERIFIED · SCM seat 0 / MTA seat 1"},
     {id = "idlewood_tags", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · Idlewood 0%"},
     {id = "return_car", title = "RETURN TO GREENWOOD", detail = "CO-OP CONDITION · party regroup"},
-    {id = "drive_ballas", title = "LOCATE CAR IN BALLAS", detail = "LUA CO-OP CONDITION · SCM box 4 m / vehicle grounded"},
+    {id = "drive_ballas", title = "LOCATE CAR IN BALLAS", detail = "SCM GATE · 4 m box + grounded / vehicle anchored"},
     {id = "ballas_camera", title = "SCRIPT CAMERA · BALLAS ARRIVAL", detail = "NATIVE VERIFIED · fixed point + widescreen / co-op barrier"},
     {id = "ballas_leave", title = "05CD · CJ LEAVES CAR", detail = "NATIVE VERIFIED · local player vehicle lifecycle"},
     {id = "ballas_wander", title = "05D2 · CAR DRIVE WANDER", detail = "NATIVE VERIFIED · Sweet passenger / speed 20 / style 2"},
@@ -82,7 +235,7 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "start_playback", title = "05EB · START RECORDED CAR", detail = "NATIVE VERIFIED · vehicle syncer only"},
     {id = "playback_wait", title = "060E · CAR PLAYBACK ACTIVE", detail = "NATIVE VERIFIED · recording 207 / natural end"},
     {id = "return_after_roof", title = "REGROUP WITH SWEET", detail = "CO-OP CONDITION · party in vehicle"},
-    {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "LUA CO-OP CONDITION · SCM-derived target / < 12 m"},
+    {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "SCM GATE · 4 m box + grounded"},
     {id = "mission_end", title = "MISSION PASSED", detail = "SERVER AUTHORITY · reward + restore"},
 }
 
@@ -248,41 +401,261 @@ local function destroyNavigation()
     if isElement(state.blip) then
         destroyElement(state.blip)
     end
+    for _, blip in pairs(state.tagBlips) do
+        if isElement(blip) then
+            destroyElement(blip)
+        end
+    end
     state.marker = nil
+    state.importantArea = nil
     state.blip = nil
+    state.tagBlips = {}
+    state.navigationMode = nil
     state.destination = nil
 end
 
-local function setNavigation(position, size, color)
+-- SWEET1 swaps one shared navigation slot between the default destination
+-- colour and Sweet's friendly car, while active tag sites use separate green
+-- coordinate blips that disappear independently at 100 percent.
+local SCM_DESTINATION_BLIP_COLOR = {226, 192, 99, 255}
+local SCM_FRIENDLY_BLIP_COLOR = {0, 0, 255, 255}
+local SCM_TAG_BLIP_COLOR = {0, 255, 0, 255}
+local SCM_TAG_BLIP_POSITIONS = {
+    [1] = {2068.31, -1654.00, 14.3},
+    [2] = {2047.31, -1634.65, 13.8},
+    [3] = {2396.21, -1469.80, 24.9},
+    [4] = {2353.22, -1506.54, 24.7},
+    [5] = {2395.43, -1551.69, 26.98},
+}
+
+local function setNavigation(position, size, color, importantArea, blipColor)
     destroyNavigation()
     if not position then
         return
     end
     state.destination = position
-    state.marker = createMarker(position[1], position[2], position[3] - 1, "cylinder", size or 4, unpack(color or {80, 180, 255, 125}))
-    setElementDimension(state.marker, TAGUP.dimension)
-    state.blip = createBlip(position[1], position[2], position[3], 0, 2, 80, 180, 255, 255)
+    if importantArea then
+        state.importantArea = {
+            center = Vector3(position[1], position[2], position[3]),
+            radiusX = importantArea.radiusX,
+            radiusY = importantArea.radiusY,
+            localId = importantArea.localId,
+            vehicleRequired = importantArea.vehicleRequired ~= false,
+        }
+        if type(renderScriptImportantArea) ~= "function" then
+            -- Keep a visible fallback on an unmodified MTA client. Neon uses
+            -- GTA's exact SCM important-area renderer instead.
+            state.marker = createMarker(position[1], position[2], position[3] - 1, "cylinder", math.max(importantArea.radiusX, importantArea.radiusY),
+                                        255, 0, 0, 255)
+            setElementDimension(state.marker, TAGUP.dimension)
+        end
+    else
+        state.marker = createMarker(position[1], position[2], position[3] - 1, "cylinder", size or 4, unpack(color or {80, 180, 255, 125}))
+        setElementDimension(state.marker, TAGUP.dimension)
+    end
+    local radarColor = blipColor or SCM_DESTINATION_BLIP_COLOR
+    state.blip = createBlip(position[1], position[2], position[3], 0, 2, unpack(radarColor))
     setElementDimension(state.blip, TAGUP.dimension)
+    state.navigationMode = "destination"
+end
+
+local function setVehicleNavigation()
+    destroyNavigation()
+    if not isElement(state.vehicle) then
+        return
+    end
+    state.blip = createBlipAttachedTo(state.vehicle, 0, 2, unpack(SCM_FRIENDLY_BLIP_COLOR))
+    if isElement(state.blip) then
+        setElementDimension(state.blip, TAGUP.dimension)
+        state.navigationMode = "vehicle"
+    end
+end
+
+local function syncTagBlips()
+    local active = {}
+    for _, tag in ipairs(getActiveTags()) do
+        if state.stage ~= "rooftop" or state.rooftopTagRevealed then
+            active[tag.id] = true
+            if not isElement(state.tagBlips[tag.id]) then
+                local position = SCM_TAG_BLIP_POSITIONS[tag.id]
+                if position then
+                    local blip = createBlip(position[1], position[2], position[3], 0, 2, unpack(SCM_TAG_BLIP_COLOR))
+                    if isElement(blip) then
+                        setElementDimension(blip, TAGUP.dimension)
+                        state.tagBlips[tag.id] = blip
+                    end
+                end
+            end
+        end
+    end
+    for tagId, blip in pairs(state.tagBlips) do
+        if not active[tagId] then
+            if isElement(blip) then
+                destroyElement(blip)
+            end
+            state.tagBlips[tagId] = nil
+        end
+    end
+    if next(active) then
+        state.navigationMode = "tags"
+    end
 end
 
 local function setStageNavigation(stage)
     if stage == "enter_car" or stage == "return_car" or stage == "return_after_roof" then
-        if isElement(state.vehicle) then
-            local x, y, z = getElementPosition(state.vehicle)
-            setNavigation({x, y, z}, 3, {80, 180, 255, 125})
-        end
+        setVehicleNavigation()
     elseif stage == "drive_idlewood" then
-        setNavigation(TAGUP.idlewoodDestination, 7, {80, 180, 255, 125})
+        if isElement(state.leader) and getPedOccupiedVehicle(state.leader) == state.vehicle then
+            setNavigation(TAGUP.idlewoodDestination, nil, nil,
+                          {radiusX = TAGUP.idlewoodArrival.radiusX, radiusY = TAGUP.idlewoodArrival.radiusY, localId = 1})
+        else
+            setVehicleNavigation()
+        end
     elseif stage == "drive_ballas" then
-        setNavigation(TAGUP.ballasDestination, 8, {190, 80, 255, 125})
+        if isElement(state.leader) and getPedOccupiedVehicle(state.leader) == state.vehicle then
+            setNavigation(TAGUP.ballasDestination, nil, nil,
+                          {radiusX = TAGUP.ballasArrival.radiusX, radiusY = TAGUP.ballasArrival.radiusY, localId = 2})
+        else
+            setVehicleNavigation()
+        end
     elseif stage == "drive_home" then
-        setNavigation(TAGUP.homeDestination, 7, {80, 200, 100, 125})
+        if isElement(state.leader) and getPedOccupiedVehicle(state.leader) == state.vehicle then
+            setNavigation(TAGUP.homeDestination, nil, nil,
+                          {radiusX = TAGUP.homeArrival.radiusX, radiusY = TAGUP.homeArrival.radiusY, localId = 3})
+        else
+            setVehicleNavigation()
+        end
+    elseif stage == "tags_idlewood" or stage == "tags_ballas" then
+        destroyNavigation()
+        syncTagBlips()
+    elseif stage == "rooftop" then
+        setNavigation({2374.0, -1534.1, 23.0}, nil, nil,
+                      {radiusX = 1.4, radiusY = 1.4, localId = 4, vehicleRequired = false})
     else
         destroyNavigation()
     end
 end
 
-local function getActiveTags()
+local function refreshStageNavigation()
+    if state.stage == "drive_idlewood" or state.stage == "drive_ballas" or state.stage == "drive_home" then
+        local desiredMode = isElement(state.leader) and getPedOccupiedVehicle(state.leader) == state.vehicle and "destination" or "vehicle"
+        if state.navigationMode ~= desiredMode then
+            setStageNavigation(state.stage)
+        end
+    elseif state.stage == "rooftop" and not state.rooftopTagRevealed and isElement(state.leader) and
+        not isPedInVehicle(state.leader) then
+        local x, y, z = getElementPosition(state.leader)
+        if math.abs(x - 2374.0) <= 1.4 and math.abs(y + 1534.1) <= 1.4 and math.abs(z - 23.0) <= 2.0 then
+            state.rooftopTagRevealed = true
+            destroyNavigation()
+            syncTagBlips()
+        end
+    end
+end
+
+local function renderNavigationImportantArea()
+    local area = state.importantArea
+    if not area or type(renderScriptImportantArea) ~= "function" or not isElement(state.leader) then
+        return
+    end
+    if area.vehicleRequired and (not isElement(state.vehicle) or getPedOccupiedVehicle(state.leader) ~= state.vehicle) then
+        return
+    end
+    renderScriptImportantArea(area.center, area.radiusX, area.radiusY, area.localId)
+end
+
+local function releaseArrivalGate(reason)
+    local arrival = state.arrivalGate
+    if not arrival then
+        return true
+    end
+    state.arrivalGate = nil
+    if isTimer(arrival.guardTimer) then
+        killTimer(arrival.guardTimer)
+    end
+    if isTimer(arrival.resendTimer) then
+        killTimer(arrival.resendTimer)
+    end
+    if not arrival.cameraToken then
+        return true
+    end
+    local ok, released = pcall(releaseScriptCamera, arrival.cameraToken)
+    outputDebugString(("[tagging-up-turf] SCM arrival lease stage=%s release=%s reason=%s"):format(
+                          tostring(arrival.stage), tostring(ok and released ~= false), tostring(reason or "cleanup")),
+                      ok and released ~= false and 3 or 2)
+    return ok and released ~= false
+end
+
+local function consumeArrivalGate(stage)
+    local arrival = state.arrivalGate
+    if not arrival or arrival.stage ~= stage or not arrival.cameraToken or type(isScriptCameraLeaseActive) ~= "function" or
+        not isScriptCameraLeaseActive(arrival.cameraToken) then
+        return nil
+    end
+    state.arrivalGate = nil
+    if isTimer(arrival.guardTimer) then
+        killTimer(arrival.guardTimer)
+    end
+    if isTimer(arrival.resendTimer) then
+        killTimer(arrival.resendTimer)
+    end
+    outputDebugString(("[tagging-up-turf] SCM arrival lease stage=%s promoted to scripted scene token=%s"):format(
+                          tostring(stage), tostring(arrival.cameraToken)))
+    return arrival.cameraToken
+end
+
+local function reportArrivalGate(arrival)
+    triggerServerEvent("tagup:vehicleReady", resourceRoot, arrival.kind, arrival.hitX, arrival.hitY, arrival.hitZ)
+end
+
+
+local function enterArrivalGate(stage, kind, vehicle)
+    if state.arrivalGate or getTickCount() - state.lastArrivalAcquireAttempt < 250 then
+        return false
+    end
+    state.lastArrivalAcquireAttempt = getTickCount()
+    if type(acquireScriptCamera) ~= "function" then
+        return false
+    end
+    local ok, token = pcall(acquireScriptCamera, true)
+    if not ok or token == false then
+        outputDebugString(("[tagging-up-turf] SCM arrival lease refused at stage=%s: %s"):format(tostring(stage), tostring(token)), 2)
+        return false
+    end
+
+    local vx, vy, vz = getElementVelocity(vehicle)
+    local hitX, hitY, hitZ = getElementPosition(vehicle)
+    local arrival = {
+        stage = stage,
+        kind = kind,
+        cameraToken = token,
+        hitAt = getTickCount(),
+        hitX = hitX,
+        hitY = hitY,
+        hitZ = hitZ,
+    }
+    state.arrivalGate = arrival
+    arrival.guardTimer = setTimer(function(expected)
+        if state.arrivalGate == expected then
+            releaseArrivalGate("server_transition_timeout")
+        end
+    end, 4000, 1, arrival)
+    -- Element transforms and Lua events use independent network packets. Send
+    -- the exact syncer-side LOCATE_CAR_3D hit with the idempotent request: a
+    -- strict re-test against the server's older transform can otherwise reject
+    -- a fast vehicle after native control inhibition has already stopped it.
+    arrival.resendTimer = setTimer(function(expected)
+        if state.arrivalGate == expected and state.stage == expected.stage then
+            reportArrivalGate(expected)
+        end
+    end, 100, 0, arrival)
+    outputDebugString(("[tagging-up-turf] SCM arrival hit stage=%s speed=%.1f km/h token=%s; controls inhibited before network ACK"):format(
+                          tostring(stage), math.sqrt(vx * vx + vy * vy + vz * vz) * 180, tostring(token)))
+    reportArrivalGate(arrival)
+    return true
+end
+
+getActiveTags = function()
     local group
     if state.stage == "tags_idlewood" then
         group = "idlewood"
@@ -303,7 +676,7 @@ local function getActiveTags()
     return result
 end
 
-local function nearestActiveTag()
+nearestActiveTag = function()
     local px, py, pz = getElementPosition(localPlayer)
     local nearest, nearestDistance
     for _, tag in ipairs(getActiveTags()) do
@@ -966,6 +1339,19 @@ local function releaseSweetDemoAudio(scene)
     return released
 end
 
+local function clearSweetDemoAudioPreload(reason)
+    local preload = state.demoAudioPreload
+    if not preload then
+        return true
+    end
+    state.demoAudioPreload = nil
+    local released = releaseSweetDemoAudio(preload)
+    outputDebugString(("[tagging-up-turf] Sweet demo early audio preload release=%s reason=%s"):format(
+                          tostring(released), tostring(reason or "cleanup")),
+                      released and 3 or 2)
+    return released
+end
+
 local function releaseSweetDemoCamera(scene, preserveFade)
     if not scene or not scene.cameraToken then
         return true
@@ -981,7 +1367,8 @@ local function clearSweetDemoScene(reason, preserveFade)
     if not scene then
         return true
     end
-    for _, timerName in ipairs({"prepareTimer", "leaseTimer", "fadeTimer", "audioTimer", "animationTimer", "releaseTimer"}) do
+    for _, timerName in ipairs({"prepareTimer", "leaseTimer", "fadeTimer", "audioTimer", "animationTimer", "releaseTimer",
+                                "playerExitMonitorTimer"}) do
         if isTimer(scene[timerName]) then
             killTimer(scene[timerName])
         end
@@ -1003,31 +1390,84 @@ local function reportSweetDemoSceneReady(scene, result, details)
     triggerServerEvent("tagup:sweetDemoSceneReady", resourceRoot, scene.id, result, details)
 end
 
+local function requestSweetDemoAudio(scene, cue, eventId)
+    local requested, handle = pcall(requestMissionAudio, eventId)
+    if not requested or not handle then
+        return false, ("%s event=%d"):format(cue, eventId)
+    end
+    scene.audioHandles[cue] = handle
+    outputDebugString(("[tagging-up-turf] Sweet demo scene #%d requested %s event=%d handle=%s"):format(
+                          scene.id, cue, eventId, tostring(handle)))
+    return true
+end
+
+local function startSweetDemoAudioPreload()
+    if state.demoAudioPreload then
+        return true
+    end
+    if type(requestMissionAudio) ~= "function" or type(releaseMissionAudio) ~= "function" then
+        return false
+    end
+
+    local preload = {requestedAt = getTickCount(), audioHandles = {}}
+    for _, request in ipairs({
+        {cue = "checkout", eventId = TAGUP.sweetDemoScene.audio.checkout},
+        {cue = "approach", eventId = TAGUP.sweetDemoScene.audio.approach},
+    }) do
+        local requested, handle = pcall(requestMissionAudio, request.eventId)
+        if not requested or not handle then
+            releaseSweetDemoAudio(preload)
+            outputDebugString(("[tagging-up-turf] Sweet demo early audio preload refused cue=%s event=%d"):format(request.cue,
+                                                                                                                  request.eventId),
+                              2)
+            return false
+        end
+        preload.audioHandles[request.cue] = handle
+        outputDebugString(("[tagging-up-turf] Sweet demo early audio preload requested %s event=%d handle=%s stage=%s"):format(
+                              request.cue, request.eventId, tostring(handle), tostring(state.stage)))
+    end
+    state.demoAudioPreload = preload
+    return true
+end
+
 local function finishSweetDemoScenePrepare(scene)
-    if state.demoScene ~= scene or scene.readyReported then
+    if state.demoScene ~= scene then
         return
     end
     if not hasSweetDemoSceneLease(scene) then
-        clearSweetDemoScene("lease_lost_during_prepare")
-        return reportSweetDemoSceneReady(scene, "camera_lost", "lease perdue pendant le preload audio")
+        if not scene.readyReported then
+            clearSweetDemoScene("lease_lost_during_prepare")
+            reportSweetDemoSceneReady(scene, "camera_lost", "lease perdue pendant le preload audio")
+        end
+        return
     end
-    for cue, handle in pairs(scene.audioHandles) do
+
+    local elapsed = getTickCount() - scene.requestedAt
+    local allLoaded = true
+    for _, cue in ipairs({"checkout", "approach"}) do
+        local handle = scene.audioHandles[cue]
         local ok, loaded = pcall(isMissionAudioLoaded, handle)
         if not ok then
             clearSweetDemoScene("audio_query_failed")
             return reportSweetDemoSceneReady(scene, "audio_query_failed", tostring(loaded))
         end
         if not loaded then
-            return
+            allLoaded = false
         end
+    end
+
+    if not allLoaded then
+        return
     end
     if isTimer(scene.prepareTimer) then
         killTimer(scene.prepareTimer)
         scene.prepareTimer = nil
     end
     scene.preparedAt = getTickCount()
+    outputDebugString(("[tagging-up-turf] Sweet demo scene #%d ordered SWE1_CA/SWE1_AR handles loaded after %d ms"):format(scene.id,
+                                                                                                                         elapsed))
     traceCurrent("demo_camera")
-    reportSweetDemoSceneReady(scene, "ready", "camera A, widescreen, controls and SWE1_AR/SWE1_CA ready")
+    reportSweetDemoSceneReady(scene, "ready", "camera active; ordered SWE1_CA/SWE1_AR preload complete")
 end
 
 local function prepareSweetDemoScene(scene)
@@ -1036,11 +1476,39 @@ local function prepareSweetDemoScene(scene)
         return reportSweetDemoSceneReady(scene, "audio_api_unavailable", "API mission-audio native absente")
     end
     local camera = TAGUP.sweetDemoScene.camera.establishing
-    local ok, result = callBallasCameraApi("acquireScriptCamera", true)
+    local result = consumeArrivalGate("drive_idlewood")
+    local ok = result ~= nil
     if not ok then
-        return reportSweetDemoSceneReady(scene, "camera_acquire_refused", result)
+        ok, result = callBallasCameraApi("acquireScriptCamera", true)
+        if not ok then
+            return reportSweetDemoSceneReady(scene, "camera_acquire_refused", result)
+        end
     end
     scene.cameraToken = result
+
+    local preload = state.demoAudioPreload
+    if preload then
+        state.demoAudioPreload = nil
+        scene.audioHandles = preload.audioHandles
+        preload.audioHandles = {}
+        outputDebugString(("[tagging-up-turf] Sweet demo scene #%d adopted early CA/AR preload after %d ms"):format(
+                              scene.id, getTickCount() - preload.requestedAt))
+    else
+        scene.audioHandles = {}
+        -- Preserve the original immediate path for a late-joining client that
+        -- did not observe the preceding enter-car/drive stage.
+        for _, request in ipairs({
+            {cue = "checkout", eventId = TAGUP.sweetDemoScene.audio.checkout},
+            {cue = "approach", eventId = TAGUP.sweetDemoScene.audio.approach},
+        }) do
+            local requested, details = requestSweetDemoAudio(scene, request.cue, request.eventId)
+            if not requested then
+                clearSweetDemoScene("audio_request_refused")
+                return reportSweetDemoSceneReady(scene, "audio_request_refused", details)
+            end
+        end
+    end
+
     ok, result = callBallasCameraApi("resetScriptCamera", scene.cameraToken)
     if ok then
         ok, result = callBallasCameraApi("setScriptCameraWidescreen", scene.cameraToken, true)
@@ -1053,16 +1521,6 @@ local function prepareSweetDemoScene(scene)
     if not ok then
         clearSweetDemoScene("camera_setup_refused")
         return reportSweetDemoSceneReady(scene, "camera_setup_refused", result)
-    end
-
-    scene.audioHandles = {}
-    for cue, eventId in pairs({approach = TAGUP.sweetDemoScene.audio.approach, checkout = TAGUP.sweetDemoScene.audio.checkout}) do
-        local requested, handle = pcall(requestMissionAudio, eventId)
-        if not requested or handle == false then
-            clearSweetDemoScene("audio_request_refused")
-            return reportSweetDemoSceneReady(scene, "audio_request_refused", ("%s event=%d"):format(cue, eventId))
-        end
-        scene.audioHandles[cue] = handle
     end
 
     scene.leaseTimer = setTimer(function()
@@ -1085,6 +1543,7 @@ local function playSweetDemoAudio(scene, cue)
         triggerServerEvent("tagup:sweetDemoSceneAudioFinished", resourceRoot, scene.id, cue, "play_refused")
         return
     end
+    printMissionText(cue == "approach" and "SWE1_AR" or "SWE1_CA", 10000)
     scene.playingCue = cue
     traceCurrent(cue == "approach" and "demo_audio_ar" or "demo_audio_ca")
     scene.audioTimer = setTimer(function()
@@ -1130,6 +1589,49 @@ addEventHandler("tagup:sweetDemoSceneStart", resourceRoot, function(sceneId)
         scene.started = true
         scene.startedAt = getTickCount()
     end
+end)
+
+addEvent("tagup:sweetDemoPlayerExitStart", true)
+addEventHandler("tagup:sweetDemoPlayerExitStart", resourceRoot, function(sceneId, vehicle)
+    local scene = state.demoScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or not hasSweetDemoSceneLease(scene) or vehicle ~= state.vehicle then
+        return
+    end
+    if getPedOccupiedVehicle(localPlayer) ~= vehicle then
+        outputDebugString(("[tagging-up-turf] Sweet demo scene #%d player already outside before SCM TASK_LEAVE_CAR"):format(scene.id))
+        return
+    end
+    if type(setPedExitVehicle) ~= "function" or not setPedExitVehicle(localPlayer) then
+        outputDebugString(("[tagging-up-turf] Sweet demo scene #%d player native TASK_LEAVE_CAR refused; black-screen staging remains armed")
+                              :format(scene.id),
+                          2)
+        return
+    end
+
+    scene.playerExitAcceptedAt = getTickCount()
+    scene.playerExitSawNative = false
+    outputDebugString(("[tagging-up-turf] Sweet demo scene #%d accepted player native TASK_LEAVE_CAR at SCM +600 ms"):format(scene.id))
+    scene.playerExitMonitorTimer = setTimer(function()
+        local active = state.demoScene
+        if active ~= scene then
+            return
+        end
+        local running = isPedDoingTask(localPlayer, "TASK_COMPLEX_LEAVE_CAR")
+        active.playerExitSawNative = active.playerExitSawNative or running
+        local elapsed = getTickCount() - active.playerExitAcceptedAt
+        if active.playerExitSawNative and not running and getPedOccupiedVehicle(localPlayer) ~= vehicle then
+            killTimer(active.playerExitMonitorTimer)
+            active.playerExitMonitorTimer = nil
+            outputDebugString(("[tagging-up-turf] Sweet demo scene #%d player native TASK_LEAVE_CAR completed after %d ms"):format(
+                                  active.id, elapsed))
+        elseif elapsed > TAGUP.sweetDemoScene.playerExitObservationTimeout then
+            killTimer(active.playerExitMonitorTimer)
+            active.playerExitMonitorTimer = nil
+            outputDebugString(("[tagging-up-turf] Sweet demo scene #%d player TASK_LEAVE_CAR was not naturally observed before staging")
+                                  :format(active.id),
+                              2)
+        end
+    end, 50, 0)
 end)
 
 addEvent("tagup:sweetDemoSceneFadeOut", true)
@@ -1287,9 +1789,13 @@ end
 local function prepareBallasCamera(departure)
     local camera = TAGUP.ballasDeparture.camera
     local setupStartedAt = getTickCount()
-    local ok, result = callBallasCameraApi("acquireScriptCamera", true)
+    local result = consumeArrivalGate("drive_ballas")
+    local ok = result ~= nil
     if not ok then
-        return reportBallasCameraReady(departure, "acquire_refused", result)
+        ok, result = callBallasCameraApi("acquireScriptCamera", true)
+        if not ok then
+            return reportBallasCameraReady(departure, "acquire_refused", result)
+        end
     end
 
     departure.cameraToken = result
@@ -1681,6 +2187,7 @@ addEventHandler("tagup:ballasGangSceneStart", resourceRoot, function(sceneId)
     end
     scene.started = true
     scene.startedAt = getTickCount()
+    printMissionHelp("SWE1_H")
     outputDebugString(("[tagging-up-turf] Ballas gang scene #%d timeline started"):format(scene.id))
 end)
 
@@ -1717,6 +2224,9 @@ addEventHandler("tagup:ballasGangSceneRelease", resourceRoot, function(sceneId, 
     triggerServerEvent("tagup:ballasGangSceneReleased", resourceRoot, sceneId, released and "released" or "release_failed")
     if released then
         traceCurrent("ballas_tags")
+        scheduleMissionText("tags_ballas", 2000, function()
+            printMissionHelp("SWE1_I")
+        end)
     end
 end)
 
@@ -1944,16 +2454,17 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
     state.leader = payload.leader
     state.tagProgress = payload.tagProgress or {}
     state.completedTags = payload.completedTags or {}
-    if payload.message then
-        state.message = payload.message
-        state.messageUntil = getTickCount() + 3500
-    end
-    if payload.failureReason then
-        state.message = payload.failureReason
-        state.messageUntil = getTickCount() + 5000
-    end
 
     if previousStage ~= state.stage then
+        state.rooftopTagRevealed = false
+        local arrival = state.arrivalGate
+        local expectedArrivalStage = arrival and ({drive_idlewood = "demo", drive_ballas = "ballas_departure"})[arrival.stage]
+        if arrival and (previousStage ~= arrival.stage or state.stage ~= expectedArrivalStage) then
+            releaseArrivalGate("unexpected_stage_" .. tostring(state.stage))
+        elseif arrival and isTimer(arrival.resendTimer) then
+            killTimer(arrival.resendTimer)
+            arrival.resendTimer = nil
+        end
         if previousStage == "demo" and state.stage ~= "demo" then
             clearSweetDemoScene("stage_changed_to_" .. tostring(state.stage), false)
             clearDemoLeave(true)
@@ -1986,8 +2497,16 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
         else
             stopIntroCamera()
         end
+        if state.stage == "enter_car" or state.stage == "drive_idlewood" then
+            startSweetDemoAudioPreload()
+        elseif state.stage ~= "demo" then
+            clearSweetDemoAudioPreload("stage_changed_to_" .. tostring(state.stage))
+        end
         setStageNavigation(state.stage)
-        playSoundFrontEnd(state.stage == "complete" and 43 or 11)
+        beginMissionStageText(state.stage)
+    end
+    if state.stage == "tags_idlewood" or state.stage == "tags_ballas" or (state.stage == "rooftop" and state.rooftopTagRevealed) then
+        syncTagBlips()
     end
     if state.stage == "rooftop" and localPlayer == state.leader and not state.vehicleRecordingPreloaded and
         type(requestVehicleRecording) == "function" then
@@ -2002,6 +2521,8 @@ end)
 
 addEvent("tagup:stop", true)
 addEventHandler("tagup:stop", resourceRoot, function()
+    releaseArrivalGate("mission_stopped")
+    clearSweetDemoAudioPreload("mission_stopped")
     clearSweetDemoScene("mission_stopped", false)
     clearDemoLeave(true)
     clearDemoWalk(true)
@@ -2010,6 +2531,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     clearBallasDeparture(true)
     clearBallasGangScene("mission_stopped")
     clearVehiclePlayback(true)
+    killMissionTextTimers()
     stopIntroCamera()
     destroyNavigation()
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
@@ -2026,95 +2548,72 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.traceDemoTagActive = false
     state.traceCurrentStep = nil
     state.demoScene = nil
+    state.demoAudioPreload = nil
     state.vehicleRecordingPreloaded = false
+    if state.missionTextReady then
+        callMissionTextApi("releaseMissionText")
+    end
+    state.missionTextReady = false
+    state.nativeTagHelpPhase = 0
+    state.nativeTagHelpStarted = 0
+    state.nativeHelpFlags = {}
+    state.rooftopTagRevealed = false
     if type(TAGUP_TRACE) == "table" then
         TAGUP_TRACE.toggle(false)
         TAGUP_TRACE.reset()
     end
 end)
 
-local function drawWorldTag(tag)
-    local sx, sy = getScreenFromWorldPosition(tag.x, tag.y, tag.z + 0.35, 0.08)
-    if not sx then
-        return
-    end
-    local progress = state.tagProgress[tag.id] or 0
-    local width, height = 120, 10
-    dxDrawRectangle(sx - width / 2 - 2, sy - 2, width + 4, height + 4, tocolor(0, 0, 0, 190))
-    dxDrawRectangle(sx - width / 2, sy, width * progress, height, tocolor(85, 200, 105, 230))
-    dxDrawText(("TAG  %d%%"):format(math.floor(progress * 100)), sx - 70, sy - 29, sx + 70, sy - 5, tocolor(255, 255, 255, 235), 1, "default-bold", "center", "bottom")
-end
-
-local function drawMissionHud()
-    if not state.active or not state.stage then
-        return
-    end
-    local info = TAGUP.stages[state.stage] or {title = state.stage, objective = ""}
-    local boxWidth = math.min(620, screenWidth - 50)
-    local left = (screenWidth - boxWidth) / 2
-    dxDrawRectangle(left, 35, boxWidth, 78, tocolor(0, 0, 0, 175))
-    dxDrawText(info.title, left + 18, 43, left + boxWidth - 18, 70, tocolor(103, 206, 112, 255), 1.35, "pricedown", "center", "center")
-    dxDrawText(info.objective, left + 18, 72, left + boxWidth - 18, 104, tocolor(245, 245, 245, 245), 1, "default-bold", "center", "center", true)
-
-    if state.message and getTickCount() < state.messageUntil then
-        dxDrawText(state.message, 0, screenHeight * 0.70, screenWidth, screenHeight * 0.78, tocolor(255, 215, 90, 255), 1.3, "default-bold", "center", "center", true, true)
-    end
-
-    if state.demoScene and state.demoScene.skippable and state.demoScene.leaderCanSkip then
-        dxDrawText("ESPACE / ENTREE  Passer la demonstration pour toute l'equipe", 0, screenHeight - 105, screenWidth, screenHeight - 65,
-                   tocolor(255, 215, 90, 245), 1.05, "default-bold", "center", "center", true)
-    elseif state.ballasGangScene and state.ballasGangScene.skippable and state.ballasGangScene.leaderCanSkip then
-        dxDrawText("ESPACE / ENTREE  Passer la scene pour toute l'equipe", 0, screenHeight - 105, screenWidth, screenHeight - 65,
-                   tocolor(255, 215, 90, 245), 1.05, "default-bold", "center", "center", true)
-    end
-
-
-    local nearestTag, distance = nearestActiveTag()
-    if nearestTag and distance <= TAGUP.sprayRange + 1 then
-        local hint = distance <= TAGUP.sprayRange and "Maintenez TIR pour recouvrir le tag" or "Approchez-vous encore du tag"
-        dxDrawText(hint, 0, screenHeight - 155, screenWidth, screenHeight - 105, tocolor(255, 255, 255, 245), 1.15, "default-bold", "center", "center", true)
-    end
-
-    for _, tag in ipairs(getActiveTags()) do
-        drawWorldTag(tag)
-    end
-end
-addEventHandler("onClientRender", root, drawMissionHud)
 addEventHandler("onClientRender", root, updateIntroCamera, true, "low-10")
 
 local function reportVehicleProgress()
-    if not state.active or localPlayer ~= state.leader or getTickCount() - state.lastVehicleReport < 500 then
+    if not state.active or localPlayer ~= state.leader then
         return
     end
     local vehicle = getPedOccupiedVehicle(localPlayer)
     if vehicle ~= state.vehicle or getVehicleController(vehicle) ~= localPlayer then
         return
     end
+
+    -- SWEET1 evaluates both LOCATE_CAR_3D gates after every WAIT 0. Detect the
+    -- inclusive cube locally on the syncer and acquire the native control
+    -- inhibitor in that same frame; the server still authorizes progression.
+    if state.stage == "drive_idlewood" or state.stage == "drive_ballas" then
+        if state.arrivalGate then
+            return
+        end
+        local x, y, z = getElementPosition(vehicle)
+        local target = state.stage == "drive_idlewood" and TAGUP.idlewoodDestination or TAGUP.ballasDestination
+        local gate = state.stage == "drive_idlewood" and TAGUP.idlewoodArrival or TAGUP.ballasArrival
+        if math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and math.abs(z - target[3]) <= gate.radiusZ and
+            isVehicleOnGround(vehicle) then
+            enterArrivalGate(state.stage, state.stage == "drive_idlewood" and "idlewood" or "ballas", vehicle)
+        end
+        return
+    end
+
+    if state.stage == "drive_home" then
+        local x, y, z = getElementPosition(vehicle)
+        local target, gate = TAGUP.homeDestination, TAGUP.homeArrival
+        if getTickCount() - state.lastVehicleReport >= 100 and math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and
+            math.abs(z - target[3]) <= gate.radiusZ and isVehicleOnGround(vehicle) then
+            state.lastVehicleReport = getTickCount()
+            triggerServerEvent("tagup:vehicleReady", resourceRoot, "home", x, y, z)
+        end
+        return
+    end
+
+    if getTickCount() - state.lastVehicleReport < 500 then
+        return
+    end
     state.lastVehicleReport = getTickCount()
 
     if state.stage == "enter_car" then
         triggerServerEvent("tagup:vehicleReady", resourceRoot, "party")
-    elseif state.stage == "drive_idlewood" then
-        local x, y, z = getElementPosition(vehicle)
-        local target, gate = TAGUP.idlewoodDestination, TAGUP.idlewoodArrival
-        if math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and math.abs(z - target[3]) <= gate.radiusZ and
-            isVehicleOnGround(vehicle) then
-            triggerServerEvent("tagup:vehicleReady", resourceRoot, "idlewood")
-        end
     elseif state.stage == "return_car" then
         triggerServerEvent("tagup:vehicleReady", resourceRoot, "returned")
-    elseif state.stage == "drive_ballas" then
-        local x, y, z = getElementPosition(vehicle)
-        local target = TAGUP.ballasDestination
-        -- The SCM uses LOCATE_CAR_3D with 4 m half-axes and requires the car on
-        -- its wheels. MTA's closest public predicate is its grounded state.
-        if math.abs(x - target[1]) <= 4 and math.abs(y - target[2]) <= 4 and math.abs(z - target[3]) <= 4 and isVehicleOnGround(vehicle) then
-            triggerServerEvent("tagup:vehicleReady", resourceRoot, "ballas")
-        end
     elseif state.stage == "return_after_roof" then
         triggerServerEvent("tagup:vehicleReady", resourceRoot, "roof_return")
-    elseif state.stage == "drive_home" then
-        triggerServerEvent("tagup:vehicleReady", resourceRoot, "home")
     end
 end
 
@@ -2185,6 +2684,9 @@ addEventHandler("onClientPlayerWeaponFire", localPlayer, function(weapon)
 end)
 
 addEventHandler("onClientPreRender", root, function()
+    refreshStageNavigation()
+    renderNavigationImportantArea()
+    updateNativeMissionHelp()
     reportVehicleProgress()
     reportBallasGangTrigger()
     reportSpraying()
@@ -2256,6 +2758,9 @@ setTimer(function()
 end, 180, 0)
 
 addEventHandler("onClientElementStreamOut", root, function()
+    if state.arrivalGate and source == state.vehicle then
+        releaseArrivalGate("vehicle_streamed_out")
+    end
     if state.vehiclePlayback and (source == state.vehiclePlayback.ped or source == state.vehiclePlayback.vehicle) then
         if isElement(state.vehiclePlayback.vehicle) and isVehiclePlaybackActive(state.vehiclePlayback.vehicle) then
             stopVehiclePlayback(state.vehiclePlayback.vehicle)
@@ -2295,6 +2800,9 @@ addEventHandler("onClientElementStreamOut", root, function()
 end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
+    releaseArrivalGate("resource_stopped")
+    clearSweetDemoAudioPreload("resource_stopped")
+    clearSweetDemoScene("resource_stopped", false)
     if type(setObjectGangTagAlpha) == "function" then
         for _, object in ipairs(getElementsByType("object", resourceRoot, true)) do
             if isElementStreamedIn(object) then

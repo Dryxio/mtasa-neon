@@ -22,6 +22,7 @@ public:
                                       BYTE a) = 0;
     virtual C3DMarker*   FindFreeMarker() = 0;
     virtual C3DMarker*   FindMarker(DWORD Identifier) = 0;
+    virtual void         RenderScriptImportantArea(DWORD identifier, const CVector& center, float radiusX, float radiusY) = 0;
     virtual void         ReinitMarkers() = 0;
     virtual unsigned int GetCount() const = 0;
     virtual unsigned int GetCapacity() const = 0;

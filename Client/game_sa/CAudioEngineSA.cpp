@@ -23,6 +23,11 @@ extern CGameSA* pGame;
 #define NUM_FallbackWorldSoundBankSlotCount (BANKSLOT_44 + 1)
 #define NUM_AudioHardwareBankLoaderOffset   0xD98
 #define NUM_BankLoaderSlotCountOffset       0x0C
+#define NUM_MissionAudioSlotCount           4
+#define NUM_ScriptAudioEntityOffset         0x2A0
+#define NUM_MissionAudioLinksOffset         0x90
+#define NUM_MissionAudioLinkStride          0x20
+#define NUM_MissionAudioEventOffset         0x14
 
 namespace
 {
@@ -298,6 +303,20 @@ void CAudioEngineSA::ClearMissionAudio(int slot)
         call    dwFunc
     }
     // clang-format on
+
+    if (slot >= 0 && slot < NUM_MissionAudioSlotCount)
+    {
+        // GTA's verified 0x4EC040 clear path cancels the sample and clears its
+        // pointers, but deliberately leaves the event at link +0x14. MTA can
+        // reload Client Deathmatch while GTA keeps that stale link alive, so a
+        // later lease manager can no longer distinguish its released event
+        // from unknown native ownership. Reset only the event that this MTA
+        // clear call just released; 0x4EC020 reads the same field.
+        auto* pAudioEngine = reinterpret_cast<BYTE*>(CLASS_CAudioEngine);
+        auto* pEvent = reinterpret_cast<int*>(pAudioEngine + NUM_ScriptAudioEntityOffset + NUM_MissionAudioLinksOffset + slot * NUM_MissionAudioLinkStride +
+                                              NUM_MissionAudioEventOffset);
+        *pEvent = -1;
+    }
 }
 
 bool CAudioEngineSA::IsMissionAudioSampleFinished(int slot)

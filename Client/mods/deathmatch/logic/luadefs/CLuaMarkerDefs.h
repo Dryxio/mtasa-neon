@@ -20,6 +20,7 @@ public:
     static void AddClass(lua_State* luaVM);
 
     LUA_DECLARE(CreateMarker);
+    static bool RenderScriptImportantArea(lua_State* luaVM, CVector center, float radiusX, float radiusY, std::optional<std::uint32_t> localId);
 
     LUA_DECLARE(GetMarkerCount);
     LUA_DECLARE(GetMarkerLimitStats);

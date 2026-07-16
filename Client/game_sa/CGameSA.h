@@ -327,6 +327,21 @@ public:
     bool IsVehiclePlaybackActive(CVehicle* vehicle) override;
     bool RemoveVehicleRecording(int recordingId) override;
 
+    bool LoadMissionTextBlock(const char* blockName) override;
+    bool ShowMissionText(const char* key, unsigned int duration, unsigned short flags) override;
+    bool ShowMissionHelp(const char* key, bool permanent) override;
+    bool ShowMissionBigText(const char* key, unsigned int duration, unsigned int style, bool hasNumber, int number) override;
+    void ClearMissionText(const char* key, bool big) override;
+    void ClearMissionHelp() override;
+
+    unsigned long long GetNativeWorldStartupAuthorizationEpoch() const override;
+    SNativeWorldAuthorizationRecordResult PersistNativeWorldStartupAuthorization(
+        const SNativeWorldStartupAuthorization& authorization, const SNativeWorldTransportPublishResult& publication) override;
+    SNativeWorldAuthorizationRecordResult InspectNativeWorldStartupAuthorization() override;
+    SNativeWorldAuthorizationRecordResult ClearNativeWorldStartupAuthorization() override;
+    SNativeWorldAuthorizationRecordResult RevokeNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
+                                                                                  const std::string& contentId) override;
+
 private:
     std::unique_ptr<CPools>           m_Pools;
     CPlayerInfo*                      m_pPlayerInfo;

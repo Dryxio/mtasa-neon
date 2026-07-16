@@ -11,6 +11,72 @@
 
 #include "StdInc.h"
 #include "lua/CLuaFunctionParser.h"
+#include <CResource.h>
+
+namespace
+{
+    constexpr std::size_t MAX_GXT_KEY_LENGTH = 7;
+
+    struct SMissionTextLease
+    {
+        CResource*                      owner{};
+        std::string                     blockName;
+        std::unordered_set<std::string> smallMessages;
+        std::unordered_set<std::string> bigMessages;
+        bool                            helpVisible{};
+    };
+
+    SMissionTextLease g_missionTextLease;
+
+    CResource* GetCallingResource(lua_State* luaVM)
+    {
+        return luaVM ? g_pClientGame->GetResourceManager()->GetResourceFromLuaState(luaVM) : nullptr;
+    }
+
+    bool IsValidGxtName(const std::string& value)
+    {
+        if (value.empty() || value.size() > MAX_GXT_KEY_LENGTH)
+            return false;
+
+        return std::all_of(value.begin(), value.end(), [](unsigned char character) { return std::isalnum(character) || character == '_'; });
+    }
+
+    void ClearOwnedMissionTexts()
+    {
+        if (g_pGame)
+        {
+            if (g_missionTextLease.helpVisible)
+                g_pGame->ClearMissionHelp();
+            for (const std::string& key : g_missionTextLease.smallMessages)
+                g_pGame->ClearMissionText(key.c_str(), false);
+            for (const std::string& key : g_missionTextLease.bigMessages)
+                g_pGame->ClearMissionText(key.c_str(), true);
+        }
+
+        g_missionTextLease.helpVisible = false;
+        g_missionTextLease.smallMessages.clear();
+        g_missionTextLease.bigMessages.clear();
+    }
+
+    bool OwnsMissionText(lua_State* luaVM)
+    {
+        CResource* resource = GetCallingResource(luaVM);
+        return resource && g_missionTextLease.owner == resource;
+    }
+
+    void ReleaseMissionTextLease(CResource* resource)
+    {
+        if (!resource || g_missionTextLease.owner != resource)
+            return;
+
+        // The loaded GXT block is deliberately left as a harmless cache. Its
+        // pointers stay valid after the owned queues are cleared, and a later
+        // lease may atomically replace it through LOAD_MISSION_TEXT.
+        ClearOwnedMissionTexts();
+        g_missionTextLease.owner = nullptr;
+        g_missionTextLease.blockName.clear();
+    }
+}  // namespace
 
 void CLuaPlayerDefs::LoadFunctions()
 {
@@ -54,11 +120,121 @@ void CLuaPlayerDefs::LoadFunctions()
         {"getPlayerMapBoundingBox", GetPlayerMapBoundingBox},
         {"getPlayerMapOpacity", ArgumentParser<GetPlayerMapOpacity>},
         {"getPlayerHudComponentProperty", ArgumentParser<GetPlayerHudComponentProperty>},
+
+        // GTA-native mission text and HUD queues
+        {"acquireMissionText", ArgumentParser<AcquireMissionText>},
+        {"showMissionText", ArgumentParser<ShowMissionText>},
+        {"showMissionHelp", ArgumentParser<ShowMissionHelp>},
+        {"showMissionBigText", ArgumentParser<ShowMissionBigText>},
+        {"clearMissionTexts", ArgumentParser<ClearMissionTexts>},
+        {"clearMissionHelp", ArgumentParser<ClearMissionHelp>},
+        {"releaseMissionText", ArgumentParser<ReleaseMissionText>},
     };
 
     // Add functions
     for (const auto& [name, func] : functions)
         CLuaCFunctions::AddFunction(name, func);
+}
+
+bool CLuaPlayerDefs::AcquireMissionText(lua_State* luaVM, std::string blockName)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource || !g_pGame || !IsValidGxtName(blockName))
+        return false;
+
+    if (g_missionTextLease.owner && g_missionTextLease.owner != resource)
+        return false;
+
+    if (g_missionTextLease.owner == resource && g_missionTextLease.blockName == blockName)
+        return true;
+
+    // A block reload invalidates every GXT pointer kept by native queues.
+    // Clear this resource's entries before asking GTA to replace the block.
+    ClearOwnedMissionTexts();
+    if (!g_pGame->LoadMissionTextBlock(blockName.c_str()))
+    {
+        g_missionTextLease.owner = nullptr;
+        g_missionTextLease.blockName.clear();
+        return false;
+    }
+
+    g_missionTextLease.owner = resource;
+    g_missionTextLease.blockName = std::move(blockName);
+    return true;
+}
+
+bool CLuaPlayerDefs::ShowMissionText(lua_State* luaVM, std::string key, unsigned int duration, std::optional<unsigned int> flags)
+{
+    const unsigned int resolvedFlags = flags.value_or(1);
+    if (!OwnsMissionText(luaVM) || !IsValidGxtName(key) || resolvedFlags > std::numeric_limits<unsigned short>::max())
+        return false;
+
+    if (!g_pGame->ShowMissionText(key.c_str(), duration, static_cast<unsigned short>(resolvedFlags)))
+        return false;
+
+    g_missionTextLease.smallMessages.insert(std::move(key));
+    return true;
+}
+
+bool CLuaPlayerDefs::ShowMissionHelp(lua_State* luaVM, std::string key, std::optional<bool> permanent)
+{
+    if (!OwnsMissionText(luaVM) || !IsValidGxtName(key) || !g_pGame->ShowMissionHelp(key.c_str(), permanent.value_or(false)))
+        return false;
+
+    g_missionTextLease.helpVisible = true;
+    return true;
+}
+
+bool CLuaPlayerDefs::ShowMissionBigText(lua_State* luaVM, std::string key, unsigned int duration, std::optional<unsigned int> style, std::optional<int> number)
+{
+    if (!OwnsMissionText(luaVM) || !IsValidGxtName(key))
+        return false;
+
+    if (!g_pGame->ShowMissionBigText(key.c_str(), duration, style.value_or(1), number.has_value(), number.value_or(-1)))
+        return false;
+
+    g_missionTextLease.bigMessages.insert(std::move(key));
+    return true;
+}
+
+bool CLuaPlayerDefs::ClearMissionTexts(lua_State* luaVM)
+{
+    if (!OwnsMissionText(luaVM))
+        return false;
+
+    for (const std::string& key : g_missionTextLease.smallMessages)
+        g_pGame->ClearMissionText(key.c_str(), false);
+    for (const std::string& key : g_missionTextLease.bigMessages)
+        g_pGame->ClearMissionText(key.c_str(), true);
+    g_missionTextLease.smallMessages.clear();
+    g_missionTextLease.bigMessages.clear();
+    return true;
+}
+
+bool CLuaPlayerDefs::ClearMissionHelp(lua_State* luaVM)
+{
+    if (!OwnsMissionText(luaVM))
+        return false;
+
+    if (g_missionTextLease.helpVisible)
+        g_pGame->ClearMissionHelp();
+    g_missionTextLease.helpVisible = false;
+    return true;
+}
+
+bool CLuaPlayerDefs::ReleaseMissionText(lua_State* luaVM)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource || g_missionTextLease.owner != resource)
+        return false;
+
+    ReleaseMissionTextLease(resource);
+    return true;
+}
+
+void CLuaPlayerDefs::ReleaseMissionTextForResource(CResource* resource)
+{
+    ReleaseMissionTextLease(resource);
 }
 
 void CLuaPlayerDefs::AddClass(lua_State* luaVM)

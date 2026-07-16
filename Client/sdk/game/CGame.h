@@ -116,6 +116,8 @@ struct SNativeWorldTransportFile
     unsigned int declaredBytes{};
 };
 
+struct SNativeWorldStartupAuthorization;
+
 struct SNativeWorldTransportOffer
 {
     std::string                              resourceName;
@@ -123,6 +125,7 @@ struct SNativeWorldTransportOffer
     std::string                              manifestRelativePath;
     std::array<SNativeWorldTransportFile, 3> files;
     std::shared_ptr<std::atomic_bool>        cancelled;
+    std::shared_ptr<const SNativeWorldStartupAuthorization> startupAuthorization;
 };
 
 struct SNativeWorldTransportPublishResult
@@ -133,6 +136,36 @@ struct SNativeWorldTransportPublishResult
     std::string contentId;
     std::string publishedDirectory;
     std::string error;
+};
+
+struct SNativeWorldStartupAuthorization
+{
+    bool                          present{};
+    unsigned char                 wireVersion{};
+    unsigned char                 startupMode{};
+    unsigned char                 policy{};
+    unsigned char                 packFormat{};
+    std::array<unsigned char, 32> serverIdDigest{};
+    unsigned int                  serverIpv4{};
+    unsigned short                serverPort{};
+    unsigned short                resourceNetId{};
+    unsigned int                  resourceStartCounter{};
+    unsigned short                bitstreamVersion{};
+    unsigned long long            connectionGeneration{};
+    unsigned long long            authorizationEpoch{};
+    std::string                   resourceName;
+};
+
+struct SNativeWorldAuthorizationRecordResult
+{
+    bool               success{};
+    bool               found{};
+    bool               idempotent{};
+    unsigned long long issuedAt{};
+    unsigned long long expiresAt{};
+    std::string        ticketId;
+    std::string        diagnostic;
+    std::string        error;
 };
 
 class __declspec(novtable) CGame
@@ -331,4 +364,26 @@ public:
     virtual bool StopVehiclePlayback(CVehicle* vehicle) = 0;
     virtual bool IsVehiclePlaybackActive(CVehicle* vehicle) = 0;
     virtual bool RemoveVehicleRecording(int recordingId) = 0;
+
+    // GTA mission text is backed by one global GXT block plus the native
+    // CMessages/CHud queues. Keep fixed executable calls behind game_sa so
+    // client resources can use SCM text semantics without depending on SA
+    // addresses or retaining pointers into a mission block themselves.
+    virtual bool LoadMissionTextBlock(const char* blockName) = 0;
+    virtual bool ShowMissionText(const char* key, unsigned int duration, unsigned short flags) = 0;
+    virtual bool ShowMissionHelp(const char* key, bool permanent) = 0;
+    virtual bool ShowMissionBigText(const char* key, unsigned int duration, unsigned int style, bool hasNumber, int number) = 0;
+    virtual void ClearMissionText(const char* key, bool big) = 0;
+    virtual void ClearMissionHelp() = 0;
+
+    // Startup authorization is deliberately appended to this ABI. Checkpoint A
+    // persists and diagnoses an inert one-shot record; these methods do not
+    // select a cache object or mutate GTA state.
+    virtual unsigned long long GetNativeWorldStartupAuthorizationEpoch() const = 0;
+    virtual SNativeWorldAuthorizationRecordResult PersistNativeWorldStartupAuthorization(
+        const SNativeWorldStartupAuthorization& authorization, const SNativeWorldTransportPublishResult& publication) = 0;
+    virtual SNativeWorldAuthorizationRecordResult InspectNativeWorldStartupAuthorization() = 0;
+    virtual SNativeWorldAuthorizationRecordResult ClearNativeWorldStartupAuthorization() = 0;
+    virtual SNativeWorldAuthorizationRecordResult RevokeNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
+                                                                                          const std::string& contentId) = 0;
 };

@@ -14,6 +14,7 @@
 #include "profiler/SharedUtil.Profiler.h"
 #include "CServerIdManager.h"
 #include "luadefs/CLuaAudioDefs.h"
+#include "luadefs/CLuaPlayerDefs.h"
 #include "luadefs/CLuaVehicleDefs.h"
 
 #include <limits>
@@ -111,6 +112,10 @@ CResource::~CResource()
     // Mission-audio handles lease GTA-global hardware slots rather than child
     // elements, so resource teardown must stop only this resource's sounds.
     CLuaAudioDefs::ReleaseMissionAudioForResource(this);
+
+    // Mission GXT blocks and native HUD queues contain GTA-global pointers.
+    // Clear this resource's prints/help before its Lua state disappears.
+    CLuaPlayerDefs::ReleaseMissionTextForResource(this);
 
     // Recorded-car buffers and active slots are native global state, not child
     // elements. Stop and release them before this resource's Lua VM disappears.
