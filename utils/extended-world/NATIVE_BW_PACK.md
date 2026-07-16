@@ -183,7 +183,7 @@ restart-required=yes`; `disposition=published` and `disposition=hit` distinguish
 a new immutable object from a validated cache hit. Publication failure retains
 stock behavior.
 
-The transport cache allows at most four other content objects under the pack
+The transport cache allows at most four content objects total under the pack
 policy, at most 1 GiB of counted data, and requires the requested bytes plus a
 64 MiB free-space margin. It safely collects only recognizable, verified
 private quarantine/recovery remnants. Unsafe siblings, reparse points,
