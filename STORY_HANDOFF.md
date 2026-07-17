@@ -24,6 +24,7 @@ Suggested resume prompt:
 - Work as an orchestrator when the slice benefits from parallel research. Give agents bounded tasks such as ASM verification or MTA synchronization mapping. The primary agent owns API design, reviews all evidence, integrates changes, builds, and decides when the slice is ready for the user's test.
 - Do not commit before the user confirms the in-game result when a gameplay test is required.
 - Preserve unrelated dirty files. Both canonical repositories can contain concurrent work.
+- Do not use the em dash character in user-facing prose or new documentation. The user considers that punctuation distracting and has explicitly asked agents to avoid it.
 
 ## Objective and architecture
 
@@ -99,21 +100,22 @@ This keeps exposed APIs, completed slices, pending substitutes, test evidence, a
 
 ## Build and deployment quick reference
 
-The canonical source is edited only on macOS. The VM-local build copy is `C:\dev\mtasa-vm-custom`.
+The canonical source is edited only on macOS. The VM-local build copy is `C:\dev\mtasa-vm-custom`. Never synchronize it with plain `robocopy /MIR` or `/PURGE`: the canonical tree omits generated dependencies and cached VM state which a mirror can destroy.
 
-Synchronize without deleting VM-local build outputs:
+Use the canonical `utils/vm-build.ps1` helper through Windows PowerShell 5.1. Name only the files owned by the current checkpoint, review its read-only plan, then rerun the identical command with `-Execute`:
 
-```sh
-prlctl exec "Windows 11" cmd.exe /d /c \
-  "robocopy C:\Mac\Home\Documents\GitHub\mtasa-neon C:\dev\mtasa-vm-custom /MIR /XD .git Build Bin .vs"
+```powershell
+$vmBuild = 'C:\Mac\Home\Documents\GitHub\mtasa-neon\utils\vm-build.ps1'
+$files = @(
+    'Client\game_sa\CTasksSA.cpp',
+    'Client\mods\deathmatch\logic\luadefs\CLuaPedDefs.cpp'
+)
+
+& $vmBuild -Files $files -ClientProjects @('Game SA', 'Client Deathmatch')
+& $vmBuild -Files $files -ClientProjects @('Game SA', 'Client Deathmatch') -Execute
 ```
 
-For client-native story work, the smallest normal build is `Release|Win32` for:
-
-```text
-C:\dev\mtasa-vm-custom\Build\Game SA.vcxproj
-C:\dev\mtasa-vm-custom\Build\Client Deathmatch.vcxproj
-```
+Select the smallest affected project set from `AGENTS.md`. For the usual client-native story task spanning `Client/game_sa`, the client Lua surface, and their SDK interfaces, build `Game SA` and `Client Deathmatch` in `Release|Win32`. Use `-BuildOnly` only to retry an already synchronized project. Use `-Regenerate` only when compiled-source membership or build definitions changed. The helper owns hash-verified synchronization, dependency preservation, output-lock checks, and output verification.
 
 Outputs:
 
