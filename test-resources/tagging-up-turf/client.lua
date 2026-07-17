@@ -3,6 +3,7 @@ local state = {
     stage = nil,
     vehicle = nil,
     sweet = nil,
+    demoTag = nil,
     leader = nil,
     tagProgress = {},
     completedTags = {},
@@ -14,9 +15,6 @@ local state = {
     navigationMode = nil,
     rooftopTagRevealed = false,
     stageStarted = 0,
-    lastSpray = 0,
-    sprayInput = false,
-    sprayPulseUntil = 0,
     lastVehicleReport = 0,
     arrivalGate = nil,
     lastArrivalAcquireAttempt = 0,
@@ -212,14 +210,14 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "shoot_rate", title = "07DD · SET CHAR SHOOT RATE", detail = "NATIVE VERIFIED · value 100"},
     {id = "shoot", title = "0668 · SHOOT AT COORD", detail = "NATIVE VERIFIED · burst 5 / ceiling 15 s"},
     {id = "shoot_wait", title = "OBSERVE NATIVE GUN CTRL", detail = "LUA TASK POLL · TASK_SIMPLE_GUN_CTRL"},
-    {id = "demo_tag", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · demo 0%"},
+    {id = "demo_tag", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · demo 0%"},
     {id = "demo_wait", title = "CANCEL TASK + WAIT 1000", detail = "NEON LIFECYCLE + SCM FLOW"},
     {id = "demo_camera", title = "SCRIPT CAMERA · SWEET DEMO", detail = "NATIVE VERIFIED · fixed + vector move/track"},
     {id = "demo_audio_ar", title = "03CF/03D1 · SWE1_AR", detail = "NATIVE MISSION AUDIO · preload / play / finish"},
     {id = "demo_checkout", title = "0605/062E · GRAFFITI_CHKOUT", detail = "SYNCED ANIMATION TASK · natural finish"},
     {id = "demo_audio_ca", title = "03CF/03D1 · SWE1_CA", detail = "NATIVE MISSION AUDIO · preload / play / finish"},
     {id = "enter_passenger", title = "05CA · ENTER CAR AS PASSENGER", detail = "NATIVE VERIFIED · SCM seat 0 / MTA seat 1"},
-    {id = "idlewood_tags", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · Idlewood 0%"},
+    {id = "idlewood_tags", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · Idlewood 0%"},
     {id = "return_car", title = "RETURN TO GREENWOOD", detail = "CO-OP CONDITION · party regroup"},
     {id = "drive_ballas", title = "LOCATE CAR IN BALLAS", detail = "SCM GATE · 4 m box + grounded / vehicle anchored"},
     {id = "ballas_camera", title = "SCRIPT CAMERA · BALLAS ARRIVAL", detail = "NATIVE VERIFIED · fixed point + widescreen / co-op barrier"},
@@ -228,8 +226,8 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "ballas_wait", title = "WAIT 1000", detail = "SCM FLOW · release control after native start"},
     {id = "spawn_ballas", title = "CREATE BALLAS GROUP", detail = "LUA SUBSTITUTE · temporary ped AI"},
     {id = "ballas_gang_camera", title = "SCRIPT CAMERA · TWO FLATS", detail = "NATIVE VERIFIED · fixed shot / WAIT 500 + skippable 6500"},
-    {id = "ballas_tags", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · Ballas 0%"},
-    {id = "rooftop_tag", title = "0702 SUBSTITUTE · TAG PERCENT", detail = "SERVER COUNTER + NATIVE TAG ALPHA · rooftop 0%"},
+    {id = "ballas_tags", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · Ballas 0%"},
+    {id = "rooftop_tag", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · rooftop 0%"},
     {id = "request_carrec", title = "07C0 · REQUEST CAR RECORDING", detail = "NATIVE VERIFIED · recording 207"},
     {id = "load_carrec", title = "07C1 · HAS CAR RECORDING LOADED", detail = "NATIVE VERIFIED · streamed RRR buffer"},
     {id = "start_playback", title = "05EB · START RECORDED CAR", detail = "NATIVE VERIFIED · vehicle syncer only"},
@@ -308,7 +306,7 @@ end
 local function averageTagProgress(ids)
     local total = 0
     for _, id in ipairs(ids) do
-        total = total + (tonumber(state.tagProgress[id]) or 0)
+        total = total + (tonumber(state.tagProgress[id]) or 0) / 255
     end
     return total / #ids
 end
@@ -316,34 +314,90 @@ end
 local function updateTraceTagStage()
     if state.stage == "tags_idlewood" then
         local progress = averageTagProgress({1, 2})
-        traceProgress("idlewood_tags", progress, ("SERVER COUNTER + NATIVE TAG ALPHA · Idlewood %d%%"):format(math.floor(progress * 100 + 0.5)))
+        traceProgress("idlewood_tags", progress, ("NATIVE SPRAY PROGRESS · Idlewood %d%%"):format(math.floor(progress * 100 + 0.5)))
     elseif state.stage == "tags_ballas" then
         local progress = averageTagProgress({3, 4})
-        traceProgress("ballas_tags", progress, ("SERVER COUNTER + NATIVE TAG ALPHA · Ballas %d%%"):format(math.floor(progress * 100 + 0.5)))
+        traceProgress("ballas_tags", progress, ("NATIVE SPRAY PROGRESS · Ballas %d%%"):format(math.floor(progress * 100 + 0.5)))
     elseif state.stage == "rooftop" then
-        local progress = tonumber(state.tagProgress[5]) or 0
-        traceProgress("rooftop_tag", progress, ("SERVER COUNTER + NATIVE TAG ALPHA · rooftop %d%%"):format(math.floor(progress * 100 + 0.5)))
+        local progress = (tonumber(state.tagProgress[5]) or 0) / 255
+        traceProgress("rooftop_tag", progress, ("NATIVE SPRAY PROGRESS · rooftop %d%%"):format(math.floor(progress * 100 + 0.5)))
     end
 end
 
-local function applyGangTagAlpha(object)
-    if not isElement(object) or getElementType(object) ~= "object" or not isElementStreamedIn(object) then
+local function getGangTagGroupForStage()
+    if state.stage == "tags_idlewood" then
+        return "idlewood"
+    elseif state.stage == "tags_ballas" then
+        return "ballas"
+    elseif state.stage == "rooftop" then
+        return "rooftop"
+    end
+    return nil
+end
+
+local function shouldEnableGangTag(object, alpha)
+    if not state.active then
+        return false
+    end
+
+    local tagId = tonumber(getElementData(object, "tagup.tagId"))
+    if not tagId then
+        return object == state.demoTag and (state.stage == "demo" or alpha == 255)
+    end
+
+    if state.completedTags[tagId] or alpha == 255 then
+        return true
+    end
+
+    local tag = tagupGetTag(tagId)
+    return tag and tag.group == getGangTagGroupForStage()
+end
+
+local function applyGangTagState(object)
+    if not isElement(object) or getElementType(object) ~= "object" then
         return
     end
     local alpha = tonumber(getElementData(object, TAG_PAINT_ALPHA_DATA))
-    if type(setObjectGangTagAlpha) ~= "function" then
+    if type(acquireObjectGangTag) ~= "function" or type(setObjectGangTagProgress) ~= "function" then
         return
     end
-    if alpha then
-        setObjectGangTagAlpha(object, math.max(0, math.min(255, math.floor(alpha + 0.5))))
-    else
-        setObjectGangTagAlpha(object, false)
+    if not alpha or not shouldEnableGangTag(object, alpha) then
+        if type(releaseObjectGangTag) == "function" then
+            releaseObjectGangTag(object)
+        end
+        return
+    end
+
+    alpha = math.max(0, math.min(255, math.floor(alpha + 0.5)))
+    local predictedAlpha = type(getObjectGangTagProgress) == "function" and getObjectGangTagProgress(object) or false
+    if type(predictedAlpha) == "number" and alpha < predictedAlpha then
+        return
+    end
+    if not setObjectGangTagProgress(object, alpha) then
+        acquireObjectGangTag(object, alpha)
+    end
+end
+
+local function refreshGangTagStates()
+    for _, object in ipairs(getElementsByType("object", resourceRoot, true)) do
+        if getElementData(object, TAG_PAINT_ALPHA_DATA) ~= false then
+            applyGangTagState(object)
+        end
+    end
+end
+
+local function releaseGangTagStates()
+    if type(releaseObjectGangTag) ~= "function" then
+        return
+    end
+    for _, object in ipairs(getElementsByType("object", resourceRoot, true)) do
+        releaseObjectGangTag(object)
     end
 end
 
 addEventHandler("onClientElementStreamIn", root, function()
     if getElementData(source, TAG_PAINT_ALPHA_DATA) ~= false then
-        applyGangTagAlpha(source)
+        applyGangTagState(source)
     end
     if getElementType(source) == "ped" and getElementData(source, TAGUP.missionActorData) ~= nil then
         applyMissionActor(source)
@@ -354,7 +408,7 @@ addEventHandler("onClientElementDataChange", root, function(dataName)
     if dataName == TAGUP.missionActorData then
         applyMissionActor(source)
     elseif dataName == TAG_PAINT_ALPHA_DATA then
-        applyGangTagAlpha(source)
+        applyGangTagState(source)
         if state.active and state.stage == "demo" and not getElementData(source, "tagup.tagId") then
             local alpha = tonumber(getElementData(source, TAG_PAINT_ALPHA_DATA))
             if alpha and alpha > 0 then
@@ -364,21 +418,17 @@ addEventHandler("onClientElementDataChange", root, function(dataName)
                     traceCurrent("demo_tag")
                 end
                 traceProgress("demo_tag", progress,
-                              ("SERVER COUNTER + NATIVE TAG ALPHA · demo %d%%"):format(math.floor(progress * 100 + 0.5)))
+                              ("NATIVE SPRAY PROGRESS · demo %d%%"):format(math.floor(progress * 100 + 0.5)))
             end
         end
     end
 end)
 
 addEventHandler("onClientResourceStart", resourceRoot, function()
-    if type(setObjectGangTagAlpha) ~= "function" then
-        outputDebugString("[tagging-up-turf] setObjectGangTagAlpha is unavailable; native tag material rendering is disabled", 1)
+    if type(acquireObjectGangTag) ~= "function" or type(setObjectGangTagProgress) ~= "function" then
+        outputDebugString("[tagging-up-turf] native gang-tag API is unavailable", 1)
     else
-        for _, object in ipairs(getElementsByType("object", resourceRoot, true)) do
-            if getElementData(object, TAG_PAINT_ALPHA_DATA) ~= false then
-                applyGangTagAlpha(object)
-            end
-        end
+        refreshGangTagStates()
     end
     if type(setPedMissionActor) ~= "function" or type(isPedMissionActor) ~= "function" then
         outputDebugString("[tagging-up-turf] mission-actor API unavailable; native story-ped classification is disabled", 1)
@@ -1021,6 +1071,22 @@ local function beginDemoShoot()
     end
 
     local target, profile = shoot.target, shoot.profile
+    local tag = state.demoTag
+    if not isElement(tag) then
+        return reportDemoShoot("native_tag_missing", "demoTag absent avant TASK_SHOOT_AT_COORD")
+    end
+    applyGangTagState(tag)
+    local tagProgress = type(getObjectGangTagProgress) == "function" and getObjectGangTagProgress(tag) or false
+    local pedX, pedY, pedZ = getElementPosition(shoot.ped)
+    local _, _, pedHeading = getElementRotation(shoot.ped)
+    local tagX, tagY, tagZ = getElementPosition(tag)
+    outputDebugString(("[tagging-up-turf] Sweet shoot geometry ped=(%.3f, %.3f, %.3f, heading=%.1f) target=(%.3f, %.3f, %.3f) tag=(%.3f, %.3f, %.3f) streamed=%s progress=%s"):format(
+                          pedX, pedY, pedZ, pedHeading, target.x, target.y, target.z, tagX, tagY, tagZ,
+                          tostring(isElementStreamedIn(tag)), tostring(tagProgress)))
+    if not isElementStreamedIn(tag) or type(tagProgress) ~= "number" then
+        return reportDemoShoot("native_tag_unavailable", ("streamed=%s progress=%s"):format(tostring(isElementStreamedIn(tag)),
+                                                                                              tostring(tagProgress)))
+    end
     traceCurrent("shoot")
     shoot.accepted = setPedShootAt(shoot.ped, Vector3(target.x, target.y, target.z), profile.duration, profile.burstLength)
     if not shoot.accepted then
@@ -2448,12 +2514,14 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
     state.stage = payload.stage
     state.vehicle = payload.vehicle
     state.sweet = payload.sweet
+    state.demoTag = payload.demoTag
     if isElement(state.sweet) then
         applyMissionActor(state.sweet)
     end
     state.leader = payload.leader
     state.tagProgress = payload.tagProgress or {}
     state.completedTags = payload.completedTags or {}
+    refreshGangTagStates()
 
     if previousStage ~= state.stage then
         state.rooftopTagRevealed = false
@@ -2521,6 +2589,7 @@ end)
 
 addEvent("tagup:stop", true)
 addEventHandler("tagup:stop", resourceRoot, function()
+    releaseGangTagStates()
     releaseArrivalGate("mission_stopped")
     clearSweetDemoAudioPreload("mission_stopped")
     clearSweetDemoScene("mission_stopped", false)
@@ -2541,6 +2610,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.stage = nil
     state.vehicle = nil
     state.sweet = nil
+    state.demoTag = nil
     state.leader = nil
     state.tagProgress = {}
     state.completedTags = {}
@@ -2617,26 +2687,19 @@ local function reportVehicleProgress()
     end
 end
 
-local function reportSpraying()
-    local now = getTickCount()
-    if not state.active or now - state.lastSpray < 110 or getPedWeapon(localPlayer) ~= TAGUP.sprayWeapon or isPedInVehicle(localPlayer) then
-        return
-    end
-    local isFiring = state.sprayInput or now < state.sprayPulseUntil or getPedControlState(localPlayer, "fire") or getKeyState("mouse1") or
-                         getKeyState("lctrl") or getKeyState("rctrl")
-    if not isFiring then
-        return
-    end
-    local tag, distance = nearestActiveTag()
-    if not tag or distance > TAGUP.sprayRange then
+addEventHandler("onClientObjectGangTagProgress", root, function(previousAlpha, currentAlpha, creator)
+    if not state.active or type(previousAlpha) ~= "number" or type(currentAlpha) ~= "number" then
         return
     end
 
-    -- Spray cans do not expose the same target endpoint as firearms in MTA. Range
-    -- plus an actual fire input reproduces SCM tag progress without CTagManager.
-    state.lastSpray = now
-    triggerServerEvent("tagup:spray", resourceRoot, tag.id)
-end
+    local reportsLocalPlayer = creator == localPlayer
+    local reportsSynchronizedSweet = creator == state.sweet and localPlayer == state.leader and isElement(creator) and isElementSyncer(creator)
+    if not reportsLocalPlayer and not reportsSynchronizedSweet then
+        return
+    end
+
+    triggerServerEvent("tagup:nativeTagProgress", resourceRoot, source, creator, previousAlpha, currentAlpha)
+end)
 
 local function reportBallasGangTrigger()
     local now = getTickCount()
@@ -2669,18 +2732,6 @@ addEventHandler("onClientKey", root, function(button, pressed)
         cancelEvent()
         return
     end
-    if button == "mouse1" or button == "lctrl" or button == "rctrl" then
-        state.sprayInput = pressed
-        if pressed then
-            state.sprayPulseUntil = getTickCount() + 250
-        end
-    end
-end)
-
-addEventHandler("onClientPlayerWeaponFire", localPlayer, function(weapon)
-    if weapon == TAGUP.sprayWeapon then
-        state.sprayPulseUntil = getTickCount() + 250
-    end
 end)
 
 addEventHandler("onClientPreRender", root, function()
@@ -2689,7 +2740,6 @@ addEventHandler("onClientPreRender", root, function()
     updateNativeMissionHelp()
     reportVehicleProgress()
     reportBallasGangTrigger()
-    reportSpraying()
 end)
 
 addEventHandler("onClientPlayerDamage", localPlayer, function(attacker)
@@ -2803,11 +2853,9 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     releaseArrivalGate("resource_stopped")
     clearSweetDemoAudioPreload("resource_stopped")
     clearSweetDemoScene("resource_stopped", false)
-    if type(setObjectGangTagAlpha) == "function" then
+    if type(releaseObjectGangTag) == "function" then
         for _, object in ipairs(getElementsByType("object", resourceRoot, true)) do
-            if isElementStreamedIn(object) then
-                setObjectGangTagAlpha(object, false)
-            end
+            releaseObjectGangTag(object)
         end
     end
     clearDemoLeave(true)

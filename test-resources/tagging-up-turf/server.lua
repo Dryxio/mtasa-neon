@@ -8,7 +8,6 @@ local mission = {
     entities = {},
     tagProgress = {},
     completedTags = {},
-    sprayCooldown = {},
     timers = {},
     demoLeaveSerial = 0,
     demoLeave = nil,
@@ -29,8 +28,8 @@ local mission = {
     vehiclePlayback = nil,
 }
 
--- The server owns every stage transition and spray increment so several clients can
--- cooperate without letting the fastest (or a modified) client decide mission state.
+-- GTA produces every spray hit and exact alpha step. The server validates those
+-- native reports and mirrors the resulting byte so co-op clients share one state.
 
 local function isMissionPlayer(player)
     if not isElement(player) then
@@ -153,6 +152,7 @@ local function stagePayload(extra)
         stage = mission.stage,
         vehicle = mission.entities.vehicle,
         sweet = mission.entities.sweet,
+        demoTag = mission.entities.demoTag,
         leader = mission.leader,
         tagProgress = mission.tagProgress,
         completedTags = mission.completedTags,
@@ -360,7 +360,7 @@ local function createTagObject(tag)
         setElementDimension(object, TAGUP.dimension)
         setElementInterior(object, 0)
         setElementCollisionsEnabled(object, false)
-        setElementData(object, "tagup.tagId", tag.id, false)
+        setElementData(object, "tagup.tagId", tag.id, true)
         -- GTA stores the rival and Grove artwork in two materials of this same
         -- model. The synchronized byte drives only the Grove material client-side.
         setElementData(object, "tagup.paintAlpha", 0, true)
@@ -369,10 +369,10 @@ local function createTagObject(tag)
     return object
 end
 
-local function updateTagVisual(tagId, progress)
+local function updateTagVisual(tagId, alpha)
     local tag = mission.entities["tag" .. tagId]
     if isElement(tag) then
-        setElementData(tag, "tagup.paintAlpha", math.floor(255 * progress + 0.5), true)
+        setElementData(tag, "tagup.paintAlpha", math.max(0, math.min(255, math.floor(alpha + 0.5))), true)
     end
 end
 
@@ -668,7 +668,6 @@ finishMission = function(passed, traceExtra)
         mission.snapshots = {}
         mission.tagProgress = {}
         mission.completedTags = {}
-        mission.sprayCooldown = {}
         mission.demoLeave = nil
         mission.demoWalk = nil
         mission.demoShoot = nil
@@ -1098,7 +1097,7 @@ addCommandHandler("tagupskip", function(player)
         end
         for _, id in ipairs(activeTagIds()) do
             mission.completedTags[id] = true
-            mission.tagProgress[id] = 1
+            mission.tagProgress[id] = 255
             replaceTagObject(id)
         end
         advanceAfterTags({traceSkipped = true})
@@ -1127,9 +1126,8 @@ local function startDemoWalk(sweet, kind, overrideProfile)
     local distance2D = math.sqrt(deltaX * deltaX + deltaY * deltaY)
     local distance3D = tagupDistance3D(exitX, exitY, exitZ, profile.target.x, profile.target.y, profile.target.z)
 
-    -- The native leave-car task owns Sweet's final position and heading. Keeping
-    -- them avoids a visible snap and mirrors the SCM sequence, which assigns the
-    -- following go-to task from the actor's natural vehicle-exit position.
+    -- SWEET1 starts this sequence only after its black-screen actor staging has
+    -- placed Sweet at the exact scripted coordinate and heading.
     setElementSyncer(sweet, mission.leader)
 
     mission.demoWalkSerial = mission.demoWalkSerial + 1
@@ -1146,11 +1144,20 @@ local function startDemoWalk(sweet, kind, overrideProfile)
     end, profile.guardTimeout, 1, walk.id))
 
     local diagnostic =
-        ("[tagging-up-turf] Starting Sweet native go-to #%d from natural exit=(%.2f, %.2f, %.2f, heading=%.1f) to target=(%.2f, %.2f, %.2f), distance2D=%.2f m, distance3D=%.2f m, syncer=%s")
+        ("[tagging-up-turf] Starting Sweet native go-to #%d from SCM stage=(%.2f, %.2f, %.2f, heading=%.1f) to target=(%.2f, %.2f, %.2f), distance2D=%.2f m, distance3D=%.2f m, syncer=%s")
             :format(walk.id, exitX, exitY, exitZ, exitHeading, profile.target.x, profile.target.y, profile.target.z, distance2D, distance3D,
                     getPlayerName(mission.leader))
     outputDebugString(diagnostic)
     triggerClientEvent(mission.leader, "tagup:sweetDemoWalkStart", resourceRoot, walk.id, sweet, profile)
+end
+
+local function tryStartDemoWalkAfterStaging()
+    local scene = mission.demoScene
+    local sweet = mission.entities.sweet
+    if not scene or not scene.actorsStaged or not scene.sweetLeaveComplete or mission.demoWalk or not isElement(sweet) then
+        return
+    end
+    startDemoWalk(sweet)
 end
 
 local function tryCompleteDemoLeave()
@@ -1159,10 +1166,14 @@ local function tryCompleteDemoLeave()
         return
     end
 
-    local ped, leaveId = leave.ped, leave.id
+    local leaveId = leave.id
     outputDebugString(("[tagging-up-turf] Sweet native leave-car #%d confirmed by task observation and server vehicle state"):format(leaveId))
     cancelDemoLeave("completed")
-    startDemoWalk(ped)
+    local scene = mission.demoScene
+    if scene then
+        scene.sweetLeaveComplete = true
+    end
+    tryStartDemoWalkAfterStaging()
 end
 
 local function startDemoLeave()
@@ -1346,9 +1357,18 @@ local function stageDemoActors(scene)
             setElementRotation(player, 0, 0, profile.leaderStage.heading)
         end
     end
-    setElementPosition(mission.entities.sweet, profile.sweetStage.x, profile.sweetStage.y, profile.sweetStage.z)
-    setElementRotation(mission.entities.sweet, 0, 0, profile.sweetStage.heading)
-    setElementSyncer(mission.entities.sweet, mission.leader)
+    local sweet = mission.entities.sweet
+    if getPedOccupiedVehicle(sweet) then
+        removePedFromVehicle(sweet)
+    end
+    setElementPosition(sweet, profile.sweetStage.x, profile.sweetStage.y, profile.sweetStage.z)
+    setElementRotation(sweet, 0, 0, profile.sweetStage.heading)
+    setElementSyncer(sweet, mission.leader)
+    scene.actorsStaged = true
+    outputDebugString(("[tagging-up-turf] Sweet staged at SCM coordinate=(%.2f, %.2f, %.2f, heading=%.1f); sequence gate leaveComplete=%s"):format(
+                          profile.sweetStage.x, profile.sweetStage.y, profile.sweetStage.z, profile.sweetStage.heading,
+                          tostring(scene.sweetLeaveComplete)))
+    tryStartDemoWalkAfterStaging()
     for _, player in ipairs(scene.players) do
         if isElement(player) then
             triggerClientEvent(player, "tagup:sweetDemoSceneStaged", resourceRoot, scene.id)
@@ -1635,8 +1655,6 @@ local function startDemoShoot(ped, distanceFromWalkTarget)
     local profile = TAGUP.sweetDemoShoot
     local demo = TAGUP.demoTag
     giveWeapon(ped, TAGUP.sprayWeapon, 500, true)
-    local x, y = getElementPosition(ped)
-    setElementRotation(ped, 0, 0, -math.deg(math.atan2(demo.x - x, demo.y - y)))
     setElementSyncer(ped, mission.leader)
 
     mission.demoShootSerial = mission.demoShootSerial + 1
@@ -1805,73 +1823,49 @@ addEventHandler("tagup:sweetDemoShootObserved", resourceRoot, function(shootId, 
     end
 
     shoot.observedAt = getTickCount()
-    shoot.progress = 0
+    -- A native spray hit can be emitted in the frame before the Lua task
+    -- observer reports TASK_SIMPLE_GUN_CTRL. Preserve that stronger evidence
+    -- instead of rolling the authoritative byte back to zero.
+    shoot.progress = shoot.progress or 0
     local demoScene = mission.demoScene
     if demoScene then
         demoScene.shootObserved = true
         tryStartDemoSprayCamera(demoScene)
     end
-    outputDebugString(("[tagging-up-turf] Sweet native shoot #%d observed after %d ms; starting authoritative demo-tag progress (task ceiling=%d ms)"):format(
+    outputDebugString(("[tagging-up-turf] Sweet native shoot #%d observed after %d ms; waiting for native tag hits (task ceiling=%d ms)"):format(
         shoot.id, shoot.observedAt - shoot.requestedAt, profile.duration))
-
-    shoot.progressTimer = rememberTimer(setTimer(function(expectedId)
-        local active = mission.demoShoot
-        if not mission.running or mission.stage ~= "demo" or not active or active.id ~= expectedId then
-            return
-        end
-        if not isElement(active.ped) or isPedDead(active.ped) or not isElement(mission.leader) or getElementSyncer(active.ped) ~= mission.leader then
-            cancelDemoShoot("progress_ownership_lost")
-            return failMission("Sweet ou son syncer a disparu pendant la progression du tag.")
-        end
-
-        local px, py, pz = getElementPosition(active.ped)
-        local activeDistance = tagupDistance3D(px, py, pz, demo.x, demo.y, demo.z)
-        if activeDistance > profile.serverMaxDistance or getPedWeapon(active.ped) ~= TAGUP.sprayWeapon or not isElement(mission.entities.demoTag) then
-            cancelDemoShoot("invalid_progress_state")
-            return failMission(("Sweet ne peut plus recouvrir le tag (distance=%.2f m, weapon=%d)."):format(activeDistance,
-                                                                                                           getPedWeapon(active.ped)))
-        end
-
-        local previousProgress = active.progress
-        active.progress = math.min(1, previousProgress + profile.progressPerTick)
-        setElementData(mission.entities.demoTag, "tagup.paintAlpha", math.floor(255 * active.progress + 0.5), true)
-        if math.floor(previousProgress * 4) ~= math.floor(active.progress * 4) then
-            outputDebugString(("[tagging-up-turf] Sweet demo tag: %d%% (server-authoritative)"):format(math.floor(active.progress * 100)))
-        end
-        if active.progress < 1 then
-            return
-        end
-
-        if isTimer(active.progressTimer) then
-            killTimer(active.progressTimer)
-        end
-        active.progressTimer = nil
-        active.nativeCancelled = true
-        setElementData(mission.entities.demoTag, "tagup.paintAlpha", 255, true)
-        triggerClientEvent(mission.leader, "tagup:sweetDemoShootCancel", resourceRoot, active.id, "authoritative_tag_complete")
-        outputDebugString(("[tagging-up-turf] Sweet demo tag reached 100%%; interrupting native shoot and honoring SCM WAIT %d"):format(
-            profile.postCompletionWait))
-
-        active.completionTimer = rememberTimer(setTimer(function(completedId)
-            local completed = mission.demoShoot
-            if not mission.running or mission.stage ~= "demo" or not completed or completed.id ~= completedId then
-                return
-            end
-            if not isElement(completed.ped) or isPedDead(completed.ped) or not isElement(mission.entities.demoTag) then
-                cancelDemoShoot("invalid_post_wait_state")
-                return failMission("Sweet ou le tag a disparu pendant l'attente de fin de demonstration.")
-            end
-
-            local scene = mission.demoScene
-            cancelDemoShoot("completed_after_scm_wait")
-            if not scene then
-                return failMission("La scene de demonstration a disparu avant GRAFFITI_CHKOUT.")
-            end
-            outputDebugString("[tagging-up-turf] SCM WAIT 1000 complete; starting synchronized GRAFFITI_CHKOUT")
-            startDemoCheckoutAnimation(scene)
-        end, profile.postCompletionWait, 1, active.id))
-    end, profile.progressInterval, 0, shoot.id))
 end)
+
+local function completeDemoTag(active)
+    if not active or active.nativeCancelled then
+        return
+    end
+
+    local profile = TAGUP.sweetDemoShoot
+    active.nativeCancelled = true
+    setElementData(mission.entities.demoTag, "tagup.paintAlpha", 255, true)
+    triggerClientEvent(mission.leader, "tagup:sweetDemoShootCancel", resourceRoot, active.id, "authoritative_tag_complete")
+    outputDebugString(("[tagging-up-turf] Sweet demo tag reached native alpha 255; honoring SCM WAIT %d"):format(profile.postCompletionWait))
+
+    active.completionTimer = rememberTimer(setTimer(function(completedId)
+        local completed = mission.demoShoot
+        if not mission.running or mission.stage ~= "demo" or not completed or completed.id ~= completedId then
+            return
+        end
+        if not isElement(completed.ped) or isPedDead(completed.ped) or not isElement(mission.entities.demoTag) then
+            cancelDemoShoot("invalid_post_wait_state")
+            return failMission("Sweet ou le tag a disparu pendant l'attente de fin de demonstration.")
+        end
+
+        local scene = mission.demoScene
+        cancelDemoShoot("completed_after_scm_wait")
+        if not scene then
+            return failMission("La scene de demonstration a disparu avant GRAFFITI_CHKOUT.")
+        end
+        outputDebugString("[tagging-up-turf] SCM WAIT 1000 complete; starting synchronized GRAFFITI_CHKOUT")
+        startDemoCheckoutAnimation(scene)
+    end, profile.postCompletionWait, 1, active.id))
+end
 
 local function allMissionPlayersExitedBallasVehicle(departure)
     for _, player in ipairs(mission.party) do
@@ -2234,11 +2228,59 @@ addEventHandler("tagup:vehicleReady", resourceRoot, function(kind, reportedX, re
     end
 end)
 
-addEvent("tagup:spray", true)
-addEventHandler("tagup:spray", resourceRoot, function(tagId)
+local function isNativeTagAlphaStep(previousAlpha, currentAlpha)
+    previousAlpha = tonumber(previousAlpha)
+    currentAlpha = tonumber(currentAlpha)
+    if not previousAlpha or not currentAlpha or previousAlpha ~= math.floor(previousAlpha) or currentAlpha ~= math.floor(currentAlpha) or
+        previousAlpha < 0 or previousAlpha > 255 or currentAlpha < 0 or currentAlpha > 255 then
+        return false
+    end
+    return previousAlpha < 255 and currentAlpha == math.min(previousAlpha + 8, 255)
+end
+
+-- CShotInfo::Update can process several live spray shots in one frame. A
+-- minimum wall-clock interval would reject a legitimate step and make every
+-- following previousAlpha disagree with the authoritative byte.
+addEvent("tagup:nativeTagProgress", true)
+addEventHandler("tagup:nativeTagProgress", resourceRoot, function(targetObject, creator, previousAlpha, currentAlpha)
     local player = client
-    tagId = tonumber(tagId)
-    if not mission.running or not isMissionPlayer(player) or not tagId or mission.completedTags[tagId] or mission.ballasGangScene then
+    if source ~= resourceRoot or not mission.running or not isMissionPlayer(player) or not isElement(targetObject) or
+        getElementType(targetObject) ~= "object" or not isElement(creator) or not isNativeTagAlphaStep(previousAlpha, currentAlpha) then
+        return
+    end
+    previousAlpha = tonumber(previousAlpha)
+    currentAlpha = tonumber(currentAlpha)
+
+    if targetObject == mission.entities.demoTag then
+        local active = mission.demoShoot
+        local profile = TAGUP.sweetDemoShoot
+        if mission.stage ~= "demo" or player ~= mission.leader or creator ~= mission.entities.sweet or not active or active.ped ~= creator or
+            active.nativeCancelled or getElementSyncer(creator) ~= player or getPedWeapon(creator) ~= TAGUP.sprayWeapon then
+            return
+        end
+
+        local previousProgress = active.progress or 0
+        if previousAlpha ~= previousProgress or currentAlpha ~= math.min(previousProgress + 8, 255) then
+            return
+        end
+        local x, y, z = getElementPosition(creator)
+        local demo = TAGUP.demoTag
+        if tagupDistance3D(x, y, z, demo.x, demo.y, demo.z) > profile.serverMaxDistance then
+            return
+        end
+        active.progress = currentAlpha
+        setElementData(targetObject, "tagup.paintAlpha", active.progress, true)
+        if math.floor(previousProgress / 64) ~= math.floor(active.progress / 64) then
+            outputDebugString(("[tagging-up-turf] Sweet demo tag: %d%% from native spray hits"):format(math.floor(active.progress / 255 * 100)))
+        end
+        if active.progress == 255 then
+            completeDemoTag(active)
+        end
+        return
+    end
+
+    local tagId = tonumber(getElementData(targetObject, "tagup.tagId"))
+    if creator ~= player or not tagId or targetObject ~= mission.entities["tag" .. tagId] or mission.completedTags[tagId] or mission.ballasGangScene then
         return
     end
 
@@ -2249,32 +2291,30 @@ addEventHandler("tagup:spray", resourceRoot, function(tagId)
             break
         end
     end
-    if not active or getPedWeapon(player) ~= TAGUP.sprayWeapon then
+    if not active or getPedWeapon(player) ~= TAGUP.sprayWeapon or isPedInVehicle(player) then
         return
     end
 
-    -- Distance, weapon and rate checks intentionally duplicate client-side checks:
-    -- client prediction keeps spraying responsive, but only this path grants progress.
+    -- The engine has already selected the surface and advanced it by GTA's
+    -- exact increment. The server only checks mission authority and mirrors one
+    -- native step, never inferring a hit from input or proximity alone.
+    local previousProgress = mission.tagProgress[tagId] or 0
+    if previousAlpha ~= previousProgress or currentAlpha ~= math.min(previousProgress + 8, 255) then
+        return
+    end
     local tag = tagupGetTag(tagId)
     local x, y, z = getElementPosition(player)
     if tagupDistance3D(x, y, z, tag.x, tag.y, tag.z) > TAGUP.sprayRange then
         return
     end
-
-    local now = getTickCount()
-    if mission.sprayCooldown[player] and now - mission.sprayCooldown[player] < 100 then
-        return
-    end
-    mission.sprayCooldown[player] = now
-    local previousProgress = mission.tagProgress[tagId] or 0
-    mission.tagProgress[tagId] = math.min(1, previousProgress + 0.05)
+    mission.tagProgress[tagId] = currentAlpha
     updateTagVisual(tagId, mission.tagProgress[tagId])
-    if math.floor(previousProgress * 4) ~= math.floor(mission.tagProgress[tagId] * 4) then
+    if math.floor(previousProgress / 64) ~= math.floor(mission.tagProgress[tagId] / 64) then
         outputDebugString(
-            ("[tagging-up-turf] Tag %d: %d%% by %s"):format(tagId, math.floor(mission.tagProgress[tagId] * 100), getPlayerName(player))
+            ("[tagging-up-turf] Tag %d: %d%% from native hits by %s"):format(tagId, math.floor(mission.tagProgress[tagId] / 255 * 100), getPlayerName(player))
         )
     end
-    if mission.tagProgress[tagId] >= 1 then
+    if mission.tagProgress[tagId] == 255 then
         mission.completedTags[tagId] = true
         replaceTagObject(tagId)
         broadcastState({message = getPlayerName(player) .. " a termine un tag."})

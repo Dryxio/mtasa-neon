@@ -4273,8 +4273,16 @@ bool CClientPed::SetMissionActor(bool enabled)
     if (m_bMissionActor == enabled)
         return true;
 
-    if (!enabled && m_pPlayerPed && m_missionActorNativeState)
-        m_pPlayerPed->RestoreCreatedByState(*m_missionActorNativeState);
+    if (!enabled)
+    {
+        if (m_pPlayerPed && m_missionActorNativeState)
+            m_pPlayerPed->RestoreCreatedByState(*m_missionActorNativeState);
+
+        // Script peds normally use MTA's player-weapon synchronization path.
+        // Restore that policy when the resource gives up native AI ownership.
+        if (m_remoteDataStorage)
+            m_remoteDataStorage->SetProcessPlayerWeapon(true);
+    }
 
     m_bMissionActor = enabled;
     m_missionActorNativeState.reset();
@@ -4296,6 +4304,13 @@ void CClientPed::ApplyMissionActorState()
     // the policy is a true restoration rather than a partial flag reset.
     m_missionActorNativeState = m_pPlayerPed->GetCreatedByState();
     m_pPlayerPed->SetCreatedBy(PED_CREATED_BY_MISSION);
+
+    // MTA represents script peds as CPlayerPed instances. Its shot-sync hook
+    // therefore replaces CWeapon::Fire's explicit target with the replicated
+    // player target by default. A mission actor running GTA AI tasks must keep
+    // the task-owned target, just like a CPed created by main.scm.
+    if (m_remoteDataStorage)
+        m_remoteDataStorage->SetProcessPlayerWeapon(false);
 }
 
 void CClientPed::InternalWarpIntoVehicle(CVehicle* pGameVehicle)

@@ -123,6 +123,8 @@ typedef bool(VehicleDamageHandler)(CEntitySAInterface* pVehicle, float fLoss, CE
 typedef bool(HeliKillHandler)(class CVehicleSAInterface* pVehicle, class CEntitySAInterface* pHitInterface);
 typedef bool(ObjectDamageHandler)(class CObjectSAInterface* pObject, float fLoss, class CEntitySAInterface* pAttacker);
 typedef bool(ObjectBreakHandler)(class CObjectSAInterface* pObject, class CEntitySAInterface* pAttacker);
+typedef void(GangTagSprayHandler)(class CObjectSAInterface* pObject, class CEntitySAInterface* pCreator, unsigned char ucPreviousAlpha,
+                                  unsigned char ucCurrentAlpha);
 typedef bool(WaterCannonHitHandler)(class CVehicleSAInterface* pCannonVehicle, class CPedSAInterface* pHitPed);
 typedef bool(VehicleFellThroughMapHandler)(class CVehicleSAInterface* pVehicle);
 typedef void(GameObjectDestructHandler)(CEntitySAInterface* pObject);
@@ -488,4 +490,6 @@ public:
     virtual SRendererStats GetRendererStats() = 0;
     virtual void           ResetRendererStats() = 0;
     virtual void           SetFastWeaponStrafeEnabled(bool bEnabled) = 0;
+    virtual void           SetGangTagSprayHandler(GangTagSprayHandler* pHandler) = 0;
+    virtual bool           SetGangTagSprayEnabled(CObjectSAInterface* pObject, bool bEnabled) = 0;
 };

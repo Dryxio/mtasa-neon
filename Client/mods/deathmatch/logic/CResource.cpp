@@ -117,6 +117,12 @@ CResource::~CResource()
     // Clear this resource's prints/help before its Lua state disappears.
     CLuaPlayerDefs::ReleaseMissionTextForResource(this);
 
+    // Native gang tags outlive streamed GTA objects and are not represented by
+    // child elements alone. Revoke this resource's spray registrations before
+    // its Lua state and ownership identity disappear.
+    if (g_pClientGame && g_pClientGame->GetObjectManager())
+        g_pClientGame->GetObjectManager()->ReleaseGangTagsForResource(this);
+
     // Recorded-car buffers and active slots are native global state, not child
     // elements. Stop and release them before this resource's Lua VM disappears.
     CLuaVehicleDefs::ReleaseVehicleRecordings(this);

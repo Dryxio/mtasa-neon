@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 class CClientObject;
+class CResource;
 
 #pragma once
 
@@ -124,6 +125,14 @@ public:
     bool IsOnFire() override { return m_pObject ? m_pObject->IsOnFire() : false; }
     bool SetOnFire(bool onFire) override { return m_pObject ? m_pObject->SetOnFire(onFire) : false; };
 
+    bool          AcquireGangTag(CResource* pOwner, unsigned char ucProgress);
+    bool          SetGangTagProgress(CResource* pOwner, unsigned char ucProgress);
+    unsigned char GetGangTagProgress() const { return m_ucGangTagProgress; }
+    bool          HasGangTagOwner() const { return m_pGangTagOwner != nullptr; }
+    bool          IsGangTagOwnedBy(const CResource* pOwner) const { return m_pGangTagOwner == pOwner; }
+    bool          ReleaseGangTag(CResource* pOwner);
+    void          ApplyNativeGangTagProgress(unsigned char ucProgress) { m_ucGangTagProgress = ucProgress; }
+
 protected:
     void StreamIn(bool bInstantly);
     void StreamOut();
@@ -135,6 +144,7 @@ protected:
     void NotifyDestroy();
 
     void StreamedInPulse();
+    bool ApplyGangTagState();
 
     class CClientObjectManager*       m_pObjectManager;
     class CClientModelRequestManager* m_pModelRequester;
@@ -160,6 +170,8 @@ protected:
     float         m_fBuoyancyConstant;
     CVector       m_vecCenterOfMass;
     bool          m_bVisibleInAllDimensions = false;
+    CResource*    m_pGangTagOwner = nullptr;
+    unsigned char m_ucGangTagProgress = 0;
 
     CVector m_vecMoveSpeed;
     CVector m_vecTurnSpeed;

@@ -611,6 +611,8 @@ private:
     static bool StaticHeliKillHandler(CVehicleSAInterface* pHeli, CEntitySAInterface* pHitInterface);
     static bool StaticObjectDamageHandler(CObjectSAInterface* pObjectInterface, float fLoss, CEntitySAInterface* pAttackerInterface);
     static bool StaticObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pAttackerInterface);
+    static void StaticGangTagSprayHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pCreatorInterface, unsigned char ucPreviousAlpha,
+                                          unsigned char ucCurrentAlpha);
     static bool StaticWaterCannonHandler(CVehicleSAInterface* pCannonVehicle, CPedSAInterface* pHitPed);
     static bool StaticVehicleFellThroughMapHandler(CVehicleSAInterface* pVehicle);
     static void StaticGameObjectDestructHandler(CEntitySAInterface* pObject);
@@ -658,6 +660,8 @@ private:
     bool        HeliKillHandler(CVehicleSAInterface* pHeli, CEntitySAInterface* pHitInterface);
     bool        ObjectDamageHandler(CObjectSAInterface* pObjectInterface, float fLoss, CEntitySAInterface* pAttackerInterface);
     bool        ObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pAttackerInterface);
+    void        GangTagSprayHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pCreatorInterface, unsigned char ucPreviousAlpha,
+                                    unsigned char ucCurrentAlpha);
     bool        WaterCannonHitHandler(CVehicleSAInterface* pCannonVehicle, CPedSAInterface* pHitPed);
     bool        VehicleFellThroughMapHandler(CVehicleSAInterface* pVehicle);
     void        GameObjectDestructHandler(CEntitySAInterface* pObject);

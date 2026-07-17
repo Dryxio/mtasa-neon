@@ -319,6 +319,8 @@ public:
 
     void AllowCreatedObjectsInVerticalLineTest(bool bOn);
     void DeleteAndDisableGangTags();
+    void SetGangTagSprayHandler(GangTagSprayHandler* pHandler) override;
+    bool SetGangTagSprayEnabled(CObjectSAInterface* pObject, bool bEnabled) override;
 
     CLimits* GetLimits() { return &m_limits; }
 

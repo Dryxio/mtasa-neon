@@ -15,6 +15,7 @@
 class CClientManager;
 class CClientObject;
 class CObject;
+class CResource;
 
 class CClientObjectManager
 {
@@ -51,6 +52,7 @@ public:
 
     void OnCreation(CClientObject* pObject);
     void OnDestruction(CClientObject* pObject);
+    void ReleaseGangTagsForResource(CResource* pResource);
 
 protected:
     void UpdateLimitInfo();

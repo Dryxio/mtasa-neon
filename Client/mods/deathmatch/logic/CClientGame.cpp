@@ -308,6 +308,7 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pMultiplayer->SetHeliKillHandler(CClientGame::StaticHeliKillHandler);
     g_pMultiplayer->SetObjectDamageHandler(CClientGame::StaticObjectDamageHandler);
     g_pMultiplayer->SetObjectBreakHandler(CClientGame::StaticObjectBreakHandler);
+    g_pMultiplayer->SetGangTagSprayHandler(CClientGame::StaticGangTagSprayHandler);
     g_pMultiplayer->SetWaterCannonHitHandler(CClientGame::StaticWaterCannonHandler);
     g_pMultiplayer->SetVehicleFellThroughMapHandler(CClientGame::StaticVehicleFellThroughMapHandler);
     g_pMultiplayer->SetGameObjectDestructHandler(CClientGame::StaticGameObjectDestructHandler);
@@ -534,6 +535,7 @@ CClientGame::~CClientGame()
     g_pMultiplayer->SetHeliKillHandler(NULL);
     g_pMultiplayer->SetObjectDamageHandler(NULL);
     g_pMultiplayer->SetObjectBreakHandler(NULL);
+    g_pMultiplayer->SetGangTagSprayHandler(NULL);
     g_pMultiplayer->SetWaterCannonHitHandler(NULL);
     g_pMultiplayer->SetGameObjectDestructHandler(NULL);
     g_pMultiplayer->SetGameVehicleDestructHandler(NULL);
@@ -2819,6 +2821,7 @@ void CClientGame::AddBuiltInEvents()
 
     // Object events
     m_Events.AddEvent("onClientObjectDamage", "loss, attacker", NULL, false);
+    m_Events.AddEvent("onClientObjectGangTagProgress", "previousProgress, currentProgress, creator", NULL, false);
     m_Events.AddEvent("onClientObjectBreak", "attacker", NULL, false);
     m_Events.AddEvent("onClientObjectMoveStart", "", NULL, false);
     m_Events.AddEvent("onClientObjectMoveStop", "", NULL, false);
@@ -3728,6 +3731,12 @@ bool CClientGame::StaticObjectDamageHandler(CObjectSAInterface* pObjectInterface
 bool CClientGame::StaticObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pAttackerInterface)
 {
     return g_pClientGame->ObjectBreakHandler(pObjectInterface, pAttackerInterface);
+}
+
+void CClientGame::StaticGangTagSprayHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pCreatorInterface, unsigned char ucPreviousAlpha,
+                                            unsigned char ucCurrentAlpha)
+{
+    g_pClientGame->GangTagSprayHandler(pObjectInterface, pCreatorInterface, ucPreviousAlpha, ucCurrentAlpha);
 }
 
 bool CClientGame::StaticWaterCannonHandler(CVehicleSAInterface* pCannonVehicle, CPedSAInterface* pHitPed)
@@ -4956,6 +4965,33 @@ bool CClientGame::ObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEnti
         }
     }
     return true;
+}
+
+void CClientGame::GangTagSprayHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pCreatorInterface, unsigned char ucPreviousAlpha,
+                                      unsigned char ucCurrentAlpha)
+{
+    if (!pObjectInterface)
+        return;
+
+    CPools*                   pPools = g_pGame->GetPools();
+    SClientEntity<CObjectSA>* pObjectEntity = pPools->GetObject(reinterpret_cast<DWORD*>(pObjectInterface));
+    CClientObject*            pClientObject = pObjectEntity ? reinterpret_cast<CClientObject*>(pObjectEntity->pClientEntity) : nullptr;
+    if (!pClientObject)
+        return;
+
+    // Persist the native byte above the streamed GTA object so a stream-out or
+    // model recreation cannot roll local prediction back to stale Lua state.
+    pClientObject->ApplyNativeGangTagProgress(ucCurrentAlpha);
+
+    CLuaArguments arguments;
+    arguments.PushNumber(ucPreviousAlpha);
+    arguments.PushNumber(ucCurrentAlpha);
+    CClientEntity* pCreator = pPools->GetClientEntity(reinterpret_cast<DWORD*>(pCreatorInterface));
+    if (pCreator)
+        arguments.PushElement(pCreator);
+    else
+        arguments.PushNil();
+    pClientObject->CallEvent("onClientObjectGangTagProgress", arguments, true);
 }
 
 bool CClientGame::WaterCannonHitHandler(CVehicleSAInterface* pCannonVehicle, CPedSAInterface* pHitPed)

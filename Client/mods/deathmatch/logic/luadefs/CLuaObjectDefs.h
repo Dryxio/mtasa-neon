@@ -43,5 +43,9 @@ public:
     LUA_DECLARE(ToggleObjectRespawn);
     LUA_DECLARE(SetObjectMass);
     LUA_DECLARE(SetObjectProperty);
-    static bool SetObjectGangTagAlpha(CClientObject* const pObject, std::variant<bool, unsigned int> alpha);
+    static bool                             SetObjectGangTagAlpha(CClientObject* const pObject, std::variant<bool, unsigned int> alpha);
+    static bool                             AcquireObjectGangTag(lua_State* luaVM, CClientObject* const pObject, std::optional<unsigned int> progress);
+    static bool                             SetObjectGangTagProgress(lua_State* luaVM, CClientObject* const pObject, unsigned int progress);
+    static std::variant<unsigned int, bool> GetObjectGangTagProgress(CClientObject* const pObject);
+    static bool                             ReleaseObjectGangTag(lua_State* luaVM, CClientObject* const pObject);
 };

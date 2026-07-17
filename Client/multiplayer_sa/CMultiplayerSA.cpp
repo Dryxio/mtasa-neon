@@ -91,6 +91,11 @@ DWORD RETURN_CGame_Process = 0x53C09F;
 #define CALL_CWeather_Update_FromCGameProcess 0x53BFC2
 DWORD FUNC_CWeather_Update = 0x72B850;
 
+// CShotInfo::Update calls CWorld::SprayPaintWorld here for spray-can shots.
+// Keeping the hook at the call site preserves the rest of the shot lifecycle,
+// including GTA's executed flag, surface reflection and completion sound.
+#define CALL_CWorld_SprayPaintWorld_FromCShotInfoUpdate 0x73A0FF
+
 #define HOOKPOS_Idle 0x53E981
 DWORD RETURN_Idle = 0x53E98B;
 
@@ -415,9 +420,86 @@ ProcessCollisionHandler*                   m_pProcessCollisionHandler = NULL;
 HeliKillHandler*                           m_pHeliKillHandler = NULL;
 ObjectDamageHandler*                       m_pObjectDamageHandler = NULL;
 ObjectBreakHandler*                        m_pObjectBreakHandler = NULL;
+GangTagSprayHandler*                       m_pGangTagSprayHandler = NULL;
 FxSystemDestructionHandler*                m_pFxSystemDestructionHandler = NULL;
 DrivebyAnimationHandler*                   m_pDrivebyAnimationHandler = NULL;
 AudioZoneRadioSwitchHandler*               m_pAudioZoneRadioSwitchHandler = NULL;
+
+static std::vector<CObjectSAInterface*> g_GangTagSprayObjects;
+
+static int __cdecl ProcessGangTagSpray(CVector* pPosition, CVector* pOutDirection, float fRadius, bool bProcessTagAlpha, CEntitySAInterface* pCreator)
+{
+    using SprayPaintWorld = int(__cdecl*)(CVector*, CVector*, float, bool);
+    const int iNativeResult = reinterpret_cast<SprayPaintWorld>(0x565B70)(pPosition, pOutDirection, fRadius, bProcessTagAlpha);
+
+    if (!pPosition || !pOutDirection || !bProcessTagAlpha || g_GangTagSprayObjects.empty())
+        return iNativeResult;
+
+    bool         bFoundTag = false;
+    bool         bCompletedTag = false;
+    unsigned int uiConsidered = 0;
+    // Lua may release or destroy a tag from the progress callback. Iterate a
+    // snapshot so those legal lifecycle operations cannot invalidate this pass.
+    const std::vector<CObjectSAInterface*> sprayObjects = g_GangTagSprayObjects;
+    for (CObjectSAInterface* pObjectInterface : sprayObjects)
+    {
+        SClientEntity<CObjectSA>* pObjectEntity = pGameInterface->GetPools()->GetObject(reinterpret_cast<DWORD*>(pObjectInterface));
+        CObjectSA*                pObject = pObjectEntity ? pObjectEntity->pEntity : nullptr;
+        if (!pObject || !pObject->IsGangTagModel() || !pObject->HasGangTagAlphaOverride())
+            continue;
+
+        const CVector vecOffset = *pObject->GetPosition() - *pPosition;
+        if (vecOffset.LengthSquared() > fRadius * fRadius)
+            continue;
+
+        // GTA's native query has a hard capacity of 15 nearby entities. Match
+        // that boundary for the resource-owned extension as well.
+        if (uiConsidered++ >= 15)
+            break;
+
+        bFoundTag = true;
+        CMatrix matrix;
+        if (pObject->GetMatrix(&matrix))
+            *pOutDirection = matrix.vFront;
+
+        const unsigned char ucPreviousAlpha = pObject->GetGangTagAlpha();
+        const unsigned char ucCurrentAlpha = static_cast<unsigned char>(std::min<unsigned int>(ucPreviousAlpha + 8u, 255u));
+        if (ucPreviousAlpha != 255 && ucCurrentAlpha == 255)
+            bCompletedTag = true;
+
+        pObject->SetGangTagAlpha(ucCurrentAlpha);
+        if (m_pGangTagSprayHandler && ucPreviousAlpha != ucCurrentAlpha)
+            m_pGangTagSprayHandler(pObjectInterface, pCreator, ucPreviousAlpha, ucCurrentAlpha);
+    }
+
+    if (iNativeResult == 2 || bCompletedTag)
+        return 2;
+    if (iNativeResult == 1 || bFoundTag)
+        return 1;
+    return 0;
+}
+
+static void __declspec(naked) HOOK_CWorld_SprayPaintWorld_FromCShotInfoUpdate()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // The verified CShotInfo::Update call keeps ESI at targetOffset.z. The
+    // creator field is therefore [ESI+8], while the original four cdecl
+    // arguments remain on the stack.
+    // clang-format off
+    __asm
+    {
+        push    [esi+8]
+        push    [esp+14h]
+        push    [esp+14h]
+        push    [esp+14h]
+        push    [esp+14h]
+        call    ProcessGangTagSpray
+        add     esp, 20
+        retn
+    }
+    // clang-format on
+}
 
 CEntitySAInterface* dwSavedPlayerPointer = 0;
 CEntitySAInterface* activeEntityForStreaming = 0;  // the entity that the streaming system considers active
@@ -677,6 +759,7 @@ void CMultiplayerSA::InitHooks()
     HookInstall(HOOKPOS_CEventHandler_ComputeKnockOffBikeResponse, (DWORD)HOOK_CEventHandler_ComputeKnockOffBikeResponse, 7);
     HookInstall(HOOKPOS_CPed_GetWeaponSkill, (DWORD)HOOK_CPed_GetWeaponSkill, 8);
     HookInstall(HOOKPOS_CPed_AddGogglesModel, (DWORD)HOOK_CPed_AddGogglesModel, 6);
+    HookInstallCall(CALL_CWorld_SprayPaintWorld_FromCShotInfoUpdate, (DWORD)HOOK_CWorld_SprayPaintWorld_FromCShotInfoUpdate);
     HookInstall(HOOKPOS_CPhysical_ProcessCollisionSectorList, (DWORD)HOOK_CPhysical_ProcessCollisionSectorList, 7);
     HookInstall(HOOKPOS_CheckAnimMatrix, (DWORD)HOOK_CheckAnimMatrix, 5);
 
@@ -6380,6 +6463,32 @@ void CMultiplayerSA::DeleteAndDisableGangTags()
         MemPut<unsigned short>(0x49CE5E, 0xC033);
         MemPut<unsigned short>(0x49CE60, 0xFF33);
     }
+}
+
+void CMultiplayerSA::SetGangTagSprayHandler(GangTagSprayHandler* pHandler)
+{
+    m_pGangTagSprayHandler = pHandler;
+}
+
+bool CMultiplayerSA::SetGangTagSprayEnabled(CObjectSAInterface* pObject, bool bEnabled)
+{
+    if (!pObject)
+        return false;
+
+    const auto iter = std::find(g_GangTagSprayObjects.begin(), g_GangTagSprayObjects.end(), pObject);
+    if (bEnabled)
+    {
+        SClientEntity<CObjectSA>* pObjectEntity = pGameInterface->GetPools()->GetObject(reinterpret_cast<DWORD*>(pObject));
+        if (!pObjectEntity || !pObjectEntity->pEntity || !pObjectEntity->pEntity->IsGangTagModel())
+            return false;
+        if (iter == g_GangTagSprayObjects.end())
+            g_GangTagSprayObjects.push_back(pObject);
+    }
+    else if (iter != g_GangTagSprayObjects.end())
+    {
+        g_GangTagSprayObjects.erase(iter);
+    }
+    return true;
 }
 
 CPhysicalSAInterface *pCollisionPhysicalThis, *pCollisionPhysical;

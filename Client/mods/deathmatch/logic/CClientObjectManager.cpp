@@ -238,6 +238,15 @@ void CClientObjectManager::OnDestruction(CClientObject* pObject)
     UpdateLimitInfo();
 }
 
+void CClientObjectManager::ReleaseGangTagsForResource(CResource* pResource)
+{
+    for (CClientObject* pObject : m_Objects)
+    {
+        if (pObject->IsGangTagOwnedBy(pResource))
+            pObject->ReleaseGangTag(pResource);
+    }
+}
+
 void CClientObjectManager::UpdateLimitInfo()
 {
     m_iEntryInfoNodeEntries = g_pMultiplayer->EntryInfoNodePool_NoOfUsedSpaces();

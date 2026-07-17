@@ -39,6 +39,10 @@ void CLuaObjectDefs::LoadFunctions()
         {"setObjectMass", SetObjectMass},
         {"setObjectProperty", SetObjectProperty},
         {"setObjectGangTagAlpha", ArgumentParser<SetObjectGangTagAlpha>},
+        {"acquireObjectGangTag", ArgumentParser<AcquireObjectGangTag>},
+        {"setObjectGangTagProgress", ArgumentParser<SetObjectGangTagProgress>},
+        {"getObjectGangTagProgress", ArgumentParser<GetObjectGangTagProgress>},
+        {"releaseObjectGangTag", ArgumentParser<ReleaseObjectGangTag>},
     };
 
     // Add functions
@@ -70,6 +74,10 @@ void CLuaObjectDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setMass", "setObjectMass");
     lua_classfunction(luaVM, "setProperty", "setObjectProperty");
     lua_classfunction(luaVM, "setGangTagAlpha", "setObjectGangTagAlpha");
+    lua_classfunction(luaVM, "acquireGangTag", "acquireObjectGangTag");
+    lua_classfunction(luaVM, "setGangTagProgress", "setObjectGangTagProgress");
+    lua_classfunction(luaVM, "getGangTagProgress", "getObjectGangTagProgress");
+    lua_classfunction(luaVM, "releaseGangTag", "releaseObjectGangTag");
 
     lua_classvariable(luaVM, "moving", nullptr, "isObjectMoving");
     lua_classvariable(luaVM, "scale", "setObjectScale", "getObjectScale");
@@ -754,4 +762,42 @@ bool CLuaObjectDefs::SetObjectGangTagAlpha(CClientObject* const pObject, std::va
         return false;
 
     return pGameObject->SetGangTagAlpha(static_cast<unsigned char>(uiAlpha));
+}
+
+bool CLuaObjectDefs::AcquireObjectGangTag(lua_State* luaVM, CClientObject* const pObject, std::optional<unsigned int> progress)
+{
+    const unsigned int uiProgress = progress.value_or(0);
+    if (!pObject || uiProgress > 255)
+        return false;
+
+    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    return pResource && pObject->AcquireGangTag(pResource, static_cast<unsigned char>(uiProgress));
+}
+
+bool CLuaObjectDefs::SetObjectGangTagProgress(lua_State* luaVM, CClientObject* const pObject, unsigned int progress)
+{
+    if (!pObject || progress > 255)
+        return false;
+
+    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    return pResource && pObject->SetGangTagProgress(pResource, static_cast<unsigned char>(progress));
+}
+
+std::variant<unsigned int, bool> CLuaObjectDefs::GetObjectGangTagProgress(CClientObject* const pObject)
+{
+    if (!pObject || !pObject->HasGangTagOwner())
+        return false;
+    return static_cast<unsigned int>(pObject->GetGangTagProgress());
+}
+
+bool CLuaObjectDefs::ReleaseObjectGangTag(lua_State* luaVM, CClientObject* const pObject)
+{
+    if (!pObject)
+        return false;
+
+    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    return pResource && pObject->ReleaseGangTag(pResource);
 }

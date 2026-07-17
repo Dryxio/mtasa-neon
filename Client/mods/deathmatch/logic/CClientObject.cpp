@@ -432,6 +432,67 @@ void CClientObject::SetCollisionEnabled(bool bCollisionEnabled)
     m_bUsesCollision = bCollisionEnabled;
 }
 
+bool CClientObject::AcquireGangTag(CResource* pOwner, unsigned char ucProgress)
+{
+    if (!pOwner || (m_pGangTagOwner && m_pGangTagOwner != pOwner))
+        return false;
+
+    if (m_pObject)
+    {
+        if (!m_pObject->IsGangTagModel())
+            return false;
+    }
+    else if (m_usModel != 1490 && (m_usModel < 1524 || m_usModel > 1531))
+    {
+        return false;
+    }
+
+    m_pGangTagOwner = pOwner;
+    m_ucGangTagProgress = ucProgress;
+    return ApplyGangTagState();
+}
+
+bool CClientObject::SetGangTagProgress(CResource* pOwner, unsigned char ucProgress)
+{
+    if (!pOwner || m_pGangTagOwner != pOwner)
+        return false;
+
+    m_ucGangTagProgress = ucProgress;
+    return ApplyGangTagState();
+}
+
+bool CClientObject::ReleaseGangTag(CResource* pOwner)
+{
+    if (!pOwner || m_pGangTagOwner != pOwner)
+        return false;
+
+    if (m_pObject)
+    {
+        g_pMultiplayer->SetGangTagSprayEnabled(m_pObject->GetObjectInterface(), false);
+        m_pObject->ClearGangTagAlphaOverride();
+    }
+    m_pGangTagOwner = nullptr;
+    m_ucGangTagProgress = 0;
+    return true;
+}
+
+bool CClientObject::ApplyGangTagState()
+{
+    if (!m_pObject)
+        return true;
+
+    if (!m_pGangTagOwner)
+    {
+        g_pMultiplayer->SetGangTagSprayEnabled(m_pObject->GetObjectInterface(), false);
+        m_pObject->ClearGangTagAlphaOverride();
+        return true;
+    }
+
+    // The visual byte and spray registration are applied together so a tag
+    // cannot accept native hits while rendering unrelated material state.
+    return m_pObject->SetGangTagAlpha(m_ucGangTagProgress) && g_pMultiplayer->SetGangTagSprayEnabled(m_pObject->GetObjectInterface(), true);
+}
+
 float CClientObject::GetHealth()
 {
     if (m_pObject)
@@ -556,6 +617,7 @@ void CClientObject::Create()
                 m_pObject->SetAreaCode(m_ucInterior);
                 SetAlpha(m_ucAlpha);
                 m_pObject->SetHealth(m_fHealth);
+                ApplyGangTagState();
 
                 // Set object properties
                 if (m_fMass != -1.0f)
@@ -600,6 +662,9 @@ void CClientObject::Destroy()
     // If the object exists
     if (m_pObject)
     {
+        if (m_pGangTagOwner)
+            g_pMultiplayer->SetGangTagSprayEnabled(m_pObject->GetObjectInterface(), false);
+
         // Invalidate
         m_pManager->InvalidateEntity(this);
 
