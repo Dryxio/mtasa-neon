@@ -1,6 +1,14 @@
-# MTA:SA Neon Engine
+<p align="center">
+  <img src="docs/media/neon-readme-banner.svg" alt="MTA:SA Neon Engine — extended worlds, native systems, and new Lua APIs" width="100%">
+</p>
 
-[![Join the MTA:SA Neon Discord](https://img.shields.io/badge/Discord-Join%20MTA%3ASA%20Neon-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/mgFRd2AzF8)
+<p align="center">
+  <a href="https://mtasa-neon-wiki.vercel.app/neon"><img alt="Read the Neon Wiki" src="https://img.shields.io/badge/NEON_WIKI-READ_THE_DOCS-F28C18?style=for-the-badge&amp;labelColor=0A0908"></a>
+  <a href="https://discord.com/invite/mgFRd2AzF8"><img alt="Join the Neon Discord" src="https://img.shields.io/badge/DISCORD-JOIN_NEON-F28C18?style=for-the-badge&amp;logo=discord&amp;logoColor=F28C18&amp;labelColor=0A0908"></a>
+  <a href="https://github.com/multitheftauto/mtasa-blue"><img alt="View the MTA:SA upstream project" src="https://img.shields.io/badge/UPSTREAM-MTA%3ABLUE-F28C18?style=for-the-badge&amp;logo=github&amp;logoColor=F28C18&amp;labelColor=0A0908"></a>
+</p>
+
+<p align="center"><strong>An independent MTA:BLUE-derived playground for deeper GTA:SA engine work.</strong></p>
 
 MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue), focused on prototyping advanced engine features and exploring changes that may be too early or too specialized for the upstream project.
 

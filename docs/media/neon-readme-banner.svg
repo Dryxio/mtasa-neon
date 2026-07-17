@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="420" viewBox="0 0 1400 420" role="img" aria-labelledby="title description">
+  <title id="title">MTA:SA Neon Engine</title>
+  <desc id="description">Black and orange MTA:SA Neon banner inspired by San Andreas streets and road markings.</desc>
+  <defs>
+    <linearGradient id="asphalt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070605"/>
+      <stop offset="0.56" stop-color="#12100d"/>
+      <stop offset="1" stop-color="#080706"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="78%" cy="32%" r="58%">
+      <stop offset="0" stop-color="#f28c18" stop-opacity="0.22"/>
+      <stop offset="0.52" stop-color="#9c4d08" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#090807" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#f28c18" stroke-opacity="0.055"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="7" dy="8" stdDeviation="0" flood-color="#5b2a06" flood-opacity="0.92"/>
+    </filter>
+    <clipPath id="frame">
+      <rect x="2" y="2" width="1396" height="416" rx="12"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="1400" height="420" fill="url(#asphalt)"/>
+    <rect width="1400" height="420" fill="url(#grid)"/>
+    <rect width="1400" height="420" fill="url(#glow)"/>
+
+    <path d="M1255 -30H1310L1064 450H1009Z" fill="#f28c18" opacity="0.88"/>
+    <path d="M1345 -30H1361L1115 450H1099Z" fill="#f28c18" opacity="0.35"/>
+    <path d="M1170 -20L940 430" fill="none" stroke="#f28c18" stroke-width="14" stroke-dasharray="72 40" opacity="0.64"/>
+
+    <path d="M70 76H454" stroke="#f28c18" stroke-width="4"/>
+    <path d="M70 344H964" stroke="#f28c18" stroke-opacity="0.28"/>
+
+    <text x="70" y="61" fill="#f28c18" font-family="Arial Narrow, Arial, sans-serif" font-size="20" font-weight="800" letter-spacing="7">MTA: SAN ANDREAS · CUSTOM ENGINE</text>
+    <text x="66" y="238" fill="#f3eadc" font-family="Impact, Haettenschweiler, Arial Black, sans-serif" font-size="158" letter-spacing="4" filter="url(#shadow)">NEON</text>
+    <text x="75" y="290" fill="#c8bfb3" font-family="Arial Narrow, Arial, sans-serif" font-size="21" font-weight="700" letter-spacing="3.2">EXTENDED WORLDS · NATIVE SYSTEMS · NEW LUA APIs</text>
+
+    <g transform="translate(74 320)">
+      <rect width="370" height="45" rx="4" fill="#f28c18"/>
+      <text x="18" y="29" fill="#090807" font-family="Arial Narrow, Arial, sans-serif" font-size="16" font-weight="900" letter-spacing="2.5">INDEPENDENT EXPERIMENTAL FORK</text>
+    </g>
+    <text x="467" y="349" fill="#918980" font-family="Arial Narrow, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="1.6">COMPLETE MTA:BLUE HISTORY · GPLv3</text>
+  </g>
+
+  <rect x="2" y="2" width="1396" height="416" rx="12" fill="none" stroke="#f28c18" stroke-width="4"/>
+</svg>
