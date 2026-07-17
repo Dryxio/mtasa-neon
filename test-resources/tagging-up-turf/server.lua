@@ -1114,6 +1114,38 @@ local function startMission(requester, checkpoint)
         return
     end
 
+    if checkpoint == "idlewood" then
+        -- Start inside the original arrival box with a small roll so the
+        -- client can prove that 09D0 stays false after the first wheel touches
+        -- and becomes true only once all four native contacts are active.
+        setElementPosition(vehicle, TAGUP.idlewoodDestination[1], TAGUP.idlewoodDestination[2], TAGUP.idlewoodDestination[3] + 2.0)
+        setElementRotation(vehicle, 8, 0, 270)
+        setElementVelocity(vehicle, 0, 0, 0)
+        setElementFrozen(vehicle, false)
+
+        if not warpPedIntoVehicle(requester, vehicle, 0) or not warpPedIntoVehicle(sweet, vehicle, 1) then
+            return failMission("Le checkpoint 09D0 Idlewood n'a pas pu installer le conducteur ou Sweet.")
+        end
+        for index = 2, #mission.party do
+            local player = mission.party[index]
+            if not warpPedIntoVehicle(player, vehicle, index) then
+                return failMission("Le checkpoint 09D0 Idlewood n'a pas pu installer toute l'equipe.")
+            end
+        end
+        for _, player in ipairs(mission.party) do
+            if isElement(player) then
+                setElementFrozen(player, false)
+            end
+        end
+
+        setElementSyncer(sweet, requester, true, true)
+        setStage("drive_idlewood", {message = "Checkpoint 09D0 Idlewood pret dans la zone d'arrivee."})
+        outputDebugString(("[tagging-up-turf] Idlewood all-wheels checkpoint started by %s; exact LOCATE_CAR_3D + 09D0 gate remains armed"):format(
+                              getPlayerName(requester)))
+        outputChatBox("Checkpoint Idlewood charge. La scene doit attendre que les quatre roues touchent la route.", requester, 120, 220, 120)
+        return
+    end
+
     if checkpoint == "departure" then
         -- This checkpoint owns only mission setup. It leaves the real
         -- LOCATE_CAR_3D, camera, leave-car, audio, and DriveWander gates intact.
@@ -1128,7 +1160,7 @@ local function startMission(requester, checkpoint)
         -- Start above the SCM target so collision can settle the Greenwood onto
         -- the surface without losing the real 4 m arrival gate.
         setElementPosition(vehicle, TAGUP.ballasDestination[1], TAGUP.ballasDestination[2], TAGUP.ballasDestination[3] + 2.0)
-        setElementRotation(vehicle, 0, 0, 270)
+        setElementRotation(vehicle, 8, 0, 270)
         setElementVelocity(vehicle, 0, 0, 0)
         setElementFrozen(vehicle, false)
 
@@ -1745,6 +1777,13 @@ addCommandHandler("tagupballas", function(player)
         return
     end
     startMission(player, "ballas")
+end)
+
+addCommandHandler("tagupidlewood", function(player)
+    if not player then
+        return
+    end
+    startMission(player, "idlewood")
 end)
 
 addCommandHandler("tagupdeparture", function(player)
@@ -3256,5 +3295,5 @@ addEventHandler("onResourceStop", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[tagging-up-turf] Ready. Use /tagup, /tagupdeparture, /tagupballas, or /taguppickup (up to three connected players).")
+    outputDebugString("[tagging-up-turf] Ready. Use /tagup, /tagupidlewood, /tagupdeparture, /tagupballas, or /taguppickup (up to three connected players).")
 end)

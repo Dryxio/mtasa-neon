@@ -87,6 +87,7 @@ void CLuaVehicleDefs::LoadFunctions()
         {"isVehicleFuelTankExplodable", IsVehicleFuelTankExplodable},
         {"isVehicleFrozen", IsVehicleFrozen},
         {"isVehicleOnGround", IsVehicleOnGround},
+        {"isVehicleOnAllWheels", IsVehicleOnAllWheels},
         {"getVehicleName", GetVehicleName},
         {"getVehicleNameFromModel", GetVehicleNameFromModel},
         {"getVehicleAdjustableProperty", GetVehicleAdjustableProperty},
@@ -238,6 +239,7 @@ void CLuaVehicleDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "isDamageProof", "isVehicleDamageProof");
     lua_classfunction(luaVM, "isLocked", "isVehicleLocked");
     lua_classfunction(luaVM, "isOnGround", "isVehicleOnGround");
+    lua_classfunction(luaVM, "isOnAllWheels", "isVehicleOnAllWheels");
     lua_classfunction(luaVM, "isBlown", "isVehicleBlown");
     lua_classfunction(luaVM, "isFuelTankExplodable", "isVehicleFuelTankExplodable");
     lua_classfunction(luaVM, "isDerailed", "isTrainDerailed");
@@ -1305,6 +1307,24 @@ int CLuaVehicleDefs::IsVehicleOnGround(lua_State* luaVM)
     else
         m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
 
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaVehicleDefs::IsVehicleOnAllWheels(lua_State* luaVM)
+{
+    CClientVehicle*  pVehicle = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pVehicle);
+
+    if (!argStream.HasErrors())
+    {
+        const auto* gameVehicle = pVehicle->GetGameVehicle();
+        lua_pushboolean(luaVM, gameVehicle && gameVehicle->IsOnAllWheels());
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
     lua_pushboolean(luaVM, false);
     return 1;
 }

@@ -447,7 +447,8 @@ public:
     CVehicleSA() = default;
     ~CVehicleSA();
 
-    CVehicleSAInterface* GetVehicleInterface() { return reinterpret_cast<CVehicleSAInterface*>(GetInterface()); }
+    CVehicleSAInterface*       GetVehicleInterface() { return reinterpret_cast<CVehicleSAInterface*>(GetInterface()); }
+    const CVehicleSAInterface* GetVehicleInterface() const { return reinterpret_cast<const CVehicleSAInterface*>(GetInterface()); }
 
     void Init();
 
@@ -712,6 +713,8 @@ public:
 
     bool IsOnFire() override { return GetVehicleInterface()->m_pFire != nullptr; }
     bool SetOnFire(bool onFire) override;
+
+    bool IsOnAllWheels() const override;
 
     static void StaticSetHooks();
     static void SetVehiclesSunGlareEnabled(bool bEnabled);

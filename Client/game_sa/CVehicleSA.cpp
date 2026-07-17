@@ -1611,6 +1611,26 @@ bool CVehicleSA::IsWheelCollided(BYTE eWheelPosition)
     return false;
 }
 
+bool CVehicleSA::IsOnAllWheels() const
+{
+    const auto* vehicle = GetVehicleInterface();
+    if (!vehicle)
+        return false;
+
+    // SCM opcode 09D0 is deliberately narrower than a generic ground test:
+    // only automobiles and bikes pass, and all four suspension contacts must
+    // be active in the current native physics frame.
+    switch (static_cast<VehicleClass>(vehicle->m_vehicleClass))
+    {
+        case VehicleClass::AUTOMOBILE:
+            return static_cast<const CAutomobileSAInterface*>(vehicle)->m_nNumContactWheels == 4;
+        case VehicleClass::BIKE:
+            return static_cast<const CBikeSAInterface*>(vehicle)->m_cNumContactWheels == 4;
+        default:
+            return false;
+    }
+}
+
 int CVehicleSA::GetWheelFrictionState(BYTE eWheelPosition)
 {
     switch (static_cast<VehicleClass>(GetVehicleInterface()->m_vehicleClass))

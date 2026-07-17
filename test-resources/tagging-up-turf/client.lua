@@ -18,6 +18,8 @@ local state = {
     lastVehicleReport = 0,
     arrivalGate = nil,
     lastArrivalAcquireAttempt = 0,
+    allWheelsMismatchStage = nil,
+    allWheelsPassedStage = nil,
     introCamera = false,
     demoLeave = nil,
     demoWalk = nil,
@@ -238,7 +240,7 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "mission_start", title = "MISSION START", detail = "LUA ORCHESTRATION · server authority"},
     {id = "intro_camera", title = "INTRO CAMERA + TIMER", detail = "LUA SUBSTITUTE · camera 6500 / gate 7000 ms"},
     {id = "enter_car", title = "PARTY IN GREENWOOD", detail = "CO-OP CONDITION · leader driving + party seated"},
-    {id = "drive_idlewood", title = "LOCATE CAR AT IDLEWOOD", detail = "SCM GATE · 4 m box + grounded / vehicle anchored"},
+    {id = "drive_idlewood", title = "LOCATE CAR AT IDLEWOOD", detail = "SCM GATE · 4 m box + 09D0 all wheels / vehicle anchored"},
     {id = "leave_car", title = "05CD · TASK LEAVE CAR", detail = "NATIVE VERIFIED · MTA vehicle lifecycle"},
     {id = "go_to", title = "05D3 · GO STRAIGHT TO COORD", detail = "NATIVE VERIFIED · Sweet / walk"},
     {id = "go_to_wait", title = "OBSERVE NATIVE GO-TO", detail = "LUA TASK POLL · approximates sequence progress"},
@@ -256,7 +258,7 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "enter_passenger", title = "05CA · ENTER CAR AS PASSENGER", detail = "NATIVE VERIFIED · SCM seat 0 / MTA seat 1"},
     {id = "idlewood_tags", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · Idlewood 0%"},
     {id = "return_car", title = "RETURN TO GREENWOOD", detail = "CO-OP CONDITION · party regroup"},
-    {id = "drive_ballas", title = "LOCATE CAR IN BALLAS", detail = "SCM GATE · 4 m box + grounded / vehicle anchored"},
+    {id = "drive_ballas", title = "LOCATE CAR IN BALLAS", detail = "SCM GATE · 4 m box + 09D0 all wheels / vehicle anchored"},
     {id = "ballas_camera", title = "SCRIPT CAMERA · BALLAS ARRIVAL", detail = "NATIVE VERIFIED · fixed point + widescreen / co-op barrier"},
     {id = "ballas_leave", title = "05CD · CJ LEAVES CAR", detail = "NATIVE VERIFIED · local player vehicle lifecycle"},
     {id = "ballas_audio_av", title = "03CF/03D1 · SWE1_AV", detail = "NATIVE MISSION AUDIO · preload / play / natural finish"},
@@ -275,7 +277,7 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "post_roof_audio", title = "03CF/03D1 · SWE1_BH", detail = "NATIVE MISSION AUDIO · preload / play / natural finish"},
     {id = "post_roof_wander", title = "TASK WANDER STANDARD", detail = "NATIVE VERIFIED · surviving Flats"},
     {id = "return_after_roof", title = "REGROUP WITH SWEET", detail = "CO-OP CONDITION · party in vehicle"},
-    {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "SCM GATE · 4 m box + grounded"},
+    {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "SCM GATE · 4 m box + 09D0 all wheels"},
     {id = "mission_end", title = "MISSION PASSED", detail = "SERVER AUTHORITY · reward + restore"},
 }
 
@@ -727,20 +729,20 @@ local function enterArrivalGate(stage, kind, vehicle)
         hitZ = hitZ,
     }
     state.arrivalGate = arrival
-    arrival.guardTimer = setTimer(function(expected)
-        if state.arrivalGate == expected then
+    arrival.guardTimer = setTimer(function()
+        if state.arrivalGate == arrival then
             releaseArrivalGate("server_transition_timeout")
         end
-    end, 4000, 1, arrival)
+    end, 4000, 1)
     -- Element transforms and Lua events use independent network packets. Send
     -- the exact syncer-side LOCATE_CAR_3D hit with the idempotent request: a
     -- strict re-test against the server's older transform can otherwise reject
     -- a fast vehicle after native control inhibition has already stopped it.
-    arrival.resendTimer = setTimer(function(expected)
-        if state.arrivalGate == expected and state.stage == expected.stage then
-            reportArrivalGate(expected)
+    arrival.resendTimer = setTimer(function()
+        if state.arrivalGate == arrival and state.stage == arrival.stage then
+            reportArrivalGate(arrival)
         end
-    end, 100, 0, arrival)
+    end, 100, 0)
     outputDebugString(("[tagging-up-turf] SCM arrival hit stage=%s speed=%.1f km/h token=%s; controls inhibited before network ACK"):format(
                           tostring(stage), math.sqrt(vx * vx + vy * vy + vz * vz) * 180, tostring(token)))
     reportArrivalGate(arrival)
@@ -3318,6 +3320,8 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
     refreshGangTagStates()
 
     if previousStage ~= state.stage then
+        state.allWheelsMismatchStage = nil
+        state.allWheelsPassedStage = nil
         state.rooftopTagRevealed = false
         local arrival = state.arrivalGate
         local expectedArrivalStage = arrival and ({drive_idlewood = "demo", drive_ballas = "ballas_departure"})[arrival.stage]
@@ -3434,6 +3438,8 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.nativeTagHelpStarted = 0
     state.nativeHelpFlags = {}
     state.rooftopTagRevealed = false
+    state.allWheelsMismatchStage = nil
+    state.allWheelsPassedStage = nil
     if type(TAGUP_TRACE) == "table" then
         TAGUP_TRACE.toggle(false)
         TAGUP_TRACE.reset()
@@ -3441,6 +3447,23 @@ addEventHandler("tagup:stop", resourceRoot, function()
 end)
 
 addEventHandler("onClientRender", root, updateIntroCamera, true, "low-10")
+
+local function passesAllWheelsGate(vehicle, stage, insideBox)
+    if not insideBox or not isElementStreamedIn(vehicle) or not isElementSyncer(vehicle) or
+        type(isVehicleOnAllWheels) ~= "function" then
+        return false
+    end
+
+    local onAllWheels = isVehicleOnAllWheels(vehicle)
+    if not onAllWheels and state.allWheelsMismatchStage ~= stage and isVehicleOnGround(vehicle) then
+        state.allWheelsMismatchStage = stage
+        outputDebugString(('[tagging-up-turf] SCM 09D0 stage=%s blocked: legacy onGround=true, native allWheels=false'):format(stage))
+    elseif onAllWheels and state.allWheelsPassedStage ~= stage then
+        state.allWheelsPassedStage = stage
+        outputDebugString(('[tagging-up-turf] SCM 09D0 stage=%s passed: native contact-wheel count is exactly four'):format(stage))
+    end
+    return onAllWheels
+end
 
 local function reportVehicleProgress()
     if not state.active or localPlayer ~= state.leader then
@@ -3461,8 +3484,9 @@ local function reportVehicleProgress()
         local x, y, z = getElementPosition(vehicle)
         local target = state.stage == "drive_idlewood" and TAGUP.idlewoodDestination or TAGUP.ballasDestination
         local gate = state.stage == "drive_idlewood" and TAGUP.idlewoodArrival or TAGUP.ballasArrival
-        if math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and math.abs(z - target[3]) <= gate.radiusZ and
-            isVehicleOnGround(vehicle) then
+        local insideBox = math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and
+                              math.abs(z - target[3]) <= gate.radiusZ
+        if passesAllWheelsGate(vehicle, state.stage, insideBox) then
             enterArrivalGate(state.stage, state.stage == "drive_idlewood" and "idlewood" or "ballas", vehicle)
         end
         return
@@ -3471,8 +3495,9 @@ local function reportVehicleProgress()
     if state.stage == "drive_home" then
         local x, y, z = getElementPosition(vehicle)
         local target, gate = TAGUP.homeDestination, TAGUP.homeArrival
-        if getTickCount() - state.lastVehicleReport >= 100 and math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and
-            math.abs(z - target[3]) <= gate.radiusZ and isVehicleOnGround(vehicle) then
+        local insideBox = math.abs(x - target[1]) <= gate.radiusX and math.abs(y - target[2]) <= gate.radiusY and
+                              math.abs(z - target[3]) <= gate.radiusZ
+        if getTickCount() - state.lastVehicleReport >= 100 and passesAllWheelsGate(vehicle, state.stage, insideBox) then
             state.lastVehicleReport = getTickCount()
             triggerServerEvent("tagup:vehicleReady", resourceRoot, "home", x, y, z)
         end

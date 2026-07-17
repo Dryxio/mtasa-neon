@@ -340,4 +340,8 @@ public:
 
     virtual const CVector* GetDummyPositions() const = 0;
     virtual void           ReinitAudio() = 0;
+
+    // Keep new cross-module methods at the end so independently built modules
+    // retain every established CVehicle vtable index.
+    virtual bool IsOnAllWheels() const = 0;
 };
