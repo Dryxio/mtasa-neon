@@ -21,6 +21,7 @@ class CTaskComplexFacial;
 class CTaskComplexLeaveCar;
 class CTaskComplexCarDriveWander;
 class CTaskComplexGoToPointAndStandStill;
+class CTaskComplexPartnerChat;
 class CTaskComplexSunbathe;
 class CTaskComplexUseMobilePhone;
 class CTaskComplexWanderStandard;
@@ -43,9 +44,11 @@ class CTaskSimplePlayerOnFoot;
 class CTaskSimpleRunAnim;
 class CTaskSimpleRunNamedAnim;
 class CTaskSimpleStealthKill;
+class CTaskSimpleStandStill;
 class CTaskSimpleTriggerLookAt;
 class CTaskSimpleUseGun;
 class CTaskComplexInWater;
+class CTaskComplexKillPedOnFoot;
 
 class CTasksSA : public CTasks
 {
@@ -115,6 +118,14 @@ public:
     CTaskSimpleGunControl*  CreateTaskSimpleGunControl(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget, char nFiringTask,
                                                        short nBurstLength, int iDuration);
     CTaskSimpleFight*       CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000);
+
+    // Appended factories preserve the cross-module CTasks ABI.
+    CTaskComplexPartnerChat*   CreateTaskComplexPartnerChat(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection);
+    CTaskSimpleStandStill*     CreateTaskSimpleStandStill(int iDuration);
+    CTaskComplex*              CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat);
+    CTaskComplexKillPedOnFoot* CreateTaskComplexKillPedOnFoot(CPed* pTarget);
+    bool                       AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds = false);
+    CTaskComplexPartnerChat*   CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled);
 
     static void StaticSetHooks();
 };

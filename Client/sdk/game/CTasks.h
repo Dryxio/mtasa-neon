@@ -16,6 +16,7 @@
 #include "TaskSecondary.h"
 
 class CEntity;
+class CTask;
 class CTaskComplexDie;
 class CTaskComplexEnterBoatAsDriver;
 class CTaskComplexEnterCarAsDriver;
@@ -24,6 +25,8 @@ class CTaskComplexFacial;
 class CTaskComplexLeaveCar;
 class CTaskComplexCarDriveWander;
 class CTaskComplexGoToPointAndStandStill;
+class CTaskComplexPartnerChat;
+class CTaskComplexSeekEntityRadiusAngleOffset;
 class CTaskComplexSunbathe;
 class CTaskComplexUseMobilePhone;
 class CTaskComplexWanderStandard;
@@ -47,9 +50,11 @@ class CTaskSimplePlayerOnFoot;
 class CTaskSimpleRunAnim;
 class CTaskSimpleRunNamedAnim;
 class CTaskSimpleStealthKill;
+class CTaskSimpleStandStill;
 class CTaskSimpleTriggerLookAt;
 class CTaskSimpleUseGun;
 class CTaskComplexInWater;
+class CTaskComplexKillPedOnFoot;
 class CVector;
 class CVehicle;
 
@@ -132,4 +137,20 @@ public:
     virtual CTaskSimpleGunControl*  CreateTaskSimpleGunControl(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget,
                                                                char nFiringTask, short nBurstLength, int iDuration) = 0;
     virtual CTaskSimpleFight*       CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000) = 0;
+
+    // Append native task factories here. CTasks crosses module boundaries, so
+    // preserving every existing vtable index is required for mixed MTA builds.
+    virtual CTaskComplexPartnerChat*   CreateTaskComplexPartnerChat(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection) = 0;
+    virtual CTaskSimpleStandStill*     CreateTaskSimpleStandStill(int iDuration) = 0;
+    virtual CTaskComplex*              CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat) = 0;
+    virtual CTaskComplexKillPedOnFoot* CreateTaskComplexKillPedOnFoot(CPed* pTarget) = 0;
+
+    // A successful dispatch consumes the fresh task immediately. It confirms
+    // native event submission only; callers must observe activation separately.
+    virtual bool AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds = false) = 0;
+
+    // Appended separately so existing CTasks vtable slots and the exact 0677
+    // factory remain ABI-compatible. Disabling conversation audio selects
+    // GTA's own timed PartnerChat fallback for installations with silent speech.
+    virtual CTaskComplexPartnerChat* CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled) = 0;
 };

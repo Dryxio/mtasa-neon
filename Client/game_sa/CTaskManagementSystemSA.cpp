@@ -180,6 +180,9 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_SIMPLE_FIGHT:
             pTaskSA = new CTaskSimpleFightSA;
             break;
+        case TASK_COMPLEX_KILL_PED_ON_FOOT:
+            pTaskSA = new CTaskComplexKillPedOnFootSA;
+            break;
 
         // Basic
         case TASK_COMPLEX_USE_MOBILE_PHONE:
@@ -202,6 +205,21 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             break;
         case TASK_SIMPLE_SWIM:
             pTaskSA = new CTaskSimpleSwimSA;
+            break;
+        case TASK_COMPLEX_PARTNER_CHAT:
+            pTaskSA = new CTaskComplexPartnerChatSA;
+            break;
+        case TASK_SIMPLE_STAND_STILL:
+            pTaskSA = new CTaskSimpleStandStillSA;
+            break;
+        case TASK_COMPLEX_SEQUENCE:
+            pTaskSA = new CTaskComplexSequenceSA;
+            break;
+        case TASK_COMPLEX_USE_SEQUENCE:
+            pTaskSA = new CTaskComplexUseSequenceSA;
+            break;
+        case TASK_COMPLEX_SEEK_ENTITY:
+            pTaskSA = new CTaskComplexSeekEntityRadiusAngleOffsetSA;
             break;
 
         // Car accessories

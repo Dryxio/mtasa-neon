@@ -113,6 +113,16 @@ void CPedSA::RestoreCreatedByState(const SPedCreatedByState& state)
     intelligence->decisionMakerRadius = state.decisionMakerRadius;
 }
 
+void CPedSA::DisableSpeechForScript(bool stopCurrentSpeech)
+{
+    ((void(__thiscall*)(CPedSAInterface*, bool))FUNC_DisableSpeechForScript)(GetPedInterface(), stopCurrentSpeech);
+}
+
+void CPedSA::EnableSpeechForScript()
+{
+    ((void(__thiscall*)(CPedSAInterface*))FUNC_EnableSpeechForScript)(GetPedInterface());
+}
+
 bool CPedSA::AddProjectile(eWeaponType weaponType, CVector origin, float force, CVector* target, CEntity* targetEntity)
 {
     CProjectileInfo* projectileInfo = pGame->GetProjectileInfo();

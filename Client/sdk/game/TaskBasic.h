@@ -19,6 +19,18 @@ public:
     virtual ~CTaskComplexUseMobilePhone() {};
 };
 
+class CTaskComplexPartnerChat : public virtual CTaskComplex
+{
+public:
+    virtual ~CTaskComplexPartnerChat() {};
+};
+
+class CTaskSimpleStandStill : public virtual CTaskSimple
+{
+public:
+    virtual ~CTaskSimpleStandStill() {};
+};
+
 class CTaskSimpleAnim : public virtual CTaskSimple
 {
 public:

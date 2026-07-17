@@ -130,6 +130,17 @@ TAGUP = {
         skippableDuration = 6500,
         readyTimeout = 5000,
         finalCheckTimeout = 2000,
+        approach = {x = 2395.61, y = -1470.52, radiusX = 5.0, radiusY = 5.0, retryInterval = 250},
+        follow = {
+            timeout = -1,
+            radius = 0.5,
+            angles = {90.0, 270.0},
+            attackDelay = 5000,
+        },
+        audio = {
+            whatTheFuck = 37423,
+            getThatFool = 37427,
+        },
     },
     vehicleRecording207 = {
         id = 207,

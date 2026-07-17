@@ -14,6 +14,32 @@
 #include "CEntitySA.h"
 #include "CPedSA.h"
 
+CTaskComplexKillPedOnFootSA::CTaskComplexKillPedOnFootSA(CPed* pTarget)
+{
+    CreateTaskInterface(sizeof(CTaskComplexKillPedOnFootSAInterface));
+    if (!IsValid() || !pTarget)
+        return;
+
+    DWORD dwFunc = FUNC_CTaskComplexKillPedOnFoot__Constructor;
+    DWORD dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+    DWORD dwTargetInterface = reinterpret_cast<DWORD>(pTarget->GetPedInterface());
+    // 05E2 deliberately leaves GTA in control of weapon choice, pursuit,
+    // aiming, melee fallback and vehicle handling for this indefinite task.
+    // clang-format off
+    __asm
+    {
+        push    1
+        push    0
+        push    0
+        push    0
+        push    -1
+        push    dwTargetInterface
+        mov     ecx, dwThisInterface
+        call    dwFunc
+    }
+    // clang-format on
+}
+
 CTaskSimpleGangDriveBySA::CTaskSimpleGangDriveBySA(CEntity* pTargetEntity, const CVector* pVecTarget, float fAbortRange, char FrequencyPercentage,
                                                    char nDrivebyStyle, bool bSeatRHS)
 {

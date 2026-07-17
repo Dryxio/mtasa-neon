@@ -25,6 +25,12 @@ typedef DWORD CTaskUtilityLineUpPedWithCar;
 
 #define FUNC_CTaskComplexGoToPointAndStandStill__Constructor      0x668120
 #define FUNC_CTaskComplexGoToPointAndStandStillTimed__Constructor 0x6685E0
+#define FUNC_CTaskComplexSeekEntityRadiusAngleOffset__Constructor 0x493730
+#define FUNC_CTaskComplexSequence__Constructor                    0x632BD0
+#define FUNC_CTaskComplexSequence__AddTask                        0x632D10
+#define FUNC_CTaskComplexSequence__Flush                          0x632C10
+#define FUNC_CTaskComplexUseSequence__Constructor                 0x635450
+#define FUNC_CTaskSequences__GetAvailableSlot                     0x632E00
 
 #define FUNC_CTaskSimpleCarSetPedOut__PositionPedOutOfCollision 0x6479B0
 
@@ -129,4 +135,61 @@ public:
     CTaskComplexGoToPointAndStandStillTimedSA() {};
     CTaskComplexGoToPointAndStandStillTimedSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance,
                                               const int iTime);
+};
+
+class CTaskComplexSeekEntityRadiusAngleOffsetSAInterface : public CTaskComplexSAInterface
+{
+private:
+    unsigned char m_stateBeforeOffset[0x38];
+
+public:
+    float m_fRadius;
+    float m_fAngleRadians;
+
+private:
+    unsigned char m_stateAfterOffset[0x8];
+};
+static_assert(sizeof(CTaskComplexSeekEntityRadiusAngleOffsetSAInterface) == 0x54, "Unexpected CTaskComplexSeekEntityRadiusAngleOffsetSAInterface size");
+
+class CTaskComplexSeekEntityRadiusAngleOffsetSA : public virtual CTaskComplexSA, public virtual CTaskComplexSeekEntityRadiusAngleOffset
+{
+public:
+    CTaskComplexSeekEntityRadiusAngleOffsetSA() {};
+    CTaskComplexSeekEntityRadiusAngleOffsetSA(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees);
+};
+
+class CTaskComplexSequenceSAInterface : public CTaskComplexSAInterface
+{
+public:
+    int               m_iCurrentTask;
+    CTaskSAInterface* m_pTasks[8];
+    unsigned int      m_uiRepeatMode;
+    int               m_iRepeatedCount;
+    bool              m_bFlushTasks;
+    unsigned char     m_ucPadding[3];
+    unsigned int      m_uiReferenceCount;
+};
+static_assert(sizeof(CTaskComplexSequenceSAInterface) == 0x40, "Unexpected CTaskComplexSequenceSAInterface size");
+
+class CTaskComplexSequenceSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexSequenceSA() {};
+};
+
+class CTaskComplexUseSequenceSAInterface : public CTaskComplexSAInterface
+{
+public:
+    int m_iSequenceIndex;
+    int m_iCurrentTask;
+    int m_iEndTask;
+    int m_iRepeatedCount;
+};
+static_assert(sizeof(CTaskComplexUseSequenceSAInterface) == 0x1C, "Unexpected CTaskComplexUseSequenceSAInterface size");
+
+class CTaskComplexUseSequenceSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexUseSequenceSA() {};
+    CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepeat);
 };

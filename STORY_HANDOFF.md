@@ -93,6 +93,7 @@ This keeps exposed APIs, completed slices, pending substitutes, test evidence, a
 - Treat native task acceptance, task observation, and authoritative world-state completion as separate facts. Harnesses should prove the relevant combination rather than passing on a single Lua return value.
 - Preserve GTA constructor, vtable, destructor, and layout semantics where possible. Prefer calling verified original engine routines over copying incomplete reconstructed C++.
 - Keep generic engine behavior in reusable Neon APIs. Mission-specific coordinates, sequence order, dialogue choices, co-op conditions, and failure policy belong in the story resource/runtime.
+- Treat every SCM opcode as a semantic adapter, not as a raw argument copy into an MTA function. Audit and document handler-side conversions such as `009A CREATE_CHAR` adding `1.0` to script Z, then assert the converted native state before dependent tasks begin.
 - Keep every temporary substitute explicit in code, documentation, and the instruction trace. Never label a Lua approximation as a native opcode implementation.
 - Keep the mission playable after each slice, with cleanup and diagnostics for every refusal or premature lifecycle transition.
 

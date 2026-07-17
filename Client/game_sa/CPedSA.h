@@ -45,6 +45,8 @@ class CVehicleSAInterface;
 #define FUNC_PreRenderAfterTest         0x5E65A0  // CPed::PreRenderAfterTest
 #define FUNC_CPed_Say                   0x5EFFE0
 #define FUNC_SetCharCreatedBy           0x5E47E0  // CPed::SetCharCreatedBy
+#define FUNC_DisableSpeechForScript     0x5EFF80
+#define FUNC_EnableSpeechForScript      0x5EFF90
 
 // CPlayerPed
 #define FUNC_MakeChangesForNewWeapon_Slot 0x60D000  // CPlayerPed::MakeChangesForNewWeapon
@@ -383,6 +385,8 @@ public:
     SPedCreatedByState GetCreatedByState() const override;
     void               SetCreatedBy(ePedCreatedBy createdBy) override;
     void               RestoreCreatedByState(const SPedCreatedByState& state) override;
+    void               DisableSpeechForScript(bool stopCurrentSpeech) override;
+    void               EnableSpeechForScript() override;
 
     bool InternalAttachEntityToEntity(DWORD entityInterface, const CVector* position, const CVector* rotation) override;
     void DetachPedFromEntity() override;

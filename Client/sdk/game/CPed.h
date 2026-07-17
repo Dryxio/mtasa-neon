@@ -342,4 +342,6 @@ public:
     virtual SPedCreatedByState GetCreatedByState() const = 0;
     virtual void               SetCreatedBy(ePedCreatedBy createdBy) = 0;
     virtual void               RestoreCreatedByState(const SPedCreatedByState& state) = 0;
+    virtual void               DisableSpeechForScript(bool stopCurrentSpeech) = 0;
+    virtual void               EnableSpeechForScript() = 0;
 };

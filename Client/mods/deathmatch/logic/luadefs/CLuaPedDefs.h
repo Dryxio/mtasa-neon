@@ -121,6 +121,14 @@ public:
     static bool SetPedWeaponAccuracy(CClientPed* ped, int accuracy);
     static bool SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
                            std::optional<float> slowdownRadius, std::optional<int> timeout);
+    static bool SetPedChatWith(CClientPed* ped, CClientPed* partner, bool leadSpeaker, std::optional<bool> updateDirection,
+                               std::optional<bool> conversationEnabled);
+    static bool SetPedStandStill(CClientPed* ped, std::optional<int> duration);
+    static bool SetPedGoToOffset(CClientPed* ped, CClientPed* target, std::optional<int> timeout, std::optional<float> radius, std::optional<float> angle,
+                                 std::optional<bool> repeatTask);
+    static bool SetPedKillOnFoot(CClientPed* ped, CClientPed* target);
+    static bool SetPedWander(CClientPed* ped, std::optional<std::string> movement, std::optional<int> direction, std::optional<bool> wanderSensibly);
+    static bool SetPedScriptedSpeechMuted(CClientPed* ped, bool muted);
     static bool SetPedShootAt(CClientPed* ped, CVector target, std::optional<int> duration, std::optional<int> burstLength);
     static bool SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);

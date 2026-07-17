@@ -46,6 +46,7 @@ class CWeaponInfo;
 #define FUNC_CTaskSimpleUseGun_StartAnim               0x624F30
 #define FUNC_CTaskSimpleUseGun_StartCountDown          0x61E160
 #define FUNC_CTaskSimpleGunControl__Constructor        0x61F3F0
+#define FUNC_CTaskComplexKillPedOnFoot__Constructor    0x620E30
 
 // temporary
 class CAnimBlendAssociation;
@@ -208,4 +209,18 @@ class CTaskSimpleFightSA : public virtual CTaskSimpleSA, public virtual CTaskSim
 public:
     CTaskSimpleFightSA() {};
     CTaskSimpleFightSA(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000);
+};
+
+class CTaskComplexKillPedOnFootSAInterface : public CTaskComplexSAInterface
+{
+private:
+    unsigned char m_opaqueState[0x2C];
+};
+static_assert(sizeof(CTaskComplexKillPedOnFootSAInterface) == 0x38, "Unexpected CTaskComplexKillPedOnFootSAInterface size");
+
+class CTaskComplexKillPedOnFootSA : public virtual CTaskComplexSA, public virtual CTaskComplexKillPedOnFoot
+{
+public:
+    CTaskComplexKillPedOnFootSA() {};
+    CTaskComplexKillPedOnFootSA(CPed* pTarget);
 };

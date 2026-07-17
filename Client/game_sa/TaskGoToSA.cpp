@@ -120,3 +120,149 @@ CTaskComplexGoToPointAndStandStillTimedSA::CTaskComplexGoToPointAndStandStillTim
     }
     // clang-format on
 }
+
+CTaskComplexSeekEntityRadiusAngleOffsetSA::CTaskComplexSeekEntityRadiusAngleOffsetSA(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees)
+{
+    CreateTaskInterface(sizeof(CTaskComplexSeekEntityRadiusAngleOffsetSAInterface));
+    if (!IsValid() || !pTarget)
+        return;
+
+    const int   iNativeTimeout = iTimeout < 0 ? 50000 : iTimeout;
+    const float fMaxEntityDistance = 1.0f;
+    const float fMoveStateRadius = 2.0f;
+    const float fFollowNodeHeight = 2.0f;
+    DWORD       dwFunc = FUNC_CTaskComplexSeekEntityRadiusAngleOffset__Constructor;
+    DWORD       dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+    DWORD       dwTargetInterface = reinterpret_cast<DWORD>(pTarget->GetPedInterface());
+
+    // 06A8 delegates movement and path selection to GTA. Its relative radius
+    // and angle are installed in the calculator after the generic seek ctor.
+    // clang-format off
+    __asm
+    {
+        push    1
+        push    1
+        push    fFollowNodeHeight
+        push    fMoveStateRadius
+        push    fMaxEntityDistance
+        push    1000
+        push    iNativeTimeout
+        push    dwTargetInterface
+        mov     ecx, dwThisInterface
+        call    dwFunc
+    }
+    // clang-format on
+
+    auto* pInterface = reinterpret_cast<CTaskComplexSeekEntityRadiusAngleOffsetSAInterface*>(GetInterface());
+    pInterface->m_fRadius = fRadius;
+    pInterface->m_fAngleRadians = fAngleDegrees * (3.14159265358979323846f / 180.0f);
+}
+
+CTaskComplexUseSequenceSA::CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepeat)
+{
+    if (!pTask)
+        return;
+    if (!pTask->IsValid())
+    {
+        delete pTask;
+        return;
+    }
+
+    int   iSequenceIndex = -1;
+    DWORD dwFunc = FUNC_CTaskSequences__GetAvailableSlot;
+    // clang-format off
+    __asm
+    {
+        push    1
+        call    dwFunc
+        add     esp, 4
+        mov     iSequenceIndex, eax
+    }
+    // clang-format on
+    if (iSequenceIndex < 0 || iSequenceIndex >= 64)
+    {
+        pTask->Destroy();
+        delete pTask;
+        return;
+    }
+
+    auto* pOpened = reinterpret_cast<bool*>(0xC17898);
+    auto* pSequences = reinterpret_cast<CTaskComplexSequenceSAInterface*>(0xC178F0);
+    auto* pSequence = &pSequences[iSequenceIndex];
+    auto* pActiveSequence = reinterpret_cast<int*>(0x8D2E98);
+
+    // Reproduce OPEN_SEQUENCE_TASK using a mission-cleanup slot. GTA keeps the
+    // template globally while each CTaskComplexUseSequence clones its children.
+    pOpened[iSequenceIndex] = true;
+    dwFunc = FUNC_CTaskComplexSequence__Flush;
+    DWORD dwSequenceInterface = reinterpret_cast<DWORD>(pSequence);
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwSequenceInterface
+        call    dwFunc
+    }
+    // clang-format on
+    *pActiveSequence = iSequenceIndex;
+
+    CTaskSAInterface* pChildInterface = pTask->GetInterface();
+    pTask->SetInterface(nullptr);
+    delete pTask;
+
+    dwFunc = FUNC_CTaskComplexSequence__AddTask;
+    // clang-format off
+    __asm
+    {
+        push    pChildInterface
+        mov     ecx, dwSequenceInterface
+        call    dwFunc
+    }
+    // clang-format on
+
+    pSequence->m_uiRepeatMode = bRepeat ? 1u : 0u;
+    pOpened[iSequenceIndex] = false;
+    *pActiveSequence = -1;
+
+    CreateTaskInterface(sizeof(CTaskComplexUseSequenceSAInterface));
+    if (!IsValid())
+    {
+        dwFunc = FUNC_CTaskComplexSequence__Flush;
+        // clang-format off
+        __asm
+        {
+            mov     ecx, dwSequenceInterface
+            call    dwFunc
+        }
+        // clang-format on
+        return;
+    }
+
+    // PERFORM_SEQUENCE increments the global template reference count. CLEAR
+    // then marks it for flushing when this native task releases its last clone.
+    dwFunc = FUNC_CTaskComplexUseSequence__Constructor;
+    DWORD dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+    // clang-format off
+    __asm
+    {
+        push    iSequenceIndex
+        mov     ecx, dwThisInterface
+        call    dwFunc
+    }
+    // clang-format on
+    if (pSequence->m_uiReferenceCount == 0)
+    {
+        pSequence->m_bFlushTasks = false;
+        dwFunc = FUNC_CTaskComplexSequence__Flush;
+        // clang-format off
+        __asm
+        {
+            mov     ecx, dwSequenceInterface
+            call    dwFunc
+        }
+        // clang-format on
+    }
+    else
+    {
+        pSequence->m_bFlushTasks = true;
+    }
+}

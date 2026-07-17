@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CGameSA.h"
+#include "CPedSA.h"
 #include "CTaskManagementSystemSA.h"
 #include "CTasksSA.h"
 #include "TaskAttackSA.h"
@@ -27,9 +28,33 @@
 
 extern CGameSA* pGame;
 
+namespace
+{
+    constexpr std::uintptr_t FUNC_CPedIntelligence_AddTaskPrimaryMaybeInGroup = 0x600E20;
+}
+
 CTasksSA::CTasksSA(CTaskManagementSystemSA* pTaskManagementSystem)
 {
     m_pTaskManagementSystem = pTaskManagementSystem;
+}
+
+bool CTasksSA::AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds)
+{
+    CPedSAInterface*  pPedInterface = pPed ? pPed->GetPedInterface() : nullptr;
+    CTaskSAInterface* pTaskInterface = pTask ? pTask->GetInterface() : nullptr;
+    if (!pPedInterface || !pPedInterface->pPedIntelligence || !pTaskInterface || pTaskInterface->m_pParent)
+        return false;
+
+    // GTA's own helper routes the fresh task through CEventScriptCommand for
+    // players and ungrouped peds. That event path clears competing event-response
+    // tasks before installing its clone, which direct CTaskManager assignment
+    // cannot reproduce. The helper destroys the original task before returning,
+    // including when the native event queue is full, so none of these pointers
+    // may be accessed after this call.
+    using AddTaskPrimaryMaybeInGroup = void(__thiscall*)(CPedIntelligenceSAInterface*, CTaskSAInterface*, bool);
+    reinterpret_cast<AddTaskPrimaryMaybeInGroup>(FUNC_CPedIntelligence_AddTaskPrimaryMaybeInGroup)(pPedInterface->pPedIntelligence, pTaskInterface,
+                                                                                                   bAffectsDeadPeds);
+    return true;
 }
 
 CTaskSimplePlayerOnFoot* CTasksSA::CreateTaskSimplePlayerOnFoot()
@@ -69,7 +94,8 @@ CTaskSimpleCarSetPedOut* CTasksSA::CreateTaskSimpleCarSetPedOut(CVehicle* pVehic
 
 CTaskComplexWanderStandard* CTasksSA::CreateTaskComplexWanderStandard(const int iMoveState, const char iDir, const bool bWanderSensibly)
 {
-    CTaskComplexWanderStandardSA* pTask = NewTask<CTaskComplexWanderStandardSA>(iMoveState, iDir, bWanderSensibly);
+    const char                    iNativeDir = iDir < 0 ? static_cast<char>(((int(__cdecl*)(int, int))0x407180)(0, 8)) : iDir;
+    CTaskComplexWanderStandardSA* pTask = NewTask<CTaskComplexWanderStandardSA>(iMoveState, iNativeDir, bWanderSensibly);
     m_pTaskManagementSystem->AddTask(pTask);
     return pTask;
 }
@@ -290,6 +316,57 @@ CTaskSimpleGunControl* CTasksSA::CreateTaskSimpleGunControl(CEntity* pTargetEnti
 CTaskSimpleFight* CTasksSA::CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod)
 {
     CTaskSimpleFightSA* pTask = NewTask<CTaskSimpleFightSA>(pTargetEntity, nCommand, nIdlePeriod);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskComplexPartnerChat* CTasksSA::CreateTaskComplexPartnerChat(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection)
+{
+    auto* pTask = NewTask<CTaskComplexPartnerChatSA>(pPartner, bLeadSpeaker, bUpdateDirection, true);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskComplexPartnerChat* CTasksSA::CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled)
+{
+    auto* pTask = NewTask<CTaskComplexPartnerChatSA>(pPartner, bLeadSpeaker, bUpdateDirection, bConversationEnabled);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskSimpleStandStill* CTasksSA::CreateTaskSimpleStandStill(int iDuration)
+{
+    auto* pTask = NewTask<CTaskSimpleStandStillSA>(iDuration);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskComplex* CTasksSA::CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat)
+{
+    CTaskComplexSA* pTask = nullptr;
+    if (bRepeat)
+    {
+        auto* pSeekTask = NewTask<CTaskComplexSeekEntityRadiusAngleOffsetSA>(pTarget, iTimeout, fRadius, fAngleDegrees);
+        auto* pUseSequenceTask = pSeekTask ? NewTask<CTaskComplexUseSequenceSA>(pSeekTask, true) : nullptr;
+        if (pUseSequenceTask && !pUseSequenceTask->IsValid())
+        {
+            delete pUseSequenceTask;
+            pUseSequenceTask = nullptr;
+        }
+        pTask = pUseSequenceTask;
+    }
+    else
+    {
+        pTask = NewTask<CTaskComplexSeekEntityRadiusAngleOffsetSA>(pTarget, iTimeout, fRadius, fAngleDegrees);
+    }
+
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskComplexKillPedOnFoot* CTasksSA::CreateTaskComplexKillPedOnFoot(CPed* pTarget)
+{
+    auto* pTask = NewTask<CTaskComplexKillPedOnFootSA>(pTarget);
     m_pTaskManagementSystem->AddTask(pTask);
     return pTask;
 }

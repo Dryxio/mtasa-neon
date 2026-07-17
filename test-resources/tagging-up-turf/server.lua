@@ -24,6 +24,11 @@ local mission = {
     ballasGangSceneSerial = 0,
     ballasGangScene = nil,
     ballasGangSceneCompleted = false,
+    ballasEncounterSerial = 0,
+    ballasEncounter = nil,
+    ballasTimerResetAt = nil,
+    checkpointGroundSerial = 0,
+    checkpointGroundPending = {},
     vehiclePlaybackSerial = 0,
     vehiclePlayback = nil,
 }
@@ -320,6 +325,23 @@ local function cancelBallasGangScene(reason)
     end
 end
 
+local function cancelBallasEncounter(reason)
+    local encounter = mission.ballasEncounter
+    if not encounter then
+        return
+    end
+
+    mission.ballasEncounter = nil
+    if isTimer(encounter.attackTimer) then
+        killTimer(encounter.attackTimer)
+    end
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:ballasEncounterCancel", resourceRoot, encounter.id, reason or "server_cancelled")
+        end
+    end
+end
+
 local function cancelVehiclePlayback(reason)
     local playback = mission.vehiclePlayback
     if not playback then
@@ -385,13 +407,11 @@ end
 
 local failMission
 
-local function setBallasActive(active)
-    for index = 1, 2 do
-        local ped = mission.entities["enemy" .. index]
-        if isElement(ped) and not isPedDead(ped) then
-            setElementData(ped, "tagup.active", active == true, true)
-        end
-    end
+local function createScmChar(model, x, y, scriptZ, heading)
+    -- GTA's CREATE_CHAR adds 1.0 to the script Z before placing the ped.
+    -- MTA's createPed consumes the element Z directly, so this conversion
+    -- belongs to the SCM opcode adapter rather than to createPed itself.
+    return createPed(model, x, y, scriptZ + 1.0, heading)
 end
 
 local function spawnBallas()
@@ -402,24 +422,18 @@ local function spawnBallas()
         return failMission("La creation des deux Ballas est dans un etat partiel.")
     end
     local positions = {
-        {2400.45, -1470.39, 22.97, 82.40, 102, 22},
-        {2396.48, -1469.90, 22.99, 262.64, 103, 5},
+        {2400.45, -1470.39, 22.97, 82.40, 102},
+        {2396.48, -1469.90, 22.99, 262.64, 103},
     }
     local enemies = {}
     for index, data in ipairs(positions) do
-        local ped = createPed(data[5], data[1], data[2], data[3], data[4])
+        local ped = createScmChar(data[5], data[1], data[2], data[3], data[4])
         if ped then
             setElementDimension(ped, TAGUP.dimension)
-            giveWeapon(ped, data[6], data[6] == 22 and 500 or 1, true)
             setElementData(ped, "tagup.enemy", true, true)
             setElementData(ped, TAGUP.missionActorData, true, true)
-            -- SWEET1 keeps both Flats passive through the 500 + 6500 ms
-            -- camera scene. Activating their syncer-owned AI only after every
-            -- client releases its lease prevents immobilized players being shot.
-            setElementData(ped, "tagup.active", false, true)
-            setPedStat(ped, 76, 700)
             if isElement(mission.leader) then
-                setElementSyncer(ped, mission.leader)
+                setElementSyncer(ped, mission.leader, true, true)
             end
             mission.entities["enemy" .. index] = ped
             table.insert(enemies, ped)
@@ -437,6 +451,18 @@ local function spawnBallas()
         return false
     end
     broadcastState({enemies = enemies, message = "Deux Ballas vous ont reperes."})
+    mission.ballasEncounterSerial = mission.ballasEncounterSerial + 1
+    mission.ballasEncounter = {
+        id = mission.ballasEncounterSerial,
+        enemies = enemies,
+        phase = "chat",
+        createdAt = getTickCount(),
+    }
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:ballasEncounterPrepare", resourceRoot, mission.ballasEncounter.id, enemies)
+        end
+    end
     return true
 end
 
@@ -496,6 +522,16 @@ local function advanceAfterTags(extra)
     if mission.stage == "tags_idlewood" then
         setStage("return_car", extra)
     elseif mission.stage == "tags_ballas" and mission.ballasGangSceneCompleted then
+        local encounter = mission.ballasEncounter
+        if encounter and not encounter.attackReady and not (extra and extra.traceSkipped) then
+            if not encounter.rooftopPending then
+                outputDebugString(('[tagging-up-turf] Ballas encounter #%d holding rooftop transition until native attack ACK'):format(
+                                      encounter.id))
+            end
+            encounter.rooftopPending = true
+            encounter.rooftopExtra = extra
+            return
+        end
         setStage("rooftop", extra)
     elseif mission.stage == "rooftop" then
         startVehiclePlaybackReturn(extra)
@@ -516,6 +552,7 @@ failMission = function(reason)
     cancelDemoEnter("mission_failed")
     cancelDemoScene("mission_failed")
     cancelBallasGangScene("mission_failed")
+    cancelBallasEncounter("mission_failed")
     mission.stage = "failed"
     broadcastState({failureReason = reason or "La mission a echoue."})
     outputDebugString("[tagging-up-turf] Failed: " .. tostring(reason))
@@ -631,6 +668,7 @@ finishMission = function(passed, traceExtra)
     cancelDemoScene("mission_finished")
     cancelBallasDeparture("mission_finished")
     cancelBallasGangScene("mission_finished")
+    cancelBallasEncounter("mission_finished")
     cancelVehiclePlayback("mission_finished")
     clearMissionTimers()
     if passed then
@@ -676,6 +714,9 @@ finishMission = function(passed, traceExtra)
         mission.ballasDeparture = nil
         mission.ballasGangScene = nil
         mission.ballasGangSceneCompleted = false
+        mission.ballasEncounter = nil
+        mission.ballasTimerResetAt = nil
+        mission.checkpointGroundPending = {}
         mission.vehiclePlayback = nil
     end, delay, 1)
 end
@@ -701,7 +742,7 @@ local function setupMissionPlayers()
     end
 end
 
-local function startMission(requester)
+local function startMission(requester, checkpoint)
     if mission.running then
         outputChatBox("Tagging Up Turf est deja en cours.", requester, 255, 190, 80)
         return
@@ -709,6 +750,8 @@ local function startMission(requester)
 
     mission.running = true
     mission.ballasGangSceneCompleted = false
+    mission.ballasEncounter = nil
+    mission.ballasTimerResetAt = nil
     mission.leader = requester
     mission.party = {requester}
     for _, player in ipairs(getElementsByType("player")) do
@@ -746,6 +789,66 @@ local function startMission(requester)
     setElementData(demoObject, "tagup.paintAlpha", 0, true)
     mission.entities.demoTag = demoObject
 
+    if checkpoint == "ballas" then
+        -- This checkpoint preserves the state produced by the completed
+        -- Idlewood and first Ballas tag flow while leaving the encounter's
+        -- spawn, chat, camera, approach, follow, and attack gates untouched.
+        for _, tagId in ipairs({1, 2, 4}) do
+            mission.tagProgress[tagId] = 255
+            mission.completedTags[tagId] = true
+            replaceTagObject(tagId)
+        end
+        setElementData(demoObject, "tagup.paintAlpha", 255, true)
+
+        setElementPosition(vehicle, TAGUP.ballasDestination[1], TAGUP.ballasDestination[2], TAGUP.ballasDestination[3])
+        setElementRotation(vehicle, 0, 0, 270)
+        setElementVelocity(vehicle, 0, 0, 0)
+        setElementSyncer(vehicle, requester, true, true)
+        setElementSyncer(sweet, requester, true, true)
+        if not warpSweetIntoFirstFreeSeat() then
+            return failMission("Sweet n'a pas pu etre initialise au checkpoint Ballas.")
+        end
+
+        local checkpointPositions = {
+            {2373.0, -1470.52, 22.97, 90},
+            {2371.8, -1471.72, 22.97, 90},
+            {2371.8, -1469.32, 22.97, 90},
+        }
+        mission.checkpointGroundSerial = mission.checkpointGroundSerial + 1
+        local groundToken = mission.checkpointGroundSerial
+        mission.checkpointGroundPending = {}
+        for index, player in ipairs(mission.party) do
+            if isElement(player) then
+                local position = checkpointPositions[index]
+                removePedFromVehicle(player)
+                -- Keep the player above the expected surface while the remote
+                -- GTA sector streams. setupMissionPlayers already froze the
+                -- actor, which intentionally bypasses MTA's long-teleport
+                -- waiting helper, so the owning client must prove collision is
+                -- available before the server releases the player.
+                setElementPosition(player, position[1], position[2], position[3] + 2.0)
+                setElementRotation(player, 0, 0, position[4])
+                setElementVelocity(player, 0, 0, 0)
+                setElementFrozen(player, true)
+                mission.checkpointGroundPending[player] = {
+                    token = groundToken,
+                    x = position[1],
+                    y = position[2],
+                    expectedGroundZ = position[3],
+                    heading = position[4],
+                }
+                triggerClientEvent(player, "tagup:checkpointGroundProbe", resourceRoot, groundToken, position[1], position[2], position[3])
+            end
+        end
+
+        mission.ballasTimerResetAt = getTickCount()
+        setStage("tags_ballas", {message = "Checkpoint Ballas pret. Avancez vers le tag de l'allee."})
+        outputDebugString(('[tagging-up-turf] Ballas checkpoint started by %s outside the SCM 20x17 camera gate'):format(
+                              getPlayerName(requester)))
+        outputChatBox("Checkpoint Ballas charge. Avance vers le tag vert pour declencher la scene.", requester, 120, 220, 120)
+        return
+    end
+
     setStage("intro")
     rememberTimer(setTimer(function()
         if not mission.running or mission.stage ~= "intro" then
@@ -764,6 +867,30 @@ local function startMission(requester)
     end, 7000, 1))
 end
 
+addEvent("tagup:checkpointGroundReady", true)
+addEventHandler("tagup:checkpointGroundReady", resourceRoot, function(token, reportedGroundZ)
+    local player = client
+    local pending = mission.checkpointGroundPending[player]
+    if source ~= resourceRoot or not mission.running or mission.stage ~= "tags_ballas" or not isMissionPlayer(player) or not pending or
+        pending.token ~= tonumber(token) then
+        outputDebugString("[tagging-up-turf] Rejected stale or unauthorized checkpoint ground result", 2)
+        return
+    end
+
+    local groundZ = tonumber(reportedGroundZ)
+    if not groundZ or math.abs(groundZ - pending.expectedGroundZ) > 2.0 then
+        mission.checkpointGroundPending[player] = nil
+        return failMission("La collision du checkpoint Ballas n'a pas pu etre chargee.")
+    end
+
+    setElementPosition(player, pending.x, pending.y, groundZ + 1.0)
+    setElementRotation(player, 0, 0, pending.heading)
+    setElementVelocity(player, 0, 0, 0)
+    setElementFrozen(player, false)
+    mission.checkpointGroundPending[player] = nil
+    outputDebugString(("[tagging-up-turf] Ballas checkpoint ground ready for %s at Z=%.3f"):format(getPlayerName(player), groundZ))
+end)
+
 local function allBallasGangScenePlayersReady(scene, field)
     for _, player in ipairs(scene.players) do
         if not isElement(player) or not scene[field][player] then
@@ -771,6 +898,73 @@ local function allBallasGangScenePlayersReady(scene, field)
         end
     end
     return true
+end
+
+local function enableBallasApproach(reason)
+    local encounter = mission.ballasEncounter
+    if not encounter or (encounter.phase ~= "chat" and encounter.phase ~= "camera") then
+        return false
+    end
+
+    encounter.phase = "awaiting_approach"
+    encounter.approachEnabledAt = getTickCount()
+    outputDebugString(('[tagging-up-turf] Ballas encounter #%d awaiting SCM 5x5 approach (%s)'):format(encounter.id,
+                                                                                                      tostring(reason)))
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:ballasEncounterApproachEnabled", resourceRoot, encounter.id)
+        end
+    end
+    return true
+end
+
+local function startBallasAttack(reason)
+    local encounter = mission.ballasEncounter
+    if not encounter or encounter.phase ~= "following" then
+        return false
+    end
+
+    encounter.phase = "attacking"
+    encounter.attackStartedAt = getTickCount()
+    if isTimer(encounter.attackTimer) then
+        killTimer(encounter.attackTimer)
+        encounter.attackTimer = nil
+    end
+    outputDebugString(('[tagging-up-turf] Ballas encounter #%d starting native KillPedOnFoot after %d ms (%s)'):format(
+                          encounter.id, getTickCount() - encounter.followStartedAt, tostring(reason)))
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:ballasEncounterAttack", resourceRoot, encounter.id, reason)
+        end
+    end
+    return true
+end
+
+local function armBallasAttackCondition(encounter)
+    if not encounter or encounter ~= mission.ballasEncounter or encounter.phase ~= "following" or not encounter.followReady then
+        return
+    end
+
+    if isTimer(encounter.attackTimer) then
+        killTimer(encounter.attackTimer)
+        encounter.attackTimer = nil
+    end
+    if mission.completedTags[3] then
+        return startBallasAttack("alley_tag_complete")
+    end
+
+    local secondFlatAlive = isElement(encounter.enemies[2]) and not isPedDead(encounter.enemies[2])
+    if secondFlatAlive then
+        mission.ballasTimerResetAt = getTickCount()
+    end
+    local elapsed = math.max(0, getTickCount() - (mission.ballasTimerResetAt or getTickCount()))
+    local remaining = math.max(50, TAGUP.ballasGangScene.follow.attackDelay - elapsed)
+    encounter.attackTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.ballasEncounter
+        if active and active.id == expectedId and active.phase == "following" and active.followReady then
+            startBallasAttack("timer_5000")
+        end
+    end, remaining, 1, encounter.id))
 end
 
 local function completeBallasGangScene(scene)
@@ -783,8 +977,8 @@ local function completeBallasGangScene(scene)
     outputDebugString(("[tagging-up-turf] Ballas gang scene #%d %s after %d ms; all camera leases acknowledged"):format(
                           scene.id, reason, getTickCount() - scene.startedAt))
     cancelBallasGangScene(reason)
-    setBallasActive(true)
-    broadcastState({message = "Ballas: Get that fool!", ballasGangSceneCompleted = true})
+    enableBallasApproach(reason)
+    broadcastState({ballasGangSceneCompleted = true})
     if currentGroupComplete() then
         rememberTimer(setTimer(advanceAfterTags, 900, 1))
     end
@@ -893,6 +1087,11 @@ local function beginBallasGangScene()
         return
     end
 
+    local encounter = mission.ballasEncounter
+    if not encounter or not encounter.chatReady then
+        return
+    end
+
     local enemies = {mission.entities.enemy1, mission.entities.enemy2}
     for _, ped in ipairs(enemies) do
         if not isElement(ped) then
@@ -902,8 +1101,8 @@ local function beginBallasGangScene()
             -- The SCM consumes gang_hassle even when either alive check fails:
             -- the shot is skipped once and the tag loop continues.
             mission.ballasGangSceneCompleted = true
-            setBallasActive(false)
             outputDebugString("[tagging-up-turf] Ballas gang scene skipped because one Flat is dead")
+            enableBallasApproach("one_flat_dead")
             broadcastState({ballasGangSceneCompleted = true})
             if currentGroupComplete() then
                 rememberTimer(setTimer(advanceAfterTags, 900, 1))
@@ -921,7 +1120,9 @@ local function beginBallasGangScene()
         requestedAt = getTickCount(),
     }
     mission.ballasGangScene = scene
-    setBallasActive(false)
+    if mission.ballasEncounter then
+        mission.ballasEncounter.phase = "camera"
+    end
     scene.readyGuardTimer = rememberTimer(setTimer(function(expectedId)
         local active = mission.ballasGangScene
         if not mission.running or mission.stage ~= "tags_ballas" or not active or active.id ~= expectedId then
@@ -956,6 +1157,93 @@ addEventHandler("tagup:ballasGangTrigger", resourceRoot, function()
     end
     if math.abs(x - trigger.x) <= trigger.radiusX and math.abs(y - trigger.y) <= trigger.radiusY then
         beginBallasGangScene()
+    end
+end)
+
+addEvent("tagup:ballasEncounterTaskResult", true)
+addEventHandler("tagup:ballasEncounterTaskResult", resourceRoot, function(encounterId, phase, result, details)
+    local player = client
+    local encounter = mission.ballasEncounter
+    if source ~= resourceRoot or player ~= mission.leader or not isMissionPlayer(player) or not encounter or encounter.id ~= tonumber(encounterId) or
+        type(phase) ~= "string" then
+        return
+    end
+
+    outputDebugString(('[tagging-up-turf] Ballas encounter #%d phase=%s result=%s (%s)'):format(
+                          encounter.id, phase, tostring(result), tostring(details or ""):sub(1, 180)))
+    if result ~= "ready" then
+        cancelBallasEncounter("native_" .. phase .. "_" .. tostring(result))
+        return failMission("La task native Ballas a echoue pendant " .. phase .. ": " .. tostring(result))
+    end
+    encounter[phase .. "Ready"] = true
+    if phase == "follow" and encounter.phase == "following" and isElement(encounter.enemies[2]) and not isPedDead(encounter.enemies[2]) then
+        for _, member in ipairs(mission.party) do
+            if isElement(member) then
+                triggerClientEvent(member, "tagup:ballasEncounterAudioCue", resourceRoot, encounter.id, "whatTheFuck")
+            end
+        end
+        armBallasAttackCondition(encounter)
+    elseif phase == "follow" and encounter.phase == "following" then
+        armBallasAttackCondition(encounter)
+    elseif phase == "attack" and encounter.phase == "attacking" then
+        local secondFlatAlive = isElement(encounter.enemies[2]) and not isPedDead(encounter.enemies[2])
+        for _, member in ipairs(mission.party) do
+            if isElement(member) then
+                triggerClientEvent(member, secondFlatAlive and "tagup:ballasEncounterAudioCue" or "tagup:ballasEncounterSpeechRestore",
+                                   resourceRoot, encounter.id, secondFlatAlive and "getThatFool" or nil)
+            end
+        end
+        if encounter.rooftopPending and mission.ballasGangSceneCompleted and currentGroupComplete() then
+            local rooftopExtra = encounter.rooftopExtra
+            encounter.rooftopPending = false
+            encounter.rooftopExtra = nil
+            advanceAfterTags(rooftopExtra)
+        end
+    end
+end)
+
+addEvent("tagup:ballasEncounterApproach", true)
+addEventHandler("tagup:ballasEncounterApproach", resourceRoot, function(encounterId)
+    local player = client
+    local encounter = mission.ballasEncounter
+    if source ~= resourceRoot or player ~= mission.leader or not isMissionPlayer(player) or not mission.running or
+        mission.stage ~= "tags_ballas" or not encounter or encounter.id ~= tonumber(encounterId) or encounter.phase ~= "awaiting_approach" then
+        return
+    end
+
+    local x, y = getElementPosition(player)
+    local approach = TAGUP.ballasGangScene.approach
+    if math.abs(x - approach.x) > approach.radiusX or math.abs(y - approach.y) > approach.radiusY then
+        local now = getTickCount()
+        if not encounter.lastApproachRejectLogAt or now - encounter.lastApproachRejectLogAt >= 1000 then
+            encounter.lastApproachRejectLogAt = now
+            outputDebugString(('[tagging-up-turf] Ballas encounter #%d rejected SCM 5x5 approach: server=(%.2f, %.2f), delta=(%.2f, %.2f)'):format(
+                                  encounter.id, x, y, x - approach.x, y - approach.y), 2)
+        end
+        return
+    end
+
+    encounter.phase = "following"
+    encounter.followStartedAt = getTickCount()
+    outputDebugString(('[tagging-up-turf] Ballas encounter #%d accepted SCM 5x5 approach from %s'):format(encounter.id,
+                                                                                                        getPlayerName(player)))
+    for _, member in ipairs(mission.party) do
+        if isElement(member) then
+            triggerClientEvent(member, "tagup:ballasEncounterFollow", resourceRoot, encounter.id)
+        end
+    end
+end)
+
+addEvent("tagup:ballasRespectHelpShown", true)
+addEventHandler("tagup:ballasRespectHelpShown", resourceRoot, function()
+    local player = client
+    if source ~= resourceRoot or player ~= mission.leader or not mission.running or mission.stage ~= "tags_ballas" then
+        return
+    end
+    local x, y = getElementPosition(player)
+    if math.abs(x - 2353.30) <= 3 and math.abs(y + 1508.18) <= 3 then
+        mission.ballasTimerResetAt = getTickCount()
+        outputDebugString("[tagging-up-turf] Ballas TIMERA reset by SWE1_G gate")
     end
 end)
 
@@ -1050,6 +1338,13 @@ addCommandHandler("tagup", function(player)
     startMission(player)
 end)
 
+addCommandHandler("tagupballas", function(player)
+    if not player then
+        return
+    end
+    startMission(player, "ballas")
+end)
+
 addCommandHandler("tagupabort", function(player)
     if mission.running and isMissionPlayer(player) then
         failMission("Mission abandonnee.")
@@ -1093,7 +1388,9 @@ addCommandHandler("tagupskip", function(player)
     elseif mission.stage == "tags_idlewood" or mission.stage == "tags_ballas" or mission.stage == "rooftop" then
         if mission.stage == "tags_ballas" then
             mission.ballasGangSceneCompleted = true
-            setBallasActive(false)
+            if mission.ballasEncounter and mission.ballasEncounter.phase == "following" then
+                startBallasAttack("stage_skipped")
+            end
         end
         for _, id in ipairs(activeTagIds()) do
             mission.completedTags[id] = true
@@ -2134,6 +2431,8 @@ addEventHandler("tagup:ballasDriveWanderAccepted", resourceRoot, function(depart
     end
 
     departure.wanderAccepted = true
+    -- SWEET1 resets TIMERA immediately before the WAIT 1000 that follows 05D2.
+    mission.ballasTimerResetAt = getTickCount()
     departure.postStartTimer = rememberTimer(setTimer(function(expectedId)
         local active = mission.ballasDeparture
         if not mission.running or mission.stage ~= "ballas_departure" or not active or active.id ~= expectedId then
@@ -2318,6 +2617,9 @@ addEventHandler("tagup:nativeTagProgress", resourceRoot, function(targetObject, 
         mission.completedTags[tagId] = true
         replaceTagObject(tagId)
         broadcastState({message = getPlayerName(player) .. " a termine un tag."})
+        if tagId == 3 and mission.ballasEncounter and mission.ballasEncounter.phase == "following" and mission.ballasEncounter.followReady then
+            startBallasAttack("alley_tag_complete")
+        end
         if currentGroupComplete() then
             rememberTimer(setTimer(advanceAfterTags, 900, 1))
         end
@@ -2400,8 +2702,6 @@ addEventHandler("onPedWasted", root, function()
     end
     if source == mission.entities.sweet then
         failMission("Sweet est mort.")
-    elseif getElementData(source, "tagup.enemy") then
-        setElementData(source, "tagup.active", false, true)
     end
 end)
 
@@ -2459,5 +2759,5 @@ addEventHandler("onResourceStop", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[tagging-up-turf] Ready. Use /tagup (up to three connected players).")
+    outputDebugString("[tagging-up-turf] Ready. Use /tagup or /tagupballas (up to three connected players).")
 end)

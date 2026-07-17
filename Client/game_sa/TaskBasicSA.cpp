@@ -13,6 +13,66 @@
 #include "TaskBasicSA.h"
 #include "CPedSA.h"
 
+CTaskComplexPartnerChatSA::CTaskComplexPartnerChatSA(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled)
+{
+    CreateTaskInterface(sizeof(CTaskComplexPartnerChatSAInterface));
+    if (!IsValid() || !pPartner)
+        return;
+
+    DWORD       dwFunc = FUNC_CTaskComplexPartnerChat__Constructor;
+    DWORD       dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+    DWORD       dwPartnerInterface = reinterpret_cast<DWORD>(pPartner->GetPedInterface());
+    const char* pCommandName = "COMMAND_TASK_CHAT_WITH_CHAR";
+    const int   iUpdateDirectionCount = bUpdateDirection ? -1 : 4;
+
+    // Construct through the exact 0677 path first. GTA forces the direction
+    // counter to 4 while conversation audio is enabled at 0x6842EB. When
+    // RequestPedConversation later fails, 0x681F6C clears only the conversation
+    // flag. Reproducing that post-failure state is essential for the timed
+    // native fallback; constructing with the flag already false leaves the
+    // counter at the opcode's -1 sentinel and makes the pair terminate early.
+    // clang-format off
+    __asm
+    {
+        push    0
+        push    0
+        push    0
+        push    1
+        push    1
+        push    iUpdateDirectionCount
+        push    03f000000h
+        push    bLeadSpeaker
+        push    dwPartnerInterface
+        push    pCommandName
+        mov     ecx, dwThisInterface
+        call    dwFunc
+    }
+    // clang-format on
+
+    if (!bConversationEnabled) reinterpret_cast<CTaskComplexPartnerChatSAInterface*>(GetInterface())->SetConversationEnabled(false);
+}
+
+CTaskSimpleStandStillSA::CTaskSimpleStandStillSA(int iDuration)
+{
+    CreateTaskInterface(sizeof(CTaskSimpleStandStillSAInterface));
+    if (!IsValid())
+        return;
+
+    DWORD dwFunc = FUNC_CTaskSimpleStandStill__Constructor;
+    DWORD dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+    // clang-format off
+    __asm
+    {
+        push    041000000h
+        push    0
+        push    0
+        push    iDuration
+        mov     ecx, dwThisInterface
+        call    dwFunc
+    }
+    // clang-format on
+}
+
 CTaskSimpleRunNamedAnimSAInterface* CTaskSimpleRunNamedAnimSA::GetAnimationInterface() noexcept
 {
     return reinterpret_cast<CTaskSimpleRunNamedAnimSAInterface*>(this->GetInterface());

@@ -59,3 +59,9 @@ class CTaskSimpleFight : public virtual CTaskSimple
 public:
     virtual ~CTaskSimpleFight() {};
 };
+
+class CTaskComplexKillPedOnFoot : public virtual CTaskComplex
+{
+public:
+    virtual ~CTaskComplexKillPedOnFoot() {};
+};

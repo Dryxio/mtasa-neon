@@ -61,3 +61,9 @@ class CTaskComplexGoToPointAndStandStill : public virtual CTaskComplex
 public:
     virtual ~CTaskComplexGoToPointAndStandStill() {};
 };
+
+class CTaskComplexSeekEntityRadiusAngleOffset : public virtual CTaskComplex
+{
+public:
+    virtual ~CTaskComplexSeekEntityRadiusAngleOffset() {};
+};

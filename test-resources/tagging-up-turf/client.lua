@@ -28,6 +28,8 @@ local state = {
     ballasDeparture = nil,
     ballasWanderPed = nil,
     ballasGangScene = nil,
+    ballasEncounter = nil,
+    ballasEncounterAudioPreload = nil,
     lastBallasGangTriggerReport = 0,
     vehiclePlayback = nil,
     vehicleRecordingPreloaded = false,
@@ -36,6 +38,7 @@ local state = {
     nativeTagHelpPhase = 0,
     nativeTagHelpStarted = 0,
     nativeHelpFlags = {},
+    checkpointGroundProbeToken = nil,
     traceStarted = false,
     traceDemoTagActive = false,
     traceCurrentStep = nil,
@@ -44,6 +47,7 @@ local state = {
 local TAG_PAINT_ALPHA_DATA = "tagup.paintAlpha"
 local getActiveTags
 local nearestActiveTag
+local startBallasEncounterAudioPreload
 
 local function killMissionTextTimers()
     for _, timer in ipairs(state.missionTextTimers) do
@@ -127,6 +131,7 @@ local function beginMissionStageText(stage)
     elseif stage == "tags_ballas" then
         scheduleMissionText(stage, 2500, function()
             printMissionText("SWE1_M", 6000)
+            startBallasEncounterAudioPreload()
         end)
     elseif stage == "rooftop" then
         printMissionText("SWE1_Z", 5000)
@@ -171,6 +176,9 @@ local function updateNativeMissionHelp()
         local x, y = getElementPosition(localPlayer)
         if not state.nativeHelpFlags.respect and math.abs(x - 2353.30) <= 3 and math.abs(y + 1508.18) <= 3 then
             state.nativeHelpFlags.respect = printMissionHelp("SWE1_G")
+            if state.nativeHelpFlags.respect and localPlayer == state.leader then
+                triggerServerEvent("tagup:ballasRespectHelpShown", resourceRoot)
+            end
         end
     elseif state.stage == "rooftop" then
         local x, y, z = getElementPosition(localPlayer)
@@ -193,6 +201,36 @@ local function applyMissionActor(ped)
     end
     return setPedMissionActor(ped, getElementData(ped, TAGUP.missionActorData) == true)
 end
+
+addEvent("tagup:checkpointGroundProbe", true)
+addEventHandler("tagup:checkpointGroundProbe", resourceRoot, function(token, x, y, expectedGroundZ)
+    if source ~= resourceRoot or type(token) ~= "number" or type(x) ~= "number" or type(y) ~= "number" or type(expectedGroundZ) ~= "number" then
+        return
+    end
+
+    state.checkpointGroundProbeToken = token
+    local startedAt = getTickCount()
+    local function probeGround()
+        if state.checkpointGroundProbeToken ~= token then
+            return
+        end
+
+        local groundZ = getGroundPosition(x, y, expectedGroundZ + 10.0)
+        if type(groundZ) == "number" and math.abs(groundZ - expectedGroundZ) <= 2.0 then
+            state.checkpointGroundProbeToken = nil
+            triggerServerEvent("tagup:checkpointGroundReady", resourceRoot, token, groundZ)
+            return
+        end
+
+        if getTickCount() - startedAt >= 10000 then
+            state.checkpointGroundProbeToken = nil
+            triggerServerEvent("tagup:checkpointGroundReady", resourceRoot, token, false)
+            return
+        end
+        setTimer(probeGround, 100, 1)
+    end
+    setTimer(probeGround, 100, 1)
+end)
 
 -- This ordered list is a presentation trace of the prototype's real execution.
 -- The labels deliberately distinguish verified GTA primitives from temporary Lua
@@ -224,7 +262,7 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "ballas_leave", title = "05CD · CJ LEAVES CAR", detail = "NATIVE VERIFIED · local player vehicle lifecycle"},
     {id = "ballas_wander", title = "05D2 · CAR DRIVE WANDER", detail = "NATIVE VERIFIED · Sweet passenger / speed 20 / style 2"},
     {id = "ballas_wait", title = "WAIT 1000", detail = "SCM FLOW · release control after native start"},
-    {id = "spawn_ballas", title = "CREATE BALLAS GROUP", detail = "LUA SUBSTITUTE · temporary ped AI"},
+    {id = "spawn_ballas", title = "CREATE BALLAS GROUP", detail = "SCM ADAPTER · synchronized peds with native task AI"},
     {id = "ballas_gang_camera", title = "SCRIPT CAMERA · TWO FLATS", detail = "NATIVE VERIFIED · fixed shot / WAIT 500 + skippable 6500"},
     {id = "ballas_tags", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · Ballas 0%"},
     {id = "rooftop_tag", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · rooftop 0%"},
@@ -2102,6 +2140,363 @@ addEventHandler("tagup:ballasDepartureCancel", resourceRoot, function(departureI
     end
 end)
 
+local function reportBallasEncounterTask(encounter, phase, result, details)
+    if not encounter or encounter[phase .. "Reported"] then
+        return
+    end
+    encounter[phase .. "Reported"] = true
+    triggerServerEvent("tagup:ballasEncounterTaskResult", resourceRoot, encounter.id, phase, result, details)
+end
+
+local function releaseBallasEncounterAudio(encounter)
+    if not encounter or not encounter.audioHandles then
+        return
+    end
+    if type(releaseMissionAudio) == "function" then
+        for _, handle in pairs(encounter.audioHandles) do
+            pcall(releaseMissionAudio, handle)
+        end
+    end
+    encounter.audioHandles = {}
+end
+
+local function clearBallasEncounterAudioPreload()
+    if state.ballasEncounterAudioPreload then
+        releaseBallasEncounterAudio(state.ballasEncounterAudioPreload)
+        state.ballasEncounterAudioPreload = nil
+    end
+end
+
+startBallasEncounterAudioPreload = function()
+    local target = state.ballasEncounter
+    if target and next(target.audioHandles or {}) then
+        return
+    end
+    if not target then
+        if state.ballasEncounterAudioPreload then
+            return
+        end
+        target = {audioHandles = {}}
+        state.ballasEncounterAudioPreload = target
+    end
+    if type(requestMissionAudio) ~= "function" then
+        return
+    end
+    for _, request in ipairs({
+        {cue = "whatTheFuck", eventId = TAGUP.ballasGangScene.audio.whatTheFuck},
+        {cue = "getThatFool", eventId = TAGUP.ballasGangScene.audio.getThatFool},
+    }) do
+        local requested, handle = pcall(requestMissionAudio, request.eventId)
+        if requested and handle then
+            target.audioHandles[request.cue] = handle
+            outputDebugString(('[tagging-up-turf] Ballas optional audio requested %s event=%d handle=%s'):format(
+                                  request.cue, request.eventId, tostring(handle)))
+        else
+            outputDebugString(('[tagging-up-turf] Ballas optional audio refused: %s'):format(request.cue), 2)
+        end
+    end
+end
+
+local function restoreBallasEncounterSpeech(encounter)
+    if not encounter or not encounter.speechMuted or localPlayer ~= state.leader then
+        return
+    end
+    encounter.speechMuted = false
+    for _, ped in ipairs(encounter.enemies) do
+        if isElement(ped) and not isPedDead(ped) and isElementSyncer(ped) and type(setPedScriptedSpeechMuted) == "function" then
+            setPedScriptedSpeechMuted(ped, false)
+        end
+    end
+end
+
+local function clearBallasEncounter(reason, stopNative)
+    local encounter = state.ballasEncounter
+    if not encounter then
+        return
+    end
+    if isTimer(encounter.chatRetryTimer) then
+        killTimer(encounter.chatRetryTimer)
+    end
+    if isTimer(encounter.chatObservationTimer) then
+        killTimer(encounter.chatObservationTimer)
+    end
+    if isTimer(encounter.audioFinishTimer) then
+        killTimer(encounter.audioFinishTimer)
+    end
+    restoreBallasEncounterSpeech(encounter)
+    if stopNative and localPlayer == state.leader and type(killPedTask) == "function" then
+        for _, ped in ipairs(encounter.enemies) do
+            if isElement(ped) and isElementSyncer(ped) then
+                killPedTask(ped, "primary", 3, false)
+            end
+        end
+    end
+    releaseBallasEncounterAudio(encounter)
+    outputDebugString(('[tagging-up-turf] Ballas encounter #%d closed: %s'):format(encounter.id, tostring(reason)))
+    state.ballasEncounter = nil
+end
+
+local function playBallasEncounterAudio(encounter, cue, textKey)
+    local handle = encounter and encounter.audioHandles and encounter.audioHandles[cue]
+    if not handle or type(isMissionAudioLoaded) ~= "function" or type(playMissionAudio) ~= "function" then
+        return false
+    end
+    local ok, loaded = pcall(isMissionAudioLoaded, handle)
+    if not ok or not loaded then
+        return false
+    end
+    ok, loaded = pcall(playMissionAudio, handle)
+    if not ok or loaded ~= true then
+        return false
+    end
+    printMissionText(textKey, 2000)
+    return true
+end
+
+local function traceBallasPartnerState(encounter, phase)
+    if not encounter or not encounter.enemies then
+        return
+    end
+
+    local parts = {}
+    for index, ped in ipairs(encounter.enemies) do
+        if not isElement(ped) then
+            parts[index] = ("Flat%d=missing"):format(index)
+        else
+            local x, y, z = getElementPosition(ped)
+            local _, _, rotation = getElementRotation(ped)
+            local chatActive = type(isPedDoingTask) == "function" and isPedDoingTask(ped, "TASK_COMPLEX_PARTNER_CHAT") or false
+            local primaryTask = type(getPedTask) == "function" and getPedTask(ped, "primary", 3) or nil
+            local hierarchy = type(getPedTask) == "function" and {getPedTask(ped, "primary", 3)} or {}
+            if hierarchy[1] == false then
+                hierarchy = {}
+            end
+            parts[index] = ("Flat%d model=%d pos=(%.3f,%.3f,%.3f) rot=%.1f chat=%s primary=%s hierarchy=%s"):format(
+                               index, getElementModel(ped), x, y, z, rotation, tostring(chatActive), tostring(primaryTask),
+                               #hierarchy > 0 and table.concat(hierarchy, ">") or "nil")
+        end
+    end
+
+    local separation = -1
+    if isElement(encounter.enemies[1]) and isElement(encounter.enemies[2]) then
+        local x1, y1, z1 = getElementPosition(encounter.enemies[1])
+        local x2, y2, z2 = getElementPosition(encounter.enemies[2])
+        separation = getDistanceBetweenPoints3D(x1, y1, z1, x2, y2, z2)
+    end
+    outputDebugString(("[tagging-up-turf] Ballas PartnerChat #%d %s separation=%.3f m; %s; %s"):format(
+                          encounter.id, tostring(phase), separation, parts[1] or "Flat1=?", parts[2] or "Flat2=?"))
+end
+
+local function beginBallasEncounterChat(encounter)
+    if state.ballasEncounter ~= encounter or localPlayer ~= state.leader or encounter.chatReported then
+        return
+    end
+    if getTickCount() - encounter.requestedAt > TAGUP.ballasGangScene.readyTimeout then
+        return reportBallasEncounterTask(encounter, "chat", "timeout", "les deux Flats ne sont pas devenus syncer-owned et streames")
+    end
+
+    for _, ped in ipairs(encounter.enemies) do
+        if not isElement(ped) or isPedDead(ped) then
+            return reportBallasEncounterTask(encounter, "chat", "actor_unavailable", "un Flat est absent avant 0677")
+        end
+        if not isElementStreamedIn(ped) or not isElementSyncer(ped) then
+            if not isTimer(encounter.chatRetryTimer) then
+                encounter.chatRetryTimer = setTimer(function()
+                    encounter.chatRetryTimer = nil
+                    beginBallasEncounterChat(encounter)
+                end, 100, 1)
+            end
+            return
+        end
+        applyMissionActor(ped)
+    end
+
+    -- The installed speech containers have silent samples. Select GTA's own
+    -- timed PartnerChat fallback explicitly so actor positioning and chat idle
+    -- behavior remain native without depending on an audible conversation.
+    if type(setPedChatWith) ~= "function" or not setPedChatWith(encounter.enemies[2], encounter.enemies[1], false, true, false) or
+        not setPedChatWith(encounter.enemies[1], encounter.enemies[2], true, true, false) then
+        return reportBallasEncounterTask(encounter, "chat", "refused", "TASK_COMPLEX_PARTNER_CHAT refusee")
+    end
+    traceBallasPartnerState(encounter, "assigned")
+    for _, delay in ipairs({100, 500, 1500, 3000}) do
+        local expected = encounter
+        local elapsed = delay
+        setTimer(function()
+            if state.ballasEncounter == expected then
+                traceBallasPartnerState(expected, ("after_%d_ms"):format(elapsed))
+            end
+        end, elapsed, 1)
+    end
+
+    -- The native scripted-task dispatcher queues a CEventScriptCommand. Its
+    -- return value confirms ownership transfer, not that GTA has processed the
+    -- event and installed both paired tasks. Requiring ten consecutive native
+    -- observations also rejects the former direct-assignment failure, where one
+    -- PartnerChat disappeared before the camera started.
+    encounter.chatActiveSamples = 0
+    encounter.chatObservationTimer = setTimer(function()
+        if state.ballasEncounter ~= encounter or encounter.chatReported then
+            if isTimer(encounter.chatObservationTimer) then
+                killTimer(encounter.chatObservationTimer)
+            end
+            encounter.chatObservationTimer = nil
+            return
+        end
+
+        local bothActive = true
+        for _, ped in ipairs(encounter.enemies) do
+            bothActive = bothActive and isElement(ped) and not isPedDead(ped) and isElementStreamedIn(ped) and
+                             isElementSyncer(ped) and type(isPedDoingTask) == "function" and
+                             isPedDoingTask(ped, "TASK_COMPLEX_PARTNER_CHAT")
+        end
+        encounter.chatActiveSamples = bothActive and encounter.chatActiveSamples + 1 or 0
+        if encounter.chatActiveSamples >= 10 then
+            killTimer(encounter.chatObservationTimer)
+            encounter.chatObservationTimer = nil
+            traceBallasPartnerState(encounter, "active_barrier")
+            return reportBallasEncounterTask(encounter, "chat", "ready",
+                                             "deux PartnerChat silencieuses natives actives pendant dix observations")
+        end
+
+        if getTickCount() - encounter.requestedAt >= TAGUP.ballasGangScene.readyTimeout then
+            killTimer(encounter.chatObservationTimer)
+            encounter.chatObservationTimer = nil
+            traceBallasPartnerState(encounter, "activation_timeout")
+            reportBallasEncounterTask(encounter, "chat", "timeout", "les deux PartnerChat ne sont pas restees actives")
+        end
+    end, 50, 0)
+end
+
+addEvent("tagup:ballasEncounterPrepare", true)
+addEventHandler("tagup:ballasEncounterPrepare", resourceRoot, function(encounterId, enemies)
+    if source ~= resourceRoot or not state.active or state.stage ~= "tags_ballas" or type(encounterId) ~= "number" or type(enemies) ~= "table" or
+        #enemies ~= 2 then
+        return
+    end
+    if state.ballasEncounter then
+        if state.ballasEncounter.id >= encounterId then
+            return
+        end
+        clearBallasEncounter("replaced_by_newer_encounter", true)
+    end
+
+    local preload = state.ballasEncounterAudioPreload
+    state.ballasEncounterAudioPreload = nil
+    local encounter = {
+        id = encounterId,
+        enemies = enemies,
+        phase = "chat",
+        requestedAt = getTickCount(),
+        audioHandles = preload and preload.audioHandles or {},
+    }
+    state.ballasEncounter = encounter
+    beginBallasEncounterChat(encounter)
+end)
+
+addEvent("tagup:ballasEncounterApproachEnabled", true)
+addEventHandler("tagup:ballasEncounterApproachEnabled", resourceRoot, function(encounterId)
+    local encounter = state.ballasEncounter
+    if source ~= resourceRoot or not encounter or encounter.id ~= encounterId then
+        return
+    end
+    encounter.phase = "awaiting_approach"
+    encounter.approachLastReportedAt = nil
+    encounter.approachReportCount = 0
+    printMissionHelp("SWE1_I", true)
+    traceCurrent("ballas_tags")
+end)
+
+addEvent("tagup:ballasEncounterFollow", true)
+addEventHandler("tagup:ballasEncounterFollow", resourceRoot, function(encounterId)
+    local encounter = state.ballasEncounter
+    if source ~= resourceRoot or not encounter or encounter.id ~= encounterId then
+        return
+    end
+    encounter.phase = "following"
+    outputDebugString(('[tagging-up-turf] Ballas encounter #%d approach ACK after %d report(s)'):format(
+                          encounter.id, encounter.approachReportCount or 0))
+    if localPlayer ~= state.leader then
+        return
+    end
+
+    local profile = TAGUP.ballasGangScene.follow
+    encounter.speechMuted = true
+    for index, ped in ipairs(encounter.enemies) do
+        if isElement(ped) and not isPedDead(ped) then
+            if not isElementStreamedIn(ped) or not isElementSyncer(ped) or type(setPedScriptedSpeechMuted) ~= "function" or
+                type(setPedStandStill) ~= "function" or type(setPedGoToOffset) ~= "function" or not setPedScriptedSpeechMuted(ped, true) or
+                not setPedStandStill(ped, 0) or
+                not setPedGoToOffset(ped, localPlayer, profile.timeout, profile.radius, profile.angles[index], true) then
+                return reportBallasEncounterTask(encounter, "follow", "refused", "05BA ou sequence 06A8 refusee pour Flat " .. index)
+            end
+        end
+    end
+    reportBallasEncounterTask(encounter, "follow", "ready", "speech mutee, StandStill puis UseSequence 06A8 repetee")
+end)
+
+addEvent("tagup:ballasEncounterAttack", true)
+addEventHandler("tagup:ballasEncounterAttack", resourceRoot, function(encounterId, reason)
+    local encounter = state.ballasEncounter
+    if source ~= resourceRoot or not encounter or encounter.id ~= encounterId then
+        return
+    end
+    encounter.phase = "attacking"
+    if localPlayer == state.leader then
+        for index, ped in ipairs(encounter.enemies) do
+            if isElement(ped) and not isPedDead(ped) and
+                (not isElementStreamedIn(ped) or not isElementSyncer(ped) or type(setPedKillOnFoot) ~= "function" or
+                 not setPedKillOnFoot(ped, localPlayer)) then
+                return reportBallasEncounterTask(encounter, "attack", "refused", "TASK_COMPLEX_KILL_PED_ON_FOOT refusee pour Flat " .. index)
+            end
+        end
+        reportBallasEncounterTask(encounter, "attack", "ready", "deux 05E2 ciblent le leader; trigger=" .. tostring(reason))
+    end
+end)
+
+addEvent("tagup:ballasEncounterAudioCue", true)
+addEventHandler("tagup:ballasEncounterAudioCue", resourceRoot, function(encounterId, cue)
+    local encounter = state.ballasEncounter
+    if source ~= resourceRoot or not encounter or encounter.id ~= encounterId or (cue ~= "whatTheFuck" and cue ~= "getThatFool") then
+        return
+    end
+    local audioStarted = playBallasEncounterAudio(encounter, cue, cue == "whatTheFuck" and "SWE1_BA" or "SWE1_BE")
+
+    if cue == "whatTheFuck" then
+        return
+    end
+    if not audioStarted or type(isMissionAudioFinished) ~= "function" then
+        return restoreBallasEncounterSpeech(encounter)
+    end
+    local handle = encounter.audioHandles[cue]
+    encounter.audioFinishTimer = setTimer(function()
+        if state.ballasEncounter ~= encounter then
+            return
+        end
+        local ok, finished = pcall(isMissionAudioFinished, handle)
+        if not ok or finished then
+            killTimer(encounter.audioFinishTimer)
+            encounter.audioFinishTimer = nil
+            restoreBallasEncounterSpeech(encounter)
+        end
+    end, 50, 0)
+end)
+
+addEvent("tagup:ballasEncounterSpeechRestore", true)
+addEventHandler("tagup:ballasEncounterSpeechRestore", resourceRoot, function(encounterId)
+    local encounter = state.ballasEncounter
+    if source == resourceRoot and encounter and encounter.id == encounterId then
+        restoreBallasEncounterSpeech(encounter)
+    end
+end)
+
+addEvent("tagup:ballasEncounterCancel", true)
+addEventHandler("tagup:ballasEncounterCancel", resourceRoot, function(encounterId, reason)
+    if state.ballasEncounter and state.ballasEncounter.id == encounterId then
+        clearBallasEncounter(reason, true)
+    end
+end)
+
 local function hasBallasGangSceneLease(scene)
     return scene and scene.cameraToken and type(isScriptCameraLeaseActive) == "function" and
                isScriptCameraLeaseActive(scene.cameraToken)
@@ -2188,6 +2583,7 @@ end
 
 local function prepareBallasGangScene(scene)
     local camera = TAGUP.ballasGangScene.camera
+    traceBallasPartnerState(state.ballasEncounter, "camera_prepare")
     local ok, result = callBallasCameraApi("acquireScriptCamera", true)
     if not ok then
         return reportBallasGangSceneReady(scene, "acquire_refused", result)
@@ -2206,6 +2602,19 @@ local function prepareBallasGangScene(scene)
     if not ok then
         clearBallasGangScene("setup_refused")
         return reportBallasGangSceneReady(scene, "setup_refused", result)
+    end
+
+    for _, delay in ipairs({50, 250}) do
+        local expected = scene
+        local elapsed = delay
+        setTimer(function()
+            if state.ballasGangScene ~= expected then
+                return
+            end
+            local px, py, pz, tx, ty, tz, roll, fov = getCameraMatrix()
+            outputDebugString(("[tagging-up-turf] Ballas camera #%d after_%d_ms pos=(%.4f,%.4f,%.4f) target=(%.4f,%.4f,%.4f) roll=%.2f fov=%.2f"):format(
+                                  expected.id, elapsed, px, py, pz, tx, ty, tz, roll, fov))
+        end, elapsed, 1)
     end
 
     -- Monitor from the moment native setup succeeds, including the actor
@@ -2288,12 +2697,6 @@ addEventHandler("tagup:ballasGangSceneRelease", resourceRoot, function(sceneId, 
     end
     local released = clearBallasGangScene(reason)
     triggerServerEvent("tagup:ballasGangSceneReleased", resourceRoot, sceneId, released and "released" or "release_failed")
-    if released then
-        traceCurrent("ballas_tags")
-        scheduleMissionText("tags_ballas", 2000, function()
-            printMissionHelp("SWE1_I")
-        end)
-    end
 end)
 
 addEvent("tagup:ballasGangSceneCancel", true)
@@ -2545,6 +2948,9 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
         if previousStage == "tags_ballas" and state.stage ~= "tags_ballas" and state.ballasGangScene then
             clearBallasGangScene("stage_changed_to_" .. tostring(state.stage))
         end
+        if previousStage == "tags_ballas" and state.stage ~= "tags_ballas" and not state.ballasEncounter then
+            clearBallasEncounterAudioPreload()
+        end
         state.stageStarted = getTickCount()
         state.traceDemoTagActive = false
         local traceStep = STAGE_TRACE_STEP[state.stage]
@@ -2599,6 +3005,8 @@ addEventHandler("tagup:stop", resourceRoot, function()
     clearSweetReturnEnter(true)
     clearBallasDeparture(true)
     clearBallasGangScene("mission_stopped")
+    clearBallasEncounter("mission_stopped", true)
+    clearBallasEncounterAudioPreload()
     clearVehiclePlayback(true)
     killMissionTextTimers()
     stopIntroCamera()
@@ -2619,6 +3027,8 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.traceCurrentStep = nil
     state.demoScene = nil
     state.demoAudioPreload = nil
+    state.ballasEncounter = nil
+    state.ballasEncounterAudioPreload = nil
     state.vehicleRecordingPreloaded = false
     if state.missionTextReady then
         callMissionTextApi("releaseMissionText")
@@ -2716,6 +3126,31 @@ local function reportBallasGangTrigger()
     end
 end
 
+local function reportBallasApproachTrigger()
+    local encounter = state.ballasEncounter
+    if not state.active or state.stage ~= "tags_ballas" or localPlayer ~= state.leader or not encounter or
+        encounter.phase ~= "awaiting_approach" then
+        return
+    end
+
+    local now = getTickCount()
+    local approach = TAGUP.ballasGangScene.approach
+    if encounter.approachLastReportedAt and now - encounter.approachLastReportedAt < approach.retryInterval then
+        return
+    end
+
+    local x, y = getElementPosition(localPlayer)
+    if math.abs(x - approach.x) <= approach.radiusX and math.abs(y - approach.y) <= approach.radiusY then
+        encounter.approachLastReportedAt = now
+        encounter.approachReportCount = (encounter.approachReportCount or 0) + 1
+        if encounter.approachReportCount == 1 or encounter.approachReportCount % 4 == 1 then
+            outputDebugString(('[tagging-up-turf] Ballas encounter #%d reporting SCM 5x5 approach attempt=%d client=(%.2f, %.2f)'):format(
+                                  encounter.id, encounter.approachReportCount, x, y))
+        end
+        triggerServerEvent("tagup:ballasEncounterApproach", resourceRoot, encounter.id)
+    end
+end
+
 
 addEventHandler("onClientKey", root, function(button, pressed)
     if pressed and (button == "space" or button == "enter") and state.demoScene and state.demoScene.skippable and state.demoScene.leaderCanSkip and
@@ -2740,6 +3175,7 @@ addEventHandler("onClientPreRender", root, function()
     updateNativeMissionHelp()
     reportVehicleProgress()
     reportBallasGangTrigger()
+    reportBallasApproachTrigger()
 end)
 
 addEventHandler("onClientPlayerDamage", localPlayer, function(attacker)
@@ -2757,55 +3193,6 @@ addEventHandler("onClientPlayerDamage", localPlayer, function(attacker)
         end
     end
 end)
-
-local function nearestLivingPlayer(ped)
-    local px, py, pz = getElementPosition(ped)
-    local nearest, nearestDistance
-    for _, player in ipairs(getElementsByType("player", root, true)) do
-        if getElementDimension(player) == TAGUP.dimension and not isPedDead(player) then
-            local x, y, z = getElementPosition(player)
-            local distance = tagupDistance3D(px, py, pz, x, y, z)
-            if not nearestDistance or distance < nearestDistance then
-                nearest, nearestDistance = player, distance
-            end
-        end
-    end
-    return nearest, nearestDistance
-end
-
-setTimer(function()
-    if not state.active then
-        return
-    end
-    for _, ped in ipairs(getElementsByType("ped", root, true)) do
-        -- MTA assigns one client as each ped's syncer. Running AI only there prevents
-        -- competing clients from issuing different movement and firing controls.
-        if getElementData(ped, "tagup.enemy") and isElementSyncer(ped) and not isPedDead(ped) then
-            if getElementData(ped, "tagup.active") and state.stage == "tags_ballas" then
-                local target, distance = nearestLivingPlayer(ped)
-                if target then
-                    local x, y, z = getElementPosition(target)
-                    local px, py = getElementPosition(ped)
-                    setElementRotation(ped, 0, 0, -math.deg(math.atan2(x - px, y - py)))
-                    setPedAimTarget(ped, x, y, z + 0.5)
-                    setPedControlState(ped, "aim_weapon", true)
-                    setPedControlState(ped, "fire", distance < 18)
-                    setPedControlState(ped, "forwards", distance > 7)
-                else
-                    setPedControlState(ped, "aim_weapon", false)
-                    setPedControlState(ped, "fire", false)
-                    setPedControlState(ped, "forwards", false)
-                end
-            else
-                -- Ped control states latch across pulses. Clear them explicitly
-                -- while passive so a previous syncer cannot leave fire enabled.
-                setPedControlState(ped, "aim_weapon", false)
-                setPedControlState(ped, "fire", false)
-                setPedControlState(ped, "forwards", false)
-            end
-        end
-    end
-end, 180, 0)
 
 addEventHandler("onClientElementStreamOut", root, function()
     if state.arrivalGate and source == state.vehicle then
@@ -2842,14 +3229,10 @@ addEventHandler("onClientElementStreamOut", root, function()
         end
         return
     end
-    if getElementType(source) == "ped" and getElementData(source, "tagup.enemy") and isElementSyncer(source) then
-        setPedControlState(source, "aim_weapon", false)
-        setPedControlState(source, "fire", false)
-        setPedControlState(source, "forwards", false)
-    end
 end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
+    state.checkpointGroundProbeToken = nil
     releaseArrivalGate("resource_stopped")
     clearSweetDemoAudioPreload("resource_stopped")
     clearSweetDemoScene("resource_stopped", false)
@@ -2864,6 +3247,8 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     clearSweetReturnEnter(true)
     clearBallasDeparture(true)
     clearBallasGangScene("resource_stopped")
+    clearBallasEncounter("resource_stopped", true)
+    clearBallasEncounterAudioPreload()
     clearVehiclePlayback(true)
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
         setPedMissionActor(state.sweet, false)

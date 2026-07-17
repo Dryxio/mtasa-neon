@@ -24,6 +24,25 @@
 #define MIN_CLIENT_REQ_REMOVEPEDFROMVEHICLE_CLIENTSIDE "1.3.0-9.04482"
 #define MIN_CLIENT_REQ_WARPPEDINTOVEHICLE_CLIENTSIDE   "1.3.0-9.04482"
 
+namespace
+{
+    bool DispatchPedScriptCommandTask(CPed* ped, CTask* task)
+    {
+        if (!task)
+            return false;
+
+        // GTA consumes the factory-created task once native scripted dispatch
+        // begins. Validation failures leave ownership here and require explicit
+        // cleanup; success only means queued, not active.
+        if (!g_pGame->GetTasks()->AddPedScriptCommandTask(ped, task))
+        {
+            task->Destroy();
+            return false;
+        }
+        return true;
+    }
+}  // namespace
+
 void CLuaPedDefs::LoadFunctions()
 {
     constexpr static const std::pair<const char*, lua_CFunction> functions[]{
@@ -69,6 +88,12 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedWeaponShootingRate", ArgumentParser<SetPedWeaponShootingRate>},
         {"setPedWeaponAccuracy", ArgumentParser<SetPedWeaponAccuracy>},
         {"setPedGoTo", ArgumentParser<SetPedGoTo>},
+        {"setPedChatWith", ArgumentParser<SetPedChatWith>},
+        {"setPedStandStill", ArgumentParser<SetPedStandStill>},
+        {"setPedGoToOffset", ArgumentParser<SetPedGoToOffset>},
+        {"setPedKillOnFoot", ArgumentParser<SetPedKillOnFoot>},
+        {"setPedWander", ArgumentParser<SetPedWander>},
+        {"setPedScriptedSpeechMuted", ArgumentParser<SetPedScriptedSpeechMuted>},
         {"setPedShootAt", ArgumentParser<SetPedShootAt>},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
@@ -230,6 +255,12 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setWeaponShootingRate", "setPedWeaponShootingRate");
     lua_classfunction(luaVM, "setWeaponAccuracy", "setPedWeaponAccuracy");
     lua_classfunction(luaVM, "setGoTo", "setPedGoTo");
+    lua_classfunction(luaVM, "setChatWith", "setPedChatWith");
+    lua_classfunction(luaVM, "setStandStill", "setPedStandStill");
+    lua_classfunction(luaVM, "setGoToOffset", "setPedGoToOffset");
+    lua_classfunction(luaVM, "setKillOnFoot", "setPedKillOnFoot");
+    lua_classfunction(luaVM, "setWander", "setPedWander");
+    lua_classfunction(luaVM, "setScriptedSpeechMuted", "setPedScriptedSpeechMuted");
     lua_classfunction(luaVM, "setShootAt", "setPedShootAt");
     lua_classfunction(luaVM, "setDriveWander", "setPedDriveWander");
     lua_classfunction(luaVM, "setMissionActor", "setPedMissionActor");
@@ -2672,13 +2703,101 @@ bool CLuaPedDefs::SetPedGoTo(CClientPed* ped, CVector target, std::optional<std:
         return false;
 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexGoToPointAndStandStill(moveState, target, taskRadius, taskSlowdownRadius, taskTimeout);
-    if (!task)
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedChatWith(CClientPed* ped, CClientPed* partner, bool leadSpeaker, std::optional<bool> updateDirection,
+                                 std::optional<bool> conversationEnabled)
+{
+    if (!ped || !partner || ped == partner || !ped->IsStreamedIn() || !partner->IsStreamedIn() || ped->IsDead() || partner->IsDead() || !ped->GetGamePlayer() ||
+        !partner->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+    {
+        return false;
+    }
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexPartnerChatEx(partner->GetGamePlayer(), leadSpeaker, updateDirection.value_or(true),
+                                                                     conversationEnabled.value_or(true));
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedStandStill(CClientPed* ped, std::optional<int> duration)
+{
+    const int taskDuration = duration.value_or(0);
+    if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) ||
+        taskDuration < 0)
+    {
+        return false;
+    }
+
+    auto* task = g_pGame->GetTasks()->CreateTaskSimpleStandStill(taskDuration);
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedGoToOffset(CClientPed* ped, CClientPed* target, std::optional<int> timeout, std::optional<float> radius, std::optional<float> angle,
+                                   std::optional<bool> repeatTask)
+{
+    const int   taskTimeout = timeout.value_or(-1);
+    const float taskRadius = radius.value_or(0.5f);
+    const float taskAngle = angle.value_or(0.0f);
+    if (!ped || !target || ped == target || !ped->IsStreamedIn() || !target->IsStreamedIn() || ped->IsDead() || target->IsDead() || !ped->GetGamePlayer() ||
+        !target->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || taskTimeout < -1 || !std::isfinite(taskRadius) ||
+        taskRadius <= 0.0f || !std::isfinite(taskAngle))
+    {
+        return false;
+    }
+
+    auto* task =
+        g_pGame->GetTasks()->CreateTaskComplexGoToEntityOffset(target->GetGamePlayer(), taskTimeout, taskRadius, taskAngle, repeatTask.value_or(false));
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedKillOnFoot(CClientPed* ped, CClientPed* target)
+{
+    if (!ped || !target || ped == target || !ped->IsStreamedIn() || !target->IsStreamedIn() || ped->IsDead() || target->IsDead() || !ped->GetGamePlayer() ||
+        !target->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+    {
+        return false;
+    }
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexKillPedOnFoot(target->GetGamePlayer());
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedWander(CClientPed* ped, std::optional<std::string> movement, std::optional<int> direction, std::optional<bool> wanderSensibly)
+{
+    if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+    {
+        return false;
+    }
+
+    int               moveState;
+    const std::string taskMovement = movement.value_or("walk");
+    if (stricmp(taskMovement.c_str(), "walk") == 0)
+        moveState = PedMoveState::PEDMOVE_WALK;
+    else if (stricmp(taskMovement.c_str(), "run") == 0)
+        moveState = PedMoveState::PEDMOVE_RUN;
+    else
         return false;
 
-    // Only the client that owns this ped may replace its primary GTA task. Forcing
-    // replacement makes repeated script commands deterministic instead of waiting
-    // for an unrelated ambient task to become abortable first.
-    task->SetAsPedTask(ped->GetGamePlayer(), TASK_PRIORITY_PRIMARY, true);
+    const int taskDirection = direction.value_or(-1);
+    if (taskDirection < -1 || taskDirection > 7)
+        return false;
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexWanderStandard(moveState, static_cast<char>(taskDirection), wanderSensibly.value_or(true));
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedScriptedSpeechMuted(CClientPed* ped, bool muted)
+{
+    if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+    {
+        return false;
+    }
+
+    if (muted)
+        ped->GetGamePlayer()->DisableSpeechForScript(false);
+    else
+        ped->GetGamePlayer()->EnableSpeechForScript();
     return true;
 }
 
@@ -2699,13 +2818,7 @@ bool CLuaPedDefs::SetPedShootAt(CClientPed* ped, CVector target, std::optional<i
 
     auto* task = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
                                                                  static_cast<short>(taskBurstLength), taskDuration);
-    if (!task)
-        return false;
-
-    // Gun control replaces the primary task so a syncer cannot leave an old
-    // movement or ambient task competing with the script-requested firing burst.
-    task->SetAsPedTask(ped->GetGamePlayer(), TASK_PRIORITY_PRIMARY, true);
-    return true;
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 
 bool CLuaPedDefs::SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle)
@@ -2757,13 +2870,7 @@ bool CLuaPedDefs::SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, fl
         return false;
 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexCarDriveWander(vehicle->GetGameVehicle(), speed, style);
-    if (!task)
-        return false;
-
-    // This indefinite task owns the car's autopilot state until cancellation;
-    // primary replacement guarantees that its destructor restores that state.
-    task->SetAsPedTask(ped->GetGamePlayer(), TASK_PRIORITY_PRIMARY, true);
-    return true;
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 
 bool CLuaPedDefs::IsPedMissionActor(CClientPed* ped)

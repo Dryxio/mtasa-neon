@@ -20,6 +20,8 @@ class CVehicleSAInterface;
 class CObjectSAInterface;
 
 #define FUNC_CTaskComplexUseMobilePhone__Constructor 0x6348A0
+#define FUNC_CTaskComplexPartnerChat__Constructor    0x684290
+#define FUNC_CTaskSimpleStandStill__Constructor      0x62F310
 #define FUNC_CTaskSimpleRunAnim__Constructor         0x61A900
 #define FUNC_CTaskSimpleRunNamedAnim__Constructor    0x61A990
 #define FUNC_CTaskComplexDie__Constructor            0x630040
@@ -49,6 +51,43 @@ class CTaskComplexUseMobilePhoneSA : public virtual CTaskComplexSA, public virtu
 public:
     CTaskComplexUseMobilePhoneSA() {};
     CTaskComplexUseMobilePhoneSA(const int iDuration);  // Default is -1
+};
+
+// The verified GTA layouts remain opaque because Neon only constructs and
+// owns these tasks. GTA controls their conversation and idle state machines.
+class CTaskComplexPartnerChatSAInterface : public CTaskComplexSAInterface
+{
+public:
+    void SetConversationEnabled(bool bEnabled)
+    {
+        // Target offsets 0x6842E6 and 0x681F6C both write this byte at 0x74.
+        m_opaqueState[0x68] = bEnabled;
+    }
+
+private:
+    unsigned char m_opaqueState[0x6C];
+};
+static_assert(sizeof(CTaskComplexPartnerChatSAInterface) == 0x78, "Unexpected CTaskComplexPartnerChatSAInterface size");
+
+class CTaskComplexPartnerChatSA : public virtual CTaskComplexSA, public virtual CTaskComplexPartnerChat
+{
+public:
+    CTaskComplexPartnerChatSA() {};
+    CTaskComplexPartnerChatSA(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled = true);
+};
+
+class CTaskSimpleStandStillSAInterface : public CTaskSimpleSAInterface
+{
+private:
+    unsigned char m_opaqueState[0x18];
+};
+static_assert(sizeof(CTaskSimpleStandStillSAInterface) == 0x20, "Unexpected CTaskSimpleStandStillSAInterface size");
+
+class CTaskSimpleStandStillSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleStandStill
+{
+public:
+    CTaskSimpleStandStillSA() {};
+    CTaskSimpleStandStillSA(int iDuration);
 };
 
 // temporary
