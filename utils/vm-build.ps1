@@ -421,7 +421,10 @@ $discordMarkers = @(
 )
 $cefMarkers = @(
     'vendor\cef3\cef\include\cef_version.h',
-    'vendor\cef3\cef\libcef_dll\wrapper\cef_helpers.cc',
+    # CEF 147 no longer ships the former wrapper/cef_helpers.cc path. Check a
+    # source that the generated CEF project actually compiles so a partial
+    # extraction containing only build definitions cannot pass bootstrap.
+    'vendor\cef3\cef\libcef_dll\wrapper\libcef_dll_wrapper.cc',
     'vendor\cef3\cef\Release\libcef.lib',
     'vendor\cef3\cef\Resources\icudtl.dat'
 )
