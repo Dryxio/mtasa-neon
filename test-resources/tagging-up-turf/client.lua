@@ -33,6 +33,7 @@ local state = {
     lastBallasGangTriggerReport = 0,
     vehiclePlayback = nil,
     vehicleRecordingPreloaded = false,
+    postRoofScene = nil,
     missionTextReady = false,
     missionTextTimers = {},
     nativeTagHelpPhase = 0,
@@ -269,6 +270,10 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "load_carrec", title = "07C1 · HAS CAR RECORDING LOADED", detail = "NATIVE VERIFIED · streamed RRR buffer"},
     {id = "start_playback", title = "05EB · START RECORDED CAR", detail = "NATIVE VERIFIED · vehicle syncer only"},
     {id = "playback_wait", title = "060E · CAR PLAYBACK ACTIVE", detail = "NATIVE VERIFIED · recording 207 / natural end"},
+    {id = "post_roof_preload", title = "0A0B · LOAD SCENE IN DIRECTION", detail = "NATIVE VERIFIED · heading converted to renderer radians"},
+    {id = "post_roof_horn", title = "09F7 · SWEET'S HORN", detail = "NATIVE VERIFIED · vehicle-attached script audio / twice"},
+    {id = "post_roof_audio", title = "03CF/03D1 · SWE1_BH", detail = "NATIVE MISSION AUDIO · preload / play / natural finish"},
+    {id = "post_roof_wander", title = "TASK WANDER STANDARD", detail = "NATIVE VERIFIED · surviving Flats"},
     {id = "return_after_roof", title = "REGROUP WITH SWEET", detail = "CO-OP CONDITION · party in vehicle"},
     {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "SCM GATE · 4 m box + grounded"},
     {id = "mission_end", title = "MISSION PASSED", detail = "SERVER AUTHORITY · reward + restore"},
@@ -1658,7 +1663,9 @@ local function prepareSweetDemoScene(scene)
             triggerServerEvent("tagup:sweetDemoSceneLeaseLost", resourceRoot, active.id)
         end
     end, 100, 0)
-    scene.prepareTimer = setTimer(finishSweetDemoScenePrepare, 100, 0, scene)
+    scene.prepareTimer = setTimer(function()
+        finishSweetDemoScenePrepare(scene)
+    end, 100, 0)
     finishSweetDemoScenePrepare(scene)
 end
 
@@ -2866,6 +2873,239 @@ addEventHandler("tagup:stopBallasWander", resourceRoot, function()
     state.ballasWanderPed = nil
 end)
 
+local function hasPostRoofCameraLease(scene)
+    return scene and scene.cameraToken and type(isScriptCameraLeaseActive) == "function" and
+               isScriptCameraLeaseActive(scene.cameraToken)
+end
+
+local function clearPostRoofScene(reason)
+    local scene = state.postRoofScene
+    if not scene then
+        return true
+    end
+    for _, timer in ipairs({scene.fadeTimer, scene.leaseTimer, scene.audioLoadTimer, scene.audioFinishTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+
+    local audioReleased = true
+    if scene.audioHandle then
+        local ok, result = pcall(releaseMissionAudio, scene.audioHandle)
+        audioReleased = ok and result ~= false
+        scene.audioHandle = nil
+    end
+    local cameraReleased = true
+    if scene.cameraToken then
+        local ok, result = pcall(releaseScriptCamera, scene.cameraToken)
+        cameraReleased = ok and result ~= false
+        scene.cameraToken = nil
+    end
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d cleared reason=%s camera=%s audio=%s'):format(
+                          scene.id, tostring(reason or "cleanup"), tostring(cameraReleased), tostring(audioReleased)),
+                      cameraReleased and audioReleased and 3 or 2)
+    state.postRoofScene = nil
+    return cameraReleased and audioReleased
+end
+
+local function failPostRoofScene(scene, result, details)
+    if state.postRoofScene ~= scene or scene.failed then
+        return
+    end
+    scene.failed = true
+    triggerServerEvent("tagup:postRoofSceneFailure", resourceRoot, scene.id, result, details)
+    clearPostRoofScene(result)
+end
+
+local function reportPostRoofAudioReady(scene, result, details)
+    if state.postRoofScene ~= scene or scene.audioReadyReported then
+        return
+    end
+    scene.audioReadyReported = true
+    triggerServerEvent("tagup:postRoofAudioReady", resourceRoot, scene.id, result, details)
+end
+
+local function waitForPostRoofAudio(scene)
+    local function poll()
+        if state.postRoofScene ~= scene or scene.audioReadyReported then
+            return
+        end
+        local ok, loaded = pcall(isMissionAudioLoaded, scene.audioHandle)
+        if not ok then
+            return reportPostRoofAudioReady(scene, "query_failed", tostring(loaded))
+        end
+        if loaded then
+            return reportPostRoofAudioReady(scene, "ready", ("event=%d loaded in %d ms"):format(
+                                                scene.profile.audio.dialogueEvent, getTickCount() - scene.audioRequestedAt))
+        end
+        if getTickCount() - scene.audioRequestedAt >= scene.profile.audio.loadTimeout then
+            return reportPostRoofAudioReady(scene, "load_timeout", ("event=%d"):format(scene.profile.audio.dialogueEvent))
+        end
+    end
+    scene.audioLoadTimer = setTimer(poll, 100, 0)
+    poll()
+end
+
+local function finishPostRoofPrepare(scene)
+    if state.postRoofScene ~= scene or not hasPostRoofCameraLease(scene) then
+        return failPostRoofScene(scene, "camera_lost", "lease absente avant 0A0B")
+    end
+    local profile, preload, camera = scene.profile, scene.profile.preload, scene.profile.camera
+    local preloadStartedAt = getTickCount()
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d entering native 0A0B'):format(scene.id))
+    local ok, result = pcall(enginePreloadWorldAreaInDirection, Vector3(preload.x, preload.y, preload.z), preload.heading)
+    if not ok or result ~= true then
+        return failPostRoofScene(scene, "preload_refused", tostring(result))
+    end
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d native 0A0B returned after %d ms'):format(
+                          scene.id, getTickCount() - preloadStartedAt))
+    traceCurrent("post_roof_preload", ("NATIVE VERIFIED · 0A0B point=(%.4f, %.4f, %.4f) heading=%.4f"):format(
+                     preload.x, preload.y, preload.z, preload.heading))
+
+    local cameraOk = resetScriptCamera(scene.cameraToken) and setScriptCameraWidescreen(scene.cameraToken, true) and
+                         setScriptCameraFixed(scene.cameraToken, Vector3(camera.position.x, camera.position.y, camera.position.z),
+                                              Vector3(camera.target.x, camera.target.y, camera.target.z), Vector3(0, 0, 0), true) and
+                         fadeScriptCamera(scene.cameraToken, true, camera.fadeDuration, 0, 0, 0)
+    if not cameraOk then
+        return failPostRoofScene(scene, "camera_setup_refused", "fixed camera ou fade-in refuse")
+    end
+
+    local requested, handle = pcall(requestMissionAudio, profile.audio.dialogueEvent)
+    if not requested or not handle then
+        return failPostRoofScene(scene, "audio_request_refused", tostring(handle))
+    end
+    scene.audioHandle = handle
+    scene.audioRequestedAt = getTickCount()
+    scene.leaseTimer = setTimer(function()
+        if state.postRoofScene == scene and not hasPostRoofCameraLease(scene) then
+            failPostRoofScene(scene, "camera_lost", "lease perdue pendant la scene")
+        end
+    end, 100, 0)
+    waitForPostRoofAudio(scene)
+    triggerServerEvent("tagup:postRoofSceneReady", resourceRoot, scene.id, scene.vehicle, "ready",
+                       ("0A0B + fixed camera; SWE1_BH handle=%s"):format(tostring(handle)))
+end
+
+addEvent("tagup:postRoofScenePrepare", true)
+addEventHandler("tagup:postRoofScenePrepare", resourceRoot, function(sceneId, vehicle, profile)
+    if source ~= resourceRoot or not state.active or state.stage ~= "rooftop" or not isElement(vehicle) or type(profile) ~= "table" then
+        return
+    end
+    clearPostRoofScene("replaced")
+    local required = {"acquireScriptCamera", "releaseScriptCamera", "fadeScriptCamera", "resetScriptCamera", "setScriptCameraWidescreen",
+                      "setScriptCameraFixed", "enginePreloadWorldAreaInDirection", "requestMissionAudio", "isMissionAudioLoaded",
+                      "playMissionAudio", "isMissionAudioFinished", "releaseMissionAudio", "reportVehicleMissionAudioEvent"}
+    for _, name in ipairs(required) do
+        if type(_G[name]) ~= "function" then
+            triggerServerEvent("tagup:postRoofSceneReady", resourceRoot, sceneId, vehicle, "api_unavailable", name)
+            return
+        end
+    end
+
+    local scene = {id = sceneId, vehicle = vehicle, profile = profile, requestedAt = getTickCount()}
+    state.postRoofScene = scene
+    local acquired, token = pcall(acquireScriptCamera, true)
+    if not acquired or not token then
+        return failPostRoofScene(scene, "camera_acquire_refused", tostring(token))
+    end
+    scene.cameraToken = token
+    if not fadeScriptCamera(token, false, profile.camera.fadeDuration, 0, 0, 0) then
+        return failPostRoofScene(scene, "fade_out_refused", "DO_FADE 300")
+    end
+    -- MTA serializes timer arguments through CLuaArguments, which deep-copies
+    -- tables. Capture the live scene in a closure so the identity guard in
+    -- finishPostRoofPrepare sees the resource-owned state object.
+    scene.fadeTimer = setTimer(function()
+        finishPostRoofPrepare(scene)
+    end, math.floor(profile.camera.fadeDuration * 1000) + 50, 1)
+end)
+
+addEvent("tagup:postRoofFirstHorn", true)
+addEventHandler("tagup:postRoofFirstHorn", resourceRoot, function(sceneId, vehicle)
+    local scene = state.postRoofScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or scene.vehicle ~= vehicle then
+        return
+    end
+    local ok, result = pcall(reportVehicleMissionAudioEvent, vehicle, scene.profile.audio.hornEvent)
+    if not ok or result ~= true then
+        return failPostRoofScene(scene, "first_horn_refused", tostring(result))
+    end
+    traceCurrent("post_roof_horn", "NATIVE VERIFIED · first 09F7 / event 1147")
+end)
+
+addEvent("tagup:postRoofAudioStart", true)
+addEventHandler("tagup:postRoofAudioStart", resourceRoot, function(sceneId, vehicle)
+    local scene = state.postRoofScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or scene.vehicle ~= vehicle or scene.audioStarted then
+        return
+    end
+    local hornOk, hornResult = pcall(reportVehicleMissionAudioEvent, vehicle, scene.profile.audio.hornEvent)
+    local playOk, playResult = pcall(playMissionAudio, scene.audioHandle)
+    if not hornOk or hornResult ~= true or not playOk or playResult ~= true then
+        return failPostRoofScene(scene, "audio_start_refused", ("horn=%s play=%s"):format(tostring(hornResult), tostring(playResult)))
+    end
+    scene.audioStarted = true
+    scene.audioStartedAt = getTickCount()
+    printMissionText("SWE1_BH", 10000)
+    traceProgress("post_roof_horn", 1, "NATIVE VERIFIED · second 09F7 / event 1147")
+    traceCurrent("post_roof_audio", "NATIVE MISSION AUDIO · event 37430 / natural finish")
+    scene.audioFinishTimer = setTimer(function()
+        if state.postRoofScene ~= scene then
+            return
+        end
+        local ok, finished = pcall(isMissionAudioFinished, scene.audioHandle)
+        local elapsed = getTickCount() - scene.audioStartedAt
+        if not ok then
+            return failPostRoofScene(scene, "audio_query_failed", tostring(finished))
+        end
+        if finished then
+            killTimer(scene.audioFinishTimer)
+            scene.audioFinishTimer = nil
+            traceProgress("post_roof_audio", 1, ("NATIVE MISSION AUDIO · natural finish after %d ms"):format(elapsed))
+            triggerServerEvent("tagup:postRoofAudioResult", resourceRoot, scene.id, "finished", ("elapsed=%d ms"):format(elapsed))
+        elseif elapsed >= scene.profile.audio.finishTimeout then
+            failPostRoofScene(scene, "audio_finish_timeout", ("elapsed=%d ms"):format(elapsed))
+        end
+    end, 100, 0)
+end)
+
+addEvent("tagup:postRoofFlatsWander", true)
+addEventHandler("tagup:postRoofFlatsWander", resourceRoot, function(sceneId, flats)
+    local scene = state.postRoofScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or localPlayer ~= state.leader or type(flats) ~= "table" then
+        return
+    end
+    traceCurrent("post_roof_wander")
+    for _, ped in ipairs(flats) do
+        if not isElement(ped) or isPedDead(ped) or not isElementSyncer(ped) then
+            return triggerServerEvent("tagup:postRoofFlatsResult", resourceRoot, scene.id, "ownership_refused", tostring(ped))
+        end
+        killPedTask(ped, "primary", 3, false)
+        if not setPedWander(ped, "walk") then
+            return triggerServerEvent("tagup:postRoofFlatsResult", resourceRoot, scene.id, "task_refused", tostring(ped))
+        end
+    end
+    traceProgress("post_roof_wander", 1, ("NATIVE VERIFIED · %d surviving Flats"):format(#flats))
+    triggerServerEvent("tagup:postRoofFlatsResult", resourceRoot, scene.id, "ready", ("count=%d"):format(#flats))
+end)
+
+addEvent("tagup:postRoofSceneRelease", true)
+addEventHandler("tagup:postRoofSceneRelease", resourceRoot, function(sceneId)
+    local scene = state.postRoofScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId then
+        return
+    end
+    local released = clearPostRoofScene("completed")
+    triggerServerEvent("tagup:postRoofSceneReleased", resourceRoot, sceneId, released and "released" or "release_failed")
+end)
+
+addEvent("tagup:postRoofSceneCancel", true)
+addEventHandler("tagup:postRoofSceneCancel", resourceRoot, function(sceneId, reason)
+    if state.postRoofScene and state.postRoofScene.id == sceneId then
+        clearPostRoofScene(reason)
+    end
+end)
+
 local function clearVehiclePlayback(stopNative)
     local playback = state.vehiclePlayback
     if not playback then
@@ -3102,6 +3342,9 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
         if previousStage == "tags_ballas" and state.stage ~= "tags_ballas" and not state.ballasEncounter then
             clearBallasEncounterAudioPreload()
         end
+        if previousStage == "rooftop" and state.stage ~= "rooftop" and state.postRoofScene then
+            clearPostRoofScene("stage_changed_to_" .. tostring(state.stage))
+        end
         state.stageStarted = getTickCount()
         state.traceDemoTagActive = false
         local traceStep = STAGE_TRACE_STEP[state.stage]
@@ -3159,6 +3402,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     clearBallasEncounter("mission_stopped", true)
     clearBallasEncounterAudioPreload()
     clearVehiclePlayback(true)
+    clearPostRoofScene("mission_stopped")
     killMissionTextTimers()
     stopIntroCamera()
     destroyNavigation()
@@ -3181,6 +3425,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.ballasEncounter = nil
     state.ballasEncounterAudioPreload = nil
     state.vehicleRecordingPreloaded = false
+    state.postRoofScene = nil
     if state.missionTextReady then
         callMissionTextApi("releaseMissionText")
     end

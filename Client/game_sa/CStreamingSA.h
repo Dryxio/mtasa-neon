@@ -22,6 +22,9 @@
 #define FUNC_CStreaming_RequestSpecialModel      0x409d10
 #define FUNC_CStreaming_LoadScene                0x40EB70
 #define FUNC_CStreaming_LoadSceneCollision       0x40ED80
+#define FUNC_CRenderer_RequestObjectsInDirection 0x555CB0
+#define FUNC_CTimer_Stop                         0x561AA0
+#define FUNC_CTimer_Update                       0x561B10
 
 struct CArchiveInfo
 {
@@ -81,6 +84,7 @@ public:
 
     void LoadScene(const CVector* position);
     void LoadSceneCollision(const CVector* position);
+    void LoadSceneInDirection(const CVector* position, float headingDegrees);
 
 private:
     void AllocateArchive();

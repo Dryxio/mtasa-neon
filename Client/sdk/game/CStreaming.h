@@ -85,4 +85,5 @@ public:
     virtual void          RemoveBigBuildings() = 0;
     virtual void          LoadScene(const CVector* position) = 0;
     virtual void          LoadSceneCollision(const CVector* position) = 0;
+    virtual void          LoadSceneInDirection(const CVector* position, float headingDegrees) = 0;
 };

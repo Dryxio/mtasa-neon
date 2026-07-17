@@ -31,6 +31,8 @@ local mission = {
     checkpointGroundPending = {},
     vehiclePlaybackSerial = 0,
     vehiclePlayback = nil,
+    postRoofSceneSerial = 0,
+    postRoofScene = nil,
 }
 
 -- GTA produces every spray hit and exact alpha step. The server validates those
@@ -342,6 +344,27 @@ local function cancelBallasEncounter(reason)
     end
 end
 
+local function cancelPostRoofScene(reason, notifyClients)
+    local scene = mission.postRoofScene
+    if not scene then
+        return
+    end
+
+    mission.postRoofScene = nil
+    for _, timer in ipairs({scene.guardTimer, scene.hornTimer, scene.releaseGuardTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    if notifyClients ~= false then
+        for _, player in ipairs(mission.party) do
+            if isElement(player) then
+                triggerClientEvent(player, "tagup:postRoofSceneCancel", resourceRoot, scene.id, reason or "server_cancelled")
+            end
+        end
+    end
+end
+
 local function cancelVehiclePlayback(reason)
     local playback = mission.vehiclePlayback
     if not playback then
@@ -357,6 +380,9 @@ local function cancelVehiclePlayback(reason)
     end
     if isTimer(playback.completionTimer) then
         killTimer(playback.completionTimer)
+    end
+    if isTimer(playback.sceneStartTimer) then
+        killTimer(playback.sceneStartTimer)
     end
     if isElement(mission.leader) then
         triggerClientEvent(mission.leader, "tagup:vehiclePlaybackCancel", resourceRoot, playback.id, reason or "server_cancelled")
@@ -486,6 +512,237 @@ local function currentGroupComplete()
     return true
 end
 
+local function allPostRoofPlayers(scene, field)
+    for _, player in ipairs(mission.party) do
+        if isElement(player) and not scene[field][player] then
+            return false
+        end
+    end
+    return true
+end
+
+local function completePostRoofScene(scene)
+    if mission.postRoofScene ~= scene then
+        return
+    end
+    local extra = scene.extra
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d complete; camera restored for %d participant(s)'):format(
+                          scene.id, #mission.party))
+    cancelPostRoofScene("completed", false)
+    cancelVehiclePlayback("completed")
+    setStage("return_after_roof", extra)
+end
+
+local function requestPostRoofRelease(scene)
+    if mission.postRoofScene ~= scene or scene.releasing then
+        return
+    end
+    scene.releasing = true
+    scene.releasedPlayers = {}
+    scene.releaseGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.postRoofScene
+        if active and active.id == expectedId then
+            cancelPostRoofScene("release_timeout")
+            failMission("La camera post-toit n'a pas ete restauree sur tous les clients.")
+        end
+    end, TAGUP.postRoofScene.camera.releaseTimeout, 1, scene.id))
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:postRoofSceneRelease", resourceRoot, scene.id)
+        end
+    end
+end
+
+local function tryFinalizePostRoofScene()
+    local scene = mission.postRoofScene
+    if not scene or scene.finalizing or not scene.playbackValidated or not allPostRoofPlayers(scene, "audioFinishedPlayers") then
+        return
+    end
+    local sweet, vehicle = mission.entities.sweet, mission.entities.vehicle
+    if not isElement(sweet) or not isElement(vehicle) then
+        cancelPostRoofScene("actors_missing")
+        return failMission("Sweet ou la Greenwood a disparu pendant la scene post-toit.")
+    end
+
+    scene.finalizing = true
+    removePedFromVehicle(sweet)
+    if not warpSweetIntoFirstFreeSeat() then
+        cancelPostRoofScene("passenger_warp_failed")
+        return failMission("Sweet n'a pas pu reprendre sa place passager apres SWE1_BH.")
+    end
+
+    local livingFlats = {}
+    for _, key in ipairs({"enemy1", "enemy2"}) do
+        local ped = mission.entities[key]
+        if isElement(ped) and not isPedDead(ped) then
+            setElementSyncer(ped, mission.leader, true, true)
+            table.insert(livingFlats, ped)
+        end
+    end
+    if #livingFlats == 0 then
+        return requestPostRoofRelease(scene)
+    end
+    triggerClientEvent(mission.leader, "tagup:postRoofFlatsWander", resourceRoot, scene.id, livingFlats)
+end
+
+local function tryStartPostRoofAudio(scene)
+    if mission.postRoofScene ~= scene or scene.audioStarted or not scene.hornLeadElapsed or
+        not allPostRoofPlayers(scene, "audioReadyPlayers") then
+        return
+    end
+    scene.audioStarted = true
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d SWE1_BH load barrier passed; reporting second horn and playing audio'):format(scene.id))
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:postRoofAudioStart", resourceRoot, scene.id, scene.vehicle)
+        end
+    end
+end
+
+local function beginPostRoofScene(extra, playbackValidated)
+    if mission.postRoofScene or mission.stage ~= "rooftop" then
+        return
+    end
+    local vehicle = mission.entities.vehicle
+    if not isElement(vehicle) then
+        return failMission("La Greenwood a disparu avant la scene post-toit.")
+    end
+
+    mission.postRoofSceneSerial = mission.postRoofSceneSerial + 1
+    local scene = {
+        id = mission.postRoofSceneSerial,
+        vehicle = vehicle,
+        extra = extra,
+        playbackValidated = playbackValidated == true,
+        cameraReadyPlayers = {},
+        audioReadyPlayers = {},
+        audioFinishedPlayers = {},
+        requestedAt = getTickCount(),
+    }
+    mission.postRoofScene = scene
+    scene.guardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.postRoofScene
+        if active and active.id == expectedId then
+            cancelPostRoofScene("server_timeout")
+            failMission("La scene post-toit a depasse son delai de garde.")
+        end
+    end, TAGUP.postRoofScene.guardTimeout, 1, scene.id))
+
+    outputDebugString(('[tagging-up-turf] Starting post-roof scene #%d, directional preload heading=%.4f, playbackValidated=%s'):format(
+                          scene.id, TAGUP.postRoofScene.preload.heading, tostring(scene.playbackValidated)))
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:postRoofScenePrepare", resourceRoot, scene.id, vehicle, TAGUP.postRoofScene)
+        end
+    end
+end
+
+addEvent("tagup:postRoofSceneReady", true)
+addEventHandler("tagup:postRoofSceneReady", resourceRoot, function(sceneId, vehicle, result, details)
+    local player, scene = client, mission.postRoofScene
+    if source ~= resourceRoot or not scene or mission.stage ~= "rooftop" or scene.id ~= tonumber(sceneId) or scene.vehicle ~= vehicle or
+        not isMissionPlayer(player) or scene.cameraReadyPlayers[player] then
+        return
+    end
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d camera player=%s result=%s (%s)'):format(
+                          scene.id, getPlayerName(player), tostring(result), tostring(details or ""):sub(1, 180)))
+    if result ~= "ready" then
+        cancelPostRoofScene("client_prepare_" .. tostring(result))
+        return failMission("La preparation post-toit a echoue sur un client: " .. tostring(result))
+    end
+    scene.cameraReadyPlayers[player] = true
+    if allPostRoofPlayers(scene, "cameraReadyPlayers") and not scene.hornTimer then
+        scene.hornTimer = rememberTimer(setTimer(function(expectedId)
+            local active = mission.postRoofScene
+            if not active or active.id ~= expectedId then
+                return
+            end
+            active.hornLeadElapsed = true
+            for _, member in ipairs(mission.party) do
+                if isElement(member) then
+                    triggerClientEvent(member, "tagup:postRoofFirstHorn", resourceRoot, active.id, active.vehicle)
+                end
+            end
+            tryStartPostRoofAudio(active)
+        end, TAGUP.postRoofScene.hornLeadDelay, 1, scene.id))
+    end
+end)
+
+addEvent("tagup:postRoofSceneFailure", true)
+addEventHandler("tagup:postRoofSceneFailure", resourceRoot, function(sceneId, result, details)
+    local scene = mission.postRoofScene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(client) then
+        return
+    end
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d failed on %s: %s (%s)'):format(
+                          scene.id, getPlayerName(client), tostring(result), tostring(details or ""):sub(1, 180)), 2)
+    cancelPostRoofScene("client_failure_" .. tostring(result))
+    failMission("La scene post-toit a echoue sur un client: " .. tostring(result))
+end)
+
+addEvent("tagup:postRoofAudioReady", true)
+addEventHandler("tagup:postRoofAudioReady", resourceRoot, function(sceneId, result, details)
+    local player, scene = client, mission.postRoofScene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or scene.audioReadyPlayers[player] then
+        return
+    end
+    if result ~= "ready" then
+        cancelPostRoofScene("client_audio_ready_" .. tostring(result))
+        return failMission("Le chargement de SWE1_BH a echoue sur un client: " .. tostring(result))
+    end
+    scene.audioReadyPlayers[player] = true
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d SWE1_BH ready on %s (%s)'):format(
+                          scene.id, getPlayerName(player), tostring(details or ""):sub(1, 180)))
+    tryStartPostRoofAudio(scene)
+end)
+
+addEvent("tagup:postRoofAudioResult", true)
+addEventHandler("tagup:postRoofAudioResult", resourceRoot, function(sceneId, result, details)
+    local player, scene = client, mission.postRoofScene
+    if source ~= resourceRoot or not scene or not scene.audioStarted or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or
+        scene.audioFinishedPlayers[player] then
+        return
+    end
+    if result ~= "finished" then
+        cancelPostRoofScene("client_audio_" .. tostring(result))
+        return failMission("La replique SWE1_BH a echoue sur un client: " .. tostring(result))
+    end
+    scene.audioFinishedPlayers[player] = true
+    outputDebugString(('[tagging-up-turf] Post-roof scene #%d SWE1_BH finished on %s (%s)'):format(
+                          scene.id, getPlayerName(player), tostring(details or ""):sub(1, 180)))
+    tryFinalizePostRoofScene()
+end)
+
+addEvent("tagup:postRoofFlatsResult", true)
+addEventHandler("tagup:postRoofFlatsResult", resourceRoot, function(sceneId, result, details)
+    local scene = mission.postRoofScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or not scene.finalizing then
+        return
+    end
+    if result ~= "ready" then
+        cancelPostRoofScene("flat_wander_" .. tostring(result))
+        return failMission("La remise en Wander des Ballas a echoue: " .. tostring(details or result))
+    end
+    requestPostRoofRelease(scene)
+end)
+
+addEvent("tagup:postRoofSceneReleased", true)
+addEventHandler("tagup:postRoofSceneReleased", resourceRoot, function(sceneId, result)
+    local player, scene = client, mission.postRoofScene
+    if source ~= resourceRoot or not scene or not scene.releasing or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or
+        scene.releasedPlayers[player] then
+        return
+    end
+    if result ~= "released" then
+        cancelPostRoofScene("client_release_" .. tostring(result))
+        return failMission("Un client n'a pas pu restaurer la camera post-toit.")
+    end
+    scene.releasedPlayers[player] = true
+    if allPostRoofPlayers(scene, "releasedPlayers") then
+        completePostRoofScene(scene)
+    end
+end)
+
 local function startVehiclePlaybackReturn(extra)
     local sweet, vehicle = mission.entities.sweet, mission.entities.vehicle
     if mission.vehiclePlayback or not isElement(mission.leader) or not isElement(sweet) or not isElement(vehicle) then
@@ -553,6 +810,8 @@ failMission = function(reason)
     cancelDemoScene("mission_failed")
     cancelBallasGangScene("mission_failed")
     cancelBallasEncounter("mission_failed")
+    cancelPostRoofScene("mission_failed")
+    cancelVehiclePlayback("mission_failed")
     mission.stage = "failed"
     broadcastState({failureReason = reason or "La mission a echoue."})
     outputDebugString("[tagging-up-turf] Failed: " .. tostring(reason))
@@ -612,6 +871,12 @@ addEventHandler("tagup:vehiclePlaybackResult", resourceRoot, function(playbackId
         end
         playback.started = true
         playback.startedAt = getTickCount()
+        playback.sceneStartTimer = rememberTimer(setTimer(function(expectedId)
+            local active = mission.vehiclePlayback
+            if active and active.id == expectedId and mission.stage == "rooftop" then
+                beginPostRoofScene(active.extra, false)
+            end
+        end, TAGUP.postRoofScene.startDelay, 1, playback.id))
         return
     end
 
@@ -637,16 +902,19 @@ addEventHandler("tagup:vehiclePlaybackResult", resourceRoot, function(playbackId
                 return failMission(("Le recording 207 a fini hors profil (%.2f m, %d ms)."):format(distance, reportedElapsed))
             end
 
-            local extra = active.extra
-            removePedFromVehicle(active.ped)
-            if not warpSweetIntoFirstFreeSeat() then
-                cancelVehiclePlayback("passenger_warp_failed")
-                return failMission("Sweet n'a pas pu reprendre sa place passager apres le recording 207.")
+            active.playbackValidated = true
+            if isTimer(active.guardTimer) then
+                killTimer(active.guardTimer)
+                active.guardTimer = nil
             end
-            outputDebugString(("[tagging-up-turf] Recording 207 #%d completed at %.2f m after %d ms; Sweet restored as passenger"):format(
+            if not mission.postRoofScene then
+                beginPostRoofScene(active.extra, true)
+            elseif mission.postRoofScene then
+                mission.postRoofScene.playbackValidated = true
+            end
+            outputDebugString(("[tagging-up-turf] Recording 207 #%d completed at %.2f m after %d ms; waiting for SWE1_BH natural finish"):format(
                                   active.id, distance, reportedElapsed))
-            cancelVehiclePlayback("completed")
-            setStage("return_after_roof", extra)
+            tryFinalizePostRoofScene()
         end, 750, 1, playback.id, elapsedMs))
         return
     end
@@ -669,6 +937,7 @@ finishMission = function(passed, traceExtra)
     cancelBallasDeparture("mission_finished")
     cancelBallasGangScene("mission_finished")
     cancelBallasEncounter("mission_finished")
+    cancelPostRoofScene("mission_finished")
     cancelVehiclePlayback("mission_finished")
     clearMissionTimers()
     if passed then
@@ -718,6 +987,7 @@ finishMission = function(passed, traceExtra)
         mission.ballasTimerResetAt = nil
         mission.checkpointGroundPending = {}
         mission.vehiclePlayback = nil
+        mission.postRoofScene = nil
     end, delay, 1)
 end
 
@@ -788,6 +1058,61 @@ local function startMission(requester, checkpoint)
     setElementCollisionsEnabled(demoObject, false)
     setElementData(demoObject, "tagup.paintAlpha", 0, true)
     mission.entities.demoTag = demoObject
+
+    if checkpoint == "pickup" then
+        for _, tagId in ipairs({1, 2, 3, 4, 5}) do
+            mission.tagProgress[tagId] = 255
+            mission.completedTags[tagId] = true
+            replaceTagObject(tagId)
+        end
+        setElementData(demoObject, "tagup.paintAlpha", 255, true)
+
+        local endpoint = TAGUP.vehicleRecording207.endPosition
+        setElementPosition(vehicle, endpoint[1], endpoint[2], endpoint[3] + 3.0)
+        setElementRotation(vehicle, 0, 0, TAGUP.postRoofScene.preload.heading)
+        setElementVelocity(vehicle, 0, 0, 0)
+        setElementFrozen(vehicle, true)
+        setElementSyncer(vehicle, requester, true, true)
+        setElementSyncer(sweet, requester, true, true)
+        if not warpPedIntoVehicle(sweet, vehicle, 0) then
+            return failMission("Sweet n'a pas pu prendre le volant au checkpoint SWE1_BH.")
+        end
+
+        local positions = {
+            {2384.0, -1525.0, endpoint[3], 180},
+            {2385.2, -1525.0, endpoint[3], 180},
+            {2386.4, -1525.0, endpoint[3], 180},
+        }
+        mission.checkpointGroundSerial = mission.checkpointGroundSerial + 1
+        local groundToken = mission.checkpointGroundSerial
+        mission.checkpointGroundPending = {}
+        for index, player in ipairs(mission.party) do
+            local position = positions[index]
+            removePedFromVehicle(player)
+            -- The full mission streams this block while recording 207 drives
+            -- through it. A direct checkpoint must prove the same collision is
+            -- resident before starting 0A0B under the black fade.
+            setElementPosition(player, position[1], position[2], position[3] + 3.0)
+            setElementRotation(player, 0, 0, position[4])
+            setElementVelocity(player, 0, 0, 0)
+            setElementFrozen(player, true)
+            mission.checkpointGroundPending[player] = {
+                token = groundToken,
+                kind = "pickup",
+                x = position[1],
+                y = position[2],
+                expectedGroundZ = position[3],
+                heading = position[4],
+            }
+            triggerClientEvent(player, "tagup:checkpointGroundProbe", resourceRoot, groundToken, position[1], position[2], position[3])
+        end
+
+        setStage("rooftop", {deferTraceStep = true, message = "Checkpoint SWE1_BH en preparation."})
+        outputDebugString(('[tagging-up-turf] SWE1_BH pickup checkpoint started by %s; waiting for destination collision'):format(
+                              getPlayerName(requester)))
+        outputChatBox("Checkpoint SWE1_BH charge. Attends la stabilisation du decor avant la scene.", requester, 120, 220, 120)
+        return
+    end
 
     if checkpoint == "departure" then
         -- This checkpoint owns only mission setup. It leaves the real
@@ -913,8 +1238,9 @@ addEvent("tagup:checkpointGroundReady", true)
 addEventHandler("tagup:checkpointGroundReady", resourceRoot, function(token, reportedGroundZ)
     local player = client
     local pending = mission.checkpointGroundPending[player]
-    if source ~= resourceRoot or not mission.running or mission.stage ~= "tags_ballas" or not isMissionPlayer(player) or not pending or
-        pending.token ~= tonumber(token) then
+    local stageMatches = pending and ((pending.kind == "pickup" and mission.stage == "rooftop") or
+                             (pending.kind ~= "pickup" and mission.stage == "tags_ballas"))
+    if source ~= resourceRoot or not mission.running or not stageMatches or not isMissionPlayer(player) or pending.token ~= tonumber(token) then
         outputDebugString("[tagging-up-turf] Rejected stale or unauthorized checkpoint ground result", 2)
         return
     end
@@ -922,15 +1248,49 @@ addEventHandler("tagup:checkpointGroundReady", resourceRoot, function(token, rep
     local groundZ = tonumber(reportedGroundZ)
     if not groundZ or math.abs(groundZ - pending.expectedGroundZ) > 2.0 then
         mission.checkpointGroundPending[player] = nil
-        return failMission("La collision du checkpoint Ballas n'a pas pu etre chargee.")
+        return failMission(pending.kind == "pickup" and "La collision du checkpoint SWE1_BH n'a pas pu etre chargee." or
+                               "La collision du checkpoint Ballas n'a pas pu etre chargee.")
     end
 
     setElementPosition(player, pending.x, pending.y, groundZ + 1.0)
     setElementRotation(player, 0, 0, pending.heading)
     setElementVelocity(player, 0, 0, 0)
-    setElementFrozen(player, false)
     mission.checkpointGroundPending[player] = nil
-    outputDebugString(("[tagging-up-turf] Ballas checkpoint ground ready for %s at Z=%.3f"):format(getPlayerName(player), groundZ))
+    if pending.kind ~= "pickup" then
+        setElementFrozen(player, false)
+        return outputDebugString(("[tagging-up-turf] Ballas checkpoint ground ready for %s at Z=%.3f"):format(getPlayerName(player), groundZ))
+    end
+
+    outputDebugString(("[tagging-up-turf] SWE1_BH checkpoint collision ready for %s at Z=%.3f"):format(getPlayerName(player), groundZ))
+    if next(mission.checkpointGroundPending) then
+        return
+    end
+
+    -- Collision readiness proves the cold teleport has reached the same world
+    -- block as the real recording. Keep one short streaming window before the
+    -- black fade so the checkpoint does not manufacture a worst-case 0A0B.
+    rememberTimer(setTimer(function(expectedToken)
+        if not mission.running or mission.stage ~= "rooftop" or mission.checkpointGroundSerial ~= expectedToken or
+            next(mission.checkpointGroundPending) then
+            return
+        end
+        for _, member in ipairs(mission.party) do
+            if isElement(member) then
+                setElementFrozen(member, false)
+            end
+        end
+        local endpoint = TAGUP.vehicleRecording207.endPosition
+        local vehicle = mission.entities.vehicle
+        if not isElement(vehicle) then
+            return failMission("La Greenwood a disparu pendant le warmup du checkpoint SWE1_BH.")
+        end
+        setElementPosition(vehicle, endpoint[1], endpoint[2], endpoint[3])
+        setElementRotation(vehicle, 0, 0, TAGUP.postRoofScene.preload.heading)
+        setElementVelocity(vehicle, 0, 0, 0)
+        setElementFrozen(vehicle, false)
+        outputDebugString("[tagging-up-turf] SWE1_BH checkpoint streaming warmup complete; starting post-roof scene")
+        beginPostRoofScene({traceSkipped = true}, true)
+    end, 1500, 1, pending.token))
 end)
 
 local function allBallasGangScenePlayersReady(scene, field)
@@ -1392,6 +1752,13 @@ addCommandHandler("tagupdeparture", function(player)
         return
     end
     startMission(player, "departure")
+end)
+
+addCommandHandler("taguppickup", function(player)
+    if not player then
+        return
+    end
+    startMission(player, "pickup")
 end)
 
 addCommandHandler("tagupabort", function(player)
@@ -2889,5 +3256,5 @@ addEventHandler("onResourceStop", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[tagging-up-turf] Ready. Use /tagup, /tagupdeparture, or /tagupballas (up to three connected players).")
+    outputDebugString("[tagging-up-turf] Ready. Use /tagup, /tagupdeparture, /tagupballas, or /taguppickup (up to three connected players).")
 end)

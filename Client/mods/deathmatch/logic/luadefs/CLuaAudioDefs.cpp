@@ -21,6 +21,8 @@ namespace
     constexpr uint64_t     MISSION_AUDIO_PRELOAD_RETRY_MS = 500;
     constexpr unsigned int SCRIPT_BANK_FIRST = 1800;
     constexpr unsigned int SCRIPT_BANK_LAST = 1829;
+    constexpr unsigned int SCRIPT_EVENT_FIRST = 1000;
+    constexpr unsigned int SCRIPT_EVENT_LAST = 1190;
     constexpr unsigned int SCRIPT_SLOT_FIRST = 2000;
     constexpr unsigned int SCRIPT_SLOT_LAST = 45400;
 
@@ -179,6 +181,7 @@ void CLuaAudioDefs::LoadFunctions()
                                                                              {"playMissionAudio", ArgumentParser<PlayMissionAudio>},
                                                                              {"isMissionAudioFinished", ArgumentParser<IsMissionAudioFinished>},
                                                                              {"releaseMissionAudio", ArgumentParser<ReleaseMissionAudio>},
+                                                                             {"reportVehicleMissionAudioEvent", ArgumentParser<ReportVehicleMissionAudioEvent>},
 
                                                                              // Sound effects and synth funcs
                                                                              {"playSound", PlaySound},
@@ -406,6 +409,19 @@ bool CLuaAudioDefs::ReleaseMissionAudio(lua_State* luaVM, unsigned int handle)
         return false;
 
     ReleaseMissionAudioSlot(slotId);
+    return true;
+}
+
+bool CLuaAudioDefs::ReportVehicleMissionAudioEvent(CClientVehicle* vehicle, unsigned int eventId)
+{
+    CAudioEngine* audio = GetAudioEngine();
+    if (!audio || !vehicle || !vehicle->IsStreamedIn() || !vehicle->GetGameVehicle() || eventId < SCRIPT_EVENT_FIRST || eventId > SCRIPT_EVENT_LAST)
+        return false;
+
+    // The 1000..1190 family is GTA's verified one-shot script-event range.
+    // Mission dialogue slots and bank selectors use separate APIs and must not
+    // be routed through the physical-entity event wrapper.
+    audio->ReportVehicleMissionAudioEvent(vehicle->GetGameVehicle(), static_cast<unsigned short>(eventId));
     return true;
 }
 

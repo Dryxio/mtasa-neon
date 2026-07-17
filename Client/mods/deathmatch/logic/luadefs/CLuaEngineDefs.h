@@ -115,6 +115,7 @@ public:
     static eModelLoadState EngineStreamingGetModelLoadState(std::uint16_t modelId);
 
     static void EnginePreloadWorldArea(CVector position, std::optional<PreloadAreaOption> option);
+    static bool EnginePreloadWorldAreaInDirection(CVector position, float headingDegrees);
     static bool EngineRestreamModel(std::uint16_t modelId);
     static void EngineRestream(std::optional<RestreamOption> option);
 

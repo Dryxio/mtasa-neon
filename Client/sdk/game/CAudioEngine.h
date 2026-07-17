@@ -18,6 +18,7 @@
 class CEntity;
 class CEntitySAInterface;
 class CPhysical;
+class CVehicle;
 class CVector;
 
 struct SWorldSoundEvent
@@ -77,4 +78,5 @@ public:
     virtual void          SetWorldSoundHandler(WorldSoundHandler* pHandler) = 0;
     virtual void          ReportBulletHit(CEntity* pEntity, unsigned char ucSurfaceType, CVector* pvecPosition, float f_2) = 0;
     virtual void          ReportWeaponEvent(int iEvent, eWeaponType weaponType, CPhysical* pPhysical) = 0;
+    virtual void          ReportVehicleMissionAudioEvent(CVehicle* vehicle, unsigned short eventId) = 0;
 };

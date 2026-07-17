@@ -141,6 +141,7 @@ public:
     void          SetWorldSoundHandler(WorldSoundHandler* pHandler);
     void          ReportBulletHit(CEntity* pEntity, unsigned char ucSurfaceType, CVector* pvecPosition, float f_2);
     void          ReportWeaponEvent(int iEvent, eWeaponType weaponType, CPhysical* pPhysical);
+    void          ReportVehicleMissionAudioEvent(CVehicle* vehicle, unsigned short eventId);
 
     void UpdateAmbientSoundSettings();
     bool OnWorldSound(CAESound* pAESound);

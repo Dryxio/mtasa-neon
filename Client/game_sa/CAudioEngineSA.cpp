@@ -16,6 +16,7 @@
 #include "CGameSA.h"
 #include "CPhysicalSA.h"
 #include "CSettingsSA.h"
+#include "CVehicleSA.h"
 
 extern CGameSA* pGame;
 
@@ -211,6 +212,30 @@ void CAudioEngineSA::PlayFrontEndSound(DWORD dwEventID)
         }
         // clang-format on
     }
+}
+
+void CAudioEngineSA::ReportVehicleMissionAudioEvent(CVehicle* vehicle, unsigned short eventId)
+{
+    auto* vehicleSA = dynamic_cast<CVehicleSA*>(vehicle);
+    if (!vehicleSA)
+        return;
+
+    CVehicleSAInterface* vehicleInterface = vehicleSA->GetVehicleInterface();
+    DWORD                audioEvent = eventId;
+    DWORD                function = FUNC_ReportMissionAudioEvent_Vehicle;
+
+    // Opcode 09F7 deliberately uses the script-audio entity rather than the
+    // vehicle horn controls. Calling GTA's wrapper preserves the event's own
+    // bank, attenuation, lifetime, and attachment to the supplied vehicle.
+    // clang-format off
+    __asm
+    {
+        mov     ecx, CLASS_CAudioEngine
+        push    vehicleInterface
+        push    audioEvent
+        call    function
+    }
+    // clang-format on
 }
 
 void CAudioEngineSA::SetEffectsMasterVolume(BYTE bVolume)

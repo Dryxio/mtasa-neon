@@ -207,6 +207,14 @@ The task calls do not yet provide resource-owned handles, completion events, or 
 
 The token prevents delayed callbacks from an older run in the same resource from controlling a newer camera lease. A resource stop, restart, or disconnect revokes its lease automatically. Gameplay input inhibition is independent from `toggleAllControls`, so cleanup does not overwrite control restrictions owned by other resources. Its reference-counted native pad bit is also restored to the state captured by the outermost inhibitor. GTA consumes that bit for its standard vehicle slowdown: zero throttle, full brake, handbrake, and a `0.28` speed clamp before physics completes the stop. Neon intentionally does not call the broader `CPlayerInfo::MakePlayerSafe`, which would also clear tasks, grant protection, and mutate world systems. Legacy client camera setters are rejected while the lease is active; an authoritative server camera RPC revokes the lease before taking control.
 
+### Native directional scene loading
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `enginePreloadWorldAreaInDirection(position, heading)` | Client | Performs GTA's blocking directional scene load used by SCM `0A0B`, with the heading expressed in degrees. |
+
+The call stops GTA's timer, requests renderer objects through the directional loading frustum, loads the scene, and updates the timer as one operation. It returns `false` for non-finite coordinates or headings.
+
 ### Native mission audio
 
 | Function | Side | Description |
@@ -216,8 +224,9 @@ The token prevents delayed callbacks from an older run in the same resource from
 | `playMissionAudio(handle)` | Client | Starts one loaded handle once through GTA's mission-audio player. |
 | `isMissionAudioFinished(handle)` | Client | Reports natural completion after playback has started. |
 | `releaseMissionAudio(handle)` | Client | Clears the owned native event and releases its physical slot. |
+| `reportVehicleMissionAudioEvent(vehicle, eventId)` | Client | Reports a verified `1000..1190` one-shot script event on a streamed native vehicle through GTA's `09F7` path. |
 
-Mission audio is local to each client: a co-op resource should preload on every participant, cross a server readiness barrier, then broadcast play and wait for every completion acknowledgement. Handles are generation-scoped to the calling resource and cannot query, play, or release another resource's slot. Resource shutdown releases its handles automatically. The service never preempts an occupied native slot; while an owned, unplayed event remains pending, load polling periodically re-arms GTA's silently dropped hardware request. Supported event IDs are the two native script-audio families (`1800..1829` and `2000..45400`); custom event `65535` is intentionally excluded.
+Mission audio is local to each client: a co-op resource should preload on every participant, cross a server readiness barrier, then broadcast play and wait for every completion acknowledgement. Handles are generation-scoped to the calling resource and cannot query, play, or release another resource's slot. Resource shutdown releases its handles automatically. The service never preempts an occupied native slot; while an owned, unplayed event remains pending, load polling periodically re-arms GTA's silently dropped hardware request. Supported handle event IDs are the two native script-audio families (`1800..1829` and `2000..45400`); custom event `65535` is intentionally excluded. Vehicle one-shot events use the separate synchronous `1000..1190` family and require a streamed vehicle.
 
 ### Native mission text
 

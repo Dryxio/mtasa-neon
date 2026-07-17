@@ -551,3 +551,19 @@ void CStreamingSA::LoadSceneCollision(const CVector* position)
     auto CStreaming_LoadSceneCollision = (void(__cdecl*)(const CVector*))FUNC_CStreaming_LoadSceneCollision;
     CStreaming_LoadSceneCollision(position);
 }
+
+void CStreamingSA::LoadSceneInDirection(const CVector* position, float headingDegrees)
+{
+    constexpr float DEGREES_TO_RADIANS = 0.017453292519943295769f;
+    constexpr int   STREAMING_LOADING_SCENE = 0x20;
+
+    // Opcode 0A0B stops GTA's timer around the blocking scene load and feeds a
+    // radians heading into CRenderer's directional frustum request first.
+    // Keeping those calls together prevents Lua consumers from accidentally
+    // reproducing only the ordinary, non-directional LoadScene half.
+    (reinterpret_cast<void(__cdecl*)()>(FUNC_CTimer_Stop))();
+    (reinterpret_cast<void(__cdecl*)(const CVector*, float, int)>(FUNC_CRenderer_RequestObjectsInDirection))(position, headingDegrees * DEGREES_TO_RADIANS,
+                                                                                                             STREAMING_LOADING_SCENE);
+    LoadScene(position);
+    (reinterpret_cast<void(__cdecl*)()>(FUNC_CTimer_Update))();
+}
