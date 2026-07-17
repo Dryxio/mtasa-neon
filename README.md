@@ -1,6 +1,7 @@
 # MTA:SA Neon Engine
 
 [![Join the MTA:SA Neon Discord](https://img.shields.io/badge/Discord-Join%20MTA%3ASA%20Neon-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/mgFRd2AzF8)
+[![Read the MTA:SA Neon Wiki](https://img.shields.io/badge/Documentation-Read%20the%20Neon%20Wiki-F28C18?logo=readthedocs&logoColor=white)](https://mtasa-neon-wiki.vercel.app)
 
 MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue), focused on prototyping advanced engine features and exploring changes that may be too early or too specialized for the upstream project.
 
