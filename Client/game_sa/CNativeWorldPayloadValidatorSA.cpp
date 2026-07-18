@@ -211,7 +211,7 @@ namespace
                     // checked below where GTA uses their counts and indices.
                 }
                 else if (frame.parentType != RW_EXTENSION || !IsAuditedRwPlugin(child.type))
-                    return Fail(error, member, "RenderWare chunk type is outside the audited Bullworth profile");
+                    return Fail(error, member, "RenderWare chunk type is outside the audited static-world-v1 profile");
                 offset = child.end;
             }
             if (offset != frame.end)
@@ -808,7 +808,7 @@ namespace
         const bool contractValid = expectedRoot == RW_CLUMP ? ValidateDffContract(reader, root, budget.renderWareLibraryId, budget, summary)
                                                             : ValidateTxdContract(reader, root, budget.renderWareLibraryId, budget, summary);
         if (!contractValid)
-            return Fail(error, member, "RenderWare core counts, ordering, or indices differ from the Bullworth profile");
+            return Fail(error, member, "RenderWare core counts, ordering, or indices differ from the static-world-v1 profile");
         return true;
     }
 

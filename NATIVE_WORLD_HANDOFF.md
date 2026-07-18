@@ -102,8 +102,11 @@ Checkpoint B, record-driven startup selection without native mutation, is
 implemented in `5971c8a67`. Checkpoint C, record-driven native activation, is
 implemented and passed the explicitly authorized automated live gate recorded
 below. Checkpoint D, explicit safe restart/reconnect UX, is implemented and
-passed the explicitly authorized automated live gate recorded below. The next
-unfinished global roadmap item is the constrained generic static-world policy.
+passed the explicitly authorized automated live gate recorded below. Checkpoint
+E1, the constrained generic static-world transport/cache identity, is
+implemented and passed its explicitly authorized publish/cache-hit live gate
+while remaining inert. Checkpoint E2 is now the next unfinished checkpoint and
+will extend the authorization/startup route without weakening format 1.
 
 Relevant earlier extended-world foundations include the enlarged world sectors,
 coordinate/network ranges, water bounds, renderer capacity, radar composition,
@@ -136,8 +139,9 @@ placements through a different lifecycle.
 - `Shared/sdk/net/bitstream.h` carries the protocol capability and
   `Shared/httpd/Types.h` carries the bounded file-response state.
 - `utils/extended-world` contains the generator, validators and focused tests;
-  `test-resources/native-world-transport-test` is the metadata-only live
-  transport harness.
+  `test-resources/native-world-transport-test` is the metadata-only legacy
+  authorization harness, and `native-world-static-transport-test` is the
+  metadata-only format-2 publish-only harness.
 
 ## Current architecture
 
@@ -145,8 +149,12 @@ placements through a different lifecycle.
 
 `CNativeWorldPackManagerSA` performs exact preflight, allocation planning,
 native commit, postconditions, IPL bootstrap, and process-lifetime management.
-`CNativeBullworthPackSA` is the only compiled trusted policy. It supports only
-the two exact GTA SA 1.0 US identities documented in `NATIVE_BW_PACK.md`.
+`CNativeBullworthPackSA` still owns the only activatable compiled policy and
+supports only the two exact GTA SA 1.0 US identities documented in
+`NATIVE_BW_PACK.md`. The transport registry also contains the constrained
+`static-world-v1` format-2 policy. It can audit and cache a bounded pack ID,
+but E1 deliberately gives it no environment selector, authorization record,
+activation lease, startup hook, or native mutation route.
 
 The legacy `MTA_NATIVE_BW_MODEL_STORES=1` prototype still reads the local
 installation copy of `native-world.json` as its developer-only startup
@@ -164,31 +172,35 @@ packs requires a clean client restart.
 
 ### Server transport and authorization-offer path
 
-A resource declares exactly one format-1 `<native_world>` descriptor and
-exactly three tagged automatic-download files: `native-world.json`, one IDE,
-and one IMG. The inert legacy descriptor remains valid. The only authorization
-opt-in is exactly `startup="true" policy="bullworth"`; partial, unknown, or
-contradictory authorization metadata is rejected.
+A resource declares exactly one `<native_world>` descriptor and exactly three
+tagged automatic-download files: `native-world.json`, one IDE, and one IMG.
+Format 1 remains either inert legacy transport or exactly
+`startup="true" policy="bullworth"`. Format 2 is exactly the publish-only
+`policy="static-world-v1"` descriptor and forbids startup metadata. Partial,
+unknown, or contradictory metadata is rejected.
 
-The version-gated ResourceStart packet now has two closed wire forms. Clients
-through protocol capability `0x35` receive the original `N` group byte-for-byte.
-Clients advertising the appended authorization capability `0x36` receive the
-distinct complete `A` group only for an opted-in resource. `A` contains the
-common descriptor and file metadata, then the fixed startup/policy values;
-truncation, duplicates, bad placement, unknown groups, and unknown values are
-fatal. Older clients receive no native-world group and do not request the
-tagged bodies.
+Clients through protocol capability `0x35` receive the original format-1 `N`
+group byte-for-byte. Clients advertising the appended authorization capability
+`0x36` receive the distinct complete `A` group only for an opted-in format-1
+resource. The next append-only capability admits the format-2 `N` group.
+Format 2 can never use `A`; clients without its exact capability receive
+neither its descriptor nor any of its three tagged bodies. Truncation,
+duplicates, bad placement, unknown groups, and unknown values are fatal.
 
 The built-in HTTP server streams file bodies through a 64 KiB buffer. After the
 normal download size and checksum checks, a cancellable worker performs the
-complete closed Bullworth audit, copies/hashes into a random same-volume locked
+complete closed policy audit, copies/hashes into a random same-volume locked
 quarantine, audits the copy, atomically renames the directory, and revalidates
 the final immutable object. A cache hit follows the same guarded validation
 path.
 
-Transport alone still does not authorize or activate the object. An opted-in
-offer may publish an inert authorization record after the exact object is
-cached. Successful diagnostics contain:
+Transport alone still does not authorize or activate the object. A format-1
+opted-in offer may publish an inert authorization record after the exact object
+is cached. Format 2 always stops at immutable publication. Its successful
+diagnostic ends with `audit=closed-static-world-v1 publish=atomic activation=no
+lease=no restart-required=no`.
+
+Successful authorized format-1 diagnostics contain:
 
 ```text
 [NativeWorldTransport] state=audit-started ... activation=no lease=no
@@ -239,10 +251,11 @@ deliberately adds no Lua API and performs no GTA activation.
 
 ### Cache policy
 
-The cache is rooted at:
+The versioned caches are rooted at:
 
 ```text
 C:\ProgramData\MTA San Andreas All\1.7\native-world-cache\v1
+C:\ProgramData\MTA San Andreas All\1.7\native-world-cache\v2
 ```
 
 The validated Bullworth object used during the transport checkpoint had content
@@ -250,6 +263,13 @@ ID:
 
 ```text
 6a090231416e0298eb78e671eba91d4c58ed1f9c16dfae94d162a81a52464824
+```
+
+The E1 format-2 fixture deliberately reused the Bullworth bytes but bound the
+generic policy and pack identity into the distinct content ID:
+
+```text
+668bd36a1a2f686975277291032a2d3bef6048057660310d2673d4f5403fa645
 ```
 
 The transport limits are a 4 KiB manifest, 1 MiB IDE, 256 MiB IMG, at most four
@@ -273,6 +293,26 @@ explicitly broadening authorization, the orchestrator automated the Checkpoint
 B/C live gates through the documented VM workflow.
 
 Confirmed checkpoints include:
+
+- Checkpoint E1 was formatted with the pinned clang-format 21.1.7 executable.
+  The focused suite reports 77 tests, including two optional
+  environment-dependent skips. Independent architecture and security reviews
+  found no remaining actionable P0-P2 issue.
+- The complete affected set (`Game SA`, `Client Core`, `Client Deathmatch`,
+  `Multiplayer SA`, and `Client Webbrowser` as `Release|Win32`, plus server
+  `Deathmatch` as `Release|x64`) built through reviewed `vm-build.ps1`
+  plan/execute with zero errors.
+- The authorized live gate first published and then cache-hit format-2 content
+  ID `668bd36a1a2f686975277291032a2d3bef6048057660310d2673d4f5403fa645`.
+  Independent hashing reproduced the ID, the v2 object contained exactly the
+  canonical manifest, IDE, and IMG with the declared sizes and hashes, and both
+  sessions ended `activation=no lease=no restart-required=no`. No format-2
+  authorization record was created.
+- An immediate format-1 regression retained the golden Bullworth content ID,
+  completed its closed audit/cache hit, and produced the expected inert pending
+  authorization with `activation=no lease=no restart-required=yes`. The client
+  was then closed and the test-only pending file was removed offline; the
+  earlier Checkpoint D gate already validates the public `clear` command.
 
 - Checkpoint C was formatted with the pinned clang-format 21.1.7 executable.
   The focused suite reports 67 tests, including two optional
@@ -416,18 +456,20 @@ all movement runs had continuous intermediate samples, no regression or
 overshoot, and zero final error. Retain this three-position matrix before later
 protocol, activation, or multi-pack checkpoints are called complete.
 
-The tracked `test-resources/native-world-transport-test` contains metadata and
-instructions only. Its large audited Bullworth payload is intentionally copied
-only into the VM runtime resource and is never Git-indexed. Do not commit
-generated city assets.
+The tracked `test-resources/native-world-transport-test` and
+`native-world-static-transport-test` contain metadata and instructions only.
+Their large audited payload is intentionally copied only into the VM runtime
+resources and is never Git-indexed. Do not commit generated city assets.
 
 ## Known boundaries
 
-- Bullworth is still the only compiled policy; the transport is not arbitrary
-  IDE support.
-- An opted-in server can cause a strictly bound authorization record to be
-  persisted after publication. Checkpoint B consumes it only for closed startup
-  selection and one-shot claim; no code activates native GTA state yet.
+- Bullworth is still the only activatable compiled policy. Format 2 accepts a
+  bounded pack identity under one closed `static-world-v1` grammar; it is not
+  arbitrary IDE/IPL/IMG support and it cannot yet authorize or activate a pack.
+- A format-1 opted-in server can cause a strictly bound authorization record to
+  be persisted after publication. Checkpoints B/C consume it for closed startup
+  selection, one-shot claim, and Bullworth activation. Format 2 cannot produce
+  such a record in E1.
 - Only the legacy developer route depends on the local selector manifest and
   environment flag. The record-driven B route does not.
 - The record is bound to the opaque server ID exposed by the established MTA
@@ -612,8 +654,8 @@ water, COL synchronization, and `moveObject` live regression evidence.
 
 After authorized activation:
 
-1. Replace Bullworth-specific compiled payload assumptions with a constrained,
-   versioned generic static-world pack policy.
+1. Extend the completed E1 generic format-2 transport boundary with equally
+   strict E2 authorization/startup without weakening format 1.
 2. Prove that a second city, preferably Carcer, uses the same pipeline without
    city-specific C++.
 3. Build a deterministic aggregate startup plan for multiple packs, including
@@ -680,9 +722,9 @@ Read AGENTS.md, LIMIT_PATCHING.md, NATIVE_WORLD_HANDOFF.md,
 utils/extended-world/NATIVE_BW_PACK.md, and the recent native-world commit
 bodies completely. Recheck HEAD and the dirty tree before touching files.
 
-Resume with global roadmap item 1, the constrained versioned generic
-static-world pack policy, in NATIVE_WORLD_HANDOFF.md. Recheck the current local
-commits, dirty tree, Checkpoint A/B/C/D evidence, and exact-cache/typed-lease
+Resume with global roadmap item 1, Checkpoint E2 generic static-world
+authorization/startup, in NATIVE_WORLD_HANDOFF.md. Recheck the current local
+commits, dirty tree, Checkpoint A/B/C/D/E1 evidence, and exact-cache/typed-lease
 contract before editing. Preserve unrelated changes, keep the
 orchestrator/independent-review loop and VM workflow. Do not perform in-game
 tests without explicit user authorization; otherwise prepare exact instructions

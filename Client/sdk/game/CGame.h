@@ -136,6 +136,7 @@ struct SNativeWorldTransportPublishResult
     bool        existingActivationActive{};
     std::string offerId;
     std::string contentId;
+    std::string auditProfile;
     std::string publishedDirectory;
     std::string error;
 };

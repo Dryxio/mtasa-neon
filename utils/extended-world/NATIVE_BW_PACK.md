@@ -80,13 +80,14 @@ The manager derives the even streaming-buffer
 minimum from that validated maximum rather than storing a second 4,008-sector
 constant.
 
-This is the Phase 2B local-cache and publish-only server-transport foundation,
-not arbitrary IDE support. Manifests currently represent the same constrained
-static-world format proven by Bullworth: `objs`/`tobj` IDE sections, DFF/TXD
-entries, exactly one merged COL, and standalone binary IPLs. Authenticated
-server authorization, hot registration, and multi-pack aggregate allocation
-are not implemented yet. Bullworth remains the single compiled policy and the
-existing environment flag, executable allowlist, trusted pool budgets,
+This is a constrained static-world pipeline, not arbitrary IDE support. The
+closed grammar proven by Bullworth permits `objs`/`tobj` IDE sections, DFF/TXD
+entries, exactly one merged COL, and standalone binary IPLs. Format 1 remains
+the immutable Bullworth policy. Format 2 identifies the compiled
+`static-world-v1` audit profile plus an untrusted bounded pack ID, but its E1
+route is transport/cache only. Generic authorization, hot registration, and
+multi-pack aggregate allocation are not implemented yet. The existing
+Bullworth environment flag, executable allowlist, trusted pool budgets,
 registration order, diagnostics, and process-lifetime behavior are unchanged.
 
 The JSON schema is closed: unknown or missing fields, duplicate JSON keys,
@@ -198,6 +199,53 @@ object aside, exact SHA-256 equality with that known-good object, and reconnect
 reuse with `disposition=hit`. The Game SA and Client Deathmatch Release/Win32
 builds passed, and the extended-world Python suite reported 38 passing tests
 with two optional skips.
+
+### Generic static-world format-2 publication checkpoint
+
+Checkpoint E1 adds a second closed descriptor without reinterpreting format 1:
+
+```xml
+<file src="native/native-world.json" download="true" native_world="true" />
+<file src="native/world.ide" download="true" native_world="true" />
+<file src="native/world.img" download="true" native_world="true" />
+<native_world format="2" policy="static-world-v1"
+              manifest="native/native-world.json" />
+```
+
+The manifest root is exactly `format`, `policy`, `pack_id`, and `files`.
+`policy` must be `static-world-v1`; `pack_id` must match
+`[a-z0-9_-]{1,15}`. The content ID uses the separate
+`mta-native-world-cache-content-v2` domain and binds the format, policy, pack
+identity, and both payload sizes and hashes. Objects live at
+`native-world-cache/v2/static-world-v1/<content-id>`; the untrusted pack ID is
+never a directory component or a selector for parser budgets, executable
+patches, pools, archive slots, or native paths.
+
+The wire extension has its own append-only capability. A client without that
+exact capability receives neither the format-2 descriptor nor its tagged
+files. A capable client accepts format 2 only as an `N` group; the authorization
+`A` group remains format-1 Bullworth only. Publication reuses the same complete
+closed payload audit, immutable cache discipline, shared policy quotas, and
+cancellation rules. It cannot create an authorization record, retain or
+recover an activation lease, select startup content, install a hook, or mutate
+native GTA state. Success must therefore report
+`audit=closed-static-world-v1 publish=atomic activation=no lease=no
+restart-required=no`.
+
+`test-resources/native-world-static-transport-test` is the metadata-only E1
+harness. Its initial live fixture may reuse Bullworth bytes to prove that the
+generic identity and cache route are distinct; that does not prove a second
+city or generic activation. The next checkpoint is the separate E2
+authorization/startup design and implementation.
+
+The authorized E1 live fixture did reuse the known Bullworth payload. A fresh
+session published format-2 content ID
+`668bd36a1a2f686975277291032a2d3bef6048057660310d2673d4f5403fa645`
+under the v2 tree, and a clean second session reported `disposition=hit` for
+the same ID. Both diagnostics ended with `activation=no lease=no
+restart-required=no`; the activation store contained no format-2 record. A
+following format-1 session retained the established Bullworth content ID and
+pending-authorization behavior.
 
 The compiled model-store policy records the relocated foundation capacities
 (`15000` Atomic, `160` DamageAtomic, and `200` Time). Preflight requires the

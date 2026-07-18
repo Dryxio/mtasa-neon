@@ -28,12 +28,14 @@ class NativeWorldPackDescriptorTest(unittest.TestCase):
         cls.manager = (GAME_SA / "CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         cls.policy = (GAME_SA / "CNativeBullworthPackSA.cpp").read_text(encoding="utf-8")
         cls.header = (GAME_SA / "CNativeWorldPackSA.h").read_text(encoding="utf-8")
+        cls.cache = (GAME_SA / "CNativeWorldCacheSA.cpp").read_text(encoding="utf-8")
         cls.manifest = json.loads(RUNTIME_MANIFEST.read_text(encoding="ascii"))
 
     def test_manager_is_pack_neutral_beyond_policy_selection(self) -> None:
         self.assertNotIn("[NativeBW]", self.manager)
         self.assertNotIn("MTA_NATIVE_BW_MODEL_STORES", self.manager)
         self.assertIn("GetNativeBullworthPackPolicy()", self.manager)
+        self.assertIn("FindNativeWorldPackPolicy(offer.format)", self.manager)
 
     def test_compiled_policy_owns_only_trusted_runtime_constraints(self) -> None:
         for value in (
@@ -56,6 +58,20 @@ class NativeWorldPackDescriptorTest(unittest.TestCase):
         )
         self.assertEqual(169545728, self.manifest["files"]["img"]["bytes"])
         self.assertEqual({"format", "pack_id", "files"}, set(self.manifest))
+
+    def test_format_two_separates_compiled_policy_from_pack_identity(self) -> None:
+        generic = copy.deepcopy(self.manifest)
+        generic["format"] = 2
+        generic["policy"] = "static-world-v1"
+        generic["pack_id"] = "another_city"
+        self.assertIs(generic, validate_runtime_manifest(generic))
+        for token in ('"static-world-v1"', '"closed-static-world-v1"', "STATIC_WORLD_V1_POLICY"):
+            self.assertIn(token, self.policy)
+        self.assertIn("manifest.policyKey = g_policy->key", self.manager)
+        self.assertIn("IsSafePackId(packId->string)", self.manager)
+        self.assertIn("CONTENT_ID_DOMAIN_V2", self.cache)
+        self.assertIn('request.policyKey == "static-world-v1"', self.cache)
+        self.assertIn('"format-2 static-world publication cannot acquire an activation lease"', self.cache)
 
     def test_malformed_manifests_are_deterministically_rejected(self) -> None:
         mutations = []

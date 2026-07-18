@@ -344,7 +344,7 @@ bool CResource::CanBeLoaded()
 
 bool CResource::SetNativeWorldTransport(unsigned char format, const SString& manifestPath)
 {
-    if (m_nativeWorldTransport.present)
+    if (m_nativeWorldTransport.present || (format != 1 && format != 2))
         return false;
 
     m_nativeWorldTransport.present = true;
@@ -355,7 +355,8 @@ bool CResource::SetNativeWorldTransport(unsigned char format, const SString& man
 
 bool CResource::SetNativeWorldStartupAuthorization(unsigned char wireVersion, unsigned char startupMode, unsigned char policy)
 {
-    if (!m_nativeWorldTransport.present || m_nativeWorldTransport.authorizationRequested || wireVersion != 1 || startupMode != 1 || policy != 1)
+    if (!m_nativeWorldTransport.present || m_nativeWorldTransport.format != 1 || m_nativeWorldTransport.authorizationRequested || wireVersion != 1 ||
+        startupMode != 1 || policy != 1)
         return false;
 
     m_nativeWorldTransport.authorizationRequested = true;
@@ -383,7 +384,8 @@ bool CResource::AddNativeWorldTransportFile(CDownloadableResource* file)
 
 bool CResource::IsNativeWorldTransportDescriptorValid() const
 {
-    if (!m_nativeWorldTransport.present || m_nativeWorldTransport.format != 1 || m_nativeWorldTransport.fileCount != m_nativeWorldTransport.files.size())
+    if (!m_nativeWorldTransport.present || (m_nativeWorldTransport.format != 1 && m_nativeWorldTransport.format != 2) ||
+        m_nativeWorldTransport.fileCount != m_nativeWorldTransport.files.size())
         return false;
 
     constexpr uint64_t MAXIMUM_MANIFEST_BYTES = 4096;
@@ -572,9 +574,10 @@ bool CResource::VerifyNativeWorldTransportReady()
         }
         const SString message(
             "[NativeWorldTransport] state=cached resource=%s format=%u manifest=%s files=3 offerId=%s contentId=%s disposition=%s directory=%s "
-            "audit=closed-bullworth publish=atomic activation=no lease=no restart-required=%s",
+            "audit=%s publish=atomic activation=no lease=no restart-required=%s",
             *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath, result.offerId.c_str(), result.contentId.c_str(),
-            result.cacheHit ? "hit" : "published", result.publishedDirectory.c_str(), m_nativeWorldTransport.authorizationRecordPublished ? "yes" : "no");
+            result.cacheHit ? "hit" : "published", result.publishedDirectory.c_str(), result.auditProfile.c_str(),
+            m_nativeWorldTransport.authorizationRecordPublished ? "yes" : "no");
         AddReportLog(7471, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);

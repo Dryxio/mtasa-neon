@@ -7,6 +7,9 @@ startup selection now performs the typed existing-cache transaction, one-shot
 claim, early model-store preparation, exact second-session revalidation,
 deferred hook installation, native commit, process-lease promotion, and an
 explicit credential-free restart to the authorized numeric endpoint.
+Checkpoint E1 adds a separate publish-only generic transport/cache format. Its
+publication and cache-hit live gates passed under the same explicit automation
+authorization on 2026-07-18; it does not extend this authorization design.
 
 Read this together with `AGENTS.md`, `LIMIT_PATCHING.md`,
 `NATIVE_WORLD_HANDOFF.md`, and `NATIVE_BW_PACK.md`.
@@ -494,6 +497,29 @@ either route mutates state; neither route may select itself independently.
   another restart once native preparation has begun.
 - Never add the server password to diagnostics, the authorization record, the
   loader action, or connection CVARs as part of the restart handoff.
+
+### Checkpoint E1: generic static-world publication (implemented and live
+validated)
+
+- Add a separate append-only capability and closed format-2
+  `static-world-v1` descriptor.
+- Bind semantic identity to format, compiled policy, bounded pack ID, and
+  payload bytes in a separate cache-v2 domain and directory tree.
+- Reuse the complete immutable publication audit, quotas, and cancellation
+  boundaries while preserving format-1 Bullworth byte-for-byte.
+- Forbid startup metadata, authorization records, activation leases, startup
+  selection, hooks, and native mutation. Successful format-2 publication ends
+  with `activation=no lease=no restart-required=no`.
+- Do not extend generic authorization until the separate E2 checkpoint.
+
+The authorized E1 live gate published and then reused format-2 content ID
+`668bd36a1a2f686975277291032a2d3bef6048057660310d2673d4f5403fa645`.
+Both sessions ended with `activation=no lease=no restart-required=no`; the
+second reported `disposition=hit`, and the local authorization store remained
+unchanged. An immediate format-1 regression retained Bullworth content ID
+`6a090231416e0298eb78e671eba91d4c58ed1f9c16dfae94d162a81a52464824`
+and produced the expected inert pending authorization. This proves E1's
+transport/cache separation, not generic startup or a second-city load.
 
 ## Required negative tests
 

@@ -24,6 +24,7 @@ from native_world_cache import (  # noqa: E402
     publish_local_seed,
     validate_cache_object,
 )
+from native_world_manifest import STATIC_WORLD_V1_POLICY  # noqa: E402
 
 
 class NativeWorldCacheTest(unittest.TestCase):
@@ -76,6 +77,37 @@ class NativeWorldCacheTest(unittest.TestCase):
         manifest_path = REPOSITORY / "Shared/data/MTA San Andreas/MTA/data/extended-world/bullworth/native-world.json"
         manifest = json.loads(manifest_path.read_text(encoding="ascii"))
         self.assertEqual("6a090231416e0298eb78e671eba91d4c58ed1f9c16dfae94d162a81a52464824", content_id(manifest, "bullworth"))
+
+    def test_format_2_identity_and_cache_path_include_policy_not_pack_parent(self) -> None:
+        manifest = copy.deepcopy(self.manifest)
+        manifest.update(format=2, policy=STATIC_WORLD_V1_POLICY, pack_id="test-city")
+        (self.seed / "native-world.json").write_text(json.dumps(manifest), encoding="ascii")
+
+        identity = content_id(manifest, STATIC_WORLD_V1_POLICY)
+        self.assertEqual("0a68d3f704fb6736f76070351ce86a3d20a717063ad1041d632ab1a142f47bee", identity)
+        renamed = copy.deepcopy(manifest)
+        renamed["files"]["ide"]["name"] = "renamed.ide"
+        renamed["files"]["img"]["name"] = "renamed.img"
+        self.assertEqual(identity, content_id(renamed, STATIC_WORLD_V1_POLICY))
+
+        another_pack = copy.deepcopy(manifest)
+        another_pack["pack_id"] = "other-city"
+        self.assertNotEqual(identity, content_id(another_pack, STATIC_WORLD_V1_POLICY))
+        resized = copy.deepcopy(manifest)
+        resized["files"]["ide"]["bytes"] += 1
+        self.assertNotEqual(identity, content_id(resized, STATIC_WORLD_V1_POLICY))
+        with self.assertRaisesRegex(ValueError, "manifest policy differs"):
+            content_id(manifest, "bullworth")
+
+        final, disposition = publish_local_seed(self.seed, self.cache, STATIC_WORLD_V1_POLICY)
+        self.assertEqual("published", disposition)
+        self.assertEqual(self.cache / "v2" / STATIC_WORLD_V1_POLICY / identity, final)
+        self.assertNotIn(manifest["pack_id"], final.parts[:-1])
+        self.assertEqual(final, open_existing_cache(self.cache, manifest, STATIC_WORLD_V1_POLICY, identity))
+        validate_cache_object(final, manifest, STATIC_WORLD_V1_POLICY)
+
+        canonical = json.loads(canonical_manifest_bytes(manifest, STATIC_WORLD_V1_POLICY))
+        self.assertEqual((2, STATIC_WORLD_V1_POLICY, "test-city"), (canonical["format"], canonical["policy"], canonical["pack_id"]))
 
     def test_corrupt_existing_object_is_quarantined_and_rebuilt(self) -> None:
         final, disposition = publish_local_seed(self.seed, self.cache, "bullworth")

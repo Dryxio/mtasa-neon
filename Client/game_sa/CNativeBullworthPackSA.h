@@ -14,3 +14,5 @@ struct SNativeWorldPackPolicySA;
 // Payload identity and inventory are intentionally absent here; the runtime
 // reads or derives those values from the pack files.
 const SNativeWorldPackPolicySA& GetNativeBullworthPackPolicy();
+const SNativeWorldPackPolicySA& GetNativeStaticWorldV1PackPolicy();
+const SNativeWorldPackPolicySA* FindNativeWorldPackPolicy(unsigned int format);

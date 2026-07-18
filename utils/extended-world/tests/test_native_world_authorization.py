@@ -184,6 +184,26 @@ class NativeWorldAuthorizationSourceContractTests(unittest.TestCase):
         self.assertIn("case 'A'", reader)
         self.assertIn("case 'N'", reader)
 
+    def test_static_world_v2_transport_is_append_only_gated_and_publish_only(self) -> None:
+        bitstream = (REPO / "Shared/sdk/net/bitstream.h").read_text()
+        server_resource = (REPO / "Server/mods/deathmatch/logic/CResource.cpp").read_text()
+        writer = (REPO / "Server/mods/deathmatch/logic/packets/CResourceStartPacket.cpp").read_text()
+        reader = (REPO / "Client/mods/deathmatch/logic/CPacketHandler.cpp").read_text()
+        client_resource = (REPO / "Client/mods/deathmatch/logic/CResource.cpp").read_text()
+
+        self.assertLess(bitstream.index("NativeWorldStartupAuthorization,"), bitstream.index("NativeWorldStaticWorldV2Transport,"))
+        self.assertIn('formatAttribute->GetValue() == "2"', server_resource)
+        self.assertIn('policyAttribute->GetValue() == "static-world-v1"', server_resource)
+        self.assertIn("staticWorldV2PublishOnly", server_resource)
+        self.assertIn("NativeWorldStaticWorldV2Transport", writer)
+        self.assertIn("if (!isNativeWorldFile(resourceFile))", writer)
+        self.assertIn("nativeWorldPack.format == 1 && nativeWorldPack.startupAuthorization", writer)
+        self.assertIn("NativeWorldStaticWorldV2Transport", reader)
+        self.assertIn("format != 1", reader)
+        self.assertIn("m_nativeWorldTransport.format != 1", client_resource)
+        self.assertIn("m_nativeWorldTransport.format != 2", client_resource)
+        self.assertIn("result.auditProfile.c_str()", client_resource)
+
     def test_store_is_dpapi_atomic_unicode_and_inert(self) -> None:
         store = (REPO / "Client/core/CNativeWorldAuthorizationStore.cpp").read_text()
         for token in (

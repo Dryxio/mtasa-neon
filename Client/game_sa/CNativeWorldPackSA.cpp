@@ -185,6 +185,8 @@ namespace
         const SNativeWorldPackPolicySA* selected = nullptr;
         for (const SNativeWorldPackPolicySA* candidate : available)
         {
+            if (!candidate->featureEnvironment)
+                continue;
             char        value[8]{};
             const DWORD valueLength = GetEnvironmentVariableA(candidate->featureEnvironment, value, sizeof(value));
             if (valueLength != 1 || value[0] != '1')
@@ -544,6 +546,14 @@ namespace
                            });
     }
 
+    bool IsSafePackId(const std::string& value)
+    {
+        return !value.empty() && value.size() <= 15 &&
+               std::all_of(
+                   value.begin(), value.end(), [](unsigned char character)
+                   { return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' || character == '-'; });
+    }
+
     bool IsLowerSha256(const std::string& value)
     {
         return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char character)
@@ -576,17 +586,22 @@ namespace
         SJsonValue root;
         if (!CStrictJsonParser(bytes).Parse(root, error))
             return false;
-        if (!HasExactKeys(root, {"format", "pack_id", "files"}))
+        const bool legacyManifest = g_policy->format == 1;
+        if ((legacyManifest && !HasExactKeys(root, {"format", "pack_id", "files"})) ||
+            (!legacyManifest && !HasExactKeys(root, {"format", "policy", "pack_id", "files"})))
         {
-            error = "runtime manifest root schema differs from format 1";
+            error = "runtime manifest root schema differs from its compiled format policy";
             return false;
         }
         const SJsonValue* format = Member(root, "format", SJsonValue::EType::Unsigned);
+        const SJsonValue* policy = legacyManifest ? nullptr : Member(root, "policy", SJsonValue::EType::String);
         const SJsonValue* packId = Member(root, "pack_id", SJsonValue::EType::String);
         const SJsonValue* files = Member(root, "files", SJsonValue::EType::Object);
-        if (!format || !packId || !files || format->number != 1 || packId->string != g_policy->key || !HasExactKeys(*files, {"ide", "img"}))
+        const bool        packMatches =
+            legacyManifest ? packId && packId->string == g_policy->key : packId && policy && policy->string == g_policy->key && IsSafePackId(packId->string);
+        if (!format || !files || format->number != g_policy->format || !packMatches || !HasExactKeys(*files, {"ide", "img"}))
         {
-            error = "runtime manifest format, pack ID, or nested schema is invalid";
+            error = "runtime manifest format, policy, pack ID, or nested schema is invalid";
             return false;
         }
 
@@ -617,6 +632,7 @@ namespace
 
         SNativeWorldPackRuntimeDataSA manifest;
         manifest.format = format->number;
+        manifest.policyKey = g_policy->key;
         manifest.packId = packId->string;
         // Runtime manifests require lowercase SHA-256 text. Normalize the
         // locally generated manifest digest to the same canonical spelling.
@@ -635,7 +651,7 @@ namespace
         for (const std::string& name : g_manifest.iplNames)
             g_iplNamePointers.push_back(name.c_str());
         g_runtimeDescriptor = {
-            g_manifest.packId.c_str(),
+            g_policy->key,
             g_policy->displayName,
             g_policy->logPrefix,
             g_policy->featureEnvironment,
@@ -1068,7 +1084,7 @@ namespace
             return false;
 
         // Keep this stable and compact: it proves the untrusted bytes passed
-        // the closed Bullworth profile before AddArchive or any pool mutation.
+        // the selected closed static-world policy before native mutation.
         Log("payloadAudit=ok dff=%u txd=%u rwChunks=%u rwDepth=%u rwBytes=%llu geometry=%llu/%llu/%llu plugins=%llu/%llu/%llu/%llu "
             "nativeTextures=%u textureBytes=%llu/%llu colRecords=%u coll=%u col3=%u colBytes=%llu maxColRecord=%u maxColVertices=%u "
             "maxColFaces=%u maxColFaceGroups=%u",
@@ -1882,6 +1898,7 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
 
     SNativeWorldCacheRequestSA request;
     request.format = g_manifest.format;
+    request.policyKey = policy.key;
     request.packId = g_manifest.packId;
     request.manifestFileName = policy.runtimeManifestFileName;
     request.sourceManifestSha256 = g_manifest.manifestSha256;
@@ -2116,6 +2133,7 @@ void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
     SNativeWorldCacheRequestSA cacheRequest;
     cacheRequest.format = g_manifest.format;
     cacheRequest.sourceRelativeDirectory = g_policy->relativeDirectory;
+    cacheRequest.policyKey = g_policy->key;
     cacheRequest.packId = g_manifest.packId;
     cacheRequest.manifestFileName = g_policy->runtimeManifestFileName;
     cacheRequest.sourceManifestSha256 = g_manifest.manifestSha256;
@@ -2193,9 +2211,15 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
         g_pack = nullptr;
     };
 
-    const SNativeWorldPackPolicySA& policy = GetNativeBullworthPackPolicy();
+    const SNativeWorldPackPolicySA* selectedPolicy = FindNativeWorldPackPolicy(offer.format);
+    if (!selectedPolicy)
+    {
+        result.error = "transport offer format has no compiled static-world policy";
+        return result;
+    }
+    const SNativeWorldPackPolicySA& policy = *selectedPolicy;
     g_policy = &policy;
-    if (offer.format != 1 || offer.resourceName.empty() || offer.resourceName.size() > 255 || offer.manifestRelativePath.empty())
+    if (offer.resourceName.empty() || offer.resourceName.size() > 255 || offer.manifestRelativePath.empty())
         result.error = "transport offer identity is invalid";
 
     std::map<std::string, const SNativeWorldTransportFile*> offeredFiles;
@@ -2223,7 +2247,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
         manifestAbsolute = std::filesystem::path(manifestOffer->second->absolutePath).lexically_normal();
         sourceDirectory = manifestAbsolute.parent_path();
         if (manifestAbsolute.filename().generic_string() != policy.runtimeManifestFileName || sourceDirectory.empty())
-            result.error = "transport manifest filename differs from the closed format-1 policy";
+            result.error = "transport manifest filename differs from the closed policy";
     }
 
     if (result.error.empty())
@@ -2302,6 +2326,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
         SNativeWorldCacheRequestSA request;
         request.format = g_manifest.format;
         request.sourceAbsoluteDirectory = sourceDirectory.string();
+        request.policyKey = policy.key;
         request.packId = g_manifest.packId;
         request.manifestFileName = policy.runtimeManifestFileName;
         request.sourceManifestSha256 = g_manifest.manifestSha256;
@@ -2312,6 +2337,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
         request.cancellation = offer.cancelled;
         request.contentId = GenerateNativeWorldContentId(request);
         result.contentId = request.contentId;
+        result.auditProfile = policy.auditProfile;
 
         const auto auditQuarantine = [&request, &policy, &isCancelled](const std::string& directory, std::string& auditError)
         {

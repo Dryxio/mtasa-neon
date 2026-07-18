@@ -84,12 +84,51 @@ namespace
     constexpr SNativeWorldPayloadBudgetSA BULLWORTH_PAYLOAD_BUDGET = MakeBullworthPayloadBudget();
 
     constexpr SNativeWorldPackPolicySA BULLWORTH_POLICY = {
+        1,
         "bullworth",
+        "closed-bullworth-v1",
         "Bullworth",
         "[NativeBW]",
         "MTA_NATIVE_BW_MODEL_STORES",
         "MTA\\data\\extended-world\\bullworth",
         "native-world.json",
+        false,
+        4096,
+        1048576,
+        131072,
+        4096,
+        8192,
+        19999,
+        2000,
+        1000,
+        10000,
+        5000,
+        252,
+        255,
+        191,
+        256,
+        6,
+        {13984, 69, 160},
+        {15000, 160, 200},
+        BULLWORTH_PAYLOAD_BUDGET,
+        BULLWORTH_TXD_POOL_PROFILES,
+        static_cast<unsigned int>(std::size(BULLWORTH_TXD_POOL_PROFILES)),
+    };
+
+    // Format 2 separates the compiled grammar/foundation policy from the
+    // untrusted pack label. The current ceilings intentionally match the
+    // reviewed v1 envelope; widening any grammar or budget requires a new
+    // policy revision rather than silently changing static-world-v1.
+    constexpr SNativeWorldPackPolicySA STATIC_WORLD_V1_POLICY = {
+        2,
+        "static-world-v1",
+        "closed-static-world-v1",
+        "Static world v1",
+        "[NativeWorld]",
+        "",
+        "",
+        "native-world.json",
+        true,
         4096,
         1048576,
         131072,
@@ -116,4 +155,18 @@ namespace
 const SNativeWorldPackPolicySA& GetNativeBullworthPackPolicy()
 {
     return BULLWORTH_POLICY;
+}
+
+const SNativeWorldPackPolicySA& GetNativeStaticWorldV1PackPolicy()
+{
+    return STATIC_WORLD_V1_POLICY;
+}
+
+const SNativeWorldPackPolicySA* FindNativeWorldPackPolicy(unsigned int format)
+{
+    if (format == 1)
+        return &BULLWORTH_POLICY;
+    if (format == 2)
+        return &STATIC_WORLD_V1_POLICY;
+    return nullptr;
 }

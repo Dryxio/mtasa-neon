@@ -1836,10 +1836,12 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
     CXMLAttribute*  manifestAttribute = attributes.Find("manifest");
     CXMLAttribute*  startupAttribute = attributes.Find("startup");
     CXMLAttribute*  policyAttribute = attributes.Find("policy");
-    const bool      requestsStartupAuthorization = startupAttribute && startupAttribute->GetValue() == "true";
-    const bool      validStartupAuthorization = requestsStartupAuthorization && policyAttribute && policyAttribute->GetValue() == "bullworth";
-    const bool      validAttributeSet = attributes.Count() == 2 || (attributes.Count() == 4 && validStartupAuthorization);
-    if (!validAttributeSet || !formatAttribute || formatAttribute->GetValue() != "1" || !manifestAttribute || (!!startupAttribute != !!policyAttribute))
+    const bool legacyPublishOnly = formatAttribute && formatAttribute->GetValue() == "1" && attributes.Count() == 2 && !startupAttribute && !policyAttribute;
+    const bool legacyAuthorized = formatAttribute && formatAttribute->GetValue() == "1" && attributes.Count() == 4 && startupAttribute &&
+                                  startupAttribute->GetValue() == "true" && policyAttribute && policyAttribute->GetValue() == "bullworth";
+    const bool staticWorldV2PublishOnly = formatAttribute && formatAttribute->GetValue() == "2" && attributes.Count() == 3 && !startupAttribute &&
+                                          policyAttribute && policyAttribute->GetValue() == "static-world-v1";
+    if ((!legacyPublishOnly && !legacyAuthorized && !staticWorldV2PublishOnly) || !manifestAttribute)
     {
         m_strFailureReason = SString("Resource '%s' has an invalid native_world descriptor\n", m_strResourceName.c_str());
         CLogger::ErrorPrintf(m_strFailureReason);
@@ -1859,10 +1861,10 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
 
     // The descriptor is engine-owned: scripts cannot mutate this immutable snapshot after the resource has loaded.
     m_nativeWorldPackTransport.present = true;
-    m_nativeWorldPackTransport.startupAuthorization = requestsStartupAuthorization;
-    m_nativeWorldPackTransport.format = 1;
-    m_nativeWorldPackTransport.authorizationVersion = requestsStartupAuthorization ? 1 : 0;
-    m_nativeWorldPackTransport.authorizationPolicy = requestsStartupAuthorization ? 1 : 0;
+    m_nativeWorldPackTransport.startupAuthorization = legacyAuthorized;
+    m_nativeWorldPackTransport.format = staticWorldV2PublishOnly ? 2 : 1;
+    m_nativeWorldPackTransport.authorizationVersion = legacyAuthorized ? 1 : 0;
+    m_nativeWorldPackTransport.authorizationPolicy = legacyAuthorized ? 1 : 0;
     m_nativeWorldPackTransport.manifestPath = manifestPath;
     m_nativeWorldPackTransport.files = taggedFiles;
     return true;

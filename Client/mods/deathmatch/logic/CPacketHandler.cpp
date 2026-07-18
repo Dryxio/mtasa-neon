@@ -5307,12 +5307,21 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
                     unsigned char format = 0;
                     unsigned char fileCount = 0;
                     unsigned char manifestLength = 0;
-                    if (pResource->HasNativeWorldTransport() ||
-                        (startupAuthorization && !g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStartupAuthorization)) || !bitStream.Read(format) ||
-                        !bitStream.Read(fileCount) || !bitStream.Read(manifestLength) || format != 1 || fileCount != 3 || manifestLength == 0)
+                    if (pResource->HasNativeWorldTransport() || !bitStream.Read(format) || !bitStream.Read(fileCount) || !bitStream.Read(manifestLength))
                     {
                         bFatalError = true;
                         AddReportLog(2081, "Malformed or duplicate native world transport descriptor");
+                        break;
+                    }
+
+                    const bool supportedTransport = format == 1
+                                                        ? g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldPackTransport)
+                                                        : format == 2 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV2Transport);
+                    if (!supportedTransport || fileCount != 3 || manifestLength == 0 ||
+                        (startupAuthorization && (format != 1 || !g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStartupAuthorization))))
+                    {
+                        bFatalError = true;
+                        AddReportLog(2081, "Malformed or unsupported native world transport descriptor");
                         break;
                     }
 

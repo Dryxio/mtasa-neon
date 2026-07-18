@@ -26,6 +26,7 @@ struct SNativeWorldCacheRequestSA
     unsigned int                      format{};
     std::string                       sourceRelativeDirectory;
     std::string                       sourceAbsoluteDirectory;
+    std::string                       policyKey;
     std::string                       packId;
     std::string                       manifestFileName;
     std::string                       sourceManifestSha256;

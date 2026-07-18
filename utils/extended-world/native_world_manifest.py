@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT_KEYS = {"format", "pack_id", "files"}
+FORMAT_1_ROOT_KEYS = {"format", "pack_id", "files"}
+FORMAT_2_ROOT_KEYS = {"format", "policy", "pack_id", "files"}
+STATIC_WORLD_V1_POLICY = "static-world-v1"
 LEAF = re.compile(r"^[a-z0-9_.-]+$")
 IDENTIFIER = re.compile(r"^[a-z0-9_-]{1,15}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -44,11 +46,20 @@ def _file(value: Any, context: str, maximum_bytes: int) -> dict[str, Any]:
 def validate_runtime_manifest(value: Any) -> dict[str, Any]:
     """Apply the same minimal closed schema enforced by the C++ runtime."""
 
-    root = _exact(value, ROOT_KEYS, "root")
-    if type(root["format"]) is not int or root["format"] != 1:
-        raise ValueError("format must be 1")
+    if not isinstance(value, dict) or type(value.get("format")) is not int:
+        raise ValueError("format is invalid")
+    if value["format"] == 1:
+        root = _exact(value, FORMAT_1_ROOT_KEYS, "root")
+    elif value["format"] == 2:
+        root = _exact(value, FORMAT_2_ROOT_KEYS, "root")
+        if root["policy"] != STATIC_WORLD_V1_POLICY:
+            raise ValueError(f"policy must be {STATIC_WORLD_V1_POLICY}")
+    else:
+        raise ValueError("format must be 1 or 2")
     if not isinstance(root["pack_id"], str) or not IDENTIFIER.fullmatch(root["pack_id"]):
         raise ValueError("pack_id is invalid")
+    if value["format"] == 1 and root["pack_id"] != "bullworth":
+        raise ValueError("format 1 pack_id must be bullworth")
     files = _exact(root["files"], {"ide", "img"}, "files")
     _file(files["ide"], "files.ide", MAX_IDE_BYTES)
     img = _file(files["img"], "files.img", MAX_IMG_BYTES)
@@ -77,26 +88,45 @@ def parse_runtime_manifest(text: str) -> dict[str, Any]:
     return validate_runtime_manifest(json.loads(text, object_pairs_hook=object_pairs))
 
 
-def build_runtime_manifest(report: dict[str, Any], ide_path: Path, img_path: Path) -> dict[str, Any]:
+def build_runtime_manifest(
+    report: dict[str, Any],
+    ide_path: Path,
+    img_path: Path,
+    *,
+    format_version: int = 1,
+    policy: str | None = None,
+    pack_id: str = "bullworth",
+) -> dict[str, Any]:
     """Describe only payload identity; inventories are derived from bytes at runtime."""
 
     del report  # Round-trip validation must finish before this function is called.
-    manifest = {
-        "format": 1,
-        "pack_id": "bullworth",
-        "files": {
-            "ide": {
-                "name": ide_path.name,
-                "bytes": ide_path.stat().st_size,
-                "sha256": hashlib.sha256(ide_path.read_bytes()).hexdigest(),
-            },
-            "img": {
-                "name": img_path.name,
-                "bytes": img_path.stat().st_size,
-                "sha256": hashlib.sha256(img_path.read_bytes()).hexdigest(),
-            },
+    files = {
+        "ide": {
+            "name": ide_path.name,
+            "bytes": ide_path.stat().st_size,
+            "sha256": hashlib.sha256(ide_path.read_bytes()).hexdigest(),
+        },
+        "img": {
+            "name": img_path.name,
+            "bytes": img_path.stat().st_size,
+            "sha256": hashlib.sha256(img_path.read_bytes()).hexdigest(),
         },
     }
+    if format_version == 2:
+        manifest = {
+            "format": format_version,
+            "policy": policy,
+            "pack_id": pack_id,
+            "files": files,
+        }
+    else:
+        manifest = {
+            "format": format_version,
+            "pack_id": pack_id,
+            "files": files,
+        }
+    if format_version != 2 and policy is not None:
+        raise ValueError("format 1 does not carry a policy field")
     return validate_runtime_manifest(manifest)
 
 

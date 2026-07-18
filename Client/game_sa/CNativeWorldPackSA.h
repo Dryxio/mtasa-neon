@@ -61,12 +61,15 @@ struct SNativeModelStoreUsageSA
 // capacities, stock occupancy, or archive allocation rules.
 struct SNativeWorldPackPolicySA
 {
-    const char* key;
-    const char* displayName;
-    const char* logPrefix;
-    const char* featureEnvironment;
-    const char* relativeDirectory;
-    const char* runtimeManifestFileName;
+    unsigned int format;
+    const char*  key;
+    const char*  auditProfile;
+    const char*  displayName;
+    const char*  logPrefix;
+    const char*  featureEnvironment;
+    const char*  relativeDirectory;
+    const char*  runtimeManifestFileName;
+    bool         acceptsVariablePackId;
 
     unsigned int  maximumManifestBytes;
     unsigned int  maximumIdeBytes;
@@ -96,6 +99,7 @@ struct SNativeWorldPackPolicySA
 struct SNativeWorldPackRuntimeDataSA
 {
     unsigned int format{};
+    std::string  policyKey;
     std::string  packId;
     std::string  manifestSha256;
     unsigned int manifestBytes{};

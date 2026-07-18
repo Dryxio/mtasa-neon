@@ -119,12 +119,17 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
         }
     };
 
-    // Authorization-capable clients receive a distinct complete descriptor.
-    // Keeping the legacy N layout byte-for-byte unchanged lets a new client
-    // connect to an older server without guessing whether trailing fields exist.
-    if (nativeWorldPack.present && m_pResource->IsClientFilesOn() && BitStream.Can(eBitStreamVersion::NativeWorldPackTransport))
+    // Each format requires its exact capability. Tagged files remain omitted
+    // below when that capability is absent, so an older client cannot mistake
+    // a generic pack for ordinary resource content. The legacy N layout stays
+    // byte-for-byte unchanged.
+    const bool canWriteNativeWorldPack = nativeWorldPack.format == 1
+                                             ? BitStream.Can(eBitStreamVersion::NativeWorldPackTransport)
+                                             : nativeWorldPack.format == 2 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV2Transport);
+    if (nativeWorldPack.present && m_pResource->IsClientFilesOn() && canWriteNativeWorldPack)
     {
-        const bool writeStartupAuthorization = nativeWorldPack.startupAuthorization && BitStream.Can(eBitStreamVersion::NativeWorldStartupAuthorization);
+        const bool writeStartupAuthorization =
+            nativeWorldPack.format == 1 && nativeWorldPack.startupAuthorization && BitStream.Can(eBitStreamVersion::NativeWorldStartupAuthorization);
         BitStream.Write(static_cast<unsigned char>(writeStartupAuthorization ? 'A' : 'N'));
         BitStream.Write(nativeWorldPack.format);
         BitStream.Write(static_cast<unsigned char>(nativeWorldPack.files.size()));

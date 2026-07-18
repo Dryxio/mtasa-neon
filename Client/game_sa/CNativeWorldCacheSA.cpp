@@ -22,8 +22,8 @@
 namespace
 {
     constexpr const char* CACHE_ROOT_DIRECTORY = "native-world-cache";
-    constexpr const char* CACHE_FORMAT_DIRECTORY = "v1";
-    constexpr const char* CONTENT_ID_DOMAIN = "mta-native-world-cache-content-v1";
+    constexpr const char* CONTENT_ID_DOMAIN_V1 = "mta-native-world-cache-content-v1";
+    constexpr const char* CONTENT_ID_DOMAIN_V2 = "mta-native-world-cache-content-v2";
     constexpr const char* CACHED_MANIFEST_FILE = "native-world.json";
     constexpr const char* CACHED_IDE_FILE = "world.ide";
     constexpr const char* CACHED_IMG_FILE = "world.img";
@@ -96,6 +96,24 @@ namespace
                                return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' ||
                                       character == '-' || character == '.';
                            });
+    }
+
+    bool IsValidRequestIdentity(const SNativeWorldCacheRequestSA& request)
+    {
+        if (request.format == 1)
+            return request.policyKey == "bullworth" && request.packId == "bullworth";
+        return request.format == 2 && request.policyKey == "static-world-v1" && IsSafeLeafName(request.packId, 15) &&
+               request.packId.find('.') == std::string::npos;
+    }
+
+    const char* CacheFormatDirectory(const SNativeWorldCacheRequestSA& request)
+    {
+        return request.format == 1 ? "v1" : "v2";
+    }
+
+    const std::string& CachePolicyDirectory(const SNativeWorldCacheRequestSA& request)
+    {
+        return request.format == 1 ? request.packId : request.policyKey;
     }
 
     bool IsSafeLocalPath(const SString& path)
@@ -223,9 +241,10 @@ namespace
     {
         std::ostringstream manifest;
         manifest.imbue(std::locale::classic());
-        manifest << "{\n"
-                 << "  \"format\": " << request.format << ",\n"
-                 << "  \"pack_id\": \"" << request.packId << "\",\n"
+        manifest << "{\n" << "  \"format\": " << request.format << ",\n";
+        if (request.format == 2)
+            manifest << "  \"policy\": \"" << request.policyKey << "\",\n";
+        manifest << "  \"pack_id\": \"" << request.packId << "\",\n"
                  << "  \"files\": {\n"
                  << "    \"ide\": {\n"
                  << "      \"name\": \"" << CACHED_IDE_FILE << "\",\n"
@@ -259,8 +278,8 @@ namespace
         SCachePaths paths;
         paths.dataRoot = SharedUtil::GetMTADataPath();
         paths.root = JoinPath(paths.dataRoot, CACHE_ROOT_DIRECTORY);
-        paths.format = JoinPath(paths.root, CACHE_FORMAT_DIRECTORY);
-        paths.pack = JoinPath(paths.format, request.packId);
+        paths.format = JoinPath(paths.root, CacheFormatDirectory(request));
+        paths.pack = JoinPath(paths.format, CachePolicyDirectory(request));
         paths.published = publishedDirectory;
         paths.manifest = JoinPath(paths.published, CACHED_MANIFEST_FILE);
         paths.ide = JoinPath(paths.published, CACHED_IDE_FILE);
@@ -581,10 +600,12 @@ std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& reque
     // and key order while still binding compiled policy identity and payload.
     std::ostringstream identity;
     identity.imbue(std::locale::classic());
-    identity << CONTENT_ID_DOMAIN << '\n'
-             << "format=" << request.format << '\n'
-             << "policy=" << request.packId << '\n'
-             << "ide.bytes=" << request.ide.bytes << '\n'
+    identity << (request.format == 1 ? CONTENT_ID_DOMAIN_V1 : CONTENT_ID_DOMAIN_V2) << '\n' << "format=" << request.format << '\n';
+    if (request.format == 1)
+        identity << "policy=" << request.packId << '\n';
+    else
+        identity << "policy=" << request.policyKey << '\n' << "pack_id=" << request.packId << '\n';
+    identity << "ide.bytes=" << request.ide.bytes << '\n'
              << "ide.sha256=" << request.ide.sha256 << '\n'
              << "img.bytes=" << request.img.bytes << '\n'
              << "img.sha256=" << request.img.sha256 << '\n';
@@ -609,12 +630,17 @@ namespace
             error = "native world cache can be prepared only once per startup transaction";
             return false;
         }
-        if (request.format != 1 || request.manifestFileName != CACHED_MANIFEST_FILE || !IsSafeLeafName(request.packId, 32) ||
-            !IsSafeLeafName(request.manifestFileName, 63) || !IsSafeLeafName(request.ide.name, 63) || !IsSafeLeafName(request.img.name, 63) ||
-            request.manifestFileName == request.ide.name || request.manifestFileName == request.img.name || request.ide.name == request.img.name ||
-            !IsLowerSha256(request.sourceManifestSha256) || !IsLowerSha256(request.ide.sha256) || !IsLowerSha256(request.img.sha256) ||
-            !IsLowerSha256(request.contentId) || !request.sourceManifestBytes || request.sourceManifestBytes > request.maximumManifestBytes ||
-            !request.ide.bytes || !request.img.bytes || GenerateNativeWorldContentId(request) != request.contentId)
+        if (retainLease && request.format != 1)
+        {
+            error = "format-2 static-world publication cannot acquire an activation lease";
+            return false;
+        }
+        if (!IsValidRequestIdentity(request) || request.manifestFileName != CACHED_MANIFEST_FILE || !IsSafeLeafName(request.manifestFileName, 63) ||
+            !IsSafeLeafName(request.ide.name, 63) || !IsSafeLeafName(request.img.name, 63) || request.manifestFileName == request.ide.name ||
+            request.manifestFileName == request.img.name || request.ide.name == request.img.name || !IsLowerSha256(request.sourceManifestSha256) ||
+            !IsLowerSha256(request.ide.sha256) || !IsLowerSha256(request.img.sha256) || !IsLowerSha256(request.contentId) || !request.sourceManifestBytes ||
+            request.sourceManifestBytes > request.maximumManifestBytes || !request.ide.bytes || !request.img.bytes ||
+            GenerateNativeWorldContentId(request) != request.contentId)
         {
             error = "native world cache request identity is invalid";
             return false;
@@ -627,8 +653,8 @@ namespace
 
         const SString dataRoot = SharedUtil::GetMTADataPath();
         const SString root = JoinPath(dataRoot, CACHE_ROOT_DIRECTORY);
-        const SString format = JoinPath(root, CACHE_FORMAT_DIRECTORY);
-        const SString pack = JoinPath(format, request.packId);
+        const SString format = JoinPath(root, CacheFormatDirectory(request));
+        const SString pack = JoinPath(format, CachePolicyDirectory(request));
         const SString published = JoinPath(pack, request.contentId);
         publishedDirectory = published.c_str();
         SCachePaths paths = MakeCachePaths(request, published);
@@ -884,8 +910,8 @@ bool AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA& requ
         error = "native-world cache lease output is already active";
         return false;
     }
-    if (!audit || request.format != 1 || request.manifestFileName != CACHED_MANIFEST_FILE || request.ide.name != CACHED_IDE_FILE ||
-        request.img.name != CACHED_IMG_FILE || !IsSafeLeafName(request.packId, 32) || !IsLowerSha256(request.sourceManifestSha256) ||
+    if (!audit || request.format != 1 || !IsValidRequestIdentity(request) || request.manifestFileName != CACHED_MANIFEST_FILE ||
+        request.ide.name != CACHED_IDE_FILE || request.img.name != CACHED_IMG_FILE || !IsLowerSha256(request.sourceManifestSha256) ||
         !IsLowerSha256(request.ide.sha256) || !IsLowerSha256(request.img.sha256) || !IsLowerSha256(request.contentId) || !IsLowerHex(ticketId, 32) ||
         !request.sourceManifestBytes || request.sourceManifestBytes > request.maximumManifestBytes || !request.ide.bytes || !request.img.bytes ||
         GenerateNativeWorldContentId(request) != request.contentId || BuildCanonicalManifest(request).size() > request.maximumManifestBytes)
@@ -901,8 +927,8 @@ bool AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA& requ
 
     const SString dataRoot = SharedUtil::GetMTADataPath();
     const SString root = JoinPath(dataRoot, CACHE_ROOT_DIRECTORY);
-    const SString format = JoinPath(root, CACHE_FORMAT_DIRECTORY);
-    const SString pack = JoinPath(format, request.packId);
+    const SString format = JoinPath(root, CacheFormatDirectory(request));
+    const SString pack = JoinPath(format, CachePolicyDirectory(request));
     const SString published = JoinPath(pack, request.contentId);
     publishedDirectory = published.c_str();
     const SCachePaths paths = MakeCachePaths(request, published);
@@ -920,7 +946,7 @@ bool AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA& requ
     }
 
     auto impl = std::make_unique<CNativeWorldCacheLeaseSA::SImpl>();
-    impl->policy = request.packId;
+    impl->policy = request.policyKey;
     impl->contentId = request.contentId;
     impl->ticketId = ticketId;
     impl->directory = publishedDirectory;

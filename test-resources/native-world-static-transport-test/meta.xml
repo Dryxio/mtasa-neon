@@ -1,0 +1,7 @@
+<meta>
+    <info author="MTA Neon" name="Native static-world v2 transport test" type="script" version="1.0.0" />
+    <file src="native/native-world.json" download="true" native_world="true" />
+    <file src="native/world.ide" download="true" native_world="true" />
+    <file src="native/world.img" download="true" native_world="true" />
+    <native_world format="2" policy="static-world-v1" manifest="native/native-world.json" />
+</meta>
