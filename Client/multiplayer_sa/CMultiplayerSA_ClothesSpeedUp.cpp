@@ -77,6 +77,7 @@ namespace
         int  iBlockCount;
         uint uiLoadflag;  // 0-not loaded  2-requested  3-loaded  1-processed
     };
+    static_assert(sizeof(SImgGTAItemInfo) == sizeof(CStreamingInfo));
 
     int   iReturnFileId;
     char* pReturnBuffer;
@@ -97,7 +98,13 @@ bool _cdecl OnCallCStreamingInfoAddToList(int flags, SImgGTAItemInfo* pImgGTAInf
 
     if (pImgGTAInfo->ucImgId == 5)
     {
-        int iFileId = ((char*)pImgGTAInfo - (char*)CStreaming__ms_aInfoForModel) / 20;
+        const uintptr_t streamingBegin = reinterpret_cast<uintptr_t>(pGameInterface->GetStreamingInfoArray());
+        const uintptr_t streamingEntry = reinterpret_cast<uintptr_t>(pImgGTAInfo);
+        const size_t    streamingSize = static_cast<size_t>(pGameInterface->GetCountOfAllFileIDs()) * sizeof(CStreamingInfo);
+        if (streamingEntry < streamingBegin || streamingEntry - streamingBegin >= streamingSize ||
+            (streamingEntry - streamingBegin) % sizeof(CStreamingInfo) != 0)
+            return false;
+        const int iFileId = static_cast<int>((streamingEntry - streamingBegin) / sizeof(CStreamingInfo));
 
         // Track which file we're attempting to cache-load, so ShouldSkipLoadRequestedModels
         // can verify its loadState before deciding to skip
@@ -199,7 +206,10 @@ bool _cdecl ShouldSkipLoadRequestedModels(DWORD calledFrom)
         // let the standard LoadRequestedModels run as fallback.
         if (iLastCacheFileId >= 0)
         {
-            auto* pInfo = reinterpret_cast<SImgGTAItemInfo*>(reinterpret_cast<char*>(CStreaming__ms_aInfoForModel) + iLastCacheFileId * 20);
+            if (static_cast<std::uint32_t>(iLastCacheFileId) >= pGameInterface->GetCountOfAllFileIDs())
+                return false;
+
+            auto* pInfo = reinterpret_cast<SImgGTAItemInfo*>(pGameInterface->GetStreamingInfoArray() + iLastCacheFileId);
             if (pInfo->uiLoadflag == 1)
                 return true;
         }

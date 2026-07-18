@@ -140,12 +140,11 @@ static void CVehicleModelInfo_StopUsingCommonVehicleTexDicationary()
     ((void(__cdecl*)())0x4C75C0)();
 }
 
-static auto          CModelInfo_ms_modelInfoPtrs = (CBaseModelInfoSAInterface**)ARRAY_ModelInfo;
 static unsigned int& gAtomicModelId = *reinterpret_cast<unsigned int*>(DWORD_AtomicsReplacerModelID);
 
 bool CFileLoader_LoadAtomicFile(RwStream* stream, unsigned int modelId)
 {
-    CBaseModelInfoSAInterface* pBaseModelInfo = CModelInfo_ms_modelInfoPtrs[modelId];
+    CBaseModelInfoSAInterface* pBaseModelInfo = CModelInfoSAInterface::ms_modelInfoPtrs[modelId];
     auto                       pAtomicModelInfo = reinterpret_cast<CAtomicModelInfo*>(pBaseModelInfo);
 
     bool bUseCommonVehicleTexDictionary = false;
@@ -192,7 +191,7 @@ bool CFileLoader_LoadAtomicFile(RwStream* stream, unsigned int modelId)
 RpAtomic* CFileLoader_SetRelatedModelInfoCB(RpAtomic* atomic, SRelatedModelInfo* pRelatedModelInfo)
 {
     char                       name[24];
-    CBaseModelInfoSAInterface* pBaseModelInfo = CModelInfo_ms_modelInfoPtrs[gAtomicModelId];
+    CBaseModelInfoSAInterface* pBaseModelInfo = CModelInfoSAInterface::ms_modelInfoPtrs[gAtomicModelId];
     auto                       pAtomicModelInfo = reinterpret_cast<CAtomicModelInfo*>(pBaseModelInfo);
     RwFrame*                   pOldFrame = reinterpret_cast<RwFrame*>(atomic->object.object.parent);
     char*                      frameNodeName = GetFrameNodeName(pOldFrame);

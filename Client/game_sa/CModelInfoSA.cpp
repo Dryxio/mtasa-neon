@@ -25,8 +25,7 @@
 extern CCoreInterface* g_pCore;
 extern CGameSA*        pGame;
 
-CBaseModelInfoSAInterface** CModelInfoSAInterface::ms_modelInfoPtrs = (CBaseModelInfoSAInterface**)ARRAY_ModelInfo;
-CBaseModelInfoSAInterface** ppModelInfo = (CBaseModelInfoSAInterface**)ARRAY_ModelInfo;
+CBaseModelInfoSAInterface** CModelInfoSAInterface::ms_modelInfoPtrs = nullptr;
 
 std::map<unsigned short, int>                                        CModelInfoSA::ms_RestreamTxdIDMap;
 std::map<DWORD, float>                                               CModelInfoSA::ms_ModelDefaultLodDistanceMap;
@@ -75,7 +74,6 @@ union tIdeFlags
 };
 
 static constexpr uintptr_t vftable_CVehicleModelInfo = 0x85C5C8u;
-static constexpr size_t    RESOURCE_ID_COL = 25000;
 
 static void CBaseModelInfo_SetColModel(CBaseModelInfoSAInterface* self, CColModelSAInterface* colModel, bool applyToPairedModel)
 {
@@ -104,7 +102,7 @@ CModelInfoSA::CModelInfoSA()
 
 CBaseModelInfoSAInterface* CModelInfoSA::GetInterface()
 {
-    return m_pInterface = ppModelInfo[m_dwModelID];
+    return m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
 }
 
 bool CModelInfoSA::IsBoat()
@@ -307,14 +305,14 @@ BYTE CModelInfoSA::GetVehicleType() const noexcept
 bool CModelInfoSA::IsVehicle() const
 {
     // NOTE(botder): This is from CModelInfo::IsVehicleModelType
-    if (m_dwModelID >= 20000)
+    if (m_dwModelID >= pGame->GetBaseIDforTXD())
         return false;
 
     if (!IsAllocatedInArchive())
         return false;
 
     // NOTE(botder): m_pInterface might be a nullptr here, we can't use it
-    CBaseModelInfoSAInterface* model = ppModelInfo[m_dwModelID];
+    CBaseModelInfoSAInterface* model = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     return model && reinterpret_cast<intptr_t>(model->VFTBL) == vftable_CVehicleModelInfo;
 }
 
@@ -336,7 +334,7 @@ bool CModelInfoSA::IsUpgrade()
 
 char* CModelInfoSA::GetNameIfVehicle()
 {
-    DWORD dwModelInfo = (DWORD)ARRAY_ModelInfo;
+    DWORD dwModelInfo = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs);
     DWORD dwFunc = FUNC_CText_Get;
     DWORD ModelID = m_dwModelID;
     DWORD dwReturn = 0;
@@ -350,7 +348,7 @@ char* CModelInfoSA::GetNameIfVehicle()
 
             mov     ebx, ModelID
             lea     ebx, [ebx*4]
-            add     ebx, dword ptr[ARRAY_ModelInfo]
+            add     ebx, dwModelInfo
             mov     eax, [ebx]
             add     eax, 50
 
@@ -457,7 +455,7 @@ void CModelInfoSA::Remove()
     // Don't remove if GTA refers to it somehow.
     // Or we'll screw up SA's map for example.
 
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
 
     // Remove our reference
     if (m_pInterface->usNumberOfRefs > 0)
@@ -488,7 +486,7 @@ bool CModelInfoSA::IsLoaded()
         if (m_dwPendingInterfaceRef)
         {
             assert(m_dwReferences > 0);
-            m_pInterface = ppModelInfo[m_dwModelID];
+            m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
             m_pInterface->usNumberOfRefs++;
             m_dwPendingInterfaceRef = 0;
         }
@@ -504,7 +502,7 @@ bool CModelInfoSA::DoIsLoaded()
 
     if (m_dwModelID < pGame->GetBaseIDforTXD())
     {
-        m_pInterface = ppModelInfo[m_dwModelID];
+        m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
 
         if (bLoaded)
         {
@@ -518,7 +516,7 @@ bool CModelInfoSA::DoIsLoaded()
 
 unsigned short CModelInfoSA::GetFlags()
 {
-    return ppModelInfo[m_dwModelID]->usFlags;
+    return CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]->usFlags;
 }
 
 unsigned short CModelInfoSA::GetOriginalFlags()
@@ -526,12 +524,12 @@ unsigned short CModelInfoSA::GetOriginalFlags()
     if (MapContains(ms_ModelDefaultFlagsMap, m_dwModelID))
         return MapGet(ms_ModelDefaultFlagsMap, m_dwModelID);
 
-    return ppModelInfo[m_dwModelID]->usFlags;
+    return CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]->usFlags;
 }
 
 void CModelInfoSA::SetFlags(unsigned short usFlags)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return;
 
@@ -548,7 +546,7 @@ void CModelInfoSA::SetFlags(unsigned short usFlags)
 
 void CModelInfoSA::SetIdeFlags(unsigned int uiFlags)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return;
 
@@ -618,7 +616,7 @@ void CModelInfoSA::SetIdeFlags(unsigned int uiFlags)
 
 void CModelInfoSA::SetIdeFlag(eModelIdeFlag eIdeFlag, bool bState)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return;
 
@@ -684,7 +682,7 @@ void CModelInfoSA::SetIdeFlag(eModelIdeFlag eIdeFlag, bool bState)
 
 bool CModelInfoSA::GetIdeFlag(eModelIdeFlag eIdeFlag)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return false;
 
@@ -742,7 +740,7 @@ void CModelInfoSA::StaticResetFlags()
     // Restore default values
     for (std::map<DWORD, unsigned short>::const_iterator iter = ms_ModelDefaultFlagsMap.begin(); iter != ms_ModelDefaultFlagsMap.end(); ++iter)
     {
-        CBaseModelInfoSAInterface* pInterface = ppModelInfo[iter->first];
+        CBaseModelInfoSAInterface* pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[iter->first];
         if (pInterface)
         {
             // Don't change bIsColLoaded flag
@@ -775,13 +773,13 @@ CBoundingBox* CModelInfoSA::GetBoundingBox()
 
 bool CModelInfoSA::IsValid()
 {
-    if (m_dwModelID >= MODELINFO_DFF_MAX && m_dwModelID < MODELINFO_TXD_MAX)
-        return !pGame->GetPools()->GetTxdPool().IsFreeTextureDictonarySlot(m_dwModelID - MODELINFO_DFF_MAX);
+    if (m_dwModelID >= pGame->GetBaseIDforTXD() && m_dwModelID < pGame->GetBaseIDforCOL())
+        return !pGame->GetPools()->GetTxdPool().IsFreeTextureDictonarySlot(m_dwModelID - pGame->GetBaseIDforTXD());
 
     if (m_dwModelID >= pGame->GetBaseIDforTXD() && m_dwModelID < pGame->GetCountOfAllFileIDs())
         return true;
 
-    if (!ppModelInfo[m_dwModelID])
+    if (!CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID])
         return false;
 
     return true;
@@ -794,7 +792,7 @@ bool CModelInfoSA::IsAllocatedInArchive() const noexcept
 
 float CModelInfoSA::GetDistanceFromCentreOfMassToBaseOfModel()
 {
-    DWORD dwModelInfo = 0;
+    DWORD dwModelInfo = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs);
     DWORD ModelID = m_dwModelID;
     float fReturn = 0;
     // clang-format off
@@ -802,7 +800,7 @@ float CModelInfoSA::GetDistanceFromCentreOfMassToBaseOfModel()
         mov     eax, ModelID
 
         push    ecx
-        mov     ecx, dword ptr[ARRAY_ModelInfo]
+        mov     ecx, dwModelInfo
         mov     eax, dword ptr[ecx + eax*4]
         pop     ecx
 
@@ -820,7 +818,7 @@ skip:
 
 unsigned short CModelInfoSA::GetTextureDictionaryID()
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (m_pInterface)
         return m_pInterface->usTextureDictionary;
 
@@ -829,7 +827,7 @@ unsigned short CModelInfoSA::GetTextureDictionaryID()
 
 void CModelInfoSA::SetTextureDictionaryID(unsigned short usID)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return;
 
@@ -887,7 +885,7 @@ void CModelInfoSA::StaticResetTextureDictionaries()
 
 float CModelInfoSA::GetLODDistance()
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (m_pInterface)
         return m_pInterface->fLodDistanceUnscaled;
 
@@ -896,7 +894,7 @@ float CModelInfoSA::GetLODDistance()
 
 bool CModelInfoSA::SetTime(char cHourOn, char cHourOff)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return false;
 
@@ -915,7 +913,7 @@ bool CModelInfoSA::SetTime(char cHourOn, char cHourOff)
 
 bool CModelInfoSA::GetTime(char& cHourOn, char& cHourOff)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (!m_pInterface)
         return false;
 
@@ -983,7 +981,7 @@ void CModelInfoSA::SetLODDistance(float fDistance, bool bOverrideMaxDistance)
         fDistance = std::min(fDistance, 325.f);
     }
 
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (m_pInterface)
     {
         // Save default value if not done yet
@@ -998,7 +996,7 @@ void CModelInfoSA::StaticResetLodDistances()
     // Restore default values
     for (std::map<DWORD, float>::const_iterator iter = ms_ModelDefaultLodDistanceMap.begin(); iter != ms_ModelDefaultLodDistanceMap.end(); ++iter)
     {
-        CBaseModelInfoSAInterface* pInterface = ppModelInfo[iter->first];
+        CBaseModelInfoSAInterface* pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[iter->first];
         if (pInterface)
             pInterface->fLodDistanceUnscaled = iter->second;
     }
@@ -1123,7 +1121,7 @@ void CModelInfoSA::ModelAddRef(EModelRequestType requestType, const char* szTag)
         assert(!m_dwPendingInterfaceRef);
         if (IsLoaded())
         {
-            m_pInterface = ppModelInfo[m_dwModelID];
+            m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
             m_pInterface->usNumberOfRefs++;
         }
         else
@@ -1178,7 +1176,7 @@ void CModelInfoSA::RemoveRef(bool bRemoveExtraGTARef)
 
 void CModelInfoSA::SetAlphaTransparencyEnabled(bool bEnabled)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (m_pInterface)
     {
         if (!MapContains(ms_ModelDefaultAlphaTransparencyMap, m_dwModelID))
@@ -1191,7 +1189,7 @@ void CModelInfoSA::SetAlphaTransparencyEnabled(bool bEnabled)
 
 bool CModelInfoSA::IsAlphaTransparencyEnabled()
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (m_pInterface)
     {
         return m_pInterface->bAlphaTransparency;
@@ -1203,7 +1201,7 @@ void CModelInfoSA::StaticResetAlphaTransparencies()
 {
     for (std::map<DWORD, BYTE>::const_iterator iter = ms_ModelDefaultAlphaTransparencyMap.begin(); iter != ms_ModelDefaultAlphaTransparencyMap.end(); iter++)
     {
-        CBaseModelInfoSAInterface* pInterface = ppModelInfo[iter->first];
+        CBaseModelInfoSAInterface* pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[iter->first];
         if (pInterface)
         {
             pInterface->bAlphaTransparency = iter->second;
@@ -1215,7 +1213,7 @@ void CModelInfoSA::StaticResetAlphaTransparencies()
 
 void CModelInfoSA::ResetAlphaTransparency()
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
     if (m_pInterface)
     {
         BYTE* pbEnabled = MapFind(ms_ModelDefaultAlphaTransparencyMap, m_dwModelID);
@@ -1230,6 +1228,7 @@ void CModelInfoSA::ResetAlphaTransparency()
 short CModelInfoSA::GetAvailableVehicleMod(unsigned short usUpgrade)
 {
     short sreturn = -1;
+    DWORD dwModelInfo = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs);
     if (usUpgrade >= 1000 && usUpgrade <= 1193)
     {
         DWORD ModelID = m_dwModelID;
@@ -1239,7 +1238,7 @@ short CModelInfoSA::GetAvailableVehicleMod(unsigned short usUpgrade)
             mov     eax, ModelID
 
             push    ecx
-            mov ecx, dword ptr[ARRAY_ModelInfo]
+            mov ecx, dwModelInfo
             mov     eax, dword ptr[ecx + eax*4]
             pop     ecx
 
@@ -1257,11 +1256,12 @@ bool CModelInfoSA::IsUpgradeAvailable(eVehicleUpgradePosn posn)
 {
     bool  bRet = false;
     DWORD ModelID = m_dwModelID;
+    DWORD dwModelInfo = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs);
     // clang-format off
     __asm
     {
         mov     eax, ModelID
-        mov ecx, dword ptr[ARRAY_ModelInfo]
+        mov ecx, dwModelInfo
         mov     ecx, dword ptr[ecx + eax*4]
 
         mov     eax, posn
@@ -1285,6 +1285,7 @@ void CModelInfoSA::SetCustomCarPlateText(const char* szText)
 {
     char* szStoredText;
     DWORD ModelID = m_dwModelID;
+    DWORD dwModelInfo = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs);
     // clang-format off
     __asm
     {
@@ -1292,7 +1293,7 @@ void CModelInfoSA::SetCustomCarPlateText(const char* szText)
         mov     ecx, ModelID
 
         push    eax
-        mov     eax, dword ptr[ARRAY_ModelInfo]
+        mov     eax, dwModelInfo
         mov     ecx, dword ptr[eax + ecx*4]
         pop     eax
 
@@ -1310,6 +1311,7 @@ unsigned int CModelInfoSA::GetNumRemaps()
 {
     DWORD        dwFunc = FUNC_CVehicleModelInfo__GetNumRemaps;
     DWORD        ModelID = m_dwModelID;
+    DWORD        dwModelInfo = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs);
     unsigned int uiReturn = 0;
     // clang-format off
     __asm
@@ -1317,7 +1319,7 @@ unsigned int CModelInfoSA::GetNumRemaps()
         mov     ecx, ModelID
 
         push    eax
-        mov     eax, dword ptr[ARRAY_ModelInfo]
+        mov     eax, dwModelInfo
         mov     ecx, dword ptr[eax + ecx*4]
         pop     eax
 
@@ -1615,7 +1617,7 @@ void CModelInfoSA::SetColModel(CColModel* pColModel)
     m_pCustomColModel = pColModel;
 
     // Do the following only if we're loaded
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
 
     if (m_pInterface)
     {
@@ -1691,7 +1693,7 @@ void CModelInfoSA::SetColModel(CColModel* pColModel)
 
 void CModelInfoSA::RestoreColModel()
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
+    m_pInterface = CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID];
 
     // Restore original collision model and flags
     if (m_pInterface && m_pOriginalColModelInterface && m_pCustomColModel)
@@ -1705,7 +1707,7 @@ void CModelInfoSA::RestoreColModel()
         // there was any object/building, which would've provoked CColStore to request it.
         if (m_pInterface->pColModel && !m_pInterface->pColModel->m_data && m_dwReferences > 1)
         {
-            pGame->GetStreaming()->RemoveModel(RESOURCE_ID_COL + m_pInterface->pColModel->m_sphere.m_collisionSlot);
+            pGame->GetStreaming()->RemoveModel(pGame->GetBaseIDforCOL() + m_pInterface->pColModel->m_sphere.m_collisionSlot);
         }
 
         // Handle paired time models explicitly so MTA tracking stays in sync.
@@ -1728,7 +1730,7 @@ void CModelInfoSA::RestoreColModel()
 
                     if (pairedInterface->pColModel && !pairedInterface->pColModel->m_data && pairedModelSA->m_dwReferences > 1)
                     {
-                        pGame->GetStreaming()->RemoveModel(RESOURCE_ID_COL + pairedInterface->pColModel->m_sphere.m_collisionSlot);
+                        pGame->GetStreaming()->RemoveModel(pGame->GetBaseIDforCOL() + pairedInterface->pColModel->m_sphere.m_collisionSlot);
                     }
                 }
 
@@ -1857,7 +1859,7 @@ void CModelInfoSA::MakePedModel(const char* szTexture)
 {
     // Create a new CPedModelInfo
     CPedModelInfoSA pedModelInfo;
-    ppModelInfo[m_dwModelID] = (CBaseModelInfoSAInterface*)pedModelInfo.GetPedModelInfoInterface();
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = (CBaseModelInfoSAInterface*)pedModelInfo.GetPedModelInfoInterface();
     // Load our texture
     pGame->GetStreaming()->RequestSpecialModel(m_dwModelID, szTexture, 0);
 }
@@ -1870,7 +1872,7 @@ void CModelInfoSA::MakeObjectModel(ushort usBaseID)
     // out-of-bounds read/write.
     CClumpModelInfoSAInterface* m_pInterface = new CClumpModelInfoSAInterface();
 
-    CBaseModelInfoSAInterface* pBaseObjectInfo = ppModelInfo[usBaseID];
+    CBaseModelInfoSAInterface* pBaseObjectInfo = CModelInfoSAInterface::ms_modelInfoPtrs[usBaseID];
     MemCpyFast(m_pInterface, pBaseObjectInfo, sizeof(CClumpModelInfoSAInterface));
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
@@ -1878,7 +1880,7 @@ void CModelInfoSA::MakeObjectModel(ushort usBaseID)
     m_pInterface->usDynamicIndex = 65535;
     m_pInterface->m_nAnimFileIndex = 0xFFFFFFFF;
 
-    ppModelInfo[m_dwModelID] = m_pInterface;
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
 
     m_dwParentID = usBaseID;
     CopyStreamingInfoFromModel(usBaseID);
@@ -1888,7 +1890,7 @@ void CModelInfoSA::MakeObjectDamageableModel(std::uint16_t baseModel)
 {
     CDamageableModelInfoSAInterface* m_pInterface = new CDamageableModelInfoSAInterface();
 
-    CDamageableModelInfoSAInterface* pBaseObjectInfo = static_cast<CDamageableModelInfoSAInterface*>(ppModelInfo[baseModel]);
+    CDamageableModelInfoSAInterface* pBaseObjectInfo = static_cast<CDamageableModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[baseModel]);
     MemCpyFast(m_pInterface, pBaseObjectInfo, sizeof(CDamageableModelInfoSAInterface));
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
@@ -1896,7 +1898,7 @@ void CModelInfoSA::MakeObjectDamageableModel(std::uint16_t baseModel)
     m_pInterface->usDynamicIndex = 65535;
     m_pInterface->m_damagedAtomic = nullptr;
 
-    ppModelInfo[m_dwModelID] = m_pInterface;
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
 
     m_dwParentID = baseModel;
     CopyStreamingInfoFromModel(baseModel);
@@ -1906,7 +1908,7 @@ void CModelInfoSA::MakeTimedObjectModel(ushort usBaseID)
 {
     CTimeModelInfoSAInterface* m_pInterface = new CTimeModelInfoSAInterface();
 
-    CTimeModelInfoSAInterface* pBaseObjectInfo = static_cast<CTimeModelInfoSAInterface*>(ppModelInfo[usBaseID]);
+    CTimeModelInfoSAInterface* pBaseObjectInfo = static_cast<CTimeModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[usBaseID]);
     MemCpyFast(m_pInterface, pBaseObjectInfo, sizeof(CTimeModelInfoSAInterface));
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
@@ -1914,7 +1916,7 @@ void CModelInfoSA::MakeTimedObjectModel(ushort usBaseID)
     m_pInterface->usDynamicIndex = 65535;
     m_pInterface->timeInfo.m_wOtherTimeModel = -1;
 
-    ppModelInfo[m_dwModelID] = m_pInterface;
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
 
     m_dwParentID = usBaseID;
     CopyStreamingInfoFromModel(usBaseID);
@@ -1923,14 +1925,14 @@ void CModelInfoSA::MakeTimedObjectModel(ushort usBaseID)
 void CModelInfoSA::MakeClumpModel(ushort usBaseID)
 {
     CClumpModelInfoSAInterface* pNewInterface = new CClumpModelInfoSAInterface();
-    CBaseModelInfoSAInterface*  pBaseObjectInfo = ppModelInfo[usBaseID];
+    CBaseModelInfoSAInterface*  pBaseObjectInfo = CModelInfoSAInterface::ms_modelInfoPtrs[usBaseID];
     MemCpyFast(pNewInterface, pBaseObjectInfo, sizeof(CClumpModelInfoSAInterface));
     pNewInterface->usNumberOfRefs = 0;
     pNewInterface->pRwObject = nullptr;
     pNewInterface->usUnknown = 65535;
     pNewInterface->usDynamicIndex = 65535;
 
-    ppModelInfo[m_dwModelID] = pNewInterface;
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = pNewInterface;
 
     m_dwParentID = usBaseID;
     CopyStreamingInfoFromModel(usBaseID);
@@ -1940,7 +1942,7 @@ void CModelInfoSA::MakeVehicleAutomobile(ushort usBaseID)
 {
     CVehicleModelInfoSAInterface* m_pInterface = new CVehicleModelInfoSAInterface();
 
-    CBaseModelInfoSAInterface* pBaseObjectInfo = (CBaseModelInfoSAInterface*)ppModelInfo[usBaseID];
+    CBaseModelInfoSAInterface* pBaseObjectInfo = (CBaseModelInfoSAInterface*)CModelInfoSAInterface::ms_modelInfoPtrs[usBaseID];
     MemCpyFast(m_pInterface, pBaseObjectInfo, sizeof(CVehicleModelInfoSAInterface));
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
@@ -1948,7 +1950,7 @@ void CModelInfoSA::MakeVehicleAutomobile(ushort usBaseID)
     m_pInterface->usUnknown = 65535;
     m_pInterface->usDynamicIndex = 65535;
 
-    ppModelInfo[m_dwModelID] = m_pInterface;
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
 
     m_dwParentID = usBaseID;
     CopyStreamingInfoFromModel(usBaseID);
@@ -1975,32 +1977,32 @@ void CModelInfoSA::DeallocateModel(void)
             // Stop detached car parts referencing this model (they keep their source vehicle's
             // model index for repainting, and would dereference the freed model info)
             static_cast<CPoolsSA*>(pGame->GetPools())->ResetDetachedCarPartsRefModel(static_cast<std::uint16_t>(m_dwModelID));
-            delete reinterpret_cast<CVehicleModelInfoSAInterface*>(ppModelInfo[m_dwModelID]);
+            delete reinterpret_cast<CVehicleModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]);
             break;
         case eModelInfoType::PED:
-            delete reinterpret_cast<CPedModelInfoSAInterface*>(ppModelInfo[m_dwModelID]);
+            delete reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]);
             break;
         case eModelInfoType::ATOMIC:
             if (IsDamageableAtomic())
             {
-                delete reinterpret_cast<CDamageableModelInfoSAInterface*>(ppModelInfo[m_dwModelID]);
+                delete reinterpret_cast<CDamageableModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]);
             }
             else
             {
-                delete reinterpret_cast<CBaseModelInfoSAInterface*>(ppModelInfo[m_dwModelID]);
+                delete reinterpret_cast<CBaseModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]);
             }
             break;
         case eModelInfoType::CLUMP:
-            delete reinterpret_cast<CClumpModelInfoSAInterface*>(ppModelInfo[m_dwModelID]);
+            delete reinterpret_cast<CClumpModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]);
             break;
         case eModelInfoType::TIME:
-            delete reinterpret_cast<CTimeModelInfoSAInterface*>(ppModelInfo[m_dwModelID]);
+            delete reinterpret_cast<CTimeModelInfoSAInterface*>(CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID]);
             break;
         default:
             break;
     }
 
-    ppModelInfo[m_dwModelID] = nullptr;
+    CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = nullptr;
     *pGame->GetStreaming()->GetStreamingInfo(m_dwModelID) = CStreamingInfo{};
 }
 //////////////////////////////////////////////////////////////////////////////////////////

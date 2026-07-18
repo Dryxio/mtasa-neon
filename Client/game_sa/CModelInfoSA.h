@@ -23,13 +23,9 @@ struct RpMaterial;
 
 #define RpGetFrame(__c) ((RwFrame*)(((RwObject*)(__c))->parent))
 
-// #define     ARRAY_ModelLoaded               0x8E4CD0 // ##SA##
-static void* CStreaming__ms_aInfoForModel = *(void**)(0x5B8B08 + 6);
-static void* ARRAY_ModelLoaded = (char*)CStreaming__ms_aInfoForModel + 0x10;
-
 #define FUNC_CStreaming__HasModelLoaded 0x4044C0
 
-// CModelInfo/ARRAY_ModelInfo __thiscall to load/replace vehicle models
+// CModelInfo __thiscall routines used to load or replace vehicle models.
 #define FUNC_LoadVehicleModel 0x4C95C0
 #define FUNC_LoadWeaponModel  0x4C9910
 #define FUNC_LoadPedModel     0x4C7340
@@ -37,8 +33,6 @@ static void* ARRAY_ModelLoaded = (char*)CStreaming__ms_aInfoForModel + 0x10;
 #define DWORD_AtomicsReplacerModelID 0xB71840
 #define FUNC_AtomicsReplacer         0x537150
 
-// #define     ARRAY_ModelInfo                 0xA9B0C8
-static void* ARRAY_ModelInfo = *(void**)(0x403DA4 + 3);
 #define CLASS_CText         0xC1B340
 #define FUNC_CText_Get      0x6A0050
 #define FUNC_GetBoundingBox 0x4082F0

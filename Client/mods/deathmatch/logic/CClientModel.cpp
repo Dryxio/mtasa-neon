@@ -234,7 +234,7 @@ void CClientModel::RestoreDFF(CModelInfo* pModelInfo)
 
 bool CClientModel::AllocateTXD(std::string& strTxdName)
 {
-    std::uint32_t uiSlotID = g_pGame->GetPools()->GetTxdPool().AllocateTextureDictonarySlot(m_iModelID - MAX_MODEL_DFF_ID, strTxdName);
+    std::uint32_t uiSlotID = g_pGame->GetPools()->GetTxdPool().AllocateTextureDictonarySlot(m_iModelID - g_pGame->GetBaseIDforTXD(), strTxdName);
     if (uiSlotID != -1)
     {
         m_bAllocatedByUs = true;
@@ -245,9 +245,9 @@ bool CClientModel::AllocateTXD(std::string& strTxdName)
 
 void CClientModel::RestoreTXD(CModelInfo* pModelInfo)
 {
-    uint uiTextureDictonarySlotID = pModelInfo->GetModel() - MAX_MODEL_DFF_ID;
+    uint uiTextureDictonarySlotID = pModelInfo->GetModel() - g_pGame->GetBaseIDforTXD();
 
-    for (uint uiModelID = 0; uiModelID < MAX_MODEL_DFF_ID; uiModelID++)
+    for (uint uiModelID = 0; uiModelID < g_pGame->GetBaseIDforTXD(); uiModelID++)
     {
         CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID, true);
 

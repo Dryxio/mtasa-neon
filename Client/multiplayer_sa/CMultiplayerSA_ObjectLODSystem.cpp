@@ -18,7 +18,6 @@
 ////////////////////////////////////////////////
 namespace
 {
-// #define     ARRAY_ModelInfo                 0xA9B0C8
 #define LOW_LOD_DRAW_DISTANCE_SCALE 5
 
     void SetGlobalDrawDistanceScale(float fValue)
@@ -60,7 +59,7 @@ namespace
 int OnMY_CRenderer_SetupEntityVisibility_Pre(CEntitySAInterface* pEntity, float& fValue)
 {
     // Guard against entities whose model info has been deallocated
-    auto* pModelInfo = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[pEntity->m_nModelIndex];
+    auto* pModelInfo = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray())[pEntity->m_nModelIndex];
     if (!pModelInfo)
     {
         saved.bValid = false;

@@ -252,7 +252,7 @@ RpClump* CRenderWareSA::ReadDFF(const SString& strFilename, const SString& buffe
     // Set correct TXD as materials are processed at the same time
     if (usModelID != 0)
     {
-        unsigned short usTxdId = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelID]->usTextureDictionary;
+        unsigned short usTxdId = ((CBaseModelInfoSAInterface**)CModelInfoSAInterface::ms_modelInfoPtrs)[usModelID]->usTextureDictionary;
         SetTextureDict(usTxdId);
     }
 
@@ -269,7 +269,7 @@ RpClump* CRenderWareSA::ReadDFF(const SString& strFilename, const SString& buffe
         streamModel = RwStreamOpen(STREAM_TYPE_FILENAME, STREAM_MODE_READ, *strFilename);
 
     // get the modelinfo array
-    DWORD* pPool = (DWORD*)ARRAY_ModelInfo;
+    DWORD* pPool = (DWORD*)CModelInfoSAInterface::ms_modelInfoPtrs;
 
     // check for errors
     if (streamModel == NULL)
@@ -533,7 +533,7 @@ bool CRenderWareSA::ReplaceAllAtomicsInModel(RpClump* pNew, unsigned short usMod
 
             // Replace the atomics
             SAtomicsReplacer data;
-            data.usTxdID = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelID]->usTextureDictionary;
+            data.usTxdID = ((CBaseModelInfoSAInterface**)CModelInfoSAInterface::ms_modelInfoPtrs)[usModelID]->usTextureDictionary;
             data.pClump = pCopy;
 
             MemPutFast<DWORD>((DWORD*)DWORD_AtomicsReplacerModelID, usModelID);
@@ -614,7 +614,7 @@ bool CRenderWareSA::ReplacePartModels(RpClump* pClump, RpAtomicContainer* pAtomi
 // Replaces a CColModel for a specific object identified by the object id (usModelID)
 void CRenderWareSA::ReplaceCollisions(CColModel* pCol, unsigned short usModelID)
 {
-    DWORD*        pPool = (DWORD*)ARRAY_ModelInfo;
+    DWORD*        pPool = (DWORD*)CModelInfoSAInterface::ms_modelInfoPtrs;
     CColModelSA*  pColModel = (CColModelSA*)pCol;
     CModelInfoSA* pModelInfoSA = (CModelInfoSA*)(pGame->GetModelInfo(usModelID));
 
@@ -739,10 +739,10 @@ ushort CRenderWareSA::GetTXDIDForModelID(ushort usModelID)
         // Get the CModelInfo's TXD ID
 
         // Ensure valid
-        if (usModelID >= pGame->GetBaseIDforTXD() || !((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelID])
+        if (usModelID >= pGame->GetBaseIDforTXD() || !((CBaseModelInfoSAInterface**)CModelInfoSAInterface::ms_modelInfoPtrs)[usModelID])
             return 0;
 
-        return ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelID]->usTextureDictionary;
+        return ((CBaseModelInfoSAInterface**)CModelInfoSAInterface::ms_modelInfoPtrs)[usModelID]->usTextureDictionary;
     }
 }
 

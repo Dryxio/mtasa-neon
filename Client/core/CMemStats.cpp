@@ -475,8 +475,8 @@ void CMemStats::SampleState(SMemStatsInfo& memStatsInfo)
     memStatsInfo.iStreamingMemoryUsed = *(size_t*)0x08E4CB4;
     memStatsInfo.iStreamingMemoryAvailable = *(size_t*)0x08A5A80;
 
-    char*      pFileInfoArray = *(char**)(0x5B8B08 + 6);
     CGame*     pGame = g_pCore->GetGame();
+    char*      pFileInfoArray = reinterpret_cast<char*>(pGame->GetStreamingInfoArray());
     const uint baseTxdId = static_cast<uint>(pGame->GetBaseIDforTXD());
     const uint baseColId = static_cast<uint>(pGame->GetBaseIDforCOL());
     const uint baseIplId = static_cast<uint>(pGame->GetBaseIDforIPL());

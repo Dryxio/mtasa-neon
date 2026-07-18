@@ -171,6 +171,14 @@ CGameSA::CGameSA()
         // Find the game version and initialize m_eGameVersion so GetGameVersion() will return the correct value
         FindGameVersion();
 
+        // Capture GTA's complete FileID layout before any native-world
+        // feature can install patches. This checkpoint is deliberately
+        // read-only: an unknown executable or operand layout is refused.
+        std::string fileIDError;
+        if (!m_fileIDs.CaptureStockLayout(m_eGameVersion, fileIDError))
+            throw std::runtime_error(SString("Unable to capture GTA FileID layout: %s", fileIDError.c_str()));
+        CModelInfoSAInterface::ms_modelInfoPtrs = reinterpret_cast<CBaseModelInfoSAInterface**>(m_fileIDs.GetModelInfoArray());
+
         char        legacySelectorValue[8]{};
         const DWORD legacySelectorLength = GetEnvironmentVariableA("MTA_NATIVE_BW_MODEL_STORES", legacySelectorValue, sizeof(legacySelectorValue));
         const bool  legacySelectorEnabled = legacySelectorLength == 1 && legacySelectorValue[0] == '1';

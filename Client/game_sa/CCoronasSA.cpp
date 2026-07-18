@@ -414,7 +414,7 @@ namespace
         if (definitions == modelDefinitions.end())
             return;
 
-        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(ARRAY_ModelInfo)[entity->m_nModelIndex];
+        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs)[entity->m_nModelIndex];
         if (!modelInfo)
             return;
 
@@ -437,7 +437,7 @@ namespace
         if (!entity || entity->m_areaCode != 0 || entity->m_nModelIndex >= pGame->GetBaseIDforTXD())
             return;
 
-        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(ARRAY_ModelInfo)[entity->m_nModelIndex];
+        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs)[entity->m_nModelIndex];
         if (!modelInfo || !modelInfo->ucNumOf2DEffects)
             return;
 

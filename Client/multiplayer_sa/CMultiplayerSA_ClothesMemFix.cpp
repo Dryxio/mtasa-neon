@@ -60,7 +60,7 @@ void      OnMy_CClothesDeleteRwObject()
         return;
 
     ushort                     usModelID = 0;
-    CBaseModelInfoSAInterface* pModelInfo = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelID];
+    CBaseModelInfoSAInterface* pModelInfo = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray())[usModelID];
     pSavedModel0RwObject = pModelInfo->pRwObject;
 }
 
@@ -99,7 +99,7 @@ void OnMy_PostCPedDress()
         return;
 
     ushort                     usModelID = 0;
-    CBaseModelInfoSAInterface* pModelInfo = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelID];
+    CBaseModelInfoSAInterface* pModelInfo = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray())[usModelID];
     if (!pModelInfo)
     {
         pSavedModel0RwObject = nullptr;

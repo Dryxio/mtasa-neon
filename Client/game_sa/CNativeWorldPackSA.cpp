@@ -1437,7 +1437,7 @@ namespace
             return false;
         }
 
-        CBaseModelInfoSAInterface** models = reinterpret_cast<CBaseModelInfoSAInterface**>(ARRAY_ModelInfo);
+        CBaseModelInfoSAInterface** models = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs);
         for (unsigned int id = Pack().modelFirst; id <= Pack().modelLast; ++id)
         {
             if (models[id] || !StreamingInfoIsFree(id))
@@ -1572,7 +1572,7 @@ namespace
             time != Pack().stockModelStores.time + Pack().addedModelStores.time)
             Fatal("model-store occupancy mismatch after IDE commit");
 
-        CBaseModelInfoSAInterface** models = reinterpret_cast<CBaseModelInfoSAInterface**>(ARRAY_ModelInfo);
+        CBaseModelInfoSAInterface** models = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs);
         const auto                  findTxd = reinterpret_cast<int(__cdecl*)(const char*)>(FIND_TXD_SLOT);
         for (const std::string& name : ide.txdNames)
             if (findTxd(name.c_str()) != static_cast<int>(ide.txdSlots.at(name)))

@@ -62,6 +62,7 @@ class CRenderWare;
 class CRopes;
 class CStats;
 class CStreaming;
+struct CStreamingInfo;
 class CTasks;
 class CVisibilityPlugins;
 class CWaterManager;
@@ -91,6 +92,24 @@ enum eGameVersion
     VERSION_11 = 15,
     VERSION_20 = 20,
     VERSION_UNKNOWN = 0xFF,
+};
+
+// File IDs are one contiguous GTA streaming namespace. Keep the partition
+// layout as runtime state because a native limit patch relocates every base;
+// callers must never reconstruct a later partition from stock constants.
+struct SFileIDLayout
+{
+    std::uint32_t dff{};
+    std::uint32_t txd{};
+    std::uint32_t col{};
+    std::uint32_t ipl{};
+    std::uint32_t dat{};
+    std::uint32_t ifp{};
+    std::uint32_t rrr{};
+    std::uint32_t scm{};
+    std::uint32_t loadedList{};
+    std::uint32_t requestedList{};
+    std::uint32_t total{};
 };
 
 struct SMatchChannelStats
@@ -313,15 +332,18 @@ public:
 
     virtual CObjectGroupPhysicalProperties* GetObjectGroupPhysicalProperties(unsigned char ucObjectGroup) = 0;
 
-    virtual uint32_t GetBaseIDforDFF() = 0;
-    virtual uint32_t GetBaseIDforTXD() = 0;
-    virtual uint32_t GetBaseIDforCOL() = 0;
-    virtual uint32_t GetBaseIDforIPL() = 0;
-    virtual uint32_t GetBaseIDforDAT() = 0;
-    virtual uint32_t GetBaseIDforIFP() = 0;
-    virtual uint32_t GetBaseIDforRRR() = 0;
-    virtual uint32_t GetBaseIDforSCM() = 0;
-    virtual uint32_t GetCountOfAllFileIDs() = 0;
+    virtual uint32_t             GetBaseIDforDFF() = 0;
+    virtual uint32_t             GetBaseIDforTXD() = 0;
+    virtual uint32_t             GetBaseIDforCOL() = 0;
+    virtual uint32_t             GetBaseIDforIPL() = 0;
+    virtual uint32_t             GetBaseIDforDAT() = 0;
+    virtual uint32_t             GetBaseIDforIFP() = 0;
+    virtual uint32_t             GetBaseIDforRRR() = 0;
+    virtual uint32_t             GetBaseIDforSCM() = 0;
+    virtual uint32_t             GetCountOfAllFileIDs() = 0;
+    virtual const SFileIDLayout& GetFileIDLayout() const = 0;
+    virtual void*                GetModelInfoArray() const = 0;
+    virtual CStreamingInfo*      GetStreamingInfoArray() const = 0;
 
     virtual void RemoveGameWorld() = 0;
     virtual void RestoreGameWorld() = 0;

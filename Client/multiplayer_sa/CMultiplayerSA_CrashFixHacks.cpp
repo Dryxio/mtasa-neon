@@ -22,6 +22,11 @@
 
 extern CCoreInterface* g_pCore;
 
+// Naked hooks cannot call the CGame virtual interface while preserving GTA's
+// register contract. Capture the already validated runtime array once before
+// installing them; this is an MTA-owned pointer, not a GTA address operand.
+static CBaseModelInfoSAInterface** g_fileIdModelInfoArray = nullptr;
+
 //
 // Support for crash stats
 //
@@ -310,13 +315,13 @@ static void __declspec(naked) HOOK_CrashFix_Misc5()
     MTA_VERIFY_HOOK_LOCAL_SIZE;
 
     __asm {
-        mov edi, dword ptr[ARRAY_ModelInfo]
+        mov edi, dword ptr[g_fileIdModelInfoArray]
         mov     edi, dword ptr [ecx*4+edi]
         mov     edi, dword ptr [edi+5Ch]
         test    edi, edi
         je      cont  // Skip much code if edi is zero
 
-        mov edi, dword ptr[ARRAY_ModelInfo]
+        mov edi, dword ptr[g_fileIdModelInfoArray]
         mov     edi, dword ptr [ecx*4+edi]
         jmp     RETURN_CrashFix_Misc5
     cont:
@@ -2538,8 +2543,7 @@ inner:
 
 CStreamingInfo* GetStreamingInfo(uint id)
 {
-    CStreamingInfo* pItemInfo = (CStreamingInfo*)(CStreaming__ms_aInfoForModel);
-    return pItemInfo + id;
+    return pGameInterface->GetStreaming()->GetStreamingInfo(id);
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -2550,7 +2554,7 @@ CStreamingInfo* GetStreamingInfo(uint id)
 void OnMY_CEntity_GetBoundRect(CEntitySAInterface* pEntity)
 {
     uint32                     usModelId = pEntity->m_nModelIndex;
-    CBaseModelInfoSAInterface* pModelInfo = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[usModelId];
+    CBaseModelInfoSAInterface* pModelInfo = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray())[usModelId];
     if (!pModelInfo)
     {
         // Crash will occur at offset 00134131
@@ -2869,7 +2873,7 @@ static void __declspec(naked) HOOK_CAnimManager_CreateAnimAssocGroups()
 
              // Replaced code
         push    ecx
-        mov     ecx, dword ptr[ARRAY_ModelInfo]
+        mov     ecx, dword ptr[g_fileIdModelInfoArray]
         mov     eax, dword ptr[ecx + eax*4]
         pop     ecx
 
@@ -3379,7 +3383,7 @@ static void __declspec(naked) HOOK_CPlaceName__Process()
 ////////////////////////////////////////////////////////////////////////
 static void LOG_CWorld__FindObjectsKindaCollidingSectorList(unsigned int modelId)
 {
-    CBaseModelInfoSAInterface* pModelInfo = ((CBaseModelInfoSAInterface**)ARRAY_ModelInfo)[modelId];
+    CBaseModelInfoSAInterface* pModelInfo = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray())[modelId];
     if (!pModelInfo)
     {
         LogEvent(840, "Model info missing", "CWorld__FindObjectsKindaCollidingSectorList", SString("Corrupt model: %d", modelId), 5601);
@@ -3403,7 +3407,8 @@ static void __declspec(naked) HOOK_CWorld__FindObjectsKindaCollidingSectorList()
     // clang-format off
     __asm
     {
-        mov eax, [edx*4+0xA9B0C8]            // CModelInfo::ms_modelInfoPtrs
+        mov eax, dword ptr[g_fileIdModelInfoArray]
+        mov eax, [eax+edx*4]
         test eax, eax
         jz skip
 
@@ -3713,7 +3718,8 @@ void _declspec(naked) HOOK_CrashFix_Misc50()
     {
         test    edx, edx
         js      skip
-        mov     ecx, dword ptr [edx*4 + 0A9B0C8h]
+        mov     ecx, dword ptr[g_fileIdModelInfoArray]
+        mov     ecx, dword ptr[ecx + edx*4]
         test    ecx, ecx
         jnz     cont
     skip:
@@ -3738,7 +3744,8 @@ void _declspec(naked) HOOK_CrashFix_Misc51()
     {
         test    eax, eax
         js      skip
-        mov     edx, dword ptr [eax*4 + 0A9B0C8h]
+        mov     edx, dword ptr[g_fileIdModelInfoArray]
+        mov     edx, dword ptr[edx + eax*4]
         test    edx, edx
         jnz     cont
     skip:
@@ -3763,7 +3770,8 @@ void _declspec(naked) HOOK_CrashFix_Misc52()
     {
         test    eax, eax
         js      skip
-        mov     ecx, dword ptr [eax*4 + 0A9B0C8h]
+        mov     ecx, dword ptr[g_fileIdModelInfoArray]
+        mov     ecx, dword ptr[ecx + eax*4]
         test    ecx, ecx
         jnz     cont
     skip:
@@ -3867,7 +3875,7 @@ static void __declspec(naked) HOOK_CEventScanner__ScanForEvents_ContactEntity()
 static void LOG_CStreaming__GetNextFileOnCd_NullTxdDef(unsigned int modelId)
 {
     LogEvent(850, "TxdDef pool entry is null", "CStreaming::GetNextFileOnCd",
-             SString("Null TxdDef for streaming model: %u (TXD slot: %u)", modelId, modelId - 20000), 5701);
+             SString("Null TxdDef for streaming model: %u (TXD slot: %u)", modelId, modelId - pGameInterface->GetBaseIDforTXD()), 5701);
 }
 
 #define HOOKPOS_CStreaming__GetNextFileOnCd_NullTxdDef   0x408F6E
@@ -3931,7 +3939,7 @@ static void __declspec(naked) HOOK_CStreaming__GetNextFileOnCd_NullTxdDef()
 static void LOG_CStreaming__ConvertBufferToObject_NullTxdDef(unsigned int modelId)
 {
     LogEvent(851, "TxdDef pool entry is null", "CStreaming::ConvertBufferToObject",
-             SString("Null TxdDef for streaming model: %u (TXD slot: %u)", modelId, modelId - 20000), 5702);
+             SString("Null TxdDef for streaming model: %u (TXD slot: %u)", modelId, modelId - pGameInterface->GetBaseIDforTXD()), 5702);
 }
 
 #define HOOKPOS_CStreaming__ConvertBufferToObject_NullTxdDef   0x40C8CE
@@ -4020,6 +4028,8 @@ static int _cdecl CFileLoader_LoadVehicleObject_sscanf(const char* s, const char
 ////////////////////////////////////////////////////////////////////////
 void CMultiplayerSA::InitHooks_CrashFixHacks()
 {
+    g_fileIdModelInfoArray = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray());
+
     EZHookInstall(CrashFix_Misc1);
     EZHookInstall(CrashFix_Misc2);
     EZHookInstall(CrashFix_Misc4);

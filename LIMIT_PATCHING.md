@@ -1073,6 +1073,39 @@ and 71/72/73 mirror capacity boundaries, visible mirror-plane behavior,
 vanilla disable/restore, and mirror off/on transitions. These remain test cases,
 not confirmed runtime results.
 
+## FileID relocation prerequisite (no native patch yet)
+
+Neon now captures GTA SA's stock FileID layout through
+`Client/game_sa/CFileIDRuntimeSA.*` before any native-world feature can mutate
+the executable. Ten manifested HOODLUM instructions supply the TXD, COL, IPL,
+DAT, IFP, RRR and SCM bases, the streaming-table begin/end, and the global
+model-pointer array. Exact bytes, operands, PE32 headers, partition ordering,
+sentinels, table stride/count and mapped readability are validated read-only.
+
+This removes MTA-owned static captures and direct `20000/25000` partition
+arithmetic from Game SA, Multiplayer SA, Client Core and Client Deathmatch,
+including naked ASM hooks. It deliberately leaves the stock partition and
+26,316-entry table untouched. The successful diagnostic ends in
+`nativeWrites=no`; the off-game mirror validator is
+`utils/extended-world/validate_native_file_id_runtime.py`.
+
+The future 44,325-entry stock-only checkpoint must update this single runtime
+layout after its transactional relocation. It must not introduce new private
+copies of table pointers or partition constants. DAT, streamed SCM, IFP/RRR and
+paths/nodes are represented only to preserve the contiguous namespace and
+remain outside the current activation scope.
+
+The user-run baseline gate completed on 2026-07-18 with format-1 ticket
+`7a1a461a`. Both the initial stock process and the authorized replacement
+process captured the exact stock partitions and 26,316-entry table with
+`nativeWrites=no`. Bullworth then registered archive 6, 952 models, 166 TXDs,
+collision slot 252 and seven IPL slots. An exact reconnect preserved the
+process lease, the same ticket, the 4008-block streaming floor and unchanged
+model-store occupancy; `/nativebw` remained usable afterwards. The client and
+server logs contained no FileID, preflight, capacity, exception or fatal
+diagnostic, and no new crash dump was created. The expected duplicate transport
+refusal retained `existing-native-world=preserved`.
+
 ## Candidate areas for future work
 
 Radar, paths, zones/population, native IPL support, object/model pools,

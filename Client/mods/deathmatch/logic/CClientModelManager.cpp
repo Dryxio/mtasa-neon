@@ -94,7 +94,7 @@ int CClientModelManager::GetFreeTxdModelID()
     if (usTxdId == -1)
         return INVALID_MODEL_ID;
 
-    return MAX_MODEL_DFF_ID + usTxdId;
+    return g_pGame->GetBaseIDforTXD() + usTxdId;
 }
 
 std::shared_ptr<CClientModel> CClientModelManager::FindModelByID(int iModelID)

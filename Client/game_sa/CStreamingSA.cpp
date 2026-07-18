@@ -19,9 +19,8 @@
 #include "CGameSA.h"
 
 extern CCoreInterface* g_pCore;
+extern CGameSA*        pGame;
 
-// count: 26316 in unmodified game
-CStreamingInfo (&CStreamingSA::ms_aInfoForModel)[26316] = *(CStreamingInfo (*)[26316])0x8E4CC0;
 HANDLE* phStreamingThread = (HANDLE*)0x8E4008;
 uint32(&CStreamingSA::ms_streamingHalfOfBufferSizeBlocks) = *(uint32*)0x8E4CA8;
 void* (&CStreamingSA::ms_pStreamingBuffer)[2] = *(void* (*)[2])0x8E4CAC;
@@ -65,6 +64,9 @@ bool IsUpgradeModelId(DWORD dwModelID)
 
 CStreamingSA::CStreamingSA()
 {
+    m_streamingInfo = pGame->GetStreamingInfoArray();
+    m_streamingInfoCount = pGame->GetCountOfAllFileIDs();
+
     // Allocate the default number of archives in order to keep modded games working as before.
     SetArchivesNum(VAR_DefaultMaxArchives);
 
@@ -344,23 +346,26 @@ void CStreamingSA::ReinitStreaming()
 void CStreamingSA::SetStreamingInfo(uint modelid, unsigned char usStreamID, uint uiOffset, ushort usSize, uint uiNextInImg)
 {
     CStreamingInfo* pItemInfo = GetStreamingInfo(modelid);
+    if (!pItemInfo)
+        return;
 
     // We remove the existing RwObject because, after switching the archive, the streamer will load a new one.
     // ReInit doesn't delete all RwObjects unless certain conditions are met.
     // In this case, we must force-remove the RwObject from memory, because it is no longer used,
     // and due to the archive change the streamer no longer detects it and therefore won't delete it.
     // As a result, a memory leak occurs after every call to engineImageLinkDFF.
-    // Only DFF models (< MODELINFO_DFF_MAX) have a valid CBaseModelInfoSAInterface with an RwObject.
+    // Only DFF models have a valid CBaseModelInfoSAInterface with an RwObject.
     // TXD and other higher model IDs don't — their CModelInfoSA::m_pInterface is uninitialized.
-    if (modelid < MODELINFO_DFF_MAX)
+    if (modelid < pGame->GetBaseIDforTXD())
     {
         if (CModelInfo* modelInfo = g_pCore->GetGame()->GetModelInfo(modelid); modelInfo && modelInfo->GetRwObject())
             RemoveModel(modelid);
     }
 
     // Change nextInImg field for prev model
-    for (CStreamingInfo& info : ms_aInfoForModel)
+    for (std::uint32_t id = 0; id < m_streamingInfoCount; ++id)
     {
+        CStreamingInfo& info = m_streamingInfo[id];
         if (info.archiveId == pItemInfo->archiveId)
         {
             // Check if the block after `info` is the beginning of `pItemInfo`'s block
@@ -380,7 +385,7 @@ void CStreamingSA::SetStreamingInfo(uint modelid, unsigned char usStreamID, uint
 
 CStreamingInfo* CStreamingSA::GetStreamingInfo(uint modelid)
 {
-    return &ms_aInfoForModel[modelid];
+    return modelid < m_streamingInfoCount ? &m_streamingInfo[modelid] : nullptr;
 }
 
 unsigned char CStreamingSA::GetUnusedArchive()

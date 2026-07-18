@@ -911,8 +911,8 @@ bool CLuaEngineDefs::EngineImageLinkDFF(CClientIMG* pIMG, std::variant<size_t, s
         throw std::invalid_argument(SString("Expected a valid model ID, got %u", uiModelID));
     uiModelID = runtimeModelId;
 
-    if (uiModelID >= 20000)
-        throw std::invalid_argument(SString("Expected modelid in range 0 - 19999, got %d", uiModelID));
+    if (uiModelID >= g_pGame->GetBaseIDforTXD())
+        throw std::invalid_argument(SString("Expected modelid in range 0 - %u, got %u", g_pGame->GetBaseIDforTXD() - 1, uiModelID));
 
     size_t      fileID = ResolveIMGFileID(pIMG, file);
     std::string buffer;
@@ -927,8 +927,9 @@ bool CLuaEngineDefs::EngineImageLinkDFF(CClientIMG* pIMG, std::variant<size_t, s
 
 bool CLuaEngineDefs::EngineImageLinkTXD(CClientIMG* pIMG, std::variant<size_t, std::string_view> file, uint uiTxdID)
 {
-    if (uiTxdID >= 5000)
-        throw std::invalid_argument(SString("Expected txdid in range 0 - 4999, got %d", uiTxdID));
+    const std::uint32_t txdCount = g_pGame->GetBaseIDforCOL() - g_pGame->GetBaseIDforTXD();
+    if (uiTxdID >= txdCount)
+        throw std::invalid_argument(SString("Expected txdid in range 0 - %u, got %u", txdCount - 1, uiTxdID));
 
     size_t      fileID = ResolveIMGFileID(pIMG, file);
     std::string buffer;
@@ -938,7 +939,7 @@ bool CLuaEngineDefs::EngineImageLinkTXD(CClientIMG* pIMG, std::variant<size_t, s
     if (!g_pCore->GetNetwork()->CheckFile("txd", "", buffer.data(), buffer.size()))
         throw std::invalid_argument("Failed to link file. Make sure the archieve isn't corrupted.");
 
-    return pIMG->LinkModel(20000 + uiTxdID, fileID);
+    return pIMG->LinkModel(g_pGame->GetBaseIDforTXD() + uiTxdID, fileID);
 }
 
 bool CLuaEngineDefs::EngineRestoreDFFImage(uint uiModelID)
@@ -948,8 +949,8 @@ bool CLuaEngineDefs::EngineRestoreDFFImage(uint uiModelID)
         throw std::invalid_argument("Expected a valid model ID at argument 1");
     uiModelID = runtimeModelId;
 
-    if (uiModelID >= 20000)
-        throw std::invalid_argument("Expected model ID in range [0-19999] at argument 1");
+    if (uiModelID >= g_pGame->GetBaseIDforTXD())
+        throw std::invalid_argument(SString("Expected model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
 
     if (CClientIMGManager::IsLinkableModel(uiModelID))
         return m_pImgManager->RestoreModel(uiModelID);
@@ -959,11 +960,12 @@ bool CLuaEngineDefs::EngineRestoreDFFImage(uint uiModelID)
 
 bool CLuaEngineDefs::EngineRestoreTXDImage(uint uiModelID)
 {
-    if (uiModelID >= 5000)
-        throw std::invalid_argument("Expected TXD ID in range [0-4999] at argument 1");
+    const std::uint32_t txdCount = g_pGame->GetBaseIDforCOL() - g_pGame->GetBaseIDforTXD();
+    if (uiModelID >= txdCount)
+        throw std::invalid_argument(SString("Expected TXD ID in range [0-%u] at argument 1", txdCount - 1));
 
     if (CClientIMGManager::IsLinkableModel(uiModelID))
-        return m_pImgManager->RestoreModel(20000 + uiModelID);
+        return m_pImgManager->RestoreModel(g_pGame->GetBaseIDforTXD() + uiModelID);
 
     return false;
 }
@@ -3031,8 +3033,8 @@ uint CLuaEngineDefs::EngineGetModelFlags(uint uiModelId)
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelId);
 
-    if (uiModelId >= 20000 || !pModelInfo)
-        throw std::invalid_argument("Expected a valid model ID in range [0-19999] at argument 1");
+    if (uiModelId >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
+        throw std::invalid_argument(SString("Expected a valid model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
 
     return pModelInfo->GetFlags();
 }
@@ -3046,8 +3048,8 @@ bool CLuaEngineDefs::EngineGetModelFlag(uint uiModelId, eModelIdeFlag eFlag)
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelId);
 
-    if (uiModelId >= 20000 || !pModelInfo)
-        throw std::invalid_argument("Expected a valid model ID in range [0-19999] at argument 1");
+    if (uiModelId >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
+        throw std::invalid_argument(SString("Expected a valid model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
 
     return pModelInfo->GetIdeFlag(eFlag);
 }
@@ -3063,8 +3065,8 @@ bool CLuaEngineDefs::EngineSetModelFlags(uint uiModelID, uint uiFlags, std::opti
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
-    if (uiModelID >= 20000 || !pModelInfo)
-        throw std::invalid_argument("Expected a valid model ID in range [0-19999] at argument 1");
+    if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
+        throw std::invalid_argument(SString("Expected a valid model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
 
     if (bIdeFlags.value_or(false))
         pModelInfo->SetIdeFlags(uiFlags);
@@ -3085,8 +3087,8 @@ bool CLuaEngineDefs::EngineSetModelFlag(uint uiModelID, eModelIdeFlag eFlag, boo
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
-    if (uiModelID >= 20000 || !pModelInfo)
-        throw std::invalid_argument("Expected a valid model ID in range [0-19999] at argument 1");
+    if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
+        throw std::invalid_argument(SString("Expected a valid model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
 
     pModelInfo->SetIdeFlag(eFlag, bState);
 
@@ -3102,8 +3104,8 @@ bool CLuaEngineDefs::EngineResetModelFlags(uint uiModelID)
 
     CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
 
-    if (uiModelID >= 20000 || !pModelInfo)
-        throw std::invalid_argument("Expected a valid model ID in range [0-19999] at argument 1");
+    if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo)
+        throw std::invalid_argument(SString("Expected a valid model ID in range [0-%u] at argument 1", g_pGame->GetBaseIDforTXD() - 1));
 
     ushort usCurrentFlags = pModelInfo->GetFlags();
     ushort usOriginalFlags = pModelInfo->GetOriginalFlags();
@@ -3137,13 +3139,13 @@ uint CLuaEngineDefs::EngineRequestTXD(lua_State* const luaVM, std::string strTxd
     pModel->SetParentResource(m_pLuaManager->GetVirtualMachine(luaVM)->GetResource());
     m_pManager->GetModelManager()->Add(pModel);
 
-    return iModelID - MAX_MODEL_DFF_ID;
+    return iModelID - g_pGame->GetBaseIDforTXD();
 }
 
 bool CLuaEngineDefs::EngineFreeTXD(uint txdID)
 {
     auto                          modelManager = m_pManager->GetModelManager();
-    std::shared_ptr<CClientModel> pModel = modelManager->FindModelByID(MAX_MODEL_DFF_ID + txdID);
+    std::shared_ptr<CClientModel> pModel = modelManager->FindModelByID(g_pGame->GetBaseIDforTXD() + txdID);
 
     // Deallocate() intentionally skips model-info destruction for TXDs, but it
     // also leaves the CClientModel registered and its GTA TXD-pool slot in use.

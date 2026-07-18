@@ -10,7 +10,7 @@
 #include "StdInc.h"
 #include <enums/VehicleType.h>
 
-static const uint32_t CModelInfo__ms_modelInfoPtrs = 0xA9B0C8;
+static CBaseModelInfoSAInterface** g_fileIdModelInfoArray = nullptr;
 
 static CVector* vehicleDummiesPositionArray = nullptr;
 
@@ -1097,7 +1097,7 @@ static void __declspec(naked) HOOK_CVehicle_GetPlaneGunsPosition()
         continueWithOriginalCode:
         popad
         movsx   ecx, dx
-        mov     eax, CModelInfo__ms_modelInfoPtrs
+        mov     eax, dword ptr[g_fileIdModelInfoArray]
         mov     eax, [eax+ecx*4]
         mov     eax, [eax+5Ch]
         jmp     CONTINUE_CVehicle_GetPlaneGunsPosition
@@ -1420,6 +1420,8 @@ static void __declspec(naked) HOOK_CVehicle_DoHeadLightBeam()
 //////////////////////////////////////////////////////////////////////////////////////////
 void CMultiplayerSA::InitHooks_VehicleDummies()
 {
+    g_fileIdModelInfoArray = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray());
+
     EZHookInstall(CVehicle_DoVehicleLights_1);
     EZHookInstall(CVehicle_DoVehicleLights_2);
     EZHookInstall(CVehicle_DoHeadLightBeam);

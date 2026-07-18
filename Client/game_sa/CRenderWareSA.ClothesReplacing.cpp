@@ -282,7 +282,7 @@ __declspec(noinline) bool _cdecl OnCStreaming_RequestModel_Mid(int flags, SImgGT
     }
 
     // Set results
-    iReturnFileId = ((char*)pImgGTAInfo - (char*)CStreaming__ms_aInfoForModel) / 20;
+    iReturnFileId = ((char*)pImgGTAInfo - (char*)pGame->GetStreamingInfoArray()) / sizeof(CStreamingInfo);
     pReturnBuffer = replacementFileData;
 
     // Update flags

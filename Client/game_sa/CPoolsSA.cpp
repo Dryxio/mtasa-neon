@@ -813,7 +813,7 @@ uint CPoolsSA::GetModelIdFromClump(RpClump* pRpClump)
     }
 
     // Finally search model info array
-    CBaseModelInfoSAInterface** ppModelInfo = (CBaseModelInfoSAInterface**)ARRAY_ModelInfo;
+    CBaseModelInfoSAInterface** ppModelInfo = (CBaseModelInfoSAInterface**)CModelInfoSAInterface::ms_modelInfoPtrs;
 
     unsigned int NUMBER_OF_MODELS = pGame->GetBaseIDforTXD();
 

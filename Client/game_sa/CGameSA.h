@@ -15,6 +15,7 @@
 #include "CFxManagerSA.h"
 #include "CModelInfoSA.h"
 #include "CStreamingSA.h"
+#include "CFileIDRuntimeSA.h"
 #include "CCoverManagerSA.h"
 #include "CPlantManagerSA.h"
 #include "CRendererSA.h"
@@ -39,10 +40,6 @@ extern unsigned int OBJECTDYNAMICINFO_MAX;  // default: 160
 #define NUM_WeaponInfosStdSkill   WEAPONTYPE_LAST_WEAPONTYPE
 #define NUM_WeaponInfosOtherSkill 11
 #define NUM_WeaponInfosTotal      (NUM_WeaponInfosStdSkill + (3 * NUM_WeaponInfosOtherSkill))  // std, (poor, pro, special)
-
-#define MODELINFO_DFF_MAX 20000
-#define MODELINFO_TXD_MAX 25000
-#define MODELINFO_MAX     26000  // Actual max is 25755
 
 #define VAR_FlyingCarsEnabled    0x969160
 #define VAR_ExtraBunnyhopEnabled 0x969161
@@ -182,15 +179,18 @@ public:
     CModelInfo*                     GetModelInfo(DWORD dwModelID, bool bCanBeInvalid = false);
     CObjectGroupPhysicalProperties* GetObjectGroupPhysicalProperties(unsigned char ucObjectGroup);
 
-    uint32_t GetBaseIDforDFF() override { return 0; }
-    uint32_t GetBaseIDforTXD() override { return *(uint32_t*)(0x407104 + 2); }
-    uint32_t GetBaseIDforCOL() override { return *(uint32_t*)(0x410344 + 2); }
-    uint32_t GetBaseIDforIPL() override { return *(uint32_t*)(0x4044F4 + 2); }
-    uint32_t GetBaseIDforDAT() override { return *(uint32_t*)(0x44D064 + 2); }
-    uint32_t GetBaseIDforIFP() override { return *(uint32_t*)(0x407124 + 2); }
-    uint32_t GetBaseIDforRRR() override { return *(uint32_t*)(0x4594A1 + 2); }
-    uint32_t GetBaseIDforSCM() override { return *(uint32_t*)(0x46A574 + 2); }
-    uint32_t GetCountOfAllFileIDs() override { return (*(char**)(0x5B8AFA + 2) - *(char**)(0x5B8B08 + 6)) / sizeof(CStreamingInfo); }
+    uint32_t             GetBaseIDforDFF() override { return m_fileIDs.GetLayout().dff; }
+    uint32_t             GetBaseIDforTXD() override { return m_fileIDs.GetLayout().txd; }
+    uint32_t             GetBaseIDforCOL() override { return m_fileIDs.GetLayout().col; }
+    uint32_t             GetBaseIDforIPL() override { return m_fileIDs.GetLayout().ipl; }
+    uint32_t             GetBaseIDforDAT() override { return m_fileIDs.GetLayout().dat; }
+    uint32_t             GetBaseIDforIFP() override { return m_fileIDs.GetLayout().ifp; }
+    uint32_t             GetBaseIDforRRR() override { return m_fileIDs.GetLayout().rrr; }
+    uint32_t             GetBaseIDforSCM() override { return m_fileIDs.GetLayout().scm; }
+    uint32_t             GetCountOfAllFileIDs() override { return m_fileIDs.GetLayout().total; }
+    const SFileIDLayout& GetFileIDLayout() const override { return m_fileIDs.GetLayout(); }
+    void*                GetModelInfoArray() const override { return m_fileIDs.GetModelInfoArray(); }
+    CStreamingInfo*      GetStreamingInfoArray() const override { return m_fileIDs.GetStreamingInfoArray(); }
 
     DWORD GetSystemTime() { return *(DWORD*)0xB7CB84; }              // CTimer::m_snTimeInMilliseconds
     int   GetSystemFrameCounter() const { return *(int*)0xB7CB4C; }  // CTimer::m_FrameCounter
@@ -402,22 +402,23 @@ private:
     CControllerConfigManager* m_pControllerConfigManager;
     CIplStore*                m_pIplStore;
 
-    eGameVersion m_eGameVersion;
-    bool         m_bAsyncScriptEnabled;
-    bool         m_bAsyncScriptForced;
-    bool         m_bASyncLoadingSuspended;
-    int          m_iCheckStatus;
-    bool         m_bUnderworldWarp;
-    bool         m_isCoronaZTestEnabled{true};
-    bool         m_isTunnelWeatherBlendEnabled{true};
-    bool         m_areWaterCreaturesEnabled{true};
-    bool         m_isBurnFlippedCarsEnabled{true};
-    bool         m_isFireballDestructEnabled{true};
-    bool         m_isRoadSignsTextEnabled{true};
-    bool         m_isGameWorldRemoved{false};
-    bool         m_isExtendedWaterCannonsEnabled{false};
-    bool         m_isIgnoreFireStateEnabled{false};
-    bool         m_isVehicleBurnExplosionsEnabled{true};
+    eGameVersion     m_eGameVersion;
+    CFileIDRuntimeSA m_fileIDs;
+    bool             m_bAsyncScriptEnabled;
+    bool             m_bAsyncScriptForced;
+    bool             m_bASyncLoadingSuspended;
+    int              m_iCheckStatus;
+    bool             m_bUnderworldWarp;
+    bool             m_isCoronaZTestEnabled{true};
+    bool             m_isTunnelWeatherBlendEnabled{true};
+    bool             m_areWaterCreaturesEnabled{true};
+    bool             m_isBurnFlippedCarsEnabled{true};
+    bool             m_isFireballDestructEnabled{true};
+    bool             m_isRoadSignsTextEnabled{true};
+    bool             m_isGameWorldRemoved{false};
+    bool             m_isExtendedWaterCannonsEnabled{false};
+    bool             m_isIgnoreFireStateEnabled{false};
+    bool             m_isVehicleBurnExplosionsEnabled{true};
 
     static unsigned int& ClumpOffset;
 

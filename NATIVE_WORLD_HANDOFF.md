@@ -773,6 +773,34 @@ crash diagnostic, and the server recorded clean join/quit/reconnect cycles.
 The expected post-activation transport refusals preserved the existing native
 world rather than attempting to republish into the active registrar.
 
+The FileID abstraction checkpoint is complete on `master`. It does not relocate
+or enlarge the stock 26,316-entry table. It validates ten read-only HOODLUM
+anchors at startup, captures every partition and the two global arrays into
+`CFileIDRuntimeSA`, and routes the Game SA, Multiplayer SA, Client Core and
+Client Deathmatch consumers through the runtime `CGame` API. This includes
+naked ASM hooks, clothes/player.img caching, model replacement, TXD
+allocation/image APIs and memory statistics. The old static captures and stock
+DFF/TXD arithmetic are covered by a source-contract test.
+
+The off-game validator passed against the local stock executable with all ten
+anchors and `nativeWrites=no`. The focused suite passed 95 tests with two
+optional skips. After regeneration, `Game SA`, `Multiplayer SA`, `Client Core`
+and `Client Deathmatch` all built as `Release|Win32` with zero errors.
+
+The user-run live gate completed on 2026-07-18 with format-1 ticket `7a1a461a`.
+The initial stock process and the authorized replacement process both emitted
+the exact `[NativeFileID] state=captured layout=stock ... total=26316 ...
+nativeWrites=no` diagnostic. Bullworth activated as archive 6 with 952 models,
+166 TXDs, collision slot 252 and IPL slots 191 through 197. `/nativebw` worked
+before and after an exact reconnect; the reconnect revalidated the same ticket
+and process lease, retained `14854/32000` Atomic, `136/512` DamageAtomic and
+`175/1024` Time occupancy, and clamped the streaming request to 4008 blocks.
+The client/server logs contained no FileID mismatch, preflight/capacity failure,
+exception or fatal diagnostic, and no new dump was created. DFF/TXD
+replace/restore should still be repeated as a focused regression when the
+44,325-entry relocation changes the table itself. Do not begin that relocation
+by reintroducing any private pointer or partition constant.
+
 After authorized activation, item 1 is complete: E2 extends the E1 format-2
 transport boundary with strict authorization/startup without weakening format
 1. Continue with:
