@@ -6,6 +6,18 @@ TAGUP = {
     tagModel = 1490,
     vehicleModel = 492,
     sweetModel = 270,
+    cj = {
+        model = 0,
+        clothingSlots = 18,
+        -- A fresh vanilla game installs these four clothes before storing
+        -- CJ's initial appearance. SWEET1 never replaces that appearance.
+        clothes = {
+            {texture = "vest", model = "vest", type = 0},
+            {texture = "player_face", model = "head", type = 1},
+            {texture = "jeansdenim", model = "jeans", type = 2},
+            {texture = "sneakerbincblk", model = "sneaker", type = 3},
+        },
+    },
     missionActorData = "tagup.missionActor",
     start = {2508.16, -1666.47, 13.0, 16},
     sweetStart = {2518.07, -1668.82, 13.1, 90},
@@ -237,6 +249,63 @@ TAGUP = {
             readyTimeout = 10000,
             releaseTimeout = 3000,
         },
+    },
+    finalScene = {
+        -- Installed main.scm offsets 0x7BF25 through 0x7C51C stage the
+        -- complete Grove Street conversation before mission_sweet1_passed.
+        leader = {x = 2511.3518, y = -1672.14, z = 12.4588, heading = 180.0},
+        sweet = {x = 2511.3518, y = -1673.14, z = 12.4588, heading = 0.0},
+        extraPlayers = {
+            {x = 2497.0, y = -1682.0, z = 13.0, heading = 0.0},
+            {x = 2495.5, y = -1682.0, z = 13.0, heading = 0.0},
+        },
+        camera = {
+            fixed = {
+                position = {x = 2509.9500, y = -1672.0947, z = 13.7315},
+                target = {x = 2510.8914, y = -1672.4194, z = 13.8204},
+            },
+            move = {
+                from = {x = 2510.1528, y = -1673.5514, z = 14.2267},
+                to = {x = 2509.9971, y = -1671.8660, z = 13.9831},
+                duration = 18000,
+            },
+            track = {
+                from = {x = 2510.9673, y = -1672.9948, z = 14.0633},
+                to = {x = 2510.8853, y = -1672.3169, z = 13.8960},
+                duration = 18000,
+            },
+            nearClip = 0.2,
+            fadeOutDuration = 1.0,
+            fadeInDuration = 1.0,
+            skipFadeDuration = 0.25,
+        },
+        audio = {
+            {event = 37435, key = "SWE1_BN", speaker = "sweet"},
+            {event = 37436, key = "SWE1_BO", speaker = "leader"},
+            {event = 37437, key = "SWE1_BP", speaker = "sweet"},
+            {event = 37438, key = "SWE1_BQ", speaker = "leader"},
+            {event = 37443, key = "SWE1_BX", speaker = "leader"},
+            {event = 37441, key = "SWE1_BT", speaker = "sweet"},
+            {event = 37442, key = "SWE1_BU", speaker = "sweet"},
+        },
+        audioStartDelay = 700,
+        leaderIdleChatLine = 4,
+        handshakeLine = 6,
+        walkLine = 7,
+        handshake = {block = "GANGS", name = "hndshkfa", guardTimeout = 10000},
+        sweetWalk = {
+            target = {x = 2517.3972, y = -1677.3524, z = 13.2548},
+            movement = "walk",
+            radius = 0.5,
+            slowdownRadius = 2.0,
+            timeout = 20000,
+        },
+        postAudioWait = 1500,
+        readyTimeout = 30000,
+        audioLoadTimeout = 30000,
+        audioFinishTimeout = 15000,
+        taskReportTimeout = 5000,
+        releaseTimeout = 3000,
     },
     tags = {
         {id = 1, group = "idlewood", x = 2066.429688, y = -1652.476563, z = 14.28125, rotation = 179.5},

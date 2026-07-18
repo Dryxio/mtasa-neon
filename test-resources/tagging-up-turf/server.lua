@@ -39,6 +39,8 @@ local mission = {
     introEntryGuardTimer = nil,
     fileCutsceneSerial = 0,
     fileCutscene = nil,
+    finalSceneSerial = 0,
+    finalScene = nil,
 }
 
 -- GTA produces every spray hit and exact alpha step. The server validates those
@@ -70,6 +72,64 @@ local function clearMissionTimers()
     mission.timers = {}
 end
 
+local function snapshotPedClothes(ped)
+    local clothes = {}
+    for clothingType = 0, TAGUP.cj.clothingSlots - 1 do
+        local texture, model = getPedClothes(ped, clothingType)
+        if type(texture) == "string" and type(model) == "string" then
+            clothes[clothingType] = {texture = texture, model = model}
+        end
+    end
+    return clothes
+end
+
+local function clearPedClothes(ped)
+    for clothingType = 0, TAGUP.cj.clothingSlots - 1 do
+        local texture = getPedClothes(ped, clothingType)
+        if type(texture) == "string" and not removePedClothes(ped, clothingType) then
+            return false, clothingType
+        end
+    end
+    return true
+end
+
+local function applyPedClothes(ped, clothes)
+    local cleared, failedType = clearPedClothes(ped)
+    if not cleared then
+        return false, ("remove slot %d refused"):format(failedType)
+    end
+    for clothingType, clothing in pairs(clothes or {}) do
+        if not addPedClothes(ped, clothing.texture, clothing.model, clothingType) then
+            return false, ("add slot %d %s/%s refused"):format(clothingType, clothing.texture, clothing.model)
+        end
+    end
+    return true
+end
+
+local function applyMissionCJ(player)
+    if not isElement(player) or not setElementModel(player, TAGUP.cj.model) then
+        return false, "CJ model 0 refused"
+    end
+    local clothes = {}
+    for _, clothing in ipairs(TAGUP.cj.clothes) do
+        clothes[clothing.type] = {texture = clothing.texture, model = clothing.model}
+    end
+    local applied, details = applyPedClothes(player, clothes)
+    if not applied then
+        return false, details
+    end
+    for _, expected in ipairs(TAGUP.cj.clothes) do
+        local texture, model = getPedClothes(player, expected.type)
+        if type(texture) ~= "string" or type(model) ~= "string" or texture:lower() ~= expected.texture or
+            model:lower() ~= expected.model then
+            return false, ("slot %d readback mismatch: %s/%s"):format(expected.type, tostring(texture), tostring(model))
+        end
+    end
+    outputDebugString(("[tagging-up-turf] Vanilla CJ appearance applied to leader %s: model=0 vest/player_face/jeansdenim/sneakerbincblk"):format(
+                          getPlayerName(player)))
+    return true
+end
+
 local function snapshotPlayer(player)
     local x, y, z = getElementPosition(player)
     local _, _, rotation = getElementRotation(player)
@@ -91,6 +151,7 @@ local function snapshotPlayer(player)
         health = getElementHealth(player),
         armor = getPedArmor(player),
         model = getElementModel(player),
+        clothes = snapshotPedClothes(player),
         weapons = weapons,
     }
 end
@@ -100,15 +161,30 @@ local function restorePlayer(player, snapshot)
         return
     end
 
+    local restoreModel = snapshot.cjAppearanceApplied and TAGUP.cj.model or snapshot.model
     if isPedDead(player) then
-        spawnPlayer(player, snapshot.x, snapshot.y, snapshot.z, snapshot.rotation, snapshot.model, snapshot.interior, snapshot.dimension)
+        spawnPlayer(player, snapshot.x, snapshot.y, snapshot.z, snapshot.rotation, restoreModel, snapshot.interior, snapshot.dimension)
     else
         removePedFromVehicle(player)
         setElementInterior(player, snapshot.interior)
         setElementDimension(player, snapshot.dimension)
         setElementPosition(player, snapshot.x, snapshot.y, snapshot.z)
         setElementRotation(player, 0, 0, snapshot.rotation)
+        setElementModel(player, restoreModel)
+    end
+
+    if snapshot.cjAppearanceApplied then
+        -- Clothes can only be changed while the element uses CJ model 0.
+        -- Restore that hidden state first, then return to the original skin.
+        local appearanceRestored, appearanceDetails = applyPedClothes(player, snapshot.clothes)
+        if not appearanceRestored then
+            outputDebugString(("[tagging-up-turf] Failed to restore clothes for %s: %s"):format(
+                                  getPlayerName(player), tostring(appearanceDetails)), 2)
+        end
         setElementModel(player, snapshot.model)
+        outputDebugString(("[tagging-up-turf] Restored leader appearance for %s: model=%d clothes=%s"):format(
+                              getPlayerName(player), snapshot.model, appearanceRestored and "restored" or "failed"),
+                          appearanceRestored and 3 or 2)
     end
 
     setElementFrozen(player, false)
@@ -438,9 +514,11 @@ local function replaceTagObject(tagId)
 end
 
 local failMission
+local finishMission
 local createScmChar
 local createMissionEntities
 local startIntroScene
+local startFinalScene
 
 local function cancelFileCutscene(reason, notifyClients)
     local scene = mission.fileCutscene
@@ -1033,6 +1111,427 @@ addEventHandler("tagup:introSceneReleased", resourceRoot, function(sceneId, resu
                           tonumber(sceneId), tostring(seated)))
 end)
 
+local function cancelFinalScene(reason, notifyClients)
+    local scene = mission.finalScene
+    if not scene then
+        return
+    end
+
+    mission.finalScene = nil
+    for _, timer in ipairs({scene.readyGuardTimer, scene.startTimer, scene.audioGuardTimer, scene.nextLineTimer,
+                            scene.handshakeGuardTimer, scene.taskReportGuardTimer, scene.postAudioTimer, scene.releaseGuardTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    if notifyClients ~= false then
+        for _, player in ipairs(scene.players) do
+            if isElement(player) then
+                triggerClientEvent(player, "tagup:finalSceneCancel", resourceRoot, scene.id, reason or "server_cancelled")
+            end
+        end
+    end
+    if isElement(mission.leader) then
+        setPedAnimation(mission.leader, false)
+    end
+    if isElement(mission.entities.sweet) then
+        setPedAnimation(mission.entities.sweet, false)
+    end
+    if isElement(mission.entities.vehicle) then
+        setElementFrozen(mission.entities.vehicle, false)
+    end
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            setElementFrozen(player, false)
+        end
+    end
+end
+
+local function allFinalScenePlayers(scene, field)
+    for _, player in ipairs(scene.players) do
+        if isElement(player) and not scene[field][player] then
+            return false
+        end
+    end
+    return true
+end
+
+local function failFinalScene(scene, reason)
+    if mission.finalScene ~= scene then
+        return
+    end
+    cancelFinalScene("failed", true)
+    failMission(reason)
+end
+
+local prepareFinalSceneLine
+local requestFinalSceneRelease
+
+local function tryFinishFinalSceneTimeline(scene)
+    if mission.finalScene ~= scene or scene.releasing or not scene.finalAudioFinished or not scene.walkAccepted or scene.postAudioTimer then
+        return
+    end
+    scene.postAudioTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.finalScene
+        if active and active.id == expectedId then
+            requestFinalSceneRelease(active, false)
+        end
+    end, TAGUP.finalScene.postAudioWait, 1, scene.id))
+end
+
+local function playFinalSceneLine(scene, lineIndex)
+    if mission.finalScene ~= scene or scene.lineIndex ~= lineIndex or scene.audioStarted or scene.releasing then
+        return
+    end
+    local profile = TAGUP.finalScene
+    scene.audioStarted = true
+    scene.audioFinishedPlayers = {}
+    scene.skippable = true
+    if isTimer(scene.audioGuardTimer) then
+        killTimer(scene.audioGuardTimer)
+    end
+    scene.audioGuardTimer = rememberTimer(setTimer(function(expectedId, expectedLine)
+        local active = mission.finalScene
+        if active and active.id == expectedId and active.lineIndex == expectedLine then
+            failFinalScene(active, ("La replique finale %d a depasse son delai de garde."):format(expectedLine))
+        end
+    end, profile.audioFinishTimeout, 1, scene.id, lineIndex))
+
+    if lineIndex == profile.leaderIdleChatLine and isElement(mission.leader) then
+        if not setPedAnimation(mission.leader, "PED", "IDLE_CHAT", 6000, true, false, false, false, 250, false) then
+            return failFinalScene(scene, "IDLE_CHAT a ete refusee pendant la scene finale.")
+        end
+    elseif lineIndex == profile.handshakeLine then
+        local sweet = mission.entities.sweet
+        if not isElement(mission.leader) or not isElement(sweet) or
+            not setPedAnimation(sweet, profile.handshake.block, profile.handshake.name, -1, false, false, false, false, 250, false) or
+            not setPedAnimation(mission.leader, profile.handshake.block, profile.handshake.name, -1, false, false, false, false, 250, false) then
+            return failFinalScene(scene, "La poignee de main GANGS a ete refusee pendant la scene finale.")
+        end
+        scene.handshakeGuardTimer = rememberTimer(setTimer(function(expectedId)
+            local active = mission.finalScene
+            if active and active.id == expectedId and not active.handshakeFinished then
+                failFinalScene(active, "La poignee de main GANGS n'a pas termine dans le delai attendu.")
+            end
+        end, profile.handshake.guardTimeout, 1, scene.id))
+        triggerClientEvent(mission.leader, "tagup:finalSceneObserveHandshake", resourceRoot, scene.id, sweet)
+    end
+
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:finalScenePlayAudio", resourceRoot, scene.id, lineIndex, player == mission.leader)
+        end
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d playing %s"):format(scene.id, profile.audio[lineIndex].key))
+end
+
+prepareFinalSceneLine = function(scene, lineIndex)
+    if mission.finalScene ~= scene or scene.releasing or not TAGUP.finalScene.audio[lineIndex] then
+        return
+    end
+    scene.lineIndex = lineIndex
+    scene.audioStarted = false
+    scene.audioReadyPlayers = {}
+    if isTimer(scene.audioGuardTimer) then
+        killTimer(scene.audioGuardTimer)
+    end
+    scene.audioGuardTimer = rememberTimer(setTimer(function(expectedId, expectedLine)
+        local active = mission.finalScene
+        if active and active.id == expectedId and active.lineIndex == expectedLine then
+            failFinalScene(active, ("Le chargement de la replique finale %d a depasse son delai de garde."):format(expectedLine))
+        end
+    end, TAGUP.finalScene.audioLoadTimeout, 1, scene.id, lineIndex))
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:finalScenePrepareAudio", resourceRoot, scene.id, lineIndex)
+        end
+    end
+end
+
+requestFinalSceneRelease = function(scene, skipped)
+    if mission.finalScene ~= scene or scene.releasing then
+        return
+    end
+    scene.releasing = true
+    scene.skipped = skipped == true
+    scene.releasedPlayers = {}
+    for _, timer in ipairs({scene.startTimer, scene.audioGuardTimer, scene.nextLineTimer, scene.handshakeGuardTimer,
+                            scene.taskReportGuardTimer, scene.postAudioTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    if isElement(mission.leader) then
+        setPedAnimation(mission.leader, false)
+    end
+    if isElement(mission.entities.sweet) then
+        setPedAnimation(mission.entities.sweet, false)
+    end
+    scene.releaseGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.finalScene
+        if active and active.id == expectedId then
+            failFinalScene(active, "La camera finale n'a pas ete restauree sur tous les clients.")
+        end
+    end, TAGUP.finalScene.releaseTimeout, 1, scene.id))
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:finalSceneRelease", resourceRoot, scene.id, scene.skipped)
+        end
+    end
+end
+
+startFinalScene = function(extra)
+    local leader, sweet, vehicle = mission.leader, mission.entities.sweet, mission.entities.vehicle
+    if not isElement(leader) or not isElement(sweet) or not isElement(vehicle) then
+        return failMission("Les acteurs de la scene finale ne sont plus disponibles.")
+    end
+
+    mission.finalSceneSerial = mission.finalSceneSerial + 1
+    local scene = {
+        id = mission.finalSceneSerial,
+        players = {},
+        readyPlayers = {},
+        lineIndex = 1,
+        traceExtra = extra,
+    }
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            table.insert(scene.players, player)
+        end
+    end
+    if #scene.players == 0 then
+        return failMission("Aucun participant n'est disponible pour la scene finale.")
+    end
+
+    mission.finalScene = scene
+    scene.readyGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.finalScene
+        if active and active.id == expectedId then
+            failFinalScene(active, "La preparation de la scene finale a depasse son delai de garde.")
+        end
+    end, TAGUP.finalScene.readyTimeout, 1, scene.id))
+    setStage("final_scene", extra)
+    for _, player in ipairs(scene.players) do
+        triggerClientEvent(player, "tagup:finalScenePrepare", resourceRoot, scene.id, sweet, player == leader)
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d preparing fade, camera and SWE1_BN for %d participant(s)"):format(
+                          scene.id, #scene.players))
+end
+
+addEvent("tagup:finalSceneReady", true)
+addEventHandler("tagup:finalSceneReady", resourceRoot, function(sceneId, result, details)
+    local player, scene = client, mission.finalScene
+    if source ~= resourceRoot or not scene or mission.stage ~= "final_scene" or scene.id ~= tonumber(sceneId) or
+        not isMissionPlayer(player) or scene.readyPlayers[player] or scene.started then
+        return
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d ready player=%s result=%s (%s)"):format(
+                          scene.id, getPlayerName(player), tostring(result), tostring(details or ""):sub(1, 180)))
+    if result ~= "ready" then
+        return failFinalScene(scene, "La preparation de la scene finale a echoue sur un client: " .. tostring(result))
+    end
+    scene.readyPlayers[player] = true
+    if not allFinalScenePlayers(scene, "readyPlayers") then
+        return
+    end
+
+    if isTimer(scene.readyGuardTimer) then
+        killTimer(scene.readyGuardTimer)
+        scene.readyGuardTimer = nil
+    end
+    local profile, leader = TAGUP.finalScene, mission.leader
+    removePedFromVehicle(leader)
+    setElementPosition(leader, profile.leader.x, profile.leader.y, profile.leader.z)
+    setElementRotation(leader, 0, 0, profile.leader.heading)
+    setElementFrozen(leader, false)
+    takeWeapon(leader, TAGUP.sprayWeapon)
+    setPedWeaponSlot(leader, 0)
+    setPedAnimation(leader, false)
+
+    removePedFromVehicle(mission.entities.sweet)
+    setElementPosition(mission.entities.sweet, profile.sweet.x, profile.sweet.y, profile.sweet.z)
+    setElementRotation(mission.entities.sweet, 0, 0, profile.sweet.heading)
+    setElementSyncer(mission.entities.sweet, leader, true, true)
+    takeWeapon(mission.entities.sweet, TAGUP.sprayWeapon)
+    setPedWeaponSlot(mission.entities.sweet, 0)
+    setPedAnimation(mission.entities.sweet, false)
+    setElementFrozen(mission.entities.vehicle, true)
+
+    local extraIndex = 1
+    for _, member in ipairs(scene.players) do
+        if member ~= leader and isElement(member) then
+            removePedFromVehicle(member)
+            local position = profile.extraPlayers[extraIndex] or profile.extraPlayers[#profile.extraPlayers]
+            extraIndex = extraIndex + 1
+            setElementPosition(member, position.x, position.y, position.z)
+            setElementRotation(member, 0, 0, position.heading)
+            setElementFrozen(member, true)
+            takeWeapon(member, TAGUP.sprayWeapon)
+            setPedWeaponSlot(member, 0)
+        end
+    end
+
+    scene.started = true
+    scene.startedAt = getTickCount()
+    scene.audioReadyPlayers = scene.readyPlayers
+    for _, member in ipairs(scene.players) do
+        if isElement(member) then
+            triggerClientEvent(member, "tagup:finalSceneStart", resourceRoot, scene.id)
+        end
+    end
+    scene.startTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.finalScene
+        if active and active.id == expectedId then
+            playFinalSceneLine(active, 1)
+        end
+    end, profile.audioStartDelay, 1, scene.id))
+end)
+
+addEvent("tagup:finalSceneAudioReady", true)
+addEventHandler("tagup:finalSceneAudioReady", resourceRoot, function(sceneId, lineIndex, result, details)
+    local player, scene = client, mission.finalScene
+    lineIndex = tonumber(lineIndex)
+    if source ~= resourceRoot or not scene or mission.stage ~= "final_scene" or scene.id ~= tonumber(sceneId) or
+        scene.lineIndex ~= lineIndex or scene.audioStarted or not isMissionPlayer(player) or scene.audioReadyPlayers[player] then
+        return
+    end
+    if result ~= "ready" then
+        return failFinalScene(scene, ("Le chargement de la replique finale %d a echoue sur un client: %s"):format(
+                                  lineIndex or -1, tostring(result)))
+    end
+    scene.audioReadyPlayers[player] = true
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d line=%d ready on %s (%s)"):format(
+                          scene.id, lineIndex, getPlayerName(player), tostring(details or ""):sub(1, 180)))
+    if allFinalScenePlayers(scene, "audioReadyPlayers") then
+        playFinalSceneLine(scene, lineIndex)
+    end
+end)
+
+addEvent("tagup:finalSceneAudioFinished", true)
+addEventHandler("tagup:finalSceneAudioFinished", resourceRoot, function(sceneId, lineIndex, result, elapsed)
+    local player, scene = client, mission.finalScene
+    lineIndex = tonumber(lineIndex)
+    if source ~= resourceRoot or not scene or mission.stage ~= "final_scene" or scene.id ~= tonumber(sceneId) or
+        scene.lineIndex ~= lineIndex or not scene.audioStarted or not isMissionPlayer(player) or scene.audioFinishedPlayers[player] then
+        return
+    end
+    if result ~= "finished" then
+        return failFinalScene(scene, ("La replique finale %d a echoue sur un client: %s"):format(lineIndex or -1, tostring(result)))
+    end
+    scene.audioFinishedPlayers[player] = true
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d line=%d natural finish on %s after %s ms"):format(
+                          scene.id, lineIndex, getPlayerName(player), tostring(elapsed or "?")))
+    if not allFinalScenePlayers(scene, "audioFinishedPlayers") then
+        return
+    end
+    if isTimer(scene.audioGuardTimer) then
+        killTimer(scene.audioGuardTimer)
+        scene.audioGuardTimer = nil
+    end
+
+    local profile = TAGUP.finalScene
+    if lineIndex == profile.handshakeLine then
+        scene.handshakeAudioFinished = true
+        if scene.handshakeFinished then
+            prepareFinalSceneLine(scene, profile.walkLine)
+        end
+    elseif lineIndex == profile.walkLine then
+        scene.finalAudioFinished = true
+        if not scene.walkReported then
+            scene.taskReportGuardTimer = rememberTimer(setTimer(function(expectedId)
+                local active = mission.finalScene
+                if active and active.id == expectedId and not active.walkReported then
+                    failFinalScene(active, "La task de depart a pied de Sweet n'a pas ete acceptee a temps.")
+                end
+            end, profile.taskReportTimeout, 1, scene.id))
+        end
+        tryFinishFinalSceneTimeline(scene)
+    else
+        prepareFinalSceneLine(scene, lineIndex + 1)
+    end
+end)
+
+addEvent("tagup:finalSceneHandshakeResult", true)
+addEventHandler("tagup:finalSceneHandshakeResult", resourceRoot, function(sceneId, sweet, result, details)
+    local scene = mission.finalScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or
+        sweet ~= mission.entities.sweet or scene.lineIndex ~= TAGUP.finalScene.handshakeLine or scene.handshakeFinished then
+        return
+    end
+    if result ~= "finished" then
+        return failFinalScene(scene, "La poignee de main GANGS a ete interrompue: " .. tostring(details or result))
+    end
+    scene.handshakeFinished = true
+    if isTimer(scene.handshakeGuardTimer) then
+        killTimer(scene.handshakeGuardTimer)
+        scene.handshakeGuardTimer = nil
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d handshake finished naturally"):format(scene.id))
+    if scene.handshakeAudioFinished then
+        prepareFinalSceneLine(scene, TAGUP.finalScene.walkLine)
+    end
+end)
+
+addEvent("tagup:finalSceneWalkResult", true)
+addEventHandler("tagup:finalSceneWalkResult", resourceRoot, function(sceneId, sweet, accepted)
+    local scene = mission.finalScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or
+        sweet ~= mission.entities.sweet or scene.lineIndex ~= TAGUP.finalScene.walkLine or scene.walkReported then
+        return
+    end
+    scene.walkReported = true
+    scene.walkAccepted = accepted == true and getElementSyncer(sweet) == mission.leader
+    if isTimer(scene.taskReportGuardTimer) then
+        killTimer(scene.taskReportGuardTimer)
+        scene.taskReportGuardTimer = nil
+    end
+    if not scene.walkAccepted then
+        return failFinalScene(scene, "La task native de depart a pied de Sweet a ete refusee.")
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d Sweet walk task accepted"):format(scene.id))
+    tryFinishFinalSceneTimeline(scene)
+end)
+
+addEvent("tagup:finalSceneSkipRequest", true)
+addEventHandler("tagup:finalSceneSkipRequest", resourceRoot, function(sceneId)
+    local scene = mission.finalScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or not scene.skippable or scene.releasing then
+        return
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d skip authorized by leader"):format(scene.id))
+    requestFinalSceneRelease(scene, true)
+end)
+
+addEvent("tagup:finalSceneLeaseLost", true)
+addEventHandler("tagup:finalSceneLeaseLost", resourceRoot, function(sceneId)
+    local scene = mission.finalScene
+    if source == resourceRoot and scene and scene.id == tonumber(sceneId) and isMissionPlayer(client) then
+        failFinalScene(scene, "Un client a perdu la camera native pendant la scene finale.")
+    end
+end)
+
+addEvent("tagup:finalSceneReleased", true)
+addEventHandler("tagup:finalSceneReleased", resourceRoot, function(sceneId, result)
+    local player, scene = client, mission.finalScene
+    if source ~= resourceRoot or not scene or not scene.releasing or scene.id ~= tonumber(sceneId) or
+        not isMissionPlayer(player) or scene.releasedPlayers[player] then
+        return
+    end
+    if result ~= "released" then
+        return failFinalScene(scene, "Un client n'a pas pu restaurer la camera finale.")
+    end
+    scene.releasedPlayers[player] = true
+    if not allFinalScenePlayers(scene, "releasedPlayers") then
+        return
+    end
+
+    local skipped = scene.skipped
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d %s after %d ms; camera/audio cleanup acknowledged"):format(
+                          scene.id, skipped and "skipped" or "completed", getTickCount() - (scene.startedAt or getTickCount())))
+    cancelFinalScene("completed", false)
+    finishMission(true, skipped and {traceSkipped = true} or nil)
+end)
+
 createScmChar = function(model, x, y, scriptZ, heading)
     -- GTA's CREATE_CHAR adds 1.0 to the script Z before placing the ped.
     -- MTA's createPed consumes the element Z directly, so this conversion
@@ -1395,8 +1894,6 @@ local function advanceAfterTags(extra)
     end
 end
 
-local finishMission
-
 failMission = function(reason)
     if not mission.running or mission.finishing or mission.stage == "failed" then
         return
@@ -1413,6 +1910,7 @@ failMission = function(reason)
     cancelBallasEncounter("mission_failed")
     cancelPostRoofScene("mission_failed")
     cancelVehiclePlayback("mission_failed")
+    cancelFinalScene("mission_failed")
     mission.stage = "failed"
     broadcastState({failureReason = reason or "La mission a echoue."})
     outputDebugString("[tagging-up-turf] Failed: " .. tostring(reason))
@@ -1542,6 +2040,7 @@ finishMission = function(passed, traceExtra)
     cancelBallasEncounter("mission_finished")
     cancelPostRoofScene("mission_finished")
     cancelVehiclePlayback("mission_finished")
+    cancelFinalScene("mission_finished")
     clearMissionTimers()
     if passed then
         mission.stage = "complete"
@@ -1595,6 +2094,7 @@ finishMission = function(passed, traceExtra)
         mission.introEntryPending = false
         mission.introEntryGuardTimer = nil
         mission.fileCutscene = nil
+        mission.finalScene = nil
     end, delay, 1)
 end
 
@@ -1606,6 +2106,16 @@ local function setupMissionPlayers()
     }
     for index, player in ipairs(mission.party) do
         mission.snapshots[player] = snapshotPlayer(player)
+        if player == mission.leader then
+            -- Mark before mutation so even a partial clothing failure restores
+            -- the original appearance through the ordinary failure cleanup.
+            mission.snapshots[player].cjAppearanceApplied = true
+            local applied, details = applyMissionCJ(player)
+            if not applied then
+                outputDebugString("[tagging-up-turf] CJ appearance setup failed: " .. tostring(details), 2)
+                return false
+            end
+        end
         removePedFromVehicle(player)
         setElementInterior(player, 0)
         setElementDimension(player, TAGUP.dimension)
@@ -1617,6 +2127,7 @@ local function setupMissionPlayers()
         giveWeapon(player, TAGUP.sprayWeapon, 1000, true)
         setElementFrozen(player, true)
     end
+    return true
 end
 
 createMissionEntities = function(requester)
@@ -1683,7 +2194,9 @@ local function startMission(requester, checkpoint)
         end
     end
 
-    setupMissionPlayers()
+    if not setupMissionPlayers() then
+        return failMission("L'apparence vanilla de CJ n'a pas pu etre appliquee au leader.")
+    end
 
     if not checkpoint then
         startFileCutscene()
@@ -1883,6 +2396,46 @@ local function startMission(requester, checkpoint)
         outputDebugString(('[tagging-up-turf] Ballas checkpoint started by %s outside the SCM 20x17 camera gate'):format(
                               getPlayerName(requester)))
         outputChatBox("Checkpoint Ballas charge. Avance vers le tag vert pour declencher la scene.", requester, 120, 220, 120)
+        return
+    end
+
+    if checkpoint == "final" then
+        for _, tagId in ipairs({1, 2, 3, 4, 5}) do
+            mission.tagProgress[tagId] = 255
+            mission.completedTags[tagId] = true
+            replaceTagObject(tagId)
+        end
+        setElementData(demoObject, "tagup.paintAlpha", 255, true)
+
+        setElementPosition(vehicle, TAGUP.homeDestination[1], TAGUP.homeDestination[2], TAGUP.homeDestination[3])
+        setElementRotation(vehicle, 0, 0, 180)
+        setElementVelocity(vehicle, 0, 0, 0)
+        setElementFrozen(vehicle, false)
+        setElementSyncer(vehicle, requester, true, true)
+        setElementSyncer(sweet, requester, true, true)
+        if not warpPedIntoVehicle(requester, vehicle, 0) or not warpPedIntoVehicle(sweet, vehicle, 1) then
+            return failMission("Le checkpoint final n'a pas pu installer CJ ou Sweet dans la Greenwood.")
+        end
+        for index = 2, #mission.party do
+            local member = mission.party[index]
+            if not warpPedIntoVehicle(member, vehicle, index) then
+                return failMission("Le checkpoint final n'a pas pu installer toute l'equipe.")
+            end
+        end
+        for _, member in ipairs(mission.party) do
+            if isElement(member) then
+                setElementFrozen(member, false)
+            end
+        end
+
+        rememberTimer(setTimer(function()
+            if mission.running and not mission.finalScene then
+                startFinalScene({traceSkipped = true})
+            end
+        end, 1000, 1))
+        outputDebugString(("[tagging-up-turf] Final Grove checkpoint started by %s; scene begins after streaming warmup"):format(
+                              getPlayerName(requester)))
+        outputChatBox("Checkpoint final charge. La scene Grove Street va commencer.", requester, 120, 220, 120)
         return
     end
 
@@ -2429,6 +2982,13 @@ addCommandHandler("taguppickup", function(player)
     startMission(player, "pickup")
 end)
 
+addCommandHandler("tagupfinal", function(player)
+    if not player then
+        return
+    end
+    startMission(player, "final")
+end)
+
 addCommandHandler("tagupabort", function(player)
     if mission.running and isMissionPlayer(player) then
         failMission("Mission abandonnee.")
@@ -2506,7 +3066,9 @@ addCommandHandler("tagupskip", function(player)
     elseif mission.stage == "return_after_roof" then
         setStage("drive_home", {traceSkipped = true})
     elseif mission.stage == "drive_home" then
-        finishMission(true, {traceSkipped = true})
+        startFinalScene({traceSkipped = true})
+    elseif mission.stage == "final_scene" and mission.finalScene then
+        requestFinalSceneRelease(mission.finalScene, true)
     end
 end)
 
@@ -3705,7 +4267,7 @@ addEventHandler("tagup:vehicleReady", resourceRoot, function(kind, reportedX, re
     elseif kind == "home" and mission.stage == "drive_home" then
         local target, gate = TAGUP.homeDestination, TAGUP.homeArrival
         if validateReportedVehicleArrival(kind, vehicle, target, gate, reportedX, reportedY, reportedZ) then
-            finishMission(true)
+            startFinalScene()
         end
     end
 end)
@@ -3906,7 +4468,7 @@ end)
 addEventHandler("onElementDestroy", root, function()
     if mission.running and (source == mission.entities.sweet or source == mission.entities.vehicle) and
         (mission.introScene or mission.demoScene or mission.demoLeave or mission.demoWalk or mission.demoShoot or mission.demoEnter or
-            mission.ballasDeparture) then
+            mission.ballasDeparture or mission.finalScene) then
         cancelIntroScene("ped_destroyed")
         cancelDemoScene("ped_destroyed")
         cancelDemoLeave("ped_destroyed")
@@ -3914,6 +4476,7 @@ addEventHandler("onElementDestroy", root, function()
         cancelDemoShoot("ped_destroyed")
         cancelDemoEnter("ped_destroyed")
         cancelBallasDeparture("ped_destroyed")
+        cancelFinalScene("ped_destroyed")
         failMission("Sweet ou la Greenwood a ete detruit pendant sa demonstration native.")
     elseif mission.running and mission.introScene and source == mission.entities.smoke then
         cancelIntroScene("smoke_destroyed")
@@ -3923,7 +4486,7 @@ end)
 
 addEventHandler("onPlayerWasted", root, function()
     if mission.running and isMissionPlayer(source) then
-        if mission.introScene or mission.demoScene or mission.ballasGangScene then
+        if mission.introScene or mission.demoScene or mission.ballasGangScene or mission.finalScene then
             failMission("Un membre de l'equipe est mort pendant une scene de mission.")
             return
         end
@@ -3956,6 +4519,7 @@ addEventHandler("onResourceStop", resourceRoot, function()
     cancelDemoScene("resource_stopped")
     cancelBallasDeparture("resource_stopped")
     cancelBallasGangScene("resource_stopped")
+    cancelFinalScene("resource_stopped")
     clearMissionTimers()
     for _, player in ipairs(mission.party) do
         restorePlayer(player, mission.snapshots[player])
@@ -3964,5 +4528,5 @@ addEventHandler("onResourceStop", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[tagging-up-turf] Ready. Use /tagup or /tagupsweet1a for SWEET1A, plus the existing checkpoint commands (up to three connected players).")
+    outputDebugString("[tagging-up-turf] Ready. Use /tagup for the full mission or /tagupfinal for the Grove Street finale (up to three connected players).")
 end)
