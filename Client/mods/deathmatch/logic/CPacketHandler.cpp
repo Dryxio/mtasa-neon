@@ -279,17 +279,29 @@ void CPacketHandler::Packet_ServerConnected(NetBitStreamInterface& bitStream)
     {
         dassert(false);
         g_pCore->SetConnected(false);
+        g_pCore->FailNativeWorldStartupBeforeActive("Packet_ServerConnected version field is truncated");
+        RaiseProtocolError(1);
         return;
     }
 
-    // Adjust the size to our buffer size
+    // Refuse rather than truncate: truncation would leave the bitstream cursor
+    // inside the version field and let later identity checks read misaligned
+    // data immediately before native activation.
     if (ucSize > sizeof(szVersionString) - 1)
     {
-        ucSize = sizeof(szVersionString) - 1;
+        g_pCore->FailNativeWorldStartupBeforeActive("Packet_ServerConnected version string is oversized");
+        RaiseProtocolError(1);
+        return;
     }
 
     // Read out the reason to a buffer
-    bitStream.Read(szVersionString, ucSize);
+    if (!bitStream.Read(szVersionString, ucSize))
+    {
+        g_pCore->SetConnected(false);
+        g_pCore->FailNativeWorldStartupBeforeActive("Packet_ServerConnected version string is truncated");
+        RaiseProtocolError(1);
+        return;
+    }
     if (ucSize)
         szVersionString[ucSize] = '\0';
 
@@ -308,8 +320,20 @@ void CPacketHandler::Packet_ServerConnected(NetBitStreamInterface& bitStream)
 
     // Get the long server version
     SString strServerVersionSortable;
-    bitStream.ReadString(strServerVersionSortable);
+    if (!bitStream.ReadString(strServerVersionSortable))
+    {
+        g_pCore->SetConnected(false);
+        g_pCore->FailNativeWorldStartupBeforeActive("Packet_ServerConnected sortable version is truncated");
+        RaiseProtocolError(1);
+        return;
+    }
     g_pClientGame->SetServerVersionSortable(strServerVersionSortable);
+
+    // This is the last network-authenticated boundary before GTA starts its
+    // native loading pass. The check also runs on reconnect when GTA is
+    // already active, so a key change at the pinned endpoint is terminal.
+    if (!g_pGame->VerifyNativeWorldStartupBeforeStartGame())
+        return;
 
     // m_Status = CClientGame::STATUS_TRANSFER;
 

@@ -212,6 +212,13 @@ public:
                                                                                     const std::string& refusalReason) = 0;
     virtual void                                  CancelNativeWorldStartupSelection(const std::string& ticketId) = 0;
     virtual bool                                  IsNativeWorldStartupSelectionCancelled(const std::string& ticketId) const = 0;
+    virtual bool ValidateNativeWorldStartupEndpoint(const std::string& targetHost, const std::array<unsigned char, 4>& endpointIpv4,
+                                                    unsigned short endpointPort, std::string& error) const = 0;
+    virtual bool ValidateNativeWorldStartupSession(std::string& error) = 0;
+    virtual void MarkNativeWorldStartupActive() = 0;
+    virtual void MarkNativeWorldStartupRefused() = 0;
+    virtual void FailNativeWorldStartupBeforeActive(const std::string& reason) = 0;
+    virtual void TerminateNativeWorldStartup(const std::string& reason) = 0;
 };
 
 class CClientTime

@@ -234,7 +234,9 @@ CGameSA::CGameSA()
         m_pTasks = new CTasksSA((CTaskManagementSystemSA*)m_pTaskManagementSystem);
         m_pAnimManager = new CAnimManagerSA;
         m_pStreaming = new CStreamingSA;
-        if (!suppressLegacyNativeWorld)
+        if (suppressLegacyNativeWorld)
+            CNativeWorldPackManagerSA::AttachAuthorizedStreaming(static_cast<CStreamingSA*>(m_pStreaming));
+        else
             CNativeWorldPackManagerSA::InstallFromEnvironment(static_cast<CStreamingSA*>(m_pStreaming));
         m_pVisibilityPlugins = new CVisibilityPluginsSA;
         m_pKeyGen = new CKeyGenSA;
@@ -479,9 +481,21 @@ CModelInfo* CGameSA::GetModelInfo(DWORD dwModelID, bool bCanBeInvalid)
  */
 void CGameSA::StartGame()
 {
+    if (!VerifyNativeWorldStartupBeforeStartGame())
+        return;
     SetSystemState(SystemState::GS_INIT_PLAYING_GAME);
     MemPutFast<BYTE>(0xB7CB49, 0);  // CTimer::m_UserPause
     MemPutFast<BYTE>(0xBA67A4, 0);  // FrontEndMenuManager + 0x5C
+}
+
+bool CGameSA::VerifyNativeWorldStartupBeforeStartGame()
+{
+    return CNativeWorldPackManagerSA::VerifyAuthorizedStartupBeforeStartGame();
+}
+
+void CGameSA::CancelNativeWorldStartupActivation()
+{
+    CNativeWorldPackManagerSA::CancelAuthorizedActivation();
 }
 
 /**

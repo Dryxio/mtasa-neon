@@ -133,6 +133,7 @@ struct SNativeWorldTransportPublishResult
 {
     bool        success{};
     bool        cacheHit{};
+    bool        existingActivationActive{};
     std::string offerId;
     std::string contentId;
     std::string publishedDirectory;
@@ -346,4 +347,10 @@ public:
     virtual bool ShowMissionBigText(const char* key, unsigned int duration, unsigned int style, bool hasNumber, int number) = 0;
     virtual void ClearMissionText(const char* key, bool big) = 0;
     virtual void ClearMissionHelp() = 0;
+
+    // Record-driven native-world startup is verified at the last reversible
+    // boundary before GTA leaves the frontend. These are append-only ABI
+    // additions shared by Core, Client Deathmatch, and Game SA.
+    virtual bool VerifyNativeWorldStartupBeforeStartGame() = 0;
+    virtual void CancelNativeWorldStartupActivation() = 0;
 };

@@ -619,6 +619,49 @@ namespace
         for (const SCollisionNopSite& site : COLLISION_NOP_SITES)
             MemCpy(reinterpret_cast<void*>(site.instructionAddress), NOPS, sizeof(NOPS));
     }
+
+    bool InstallValidated(eGameVersion gameVersion, std::string& error)
+    {
+        if (g_installed)
+        {
+            error = "native model-store foundation is already installed";
+            return false;
+        }
+
+        char        executablePath[MAX_PATH]{};
+        const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
+        if (!executablePathLength || executablePathLength >= sizeof(executablePath))
+        {
+            error = SString("executable path is unavailable or truncated win32=%u", GetLastError());
+            return false;
+        }
+
+        DWORD                      imageSize = 0;
+        const SExecutableIdentity* identity = nullptr;
+        if (!ValidateExecutable(gameVersion, executablePath, imageSize, identity) || !ValidateManifest(imageSize) || !ValidateOriginalStores())
+        {
+            error = "executable identity, patch manifest, or stock stores failed validation";
+            return false;
+        }
+        if (!AllocateStoresAndCollisionBuffer())
+        {
+            error = "native model-store allocation failed before executable mutation";
+            return false;
+        }
+        if (!ValidateManifest(imageSize) || !ValidateOriginalStores())
+        {
+            error = "executable patch sites or stock stores changed before the first native write";
+            return false;
+        }
+
+        g_executableIdentity = identity;
+
+        // Every instruction and allocation is revalidated after authorization
+        // claim and before this first write. GTA has not populated the stores.
+        CommitPatchSet();
+        g_installed = true;
+        return true;
+    }
 }  // namespace
 
 void CNativeModelStoreSA::InstallFromEnvironment(eGameVersion gameVersion)
@@ -631,39 +674,25 @@ void CNativeModelStoreSA::InstallFromEnvironment(eGameVersion gameVersion)
         return;
     }
 
-    char        executablePath[MAX_PATH]{};
-    const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
-    if (!executablePathLength || executablePathLength >= sizeof(executablePath))
+    std::string error;
+    if (!InstallValidated(gameVersion, error))
     {
-        DebugLog("[NativeBW] mode=refused; executable path is unavailable or truncated error=%u", GetLastError());
+        DebugLog("[NativeBW] mode=refused detail=%s; stock stores and collision buffers remain active", error.c_str());
         return;
     }
-    DebugLog("[NativeBW] mode=preflight executable=%s gameVersion=%d", executablePath, gameVersion);
-
-    DWORD                      imageSize = 0;
-    const SExecutableIdentity* identity = nullptr;
-    if (!ValidateExecutable(gameVersion, executablePath, imageSize, identity) || !ValidateManifest(imageSize) || !ValidateOriginalStores())
-    {
-        DebugLog("[NativeBW] mode=refused; stock stores and collision buffers remain active");
-        return;
-    }
-    if (!AllocateStoresAndCollisionBuffer())
-    {
-        DebugLog("[NativeBW] mode=refused after allocation failure; no executable bytes were changed");
-        return;
-    }
-
-    g_executableIdentity = identity;
-
-    // Every instruction and every allocation has been validated before this
-    // first executable write. From this point the set is committed as one
-    // startup operation while GTA model/streaming initialization is still idle.
-    CommitPatchSet();
-    g_installed = true;
 
     DebugLog("[NativeBW] mode=active executable=%s timestamp=0x%08X checksum=0x%08X image=0x%08X collision=%p capacity=%u (stock=%u)",
              g_executableIdentity->name, g_executableIdentity->timestamp, g_executableIdentity->checksum, g_executableIdentity->imageSize, g_collisionBuffer,
              COLLISION_BUFFER_DEFINITIONS[0].newCapacity, COLLISION_BUFFER_DEFINITIONS[0].originalCapacity);
+}
+
+bool CNativeModelStoreSA::InstallForAuthorizedStartup(eGameVersion gameVersion, std::string& error)
+{
+    if (!InstallValidated(gameVersion, error))
+        return false;
+
+    DebugLog("[NativeWorldAuthorization] state=model-stores-prepared executable=%s nativeWrites=yes activation=prepared", g_executableIdentity->name);
+    return true;
 }
 
 bool CNativeModelStoreSA::ValidateExecutableAndPatchManifestReadOnly(eGameVersion gameVersion, std::string& error)

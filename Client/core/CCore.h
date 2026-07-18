@@ -126,6 +126,13 @@ public:
     SNativeWorldAuthorizationRecordResult FinishNativeWorldStartupSelection(const std::string& ticketId, bool claim, const std::string& refusalReason) override;
     void                                  CancelNativeWorldStartupSelection(const std::string& ticketId) override;
     bool                                  IsNativeWorldStartupSelectionCancelled(const std::string& ticketId) const override;
+    bool ValidateNativeWorldStartupEndpoint(const std::string& targetHost, const std::array<unsigned char, 4>& endpointIpv4, unsigned short endpointPort,
+                                            std::string& error) const override;
+    bool ValidateNativeWorldStartupSession(std::string& error) override;
+    void MarkNativeWorldStartupActive() override;
+    void MarkNativeWorldStartupRefused() override;
+    void FailNativeWorldStartupBeforeActive(const std::string& reason) override;
+    void TerminateNativeWorldStartup(const std::string& reason) override;
 
     void SaveConfig(bool bWaitUntilFinished = false);
 
@@ -416,6 +423,19 @@ private:
     uint               m_uiCurrentRefreshRate{};
     unsigned long long m_networkConnectionGeneration{};
     unsigned long long m_nativeWorldAuthorizationEpoch{1};
+
+    enum class ENativeWorldStartupPhase
+    {
+        Off,
+        Candidate,
+        Prepared,
+        SessionValidated,
+        Active,
+        Refused,
+        Terminal,
+    };
+    ENativeWorldStartupPhase     m_nativeWorldStartupPhase{ENativeWorldStartupPhase::Off};
+    SNativeWorldStartupSelection m_nativeWorldStartupSelection{};
 
     // Command line
     static void                        ParseCommandLine(std::map<std::string, std::string>& options, const char*& szArgs, const char** pszNoValOptions = NULL);

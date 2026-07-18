@@ -333,6 +333,8 @@ public:
     bool ShowMissionBigText(const char* key, unsigned int duration, unsigned int style, bool hasNumber, int number) override;
     void ClearMissionText(const char* key, bool big) override;
     void ClearMissionHelp() override;
+    bool VerifyNativeWorldStartupBeforeStartGame() override;
+    void CancelNativeWorldStartupActivation() override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;

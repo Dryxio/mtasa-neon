@@ -1279,6 +1279,13 @@ void CClientGame::DoPulses()
                 g_pCore->ShowMessageBox(_("Local Server"), _("Connecting to local server..."), MB_ICON_INFO);
 
                 // Connect
+                const std::array<unsigned char, 4> localEndpoint{{127, 0, 0, 1}};
+                std::string                        pinError;
+                if (!g_pCore->ValidateNativeWorldStartupEndpoint("127.0.0.1", localEndpoint, 22010, pinError))
+                {
+                    g_pCore->TerminateNativeWorldStartup(pinError);
+                    return;
+                }
                 g_pCore->AdvanceNetworkConnectionGeneration();
                 if (g_pNet->StartNetwork("127.0.0.1", 22010))
                 {

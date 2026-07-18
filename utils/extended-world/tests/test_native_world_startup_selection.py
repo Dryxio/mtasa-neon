@@ -115,14 +115,43 @@ class StartupTransactionTests(unittest.TestCase):
         with self.assertRaises(RecordError):
             lease.commit("bullworth", "c" * 64, "t" * 32)
 
-    def test_cpp_b_path_contains_no_native_commit_primitive(self) -> None:
+    def test_cpp_c_prepares_stores_but_defers_hook_and_pack_commit(self) -> None:
         pack = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         start = pack.index("void CNativeWorldPackManagerSA::HandleStartupSelection")
-        end = pack.index("void CNativeWorldPackManagerSA::InstallFromEnvironment", start)
+        end = pack.index("void CNativeWorldPackManagerSA::AttachAuthorizedStreaming", start)
         body = pack[start:end]
-        for forbidden in ("VirtualAlloc", "MemPut", "MemCpy", "HookInstallCall", "LOAD_OBJECT_TYPES", "CommitNativeWorldCacheLease"):
+        self.assertIn("InstallForAuthorizedStartup", body)
+        self.assertIn("g_authorizedLease = std::move(lease)", body)
+        for forbidden in ("HookInstallCall", "LOAD_OBJECT_TYPES", "CommitRegistrationLease"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, body)
+
+    def test_cpp_c_verifies_session_and_lease_before_installing_hook(self) -> None:
+        pack = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        start = pack.index("bool CNativeWorldPackManagerSA::VerifyAuthorizedStartupBeforeStartGame")
+        end = pack.index("void CNativeWorldPackManagerSA::CancelAuthorizedActivation", start)
+        body = pack[start:end]
+        self.assertLess(body.index("ValidateNativeWorldStartupSession"), body.index("RevalidateClosedObject"))
+        self.assertLess(body.index("RevalidateClosedObject"), body.index("HookInstallCall"))
+
+    def test_cpp_c_promotes_the_typed_lease_after_native_postconditions(self) -> None:
+        pack = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        register_start = pack.index("void RegisterPack()")
+        register_end = pack.index("void __cdecl LoadCdDirectoryHook", register_start)
+        register = pack[register_start:register_end]
+        self.assertLess(register.index("LOAD_OBJECT_TYPES"), register.index("CommitRegistrationLease"))
+        self.assertLess(register.index("ValidatePostconditions"), register.index("CommitRegistrationLease"))
+        self.assertIn("g_authorizedLease.Commit(g_policy->key, g_authorizedSelection.contentId, g_authorizedSelection.ticketId", pack)
+
+    def test_cpp_c_pins_connect_and_checks_every_server_connected_packet(self) -> None:
+        connect = (REPOSITORY / "Client/core/CConnectManager.cpp").read_text(encoding="utf-8")
+        packets = (REPOSITORY / "Client/mods/deathmatch/logic/CPacketHandler.cpp").read_text(encoding="utf-8")
+        self.assertIn("ValidateNativeWorldStartupEndpoint", connect)
+        self.assertIn("FailNativeWorldStartupBeforeActive", connect)
+        packet_start = packets.index("void CPacketHandler::Packet_ServerConnected")
+        packet_end = packets.index("void CPacketHandler::Packet_ServerJoined", packet_start)
+        packet = packets[packet_start:packet_end]
+        self.assertLess(packet.index("VerifyNativeWorldStartupBeforeStartGame"), packet.index("g_pGame->StartGame()"))
 
 
 if __name__ == "__main__":

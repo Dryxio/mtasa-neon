@@ -19,6 +19,11 @@ public:
     // selection without allocating memory or changing any process state.
     static bool ValidateExecutableAndPatchManifestReadOnly(eGameVersion gameVersion, std::string& error);
 
+    // Repeats the executable audit and installs the foundation after an
+    // authorization ticket has been durably claimed. Unlike the developer
+    // route below, this entry point has no environment selector.
+    static bool InstallForAuthorizedStartup(eGameVersion gameVersion, std::string& error);
+
     // This must run before GTA calls CModelInfo::Initialise. The process-start
     // environment is intentionally the only switch so a resource cannot turn
     // executable patching on after the stores are already in use.

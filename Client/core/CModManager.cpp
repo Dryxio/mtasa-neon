@@ -32,6 +32,7 @@ void CModManager::RequestLoad(const char* arguments)
 
 void CModManager::RequestUnload()
 {
+    CCore::GetSingleton().FailNativeWorldStartupBeforeActive("Client Deathmatch requested unload before native-world activation");
     if (!IsLoaded())
         return;
 
@@ -143,6 +144,8 @@ bool CModManager::Start()
     CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(true);
 
     m_state = State::Idle;
+    if (!success)
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("Client Deathmatch failed to load before native-world activation");
     return success;
 }
 
@@ -236,6 +239,7 @@ void CModManager::Stop()
 
 void CModManager::TryStop()
 {
+    CCore::GetSingleton().FailNativeWorldStartupBeforeActive("Client Deathmatch stopped before native-world activation");
     if (m_client)
     {
         m_client->ClientShutdown();

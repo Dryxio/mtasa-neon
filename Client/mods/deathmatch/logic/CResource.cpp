@@ -581,18 +581,20 @@ bool CResource::VerifyNativeWorldTransportReady()
     }
     else
     {
-        const SString message(
-            "[NativeWorldTransport] state=refused resource=%s format=%u manifest=%s files=3 reason=%s activation=no lease=no "
-            "stock-behavior=preserved",
-            *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath, result.error.c_str());
+        const char*   activationState = result.existingActivationActive ? "active" : "no";
+        const char*   leaseState = result.existingActivationActive ? "process" : "no";
+        const char*   preservedState = result.existingActivationActive ? "existing-native-world=preserved" : "stock-behavior=preserved";
+        const SString message("[NativeWorldTransport] state=refused resource=%s format=%u manifest=%s files=3 reason=%s activation=%s lease=%s %s",
+                              *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath, result.error.c_str(), activationState,
+                              leaseState, preservedState);
         AddReportLog(7472, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
         if (m_nativeWorldTransport.authorizationRequested)
         {
             const SString authorizationMessage(
-                "[NativeWorldAuthorization] state=refused resource=%s reason=transport-publication-failed activation=no lease=no restart-required=no",
-                *m_strResourceName);
+                "[NativeWorldAuthorization] state=refused resource=%s reason=transport-publication-failed activation=%s lease=%s restart-required=no %s",
+                *m_strResourceName, activationState, leaseState, preservedState);
             AddReportLog(7474, authorizationMessage);
             WriteDebugEvent(authorizationMessage);
         }

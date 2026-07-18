@@ -33,10 +33,10 @@ code and update both documents rather than silently trusting this snapshot.
 
 ## Non-negotiable collaboration rules
 
-- The user performs every in-game action and decides whether behavior is
-  correct. Agents must not test gameplay themselves. They may build, start or
-  stop the server, launch the client when asked, inspect logs/processes/cache
-  files/crash dumps, and prepare exact test instructions.
+- By default the user performs every in-game action and decides whether
+  behavior is correct. Agents may run gameplay automation only when the user
+  explicitly authorizes it for the current work, as happened for Checkpoint C;
+  otherwise they stop at a ready build and provide exact test instructions.
 - Keep the established orchestrated workflow. For major checkpoints, use a
   research/exploration/planning agent and an independent implementation/review
   agent where their work is useful. Keep file ownership clear and prefer
@@ -50,7 +50,8 @@ code and update both documents rather than silently trusting this snapshot.
 - Define explicit checkpoints. Tell the user when a build is ready, what to do
   in game, what result to report, and when the client must be closed.
 - Do not commit a gameplay-affecting checkpoint until the user has supplied the
-  requested in-game feedback and the result is understood.
+  requested in-game feedback, or explicitly authorized an automated live gate,
+  and the resulting evidence is understood.
 - Do not skip safety reviews around executable writes, downloaded native data,
   cache publication, activation authorization, worker cancellation, native
   object lifetimes, or aggregate pool allocation.
@@ -67,8 +68,8 @@ At the time of this handoff:
 ```text
 Canonical tree  /Users/salimtrouve/Documents/GitHub/mtasa-neon
 Branch          master
-Fix baseline    33b8fb453 feat(story): drive gang tags from native spray hits
-origin/master   33b8fb453 before the local world-sync compatibility commit
+Checkpoint B    5971c8a67 feat(native-world): validate authorized startup selection
+origin/master   7895f0e1e feat(story): match SWEET1 all-wheels gates
 VM              Windows 11
 VM build tree   C:\dev\mtasa-vm-custom
 ```
@@ -77,7 +78,8 @@ Always re-run `git status --short` and `git log -5 --oneline --decorate`; the
 user and other agents work in this repository concurrently. Checkpoint A is
 commit `b9ce96d3c`; the VM-helper marker repair is `3c8d608e5`. Both are now in
 the history reachable from `origin/master`. Untracked `.claude`, `Tools`,
-`game-resources`, and `out.dff` remain unrelated and must not be staged.
+`game-resources`, `out.dff`, and `test-resources/synchronized-video-screen`
+remain unrelated and must not be staged.
 Re-establish ownership from the current diff before every later commit rather
 than relying on this list.
 
@@ -96,9 +98,10 @@ Read the commit bodies as design records. The core sequence is:
 
 Checkpoint A, the inert authorization record, is implemented in `b9ce96d3c`
 and passed both non-game validation and the user-only live gate recorded below.
-Checkpoint B, record-driven startup selection without native mutation, is also
+Checkpoint B, record-driven startup selection without native mutation, is
+implemented in `5971c8a67`. Checkpoint C, record-driven native activation, is
 implemented and passed the explicitly authorized automated live gate recorded
-below. Checkpoint C is the next code checkpoint.
+below. Checkpoint D is next.
 
 Relevant earlier extended-world foundations include the enlarged world sectors,
 coordinate/network ranges, water bounds, renderer capacity, radar composition,
@@ -147,12 +150,14 @@ installation copy of `native-world.json` as its developer-only startup
 selector. The record-driven path no longer needs that local selector: a clean
 launch for the exact canonical numeric URI selects the pending authorization,
 locks and fully reaudits the exact ProgramData object, performs the read-only
-executable preflight, claims the ticket, and deliberately releases the lease
-without touching GTA state. A valid record and the legacy switch together are
-terminally ambiguous and suppress both routes. Checkpoint C will feed the
-record-selected object into the existing activation path. Successful native
-registration remains process-global and intentionally survives resource stops
-and reconnects; changing packs requires a clean client restart.
+executable preflight, claims the ticket, and prepares the model stores. The
+second session must reproduce the raw server-ID digest, canonical numeric
+endpoint, and bitstream version immediately before `StartGame`; only then is
+the hook installed and the typed lease committed after native postconditions.
+A valid record and the legacy switch together remain terminally ambiguous and
+suppress both routes. Successful native registration is process-global and
+intentionally survives resource stops and exact-server reconnects; changing
+packs requires a clean client restart.
 
 ### Server transport and authorization-offer path
 
@@ -260,13 +265,44 @@ as a possible future net-module/ABI improvement, not as implemented behavior.
 ## Validation already completed
 
 Agents performed builds, static checks, log inspection, cache inspection, and
-hash comparisons. The user performed every in-game action, including the
-Checkpoint A live authorization lifecycle below.
+hash comparisons. The user performed the Checkpoint A in-game lifecycle; after
+explicitly broadening authorization, the orchestrator automated the Checkpoint
+B/C live gates through the documented VM workflow.
 
 Confirmed checkpoints include:
 
+- Checkpoint C was formatted with the pinned clang-format 21.1.7 executable.
+  The focused suite reports 67 tests, including two optional
+  environment-dependent skips. Two independent final security/lifecycle
+  reviews found no remaining actionable P0-P2 issue.
+- The affected client consumers (`Game SA`, `Client Core`, `Client
+  Deathmatch`, `Multiplayer SA`, and `Client Webbrowser`) built Release|Win32
+  through reviewed `vm-build.ps1` plan/execute and BuildOnly verification runs;
+  every project completed with zero errors.
+- Ticket `8ba5bfc8` completed the full authorized transaction: exact startup
+  selection and cache audit, allowlisted executable preflight, durable claim,
+  early model-store preparation, second-session identity validation, deferred
+  hook installation, native registrar postconditions, and typed process-lease
+  commit. The registrar reported archive 6, 952 models, 166 TXDs, collision
+  slot 252, and seven IPL slots.
+- An earlier active process using ticket `ce451b6c` survived two exact-server
+  reconnects and a server/resource reload. Each new session logged
+  `state=session-validated ... activation=active lease=process`; attempts by
+  the startup resource to publish another descriptor correctly preserved the
+  existing activation.
+- The explicitly authorized runtime gate teleported the player to Bullworth
+  `(-8148.06, 7648.97)`, returned to San Andreas `(1481.00, -1771.00)`, and ran
+  the world-sync regression at Bullworth. COL SET, COL ADD, COL ADD INDEX, and
+  MOVE all passed; MOVE ended with zero final error and no regression or
+  overshoot. The temporary automation was removed from the canonical and VM
+  resource copies after the run.
+- The final diagnostic regression launch proved that a post-activation
+  transport refusal now reports `activation=active lease=process
+  existing-native-world=preserved`, rather than incorrectly implying that the
+  active process reverted to stock.
+
 - Checkpoint B was formatted with the pinned VM formatter. The focused suite
-  reports 64 tests with two optional environment-dependent skips, and an
+  reports 64 tests, including two optional environment-dependent skips, and an
   independent security/lifecycle re-review found no remaining P1/P2 issue in
   the startup transaction, cancellation/claim boundary, lease lifetime, or
   no-mutation path.
@@ -424,8 +460,9 @@ protocol capability, DPAPI-protected pending record, and conflicting
 cross-server refusal. Checkpoint B now supplies exact-cache startup lookup, a
 transaction-typed lease, atomic claim, strict startup endpoint matching, and
 zero-mutation read-only executable preflight. Second-session identity
-revalidation and the irreversible native commit remain Checkpoint C work and
-still block activation.
+revalidation, deferred hook installation, irreversible native commit, and
+typed process-lease promotion are now implemented by Checkpoint C.
+Restart/reconnect UX remains Checkpoint D work.
 
 The server config initializes an identity facility from a private key, and the
 client's opaque server ID is the strongest available continuity input. The
@@ -493,7 +530,7 @@ The completed read-only design/research checkpoint covered:
 7. An implementation plan and independent security/lifecycle review before
    editing activation code.
 
-Continue progressively from Checkpoint C:
+Continue progressively from Checkpoint D:
 
 - **Checkpoint A — inert authorization record (complete):** receive, validate,
   persist, inspect, expire, attach on exact
@@ -504,19 +541,20 @@ Continue progressively from Checkpoint C:
   object, acquire the pending
   activation lease, complete the read-only executable preflight, and only then
   claim the record atomically without committing GTA state.
-- **Checkpoint C — native activation (next code checkpoint):** feed the
-  selected object into the existing preflight/commit path, remove the
-  environment/local-selector requirement for this route, and keep
-  rollback/fatal boundaries intact.
-- **Checkpoint D — restart/reconnect UX:** initially use an explicit user-driven
+- **Checkpoint C — native activation (complete):** feed the selected object
+  into the existing preflight/commit path, revalidate the exact second session
+  before `StartGame`, remove the environment/local-selector requirement for
+  this route, and keep rollback/fatal boundaries intact.
+- **Checkpoint D — restart/reconnect UX (next):** initially use an explicit user-driven
   restart; automate or polish it only after the trust and lifecycle path is
   stable.
 
 Each checkpoint needs negative tests for wrong server, wrong content ID,
 missing/corrupt cache, expired/replayed/tampered record, disconnect during
 publication, resource stop, crash between write and consume, and a modified or
-unsupported GTA executable. Ask the user for gameplay validation only after the
-relevant builds, logs, and non-game checks pass.
+unsupported GTA executable. Request gameplay validation or use explicitly
+authorized automation only after the relevant builds, logs, and non-game checks
+pass.
 
 ## Remaining global roadmap
 
@@ -575,10 +613,10 @@ HTTP endpoint           127.0.0.1:22005 TCP
   client/server set appropriate to the checkpoint.
 - Run focused Python tests and `git diff --check` before requesting gameplay
   validation.
-- For the current authorization/ABI checkpoint, the reviewed complete build set
-  is `Game SA`, `Client Core`, `Client Deathmatch`, `Multiplayer SA`, and
-  `Client Webbrowser` as `Release|Win32`, plus `Deathmatch` as `Release|x64`;
-  regenerate because the compiled-source/protocol definitions changed.
+- For Checkpoint C, the reviewed complete build set is `Game SA`, `Client
+  Core`, `Client Deathmatch`, `Multiplayer SA`, and `Client Webbrowser` as
+  `Release|Win32`. It changed no server wire/build definition, so no server
+  rebuild or solution regeneration was required. Recompute the set for D.
 - GUI launches through `prlctl exec` require `--current-user`; otherwise a
   command can report success without opening a visible client.
 - Never replace the current custom `netc.dll` with the older MTA 1.6 module.
@@ -590,10 +628,11 @@ Read AGENTS.md, LIMIT_PATCHING.md, NATIVE_WORLD_HANDOFF.md,
 utils/extended-world/NATIVE_BW_PACK.md, and the recent native-world commit
 bodies completely. Recheck HEAD and the dirty tree before touching files.
 
-Resume with Checkpoint C, native activation, in
+Resume with Checkpoint D, restart/reconnect UX, in
 NATIVE_WORLD_HANDOFF.md and NATIVE_WORLD_ACTIVATION.md. Recheck the current
-local commits, dirty tree, Checkpoint A/B evidence, and exact-cache/typed-lease
+local commits, dirty tree, Checkpoint A/B/C evidence, and exact-cache/typed-lease
 contract before editing. Preserve unrelated changes, keep the
-orchestrator/independent-review loop and VM workflow, and never perform in-game
-tests yourself: prepare exact instructions and wait for my feedback.
+orchestrator/independent-review loop and VM workflow. Do not perform in-game
+tests without explicit user authorization; otherwise prepare exact instructions
+and wait for feedback.
 ```

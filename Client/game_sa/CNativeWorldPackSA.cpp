@@ -151,6 +151,7 @@ namespace
     enum class EState
     {
         Off,
+        Prepared,
         Hooked,
         Registering,
         Active,
@@ -166,6 +167,9 @@ namespace
     const SNativeWorldPackDescriptorSA* g_pack = nullptr;
     EState                              g_state = EState::Off;
     std::mutex                          g_transportPublisherMutex;
+    bool                                g_authorizedRoute = false;
+    SNativeWorldStartupSelection        g_authorizedSelection{};
+    CNativeWorldCacheLeaseSA            g_authorizedLease;
 
     const SNativeWorldPackDescriptorSA& Pack()
     {
@@ -213,6 +217,33 @@ namespace
         Log("registrar=fatal reason=%s exit=0x%08X", reason, FATAL_EXIT_CODE);
         TerminateProcess(GetCurrentProcess(), FATAL_EXIT_CODE);
         __assume(false);
+    }
+
+    void ReleaseRegistrationLease()
+    {
+        if (g_authorizedRoute)
+            g_authorizedLease.Release();
+        else
+            ReleaseNativeWorldCacheLease();
+    }
+
+    void CommitRegistrationLease()
+    {
+        if (!g_authorizedRoute)
+        {
+            CommitNativeWorldCacheLease();
+            return;
+        }
+
+        std::string error;
+        if (!g_authorizedLease.Commit(g_policy->key, g_authorizedSelection.contentId, g_authorizedSelection.ticketId, error))
+            Fatal(error.c_str());
+    }
+
+    void MarkRegistrationRefused()
+    {
+        if (g_authorizedRoute)
+            g_pCore->MarkNativeWorldStartupRefused();
     }
 
     std::string Trim(const std::string& value)
@@ -1676,8 +1707,9 @@ namespace
             !ValidatePayloads(imgPath, ide, error) || !ValidateDescriptor(error) || !PreflightRuntime(ide, error))
         {
             RestoreTxdFindCache(ide);
-            ReleaseNativeWorldCacheLease();
+            ReleaseRegistrationLease();
             g_state = EState::Refused;
+            MarkRegistrationRefused();
             Log("registrar=refused reason=%s stock-world-remains-active", error.c_str());
             return;
         }
@@ -1693,8 +1725,9 @@ namespace
         if (archiveId == INVALID_ARCHIVE_ID)
         {
             RestoreTxdFindCache(ide);
-            ReleaseNativeWorldCacheLease();
+            ReleaseRegistrationLease();
             g_state = EState::Refused;
+            MarkRegistrationRefused();
             Log("registrar=refused reason=AddArchive-failed-before-pool-mutation stock-world-remains-active");
             return;
         }
@@ -1702,8 +1735,9 @@ namespace
         {
             g_streaming->RemoveArchive(archiveId);
             RestoreTxdFindCache(ide);
-            ReleaseNativeWorldCacheLease();
+            ReleaseRegistrationLease();
             g_state = EState::Refused;
+            MarkRegistrationRefused();
             Log("registrar=refused reason=unexpected-archive-id expected=%u actual=%u rollback=complete", Pack().expectedArchiveId, archiveId);
             return;
         }
@@ -1740,8 +1774,9 @@ namespace
                 // Releasing in reverse and restoring the saved cursor makes
                 // this failed pre-IDE allocation indistinguishable from no run.
                 rollbackTxdAllocations();
-                ReleaseNativeWorldCacheLease();
+                ReleaseRegistrationLease();
                 g_state = EState::Refused;
+                MarkRegistrationRefused();
                 Log("registrar=refused reason=TXD-allocation-plan-mismatch name=%s expected=%u actual=%d rollback=complete restoredFirstFree=%d", name.c_str(),
                     expected, allocated, ide.txdOriginalFirstFree);
                 return;
@@ -1752,8 +1787,9 @@ namespace
         {
             const int actualCursor = txdPool->m_nFirstFree;
             rollbackTxdAllocations();
-            ReleaseNativeWorldCacheLease();
+            ReleaseRegistrationLease();
             g_state = EState::Refused;
+            MarkRegistrationRefused();
             Log("registrar=refused reason=TXD-allocation-cursor-mismatch expected=%u actual=%d rollback=complete restoredFirstFree=%d", expectedFinalCursor,
                 actualCursor, ide.txdOriginalFirstFree);
             return;
@@ -1768,8 +1804,10 @@ namespace
 
         ValidatePostconditions(ide, archiveId);
         EnableOwnedIplDynamicStreaming(ide);
-        CommitNativeWorldCacheLease();
+        CommitRegistrationLease();
         g_state = EState::Active;
+        if (g_authorizedRoute)
+            g_pCore->MarkNativeWorldStartupActive();
         std::ostringstream iplSlots;
         for (unsigned int index = 0; index < Pack().iplCount; ++index)
         {
@@ -1955,12 +1993,89 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         return;
     }
     const bool claimed = finish(true, "");
-    lease.Release();
+    if (!claimed)
+    {
+        lease.Release();
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldAuthorization] state=claim-failed ticket=%s activation=no lease=released", selection.ticketId.substr(0, 8).c_str()));
+        resetAuditState();
+        return;
+    }
+
+    if (!CNativeModelStoreSA::InstallForAuthorizedStartup(gameVersion, error))
+    {
+        lease.Release();
+        g_pCore->TerminateNativeWorldStartup(error);
+        return;
+    }
+
+    g_authorizedRoute = true;
+    g_authorizedSelection = selection;
+    g_authorizedLease = std::move(lease);
+    g_state = EState::Prepared;
     SharedUtil::WriteDebugEvent(
-        SString("[NativeWorldAuthorization] state=%s ticket=%s nativeWrites=0 allocations=0 hooks=0 archives=0 poolMutations=0 "
-                "activation=no lease=released",
-                claimed ? "checkpoint-b-complete" : "claim-failed", selection.ticketId.substr(0, 8).c_str()));
-    resetAuditState();
+        SString("[NativeWorldAuthorization] state=checkpoint-c-prepared ticket=%s nativeWrites=yes hooks=0 archives=0 poolMutations=0 "
+                "activation=prepared lease=pending",
+                selection.ticketId.substr(0, 8).c_str()));
+}
+
+void CNativeWorldPackManagerSA::AttachAuthorizedStreaming(CStreamingSA* streaming)
+{
+    if (!g_authorizedRoute)
+        return;
+    if (g_state != EState::Prepared || !streaming)
+    {
+        g_authorizedLease.Release();
+        g_pCore->TerminateNativeWorldStartup("authorized native-world streaming foundation is unavailable");
+        return;
+    }
+    g_streaming = streaming;
+}
+
+bool CNativeWorldPackManagerSA::VerifyAuthorizedStartupBeforeStartGame()
+{
+    if (!g_authorizedRoute)
+        return true;
+
+    std::string error;
+    if (!g_pCore->ValidateNativeWorldStartupSession(error))
+    {
+        g_authorizedLease.Release();
+        g_pCore->TerminateNativeWorldStartup(error);
+        return false;
+    }
+    if (g_state == EState::Active || g_state == EState::Refused || g_state == EState::Hooked)
+        return true;
+    if (g_state != EState::Prepared || !CNativeModelStoreSA::IsInstalled() || !g_streaming || !g_authorizedLease.IsValid())
+    {
+        g_authorizedLease.Release();
+        g_pCore->TerminateNativeWorldStartup("authorized native-world preparation is incomplete before StartGame");
+        return false;
+    }
+    if (!g_authorizedLease.RevalidateClosedObject(error) ||
+        memcmp(reinterpret_cast<const void*>(LOAD_CD_DIRECTORY_CALL), LOAD_CD_DIRECTORY_CALL_BYTES, sizeof(LOAD_CD_DIRECTORY_CALL_BYTES)) != 0)
+    {
+        if (error.empty())
+            error = "LoadCdDirectory call signature changed before authorized hook installation";
+        g_authorizedLease.Release();
+        g_pCore->TerminateNativeWorldStartup(error);
+        return false;
+    }
+
+    HookInstallCall(LOAD_CD_DIRECTORY_CALL, reinterpret_cast<DWORD>(&LoadCdDirectoryHook));
+    g_state = EState::Hooked;
+    SharedUtil::WriteDebugEvent(SString("[NativeWorldAuthorization] state=hooked ticket=%s call=0x%08X activation=committing lease=pending",
+                                        g_authorizedSelection.ticketId.substr(0, 8).c_str(), LOAD_CD_DIRECTORY_CALL));
+    return true;
+}
+
+void CNativeWorldPackManagerSA::CancelAuthorizedActivation()
+{
+    if (!g_authorizedRoute || g_state == EState::Active)
+        return;
+    g_authorizedLease.Release();
+    if (g_state != EState::Refused)
+        g_state = EState::Refused;
 }
 
 void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
@@ -2063,6 +2178,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
     }
     if (g_state != EState::Off)
     {
+        result.existingActivationActive = g_state == EState::Active;
         result.error = "native registrar state is not idle; transport publication cannot share its mutable descriptor";
         return result;
     }

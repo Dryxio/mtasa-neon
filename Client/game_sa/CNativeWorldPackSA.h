@@ -159,10 +159,14 @@ struct SNativeWorldPackDescriptorSA
 class CNativeWorldPackManagerSA
 {
 public:
-    // Completes Checkpoint-B selection only: exact cache audit, read-only
-    // executable preflight, durable claim, then deliberate lease release.
-    // It never installs stores, writes executable bytes, or registers a pack.
+    // Completes selection, claims the one-shot ticket, retains its exact-cache
+    // lease, and prepares model stores before GTA population. The pack hook is
+    // still deferred until the second server session is verified.
     static void HandleStartupSelection(eGameVersion gameVersion, const SNativeWorldStartupSelection& selection);
+
+    static void AttachAuthorizedStreaming(CStreamingSA* streaming);
+    static bool VerifyAuthorizedStartupBeforeStartGame();
+    static void CancelAuthorizedActivation();
 
     // Installs only the startup call hook. The pack itself is validated and
     // registered after GTA has loaded all stock CD directories.

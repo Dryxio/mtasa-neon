@@ -520,12 +520,39 @@ SNativeWorldStartupSelection CCore::BeginNativeWorldStartupSelection(bool legacy
     std::array<unsigned char, 4> endpointIpv4{};
     unsigned short               endpointPort = 0;
     const bool                   hasClosedEndpoint = ParseClosedNativeWorldEndpoint(m_szCommandLineArgs, endpointIpv4, endpointPort);
-    return NativeWorldAuthorizationStore::BeginStartup(hasClosedEndpoint ? &endpointIpv4 : nullptr, endpointPort, legacySelectorEnabled);
+    SNativeWorldStartupSelection selection =
+        NativeWorldAuthorizationStore::BeginStartup(hasClosedEndpoint ? &endpointIpv4 : nullptr, endpointPort, legacySelectorEnabled);
+    if (selection.ready)
+    {
+        m_nativeWorldStartupSelection = selection;
+        m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Candidate;
+    }
+    return selection;
 }
 
 SNativeWorldAuthorizationRecordResult CCore::FinishNativeWorldStartupSelection(const std::string& ticketId, bool claim, const std::string& refusalReason)
 {
-    return NativeWorldAuthorizationStore::FinishStartup(ticketId, claim, refusalReason);
+    SNativeWorldAuthorizationRecordResult result = NativeWorldAuthorizationStore::FinishStartup(ticketId, claim, refusalReason);
+    const bool exactCandidate = m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Candidate && m_nativeWorldStartupSelection.ticketId == ticketId;
+    if (claim && result.success && result.claimed && exactCandidate)
+    {
+        m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Prepared;
+        const SNativeWorldStartupSelection& selection = m_nativeWorldStartupSelection;
+        WriteDebugEvent(SString("[NativeWorldAuthorization] state=prepared ticket=%s endpoint=%u.%u.%u.%u:%u activation=prepared lease=pending",
+                                selection.ticketId.substr(0, 8).c_str(), selection.serverIpv4[0], selection.serverIpv4[1], selection.serverIpv4[2],
+                                selection.serverIpv4[3], selection.serverPort));
+    }
+    else
+    {
+        m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Off;
+        m_nativeWorldStartupSelection = {};
+        if (claim && result.success && result.claimed)
+        {
+            WriteDebugEvent("[NativeWorldAuthorization] state=process-terminal reason=claimed-ticket-candidate-mismatch activation=no exit=0xE057C003");
+            TerminateProcess(GetCurrentProcess(), 0xE057C003);
+        }
+    }
+    return result;
 }
 
 void CCore::CancelNativeWorldStartupSelection(const std::string& ticketId)
@@ -536,6 +563,143 @@ void CCore::CancelNativeWorldStartupSelection(const std::string& ticketId)
 bool CCore::IsNativeWorldStartupSelectionCancelled(const std::string& ticketId) const
 {
     return NativeWorldAuthorizationStore::IsStartupCancelled(ticketId);
+}
+
+bool CCore::ValidateNativeWorldStartupEndpoint(const std::string& targetHost, const std::array<unsigned char, 4>& endpointIpv4, unsigned short endpointPort,
+                                               std::string& error) const
+{
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off || m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Candidate)
+        return true;
+    const SString canonicalHost("%u.%u.%u.%u", m_nativeWorldStartupSelection.serverIpv4[0], m_nativeWorldStartupSelection.serverIpv4[1],
+                                m_nativeWorldStartupSelection.serverIpv4[2], m_nativeWorldStartupSelection.serverIpv4[3]);
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Terminal || targetHost != canonicalHost ||
+        endpointIpv4 != m_nativeWorldStartupSelection.serverIpv4 || endpointPort != m_nativeWorldStartupSelection.serverPort)
+    {
+        error = "connection target differs from the process-pinned native-world endpoint";
+        return false;
+    }
+    return true;
+}
+
+bool CCore::ValidateNativeWorldStartupSession(std::string& error)
+{
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off)
+        return true;
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Terminal || !m_pNet || !m_pNet->IsConnected())
+    {
+        error = "native-world startup session is unavailable";
+        return false;
+    }
+
+    const char*       serverIdValue = m_pNet->GetCurrentServerId(false);
+    const std::string serverId = serverIdValue ? serverIdValue : "";
+    const char*       numericServerValue = m_pNet->GetConnectedServer(false);
+    const std::string numericServer = numericServerValue ? numericServerValue : "";
+    const char*       numericEndpointValue = m_pNet->GetConnectedServer(true);
+    const std::string numericEndpoint = numericEndpointValue ? numericEndpointValue : "";
+    if (serverId.size() < 10 || serverId.size() > 4096 || numericServer.empty() || numericEndpoint.empty())
+    {
+        error = "native-world startup server identity or endpoint is unavailable";
+        return false;
+    }
+
+    in_addr             address{};
+    const unsigned long addressValue = inet_addr(numericServer.c_str());
+    address.s_addr = addressValue;
+    const char* canonicalAddress = addressValue == INADDR_NONE || addressValue == INADDR_ANY ? nullptr : inet_ntoa(address);
+    if (!canonicalAddress || numericServer != canonicalAddress)
+    {
+        error = "native-world startup endpoint is not canonical numeric IPv4";
+        return false;
+    }
+    if (numericEndpoint.size() <= numericServer.size() + 1 || numericEndpoint.compare(0, numericServer.size(), numericServer) != 0 ||
+        numericEndpoint[numericServer.size()] != ':')
+    {
+        error = "native-world startup endpoint text is not canonical";
+        return false;
+    }
+    char*               portEnd = nullptr;
+    const char*         portText = numericEndpoint.c_str() + numericServer.size() + 1;
+    const unsigned long port = strtoul(portText, &portEnd, 10);
+    if (!portText[0] || !portEnd || portEnd[0] || !port || port > std::numeric_limits<unsigned short>::max())
+    {
+        error = "native-world startup session port is invalid";
+        return false;
+    }
+
+    std::array<unsigned char, 4> endpointIpv4{};
+    memcpy(endpointIpv4.data(), &address.s_addr, endpointIpv4.size());
+    std::array<unsigned char, 32> serverIdDigest{};
+    std::string                   serverIdentity = "mta-native-world-server-id-v1\n";
+    serverIdentity += serverId;
+    SharedUtil::GenerateSha256(serverIdentity.data(), static_cast<uint>(serverIdentity.size()), serverIdDigest.data());
+    if (serverIdDigest != m_nativeWorldStartupSelection.serverIdDigest || endpointIpv4 != m_nativeWorldStartupSelection.serverIpv4 ||
+        port != m_nativeWorldStartupSelection.serverPort || m_pNet->GetServerBitStreamVersion() != m_nativeWorldStartupSelection.bitstreamVersion)
+    {
+        error = "native-world startup session identity differs from the claimed record";
+        return false;
+    }
+
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Prepared)
+    {
+        const __time64_t nowValue = _time64(nullptr);
+        if (nowValue < 0 || static_cast<unsigned long long>(nowValue) > m_nativeWorldStartupSelection.expiresAt ||
+            static_cast<unsigned long long>(nowValue) + 120 < m_nativeWorldStartupSelection.issuedAt ||
+            m_nativeWorldStartupSelection.expiresAt - m_nativeWorldStartupSelection.issuedAt != 900)
+        {
+            error = "native-world startup authorization expired or the clock moved backwards";
+            return false;
+        }
+        m_nativeWorldStartupPhase = ENativeWorldStartupPhase::SessionValidated;
+    }
+
+    const char* activation = m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Active    ? "active"
+                             : m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Refused ? "refused"
+                                                                                              : "prepared";
+    const char* lease = m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Active    ? "process"
+                        : m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Refused ? "released"
+                                                                                         : "pending";
+    WriteDebugEvent(SString("[NativeWorldAuthorization] state=session-validated ticket=%s endpoint=%s activation=%s lease=%s",
+                            m_nativeWorldStartupSelection.ticketId.substr(0, 8).c_str(), numericEndpoint.c_str(), activation, lease));
+    return true;
+}
+
+void CCore::MarkNativeWorldStartupActive()
+{
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::SessionValidated)
+    {
+        TerminateNativeWorldStartup("native-world registrar completed outside the validated startup session");
+        return;
+    }
+    m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Active;
+    WriteDebugEvent(
+        SString("[NativeWorldAuthorization] state=active ticket=%s activation=yes lease=process", m_nativeWorldStartupSelection.ticketId.substr(0, 8).c_str()));
+}
+
+void CCore::MarkNativeWorldStartupRefused()
+{
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::SessionValidated)
+        m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Refused;
+}
+
+void CCore::FailNativeWorldStartupBeforeActive(const std::string& reason)
+{
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Prepared || m_nativeWorldStartupPhase == ENativeWorldStartupPhase::SessionValidated)
+        TerminateNativeWorldStartup(reason);
+}
+
+void CCore::TerminateNativeWorldStartup(const std::string& reason)
+{
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off || m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Terminal)
+        return;
+
+    const std::string ticket = m_nativeWorldStartupSelection.ticketId.substr(0, 8);
+    if (m_pGame)
+        m_pGame->CancelNativeWorldStartupActivation();
+    m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Terminal;
+    WriteDebugEvent(SString("[NativeWorldAuthorization] state=process-terminal ticket=%s reason=%s activation=no lease=released exit=0xE057C003",
+                            ticket.c_str(), reason.c_str()));
+    TerminateProcess(GetCurrentProcess(), 0xE057C003);
 }
 
 CKeyBindsInterface* CCore::GetKeyBinds()
@@ -1667,6 +1831,8 @@ void CCore::DoPostFramePulse()
 // Called after MOD is unloaded
 void CCore::OnModUnload()
 {
+    FailNativeWorldStartupBeforeActive("Core began returning to the menu before native-world activation");
+
     // reattach the global event
     m_pGUI->SelectInputHandlers(INPUT_CORE);
     // remove unused events

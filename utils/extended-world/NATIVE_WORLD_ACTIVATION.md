@@ -1,11 +1,12 @@
 # Native world authorized startup design
 
 Status: research completed on 2026-07-16; Checkpoint A was implemented and
-user-live-validated on 2026-07-17. Checkpoint B was implemented and live
-validated under explicit user authorization on 2026-07-18. Record-driven
-startup selection, a typed existing-cache lease, read-only executable preflight,
-and one-shot claim now exist, but no executable mutation or native-world
-activation occurs. Checkpoint C is next.
+user-live-validated on 2026-07-17. Checkpoints B and C were implemented and
+live validated under explicit user authorization on 2026-07-18. Record-driven
+startup selection now performs the typed existing-cache transaction, one-shot
+claim, early model-store preparation, exact second-session revalidation,
+deferred hook installation, native commit, and process-lease promotion.
+Checkpoint D is next.
 
 Read this together with `AGENTS.md`, `LIMIT_PATCHING.md`,
 `NATIVE_WORLD_HANDOFF.md`, and `NATIVE_BW_PACK.md`.
@@ -403,7 +404,7 @@ it does not pretend that an activation claim or lease commit occurred.
 Checkpoint B stops here, releases the lease, logs `activation=no`, and performs
 no native allocation, executable write, hook installation, or GTA registration.
 
-Checkpoint C then prepares the model-store foundation early enough for GTA's
+Checkpoint C prepares the model-store foundation early enough for GTA's
 initialization. It does not install the native pack hook yet. The process is
 pinned to the recorded numeric endpoint; any attempt to connect elsewhere is
 refused.
@@ -466,7 +467,7 @@ either route mutates state; neither route may select itself independently.
   deliberately.
 - Keep all diagnostics at `activation=no` and make zero executable writes.
 
-### Checkpoint C: native activation
+### Checkpoint C: native activation (complete)
 
 - Feed the record-selected object into the existing preflight/commit path.
 - Prepare model stores before GTA population.
@@ -522,12 +523,12 @@ Checkpoint B additionally covers:
 - proof that no hook, allocation, pool mutation, archive registration, or
   executable write occurred.
 
-Checkpoint C/D user-led tests must later cover the correct server, wrong server
-at the same endpoint/key-change case, different endpoint in the same process,
-clean restart, disconnect/reconnect, resource restart, respawn, normal San
-Andreas rollback, Bullworth traversal, cache corruption, unsupported
-executable, and crash-artifact inspection. Agents prepare builds, logs, and
-exact steps; the user performs all in-game actions.
+Checkpoint C/D live tests must cover the correct server, wrong server at the
+same endpoint/key-change case, different endpoint in the same process, clean
+restart, disconnect/reconnect, resource restart, respawn, normal San Andreas
+rollback, Bullworth traversal, cache corruption, unsupported executable, and
+crash-artifact inspection. Agents normally prepare builds, logs, and exact
+steps; they may automate in-game actions only under explicit user authorization.
 
 ## Build and review scope
 
@@ -569,5 +570,16 @@ terminal `selector-ambiguous` refusal. Every B completion retained
 `activation=no` and logged zero native writes, allocations, hooks, archives,
 and pool mutations. The five affected client consumers built Release|Win32
 with zero errors, and the focused suite reports 64 tests with two optional
-environment-dependent skips. Checkpoint C may now consume the selected object
-only after preserving these gates and the documented fatal/rollback boundary.
+environment-dependent skips.
+
+Checkpoint C's explicitly authorized automated gate validated two complete
+activations and exact-session binding. Ticket `8ba5bfc8` progressed through
+model-store preparation, deferred hook installation, archive/model/TXD/IPL
+postconditions, `state=active`, and `lease=process`. An active process using
+ticket `ce451b6c` survived two exact-server reconnects and server/resource
+reloads. Bullworth travel, return to San Andreas, and the COL/moveObject
+regression suite passed. The final five-project Release|Win32 build completed
+with zero errors, and the focused suite reports 67 tests with two optional
+environment-dependent skips. Wrong-key-at-the-same-endpoint, live cache
+corruption, unsupported-executable, respawn, and crash-artifact scenarios remain
+prescribed negative/regression coverage rather than claimed live evidence.

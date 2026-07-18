@@ -54,6 +54,7 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
 
     if (!CCore::GetSingleton().IsNetworkReady())
     {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("network module is unavailable before the pinned connection");
         CCore::GetSingleton().GetLocalGUI()->GetMainMenu()->ShowNetworkNotReadyWindow();
         return false;
     }
@@ -82,6 +83,7 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     // Is the nick valid?
     if (!CheckNickProvided((char*)szNick))
     {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("nickname validation failed before the pinned connection");
         SString strBuffer = _("Connecting failed. Invalid nick provided!");
         CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC20"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid nick provided
         return false;
@@ -114,14 +116,27 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     // Parse host into a server item
     if (!CServerListItem::Parse(m_strHost.c_str(), m_Address))
     {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("startup target is not a resolvable IPv4 endpoint");
         SString strBuffer = _("Connecting failed. Invalid host provided!");
         CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC21"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid host provided
         return false;
     }
 
+    std::array<unsigned char, 4> endpointIpv4{};
+    memcpy(endpointIpv4.data(), &m_Address.s_addr, endpointIpv4.size());
+    std::string pinError;
+    if (!CCore::GetSingleton().ValidateNativeWorldStartupEndpoint(m_strHost, endpointIpv4, m_usPort, pinError))
+    {
+        CCore::GetSingleton().TerminateNativeWorldStartup(pinError);
+        return false;
+    }
+
     // No connect if disk space is low
     if (!CCore::GetSingleton().CheckDiskSpace())
+    {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("disk-space validation failed before the pinned connection");
         return false;
+    }
 
     // Set our packet handler
     pNet->RegisterPacketHandler(CConnectManager::StaticProcessPacket);
@@ -131,6 +146,7 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     if (m_usPort && !pNet->StartNetwork(strAddress, m_usPort, CVARS_GET_VALUE<bool>("packet_tag")))
     {
         CCore::GetSingleton().AdvanceNetworkConnectionGeneration();
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("StartNetwork failed for the pinned endpoint");
         SString strBuffer(_("Connecting to %s at port %u failed!"), m_strHost.c_str(), m_usPort);
         CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC22"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Failed to connect
         return false;
@@ -210,6 +226,8 @@ bool CConnectManager::Event_OnCancelClick(CGUIElement* pElement)
 
 bool CConnectManager::Abort()
 {
+    CCore::GetSingleton().FailNativeWorldStartupBeforeActive("connection attempt aborted before native-world activation");
+
     // Stop the attempt
     CCore::GetSingleton().AdvanceNetworkConnectionGeneration();
     CNet* pNet = CCore::GetSingleton().GetNetwork();
