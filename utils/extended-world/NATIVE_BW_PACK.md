@@ -336,7 +336,11 @@ new TXD names, archive availability, IMG bounds, entry names, and entry sizes
 before changing native state. It also verifies the exact reviewed SHA-256 of
 both runtime files, including every streamed payload sector. Registration is
 process-global and deliberately survives resource stops, reconnects, and
-streaming reinitialization. The largest native IMG entry is `bw.col` at 4,007
+streaming reinitialization. The authorized record-driven route therefore pins
+the process to its exact numeric server endpoint and refuses a different
+server before unloading the valid session; changing servers requires a clean
+restart. The legacy environment-selector route has no server record and is not
+covered by that isolation contract. The largest native IMG entry is `bw.col` at 4,007
 sectors, so GTA initially rounds its split streaming buffer to 4,008 sectors.
 MTA's script-managed IMG inventory cannot see this native archive; while the
 registrar is active, its central buffer setter therefore preserves that 4,008

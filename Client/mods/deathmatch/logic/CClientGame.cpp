@@ -767,6 +767,17 @@ void CClientGame::SetupLocalGame(eServerType Type)
 
 bool CClientGame::StartLocalGame(eServerType Type, const char* szPassword)
 {
+    // Core normally rejects Host Game and Editor before loading this mod. Keep
+    // a second fail-closed gate here so no alternate local server is started
+    // if another caller bypasses the menu while a native world owns the process.
+    const std::array<unsigned char, 4> localEndpoint{{127, 0, 0, 1}};
+    std::string                        pinError;
+    if (!g_pCore->ValidateNativeWorldStartupEndpoint("127.0.0.1", localEndpoint, 22010, pinError))
+    {
+        g_pCore->TerminateNativeWorldStartup(pinError);
+        return false;
+    }
+
     // Verify that the nickname is valid
     std::string strNick;
     g_pCore->GetCVars()->Get("nick", strNick);

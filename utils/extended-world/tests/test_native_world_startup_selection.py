@@ -175,13 +175,92 @@ class StartupTransactionTests(unittest.TestCase):
 
     def test_cpp_c_pins_connect_and_checks_every_server_connected_packet(self) -> None:
         connect = (REPOSITORY / "Client/core/CConnectManager.cpp").read_text(encoding="utf-8")
+        commands = (REPOSITORY / "Client/core/CCommandFuncs.cpp").read_text(encoding="utf-8")
+        core = (REPOSITORY / "Client/core/CCore.cpp").read_text(encoding="utf-8")
         packets = (REPOSITORY / "Client/mods/deathmatch/logic/CPacketHandler.cpp").read_text(encoding="utf-8")
         self.assertIn("ValidateNativeWorldStartupEndpoint", connect)
         self.assertIn("FailNativeWorldStartupBeforeActive", connect)
+        connect_start = connect.index("bool CConnectManager::Connect")
+        reconnect_start = connect.index("bool CConnectManager::Reconnect", connect_start)
+        connect_body = connect[connect_start:reconnect_start]
+        self.assertLess(connect_body.index("ValidateConnectionTarget"), connect_body.index("CModManager::GetSingleton().Unload"))
+        self.assertLess(connect_body.index("ValidateConnectionTarget"), connect_body.index("AdvanceNetworkConnectionGeneration"))
+        self.assertLess(connect_body.index("ValidateConnectionTarget"), connect_body.index("pNet->Reset"))
+        self.assertGreaterEqual(connect_body.count("ValidateNativeWorldStartupEndpoint"), 1)
+        command_start = commands.index("void CCommandFuncs::Connect")
+        command_end = commands.index("void CCommandFuncs::ReloadNews", command_start)
+        command_body = commands[command_start:command_end]
+        self.assertLess(command_body.index("ValidateConnectionTarget"), command_body.index("CModManager::GetSingleton().Unload"))
+        endpoint_start = core.index("bool CCore::ValidateNativeWorldStartupEndpoint")
+        endpoint_end = core.index("void CCore::HandleNativeWorldConnectionTargetRefusal", endpoint_start)
+        self.assertNotIn("ENativeWorldStartupPhase::Candidate", core[endpoint_start:endpoint_end])
         packet_start = packets.index("void CPacketHandler::Packet_ServerConnected")
         packet_end = packets.index("void CPacketHandler::Packet_ServerJoined", packet_start)
         packet = packets[packet_start:packet_end]
         self.assertLess(packet.index("VerifyNativeWorldStartupBeforeStartGame"), packet.index("g_pGame->StartGame()"))
+
+    def test_active_native_world_refuses_cross_server_request_without_unloading(self) -> None:
+        core = (REPOSITORY / "Client/core/CCore.cpp").read_text(encoding="utf-8")
+        connect = (REPOSITORY / "Client/core/CConnectManager.cpp").read_text(encoding="utf-8")
+        handler_start = core.index("void CCore::HandleNativeWorldConnectionTargetRefusal")
+        handler_end = core.index("bool CCore::ValidateNativeWorldStartupSession", handler_start)
+        handler = core[handler_start:handler_end]
+        self.assertIn("ENativeWorldStartupPhase::Active", handler)
+        self.assertIn("existing-native-world=preserved", handler)
+        self.assertIn("next-server-restart-required=yes", handler)
+        self.assertIn("TerminateNativeWorldStartup(reason)", handler)
+        self.assertIn("Close and restart Multi Theft Auto", handler)
+
+        reconnect_start = connect.index("bool CConnectManager::Reconnect")
+        reconnect_end = connect.index("bool CConnectManager::Event_OnCancelClick", reconnect_start)
+        reconnect = connect[reconnect_start:reconnect_end]
+        self.assertLess(reconnect.index("ValidateConnectionTarget"), reconnect.index("m_strHost ="))
+        self.assertLess(reconnect.index("ValidateConnectionTarget"), reconnect.index("m_bReconnect = true"))
+        self.assertLess(reconnect.index("ValidateConnectionTarget"), reconnect.index('CVARS_GET("password"'))
+        self.assertLess(reconnect.index("IsNativeWorldStartupCredentialSuppressed"), reconnect.index("m_strPassword ="))
+
+        commands = (REPOSITORY / "Client/core/CCommandFuncs.cpp").read_text(encoding="utf-8")
+        command_start = commands.index("void CCommandFuncs::Reconnect")
+        command_end = commands.index("void CCommandFuncs::Bind", command_start)
+        command = commands[command_start:command_end]
+        self.assertLess(command.index("ValidateConnectionTarget"), command.index('CVARS_GET("password"'))
+
+    def test_active_native_world_guards_browser_and_local_server_before_credentials_or_start(self) -> None:
+        browser = (REPOSITORY / "Client/core/ServerBrowser/CServerBrowser.cpp").read_text(encoding="utf-8")
+        server_info = (REPOSITORY / "Client/core/ServerBrowser/CServerInfo.cpp").read_text(encoding="utf-8")
+        menu = (REPOSITORY / "Client/core/CMainMenu.cpp").read_text(encoding="utf-8")
+        client_game = (REPOSITORY / "Client/mods/deathmatch/logic/CClientGame.cpp").read_text(encoding="utf-8")
+
+        address_start = browser.index("bool CServerBrowser::OnConnectClick")
+        address_end = browser.index("void CServerBrowser::NotifyServerExists", address_start)
+        address = browser[address_start:address_end]
+        self.assertLess(address.index("ValidateConnectionTarget"), address.index("GetServerPassword"))
+
+        selected_start = browser.index("bool CServerBrowser::ConnectToSelectedServer")
+        selected_end = browser.index("bool CServerBrowser::OnRefreshClick", selected_start)
+        selected = browser[selected_start:selected_end]
+        self.assertLess(selected.index("ValidateConnectionTarget"), selected.index("GetServerPassword"))
+
+        info_start = server_info.index("void CServerInfo::Connect")
+        info_end = server_info.index("void CServerInfo::ResetServerGUI", info_start)
+        info = server_info[info_start:info_end]
+        self.assertLess(info.index("ValidateConnectionTarget"), info.index("m_strPassword"))
+        self.assertLess(info.index("ValidateConnectionTarget"), info.index("GetServerPassword"))
+
+        for function, next_function in (
+            ("bool CMainMenu::OnHostGameButtonClick", "bool CMainMenu::OnEditorButtonClick"),
+            ("bool CMainMenu::OnEditorButtonClick", "bool CMainMenu::OnSettingsButtonClick"),
+        ):
+            start = menu.index(function)
+            end = menu.index(next_function, start)
+            body = menu[start:end]
+            self.assertLess(body.index("ValidateConnectionTarget"), body.index("RequestLoad"))
+
+        local_start = client_game.index("bool CClientGame::StartLocalGame")
+        local_end = client_game.index("bool CClientGame::OnCancelLocalGameClick", local_start)
+        local = client_game[local_start:local_end]
+        self.assertLess(local.index("ValidateNativeWorldStartupEndpoint"), local.index("m_Server.Start"))
+        self.assertLess(local.index("ValidateNativeWorldStartupEndpoint"), local.index("m_Server.SetPassword"))
 
     def test_cpp_d_schedules_only_the_closed_passwordless_restart_then_quits(self) -> None:
         core = (REPOSITORY / "Client/core/CCore.cpp").read_text(encoding="utf-8")
@@ -219,7 +298,7 @@ class StartupTransactionTests(unittest.TestCase):
         credential_start = core.index("bool CCore::IsNativeWorldStartupCredentialSuppressed")
         credential_end = core.index("SNativeWorldAuthorizationRecordResult CCore::DescribeNativeWorldStartupProcess", credential_start)
         credential = core[credential_start:credential_end]
-        self.assertIn("ENativeWorldStartupPhase::Prepared", credential)
+        self.assertIn("m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off", credential)
         self.assertIn("IsNativeWorldStartupCredentialSuppressed", connect)
         self.assertIn('m_strPassword = bSuppressNativeWorldCredential ? "" : szPassword', connect)
         self.assertLess(connect.index('m_strPassword = bSuppressNativeWorldCredential ? "" : szPassword'), connect.index("m_strLastPassword = m_strPassword"))

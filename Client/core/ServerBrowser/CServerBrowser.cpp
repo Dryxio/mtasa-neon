@@ -1632,8 +1632,11 @@ bool CServerBrowser::OnConnectClick(CGUIElement* pElement)
         return true;
     }
 
+    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(strHost.c_str(), usPort))
+        return true;
+
     // If our password is empty, try and grab a saved password
-    if (strPassword.empty())
+    if (strPassword.empty() && !CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed())
     {
         strPassword = GetServerPassword(strHost + ":" + SString("%u", usPort));
     }
@@ -1691,9 +1694,12 @@ bool CServerBrowser::ConnectToSelectedServer()
             return true;
         }
 
+        if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(pServer->strHost.c_str(), pServer->usGamePort))
+            return true;
+
         // Password buffer
         SString strPassword = "";
-        if (pServer->bPassworded)  // The server is passworded, let's try and grab a saved password
+        if (pServer->bPassworded && !CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed())
         {
             strPassword = GetServerPassword(pServer->GetEndpoint().c_str());
 

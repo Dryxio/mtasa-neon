@@ -1002,6 +1002,9 @@ bool CMainMenu::OnHostGameButtonClick()
     if (!WarnIfLocalServerUnsupported())
         return false;
 
+    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget("127.0.0.1", 22010))
+        return false;
+
     // Load deathmatch, but with local play
     CModManager::GetSingleton().RequestLoad("local");
 
@@ -1015,6 +1018,9 @@ bool CMainMenu::OnEditorButtonClick()
         return false;
 
     if (!WarnIfLocalServerUnsupported())
+        return false;
+
+    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget("127.0.0.1", 22010))
         return false;
 
     // Load deathmatch, but with local play

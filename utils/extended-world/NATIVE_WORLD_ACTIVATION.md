@@ -419,8 +419,10 @@ no native allocation, executable write, hook installation, or GTA registration.
 
 Checkpoint C prepares the model-store foundation early enough for GTA's
 initialization. It does not install the native pack hook yet. The process is
-pinned to the recorded numeric endpoint; any attempt to connect elsewhere is
-refused.
+pinned to the recorded numeric endpoint as soon as the startup selection
+becomes a candidate; any attempt to connect elsewhere is refused. Core keeps
+that pin for the remainder of the process, including after the pack becomes
+active.
 
 When the second session reaches `Packet_ServerConnected`, the client compares
 the current raw server ID digest, numeric endpoint, and negotiated bitstream
@@ -449,6 +451,36 @@ The existing native failure boundary remains authoritative:
 - `LOAD_OBJECT_TYPES` is the irreversible IDE commit;
 - failure after that point is fatal; and
 - successful postconditions promote the exact typed lease to process lifetime.
+
+### Active-process server isolation
+
+Native registration has no safe hot-unload inverse, so an active process must
+never carry one server's world into another server session. Every ordinary
+console, browser, quick-connect, reconnect, and server-forced reconnect route
+converges on `CConnectManager`. It resolves and validates the requested target
+against the immutable numeric endpoint before unloading the current mod,
+advancing the connection generation, resetting the network, copying a
+credential, or changing queued reconnect state. The exact stored endpoint is
+checked again immediately before `StartNetwork`; the opaque server-ID digest
+and negotiated bitstream version remain a separate post-connect check before
+`StartGame`.
+
+A different target while the pack is active is a rejected request, not a
+reason to destroy the valid current session. The client preserves the mod,
+network, native lease, and process phase, reports
+`state=connection-refused ... existing-native-world=preserved
+next-server-restart-required=yes`, and instructs the player to close and
+restart MTA. A mismatch during Candidate, Prepared, SessionValidated, Refused,
+or Terminal state remains fail-closed and process-terminal. Exact reconnects
+remain permitted.
+
+Endpoint equality cannot authenticate a new peer. From Candidate through the
+end of every process-owned native-world phase, Core therefore discards supplied
+and saved credentials. A server that later occupies the same IP and port must
+still reproduce the opaque server-ID digest and bitstream version before GTA
+starts; otherwise the process terminates. Passworded native-world startup and
+active reconnect remain unsupported until identity can be proven before a
+reusable verifier leaves Core.
 
 The environment/local-selector route remains a separate developer path during
 migration. A common startup selector must inspect both sources before the
@@ -687,3 +719,15 @@ activation both regressed cleanly. The six affected client/server projects
 built with zero errors, and the focused suite reports 81 tests with two
 optional environment-dependent skips. Three independent architecture,
 security, and code/ABI reviews found no actionable P0-P2 issue.
+
+The active-pack server-isolation gate then used format-2 ticket `5d0d35f3`.
+After the clean restart reached `state=active activation=yes lease=process`, a
+different F8 target (`127.0.0.1:22004`) was rejected before any network attempt
+with `existing-native-world=preserved` and
+`next-server-restart-required=yes`. The player remained in the owner session,
+and exact `reconnect` returned to `127.0.0.1:22003` and revalidated the active
+ticket. A fresh no-URI process reported `state=absent` and attempted port 22004
+normally, proving that the admission guard does not alter Off-state connection
+behavior. `Client Core` and `Client Deathmatch` built as `Release|Win32` with
+zero errors, and the focused suite reports 83 tests with two optional
+environment-dependent skips.

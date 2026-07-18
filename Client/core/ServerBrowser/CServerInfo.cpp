@@ -527,21 +527,28 @@ void CServerInfo::Connect()
     std::string strNick;
     CVARS_GET("nick", strNick);
 
+    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(m_strHost, m_usPort))
+        return;
+
     // Hide the window
     m_pWindow->SetVisible(false);
 
-    std::string strPassword = m_strPassword;
-    if (m_pCurrentWindowType == eWindowTypes::SERVER_INFO_PASSWORD)
-        strPassword = m_pEnterPasswordEdit->GetText();
-    else if (m_Server.bPassworded)  // If we're not in a passworded window, but the server is passworded
+    std::string strPassword;
+    if (!CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed())
     {
-        // Try to grab a saved password
-        strPassword = g_pCore->GetLocalGUI()->GetMainMenu()->GetServerBrowser()->GetServerPassword(m_Server.GetEndpoint().c_str());
-
-        if (strPassword.empty())  // No password could be found, repopup the window in password mode.
+        strPassword = m_strPassword;
+        if (m_pCurrentWindowType == eWindowTypes::SERVER_INFO_PASSWORD)
+            strPassword = m_pEnterPasswordEdit->GetText();
+        else if (m_Server.bPassworded)  // If we're not in a passworded window, but the server is passworded
         {
-            Show(eWindowTypes::SERVER_INFO_PASSWORD, m_Server.strHost.c_str(), m_Server.usGamePort, "", &m_Server);
-            return;
+            // Try to grab a saved password
+            strPassword = g_pCore->GetLocalGUI()->GetMainMenu()->GetServerBrowser()->GetServerPassword(m_Server.GetEndpoint().c_str());
+
+            if (strPassword.empty())  // No password could be found, repopup the window in password mode.
+            {
+                Show(eWindowTypes::SERVER_INFO_PASSWORD, m_Server.strHost.c_str(), m_Server.usGamePort, "", &m_Server);
+                return;
+            }
         }
     }
 

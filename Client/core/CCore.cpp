@@ -582,8 +582,9 @@ bool CCore::IsNativeWorldStartupCredentialSuppressed() const
 {
     // Server identity is revalidated only after Client Deathmatch starts.
     // Suppress every credential until a future protocol can authenticate the
-    // second session before any reusable verifier leaves Core.
-    return m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Prepared;
+    // new session before any reusable verifier leaves Core. This remains true
+    // for exact reconnects while the native pack has process lifetime.
+    return m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off;
 }
 
 SNativeWorldAuthorizationRecordResult CCore::DescribeNativeWorldStartupProcess() const
@@ -708,7 +709,7 @@ bool CCore::IsNativeWorldStartupSelectionCancelled(const std::string& ticketId) 
 bool CCore::ValidateNativeWorldStartupEndpoint(const std::string& targetHost, const std::array<unsigned char, 4>& endpointIpv4, unsigned short endpointPort,
                                                std::string& error) const
 {
-    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off || m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Candidate)
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off)
         return true;
     const SString canonicalHost("%u.%u.%u.%u", m_nativeWorldStartupSelection.serverIpv4[0], m_nativeWorldStartupSelection.serverIpv4[1],
                                 m_nativeWorldStartupSelection.serverIpv4[2], m_nativeWorldStartupSelection.serverIpv4[3]);
@@ -719,6 +720,32 @@ bool CCore::ValidateNativeWorldStartupEndpoint(const std::string& targetHost, co
         return false;
     }
     return true;
+}
+
+void CCore::HandleNativeWorldConnectionTargetRefusal(const std::string& reason)
+{
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Active)
+    {
+        TerminateNativeWorldStartup(reason);
+        return;
+    }
+
+    const SNativeWorldStartupSelection& selection = m_nativeWorldStartupSelection;
+    const SString                       diagnostic(
+        "state=connection-refused reason=endpoint-mismatch pinned=%u.%u.%u.%u:%u ticket=%s activation=yes lease=process existing-native-world=preserved "
+                              "next-server-restart-required=yes",
+        selection.serverIpv4[0], selection.serverIpv4[1], selection.serverIpv4[2], selection.serverIpv4[3], selection.serverPort,
+        selection.ticketId.substr(0, 8).c_str());
+    WriteDebugEvent(SString("[NativeWorldAuthorization] %s", diagnostic.c_str()));
+    if (CConsoleInterface* console = GetConsole())
+        console->Printf("[NativeWorldAuthorization] %s", diagnostic.c_str());
+
+    const SString ownerEndpoint("%u.%u.%u.%u:%u", selection.serverIpv4[0], selection.serverIpv4[1], selection.serverIpv4[2], selection.serverIpv4[3],
+                                selection.serverPort);
+    ShowMessageBox(
+        _("Connection blocked"),
+        SString(_("A native world pack for %s is active. Close and restart Multi Theft Auto before connecting to another server."), ownerEndpoint.c_str()),
+        MB_BUTTON_OK | MB_ICON_INFO);
 }
 
 bool CCore::ValidateNativeWorldStartupSession(std::string& error)

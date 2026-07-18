@@ -176,7 +176,13 @@ the hook installed and the typed lease committed after native postconditions.
 A valid record and the legacy switch together remain terminally ambiguous and
 suppress both routes. Successful native registration is process-global and
 intentionally survives resource stops and exact-server reconnects; changing
-packs requires a clean client restart.
+packs or servers requires a clean client restart. Connection admission is
+pinned from Candidate onward. A different endpoint requested while Active is
+rejected before mod unload, network reset, credential copying, or queued-state
+mutation, preserving the exact current session; pre-active mismatches remain
+process-terminal. Every process-owned native-world phase is passwordless until
+the opaque server identity is reproduced after connecting to the exact numeric
+endpoint.
 
 ### Server transport and authorization-offer path
 
@@ -524,7 +530,11 @@ resources and is never Git-indexed. Do not commit generated city assets.
 - There is no aggregate multi-pack allocation or transactional registration of
   several cities.
 - Native registration cannot currently be safely hot-unloaded. Treat active
-  startup packs as process-lifetime state.
+  startup packs as process-lifetime state. The record-driven route pins that
+  process to its exact numeric server endpoint: a different-server request is
+  refused without unloading the active session and requires a clean restart.
+  The legacy environment/local-selector developer route has no server record
+  and therefore does not provide this server-isolation contract.
 - Current generated Bullworth IPL placements use `lod_index = -1`; native
   spatial streaming and collision are validated, but GTA UG-equivalent
   long-distance LOD behavior is not.
@@ -695,6 +705,49 @@ resource-stop races, expiry during restart, unsupported executables, cache
 corruption, respawn, or the full world-sync resource. Those remain prescribed
 negative/regression scenarios; Checkpoint C already supplied the x=9500,
 water, COL synchronization, and `moveObject` live regression evidence.
+
+## Completed checkpoint: active-pack server isolation
+
+The record-driven path already refused another endpoint before
+`StartNetwork`, but the guard ran after console/mod unload, network reset, and
+connection-state mutation, then terminalized an otherwise valid Active
+process. The current hardening moves a common target guard before every such
+effect in console connect/reconnect and `CConnectManager`, validates queued
+server-forced reconnects before committing their state, and retains the
+immediate pre-`StartNetwork` invariant check.
+
+Candidate is now pinned rather than temporarily exempt. Credentials are
+suppressed for every phase other than Off, including Active exact reconnect,
+because endpoint equality precedes the opaque server-ID proof. Active
+different-target requests preserve the existing session and process lease and
+report that changing servers requires a clean restart; earlier-phase mismatch
+continues to terminate fail-closed.
+
+The user-run live gate completed with format-2 ticket `5d0d35f3`. The clean
+restart reached `state=active activation=yes lease=process`; the registrar
+reported the exact `mta-runtime-3608` TXD profile, archive 6, 952 models, 166
+TXDs, collision slot 252, and seven IPL slots. An F8 `connect 127.0.0.1 22004`
+then reported `state=connection-refused reason=endpoint-mismatch` while retaining
+the `127.0.0.1:22003` session, active lease, and native world. Exact `reconnect`
+returned to port 22003 and revalidated the same ticket with
+`activation=active lease=process`. After a clean client exit, a no-URI process
+reported `state=absent` and `connect 127.0.0.1 22004` produced an ordinary
+network connection attempt rather than a native-world refusal.
+
+`Client Core` and `Client Deathmatch` built as `Release|Win32` with zero
+errors through the reviewed VM plan/execute workflow. The focused suite reports
+83 tests with two optional environment-dependent skips, `git diff --check` is
+clean, and two independent final security/code-path reviews found no remaining
+actionable P0-P2 issue.
+
+An immediately preceding attempt with ticket `151e80c0` refused before any
+pack mutation because the aggregated TXD pointer/capacity/cursor precondition
+did not match. A later read in that process showed the expected capacity 5000
+and cursor 3607, and the clean retry above passed with the exact same Game SA
+and Multiplayer binaries and canonical source hashes. Treat this as a
+non-reproduced launch-order observation: if it recurs, log the pool pointer,
+object pointer, bitmap pointer, capacity, and cursor individually before
+changing the closed TXD profile.
 
 ## Remaining global roadmap
 

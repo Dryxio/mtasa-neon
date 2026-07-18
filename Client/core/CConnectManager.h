@@ -23,6 +23,7 @@ public:
 
     bool Connect(const char* szHost, unsigned short usPort, const char* szNick, const char* szPassword, bool bNotifyServerBrowser = false);
     bool Reconnect(const char* szHost, unsigned short usPort, const char* szPassword, bool bSave = true);
+    bool ValidateConnectionTarget(const char* szHost, unsigned short usPort, in_addr* pResolvedAddress = nullptr) const;
 
     bool Abort();
 

@@ -130,6 +130,7 @@ public:
     bool                                  IsNativeWorldStartupSelectionCancelled(const std::string& ticketId) const override;
     bool ValidateNativeWorldStartupEndpoint(const std::string& targetHost, const std::array<unsigned char, 4>& endpointIpv4, unsigned short endpointPort,
                                             std::string& error) const override;
+    void HandleNativeWorldConnectionTargetRefusal(const std::string& reason);
     bool ValidateNativeWorldStartupSession(std::string& error) override;
     void MarkNativeWorldStartupActive() override;
     void MarkNativeWorldStartupRefused() override;

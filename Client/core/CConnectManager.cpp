@@ -46,6 +46,37 @@ CConnectManager::~CConnectManager()
     g_pConnectManager = NULL;
 }
 
+bool CConnectManager::ValidateConnectionTarget(const char* szHost, unsigned short usPort, in_addr* pResolvedAddress) const
+{
+    assert(szHost);
+
+    in_addr    targetAddress{};
+    const bool parsed = CServerListItem::Parse(szHost, targetAddress);
+
+    std::array<unsigned char, 4> endpointIpv4{};
+    if (parsed)
+        memcpy(endpointIpv4.data(), &targetAddress.s_addr, endpointIpv4.size());
+
+    std::string pinError;
+    if (!CCore::GetSingleton().ValidateNativeWorldStartupEndpoint(szHost, endpointIpv4, usPort, pinError))
+    {
+        CCore::GetSingleton().HandleNativeWorldConnectionTargetRefusal(pinError);
+        return false;
+    }
+
+    if (!parsed)
+    {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("startup target is not a resolvable IPv4 endpoint");
+        SString strBuffer = _("Connecting failed. Invalid host provided!");
+        CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC21"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid host provided
+        return false;
+    }
+
+    if (pResolvedAddress)
+        *pResolvedAddress = targetAddress;
+    return true;
+}
+
 bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const char* szNick, const char* szPassword, bool bNotifyServerBrowser)
 {
     assert(szHost);
@@ -58,6 +89,12 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
         CCore::GetSingleton().GetLocalGUI()->GetMainMenu()->ShowNetworkNotReadyWindow();
         return false;
     }
+
+    // A native startup pack cannot be unloaded safely. Reject another server
+    // before the current mod, network generation, or credentials are touched.
+    in_addr targetAddress{};
+    if (!ValidateConnectionTarget(szHost, usPort, &targetAddress))
+        return false;
 
     m_bNotifyServerBrowser = bNotifyServerBrowser;
 
@@ -109,7 +146,7 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     // credential before it can be copied, persisted, or sent to a different
     // server at the pinned endpoint.
     m_strPassword = bSuppressNativeWorldCredential ? "" : szPassword;
-    m_Address.s_addr = 0;
+    m_Address = targetAddress;
     m_usPort = usPort;
     m_bSave = true;
 
@@ -117,15 +154,9 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     m_usLastPort = m_usPort;
     m_strLastPassword = m_strPassword;
 
-    // Parse host into a server item
-    if (!CServerListItem::Parse(m_strHost.c_str(), m_Address))
-    {
-        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("startup target is not a resolvable IPv4 endpoint");
-        SString strBuffer = _("Connecting failed. Invalid host provided!");
-        CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC21"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid host provided
-        return false;
-    }
-
+    // Recheck the immutable selection immediately before the network starts.
+    // This second gate is an invariant check after ordinary connection setup;
+    // unlike a rejected user request, a mismatch here is process-terminal.
     std::array<unsigned char, 4> endpointIpv4{};
     memcpy(endpointIpv4.data(), &m_Address.s_addr, endpointIpv4.size());
     std::string pinError;
@@ -185,34 +216,39 @@ bool CConnectManager::Reconnect(const char* szHost, unsigned short usPort, const
 {
     // Use previous connection datum when function arguments are not set
     unsigned int uiPort = 0;
-    CVARS_GET("host", m_strHost);
+    std::string  targetHost;
+    CVARS_GET("host", targetHost);
     CVARS_GET("port", uiPort);
     if (uiPort == 0 || uiPort > 0xFFFF)
         uiPort = 22003;
-    m_usPort = static_cast<unsigned short>(uiPort);
+    unsigned short targetPort = static_cast<unsigned short>(uiPort);
 
-    // If keeping the same host & port, retrieve the password as well
-    if (!szHost || !szHost[0] || m_strHost == szHost)
-        if (usPort == 0 || m_usPort == usPort)
-            CVARS_GET("password", m_strPassword);
+    const bool useSavedPassword = (!szHost || !szHost[0] || targetHost == szHost) && (usPort == 0 || targetPort == usPort);
 
-    // Allocate a new host and nick buffer and store the strings in them
+    // Derive the complete request in locals so a rejected redirect cannot
+    // overwrite the exact reconnect target or queue a later attempt.
     if (szHost && szHost[0])
-    {
-        m_strHost = szHost;
-    }
-    if (szPassword && szPassword[0])
-    {
-        m_strPassword = szPassword;
-    }
-
+        targetHost = szHost;
     if (usPort)
+        targetPort = usPort;
+
+    if (!ValidateConnectionTarget(targetHost.c_str(), targetPort))
+        return false;
+
+    std::string targetPassword;
+    if (!CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed())
     {
-        m_usPort = usPort;
+        targetPassword = m_strPassword;
+        if (useSavedPassword)
+            CVARS_GET("password", targetPassword);
+        if (szPassword && szPassword[0])
+            targetPassword = szPassword;
     }
 
+    m_strHost = std::move(targetHost);
+    m_strPassword = std::move(targetPassword);
+    m_usPort = targetPort;
     m_bSave = bSave;
-
     m_bReconnect = true;
 
     return true;

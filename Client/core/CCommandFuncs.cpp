@@ -287,6 +287,11 @@ void CCommandFuncs::Connect(const char* szParameters)
         szPass = &emptyPass;
     }
 
+    // A native world has process lifetime. Check its server pin before the
+    // console command unloads the currently valid session.
+    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(szHost, usPort))
+        return;
+
     // Unload any mod before connecting to a server
     CModManager::GetSingleton().Unload();
 
@@ -329,14 +334,23 @@ void CCommandFuncs::Reconnect(const char* szParameters)
         return;
     }
 
-    CModManager::GetSingleton().Unload();
-
     std::string  strHost, strNick, strPassword;
     unsigned int uiPort;
 
     CVARS_GET("host", strHost);
-    CVARS_GET("password", strPassword);
     CVARS_GET("port", uiPort);
+
+    // Validate the complete target before changing the current session.
+    if (uiPort <= 0 || uiPort > 0xFFFF)
+    {
+        CCore::GetSingleton().GetConsole()->Print(_("reconnect: Bad port number"));
+        return;
+    }
+    const unsigned short usPort = static_cast<unsigned short>(uiPort);
+    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(strHost.c_str(), usPort))
+        return;
+    if (!CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed())
+        CVARS_GET("password", strPassword);
 
     // Restart the connection.
     CModManager::GetSingleton().Unload();
@@ -344,21 +358,6 @@ void CCommandFuncs::Reconnect(const char* szParameters)
     // Any mod loaded?
     if (!CModManager::GetSingleton().IsLoaded())
     {
-        // Verify and convert the port number
-        if (uiPort <= 0 || uiPort > 0xFFFF)
-        {
-            CCore::GetSingleton().GetConsole()->Print(_("reconnect: Bad port number"));
-            return;
-        }
-
-        unsigned short usPort = static_cast<unsigned short>(uiPort);
-
-        // Got a password?
-        if (!strPassword.c_str())
-        {
-            strPassword = '\0';
-        }
-
         // Start the connect
         if (CCore::GetSingleton().GetConnectManager()->Reconnect(strHost.c_str(), usPort, strPassword.c_str(), false))
         {
