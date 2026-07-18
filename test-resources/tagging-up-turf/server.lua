@@ -33,6 +33,12 @@ local mission = {
     vehiclePlayback = nil,
     postRoofSceneSerial = 0,
     postRoofScene = nil,
+    introSceneSerial = 0,
+    introScene = nil,
+    introEntryPending = false,
+    introEntryGuardTimer = nil,
+    fileCutsceneSerial = 0,
+    fileCutscene = nil,
 }
 
 -- GTA produces every spray hit and exact alpha step. The server validates those
@@ -432,8 +438,602 @@ local function replaceTagObject(tagId)
 end
 
 local failMission
+local createScmChar
+local createMissionEntities
+local startIntroScene
 
-local function createScmChar(model, x, y, scriptZ, heading)
+local function cancelFileCutscene(reason, notifyClients)
+    local scene = mission.fileCutscene
+    if not scene then
+        return
+    end
+
+    mission.fileCutscene = nil
+    for _, timer in ipairs({scene.loadGuardTimer, scene.finishGuardTimer, scene.releaseGuardTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    if notifyClients ~= false then
+        for _, player in ipairs(scene.players) do
+            if isElement(player) then
+                triggerClientEvent(player, "tagup:fileCutsceneCancel", resourceRoot, scene.id, reason or "server_cancelled")
+            end
+        end
+    end
+end
+
+local function allFileCutscenePlayers(scene, field)
+    for _, player in ipairs(scene.players) do
+        if isElement(player) and not scene[field][player] then
+            return false
+        end
+    end
+    return true
+end
+
+local function failFileCutscene(scene, reason)
+    if mission.fileCutscene ~= scene then
+        return
+    end
+    cancelFileCutscene("failed", true)
+    failMission(reason)
+end
+
+local function clearIntroEntryGuard()
+    if isTimer(mission.introEntryGuardTimer) then
+        killTimer(mission.introEntryGuardTimer)
+    end
+    mission.introEntryGuardTimer = nil
+end
+
+local function cancelIntroScene(reason, notifyClients)
+    local scene = mission.introScene
+    if not scene then
+        return
+    end
+
+    mission.introScene = nil
+    for _, timer in ipairs({scene.readyGuardTimer, scene.startTimer, scene.audioGuardTimer, scene.nextLineTimer,
+                            scene.releaseTimer, scene.entryReportGuardTimer, scene.releaseGuardTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    if notifyClients ~= false then
+        for _, player in ipairs(scene.players) do
+            if isElement(player) then
+                triggerClientEvent(player, "tagup:introSceneCancel", resourceRoot, scene.id, reason or "server_cancelled")
+            end
+        end
+    end
+    local smoke = mission.entities.smoke
+    if isElement(smoke) then
+        destroyElement(smoke)
+    end
+    mission.entities.smoke = nil
+    mission.introEntryPending = false
+    clearIntroEntryGuard()
+end
+
+local function allIntroScenePlayers(scene, field)
+    for _, player in ipairs(scene.players) do
+        if isElement(player) and not scene[field][player] then
+            return false
+        end
+    end
+    return true
+end
+
+local function failIntroScene(scene, reason)
+    if mission.introScene ~= scene then
+        return
+    end
+    cancelIntroScene("failed", true)
+    failMission(reason)
+end
+
+local requestIntroSceneRelease
+local prepareIntroSceneLine
+
+local function playIntroSceneLine(scene, lineIndex)
+    if mission.introScene ~= scene or scene.lineIndex ~= lineIndex or scene.audioStarted then
+        return
+    end
+    scene.audioStarted = true
+    scene.audioFinishedPlayers = {}
+    if isTimer(scene.audioGuardTimer) then
+        killTimer(scene.audioGuardTimer)
+    end
+    scene.audioGuardTimer = rememberTimer(setTimer(function(expectedId, expectedLine)
+        local active = mission.introScene
+        if active and active.id == expectedId and active.lineIndex == expectedLine then
+            failIntroScene(active, ("La replique d'intro %d a depasse son delai de garde."):format(expectedLine))
+        end
+    end, TAGUP.introScene.audioFinishTimeout, 1, scene.id, lineIndex))
+
+    if lineIndex == 3 and isElement(mission.entities.sweet) then
+        -- SWEET1 starts IDLE_CHAT with a 6000 ms lifetime during SWE1_AC.
+        setPedAnimation(mission.entities.sweet, "PED", "IDLE_CHAT", 6000, true, false, false, false, 250, false)
+    end
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:introScenePlayAudio", resourceRoot, scene.id, lineIndex, player == mission.leader)
+        end
+    end
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d playing %s"):format(
+                          scene.id, TAGUP.introScene.audio[lineIndex].key))
+end
+
+prepareIntroSceneLine = function(scene, lineIndex)
+    if mission.introScene ~= scene or not TAGUP.introScene.audio[lineIndex] then
+        return
+    end
+    scene.lineIndex = lineIndex
+    scene.audioStarted = false
+    scene.audioReadyPlayers = {}
+    if isTimer(scene.audioGuardTimer) then
+        killTimer(scene.audioGuardTimer)
+    end
+    scene.audioGuardTimer = rememberTimer(setTimer(function(expectedId, expectedLine)
+        local active = mission.introScene
+        if active and active.id == expectedId and active.lineIndex == expectedLine then
+            failIntroScene(active, ("Le chargement de la replique d'intro %d a depasse son delai de garde."):format(expectedLine))
+        end
+    end, TAGUP.introScene.audioLoadTimeout, 1, scene.id, lineIndex))
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:introScenePrepareAudio", resourceRoot, scene.id, lineIndex)
+        end
+    end
+end
+
+requestIntroSceneRelease = function(scene)
+    if mission.introScene ~= scene or scene.releasing then
+        return
+    end
+    scene.releasing = true
+    scene.releasedPlayers = {}
+    scene.releaseGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.introScene
+        if active and active.id == expectedId then
+            failIntroScene(active, "La camera d'intro n'a pas ete restauree sur tous les clients.")
+        end
+    end, TAGUP.introScene.releaseTimeout, 1, scene.id))
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:introSceneRelease", resourceRoot, scene.id)
+        end
+    end
+end
+
+local function startFileCutscene()
+    mission.fileCutsceneSerial = mission.fileCutsceneSerial + 1
+    local scene = {
+        id = mission.fileCutsceneSerial,
+        players = {},
+        readyPlayers = {},
+        startedPlayers = {},
+        finishedPlayers = {},
+        releasedPlayers = {},
+    }
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            table.insert(scene.players, player)
+        end
+    end
+    if #scene.players == 0 then
+        return failMission("Aucun participant n'est disponible pour SWEET1A.")
+    end
+
+    mission.fileCutscene = scene
+    scene.loadGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.fileCutscene
+        if active and active.id == expectedId then
+            failFileCutscene(active, "Le chargement natif de SWEET1A a depasse son delai de garde.")
+        end
+    end, TAGUP.fileCutscene.loadTimeout, 1, scene.id))
+
+    setStage("sweet1a")
+    for _, player in ipairs(scene.players) do
+        triggerClientEvent(player, "tagup:fileCutscenePrepare", resourceRoot, scene.id, player == mission.leader)
+    end
+    outputDebugString(("[tagging-up-turf] SWEET1A file cutscene #%d loading for %d participant(s)"):format(scene.id, #scene.players))
+end
+
+addEvent("tagup:fileCutsceneReady", true)
+addEventHandler("tagup:fileCutsceneReady", resourceRoot, function(sceneId, result, details)
+    local player, scene = client, mission.fileCutscene
+    if source ~= resourceRoot or not scene or mission.stage ~= "sweet1a" or scene.id ~= tonumber(sceneId) or
+        not isMissionPlayer(player) or scene.readyPlayers[player] then
+        return
+    end
+    outputDebugString(("[tagging-up-turf] SWEET1A #%d loaded on %s result=%s (%s)"):format(
+                          scene.id, getPlayerName(player), tostring(result), tostring(details or ""):sub(1, 180)))
+    if result ~= "ready" then
+        return failFileCutscene(scene, "SWEET1A n'a pas pu etre chargee sur un client: " .. tostring(result))
+    end
+    scene.readyPlayers[player] = true
+    if not allFileCutscenePlayers(scene, "readyPlayers") then
+        return
+    end
+
+    if isTimer(scene.loadGuardTimer) then
+        killTimer(scene.loadGuardTimer)
+        scene.loadGuardTimer = nil
+    end
+    scene.finishGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.fileCutscene
+        if active and active.id == expectedId then
+            failFileCutscene(active, "La lecture native de SWEET1A a depasse son delai de garde.")
+        end
+    end, TAGUP.fileCutscene.finishTimeout, 1, scene.id))
+    for _, member in ipairs(scene.players) do
+        if isElement(member) then
+            triggerClientEvent(member, "tagup:fileCutsceneStart", resourceRoot, scene.id)
+        end
+    end
+end)
+
+addEvent("tagup:fileCutsceneStarted", true)
+addEventHandler("tagup:fileCutsceneStarted", resourceRoot, function(sceneId, result)
+    local player, scene = client, mission.fileCutscene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or scene.startedPlayers[player] then
+        return
+    end
+    if result ~= "started" then
+        return failFileCutscene(scene, "Le demarrage natif de SWEET1A a echoue sur un client: " .. tostring(result))
+    end
+    scene.startedPlayers[player] = true
+    if allFileCutscenePlayers(scene, "startedPlayers") then
+        outputDebugString(("[tagging-up-turf] SWEET1A #%d started on every participant"):format(scene.id))
+    end
+end)
+
+addEvent("tagup:fileCutsceneSkipRequest", true)
+addEventHandler("tagup:fileCutsceneSkipRequest", resourceRoot, function(sceneId)
+    local scene = mission.fileCutscene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or scene.skipRequested then
+        return
+    end
+    scene.skipRequested = true
+    for _, player in ipairs(scene.players) do
+        if isElement(player) then
+            triggerClientEvent(player, "tagup:fileCutsceneSkip", resourceRoot, scene.id)
+        end
+    end
+    outputDebugString(("[tagging-up-turf] SWEET1A #%d native skip authorized by leader"):format(scene.id))
+end)
+
+addEvent("tagup:fileCutsceneFinished", true)
+addEventHandler("tagup:fileCutsceneFinished", resourceRoot, function(sceneId, result, skipped, elapsed)
+    local player, scene = client, mission.fileCutscene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or scene.finishedPlayers[player] then
+        return
+    end
+    if result ~= "finished" then
+        return failFileCutscene(scene, "La lecture native de SWEET1A a echoue sur un client: " .. tostring(result))
+    end
+    scene.finishedPlayers[player] = true
+    outputDebugString(("[tagging-up-turf] SWEET1A #%d finished on %s skipped=%s elapsed=%s ms"):format(
+                          scene.id, getPlayerName(player), tostring(skipped == true), tostring(elapsed or "?")))
+    if not allFileCutscenePlayers(scene, "finishedPlayers") then
+        return
+    end
+
+    if isTimer(scene.finishGuardTimer) then
+        killTimer(scene.finishGuardTimer)
+        scene.finishGuardTimer = nil
+    end
+    scene.releaseGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.fileCutscene
+        if active and active.id == expectedId then
+            failFileCutscene(active, "Le cleanup natif de SWEET1A a depasse son delai de garde.")
+        end
+    end, TAGUP.fileCutscene.releaseTimeout, 1, scene.id))
+    for _, member in ipairs(scene.players) do
+        if isElement(member) then
+            triggerClientEvent(member, "tagup:fileCutsceneRelease", resourceRoot, scene.id)
+        end
+    end
+end)
+
+addEvent("tagup:fileCutsceneReleased", true)
+addEventHandler("tagup:fileCutsceneReleased", resourceRoot, function(sceneId, result)
+    local player, scene = client, mission.fileCutscene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or scene.releasedPlayers[player] then
+        return
+    end
+    if result ~= "released" then
+        return failFileCutscene(scene, "Le cleanup natif de SWEET1A a echoue sur un client.")
+    end
+    scene.releasedPlayers[player] = true
+    if not allFileCutscenePlayers(scene, "releasedPlayers") then
+        return
+    end
+
+    cancelFileCutscene("completed", false)
+    if not createMissionEntities(mission.leader) then
+        return failMission("Les entites de mission n'ont pas pu etre creees apres SWEET1A.")
+    end
+    outputDebugString(("[tagging-up-turf] SWEET1A #%d cleared on every participant; starting world intro"):format(tonumber(sceneId)))
+    startIntroScene()
+end)
+
+startIntroScene = function()
+    local leader, sweet = mission.leader, mission.entities.sweet
+    if not isElement(leader) or not isElement(sweet) then
+        return failMission("Sweet ou le leader est indisponible pour la scene d'intro.")
+    end
+    local profile = TAGUP.introScene
+    setElementPosition(leader, profile.leaderStart.x, profile.leaderStart.y, profile.leaderStart.z)
+    setElementRotation(leader, 0, 0, profile.leaderStart.heading)
+    -- CREATE_CHAR adds 1.0 to the script Z before native placement.
+    setElementPosition(sweet, profile.sweetStart.x, profile.sweetStart.y, profile.sweetStart.z + 1.0)
+    setElementRotation(sweet, 0, 0, profile.sweetStart.heading)
+    setElementSyncer(sweet, leader, true, true)
+
+    local smoke = createScmChar(profile.smoke.model, profile.smoke.start.x, profile.smoke.start.y, profile.smoke.start.z,
+                                profile.smoke.start.heading)
+    if not smoke then
+        return failMission("Big Smoke n'a pas pu etre cree pour la scene d'intro.")
+    end
+    setElementDimension(smoke, TAGUP.dimension)
+    setElementData(smoke, TAGUP.missionActorData, true, true)
+    -- SWEET1 assigns Smoke's FATMAN motion group to this mission actor.
+    setPedWalkingStyle(smoke, profile.smoke.walkingStyle)
+    setElementSyncer(smoke, leader, true, true)
+    mission.entities.smoke = smoke
+
+    mission.introSceneSerial = mission.introSceneSerial + 1
+    local scene = {
+        id = mission.introSceneSerial,
+        players = {},
+        readyPlayers = {},
+        lineIndex = 1,
+        requestedAt = getTickCount(),
+    }
+    for _, player in ipairs(mission.party) do
+        if isElement(player) then
+            table.insert(scene.players, player)
+        end
+    end
+    mission.introScene = scene
+    mission.introEntryPending = false
+    scene.readyGuardTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.introScene
+        if active and active.id == expectedId then
+            failIntroScene(active, "La preparation de la scene d'intro a depasse son delai de garde.")
+        end
+    end, profile.readyTimeout, 1, scene.id))
+
+    setStage("intro")
+    for _, player in ipairs(scene.players) do
+        triggerClientEvent(player, "tagup:introScenePrepare", resourceRoot, scene.id, sweet, smoke)
+    end
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d preparing fixed camera and SWE1_AA for %d participant(s)"):format(
+                          scene.id, #scene.players))
+end
+
+addEvent("tagup:introSceneReady", true)
+addEventHandler("tagup:introSceneReady", resourceRoot, function(sceneId, result, details)
+    local player, scene = client, mission.introScene
+    if source ~= resourceRoot or not scene or mission.stage ~= "intro" or scene.id ~= tonumber(sceneId) or
+        not isMissionPlayer(player) or scene.readyPlayers[player] or scene.started then
+        return
+    end
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d ready player=%s result=%s (%s)"):format(
+                          scene.id, getPlayerName(player), tostring(result), tostring(details or ""):sub(1, 180)))
+    if result ~= "ready" then
+        return failIntroScene(scene, "La preparation de la scene d'intro a echoue sur un client: " .. tostring(result))
+    end
+    scene.readyPlayers[player] = true
+    if not allIntroScenePlayers(scene, "readyPlayers") then
+        return
+    end
+
+    scene.started = true
+    scene.startedAt = getTickCount()
+    scene.audioReadyPlayers = scene.readyPlayers
+    if isTimer(scene.readyGuardTimer) then
+        killTimer(scene.readyGuardTimer)
+        scene.readyGuardTimer = nil
+    end
+    setElementFrozen(mission.leader, false)
+    for _, member in ipairs(scene.players) do
+        if isElement(member) then
+            triggerClientEvent(member, "tagup:introSceneStart", resourceRoot, scene.id)
+        end
+    end
+    scene.startTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.introScene
+        if active and active.id == expectedId then
+            failIntroScene(active, "Les tasks de marche natives de l'intro n'ont pas ete acceptees a temps.")
+        end
+    end, 3000, 1, scene.id))
+end)
+
+addEvent("tagup:introSceneTasksStarted", true)
+addEventHandler("tagup:introSceneTasksStarted", resourceRoot, function(sceneId, smokeAccepted, sweetAccepted, leaderAccepted)
+    local scene = mission.introScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or not scene.started or
+        scene.tasksReported then
+        return
+    end
+    scene.tasksReported = true
+    if smokeAccepted ~= true or sweetAccepted ~= true or leaderAccepted ~= true then
+        return failIntroScene(scene, ("Une task de marche native de l'intro a ete refusee (Smoke=%s Sweet=%s leader=%s)."):format(
+                                  tostring(smokeAccepted), tostring(sweetAccepted), tostring(leaderAccepted)))
+    end
+    if isTimer(scene.startTimer) then
+        killTimer(scene.startTimer)
+        scene.startTimer = nil
+    end
+    local elapsed = getTickCount() - (scene.startedAt or getTickCount())
+    local delay = math.max(50, math.floor(TAGUP.introScene.camera.fadeInDuration * 1000 + 0.5) - elapsed)
+    scene.startTimer = rememberTimer(setTimer(function(expectedId)
+        local active = mission.introScene
+        if active and active.id == expectedId then
+            playIntroSceneLine(active, 1)
+        end
+    end, delay, 1, scene.id))
+end)
+
+addEvent("tagup:introSceneAudioReady", true)
+addEventHandler("tagup:introSceneAudioReady", resourceRoot, function(sceneId, lineIndex, result, details)
+    local player, scene = client, mission.introScene
+    lineIndex = tonumber(lineIndex)
+    if source ~= resourceRoot or not scene or mission.stage ~= "intro" or scene.id ~= tonumber(sceneId) or
+        scene.lineIndex ~= lineIndex or scene.audioStarted or not isMissionPlayer(player) or scene.audioReadyPlayers[player] then
+        return
+    end
+    if result ~= "ready" then
+        return failIntroScene(scene, ("Le chargement de la replique d'intro %d a echoue sur un client: %s"):format(
+                                  lineIndex or -1, tostring(result)))
+    end
+    scene.audioReadyPlayers[player] = true
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d line=%d ready on %s (%s)"):format(
+                          scene.id, lineIndex, getPlayerName(player), tostring(details or ""):sub(1, 180)))
+    if allIntroScenePlayers(scene, "audioReadyPlayers") then
+        playIntroSceneLine(scene, lineIndex)
+    end
+end)
+
+addEvent("tagup:introSceneAudioFinished", true)
+addEventHandler("tagup:introSceneAudioFinished", resourceRoot, function(sceneId, lineIndex, result, elapsed)
+    local player, scene = client, mission.introScene
+    lineIndex = tonumber(lineIndex)
+    if source ~= resourceRoot or not scene or mission.stage ~= "intro" or scene.id ~= tonumber(sceneId) or
+        scene.lineIndex ~= lineIndex or not scene.audioStarted or not isMissionPlayer(player) or scene.audioFinishedPlayers[player] then
+        return
+    end
+    if result ~= "finished" then
+        return failIntroScene(scene, ("La replique d'intro %d a echoue sur un client: %s"):format(
+                                  lineIndex or -1, tostring(result)))
+    end
+    scene.audioFinishedPlayers[player] = true
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d line=%d natural finish on %s after %s ms"):format(
+                          scene.id, lineIndex, getPlayerName(player), tostring(elapsed or "?")))
+    if not allIntroScenePlayers(scene, "audioFinishedPlayers") then
+        return
+    end
+    if isTimer(scene.audioGuardTimer) then
+        killTimer(scene.audioGuardTimer)
+        scene.audioGuardTimer = nil
+    end
+    if lineIndex == 1 then
+        for _, member in ipairs(scene.players) do
+            if isElement(member) then
+                triggerClientEvent(member, "tagup:introSceneTrack", resourceRoot, scene.id)
+            end
+        end
+    end
+    if lineIndex < #TAGUP.introScene.audio then
+        scene.nextLineTimer = rememberTimer(setTimer(function(expectedId, nextLine)
+            local active = mission.introScene
+            if active and active.id == expectedId then
+                prepareIntroSceneLine(active, nextLine)
+            end
+        end, TAGUP.introScene.audioGap, 1, scene.id, lineIndex + 1))
+    else
+        scene.releaseTimer = rememberTimer(setTimer(function(expectedId)
+            local active = mission.introScene
+            if not active or active.id ~= expectedId then
+                return
+            end
+            local sweet = mission.entities.sweet
+            if not isElement(sweet) then
+                return failIntroScene(active, "Sweet a disparu avant le placement final de la scene d'intro.")
+            end
+            local final = TAGUP.introScene.sweetFinal
+            setElementPosition(sweet, final.x, final.y, final.z)
+            setElementRotation(sweet, 0, 0, final.heading)
+            active.finalWaitElapsed = true
+            if active.entryAccepted then
+                requestIntroSceneRelease(active)
+            elseif not active.entryReported then
+                active.entryReportGuardTimer = rememberTimer(setTimer(function(guardedId)
+                    local guarded = mission.introScene
+                    if guarded and guarded.id == guardedId and not guarded.entryReported then
+                        failIntroScene(guarded, "Sweet n'a pas accepte sa task d'entree passager pendant SWE1_AE.")
+                    end
+                end, TAGUP.introScene.entryRequestTimeout, 1, active.id))
+            end
+        end, TAGUP.introScene.postAudioWait, 1, scene.id))
+    end
+end)
+
+addEvent("tagup:introSceneEntryRequested", true)
+addEventHandler("tagup:introSceneEntryRequested", resourceRoot, function(sceneId, sweet, vehicle, accepted)
+    local scene = mission.introScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or scene.lineIndex ~= 5 or
+        sweet ~= mission.entities.sweet or vehicle ~= mission.entities.vehicle or scene.entryReported then
+        return
+    end
+    scene.entryReported = true
+    scene.entryAccepted = accepted == true
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d Sweet passenger task accepted=%s"):format(
+                          scene.id, tostring(scene.entryAccepted)))
+    if not scene.entryAccepted then
+        return failIntroScene(scene, "La task native d'entree passager de Sweet a ete refusee pendant SWE1_AE.")
+    end
+    mission.introEntryPending = true
+    if isTimer(scene.entryReportGuardTimer) then
+        killTimer(scene.entryReportGuardTimer)
+        scene.entryReportGuardTimer = nil
+    end
+    if scene.finalWaitElapsed then
+        requestIntroSceneRelease(scene)
+    end
+end)
+
+addEvent("tagup:introSceneLeaseLost", true)
+addEventHandler("tagup:introSceneLeaseLost", resourceRoot, function(sceneId)
+    local scene = mission.introScene
+    if source == resourceRoot and scene and scene.id == tonumber(sceneId) and isMissionPlayer(client) then
+        failIntroScene(scene, "Un client a perdu la camera native pendant la scene d'intro.")
+    end
+end)
+
+addEvent("tagup:introSceneReleased", true)
+addEventHandler("tagup:introSceneReleased", resourceRoot, function(sceneId, result)
+    local player, scene = client, mission.introScene
+    if source ~= resourceRoot or not scene or not scene.releasing or scene.id ~= tonumber(sceneId) or
+        not isMissionPlayer(player) or scene.releasedPlayers[player] then
+        return
+    end
+    if result ~= "released" then
+        return failIntroScene(scene, "Un client n'a pas pu restaurer la camera d'intro.")
+    end
+    scene.releasedPlayers[player] = true
+    if not allIntroScenePlayers(scene, "releasedPlayers") then
+        return
+    end
+
+    local sweet, vehicle = mission.entities.sweet, mission.entities.vehicle
+    local seated = isElement(sweet) and getPedOccupiedVehicle(sweet) == vehicle and getPedOccupiedVehicleSeat(sweet) == 1
+    cancelIntroScene("completed", false)
+    mission.introEntryPending = not seated
+    for _, member in ipairs(mission.party) do
+        if isElement(member) then
+            setElementFrozen(member, false)
+        end
+    end
+    setStage("enter_car", {message = seated and "Sweet est a bord. Montez dans la Greenwood." or
+                                      "Montez dans la Greenwood pendant que Sweet prend sa place."})
+    if not seated then
+        mission.introEntryGuardTimer = rememberTimer(setTimer(function()
+            if mission.running and mission.stage == "enter_car" and mission.introEntryPending then
+                mission.introEntryPending = false
+                failMission("Sweet n'a pas termine son entree passager dans le delai SCM.")
+            end
+        end, TAGUP.introScene.entryTimeout, 1))
+    end
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d completed; Sweet passenger seated=%s"):format(
+                          tonumber(sceneId), tostring(seated)))
+end)
+
+createScmChar = function(model, x, y, scriptZ, heading)
     -- GTA's CREATE_CHAR adds 1.0 to the script Z before placing the ped.
     -- MTA's createPed consumes the element Z directly, so this conversion
     -- belongs to the SCM opcode adapter rather than to createPed itself.
@@ -803,6 +1403,7 @@ failMission = function(reason)
     end
     -- A failure must not leave a resource-owned control inhibitor alive during
     -- the failure banner. The scene cancel restores every local camera lease.
+    cancelIntroScene("mission_failed")
     cancelDemoLeave("mission_failed")
     cancelDemoWalk("mission_failed")
     cancelDemoShoot("mission_failed")
@@ -929,6 +1530,8 @@ finishMission = function(passed, traceExtra)
     end
 
     mission.finishing = true
+    cancelFileCutscene("mission_finished")
+    cancelIntroScene("mission_finished")
     cancelDemoLeave("mission_finished")
     cancelDemoWalk("mission_finished")
     cancelDemoShoot("mission_finished")
@@ -988,6 +1591,10 @@ finishMission = function(passed, traceExtra)
         mission.checkpointGroundPending = {}
         mission.vehiclePlayback = nil
         mission.postRoofScene = nil
+        mission.introScene = nil
+        mission.introEntryPending = false
+        mission.introEntryGuardTimer = nil
+        mission.fileCutscene = nil
     end, delay, 1)
 end
 
@@ -1012,6 +1619,52 @@ local function setupMissionPlayers()
     end
 end
 
+createMissionEntities = function(requester)
+    local vehicle = createVehicle(TAGUP.vehicleModel, TAGUP.start[1], TAGUP.start[2], TAGUP.start[3], 0, 0, TAGUP.start[4])
+    if not vehicle then
+        return false
+    end
+    setElementDimension(vehicle, TAGUP.dimension)
+    setVehicleColor(vehicle, 25, 86, 39, 25, 86, 39)
+    setVehicleEngineState(vehicle, true)
+    mission.entities.vehicle = vehicle
+
+    local sweetStart = TAGUP.introScene.sweetStart
+    local sweet = createScmChar(TAGUP.sweetModel, sweetStart.x, sweetStart.y, sweetStart.z, sweetStart.heading)
+    if not sweet then
+        return false
+    end
+    setElementDimension(sweet, TAGUP.dimension)
+    setElementData(sweet, "tagup.sweet", true, true)
+    -- GTA's CREATE_CHAR marks story actors as PED_MISSION. Replicate the
+    -- policy so every client applies it before becoming Sweet's syncer.
+    setElementData(sweet, TAGUP.missionActorData, true, true)
+    -- SWEET1 assigns Sweet's GANG2 motion group for the lifetime of this ped.
+    setPedWalkingStyle(sweet, TAGUP.introScene.sweetWalkingStyle)
+    setElementHealth(sweet, 500)
+    giveWeapon(sweet, TAGUP.sprayWeapon, 30000, true)
+    mission.entities.sweet = sweet
+    setElementSyncer(sweet, requester)
+
+    for _, tag in ipairs(TAGUP.tags) do
+        mission.tagProgress[tag.id] = 0
+        if not createTagObject(tag) then
+            return false
+        end
+    end
+
+    local demo = TAGUP.demoTag
+    local demoObject = createObject(TAGUP.tagModel, demo.x, demo.y, demo.z, 0, 0, demo.rotation)
+    if not demoObject then
+        return false
+    end
+    setElementDimension(demoObject, TAGUP.dimension)
+    setElementCollisionsEnabled(demoObject, false)
+    setElementData(demoObject, "tagup.paintAlpha", 0, true)
+    mission.entities.demoTag = demoObject
+    return true
+end
+
 local function startMission(requester, checkpoint)
     if mission.running then
         outputChatBox("Tagging Up Turf est deja en cours.", requester, 255, 190, 80)
@@ -1032,32 +1685,17 @@ local function startMission(requester, checkpoint)
 
     setupMissionPlayers()
 
-    local vehicle = createVehicle(TAGUP.vehicleModel, TAGUP.start[1], TAGUP.start[2], TAGUP.start[3], 0, 0, TAGUP.start[4])
-    setElementDimension(vehicle, TAGUP.dimension)
-    setVehicleColor(vehicle, 25, 86, 39, 25, 86, 39)
-    setVehicleEngineState(vehicle, true)
-    mission.entities.vehicle = vehicle
-
-    local sweet = createPed(TAGUP.sweetModel, unpack(TAGUP.sweetStart))
-    setElementDimension(sweet, TAGUP.dimension)
-    setElementData(sweet, "tagup.sweet", true, true)
-    -- GTA's CREATE_CHAR marks story actors as PED_MISSION. Replicate the
-    -- policy so every client applies it before becoming Sweet's syncer.
-    setElementData(sweet, TAGUP.missionActorData, true, true)
-    mission.entities.sweet = sweet
-    setElementSyncer(sweet, requester)
-
-    for _, tag in ipairs(TAGUP.tags) do
-        mission.tagProgress[tag.id] = 0
-        createTagObject(tag)
+    if not checkpoint then
+        startFileCutscene()
+        return
     end
 
-    local demo = TAGUP.demoTag
-    local demoObject = createObject(TAGUP.tagModel, demo.x, demo.y, demo.z, 0, 0, demo.rotation)
-    setElementDimension(demoObject, TAGUP.dimension)
-    setElementCollisionsEnabled(demoObject, false)
-    setElementData(demoObject, "tagup.paintAlpha", 0, true)
-    mission.entities.demoTag = demoObject
+    if not createMissionEntities(requester) then
+        return failMission("Les entites du checkpoint n'ont pas pu etre creees.")
+    end
+    local vehicle = mission.entities.vehicle
+    local sweet = mission.entities.sweet
+    local demoObject = mission.entities.demoTag
 
     if checkpoint == "pickup" then
         for _, tagId in ipairs({1, 2, 3, 4, 5}) do
@@ -1248,22 +1886,6 @@ local function startMission(requester, checkpoint)
         return
     end
 
-    setStage("intro")
-    rememberTimer(setTimer(function()
-        if not mission.running or mission.stage ~= "intro" then
-            return
-        end
-        for _, player in ipairs(mission.party) do
-            if isElement(player) then
-                setElementFrozen(player, false)
-            end
-        end
-        if warpSweetIntoFirstFreeSeat() then
-            setStage("enter_car", {message = "Sweet vous attend dans la Greenwood."})
-        else
-            failMission("Sweet n'a pas pu monter dans la Greenwood.")
-        end
-    end, 7000, 1))
 end
 
 addEvent("tagup:checkpointGroundReady", true)
@@ -1772,6 +2394,13 @@ addCommandHandler("tagup", function(player)
     startMission(player)
 end)
 
+addCommandHandler("tagupsweet1a", function(player)
+    if not player then
+        return
+    end
+    startMission(player)
+end)
+
 addCommandHandler("tagupballas", function(player)
     if not player then
         return
@@ -1810,7 +2439,18 @@ addCommandHandler("tagupskip", function(player)
     if not mission.running or player ~= mission.leader then
         return
     end
-    if mission.stage == "intro" then
+    if mission.stage == "sweet1a" and mission.fileCutscene then
+        local scene = mission.fileCutscene
+        if not scene.skipRequested then
+            scene.skipRequested = true
+            for _, member in ipairs(scene.players) do
+                if isElement(member) then
+                    triggerClientEvent(member, "tagup:fileCutsceneSkip", resourceRoot, scene.id)
+                end
+            end
+        end
+    elseif mission.stage == "intro" then
+        cancelIntroScene("stage_skipped")
         for _, member in ipairs(mission.party) do
             setElementFrozen(member, false)
         end
@@ -3025,7 +3665,14 @@ addEventHandler("tagup:vehicleReady", resourceRoot, function(kind, reportedX, re
     end
 
     if kind == "party" and mission.stage == "enter_car" and isPartyInVehicle() then
-        if warpSweetIntoFirstFreeSeat() then
+        local sweet = mission.entities.sweet
+        if isElement(sweet) and getPedOccupiedVehicle(sweet) == vehicle and getPedOccupiedVehicleSeat(sweet) == 1 then
+            mission.introEntryPending = false
+            setStage("drive_idlewood", {message = "Sweet est a bord. Direction Idlewood."})
+        elseif mission.introEntryPending then
+            broadcastState({message = "Attendez que Sweet finisse de monter."})
+        elseif warpSweetIntoFirstFreeSeat() then
+            -- Debug checkpoints and /tagupskip do not execute the intro task.
             setStage("drive_idlewood", {message = "Sweet est a bord. Direction Idlewood."})
         else
             broadcastState({message = "Impossible d'installer Sweet dans la voiture."})
@@ -3217,6 +3864,21 @@ addEventHandler("tagup:sweetReturnEnterResult", resourceRoot, function(enterId, 
 end)
 
 addEventHandler("onVehicleEnter", root, function(ped, seat)
+    if mission.running and source == mission.entities.vehicle and ped == mission.entities.sweet and mission.introEntryPending then
+        if tonumber(seat) ~= 1 then
+            mission.introEntryPending = false
+            clearIntroEntryGuard()
+            return failMission("Sweet est monte dans le mauvais siege apres la scene d'intro.")
+        end
+        mission.introEntryPending = false
+        clearIntroEntryGuard()
+        outputDebugString("[tagging-up-turf] Server observed Sweet complete the intro passenger-entry task in seat 1")
+        if mission.stage == "enter_car" and isPartyInVehicle() then
+            setStage("drive_idlewood", {message = "Sweet est a bord. Direction Idlewood."})
+        end
+        return
+    end
+
     local enter = mission.demoEnter
     if not mission.running or not enter or source ~= enter.vehicle or ped ~= enter.ped then
         return
@@ -3243,7 +3905,9 @@ end)
 
 addEventHandler("onElementDestroy", root, function()
     if mission.running and (source == mission.entities.sweet or source == mission.entities.vehicle) and
-        (mission.demoScene or mission.demoLeave or mission.demoWalk or mission.demoShoot or mission.demoEnter or mission.ballasDeparture) then
+        (mission.introScene or mission.demoScene or mission.demoLeave or mission.demoWalk or mission.demoShoot or mission.demoEnter or
+            mission.ballasDeparture) then
+        cancelIntroScene("ped_destroyed")
         cancelDemoScene("ped_destroyed")
         cancelDemoLeave("ped_destroyed")
         cancelDemoWalk("ped_destroyed")
@@ -3251,12 +3915,15 @@ addEventHandler("onElementDestroy", root, function()
         cancelDemoEnter("ped_destroyed")
         cancelBallasDeparture("ped_destroyed")
         failMission("Sweet ou la Greenwood a ete detruit pendant sa demonstration native.")
+    elseif mission.running and mission.introScene and source == mission.entities.smoke then
+        cancelIntroScene("smoke_destroyed")
+        failMission("Big Smoke a ete detruit pendant la scene d'intro.")
     end
 end)
 
 addEventHandler("onPlayerWasted", root, function()
     if mission.running and isMissionPlayer(source) then
-        if mission.demoScene or mission.ballasGangScene then
+        if mission.introScene or mission.demoScene or mission.ballasGangScene then
             failMission("Un membre de l'equipe est mort pendant une scene de mission.")
             return
         end
@@ -3280,6 +3947,8 @@ addEventHandler("onPlayerQuit", root, function()
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
+    cancelFileCutscene("resource_stopped")
+    cancelIntroScene("resource_stopped")
     cancelDemoLeave("resource_stopped")
     cancelDemoWalk("resource_stopped")
     cancelDemoShoot("resource_stopped")
@@ -3295,5 +3964,5 @@ addEventHandler("onResourceStop", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[tagging-up-turf] Ready. Use /tagup, /tagupidlewood, /tagupdeparture, /tagupballas, or /taguppickup (up to three connected players).")
+    outputDebugString("[tagging-up-turf] Ready. Use /tagup or /tagupsweet1a for SWEET1A, plus the existing checkpoint commands (up to three connected players).")
 end)

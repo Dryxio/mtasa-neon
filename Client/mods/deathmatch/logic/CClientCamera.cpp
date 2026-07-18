@@ -624,7 +624,8 @@ void CClientCamera::Reset()
 
 std::uint32_t CClientCamera::AcquireScriptCamera(CResource* owner, bool inhibitControls)
 {
-    if (!owner || m_pScriptCameraOwner || !m_pCamera || !g_pGame || g_pGame->GetSystemState() != SystemState::GS_PLAYING_GAME)
+    if (!owner || m_pScriptCameraOwner || !m_pCamera || !g_pGame || g_pGame->GetSystemState() != SystemState::GS_PLAYING_GAME ||
+        g_pGame->IsFileCutsceneActive())
         return 0;
 
     m_bScriptCameraPreviousFixed = m_bFixed;
@@ -651,7 +652,63 @@ std::uint32_t CClientCamera::AcquireScriptCamera(CResource* owner, bool inhibitC
     if (m_uiScriptCameraToken == 0)
         ++m_uiScriptCameraToken;
     m_pScriptCameraOwner = owner;
+    m_bFileCutsceneLease = false;
+    m_bFileCutsceneStarted = false;
     return m_uiScriptCameraToken;
+}
+
+bool CClientCamera::BeginFileCutscene(CResource* owner, std::uint32_t token, const char* name)
+{
+    if (!HasScriptCameraLease(owner, token) || m_bFileCutsceneLease || !g_pGame || !g_pGame->LoadFileCutscene(name))
+        return false;
+
+    // The same lease that snapshots camera and controls must also own the
+    // CCutsceneMgr teardown. This prevents a server camera takeover or
+    // resource stop from restoring gameplay while native playback continues.
+    m_bFileCutsceneLease = true;
+    m_bFileCutsceneStarted = false;
+    return true;
+}
+
+bool CClientCamera::IsFileCutsceneLeaseActive(const CResource* owner, std::uint32_t token) const
+{
+    return m_bFileCutsceneLease && HasScriptCameraLease(owner, token);
+}
+
+bool CClientCamera::IsFileCutsceneLoaded(const CResource* owner, std::uint32_t token) const
+{
+    return IsFileCutsceneLeaseActive(owner, token) && g_pGame && g_pGame->IsFileCutsceneLoaded();
+}
+
+bool CClientCamera::StartFileCutscene(CResource* owner, std::uint32_t token)
+{
+    if (!IsFileCutsceneLoaded(owner, token) || m_bFileCutsceneStarted || !g_pGame->StartFileCutscene())
+        return false;
+
+    m_bFileCutsceneStarted = true;
+    return true;
+}
+
+bool CClientCamera::HasFileCutsceneFinished(const CResource* owner, std::uint32_t token) const
+{
+    // Native HasCutsceneFinished returns true when no DAT is present, including
+    // before start. Require this lease's accepted start before exposing it.
+    return IsFileCutsceneLeaseActive(owner, token) && m_bFileCutsceneStarted && g_pGame && g_pGame->HasFileCutsceneFinished();
+}
+
+bool CClientCamera::IsFileCutsceneSkipInputPressed(const CResource* owner, std::uint32_t token) const
+{
+    return IsFileCutsceneLeaseActive(owner, token) && m_bFileCutsceneStarted && g_pGame && g_pGame->IsFileCutsceneSkipInputPressed();
+}
+
+bool CClientCamera::WasFileCutsceneSkipped(const CResource* owner, std::uint32_t token) const
+{
+    return IsFileCutsceneLeaseActive(owner, token) && m_bFileCutsceneStarted && g_pGame && g_pGame->WasFileCutsceneSkipped();
+}
+
+bool CClientCamera::SkipFileCutscene(CResource* owner, std::uint32_t token)
+{
+    return IsFileCutsceneLeaseActive(owner, token) && m_bFileCutsceneStarted && g_pGame && g_pGame->SkipFileCutscene();
 }
 
 bool CClientCamera::ReleaseScriptCamera(CResource* owner, std::uint32_t token, bool preserveFade)
@@ -684,6 +741,11 @@ void CClientCamera::RestoreScriptCameraLease(bool preserveFade)
 {
     if (!m_pScriptCameraOwner)
         return;
+
+    if (m_bFileCutsceneLease && g_pGame)
+        g_pGame->DeleteFileCutscene();
+    m_bFileCutsceneLease = false;
+    m_bFileCutsceneStarted = false;
 
     // Clear ownership before restoring legacy MTA camera state so any internal
     // setter reached during restoration cannot observe a stale active lease.

@@ -354,4 +354,17 @@ public:
     // additions shared by Core, Client Deathmatch, and Game SA.
     virtual bool VerifyNativeWorldStartupBeforeStartGame() = 0;
     virtual void CancelNativeWorldStartupActivation() = 0;
+
+    // GTA file cutscenes own global camera, streaming, audio and player-safe
+    // state. Keep every fixed-address operation behind Game SA and append this
+    // surface so existing cross-module vtable slots remain unchanged.
+    virtual bool LoadFileCutscene(const char* name) = 0;
+    virtual bool IsFileCutsceneActive() const = 0;
+    virtual bool IsFileCutsceneLoaded() const = 0;
+    virtual bool StartFileCutscene() = 0;
+    virtual bool HasFileCutsceneFinished() const = 0;
+    virtual bool IsFileCutsceneSkipInputPressed() const = 0;
+    virtual bool WasFileCutsceneSkipped() const = 0;
+    virtual bool SkipFileCutscene() = 0;
+    virtual bool DeleteFileCutscene() = 0;
 };

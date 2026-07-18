@@ -30,7 +30,14 @@ namespace
     {
         CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
         CResource*     owner = GetCallingResource(luaVM);
-        return camera && camera->HasScriptCameraLease(owner, token) ? camera : nullptr;
+        return camera && camera->HasScriptCameraLease(owner, token) && !camera->IsFileCutsceneLeaseActive(owner, token) ? camera : nullptr;
+    }
+
+    CClientCamera* GetOwnedFileCutscene(lua_State* luaVM, unsigned int token)
+    {
+        CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
+        CResource*     owner = GetCallingResource(luaVM);
+        return camera && camera->IsFileCutsceneLeaseActive(owner, token) ? camera : nullptr;
     }
 
     bool IsScriptCameraActive()
@@ -82,6 +89,18 @@ void CLuaCameraDefs::LoadFunctions()
         {"isScriptCameraTrackRunning", ArgumentParser<IsScriptCameraTrackRunning>},
         {"setScriptCameraWidescreen", ArgumentParser<SetScriptCameraWidescreen>},
         {"setScriptCameraNearClip", ArgumentParser<SetScriptCameraNearClip>},
+
+        {"requestFileCutscene", ArgumentParser<RequestFileCutscene>},
+        {"isFileCutsceneLeaseActive", ArgumentParser<IsFileCutsceneLeaseActive>},
+        {"isFileCutsceneLoaded", ArgumentParser<IsFileCutsceneLoaded>},
+        {"startFileCutscene", ArgumentParser<StartFileCutscene>},
+        {"fadeFileCutscene", ArgumentParser<FadeFileCutscene>},
+        {"isFileCutsceneFading", ArgumentParser<IsFileCutsceneFading>},
+        {"isFileCutsceneFinished", ArgumentParser<IsFileCutsceneFinished>},
+        {"isFileCutsceneSkipInputPressed", ArgumentParser<IsFileCutsceneSkipInputPressed>},
+        {"wasFileCutsceneSkipped", ArgumentParser<WasFileCutsceneSkipped>},
+        {"skipFileCutscene", ArgumentParser<SkipFileCutscene>},
+        {"releaseFileCutscene", ArgumentParser<ReleaseFileCutscene>},
     };
 
     // Add functions
@@ -776,4 +795,91 @@ bool CLuaCameraDefs::SetScriptCameraNearClip(lua_State* luaVM, unsigned int toke
         return false;
     g_pGame->GetCamera()->SetScriptNearClip(value);
     return true;
+}
+
+std::variant<unsigned int, bool> CLuaCameraDefs::RequestFileCutscene(lua_State* luaVM, std::string name)
+{
+    CResource*     owner = GetCallingResource(luaVM);
+    CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
+    if (!owner || !camera)
+        return false;
+
+    const unsigned int token = camera->AcquireScriptCamera(owner, true);
+    if (!token)
+        return false;
+
+    if (!camera->BeginFileCutscene(owner, token, name.c_str()))
+    {
+        camera->ReleaseScriptCamera(owner, token);
+        return false;
+    }
+    return token;
+}
+
+bool CLuaCameraDefs::IsFileCutsceneLeaseActive(lua_State* luaVM, unsigned int token)
+{
+    return GetOwnedFileCutscene(luaVM, token) != nullptr;
+}
+
+bool CLuaCameraDefs::IsFileCutsceneLoaded(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->IsFileCutsceneLoaded(GetCallingResource(luaVM), token);
+}
+
+bool CLuaCameraDefs::StartFileCutscene(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->StartFileCutscene(GetCallingResource(luaVM), token);
+}
+
+bool CLuaCameraDefs::FadeFileCutscene(lua_State* luaVM, unsigned int token, bool fadeIn, float durationSeconds, std::optional<unsigned char> red,
+                                      std::optional<unsigned char> green, std::optional<unsigned char> blue)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    if (!camera || !std::isfinite(durationSeconds) || durationSeconds < 0.0f || durationSeconds > 60.0f)
+        return false;
+
+    if (fadeIn)
+        camera->FadeIn(durationSeconds);
+    else
+        camera->FadeOut(durationSeconds, red.value_or(0), green.value_or(0), blue.value_or(0));
+    return true;
+}
+
+bool CLuaCameraDefs::IsFileCutsceneFading(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && g_pGame && g_pGame->GetCamera() && g_pGame->GetCamera()->IsFading();
+}
+
+bool CLuaCameraDefs::IsFileCutsceneFinished(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->HasFileCutsceneFinished(GetCallingResource(luaVM), token);
+}
+
+bool CLuaCameraDefs::IsFileCutsceneSkipInputPressed(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->IsFileCutsceneSkipInputPressed(GetCallingResource(luaVM), token);
+}
+
+bool CLuaCameraDefs::WasFileCutsceneSkipped(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->WasFileCutsceneSkipped(GetCallingResource(luaVM), token);
+}
+
+bool CLuaCameraDefs::SkipFileCutscene(lua_State* luaVM, unsigned int token)
+{
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->SkipFileCutscene(GetCallingResource(luaVM), token);
+}
+
+bool CLuaCameraDefs::ReleaseFileCutscene(lua_State* luaVM, unsigned int token, std::optional<bool> preserveFade)
+{
+    CResource*     owner = GetCallingResource(luaVM);
+    CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
+    return camera && camera->ReleaseScriptCamera(owner, token, preserveFade.value_or(false));
 }

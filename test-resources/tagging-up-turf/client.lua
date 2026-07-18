@@ -20,7 +20,8 @@ local state = {
     lastArrivalAcquireAttempt = 0,
     allWheelsMismatchStage = nil,
     allWheelsPassedStage = nil,
-    introCamera = false,
+    fileCutscene = nil,
+    introScene = nil,
     demoLeave = nil,
     demoWalk = nil,
     demoShoot = nil,
@@ -238,7 +239,8 @@ end)
 -- substitutes so footage cannot imply that the whole SCM runtime already exists.
 local MISSION_TRACE_SEQUENCE = {
     {id = "mission_start", title = "MISSION START", detail = "LUA ORCHESTRATION · server authority"},
-    {id = "intro_camera", title = "INTRO CAMERA + TIMER", detail = "LUA SUBSTITUTE · camera 6500 / gate 7000 ms"},
+    {id = "file_cutscene", title = "SWEET1A FILE CUTSCENE", detail = "NATIVE VERIFIED · DAT/CUT/IFP + track 739"},
+    {id = "intro_camera", title = "SCM WORLD INTRO", detail = "NATIVE VERIFIED · fixed shot / 13 s vector track / SWE1_AA-AE"},
     {id = "enter_car", title = "PARTY IN GREENWOOD", detail = "CO-OP CONDITION · leader driving + party seated"},
     {id = "drive_idlewood", title = "LOCATE CAR AT IDLEWOOD", detail = "SCM GATE · 4 m box + 09D0 all wheels / vehicle anchored"},
     {id = "leave_car", title = "05CD · TASK LEAVE CAR", detail = "NATIVE VERIFIED · MTA vehicle lifecycle"},
@@ -282,6 +284,7 @@ local MISSION_TRACE_SEQUENCE = {
 }
 
 local STAGE_TRACE_STEP = {
+    sweet1a = "file_cutscene",
     intro = "intro_camera",
     enter_car = "enter_car",
     drive_idlewood = "drive_idlewood",
@@ -782,30 +785,516 @@ nearestActiveTag = function()
     return nearest, nearestDistance
 end
 
-local function startIntroCamera()
-    state.introCamera = true
-    setCameraMatrix(2545.0, -1710.0, 24.0, 2514.0, -1668.0, 13.5)
+local function hasFileCutsceneLease(scene)
+    return scene and scene.token and type(isFileCutsceneLeaseActive) == "function" and
+               isFileCutsceneLeaseActive(scene.token)
 end
 
-local function stopIntroCamera()
-    if state.introCamera then
-        setCameraTarget(localPlayer)
-        state.introCamera = false
+local function clearFileCutscene(reason, preserveFade)
+    local scene = state.fileCutscene
+    if not scene then
+        return true
     end
+    for _, name in ipairs({"loadTimer", "finishTimer", "fadeTimer"}) do
+        if isTimer(scene[name]) then
+            killTimer(scene[name])
+        end
+    end
+
+    local released = true
+    if scene.token then
+        if type(releaseFileCutscene) ~= "function" then
+            released = false
+        else
+            local ok, result = pcall(releaseFileCutscene, scene.token, preserveFade == true)
+            released = ok and result == true
+        end
+    end
+    outputDebugString(("[tagging-up-turf] SWEET1A file cutscene #%d cleanup released=%s reason=%s"):format(
+                          tonumber(scene.id) or -1, tostring(released), tostring(reason or "cleanup")),
+                      released and 3 or 2)
+    state.fileCutscene = nil
+    return released
 end
 
-local function updateIntroCamera()
-    if not state.introCamera then
+local function reportFileCutsceneReady(scene, result, details)
+    if not scene or scene.readyReported then
         return
     end
-
-    -- Reasserting the camera every frame prevents freeroam/spawn resources from
-    -- snapping it back to the player's pre-mission position during the intro.
-    local progress = math.min(1, (getTickCount() - state.stageStarted) / 6500)
-    local x, y, z = interpolateBetween(2545.0, -1710.0, 24.0, 2496.0, -1648.0, 18.0, progress, "InOutQuad")
-    local lookX, lookY, lookZ = interpolateBetween(2518.0, -1669.0, 13.5, 2508.0, -1666.0, 13.2, progress, "InOutQuad")
-    setCameraMatrix(x, y, z, lookX, lookY, lookZ)
+    scene.readyReported = true
+    triggerServerEvent("tagup:fileCutsceneReady", resourceRoot, scene.id, result, details)
 end
+
+local function reportFileCutsceneFinished(scene, result)
+    if not scene or scene.finishedReported then
+        return
+    end
+    scene.finishedReported = true
+    local skipped = false
+    if scene.token and type(wasFileCutsceneSkipped) == "function" then
+        local ok, nativeSkipped = pcall(wasFileCutsceneSkipped, scene.token)
+        skipped = ok and nativeSkipped == true
+    end
+    triggerServerEvent("tagup:fileCutsceneFinished", resourceRoot, scene.id, result, skipped,
+                       scene.startedAt and getTickCount() - scene.startedAt or nil)
+end
+
+addEvent("tagup:fileCutscenePrepare", true)
+addEventHandler("tagup:fileCutscenePrepare", resourceRoot, function(sceneId, leaderCanSkip)
+    if source ~= resourceRoot or not state.active or state.stage ~= "sweet1a" then
+        return
+    end
+    clearFileCutscene("replaced", false)
+    local required = {"requestFileCutscene", "releaseFileCutscene", "isFileCutsceneLeaseActive", "isFileCutsceneLoaded",
+                      "startFileCutscene", "fadeFileCutscene", "isFileCutsceneFading", "isFileCutsceneFinished",
+                      "isFileCutsceneSkipInputPressed", "wasFileCutsceneSkipped", "skipFileCutscene"}
+    for _, name in ipairs(required) do
+        if type(_G[name]) ~= "function" then
+            state.fileCutscene = {id = sceneId}
+            return reportFileCutsceneReady(state.fileCutscene, "api_unavailable", name)
+        end
+    end
+    if not ensureMissionText() then
+        state.fileCutscene = {id = sceneId}
+        return reportFileCutsceneReady(state.fileCutscene, "mission_text_unavailable", "SWEET1")
+    end
+
+    local scene = {id = sceneId, leaderCanSkip = leaderCanSkip == true, requestedAt = getTickCount()}
+    state.fileCutscene = scene
+    local ok, token = pcall(requestFileCutscene, TAGUP.fileCutscene.name)
+    if not ok or not token then
+        return reportFileCutsceneReady(scene, "request_refused", tostring(token))
+    end
+    scene.token = token
+    scene.loadTimer = setTimer(function()
+        if state.fileCutscene ~= scene then
+            return
+        end
+        if not hasFileCutsceneLease(scene) then
+            killTimer(scene.loadTimer)
+            scene.loadTimer = nil
+            return reportFileCutsceneReady(scene, "lease_lost", "native cutscene lease ended during load")
+        end
+        local queried, loaded = pcall(isFileCutsceneLoaded, scene.token)
+        if not queried then
+            killTimer(scene.loadTimer)
+            scene.loadTimer = nil
+            return reportFileCutsceneReady(scene, "load_query_failed", tostring(loaded))
+        end
+        if loaded then
+            killTimer(scene.loadTimer)
+            scene.loadTimer = nil
+            reportFileCutsceneReady(scene, "ready", ("loaded in %d ms"):format(getTickCount() - scene.requestedAt))
+        elseif getTickCount() - scene.requestedAt >= TAGUP.fileCutscene.loadTimeout then
+            killTimer(scene.loadTimer)
+            scene.loadTimer = nil
+            reportFileCutsceneReady(scene, "load_timeout", tostring(TAGUP.fileCutscene.loadTimeout))
+        end
+    end, TAGUP.fileCutscene.pollInterval, 0)
+end)
+
+addEvent("tagup:fileCutsceneStart", true)
+addEventHandler("tagup:fileCutsceneStart", resourceRoot, function(sceneId)
+    local scene = state.fileCutscene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or not hasFileCutsceneLease(scene) or scene.startedAt then
+        return
+    end
+    local startedOk, started = pcall(startFileCutscene, scene.token)
+    if not startedOk or started ~= true then
+        triggerServerEvent("tagup:fileCutsceneStarted", resourceRoot, scene.id, "start_refused")
+        return
+    end
+    scene.startedAt = getTickCount()
+    local fadeOk, faded = pcall(fadeFileCutscene, scene.token, true, TAGUP.fileCutscene.fadeInDuration, 0, 0, 0)
+    if not fadeOk or faded ~= true then
+        triggerServerEvent("tagup:fileCutsceneStarted", resourceRoot, scene.id, "fade_in_refused")
+        return
+    end
+    triggerServerEvent("tagup:fileCutsceneStarted", resourceRoot, scene.id, "started")
+    outputDebugString(("[tagging-up-turf] SWEET1A file cutscene #%d native playback started"):format(scene.id))
+
+    scene.finishTimer = setTimer(function()
+        if state.fileCutscene ~= scene or scene.finishedReported then
+            return
+        end
+        if not hasFileCutsceneLease(scene) then
+            killTimer(scene.finishTimer)
+            scene.finishTimer = nil
+            return reportFileCutsceneFinished(scene, "lease_lost")
+        end
+        local queried, finished = pcall(isFileCutsceneFinished, scene.token)
+        if not queried then
+            killTimer(scene.finishTimer)
+            scene.finishTimer = nil
+            return reportFileCutsceneFinished(scene, "finish_query_failed")
+        end
+        if finished then
+            killTimer(scene.finishTimer)
+            scene.finishTimer = nil
+            local fadeOutOk, fadeOut = pcall(fadeFileCutscene, scene.token, false, 0, 0, 0, 0)
+            if not fadeOutOk or fadeOut ~= true then
+                return reportFileCutsceneFinished(scene, "fade_out_refused")
+            end
+            scene.fadeTimer = setTimer(function()
+                if state.fileCutscene ~= scene or scene.finishedReported then
+                    return
+                end
+                local fadeQueried, fading = pcall(isFileCutsceneFading, scene.token)
+                if not fadeQueried then
+                    killTimer(scene.fadeTimer)
+                    scene.fadeTimer = nil
+                    return reportFileCutsceneFinished(scene, "fade_query_failed")
+                end
+                if not fading then
+                    killTimer(scene.fadeTimer)
+                    scene.fadeTimer = nil
+                    reportFileCutsceneFinished(scene, "finished")
+                end
+            end, TAGUP.fileCutscene.pollInterval, 0)
+        elseif getTickCount() - scene.startedAt >= TAGUP.fileCutscene.finishTimeout then
+            killTimer(scene.finishTimer)
+            scene.finishTimer = nil
+            reportFileCutsceneFinished(scene, "finish_timeout")
+        end
+    end, TAGUP.fileCutscene.pollInterval, 0)
+end)
+
+addEvent("tagup:fileCutsceneSkip", true)
+addEventHandler("tagup:fileCutsceneSkip", resourceRoot, function(sceneId)
+    local scene = state.fileCutscene
+    if source == resourceRoot and scene and scene.id == sceneId and hasFileCutsceneLease(scene) then
+        pcall(skipFileCutscene, scene.token)
+    end
+end)
+
+addEvent("tagup:fileCutsceneRelease", true)
+addEventHandler("tagup:fileCutsceneRelease", resourceRoot, function(sceneId)
+    local scene = state.fileCutscene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId then
+        return
+    end
+    local released = clearFileCutscene("completed", true)
+    triggerServerEvent("tagup:fileCutsceneReleased", resourceRoot, sceneId, released and "released" or "release_failed")
+end)
+
+addEvent("tagup:fileCutsceneCancel", true)
+addEventHandler("tagup:fileCutsceneCancel", resourceRoot, function(sceneId, reason)
+    if state.fileCutscene and state.fileCutscene.id == sceneId then
+        clearFileCutscene(reason, false)
+    end
+end)
+
+local function hasIntroSceneLease(scene)
+    return scene and scene.cameraToken and type(isScriptCameraLeaseActive) == "function" and
+               isScriptCameraLeaseActive(scene.cameraToken)
+end
+
+local function releaseIntroSceneAudio(scene)
+    if not scene or not scene.audioHandle then
+        return true
+    end
+    local handle = scene.audioHandle
+    scene.audioHandle = nil
+    if type(releaseMissionAudio) ~= "function" then
+        return false
+    end
+    local ok, result = pcall(releaseMissionAudio, handle)
+    return ok and result ~= false
+end
+
+local function releaseIntroSceneCamera(scene)
+    if not scene or not scene.cameraToken then
+        return true
+    end
+    local token = scene.cameraToken
+    scene.cameraToken = nil
+    if type(releaseScriptCamera) ~= "function" then
+        return false
+    end
+    local ok, result = pcall(releaseScriptCamera, token)
+    return ok and result ~= false
+end
+
+local function clearIntroScene(reason)
+    local scene = state.introScene
+    if not scene then
+        return true
+    end
+    for _, name in ipairs({"prepareTimer", "audioLoadTimer", "audioFinishTimer", "entryTimer", "leaseTimer"}) do
+        if isTimer(scene[name]) then
+            killTimer(scene[name])
+        end
+    end
+    -- SWEET1 clears CJ's primary task before restoring gameplay. Without this,
+    -- the final scripted walk can continue steering the local player.
+    if localPlayer == state.leader and type(killPedTask) == "function" then
+        pcall(killPedTask, localPlayer, "primary", 3, false)
+    end
+    local audioReleased = releaseIntroSceneAudio(scene)
+    local cameraReleased = releaseIntroSceneCamera(scene)
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d cleanup camera=%s audio=%s reason=%s"):format(
+                          scene.id, tostring(cameraReleased), tostring(audioReleased), tostring(reason or "cleanup")),
+                      cameraReleased and audioReleased and 3 or 2)
+    state.introScene = nil
+    return cameraReleased and audioReleased
+end
+
+local function reportIntroSceneReady(scene, result, details)
+    if not scene or scene.readyReported then
+        return
+    end
+    scene.readyReported = true
+    triggerServerEvent("tagup:introSceneReady", resourceRoot, scene.id, result, details)
+end
+
+local function requestIntroSceneAudio(scene, lineIndex, initial)
+    if state.introScene ~= scene or not hasIntroSceneLease(scene) then
+        return
+    end
+    local line = TAGUP.introScene.audio[lineIndex]
+    if not line then
+        return
+    end
+    releaseIntroSceneAudio(scene)
+    local ok, handle = pcall(requestMissionAudio, line.event)
+    if not ok or not handle then
+        if initial then
+            return reportIntroSceneReady(scene, "audio_request_refused", ("event=%d"):format(line.event))
+        end
+        return triggerServerEvent("tagup:introSceneAudioReady", resourceRoot, scene.id, lineIndex, "request_refused")
+    end
+    scene.audioHandle = handle
+    scene.lineIndex = lineIndex
+    scene.audioRequestedAt = getTickCount()
+    scene.audioLoadTimer = setTimer(function()
+        local active = state.introScene
+        if active ~= scene or active.lineIndex ~= lineIndex then
+            return
+        end
+        if not hasIntroSceneLease(active) then
+            killTimer(active.audioLoadTimer)
+            active.audioLoadTimer = nil
+            if initial then
+                reportIntroSceneReady(active, "camera_lost", "lease lost during audio load")
+            else
+                triggerServerEvent("tagup:introSceneAudioReady", resourceRoot, active.id, lineIndex, "camera_lost")
+            end
+            return
+        end
+        local queried, loaded = pcall(isMissionAudioLoaded, active.audioHandle)
+        if not queried then
+            killTimer(active.audioLoadTimer)
+            active.audioLoadTimer = nil
+            if initial then
+                reportIntroSceneReady(active, "audio_query_failed", tostring(loaded))
+            else
+                triggerServerEvent("tagup:introSceneAudioReady", resourceRoot, active.id, lineIndex, "query_failed")
+            end
+        elseif loaded then
+            local actorsReady = localPlayer ~= state.leader or
+                                    (isElementStreamedIn(active.sweet) and isElementSyncer(active.sweet) and
+                                        isElementStreamedIn(active.smoke) and isElementSyncer(active.smoke) and
+                                        isElement(state.vehicle) and isElementStreamedIn(state.vehicle))
+            if not actorsReady then
+                return
+            end
+            killTimer(active.audioLoadTimer)
+            active.audioLoadTimer = nil
+            local details = ("event=%d loaded in %d ms"):format(line.event, getTickCount() - active.audioRequestedAt)
+            if initial then
+                reportIntroSceneReady(active, "ready", details)
+            else
+                triggerServerEvent("tagup:introSceneAudioReady", resourceRoot, active.id, lineIndex, "ready", details)
+            end
+        end
+    end, 100, 0)
+end
+
+addEvent("tagup:introScenePrepare", true)
+addEventHandler("tagup:introScenePrepare", resourceRoot, function(sceneId, sweet, smoke)
+    if source ~= resourceRoot or not state.active or state.stage ~= "intro" or sweet ~= state.sweet or not isElement(smoke) then
+        return
+    end
+    clearIntroScene("replaced")
+    local required = {"acquireScriptCamera", "releaseScriptCamera", "isScriptCameraLeaseActive", "resetScriptCamera",
+                      "setScriptCameraWidescreen", "setScriptCameraNearClip", "setScriptCameraFixed", "setScriptCameraPersist",
+                      "moveScriptCamera", "trackScriptCamera", "fadeScriptCamera", "enginePreloadWorldArea", "setPedGoTo", "setPedEnterVehicle",
+                      "setPedLookAt", "killPedTask",
+                      "requestMissionAudio", "isMissionAudioLoaded", "playMissionAudio", "isMissionAudioFinished", "releaseMissionAudio"}
+    for _, name in ipairs(required) do
+        if type(_G[name]) ~= "function" then
+            state.introScene = {id = sceneId}
+            return reportIntroSceneReady(state.introScene, "api_unavailable", name)
+        end
+    end
+
+    local scene = {id = sceneId, sweet = sweet, smoke = smoke, requestedAt = getTickCount()}
+    state.introScene = scene
+    local acquired, token = pcall(acquireScriptCamera, true)
+    if not acquired or not token then
+        return reportIntroSceneReady(scene, "camera_acquire_refused", tostring(token))
+    end
+    scene.cameraToken = token
+    local camera = TAGUP.introScene.camera
+    local cameraReady = resetScriptCamera(token) and setScriptCameraWidescreen(token, true) and
+                            setScriptCameraNearClip(token, camera.nearClip) and
+                            setScriptCameraFixed(token, Vector3(camera.fixed.position.x, camera.fixed.position.y, camera.fixed.position.z),
+                                                 Vector3(camera.fixed.target.x, camera.fixed.target.y, camera.fixed.target.z), Vector3(0, 0, 0), true) and
+                            fadeScriptCamera(token, false, 0, 0, 0, 0)
+    if not cameraReady then
+        clearIntroScene("camera_setup_refused")
+        return reportIntroSceneReady(scene, "camera_setup_refused", "SCM fixed shot refused")
+    end
+    local preload = TAGUP.introScene.preload
+    local preloaded, preloadError = pcall(enginePreloadWorldArea, preload.x, preload.y, preload.z, "models")
+    if not preloaded then
+        clearIntroScene("scene_preload_failed")
+        return reportIntroSceneReady(scene, "scene_preload_failed", tostring(preloadError))
+    end
+    scene.leaseTimer = setTimer(function()
+        local active = state.introScene
+        if active == scene and not hasIntroSceneLease(active) then
+            triggerServerEvent("tagup:introSceneLeaseLost", resourceRoot, active.id)
+            clearIntroScene("lease_lost")
+        end
+    end, 100, 0)
+    requestIntroSceneAudio(scene, 1, true)
+end)
+
+addEvent("tagup:introSceneStart", true)
+addEventHandler("tagup:introSceneStart", resourceRoot, function(sceneId)
+    local scene = state.introScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or not hasIntroSceneLease(scene) then
+        return
+    end
+    scene.startedAt = getTickCount()
+    fadeScriptCamera(scene.cameraToken, true, TAGUP.introScene.camera.fadeInDuration, 0, 0, 0)
+    if localPlayer == state.leader then
+        local profile = TAGUP.introScene
+        local smokeAccepted = setPedGoTo(scene.smoke, Vector3(profile.smoke.walk.x, profile.smoke.walk.y, profile.smoke.walk.z), "walk", 0.5,
+                                             2.0, 10000)
+        local sweetAccepted = setPedGoTo(scene.sweet, Vector3(profile.sweetWalk.x, profile.sweetWalk.y, profile.sweetWalk.z), "walk", 0.5, 2.0,
+                                             10000)
+        local leaderAccepted = setPedGoTo(localPlayer, Vector3(profile.leaderWalk.x, profile.leaderWalk.y, profile.leaderWalk.z), "walk", 0.5,
+                                              2.0, 10000)
+        triggerServerEvent("tagup:introSceneTasksStarted", resourceRoot, scene.id, smokeAccepted == true, sweetAccepted == true,
+                           leaderAccepted == true)
+    end
+    outputDebugString(("[tagging-up-turf] Intro world scene #%d native fixed shot started"):format(scene.id))
+end)
+
+addEvent("tagup:introSceneTrack", true)
+addEventHandler("tagup:introSceneTrack", resourceRoot, function(sceneId)
+    local scene = state.introScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or not hasIntroSceneLease(scene) then
+        return
+    end
+    local move, track = TAGUP.introScene.camera.move, TAGUP.introScene.camera.track
+    local ok = resetScriptCamera(scene.cameraToken) and setScriptCameraPersist(scene.cameraToken, true, true) and
+                   moveScriptCamera(scene.cameraToken, Vector3(move.from.x, move.from.y, move.from.z),
+                                    Vector3(move.to.x, move.to.y, move.to.z), move.duration, true) and
+                   trackScriptCamera(scene.cameraToken, Vector3(track.from.x, track.from.y, track.from.z),
+                                     Vector3(track.to.x, track.to.y, track.to.z), track.duration, true)
+    if not ok then
+        triggerServerEvent("tagup:introSceneLeaseLost", resourceRoot, scene.id)
+    end
+end)
+
+addEvent("tagup:introScenePrepareAudio", true)
+addEventHandler("tagup:introScenePrepareAudio", resourceRoot, function(sceneId, lineIndex)
+    local scene = state.introScene
+    if source == resourceRoot and scene and scene.id == sceneId then
+        requestIntroSceneAudio(scene, lineIndex, false)
+    end
+end)
+
+addEvent("tagup:introScenePlayAudio", true)
+addEventHandler("tagup:introScenePlayAudio", resourceRoot, function(sceneId, lineIndex, leaderCanSkip)
+    local scene = state.introScene
+    local line = TAGUP.introScene.audio[lineIndex]
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId or scene.lineIndex ~= lineIndex or not line or
+        not hasIntroSceneLease(scene) or not scene.audioHandle then
+        return
+    end
+    scene.skippable = true
+    scene.leaderCanSkip = leaderCanSkip == true
+    local played, result = pcall(playMissionAudio, scene.audioHandle)
+    if not played or result == false then
+        return triggerServerEvent("tagup:introSceneAudioFinished", resourceRoot, scene.id, lineIndex, "play_refused")
+    end
+    printMissionText(line.key, 4000)
+    scene.audioStartedAt = getTickCount()
+    if lineIndex == 1 then
+        local sx, sy, sz = getElementPosition(scene.sweet)
+        setPedLookAt(localPlayer, Vector3(sx, sy, sz + 0.7), 8000, scene.sweet)
+        if localPlayer == state.leader then
+            local px, py, pz = getElementPosition(localPlayer)
+            setPedLookAt(scene.sweet, Vector3(px, py, pz + 0.7), 8000, localPlayer)
+        end
+    elseif lineIndex == 5 and localPlayer == state.leader then
+        local profile = TAGUP.introScene
+        setPedGoTo(localPlayer, Vector3(profile.leaderFinalWalk.x, profile.leaderFinalWalk.y, profile.leaderFinalWalk.z), "walk", 0.5, 2.0, 10000)
+        -- MTA correctly refuses enter-car requests while a synchronized
+        -- animation is still running. SCM replaces IDLE_CHAT with the new
+        -- scripted task, so clear that animation and retry the request while
+        -- retaining one authoritative server completion observation.
+        setPedAnimation(scene.sweet, false)
+        pcall(killPedTask, scene.sweet, "primary", 3, false)
+        local requestedAt = getTickCount()
+        local function requestEntry()
+            local active = state.introScene
+            if active ~= scene or active.lineIndex ~= lineIndex then
+                return
+            end
+            local accepted = setPedEnterVehicle(active.sweet, state.vehicle, 1)
+            if accepted or getTickCount() - requestedAt >= 5000 then
+                triggerServerEvent("tagup:introSceneEntryRequested", resourceRoot, active.id, active.sweet, state.vehicle, accepted == true)
+                active.entryTimer = nil
+                return
+            end
+            active.entryTimer = setTimer(requestEntry, 250, 1)
+        end
+        requestEntry()
+    end
+    scene.audioFinishTimer = setTimer(function()
+        local active = state.introScene
+        if active ~= scene or active.lineIndex ~= lineIndex then
+            return
+        end
+        local queried, finished = pcall(isMissionAudioFinished, active.audioHandle)
+        if not queried then
+            killTimer(active.audioFinishTimer)
+            active.audioFinishTimer = nil
+            triggerServerEvent("tagup:introSceneAudioFinished", resourceRoot, active.id, lineIndex, "query_failed")
+        elseif finished then
+            killTimer(active.audioFinishTimer)
+            active.audioFinishTimer = nil
+            local elapsed = getTickCount() - active.audioStartedAt
+            releaseIntroSceneAudio(active)
+            outputDebugString(("[tagging-up-turf] Intro world scene #%d %s finished naturally after %d ms"):format(
+                                  active.id, line.key, elapsed))
+            triggerServerEvent("tagup:introSceneAudioFinished", resourceRoot, active.id, lineIndex, "finished", elapsed)
+        end
+    end, 100, 0)
+end)
+
+addEvent("tagup:introSceneRelease", true)
+addEventHandler("tagup:introSceneRelease", resourceRoot, function(sceneId)
+    local scene = state.introScene
+    if source ~= resourceRoot or not scene or scene.id ~= sceneId then
+        return
+    end
+    local released = clearIntroScene("completed")
+    triggerServerEvent("tagup:introSceneReleased", resourceRoot, sceneId, released and "released" or "release_failed")
+end)
+
+addEvent("tagup:introSceneCancel", true)
+addEventHandler("tagup:introSceneCancel", resourceRoot, function(sceneId, reason)
+    local scene = state.introScene
+    if source == resourceRoot and scene and scene.id == sceneId then
+        clearIntroScene(reason or "server_cancelled")
+    end
+end)
 
 local SWEET_GO_TO_TASK = "TASK_COMPLEX_GO_TO_POINT_AND_STAND_STILL"
 
@@ -3320,6 +3809,9 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
     refreshGangTagStates()
 
     if previousStage ~= state.stage then
+        if previousStage == "sweet1a" and state.stage ~= "sweet1a" and state.fileCutscene then
+            clearFileCutscene("stage_changed_to_" .. tostring(state.stage), state.stage == "intro")
+        end
         state.allWheelsMismatchStage = nil
         state.allWheelsPassedStage = nil
         state.rooftopTagRevealed = false
@@ -3364,10 +3856,8 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
                 TAGUP_TRACE.setStatus("mission_end", "done", "SERVER AUTHORITY · reward granted / state restore queued")
             end
         end
-        if state.stage == "intro" then
-            startIntroCamera()
-        else
-            stopIntroCamera()
+        if previousStage == "intro" and state.stage ~= "intro" then
+            clearIntroScene("stage_changed_to_" .. tostring(state.stage))
         end
         if state.stage == "enter_car" or state.stage == "drive_idlewood" then
             startSweetDemoAudioPreload()
@@ -3393,6 +3883,7 @@ end)
 
 addEvent("tagup:stop", true)
 addEventHandler("tagup:stop", resourceRoot, function()
+    clearFileCutscene("mission_stopped", false)
     releaseGangTagStates()
     releaseArrivalGate("mission_stopped")
     clearSweetDemoAudioPreload("mission_stopped")
@@ -3408,7 +3899,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     clearVehiclePlayback(true)
     clearPostRoofScene("mission_stopped")
     killMissionTextTimers()
-    stopIntroCamera()
+    clearIntroScene("mission_stopped")
     destroyNavigation()
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
         setPedMissionActor(state.sweet, false)
@@ -3430,6 +3921,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.ballasEncounterAudioPreload = nil
     state.vehicleRecordingPreloaded = false
     state.postRoofScene = nil
+    state.fileCutscene = nil
     if state.missionTextReady then
         callMissionTextApi("releaseMissionText")
     end
@@ -3445,8 +3937,6 @@ addEventHandler("tagup:stop", resourceRoot, function()
         TAGUP_TRACE.reset()
     end
 end)
-
-addEventHandler("onClientRender", root, updateIntroCamera, true, "low-10")
 
 local function passesAllWheelsGate(vehicle, stage, insideBox)
     if not insideBox or not isElementStreamedIn(vehicle) or not isElementSyncer(vehicle) or
@@ -3591,6 +4081,15 @@ addEventHandler("onClientKey", root, function(button, pressed)
 end)
 
 addEventHandler("onClientPreRender", root, function()
+    local fileCutscene = state.fileCutscene
+    if fileCutscene and fileCutscene.startedAt and fileCutscene.leaderCanSkip and not fileCutscene.skipRequested and
+        hasFileCutsceneLease(fileCutscene) then
+        local ok, pressed = pcall(isFileCutsceneSkipInputPressed, fileCutscene.token)
+        if ok and pressed == true then
+            fileCutscene.skipRequested = true
+            triggerServerEvent("tagup:fileCutsceneSkipRequest", resourceRoot, fileCutscene.id)
+        end
+    end
     refreshStageNavigation()
     renderNavigationImportantArea()
     updateNativeMissionHelp()
@@ -3616,6 +4115,12 @@ addEventHandler("onClientPlayerDamage", localPlayer, function(attacker)
 end)
 
 addEventHandler("onClientElementStreamOut", root, function()
+    if state.introScene and (source == state.introScene.sweet or source == state.introScene.smoke) then
+        local scene = state.introScene
+        triggerServerEvent("tagup:introSceneLeaseLost", resourceRoot, scene.id)
+        clearIntroScene("actor_streamed_out")
+        return
+    end
     if state.arrivalGate and source == state.vehicle then
         releaseArrivalGate("vehicle_streamed_out")
     end
@@ -3654,6 +4159,7 @@ end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
     state.checkpointGroundProbeToken = nil
+    clearFileCutscene("resource_stopped", false)
     releaseArrivalGate("resource_stopped")
     clearSweetDemoAudioPreload("resource_stopped")
     clearSweetDemoScene("resource_stopped", false)
@@ -3674,6 +4180,6 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
         setPedMissionActor(state.sweet, false)
     end
-    stopIntroCamera()
+    clearIntroScene("resource_stopped")
     destroyNavigation()
 end)

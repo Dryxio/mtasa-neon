@@ -101,6 +101,29 @@ namespace
     constexpr std::size_t    GTA_SUBTITLES_OFFSET = 0x44;
     constexpr unsigned int   GTA_BIG_MESSAGE_STYLE_COUNT = 7;
 
+    constexpr std::uintptr_t FUNC_LoadFileCutscene = 0x4D5E80;
+    constexpr std::uintptr_t FUNC_StartFileCutscene = 0x5B1460;
+    constexpr std::uintptr_t FUNC_HasFileCutsceneFinished = 0x5B0570;
+    constexpr std::uintptr_t FUNC_IsFileCutsceneSkipInputPressed = 0x4D5D10;
+    constexpr std::uintptr_t FUNC_SkipFileCutscene = 0x5B1700;
+    constexpr std::uintptr_t FUNC_DeleteFileCutscene = 0x4D5ED0;
+    constexpr std::uintptr_t FUNC_FindCutsceneAudioTrack = 0x5AFA50;
+    constexpr std::uintptr_t HOOKPOS_FileCutsceneSkipInput = 0x5B1947;
+    constexpr std::uintptr_t VAR_FileCutsceneLoadStatus = 0xB5F84C;
+    constexpr std::uintptr_t VAR_FileCutsceneRunning = 0xB5F851;
+    constexpr std::uintptr_t VAR_FileCutsceneProcessing = 0xB5F852;
+    constexpr std::uintptr_t VAR_FileCutsceneSkipped = 0xB5F854;
+
+    bool g_suppressManagedFileCutsceneSkipInput{};
+
+    bool __cdecl FileCutsceneSkipInputHook()
+    {
+        // Managed multiplayer cutscenes route one participant's skip through
+        // the server before asking every client to finish its local playback.
+        // Unmanaged GTA cutscenes retain their original direct input path.
+        return !g_suppressManagedFileCutsceneSkipInput && reinterpret_cast<bool(__cdecl*)()>(FUNC_IsFileCutsceneSkipInputPressed)();
+    }
+
     bool IsKnownVehicleRecording(int recordingId)
     {
         const int count = *reinterpret_cast<const int*>(VEHICLE_RECORDING_COUNT);
@@ -189,6 +212,11 @@ CGameSA::CGameSA()
         ObjectGroupsInfo = new CObjectGroupPhysicalPropertiesSA[OBJECTDYNAMICINFO_MAX];
 
         SetInitialVirtualProtect();
+
+        // CCutsceneMgr otherwise consumes local skip input inside Update and
+        // finishes only this client's copy. Intercept that single call site so
+        // a resource-owned cutscene can synchronize the decision at server.
+        HookInstallCall(HOOKPOS_FileCutsceneSkipInput, reinterpret_cast<DWORD>(&FileCutsceneSkipInputHook));
 
         // Set the model ids for all the CModelInfoSA instances
         for (unsigned int i = 0; i < modelInfoMax; i++)
@@ -1503,4 +1531,80 @@ void CGameSA::ClearMissionHelp()
     // This is the exact CLEAR_HELP argument tuple: null text, quick=true,
     // permanent=false, and no previous-brief insertion.
     reinterpret_cast<void(__cdecl*)(const char*, bool, bool, bool)>(FUNC_SetHelpMessage)(nullptr, true, false, false);
+}
+
+bool CGameSA::LoadFileCutscene(const char* name)
+{
+    if (!name || !name[0] || std::strlen(name) > 7 || IsFileCutsceneActive())
+        return false;
+
+    // Passing an unknown name into CCutsceneMgr still clears zone models and
+    // hides the player before it discovers the missing files. The native
+    // cutscene-track table is a compact stock-name oracle, so reject anything
+    // outside it before mutating global engine state.
+    if (reinterpret_cast<short(__cdecl*)(const char*)>(FUNC_FindCutsceneAudioTrack)(name) < 0)
+        return false;
+
+    reinterpret_cast<void(__cdecl*)(const char*)>(FUNC_LoadFileCutscene)(name);
+    if (!IsFileCutsceneActive())
+        return false;
+
+    g_suppressManagedFileCutsceneSkipInput = true;
+    return true;
+}
+
+bool CGameSA::IsFileCutsceneActive() const
+{
+    const int  loadStatus = *reinterpret_cast<const int*>(VAR_FileCutsceneLoadStatus);
+    const bool running = *reinterpret_cast<const bool*>(VAR_FileCutsceneRunning);
+    const bool processing = *reinterpret_cast<const bool*>(VAR_FileCutsceneProcessing);
+    return loadStatus != 0 || running || processing;
+}
+
+bool CGameSA::IsFileCutsceneLoaded() const
+{
+    return *reinterpret_cast<const int*>(VAR_FileCutsceneLoadStatus) == 2;
+}
+
+bool CGameSA::StartFileCutscene()
+{
+    if (!IsFileCutsceneLoaded() || *reinterpret_cast<const bool*>(VAR_FileCutsceneRunning))
+        return false;
+
+    reinterpret_cast<void(__cdecl*)()>(FUNC_StartFileCutscene)();
+    return true;
+}
+
+bool CGameSA::HasFileCutsceneFinished() const
+{
+    return reinterpret_cast<bool(__cdecl*)()>(FUNC_HasFileCutsceneFinished)();
+}
+
+bool CGameSA::IsFileCutsceneSkipInputPressed() const
+{
+    return reinterpret_cast<bool(__cdecl*)()>(FUNC_IsFileCutsceneSkipInputPressed)();
+}
+
+bool CGameSA::WasFileCutsceneSkipped() const
+{
+    return *reinterpret_cast<const bool*>(VAR_FileCutsceneSkipped);
+}
+
+bool CGameSA::SkipFileCutscene()
+{
+    if (!IsFileCutsceneLoaded() || !*reinterpret_cast<const bool*>(VAR_FileCutsceneRunning))
+        return false;
+
+    reinterpret_cast<void(__cdecl*)()>(FUNC_SkipFileCutscene)();
+    return WasFileCutsceneSkipped();
+}
+
+bool CGameSA::DeleteFileCutscene()
+{
+    g_suppressManagedFileCutsceneSkipInput = false;
+    if (!IsFileCutsceneActive())
+        return true;
+
+    reinterpret_cast<void(__cdecl*)()>(FUNC_DeleteFileCutscene)();
+    return !IsFileCutsceneActive();
 }

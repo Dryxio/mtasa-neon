@@ -104,6 +104,14 @@ public:
     void          AbortScriptCamera();
     bool          HasScriptCameraLease(const CResource* owner, std::uint32_t token) const;
     bool          IsScriptCameraActive() const { return m_pScriptCameraOwner != nullptr; }
+    bool          BeginFileCutscene(CResource* owner, std::uint32_t token, const char* name);
+    bool          IsFileCutsceneLeaseActive(const CResource* owner, std::uint32_t token) const;
+    bool          IsFileCutsceneLoaded(const CResource* owner, std::uint32_t token) const;
+    bool          StartFileCutscene(CResource* owner, std::uint32_t token);
+    bool          HasFileCutsceneFinished(const CResource* owner, std::uint32_t token) const;
+    bool          IsFileCutsceneSkipInputPressed(const CResource* owner, std::uint32_t token) const;
+    bool          WasFileCutsceneSkipped(const CResource* owner, std::uint32_t token) const;
+    bool          SkipFileCutscene(CResource* owner, std::uint32_t token);
 
 private:
     CClientCamera(CClientManager* pManager);
@@ -161,4 +169,6 @@ private:
     float         m_fScriptCameraPreviousNativeNearClip{};
     bool          m_bScriptCameraPreviousNativeNearClipEnabled{};
     bool          m_bScriptCameraPreviousWidescreen{};
+    bool          m_bFileCutsceneLease{};
+    bool          m_bFileCutsceneStarted{};
 };

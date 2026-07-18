@@ -213,6 +213,24 @@ The task calls do not yet provide resource-owned handles, completion events, or 
 
 The token prevents delayed callbacks from an older run in the same resource from controlling a newer camera lease. A resource stop, restart, or disconnect revokes its lease automatically. Gameplay input inhibition is independent from `toggleAllControls`, so cleanup does not overwrite control restrictions owned by other resources. Its reference-counted native pad bit is also restored to the state captured by the outermost inhibitor. GTA consumes that bit for its standard vehicle slowdown: zero throttle, full brake, handbrake, and a `0.28` speed clamp before physics completes the stop. Neon intentionally does not call the broader `CPlayerInfo::MakePlayerSafe`, which would also clear tasks, grant protection, and mutate world systems. Legacy client camera setters are rejected while the lease is active; an authoritative server camera RPC revokes the lease before taking control.
 
+### Native file cutscenes
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `requestFileCutscene(name)` | Client | Acquires the exclusive camera lease, validates a stock cutscene name, and starts GTA's asynchronous DAT/CUT/IFP load. Returns a generation token. |
+| `isFileCutsceneLeaseActive(token)` | Client | Reports whether the calling resource still owns the native cutscene and camera generation. |
+| `isFileCutsceneLoaded(token)` | Client | Reports GTA's native loaded status. |
+| `startFileCutscene(token)` | Client | Starts the loaded native cutscene once. |
+| `fadeFileCutscene(token, fadeIn, durationSeconds [, red, green, blue])` | Client | Runs GTA's native fade while the file-cutscene lease is active. |
+| `isFileCutsceneFading(token)` | Client | Reports the native fade state for the current cutscene generation. |
+| `isFileCutsceneFinished(token)` | Client | Reports native camera-spline completion after this lease has successfully started. |
+| `isFileCutsceneSkipInputPressed(token)` | Client | Queries GTA's original cutscene skip controls without applying the skip locally. |
+| `wasFileCutsceneSkipped(token)` | Client | Reports whether GTA's native skip path completed this playback. |
+| `skipFileCutscene(token)` | Client | Applies GTA's native skip to the owned playback. Cooperative resources should call it only after a server-authorized broadcast. |
+| `releaseFileCutscene(token [, preserveFade])` | Client | Deletes native cutscene data and restores the captured camera and controls. Resource shutdown performs the same cleanup automatically. |
+
+File cutscenes are global GTA state and therefore share the exclusive script-camera lease. Ordinary script-camera setters cannot mutate a file-cutscene lease, and camera takeover deletes native cutscene data before restoring gameplay. Neon suppresses only the original local skip call inside `CCutsceneMgr::Update`; the resource can still query the same keyboard, mouse, and gamepad edge and synchronize one leader's decision across all participants. Names are limited to GTA's stock cutscene-audio table and seven characters so an invalid public request cannot partially mutate streaming, player-safe, or hidden-world state.
+
 ### Native directional scene loading
 
 | Function | Side | Description |

@@ -64,6 +64,19 @@ public:
     static bool SetScriptCameraWidescreen(lua_State* luaVM, unsigned int token, bool enabled);
     static bool SetScriptCameraNearClip(lua_State* luaVM, unsigned int token, std::variant<bool, float> distance);
 
+    static std::variant<unsigned int, bool> RequestFileCutscene(lua_State* luaVM, std::string name);
+    static bool                             IsFileCutsceneLeaseActive(lua_State* luaVM, unsigned int token);
+    static bool                             IsFileCutsceneLoaded(lua_State* luaVM, unsigned int token);
+    static bool                             StartFileCutscene(lua_State* luaVM, unsigned int token);
+    static bool FadeFileCutscene(lua_State* luaVM, unsigned int token, bool fadeIn, float durationSeconds, std::optional<unsigned char> red,
+                                 std::optional<unsigned char> green, std::optional<unsigned char> blue);
+    static bool IsFileCutsceneFading(lua_State* luaVM, unsigned int token);
+    static bool IsFileCutsceneFinished(lua_State* luaVM, unsigned int token);
+    static bool IsFileCutsceneSkipInputPressed(lua_State* luaVM, unsigned int token);
+    static bool WasFileCutsceneSkipped(lua_State* luaVM, unsigned int token);
+    static bool SkipFileCutscene(lua_State* luaVM, unsigned int token);
+    static bool ReleaseFileCutscene(lua_State* luaVM, unsigned int token, std::optional<bool> preserveFade);
+
     // For OOP only
     LUA_DECLARE(OOP_GetCameraPosition);
     LUA_DECLARE(OOP_SetCameraPosition);
