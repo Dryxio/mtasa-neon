@@ -104,7 +104,11 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     // Save input
     m_strHost = szHost;
     m_strNick = szNick;
-    m_strPassword = szPassword;
+    const bool bSuppressNativeWorldCredential = CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed();
+    // The launch-2 identity is not yet revalidated. Discard the supplied
+    // credential before it can be copied, persisted, or sent to a different
+    // server at the pinned endpoint.
+    m_strPassword = bSuppressNativeWorldCredential ? "" : szPassword;
     m_Address.s_addr = 0;
     m_usPort = usPort;
     m_bSave = true;
@@ -156,8 +160,8 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     m_tConnectStarted = time(NULL);
     m_bHasTriedSecondConnect = false;
 
-    // Load server password
-    if (m_strPassword.empty())
+    // Saved browser credentials are also unavailable to the prepared launch.
+    if (!bSuppressNativeWorldCredential && m_strPassword.empty())
         m_strPassword = CServerBrowser::GetSingletonPtr()->GetServerPassword(m_strHost + ":" + SString("%u", m_usPort));
 
     // Start server version detection

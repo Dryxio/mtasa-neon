@@ -541,7 +541,7 @@ bool CResource::VerifyNativeWorldTransportReady()
                 m_nativeWorldTransport.authorizationContentId = result.contentId;
                 const SString authorizationMessage(
                     "[NativeWorldAuthorization] state=pending resource=%s contentId=%s ticket=%s issued=%llu expires=%llu disposition=%s "
-                    "activation=no lease=no restart-required=yes",
+                    "activation=no lease=no restart-required=yes action=nativeworldauth-restart",
                     *m_strResourceName, result.contentId.c_str(), authorizationResult.ticketId.substr(0, 8).c_str(), authorizationResult.issuedAt,
                     authorizationResult.expiresAt,
                     authorizationResult.attached     ? "attached"

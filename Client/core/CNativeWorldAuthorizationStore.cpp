@@ -3,7 +3,7 @@
  *  PROJECT:     Multi Theft Auto v1.0
  *  LICENSE:     See LICENSE in the top level directory
  *  FILE:        core/CNativeWorldAuthorizationStore.cpp
- *  PURPOSE:     DPAPI-backed inert native-world authorization store
+ *  PURPOSE:     DPAPI-backed native-world authorization store
  *
  *  Multi Theft Auto is available from https://www.multitheftauto.com/
  *
@@ -822,6 +822,31 @@ namespace
         return result;
     }
 
+    bool CurrentTime(unsigned long long& now, std::string& error);
+    bool ValidateSpentLedger(STransaction& transaction, unsigned long long now, std::string& error);
+
+    bool ReadInspectablePending(STransaction& transaction, SRecord& record, EReadResult& read, unsigned long long& now, std::string& error)
+    {
+        if (!BeginTransaction(transaction, error))
+            return false;
+        if (!transaction.temporaryFiles.empty())
+        {
+            error = "authorization store contains an unproven temporary remnant";
+            return false;
+        }
+        if (!CurrentTime(now, error) || !ValidateSpentLedger(transaction, now, error))
+            return false;
+        read = ReadRecord(transaction.pending, record, error);
+        if (read == EReadResult::Failure)
+            return false;
+        if (read == EReadResult::Success && transaction.spentTickets.count(EncodeHex(record.ticketId)))
+        {
+            error = "the pending authorization ticket is already spent";
+            return false;
+        }
+        return true;
+    }
+
     bool TemporaryRecordsMatch(const STransaction& transaction, const SRecord& expected, std::string& error)
     {
         for (const std::wstring& temporary : transaction.temporaryFiles)
@@ -1249,19 +1274,10 @@ SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::Inspect()
 {
     SNativeWorldAuthorizationRecordResult result;
     STransaction                          transaction;
-    if (!BeginTransaction(transaction, result.error))
-        return result;
-    if (!transaction.temporaryFiles.empty())
-    {
-        result.error = "authorization store contains an unproven temporary remnant";
-        return result;
-    }
-    unsigned long long now = 0;
-    if (!CurrentTime(now, result.error) || !ValidateSpentLedger(transaction, now, result.error))
-        return result;
-    SRecord           record;
-    const EReadResult read = ReadRecord(transaction.pending, record, result.error);
-    if (read == EReadResult::Failure)
+    unsigned long long                    now = 0;
+    SRecord                               record;
+    EReadResult                           read = EReadResult::Failure;
+    if (!ReadInspectablePending(transaction, record, read, now, result.error))
         return result;
     if (read == EReadResult::Missing)
     {
@@ -1269,13 +1285,42 @@ SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::Inspect()
         result.diagnostic = "state=absent activation=no lease=no";
         return result;
     }
-    if (transaction.spentTickets.count(EncodeHex(record.ticketId)))
-    {
-        result.error = "the pending authorization ticket is already spent";
-        return result;
-    }
     const EFreshness freshness = EvaluateFreshness(record, now);
     return MakeResult(record, freshness == EFreshness::Fresh ? "pending" : freshness == EFreshness::Expired ? "expired" : "clock-refused");
+}
+
+SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::InspectFreshRestartTarget(SRestartTarget& target)
+{
+    target = {};
+    SNativeWorldAuthorizationRecordResult result;
+    STransaction                          transaction;
+    unsigned long long                    now = 0;
+    SRecord                               record;
+    EReadResult                           read = EReadResult::Failure;
+    if (!ReadInspectablePending(transaction, record, read, now, result.error))
+        return result;
+    if (read == EReadResult::Missing)
+    {
+        result.error = "no pending native-world authorization is available for restart";
+        return result;
+    }
+
+    const EFreshness freshness = EvaluateFreshness(record, now);
+    if (freshness != EFreshness::Fresh)
+    {
+        result.error =
+            freshness == EFreshness::Expired ? "native-world authorization expired before restart" : "native-world authorization clock check refused restart";
+        return result;
+    }
+    if (record.expiresAt - now < 60)
+    {
+        result.error = "native-world authorization has insufficient time remaining for restart";
+        return result;
+    }
+
+    target.serverIpv4 = record.authorization.serverIpv4;
+    target.serverPort = record.authorization.serverPort;
+    return MakeResult(record, "restart-ready");
 }
 
 SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::Clear()

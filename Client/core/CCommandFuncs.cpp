@@ -184,16 +184,23 @@ void CCommandFuncs::NativeWorldAuthorization(const char* szParameters)
         result = g_pCore->InspectNativeWorldStartupAuthorization();
     else if (operation == "clear")
         result = g_pCore->ClearNativeWorldStartupAuthorization();
+    else if (operation == "restart")
+        result = g_pCore->PrepareNativeWorldStartupRestart();
     else
     {
-        g_pCore->GetConsole()->Print("nativeworldauth: syntax: nativeworldauth [status|clear]");
+        g_pCore->GetConsole()->Print("nativeworldauth: syntax: nativeworldauth [status|clear|restart]");
         return;
     }
 
-    if (result.success)
+    if (!result.diagnostic.empty())
         g_pCore->GetConsole()->Printf("[NativeWorldAuthorization] %s", result.diagnostic.c_str());
     else
         g_pCore->GetConsole()->Printf("[NativeWorldAuthorization] state=refused reason=%s activation=no lease=no", result.error.c_str());
+
+    // Printing first makes the user-visible audit line durable in the client
+    // log before the loader performs the already scheduled clean relaunch.
+    if (operation == "restart" && result.success)
+        g_pCore->Quit();
 }
 
 // this fails randomly, see comments in CConsole

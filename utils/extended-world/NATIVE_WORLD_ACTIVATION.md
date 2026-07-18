@@ -1,12 +1,12 @@
 # Native world authorized startup design
 
 Status: research completed on 2026-07-16; Checkpoint A was implemented and
-user-live-validated on 2026-07-17. Checkpoints B and C were implemented and
+user-live-validated on 2026-07-17. Checkpoints B, C, and D were implemented and
 live validated under explicit user authorization on 2026-07-18. Record-driven
 startup selection now performs the typed existing-cache transaction, one-shot
 claim, early model-store preparation, exact second-session revalidation,
-deferred hook installation, native commit, and process-lease promotion.
-Checkpoint D is next.
+deferred hook installation, native commit, process-lease promotion, and an
+explicit credential-free restart to the authorized numeric endpoint.
 
 Read this together with `AGENTS.md`, `LIMIT_PATCHING.md`,
 `NATIVE_WORLD_HANDOFF.md`, and `NATIVE_BW_PACK.md`.
@@ -382,7 +382,8 @@ handle. Any surviving recognized marker blocks startup until explicit clear.
 
 The first implementation accepts only a direct `mtasa://<numeric-ip>:<port>`
 startup target matching the record. This removes DNS re-resolution ambiguity.
-Checkpoint D may later let Core produce and relaunch that exact numeric target.
+Checkpoint D lets Core produce and relaunch that exact numeric target through
+the explicit local `nativeworldauth restart` command.
 
 The normative order before any native mutation is:
 
@@ -477,13 +478,22 @@ either route mutates state; neither route may select itself independently.
 - Pin the active process to the authorized server and preserve all current
   rollback/fatal boundaries.
 
-### Checkpoint D: restart and reconnect UX
+### Checkpoint D: restart and reconnect UX (complete)
 
-- Begin with an explicit user-driven clean restart to the recorded numeric
-  endpoint.
-- Automate restart or add UI only after trust, one-shot, cache, and lifecycle
-  behavior is stable.
-- Never include the server password in diagnostics or the authorization record.
+- Expose an explicit user-driven clean restart to the recorded numeric endpoint
+  only while the process is still unprepared.
+- Require a structured fresh record with at least 60 seconds remaining, refuse
+  a conflicting loader action, and verify the exact scheduled action after its
+  durable write.
+- Discard the supplied in-memory credential and skip saved-password recovery in
+  the prepared launch before the credential-bearing Deathmatch join. This does
+  not erase MTA's general saved credential storage. Passworded servers remain
+  unsupported until server identity can be verified before a password could be
+  sent.
+- Report pending versus active process state accurately and refuse clear or
+  another restart once native preparation has begun.
+- Never add the server password to diagnostics, the authorization record, the
+  loader action, or connection CVARs as part of the restart handoff.
 
 ## Required negative tests
 
@@ -583,3 +593,21 @@ with zero errors, and the focused suite reports 67 tests with two optional
 environment-dependent skips. Wrong-key-at-the-same-endpoint, live cache
 corruption, unsupported-executable, respawn, and crash-artifact scenarios remain
 prescribed negative/regression coverage rather than claimed live evidence.
+
+Checkpoint D's explicitly authorized automated gate validated an exact
+credential-free restart using ticket `4e97a97f`. The original client durably
+scheduled and read back `mtasa://127.0.0.1:22003`, exited cleanly, and the
+replacement process retained the same ticket through audit, claim, session
+validation, native commit, and `state=active lease=process`. Active status,
+clear refusal, restart refusal, exact-server reconnect, and the extended-world
+teleport/line-of-sight/vehicle/camera sanity passed. A later no-URI launch
+reported `state=absent`; restart refusal neither exited the process nor changed
+the loader action. `Client Core` and `Client Deathmatch` built twice as
+`Release|Win32` with zero errors, and the focused suite reports 70 tests with
+two optional environment-dependent skips. Passworded-server startup,
+wrong-key-at-the-same-endpoint, expiry during restart, resource-stop races,
+live cache corruption, unsupported executables, respawn, and the full
+world-sync resource remain prescribed coverage rather than claimed D evidence.
+After the final credential-ordering and single-write loader hardening review,
+ticket `93e09b84` repeated the passwordless restart with new process IDs and
+again reached `state=active lease=process`.

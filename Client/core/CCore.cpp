@@ -485,15 +485,148 @@ SNativeWorldAuthorizationRecordResult CCore::PersistNativeWorldStartupAuthorizat
 
 SNativeWorldAuthorizationRecordResult CCore::InspectNativeWorldStartupAuthorization()
 {
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off)
+        return DescribeNativeWorldStartupProcess();
     return NativeWorldAuthorizationStore::Inspect();
 }
 
 SNativeWorldAuthorizationRecordResult CCore::ClearNativeWorldStartupAuthorization()
 {
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off)
+    {
+        SNativeWorldAuthorizationRecordResult result = DescribeNativeWorldStartupProcess();
+        result.success = false;
+        result.error = "native-world authorization cannot be cleared while this process owns startup state";
+        result.diagnostic += " action=clear-refused";
+        return result;
+    }
     ++m_nativeWorldAuthorizationEpoch;
     if (m_nativeWorldAuthorizationEpoch == 0)
         ++m_nativeWorldAuthorizationEpoch;
     return NativeWorldAuthorizationStore::Clear();
+}
+
+SNativeWorldAuthorizationRecordResult CCore::PrepareNativeWorldStartupRestart()
+{
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off)
+    {
+        SNativeWorldAuthorizationRecordResult result = DescribeNativeWorldStartupProcess();
+        result.success = false;
+        result.error = "native-world restart is unavailable after startup selection";
+        result.diagnostic += " action=restart-refused";
+        return result;
+    }
+
+    NativeWorldAuthorizationStore::SRestartTarget target;
+    SNativeWorldAuthorizationRecordResult         result = NativeWorldAuthorizationStore::InspectFreshRestartTarget(target);
+    if (!result.success)
+        return result;
+
+    const SString existing = GetRegistryValue("", "OnQuitCommand");
+    if (!existing.empty() && existing != "\t\t\t\t")
+    {
+        result.success = false;
+        result.diagnostic.clear();
+        result.error = "another post-exit action is already scheduled";
+        return result;
+    }
+
+    const SString endpoint("%u.%u.%u.%u:%u", target.serverIpv4[0], target.serverIpv4[1], target.serverIpv4[2], target.serverIpv4[3], target.serverPort);
+    const SString uri("mtasa://%s", endpoint.c_str());
+    const SString expected("restart\t\t%s\t\t", uri.c_str());
+
+    // The loader resolves `restart` to the already trusted MTA executable.
+    // Use one flushed write and read back the exact five-field command before
+    // ending this process; a partial or competing write leaves the ticket
+    // pending and must not silently arm a later exit.
+    SaveConfig(true);
+    SetRegistryValue("", "OnQuitCommand", expected, true);
+    const SString observed = GetRegistryValue("", "OnQuitCommand");
+    if (observed != expected)
+    {
+        result.success = false;
+        const bool writeAppearsUnchanged = observed == existing;
+        const bool writeAppearsPartial = !observed.empty() && observed.length() < expected.length() && expected.substr(0, observed.length()) == observed;
+        if (writeAppearsUnchanged || writeAppearsPartial)
+        {
+            SetRegistryValue("", "OnQuitCommand", existing, true);
+            if (GetRegistryValue("", "OnQuitCommand") == existing)
+            {
+                result.diagnostic.clear();
+                result.error = "native-world restart scheduling could not be verified and was disarmed";
+                return result;
+            }
+        }
+
+        // An unrelated value may have won a concurrent write. Preserve it,
+        // but make the unresolved loader state explicit instead of claiming
+        // that no post-exit action exists.
+        result.diagnostic = "state=restart-scheduling-ambiguous activation=no lease=no action=inspect-onquit";
+        result.error = "native-world restart scheduling left an ambiguous post-exit action";
+        return result;
+    }
+
+    result.diagnostic = SString("state=restart-scheduled endpoint=%s ticket=%s activation=no lease=no credential=suppressed", endpoint.c_str(),
+                                result.ticketId.substr(0, 8).c_str());
+    WriteDebugEvent(SString("[NativeWorldAuthorization] %s", result.diagnostic.c_str()));
+    return result;
+}
+
+bool CCore::IsNativeWorldStartupCredentialSuppressed() const
+{
+    // Server identity is revalidated only after Client Deathmatch starts.
+    // Suppress every credential until a future protocol can authenticate the
+    // second session before any reusable verifier leaves Core.
+    return m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Prepared;
+}
+
+SNativeWorldAuthorizationRecordResult CCore::DescribeNativeWorldStartupProcess() const
+{
+    SNativeWorldAuthorizationRecordResult result;
+    result.success = true;
+    result.found = true;
+    result.ticketId = m_nativeWorldStartupSelection.ticketId;
+    result.issuedAt = m_nativeWorldStartupSelection.issuedAt;
+    result.expiresAt = m_nativeWorldStartupSelection.expiresAt;
+
+    const char* state = "process-terminal";
+    const char* activation = "no";
+    const char* lease = "released";
+    switch (m_nativeWorldStartupPhase)
+    {
+        case ENativeWorldStartupPhase::Candidate:
+            state = "selected";
+            lease = "pending";
+            break;
+        case ENativeWorldStartupPhase::Prepared:
+        case ENativeWorldStartupPhase::SessionValidated:
+            state = "prepared";
+            activation = "prepared";
+            lease = "pending";
+            break;
+        case ENativeWorldStartupPhase::Active:
+            state = "active";
+            activation = "yes";
+            lease = "process";
+            break;
+        case ENativeWorldStartupPhase::Refused:
+            state = "refused";
+            break;
+        case ENativeWorldStartupPhase::Terminal:
+            break;
+        case ENativeWorldStartupPhase::Off:
+            result.success = false;
+            result.found = false;
+            result.error = "native-world process state is unavailable";
+            return result;
+    }
+
+    result.diagnostic = SString("state=%s endpoint=%u.%u.%u.%u:%u ticket=%s issued=%llu expires=%llu activation=%s lease=%s restart-required=no", state,
+                                m_nativeWorldStartupSelection.serverIpv4[0], m_nativeWorldStartupSelection.serverIpv4[1],
+                                m_nativeWorldStartupSelection.serverIpv4[2], m_nativeWorldStartupSelection.serverIpv4[3],
+                                m_nativeWorldStartupSelection.serverPort, m_nativeWorldStartupSelection.ticketId.substr(0, 8).c_str(),
+                                m_nativeWorldStartupSelection.issuedAt, m_nativeWorldStartupSelection.expiresAt, activation, lease);
+    return result;
 }
 
 SNativeWorldAuthorizationRecordResult CCore::RevokeNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
@@ -1894,7 +2027,7 @@ void CCore::RegisterCommands()
     m_pCommands->Add("showmemstat", _("shows the memory statistics"), CCommandFuncs::ShowMemStat);
     m_pCommands->Add("showframegraph", _("shows the frame timing graph"), CCommandFuncs::ShowFrameGraph);
     m_pCommands->Add("timingdebug", "enables or disables native timing checkpoints", CCommandFuncs::TimingDebug);
-    m_pCommands->Add("nativeworldauth", "inspects or clears the inert native-world authorization record", CCommandFuncs::NativeWorldAuthorization);
+    m_pCommands->Add("nativeworldauth", "inspects, clears, or restarts into an authorized native world", CCommandFuncs::NativeWorldAuthorization);
     m_pCommands->Add("jinglebells", "", CCommandFuncs::JingleBells);
     m_pCommands->Add("fakelag", "", CCommandFuncs::FakeLag);
 

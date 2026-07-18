@@ -68,7 +68,7 @@ At the time of this handoff:
 ```text
 Canonical tree  /Users/salimtrouve/Documents/GitHub/mtasa-neon
 Branch          master
-Checkpoint B    5971c8a67 feat(native-world): validate authorized startup selection
+Checkpoint C    163605d59 feat(native-world): activate authorized startup packs
 origin/master   7895f0e1e feat(story): match SWEET1 all-wheels gates
 VM              Windows 11
 VM build tree   C:\dev\mtasa-vm-custom
@@ -101,7 +101,9 @@ and passed both non-game validation and the user-only live gate recorded below.
 Checkpoint B, record-driven startup selection without native mutation, is
 implemented in `5971c8a67`. Checkpoint C, record-driven native activation, is
 implemented and passed the explicitly authorized automated live gate recorded
-below. Checkpoint D is next.
+below. Checkpoint D, explicit safe restart/reconnect UX, is implemented and
+passed the explicitly authorized automated live gate recorded below. The next
+unfinished global roadmap item is the constrained generic static-world policy.
 
 Relevant earlier extended-world foundations include the enlarged world sectors,
 coordinate/network ranges, water bounds, renderer capacity, radar composition,
@@ -126,7 +128,8 @@ placements through a different lifecycle.
 - `Client/core/CNativeWorldAuthorizationStore.*`, Core connection management,
   and `Client/sdk/core/CNativeWorldAuthorization.h` own the connection epoch,
   opaque server/session identity capture, DPAPI-protected authorization store,
-  inspection, clear/revoke operations, and console diagnostics.
+  inspection, clear/revoke operations, safe restart scheduling, process-aware
+  diagnostics, and prepared-process credential suppression.
 - Server Deathmatch `CResource.*`, `CResourceFile.*`,
   `packets/CResourceStartPacket.cpp`, and `CHTTPD.cpp` validate metadata,
   version-gate the group and stream the files.
@@ -462,7 +465,8 @@ transaction-typed lease, atomic claim, strict startup endpoint matching, and
 zero-mutation read-only executable preflight. Second-session identity
 revalidation, deferred hook installation, irreversible native commit, and
 typed process-lease promotion are now implemented by Checkpoint C.
-Restart/reconnect UX remains Checkpoint D work.
+Checkpoint D adds the explicit local restart command and active-process command
+guards without weakening the startup identity boundary.
 
 The server config initializes an identity facility from a private key, and the
 client's opaque server ID is the strongest available continuity input. The
@@ -530,7 +534,7 @@ The completed read-only design/research checkpoint covered:
 7. An implementation plan and independent security/lifecycle review before
    editing activation code.
 
-Continue progressively from Checkpoint D:
+The authorized-startup sequence is complete:
 
 - **Checkpoint A — inert authorization record (complete):** receive, validate,
   persist, inspect, expire, attach on exact
@@ -545,9 +549,9 @@ Continue progressively from Checkpoint D:
   into the existing preflight/commit path, revalidate the exact second session
   before `StartGame`, remove the environment/local-selector requirement for
   this route, and keep rollback/fatal boundaries intact.
-- **Checkpoint D — restart/reconnect UX (next):** initially use an explicit user-driven
-  restart; automate or polish it only after the trust and lifecycle path is
-  stable.
+- **Checkpoint D — restart/reconnect UX (complete):** expose an explicit local
+  restart to the exact fresh numeric endpoint, refuse conflicting loader
+  actions, suppress credentials, and make status/clear/restart process-aware.
 
 Each checkpoint needs negative tests for wrong server, wrong content ID,
 missing/corrupt cache, expired/replayed/tampered record, disconnect during
@@ -555,6 +559,54 @@ publication, resource stop, crash between write and consume, and a modified or
 unsupported GTA executable. Request gameplay validation or use explicitly
 authorized automation only after the relevant builds, logs, and non-game checks
 pass.
+
+## Completed checkpoint: restart and reconnect UX
+
+Checkpoint D adds `nativeworldauth restart`. It inspects a structured pending
+record under the authorization transaction, requires at least 60 seconds of
+remaining freshness, constructs only the exact canonical numeric
+`mtasa://<ip>:<port>` target, and schedules the loader restart only after an
+exact write/flush/readback check. An unrelated non-empty loader action is never
+overwritten. The restart diagnostic deliberately reports
+`credential=suppressed` and never includes a password.
+
+Prepared startup discards the supplied in-memory credential before it can be
+copied or used and skips browser-password recovery before the credential-bearing
+Deathmatch join. It does not erase MTA's general saved credential storage. This
+is intentional: the external network module exposes the server identity only
+after the join path begins, so passworded startup authorization is unsupported
+until an identity proof is available before credentials could be disclosed.
+The restart handoff must not restore password support by adding a password to
+the authorization record, loader action, diagnostics, or connection CVARs.
+
+Status now reflects the current process: an active native pack reports
+`state=active activation=yes lease=process restart-required=no`. `clear` and
+`restart` are refused throughout prepared, session-validated, hook-installed,
+and active phases, so an authorization command cannot invalidate or replace a
+process-global native registration.
+
+The explicitly authorized automated gate used ticket `4e97a97f`. The first
+client scheduled an exact restart and exited cleanly; the replacement process
+was launched with `mtasa://127.0.0.1:22003`, retained the same ticket, audited
+and claimed the cache, revalidated the session, and reached
+`state=active lease=process`. Active status, clear refusal, restart refusal, an
+exact `/reconnect`, and the extended-world teleport/line-of-sight/vehicle/camera
+sanity at x=7000 all passed. After a clean exit, a launch without a URI reported
+`state=absent`; restart was refused and did not exit or alter the loader action.
+The focused suite reports 70 tests with two optional environment-dependent
+skips. `Client Core` and `Client Deathmatch` each built twice as
+`Release|Win32` with zero errors.
+
+After the final credential-ordering and single-write loader hardening review,
+ticket `93e09b84` repeated the real restart path: the old process logged the
+exact passwordless scheduled action, the loader consumed it once, the new PIDs
+retained the ticket, and launch 2 again reached `state=active lease=process`.
+
+This gate did not claim live coverage for passworded servers, wrong-key reuse,
+resource-stop races, expiry during restart, unsupported executables, cache
+corruption, respawn, or the full world-sync resource. Those remain prescribed
+negative/regression scenarios; Checkpoint C already supplied the x=9500,
+water, COL synchronization, and `moveObject` live regression evidence.
 
 ## Remaining global roadmap
 
@@ -628,9 +680,9 @@ Read AGENTS.md, LIMIT_PATCHING.md, NATIVE_WORLD_HANDOFF.md,
 utils/extended-world/NATIVE_BW_PACK.md, and the recent native-world commit
 bodies completely. Recheck HEAD and the dirty tree before touching files.
 
-Resume with Checkpoint D, restart/reconnect UX, in
-NATIVE_WORLD_HANDOFF.md and NATIVE_WORLD_ACTIVATION.md. Recheck the current
-local commits, dirty tree, Checkpoint A/B/C evidence, and exact-cache/typed-lease
+Resume with global roadmap item 1, the constrained versioned generic
+static-world pack policy, in NATIVE_WORLD_HANDOFF.md. Recheck the current local
+commits, dirty tree, Checkpoint A/B/C/D evidence, and exact-cache/typed-lease
 contract before editing. Preserve unrelated changes, keep the
 orchestrator/independent-review loop and VM workflow. Do not perform in-game
 tests without explicit user authorization; otherwise prepare exact instructions

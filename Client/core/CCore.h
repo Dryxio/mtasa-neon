@@ -120,6 +120,8 @@ public:
                                                                                  const SNativeWorldAuthorizationPublication& publication) override;
     SNativeWorldAuthorizationRecordResult InspectNativeWorldStartupAuthorization() override;
     SNativeWorldAuthorizationRecordResult ClearNativeWorldStartupAuthorization() override;
+    SNativeWorldAuthorizationRecordResult PrepareNativeWorldStartupRestart();
+    bool                                  IsNativeWorldStartupCredentialSuppressed() const;
     SNativeWorldAuthorizationRecordResult RevokeNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
                                                                                 const std::string&                      contentId) override;
     SNativeWorldStartupSelection          BeginNativeWorldStartupSelection(bool legacySelectorEnabled) override;
@@ -436,6 +438,8 @@ private:
     };
     ENativeWorldStartupPhase     m_nativeWorldStartupPhase{ENativeWorldStartupPhase::Off};
     SNativeWorldStartupSelection m_nativeWorldStartupSelection{};
+
+    SNativeWorldAuthorizationRecordResult DescribeNativeWorldStartupProcess() const;
 
     // Command line
     static void                        ParseCommandLine(std::map<std::string, std::string>& options, const char*& szArgs, const char** pszNoValOptions = NULL);

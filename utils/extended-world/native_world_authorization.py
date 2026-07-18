@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic model of the inert native-world authorization record.
+"""Deterministic model of the native-world authorization record.
 
 The production envelope is protected by Windows DPAPI.  This module models the
 canonical plaintext only so its field order, bounds, freshness, and one-shot
@@ -20,6 +20,7 @@ PACK_FORMAT = 1
 POLICY_BULLWORTH = 1
 RECORD_LIFETIME_SECONDS = 900
 CLOCK_ROLLBACK_TOLERANCE_SECONDS = 120
+RESTART_MINIMUM_REMAINING_SECONDS = 60
 TRANSPORT_BITSTREAM_VERSION = 0x35
 AUTHORIZATION_BITSTREAM_VERSION = 0x36
 LATEST_BITSTREAM_VERSION = AUTHORIZATION_BITSTREAM_VERSION
@@ -389,6 +390,19 @@ def parse_closed_startup_uri(uri: str | None) -> tuple[bytes, int] | None:
     if not 1 <= port <= 65535:
         return None
     return bytes(map(int, octets)), port
+
+
+def restart_uri(record: AuthorizationRecord, now: int) -> str:
+    """Produce the only launch-2 target permitted for a fresh record."""
+    if freshness(record, now) != "fresh":
+        raise RecordError("restart requires a fresh native-world authorization")
+    if record.expires_at - now < RESTART_MINIMUM_REMAINING_SECONDS:
+        raise RecordError("restart authorization has insufficient time remaining")
+    host = ".".join(str(octet) for octet in record.server_ipv4)
+    uri = f"mtasa://{host}:{record.server_port}"
+    if parse_closed_startup_uri(uri) != (record.server_ipv4, record.server_port):
+        raise RecordError("restart endpoint is not canonical numeric IPv4")
+    return uri
 
 
 @dataclass
