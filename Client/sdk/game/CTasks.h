@@ -24,6 +24,7 @@ class CTaskComplexEnterCarAsPassenger;
 class CTaskComplexFacial;
 class CTaskComplexLeaveCar;
 class CTaskComplexCarDriveWander;
+class CTaskComplexCarDriveToPoint;
 class CTaskComplexGoToPointAndStandStill;
 class CTaskComplexPartnerChat;
 class CTaskComplexSeekEntityRadiusAngleOffset;
@@ -161,4 +162,8 @@ public:
     // matching OPEN/CLOSE/PERFORM/CLEAR_SEQUENCE_TASK ownership.
     virtual CTaskComplex* CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat = false) = 0;
     virtual int           GetTaskSequenceProgress(CPed* pPed) = 0;
+
+    // Appended after the sequence surface to preserve every established slot.
+    virtual CTaskComplexCarDriveToPoint* CreateTaskComplexCarDriveToPoint(CVehicle* pVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
+                                                                          int iDesiredVehicleModel, float fRadius, int iDrivingStyle) = 0;
 };

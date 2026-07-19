@@ -120,15 +120,17 @@ public:
     CTaskSimpleFight*       CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000);
 
     // Appended factories preserve the cross-module CTasks ABI.
-    CTaskComplexPartnerChat*   CreateTaskComplexPartnerChat(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection);
-    CTaskSimpleStandStill*     CreateTaskSimpleStandStill(int iDuration);
-    CTaskComplex*              CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat);
-    CTaskComplexKillPedOnFoot* CreateTaskComplexKillPedOnFoot(CPed* pTarget);
-    bool                       AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds = false);
-    CTaskComplexPartnerChat*   CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled);
-    CTaskComplex*              CreateTaskComplexTurnToFaceEntity(CPed* pTarget);
-    CTaskComplex*              CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat = false);
-    int                        GetTaskSequenceProgress(CPed* pPed);
+    CTaskComplexPartnerChat*     CreateTaskComplexPartnerChat(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection);
+    CTaskSimpleStandStill*       CreateTaskSimpleStandStill(int iDuration);
+    CTaskComplex*                CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat);
+    CTaskComplexKillPedOnFoot*   CreateTaskComplexKillPedOnFoot(CPed* pTarget);
+    bool                         AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds = false);
+    CTaskComplexPartnerChat*     CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled);
+    CTaskComplex*                CreateTaskComplexTurnToFaceEntity(CPed* pTarget);
+    CTaskComplex*                CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat = false);
+    int                          GetTaskSequenceProgress(CPed* pPed);
+    CTaskComplexCarDriveToPoint* CreateTaskComplexCarDriveToPoint(CVehicle* pVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
+                                                                  int iDesiredVehicleModel, float fRadius, int iDrivingStyle);
 
     static void StaticSetHooks();
 };

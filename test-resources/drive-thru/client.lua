@@ -13,10 +13,14 @@ local state = {
     arrivalTimer = nil,
     checkpointReached = false,
     greenwoodPolicyLogged = false,
+    restaurantCamera = nil,
+    restaurantRebuildTimer = nil,
+    pursuitBlip = nil,
 }
 
 local SCM_DESTINATION_BLIP_COLOR = {226, 192, 99, 255}
 local SCM_FRIENDLY_BLIP_COLOR = {0, 0, 255, 255}
+local SCM_THREAT_BLIP_COLOR = {255, 0, 0, 255}
 
 local function callMissionTextApi(name, ...)
     local api = _G[name]
@@ -84,25 +88,45 @@ local function applyActorPolicies(ped)
     if not isElement(ped) or getElementType(ped) ~= "ped" or getElementData(ped, DRIVETHRU.missionActorData) ~= true then
         return false
     end
-    if type(setPedMissionActor) ~= "function" or type(setPedStoryProtected) ~= "function" then
+    if type(setPedMissionActor) ~= "function" then
         return false
     end
-    return setPedMissionActor(ped, true) == true and setPedStoryProtected(ped, true) == true
+    if setPedMissionActor(ped, true) ~= true then
+        return false
+    end
+    local role = getElementData(ped, DRIVETHRU.actorRoleData)
+    if role == "ballas_driver" then
+        if type(setPedSuffersCriticalHits) ~= "function" or type(getPedSuffersCriticalHits) ~= "function" or
+            type(setPedWeaponAccuracy) ~= "function" then
+            return false
+        end
+        return setPedSuffersCriticalHits(ped, false) == true and getPedSuffersCriticalHits(ped) == false and
+                   setPedWeaponAccuracy(ped, DRIVETHRU.restaurant.ballasDriver.accuracy) == true
+    end
+    return type(setPedStoryProtected) == "function" and setPedStoryProtected(ped, true) == true
 end
 
 local function applyGreenwoodPolicies(vehicle)
-    if not isElement(vehicle) or getElementData(vehicle, DRIVETHRU.vehicleData) ~= true then
+    if not isElement(vehicle) then
         return false
     end
+    local role = getElementData(vehicle, DRIVETHRU.vehicleRoleData)
+    local profile = role == "voodoo" and DRIVETHRU.restaurant.voodoo or
+                        (role == "greenwood" and DRIVETHRU.restaurant.greenwood or DRIVETHRU.vehicle)
     if type(setVehicleTyresCanBurst) ~= "function" or type(setVehicleDoorLockMode) ~= "function" then
         return false
     end
-    local tyres = type(getVehicleTyresCanBurst) == "function" and getVehicleTyresCanBurst(vehicle) == false or
-                       setVehicleTyresCanBurst(vehicle, false)
+    local tyres = type(getVehicleTyresCanBurst) == "function" and getVehicleTyresCanBurst(vehicle) == profile.tyresCanBurst or
+                       setVehicleTyresCanBurst(vehicle, profile.tyresCanBurst)
     local doors = type(getVehicleDoorLockMode) == "function" and
-                      getVehicleDoorLockMode(vehicle) == DRIVETHRU.vehicle.doorLockMode or
-                      setVehicleDoorLockMode(vehicle, DRIVETHRU.vehicle.doorLockMode)
-    if tyres == true and doors == true and not state.greenwoodPolicyLogged then
+                      getVehicleDoorLockMode(vehicle) == profile.doorLockMode or setVehicleDoorLockMode(vehicle, profile.doorLockMode)
+    local proofs = true
+    if profile.proofs then
+        proofs = type(setVehiclePhysicalProofs) == "function" and
+                     setVehiclePhysicalProofs(vehicle, profile.proofs.bullet, profile.proofs.fire, profile.proofs.explosion,
+                                              profile.proofs.collision, profile.proofs.melee) == true
+    end
+    if role ~= "voodoo" and tyres == true and doors == true and proofs == true and not state.greenwoodPolicyLogged then
         state.greenwoodPolicyLogged = true
         local x, y, z = getElementPosition(vehicle)
         local colourOk, primaryR, primaryG, primaryB, secondaryR, secondaryG, secondaryB = pcall(getVehicleColor, vehicle, true)
@@ -110,9 +134,9 @@ local function applyGreenwoodPolicies(vehicle)
                               x, y, z,
                               colourOk and ("(%d,%d,%d)/(%d,%d,%d)"):format(primaryR, primaryG, primaryB, secondaryR, secondaryG,
                                                                             secondaryB) or "unavailable",
-                              tostring(getVehiclePlateText(vehicle)), DRIVETHRU.vehicle.doorLockMode))
+                              tostring(getVehiclePlateText(vehicle)), profile.doorLockMode))
     end
-    return tyres == true and doors == true
+    return tyres == true and doors == true and proofs == true
 end
 
 local function stopSpeaker(audio)
@@ -169,8 +193,8 @@ local function clearFileCutscene(reason, preserveFade)
             released = ok and result == true
         end
     end
-    outputDebugString(("[drive-thru] SWEET2A #%d cleared released=%s reason=%s"):format(
-                          tonumber(scene.id) or -1, tostring(released), tostring(reason or "cleanup")))
+    outputDebugString(("[drive-thru] %s #%d cleared released=%s reason=%s"):format(
+                          tostring(scene.name or "cutscene"), tonumber(scene.id) or -1, tostring(released), tostring(reason or "cleanup")))
     state.cutscene = nil
     return released
 end
@@ -191,7 +215,7 @@ local function getCJReadiness()
 end
 
 local function requestNativeCutscene(scene)
-    local ok, token = pcall(requestFileCutscene, DRIVETHRU.cutscene.name)
+    local ok, token = pcall(requestFileCutscene, scene.name)
     if not ok or not token then
         triggerServerEvent("drivethru:cutsceneReady", resourceRoot, scene.id, "request_refused", tostring(token))
         return
@@ -222,14 +246,44 @@ local function requestNativeCutscene(scene)
     end, DRIVETHRU.cutscene.pollInterval, 0)
 end
 
+local function clearRestaurantCamera(reason, preserveFade)
+    local camera = state.restaurantCamera
+    if not camera then
+        return true
+    end
+    for _, timer in ipairs({camera.fadeTimer, camera.leaseTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    local released = true
+    if camera.token and type(releaseScriptCamera) == "function" then
+        local ok, result = pcall(releaseScriptCamera, camera.token, preserveFade == true)
+        released = ok and result == true
+    end
+    state.restaurantCamera = nil
+    outputDebugString(("[drive-thru] Restaurant camera cleared released=%s reason=%s"):format(tostring(released),
+                                                                                              tostring(reason or "cleanup")))
+    return released
+end
+
 local function clearClientState(reason)
     if isTimer(state.entryTimer) then
         killTimer(state.entryTimer)
     end
     state.entryTimer = nil
+    if isTimer(state.restaurantRebuildTimer) then
+        killTimer(state.restaurantRebuildTimer)
+    end
+    state.restaurantRebuildTimer = nil
     clearAudio(reason)
     clearFileCutscene(reason, false)
+    clearRestaurantCamera(reason, false)
     destroyNavigation()
+    if isElement(state.pursuitBlip) then
+        destroyElement(state.pursuitBlip)
+    end
+    state.pursuitBlip = nil
     for _, ped in pairs(state.actors) do
         if isElement(ped) then
             if type(setPedMissionActor) == "function" then
@@ -263,7 +317,7 @@ addEventHandler("drivethru:start", resourceRoot, function(vehicle)
 end)
 
 addEvent("drivethru:cutscenePrepare", true)
-addEventHandler("drivethru:cutscenePrepare", resourceRoot, function(sceneId)
+addEventHandler("drivethru:cutscenePrepare", resourceRoot, function(sceneId, name, requiresAppearance)
     if source ~= resourceRoot or not state.active then
         return
     end
@@ -278,9 +332,13 @@ addEventHandler("drivethru:cutscenePrepare", resourceRoot, function(sceneId)
     if not ensureMissionText() then
         return triggerServerEvent("drivethru:cutsceneReady", resourceRoot, sceneId, "mission_text_unavailable", "SWEET3")
     end
-    local scene = {id = sceneId, requestedAt = getTickCount(), appearanceStableSamples = 0}
+    local scene = {id = sceneId, name = name, requestedAt = getTickCount(), appearanceStableSamples = 0}
     state.cutscene = scene
     state.stage = "cutscene"
+    if requiresAppearance ~= true then
+        requestNativeCutscene(scene)
+        return
+    end
     scene.appearanceTimer = setTimer(function()
         if state.cutscene ~= scene then
             return
@@ -312,7 +370,7 @@ addEventHandler("drivethru:cutsceneStart", resourceRoot, function(sceneId)
     if not fadeOk or faded ~= true then
         return triggerServerEvent("drivethru:cutsceneFinished", resourceRoot, scene.id, "fade_in_refused")
     end
-    outputDebugString("[drive-thru] SWEET2A native playback started")
+    outputDebugString(("[drive-thru] %s native playback started"):format(scene.name))
     scene.finishTimer = setTimer(function()
         if state.cutscene ~= scene then
             return
@@ -344,7 +402,8 @@ addEventHandler("drivethru:cutsceneStart", resourceRoot, function(sceneId)
                                        getTickCount() - scene.startedAt)
                 end
             end, DRIVETHRU.cutscene.pollInterval, 0)
-        elseif getTickCount() - scene.startedAt >= DRIVETHRU.cutscene.finishTimeout then
+        elseif getTickCount() - scene.startedAt >=
+            (DRIVETHRU.cutscene.finishTimeoutByName[scene.name] or DRIVETHRU.cutscene.finishTimeout) then
             killTimer(scene.finishTimer)
             triggerServerEvent("drivethru:cutsceneFinished", resourceRoot, scene.id, "finish_timeout")
         end
@@ -569,11 +628,169 @@ addEventHandler("drivethru:checkpointReached", resourceRoot, function()
     if source ~= resourceRoot or not state.active then
         return
     end
-    state.stage = "checkpoint"
+    state.stage = "restaurant_camera"
     state.checkpointReached = true
     destroyNavigation()
-    outputChatBox("Drive-Thru checkpoint valide: gate Cluckin' Bell + conducteur + quatre roues.", 80, 220, 120)
-    outputChatBox("Reste ici pour observer, puis utilise /drivethruabort.", 220, 220, 220)
+    clearAudio("restaurant_transition")
+
+    local required = {"acquireScriptCamera", "releaseScriptCamera", "isScriptCameraLeaseActive", "resetScriptCamera",
+                      "setScriptCameraWidescreen", "setScriptCameraFixed", "fadeScriptCamera", "isScriptCameraFading"}
+    for _, name in ipairs(required) do
+        if type(_G[name]) ~= "function" then
+            return triggerServerEvent("drivethru:restaurantCameraReady", resourceRoot, "api_unavailable", name)
+        end
+    end
+    clearRestaurantCamera("replaced", false)
+    local acquired, token = pcall(acquireScriptCamera, true)
+    if not acquired or not token then
+        return triggerServerEvent("drivethru:restaurantCameraReady", resourceRoot, "camera_acquire_refused", tostring(token))
+    end
+    local camera = {token = token, startedAt = getTickCount()}
+    state.restaurantCamera = camera
+    local profile = DRIVETHRU.restaurant.camera
+    local ready = resetScriptCamera(token) and setScriptCameraWidescreen(token, true) and
+                      setScriptCameraFixed(token, Vector3(profile.position.x, profile.position.y, profile.position.z),
+                                           Vector3(profile.target.x, profile.target.y, profile.target.z), Vector3(0, 0, 0), true) and
+                      fadeScriptCamera(token, false, profile.fadeOutDuration, 0, 0, 0)
+    if not ready then
+        clearRestaurantCamera("setup_refused", false)
+        return triggerServerEvent("drivethru:restaurantCameraReady", resourceRoot, "camera_setup_refused")
+    end
+    camera.leaseTimer = setTimer(function()
+        if state.restaurantCamera == camera and not isScriptCameraLeaseActive(camera.token) then
+            clearRestaurantCamera("lease_lost", false)
+            triggerServerEvent("drivethru:restaurantCameraReady", resourceRoot, "lease_lost")
+        end
+    end, 100, 0)
+    camera.fadeTimer = setTimer(function()
+        if state.restaurantCamera ~= camera or not isScriptCameraLeaseActive(camera.token) then
+            return
+        end
+        local ok, fading = pcall(isScriptCameraFading, camera.token)
+        local minimumElapsed = math.floor(profile.fadeOutDuration * 1000 + 0.5)
+        if not ok then
+            killTimer(camera.fadeTimer)
+            camera.fadeTimer = nil
+            triggerServerEvent("drivethru:restaurantCameraReady", resourceRoot, "fade_query_failed", tostring(fading))
+        elseif not fading and getTickCount() - camera.startedAt >= minimumElapsed then
+            killTimer(camera.fadeTimer)
+            camera.fadeTimer = nil
+            triggerServerEvent("drivethru:restaurantCameraReady", resourceRoot, "ready",
+                               ("fade=%dms"):format(getTickCount() - camera.startedAt))
+        end
+    end, 50, 0)
+end)
+
+addEvent("drivethru:restaurantCameraRelease", true)
+addEventHandler("drivethru:restaurantCameraRelease", resourceRoot, function()
+    if source ~= resourceRoot or state.stage ~= "restaurant_camera" then
+        return
+    end
+    local preload = DRIVETHRU.restaurant.preload
+    if type(enginePreloadWorldAreaInDirection) ~= "function" then
+        return triggerServerEvent("drivethru:restaurantCameraReleased", resourceRoot, "api_unavailable",
+                                  "enginePreloadWorldAreaInDirection")
+    end
+    local preloaded, preloadResult = pcall(enginePreloadWorldAreaInDirection, Vector3(preload.x, preload.y, preload.z), preload.heading)
+    if not preloaded or preloadResult == false then
+        return triggerServerEvent("drivethru:restaurantCameraReleased", resourceRoot, "preload_refused", tostring(preloadResult))
+    end
+    local released = clearRestaurantCamera("handoff_to_SWEET2B", true)
+    triggerServerEvent("drivethru:restaurantCameraReleased", resourceRoot, released and "released" or "release_failed")
+end)
+
+local function headingDistance(a, b)
+    return math.abs((a - b + 180) % 360 - 180)
+end
+
+local function vehicleMatchesReconstruction(vehicle, profile)
+    if not isElement(vehicle) or not isElementStreamedIn(vehicle) or not isElementSyncer(vehicle) or not applyGreenwoodPolicies(vehicle) then
+        return false, "not streamed, syncer-owned, or policy-ready"
+    end
+    local x, y, z = getElementPosition(vehicle)
+    local _, _, heading = getElementRotation(vehicle)
+    local expected = profile.position
+    if math.abs(x - expected.x) > 0.35 or math.abs(y - expected.y) > 0.35 or math.abs(z - expected.z) > 0.35 or
+        headingDistance(heading, expected.heading) > 2.0 then
+        return false, ("position=(%.3f,%.3f,%.3f) heading=%.2f"):format(x, y, z, heading)
+    end
+    return true, ("position=(%.3f,%.3f,%.3f) heading=%.2f"):format(x, y, z, heading)
+end
+
+addEvent("drivethru:restaurantRebuilt", true)
+addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
+    if source ~= resourceRoot or not state.active or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "restaurant_barrier"
+    state.vehicle = entities.vehicle
+    state.actors = {
+        smoke = entities.smoke,
+        sweet = entities.sweet,
+        ryder = entities.ryder,
+        ballas_driver = entities.ballas_driver,
+    }
+    local voodoo = entities.voodoo
+    if isElement(state.pursuitBlip) then
+        destroyElement(state.pursuitBlip)
+    end
+    state.pursuitBlip = createBlipAttachedTo(voodoo, 0, 2, unpack(SCM_THREAT_BLIP_COLOR))
+    if isElement(state.pursuitBlip) then
+        setElementDimension(state.pursuitBlip, DRIVETHRU.dimension)
+    end
+
+    local startedAt = getTickCount()
+    local stableSamples = 0
+    local lastDetails = "not sampled"
+    state.restaurantRebuildTimer = setTimer(function()
+        if not state.active or state.stage ~= "restaurant_barrier" then
+            return
+        end
+        local greenwoodReady, greenwoodDetails = vehicleMatchesReconstruction(state.vehicle, DRIVETHRU.restaurant.greenwood)
+        local voodooReady, voodooDetails = vehicleMatchesReconstruction(voodoo, DRIVETHRU.restaurant.voodoo)
+        if voodooReady and math.abs(getElementHealth(voodoo) - DRIVETHRU.restaurant.voodoo.health) > 0.5 then
+            voodooReady = false
+            voodooDetails = voodooDetails .. (" health=%.1f"):format(getElementHealth(voodoo))
+        end
+        local actorsReady = true
+        local seatDetails = {}
+        for _, name in ipairs({"smoke", "sweet", "ryder", "ballas_driver"}) do
+            local ped = state.actors[name]
+            local expectedVehicle = name == "ballas_driver" and voodoo or state.vehicle
+            local expectedSeat = name == "ballas_driver" and DRIVETHRU.restaurant.ballasDriver.seat or DRIVETHRU.actors[name].seat
+            local ready = isElement(ped) and isElementStreamedIn(ped) and isElementSyncer(ped) and applyActorPolicies(ped) and
+                              getPedOccupiedVehicle(ped) == expectedVehicle and getPedOccupiedVehicleSeat(ped) == expectedSeat
+            actorsReady = actorsReady and ready
+            seatDetails[#seatDetails + 1] = ("%s=%s/%s"):format(name, tostring(ready),
+                                                                 tostring(isElement(ped) and getPedOccupiedVehicleSeat(ped) or "none"))
+        end
+        local cjReady = getPedOccupiedVehicle(localPlayer) == state.vehicle and getPedOccupiedVehicleSeat(localPlayer) == 0
+        local ready = greenwoodReady and voodooReady and actorsReady and cjReady and isElement(state.pursuitBlip)
+        stableSamples = ready and stableSamples + 1 or 0
+        lastDetails = ("greenwood[%s] voodoo[%s] cj=%s %s stable=%d/%d"):format(
+                          greenwoodDetails, voodooDetails, tostring(cjReady), table.concat(seatDetails, ","), stableSamples,
+                          DRIVETHRU.restaurant.stableSamples)
+        if stableSamples >= DRIVETHRU.restaurant.stableSamples then
+            killTimer(state.restaurantRebuildTimer)
+            state.restaurantRebuildTimer = nil
+            outputDebugString("[drive-thru] PRE-PURSUIT RECONSTRUCTION READY: " .. lastDetails)
+            triggerServerEvent("drivethru:restaurantRebuildReady", resourceRoot, "ready", lastDetails)
+        elseif getTickCount() - startedAt >= DRIVETHRU.restaurant.reconstructionTimeout then
+            killTimer(state.restaurantRebuildTimer)
+            state.restaurantRebuildTimer = nil
+            triggerServerEvent("drivethru:restaurantRebuildReady", resourceRoot, "timeout", lastDetails)
+        end
+    end, 100, 0)
+end)
+
+addEvent("drivethru:restaurantCheckpoint", true)
+addEventHandler("drivethru:restaurantCheckpoint", resourceRoot, function()
+    if source ~= resourceRoot or not state.active then
+        return
+    end
+    state.stage = "restaurant_checkpoint"
+    outputChatBox("Drive-Thru: SWEET2B et reconstruction pre-poursuite valides.", 80, 220, 120)
+    outputChatBox("Le noir ecran est la frontiere SCM exacte. Utilise /drivethruabort apres verification des logs.", 220, 220, 220)
 end)
 
 addEvent("drivethru:failed", true)
@@ -603,7 +820,7 @@ addEventHandler("onClientElementStreamIn", root, function()
     end
     if getElementData(source, DRIVETHRU.missionActorData) == true then
         applyActorPolicies(source)
-    elseif getElementData(source, DRIVETHRU.vehicleData) == true then
+    elseif getElementData(source, DRIVETHRU.vehicleData) == true or type(getElementData(source, DRIVETHRU.vehicleRoleData)) == "string" then
         applyGreenwoodPolicies(source)
     end
 end)

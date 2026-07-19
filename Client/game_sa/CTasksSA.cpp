@@ -405,6 +405,14 @@ int CTasksSA::GetTaskSequenceProgress(CPed* pPed)
     return -1;
 }
 
+CTaskComplexCarDriveToPoint* CTasksSA::CreateTaskComplexCarDriveToPoint(CVehicle* pVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
+                                                                        int iDesiredVehicleModel, float fRadius, int iDrivingStyle)
+{
+    auto* pTask = NewTask<CTaskComplexCarDriveToPointSA>(pVehicle, vecTarget, fSpeed, iDriveMode, iDesiredVehicleModel, fRadius, iDrivingStyle);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
 CTaskSimpleStandStill* CTasksSA::CreateTaskSimpleStandStill(int iDuration)
 {
     auto* pTask = NewTask<CTaskSimpleStandStillSA>(iDuration);

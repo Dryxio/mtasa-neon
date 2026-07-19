@@ -24,15 +24,18 @@ Development commands:
 - `/tagupskip` advances the current stage (leader only).
 - `/tagupabort` aborts and restores every participant's previous state.
 - `/taguptrace [on|off]` or `F7` controls the local instruction-trace overlay.
+- `/taguptracechat [on|off]` sends each new trace operation to the local chatbox.
 - `/taguptracepreview` loads a presentation-only sample sequence for visual QA.
 
 ## Instruction trace component
 
-`instruction_feed.lua` provides a generic client-side `TAGUP_TRACE` namespace. It is loaded before `client.lua` and receives presentation-only updates from the mission: toggling it cannot affect stage progression. The overlay is invisible by default, keeps completed instructions dimmed, highlights the current instruction and interpolated progress, and shows future instructions as queued.
+`instruction_feed.lua` provides a generic client-side `TAGUP_TRACE` namespace. It is loaded before `client.lua` and receives presentation-only updates from the mission: toggling it cannot affect stage progression. The overlay is invisible by default and places one low-opacity black field below GTA's stock HUD. It makes the exact primitive or opcode the dominant line, keeps the human-readable title as a readable subtitle, and retains the two most recent primitives with explicit status and execution-domain labels.
 
-The live sequence labels each entry honestly as a verified native opcode/task, SCM flow or condition, co-op adaptation, or temporary Lua substitute. Fast synchronous instructions can move directly into the dimmed history without being held on screen; the trace never delays gameplay just to animate the UI. `/taguptracepreview` remains a purely local visual sample.
+The live sequence retains full presentation copy and changing runtime evidence for every observed operation even though the minimal overlay does not draw those longer fields. It labels each execution domain honestly as a native cutscene, task, camera, audio, predicate, recording or gameplay primitive, SCM flow, synchronized adapter, co-op barrier, or server-authoritative action. Fast synchronous calls update the card immediately; the trace never delays gameplay for presentation. `/taguptracepreview` remains a purely local visual sample.
 
-The panel reuses the running `chatbox` resource's `fonts/Arial.ttf` through MTA's cross-resource path support. It creates larger dedicated header, instruction, detail, status, and footer fonts and falls back to built-in fonts if `chatbox` is unavailable. Its black, warm-orange, and ivory treatment intentionally follows San Andreas' original mission UI rather than Neon's modern green diagnostic styling.
+`/taguptracechat` is an independent alternative to the HUD feed. When enabled, it writes a color-coded chatbox block for every newly active operation: the exact opcode and complete SCM command in gold, the concrete original GTA `CTask` class in blue when the operation creates one, then the human title in white. Non-task camera, audio, streaming, predicate, and server operations stay on one line rather than being mislabeled as tasks. It deliberately ignores progress-only updates, so tag percentages and per-frame observations cannot flood chat. Enabling it during an active sequence immediately prints the current operation; the chatbox itself provides the durable history.
+
+The feed uses MTA's bundled `pricedown` face for prominent primitives and `bankgothic` for supporting text, so it has no cross-resource font dependency. GTA-style gold, off-white text, green/red/amber history, a heavy black outline, and the restrained background remain readable over bright or detailed scenery without adding a live indicator, counter, or progress bar.
 
 ```lua
 TAGUP_TRACE.setSequence(steps, {title = "TAGGING UP TURF", subtitle = "CO-OP TRACE"})
@@ -43,9 +46,10 @@ TAGUP_TRACE.fail(stepId [, detail])
 TAGUP_TRACE.setProgress(stepId, progress [, detail]) -- progress accepts 0..1 or 0..100
 TAGUP_TRACE.reset()
 TAGUP_TRACE.toggle([visible])
+TAGUP_TRACE.toggleChat([enabled])
 ```
 
-Sequence entries may be strings or tables containing `id`, `title`, `detail`, `status`, and `progress`. The component only draws local DX primitives and owns no timers, elements, mission tokens, or server events. The detailed native-task feed is intentionally available on the mission leader/syncer, which is the client that actually executes and observes Sweet's GTA tasks; other party members do not fabricate those observations locally.
+Sequence entries may be strings or tables containing `id`, `title`, `explanation`, `category`, `primitive`, optional `originalTask`, `detail`, `status`, and `progress`. `explanation` is stable presentation copy; `detail` is the changing runtime evidence supplied by mission hooks. The component only draws local DX primitives or calls the local `outputChatBox`; it owns no timers, elements, mission tokens, or server events. The detailed native-task feed is intentionally available on the mission leader/syncer, which is the client that actually executes and observes Sweet's GTA tasks; other party members do not fabricate those observations locally.
 
 ## Current scope
 

@@ -386,56 +386,171 @@ addEventHandler("tagup:checkpointGroundProbe", resourceRoot, function(token, x, 
     setTimer(probeGround, 100, 1)
 end)
 
--- This ordered list is a presentation trace of the prototype's real execution.
--- The labels deliberately distinguish verified GTA primitives from temporary Lua
--- substitutes so footage cannot imply that the whole SCM runtime already exists.
+-- This is presentation copy as well as an execution map. Keeping the friendly
+-- explanation beside the exact primitive lets footage show how much native work
+-- is running without turning the overlay into an opcode spreadsheet.
+local function defineTraceStep(id, title, category, primitive, explanation, detail, originalTask)
+    return {
+        id = id,
+        title = title,
+        category = category,
+        primitive = primitive,
+        explanation = explanation,
+        detail = detail,
+        originalTask = originalTask,
+    }
+end
+
 local MISSION_TRACE_SEQUENCE = {
-    {id = "mission_start", title = "MISSION START", detail = "LUA ORCHESTRATION · server authority"},
-    {id = "file_cutscene", title = "SWEET1A FILE CUTSCENE", detail = "NATIVE VERIFIED · DAT/CUT/IFP + track 739"},
-    {id = "intro_camera", title = "SCM WORLD INTRO", detail = "NATIVE VERIFIED · fixed shot / 13 s vector track / SWE1_AA-AE"},
-    {id = "enter_car", title = "PARTY IN GREENWOOD", detail = "CO-OP CONDITION · leader driving + party seated"},
-    {id = "drive_idlewood", title = "LOCATE CAR AT IDLEWOOD", detail = "SCM GATE · 4 m box + 09D0 all wheels / vehicle anchored"},
-    {id = "leave_car", title = "05CD · TASK LEAVE CAR", detail = "NATIVE VERIFIED · MTA vehicle lifecycle"},
-    {id = "go_to", title = "05D3 · GO STRAIGHT TO COORD", detail = "NATIVE VERIFIED · Sweet / walk"},
-    {id = "go_to_wait", title = "OBSERVE NATIVE GO-TO", detail = "GET_SEQUENCE_PROGRESS · native task index 1"},
-    {id = "demo_setup", title = "COMPOSE SPRAY DEMO", detail = "NATIVE SEQUENCE · leave car / walk / shoot"},
-    {id = "accuracy", title = "02E2 · SET CHAR ACCURACY", detail = "NATIVE VERIFIED · value 90"},
-    {id = "shoot_rate", title = "07DD · SET CHAR SHOOT RATE", detail = "NATIVE VERIFIED · value 100"},
-    {id = "shoot", title = "0668 · SHOOT AT COORD", detail = "NATIVE VERIFIED · burst 5 / ceiling 15 s"},
-    {id = "shoot_wait", title = "OBSERVE NATIVE GUN CTRL", detail = "GET_SEQUENCE_PROGRESS · native task index 2"},
-    {id = "demo_tag", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · demo 0%"},
-    {id = "demo_wait", title = "CANCEL TASK + WAIT 1000", detail = "NEON LIFECYCLE + SCM FLOW"},
-    {id = "demo_camera", title = "SCRIPT CAMERA · SWEET DEMO", detail = "NATIVE VERIFIED · fixed + vector move/track"},
-    {id = "demo_audio_ar", title = "03CF/03D1 · SWE1_AR", detail = "NATIVE MISSION AUDIO · preload / play / finish"},
-    {id = "demo_checkout", title = "0605/062E · GRAFFITI_CHKOUT", detail = "SYNCED ANIMATION TASK · natural finish"},
-    {id = "demo_audio_ca", title = "03CF/03D1 · SWE1_CA", detail = "NATIVE MISSION AUDIO · preload / play / finish"},
-    {id = "enter_passenger", title = "05CA · ENTER CAR AS PASSENGER", detail = "NATIVE VERIFIED · SCM seat 0 / MTA seat 1"},
-    {id = "idlewood_tags", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · Idlewood 0%"},
-    {id = "return_car", title = "RETURN TO GREENWOOD", detail = "CO-OP CONDITION · party regroup"},
-    {id = "drive_ballas", title = "LOCATE CAR IN BALLAS", detail = "SCM GATE · 4 m box + 09D0 all wheels / vehicle anchored"},
-    {id = "ballas_camera", title = "SCRIPT CAMERA · BALLAS ARRIVAL", detail = "NATIVE VERIFIED · fixed point + widescreen / co-op barrier"},
-    {id = "ballas_leave", title = "05CD · CJ LEAVES CAR", detail = "NATIVE VERIFIED · local player vehicle lifecycle"},
-    {id = "ballas_audio_av", title = "03CF/03D1 · SWE1_AV", detail = "NATIVE MISSION AUDIO · preload / play / natural finish"},
-    {id = "ballas_wander", title = "05D2 · CAR DRIVE WANDER", detail = "NATIVE VERIFIED · Sweet passenger / speed 20 / style 2"},
-    {id = "ballas_wait", title = "WAIT 1000", detail = "SCM FLOW · release control after native start"},
-    {id = "spawn_ballas", title = "CREATE BALLAS GROUP", detail = "SCM ADAPTER · synchronized peds with native task AI"},
-    {id = "ballas_gang_camera", title = "SCRIPT CAMERA · TWO FLATS", detail = "NATIVE VERIFIED · fixed shot / WAIT 500 + skippable 6500"},
-    {id = "ballas_tags", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · Ballas 0%"},
-    {id = "rooftop_tag", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · rooftop 0%"},
-    {id = "request_carrec", title = "07C0 · REQUEST CAR RECORDING", detail = "NATIVE VERIFIED · recording 207"},
-    {id = "load_carrec", title = "07C1 · HAS CAR RECORDING LOADED", detail = "NATIVE VERIFIED · streamed RRR buffer"},
-    {id = "start_playback", title = "05EB · START RECORDED CAR", detail = "NATIVE VERIFIED · vehicle syncer only"},
-    {id = "playback_wait", title = "060E · CAR PLAYBACK ACTIVE", detail = "NATIVE VERIFIED · recording 207 / natural end"},
-    {id = "post_roof_preload", title = "0A0B · LOAD SCENE IN DIRECTION", detail = "NATIVE VERIFIED · heading converted to renderer radians"},
-    {id = "post_roof_horn", title = "09F7 · SWEET'S HORN", detail = "NATIVE VERIFIED · vehicle-attached script audio / twice"},
-    {id = "post_roof_audio", title = "03CF/03D1 · SWE1_BH", detail = "NATIVE MISSION AUDIO · preload / play / natural finish"},
-    {id = "post_roof_wander", title = "TASK WANDER STANDARD", detail = "NATIVE VERIFIED · surviving Flats"},
-    {id = "return_after_roof", title = "REGROUP WITH SWEET", detail = "CO-OP CONDITION · party in vehicle"},
-    {id = "drive_home", title = "LOCATE CAR AT GROVE", detail = "SCM GATE · 4 m box + 09D0 all wheels"},
-    {id = "final_camera", title = "SCM GROVE FINALE", detail = "NATIVE VERIFIED · 18 s vector camera / SWE1_BN-BU"},
-    {id = "final_handshake", title = "0605/062E · GANGS HANDSHAKE", detail = "SYNCED ANIMATION TASK · natural finish"},
-    {id = "final_walk", title = "05D3 · SWEET WALKS AWAY", detail = "NATIVE VERIFIED · walk / 20000 ms"},
-    {id = "mission_end", title = "MISSION PASSED", detail = "SERVER AUTHORITY · reward + restore"},
+    defineTraceStep("mission_start", "The server opens an authoritative mission run", "SERVER AUTHORITY", "MISSION STATE",
+                    "The server owns party membership, stage changes, failures and rewards while each client reports observable native work.",
+                    "Lua orchestration · run token accepted"),
+    defineTraceStep("file_cutscene", "GTA plays the original SWEET1A cutscene", "NATIVE CUTSCENE", "DAT / CUT / IFP + 739",
+                    "Neon leases GTA's global camera and synchronizes native loading, playback, skipping and cleanup across the party.",
+                    "Native verified · managed file-cutscene lifecycle"),
+    defineTraceStep("intro_camera", "The world intro continues outside the cutscene file", "NATIVE CAMERA", "FIXED + VECTOR CAMERA",
+                    "GTA camera primitives, mission audio and actor tasks rebuild the original SCM transition from SWE1_AA through SWE1_AE.",
+                    "Native verified · fixed shot + 13 s vector track"),
+    defineTraceStep("enter_car", "The party boards Sweet's Greenwood", "CO-OP BARRIER", "SERVER OCCUPANTS",
+                    "The mission waits for the leader to drive and for every participant to be seated before shared progression continues.",
+                    "Server validated · leader driving + party seated"),
+    defineTraceStep("drive_idlewood", "The Greenwood reaches the exact Idlewood gate", "NATIVE PREDICATE", "09D0 · ALL WHEELS",
+                    "The server combines the original four-metre SCM box with GTA's real wheel-contact predicate instead of approximating arrival.",
+                    "SCM gate · vehicle anchored after validation"),
+    defineTraceStep("leave_car", "Sweet leaves the Greenwood through GTA's task system", "NATIVE TASK", "05CD · TASK_LEAVE_CAR",
+                    "A verified CTaskComplexLeaveCar runs underneath MTA's server-confirmed occupant lifecycle.",
+                    "Native verified · synchronized vehicle lifecycle", "CTaskComplexLeaveCar"),
+    defineTraceStep("go_to", "Sweet walks to the demonstration tag", "NATIVE TASK", "05D3 · TASK_GO_STRAIGHT_TO_COORD",
+                    "GTA owns pathfinding, movement and stand-still completion; Lua supplies the original target, move state and timeout.",
+                    "Native verified · Sweet walking", "CTaskComplexGoToPointAndStandStillTimed"),
+    defineTraceStep("go_to_wait", "Lua observes GTA's active walk child", "NATIVE SEQUENCE", "0646 · GET_SEQUENCE_PROGRESS",
+                    "The mission reads the native task hierarchy instead of estimating movement with a timer or teleport.",
+                    "GET_SEQUENCE_PROGRESS · child index 1", "CTaskComplexUseSequence"),
+    defineTraceStep("demo_setup", "Neon composes Sweet's complete spray demonstration", "NATIVE SEQUENCE",
+                    "0615 / 0616 / 0618 / 063F · OPEN / CLOSE / PERFORM_SEQUENCE_TASK",
+                    "Leave-car, go-to and shoot descriptors become one GTA-owned task sequence with native child ownership.",
+                    "Open · append · close · perform · clear", "CTaskComplexSequence -> CTaskComplexUseSequence"),
+    defineTraceStep("accuracy", "Sweet receives the original weapon accuracy", "NATIVE PED STATE", "02E2 · SET_CHAR_ACCURACY",
+                    "The verified SCM setter updates the byte consumed directly by GTA's gun tasks.", "Native verified · value 90"),
+    defineTraceStep("shoot_rate", "Sweet receives the original shooting rate", "NATIVE PED STATE", "07DD · SET_CHAR_SHOOT_RATE",
+                    "GTA's weapon task reads a native rate byte rather than a Lua-side firing interval.", "Native verified · value 100"),
+    defineTraceStep("shoot", "Sweet sprays the wall with native gun control", "NATIVE TASK", "0668 · TASK_SHOOT_AT_COORD",
+                    "CTaskSimpleGunControl aims and fires the spray can at the SCM coordinate as part of the composed sequence.",
+                    "Native verified · burst 5 · 15 s safety ceiling", "CTaskSimpleGunControl -> CTaskSimpleUseGun"),
+    defineTraceStep("shoot_wait", "Lua observes GTA's active shooting child", "NATIVE SEQUENCE", "0646 · GET_SEQUENCE_PROGRESS",
+                    "The sequence index proves GTA has advanced from walking into gun control before the mission reacts.",
+                    "GET_SEQUENCE_PROGRESS · child index 2", "CTaskComplexUseSequence"),
+    defineTraceStep("demo_tag", "Real spray hits advance the demonstration tag", "NATIVE GAMEPLAY", "0702 / CShotInfo",
+                    "GTA detects spray-can impacts and applies its original eight-alpha tag progression before the server accepts the report.",
+                    "Native spray progress · demonstration 0%"),
+    defineTraceStep("demo_wait", "The task is cancelled at completion, then SCM waits", "SCM FLOW", "CLEAR TASK + WAIT 1000",
+                    "Neon tears down the native sequence cleanly and preserves the original one-second story beat without blocking gameplay.",
+                    "Native lifecycle + original SCM timing"),
+    defineTraceStep("demo_camera", "A leased script camera frames Sweet's demonstration", "NATIVE CAMERA", "FIXED + MOVE / TRACK",
+                    "Resource ownership and generation tokens protect GTA's one global camera from stale scene callbacks.",
+                    "Native verified · fixed and vector primitives"),
+    defineTraceStep("demo_audio_ar", "GTA loads and plays Sweet's approach dialogue", "NATIVE AUDIO", "03CF / 03D1 · SWE1_AR",
+                    "A resource-owned mission-audio slot is preloaded, played once and observed until its natural native finish.",
+                    "Native mission audio · preload / play / finish"),
+    defineTraceStep("demo_checkout", "Sweet performs the graffiti checkout animation", "SYNCED ANIMATION", "0605 / 062E · GRAFFITI_CHKOUT",
+                    "The synchronized animation runs to its real endpoint while the mission observes both actor and scene lifecycle.",
+                    "Natural animation finish required"),
+    defineTraceStep("demo_audio_ca", "GTA plays Sweet's checkout dialogue", "NATIVE AUDIO", "03CF / 03D1 · SWE1_CA",
+                    "The second native audio cue shares the same guarded slot lifecycle and finishes before camera cleanup.",
+                    "Native mission audio · preload / play / finish"),
+    defineTraceStep("enter_passenger", "Sweet re-enters as Greenwood passenger", "NATIVE TASK", "05CA · TASK_ENTER_CAR_AS_PASSENGER",
+                    "GTA handles approach and entry while MTA confirms the authoritative seat using its synchronized occupant lifecycle.",
+                    "Native verified · SCM seat 0 maps to MTA seat 1", "CTaskComplexEnterCarAsPassenger"),
+    defineTraceStep("idlewood_tags", "Native spray impacts cover both Idlewood tags", "NATIVE GAMEPLAY", "0702 / CShotInfo",
+                    "Each real spray hit advances GTA's tag material, then the server validates and mirrors accepted byte progress.",
+                    "Native spray progress · Idlewood 0%"),
+    defineTraceStep("return_car", "The party regroups with Sweet", "CO-OP BARRIER", "SERVER OCCUPANTS",
+                    "Shared mission state pauses until the active party is back together in the Greenwood.", "Server validated · party regroup"),
+    defineTraceStep("drive_ballas", "The Greenwood reaches the Ballas territory gate", "NATIVE PREDICATE", "09D0 · ALL WHEELS",
+                    "The original position box and GTA wheel contacts must both pass before the arrival scene can take ownership.",
+                    "SCM gate · vehicle anchored after validation"),
+    defineTraceStep("ballas_camera", "A native camera establishes the Ballas arrival", "NATIVE CAMERA", "FIXED + WIDESCREEN",
+                    "Every participant crosses a readiness barrier before the resource-owned fixed shot and widescreen state are revealed.",
+                    "Native verified · synchronized camera barrier"),
+    defineTraceStep("ballas_leave", "CJ leaves the Greenwood through the native task", "NATIVE TASK", "05CD · TASK_LEAVE_CAR",
+                    "The local player follows GTA's real leave-car behavior while the server waits for the synchronized occupant result.",
+                    "Native verified · player vehicle lifecycle", "CTaskComplexLeaveCar"),
+    defineTraceStep("ballas_audio_av", "GTA plays the Ballas departure line", "NATIVE AUDIO", "03CF / 03D1 · SWE1_AV",
+                    "The cue is requested before camera timing, broadcast through the party barrier and observed to natural completion.",
+                    "Native mission audio · event 37420"),
+    defineTraceStep("ballas_wander", "GTA road AI drives Sweet away", "NATIVE VEHICLE AI", "05D2 · TASK_CAR_DRIVE_WANDER",
+                    "CTaskComplexCarDriveWander owns the Greenwood route with the original speed and driving style while Sweet stays passenger.",
+                    "Native verified · speed 20 · style 2", "CTaskComplexCarDriveWander"),
+    defineTraceStep("ballas_wait", "SCM yields after the driving task starts", "SCM FLOW", "WAIT 1000",
+                    "The original delay lets native vehicle AI establish control before Lua releases the departure scene.",
+                    "Original SCM timing · no gameplay stall"),
+    defineTraceStep("spawn_ballas", "The server creates a synchronized Ballas group", "SCM ADAPTER", "NETWORK PEDS + GTA TASK AI",
+                    "MTA owns shared actors while their current syncer assigns native partner-chat, seek, combat and wander behavior.",
+                    "Synchronized actors · native task brain"),
+    defineTraceStep("ballas_chat", "Both Flats enter GTA's paired conversation behavior", "NATIVE TASK",
+                    "0677 · TASK_CHAT_WITH_CHAR",
+                    "GTA receives two reciprocal script-command events and keeps both PartnerChat tasks active through an observation barrier.",
+                    "Native verified · both actors · ten consecutive samples", "CTaskComplexPartnerChat"),
+    defineTraceStep("ballas_gang_camera", "A leased camera reveals the two Flats", "NATIVE CAMERA", "FIXED SHOT + SCM WAITS",
+                    "The shot preserves the original half-second lead-in and skippable 6.5-second hold across the co-op party.",
+                    "Native verified · WAIT 500 + skippable 6500"),
+    defineTraceStep("ballas_tags", "Native spray impacts cover both Ballas tags", "NATIVE GAMEPLAY", "0702 / CShotInfo",
+                    "GTA's spray system, not a scripted progress bar, drives both territory tags under server validation.",
+                    "Native spray progress · Ballas 0%"),
+    defineTraceStep("ballas_follow", "Both Flats repeatedly seek offsets around CJ", "NATIVE TASK SET",
+                    "0A09 SHUT_CHAR_UP_FOR_SCRIPTED_SPEECH + 05BA TASK_STAND_STILL + 06A8 TASK_GOTO_CHAR_OFFSET",
+                    "The syncer mutes scripted speech, clears the actors into StandStill, then dispatches GTA's repeated native offset sequence.",
+                    "Native verified · two actors · repeated mission sequence",
+                    "CTaskSimpleStandStill + CTaskComplexSeekEntityRadiusAngleOffset -> CTaskComplexUseSequence"),
+    defineTraceStep("ballas_attack", "Both Flats switch to GTA's on-foot combat AI", "NATIVE TASK",
+                    "05E2 · TASK_KILL_CHAR_ON_FOOT",
+                    "Each synchronized actor receives GTA's original on-foot kill task against the authoritative mission leader.",
+                    "Native verified · two attackers · leader target", "CTaskComplexKillPedOnFoot"),
+    defineTraceStep("rooftop_tag", "Native spray impacts cover the rooftop tag", "NATIVE GAMEPLAY", "0702 / CShotInfo",
+                    "The final wall uses the same resource-owned native tag path and survives stream-out through synchronized element state.",
+                    "Native spray progress · rooftop 0%"),
+    defineTraceStep("request_carrec", "Neon requests GTA's Greenwood recording", "NATIVE RECORDING", "07C0 · REQUEST RRR",
+                    "The resource claims recording 207 and one of GTA's sixteen guarded playback slots.",
+                    "Native verified · recording 207 requested"),
+    defineTraceStep("load_carrec", "GTA streams the recording into its RRR buffer", "NATIVE RECORDING", "07C1 · HAS RRR LOADED",
+                    "Playback cannot start until GTA confirms the native recording buffer is resident.",
+                    "Native verified · waiting for streamed buffer"),
+    defineTraceStep("start_playback", "GTA starts recorded Greenwood movement", "NATIVE RECORDING", "05EB · START CAR RECORDING",
+                    "The vehicle syncer starts direct non-looped playback while normal MTA vehicle replication remains in place.",
+                    "Native verified · syncer-owned start"),
+    defineTraceStep("playback_wait", "The mission observes recording 207 to its endpoint", "NATIVE RECORDING", "060E · RRR ACTIVE",
+                    "GTA owns every frame of the drive; Lua only checks native activity and validates the final position.",
+                    "Native verified · natural endpoint required"),
+    defineTraceStep("post_roof_preload", "GTA preloads the destination world in one direction", "NATIVE STREAMING", "0A0B · LOAD SCENE",
+                    "The renderer-facing SCM primitive loads objects around the destination and updates GTA's timer around blocking work.",
+                    "Native verified · heading converted to renderer radians"),
+    defineTraceStep("post_roof_horn", "The Greenwood emits Sweet's two scripted horns", "NATIVE VEHICLE AUDIO", "09F7 · EVENT 1147",
+                    "Each horn is reported through the streamed vehicle's own GTA audio entity rather than a detached sound effect.",
+                    "Native verified · two vehicle-attached events"),
+    defineTraceStep("post_roof_audio", "GTA plays Sweet's post-rooftop dialogue", "NATIVE AUDIO", "03CF / 03D1 · SWE1_BH",
+                    "The mission holds its transition until the resource-owned native cue reaches a natural finish.",
+                    "Native mission audio · event 37430"),
+    defineTraceStep("post_roof_wander", "Surviving Flats return to GTA's wander behavior", "NATIVE TASK", "05DE · TASK_WANDER_STANDARD",
+                    "The syncer releases encounter combat into CTaskComplexWanderStandard for every surviving actor.",
+                    "Native verified · surviving Flats", "CTaskComplexWanderStandard"),
+    defineTraceStep("return_after_roof", "The party regroups in the Greenwood", "CO-OP BARRIER", "SERVER OCCUPANTS",
+                    "Authoritative progression waits for Sweet and every active participant before the drive home.",
+                    "Server validated · party in vehicle"),
+    defineTraceStep("drive_home", "The Greenwood reaches the exact Grove Street gate", "NATIVE PREDICATE", "09D0 · ALL WHEELS",
+                    "The four-metre SCM region and GTA's strict wheel-contact counter protect the finale transition.",
+                    "SCM gate · position + native contact state"),
+    defineTraceStep("final_camera", "A native 18-second camera performs the Grove finale", "NATIVE CAMERA", "VECTOR MOVE / TRACK",
+                    "The leased camera, seven SWE1_BN–BU cues, facial controllers and actor staging reproduce the original closing scene.",
+                    "Native verified · synchronized finale lifecycle"),
+    defineTraceStep("final_handshake", "CJ and Sweet perform the GANGS handshake", "SYNCED ANIMATION", "0605 / 062E · GANGS",
+                    "Both synchronized animations must reach their natural endpoints after collision-safe restaging.",
+                    "Natural finish observed for both actors"),
+    defineTraceStep("final_walk", "Sweet turns and walks away through GTA's task system", "NATIVE TASK", "05D3 · TASK_GO_STRAIGHT_TO_COORD",
+                    "The final actor exit uses native pathfinding and the original twenty-second timeout instead of scripted movement.",
+                    "Native verified · walk · 20000 ms", "CTaskComplexGoToPointAndStandStillTimed"),
+    defineTraceStep("mission_end", "The server commits mission completion", "SERVER AUTHORITY", "0394 · PASSED TUNE",
+                    "The authoritative reward, native completion tune and full camera, actor, vehicle, model and clothing restoration close the run.",
+                    "Mission passed · $200 reward · state restore"),
 }
 
 local STAGE_TRACE_STEP = {
@@ -3763,6 +3878,21 @@ local function releaseBallasEncounterAudio(encounter)
     encounter.audioHandles = {}
 end
 
+local function releaseBallasEncounterAudioCue(encounter, cue)
+    local handle = encounter and encounter.audioHandles and encounter.audioHandles[cue]
+    if not handle then
+        return false
+    end
+    encounter.audioHandles[cue] = nil
+    if type(releaseMissionAudio) ~= "function" then
+        return false
+    end
+    local ok, released = pcall(releaseMissionAudio, handle)
+    outputDebugString(('[tagging-up-turf] Ballas optional audio released %s handle=%s result=%s'):format(
+                          tostring(cue), tostring(handle), tostring(ok and released ~= false)))
+    return ok and released ~= false
+end
+
 local function clearBallasEncounterAudioPreload()
     if state.ballasEncounterAudioPreload then
         releaseBallasEncounterAudio(state.ballasEncounterAudioPreload)
@@ -3823,9 +3953,12 @@ local function clearBallasEncounter(reason, stopNative)
     if isTimer(encounter.chatObservationTimer) then
         killTimer(encounter.chatObservationTimer)
     end
-    if isTimer(encounter.audioFinishTimer) then
-        killTimer(encounter.audioFinishTimer)
+    for _, timer in pairs(encounter.audioFinishTimers or {}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
     end
+    encounter.audioFinishTimers = {}
     restoreBallasEncounterSpeech(encounter)
     if stopNative and localPlayer == state.leader and type(killPedTask) == "function" then
         for _, ped in ipairs(encounter.enemies) do
@@ -3917,6 +4050,7 @@ local function beginBallasEncounterChat(encounter)
     -- The installed speech containers have silent samples. Select GTA's own
     -- timed PartnerChat fallback explicitly so actor positioning and chat idle
     -- behavior remain native without depending on an audible conversation.
+    traceCurrent("ballas_chat", "NATIVE VERIFIED · assigning reciprocal 0677 events to both Flats")
     if type(setPedChatWith) ~= "function" or not setPedChatWith(encounter.enemies[2], encounter.enemies[1], false, true, false) or
         not setPedChatWith(encounter.enemies[1], encounter.enemies[2], true, true, false) then
         return reportBallasEncounterTask(encounter, "chat", "refused", "TASK_COMPLEX_PARTNER_CHAT refusee")
@@ -4025,6 +4159,7 @@ addEventHandler("tagup:ballasEncounterFollow", resourceRoot, function(encounterI
 
     local profile = TAGUP.ballasGangScene.follow
     encounter.speechMuted = true
+    traceCurrent("ballas_follow", "NATIVE VERIFIED · 0A09 + 05BA + repeated 06A8 for both Flats")
     for index, ped in ipairs(encounter.enemies) do
         if isElement(ped) and not isPedDead(ped) then
             if not isElementStreamedIn(ped) or not isElementSyncer(ped) or type(setPedScriptedSpeechMuted) ~= "function" or
@@ -4046,6 +4181,7 @@ addEventHandler("tagup:ballasEncounterAttack", resourceRoot, function(encounterI
     end
     encounter.phase = "attacking"
     if localPlayer == state.leader then
+        traceCurrent("ballas_attack", "NATIVE VERIFIED · assigning 05E2 against the leader to both Flats")
         for index, ped in ipairs(encounter.enemies) do
             if isElement(ped) and not isPedDead(ped) and
                 (not isElementStreamedIn(ped) or not isElementSyncer(ped) or type(setPedKillOnFoot) ~= "function" or
@@ -4064,23 +4200,30 @@ addEventHandler("tagup:ballasEncounterAudioCue", resourceRoot, function(encounte
         return
     end
     local audioStarted = playBallasEncounterAudio(encounter, cue, cue == "whatTheFuck" and "SWE1_BA" or "SWE1_BE")
-
-    if cue == "whatTheFuck" then
+    if not audioStarted or type(isMissionAudioFinished) ~= "function" then
+        releaseBallasEncounterAudioCue(encounter, cue)
+        if cue == "getThatFool" then
+            restoreBallasEncounterSpeech(encounter)
+        end
         return
     end
-    if not audioStarted or type(isMissionAudioFinished) ~= "function" then
-        return restoreBallasEncounterSpeech(encounter)
-    end
     local handle = encounter.audioHandles[cue]
-    encounter.audioFinishTimer = setTimer(function()
+    encounter.audioFinishTimers = encounter.audioFinishTimers or {}
+    encounter.audioFinishTimers[cue] = setTimer(function()
         if state.ballasEncounter ~= encounter then
             return
         end
         local ok, finished = pcall(isMissionAudioFinished, handle)
         if not ok or finished then
-            killTimer(encounter.audioFinishTimer)
-            encounter.audioFinishTimer = nil
-            restoreBallasEncounterSpeech(encounter)
+            local timer = encounter.audioFinishTimers and encounter.audioFinishTimers[cue]
+            if isTimer(timer) then
+                killTimer(timer)
+            end
+            encounter.audioFinishTimers[cue] = nil
+            releaseBallasEncounterAudioCue(encounter, cue)
+            if cue == "getThatFool" then
+                restoreBallasEncounterSpeech(encounter)
+            end
         end
     end, 50, 0)
 end)

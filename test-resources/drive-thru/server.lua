@@ -198,7 +198,9 @@ local function startMissionWatchdog()
             return
         end
         local vehicle = mission.entities.vehicle
-        if mission.stage ~= "cutscene" and not isElement(vehicle) then
+        local allowsMissingGreenwood = mission.stage == "cutscene" or mission.stage == "restaurant_teardown" or
+                                           mission.stage == "restaurant_rebuild"
+        if not allowsMissingGreenwood and not isElement(vehicle) then
             return failMission("The Greenwood element disappeared", "SWE3_D")
         end
         if isElement(vehicle) and mission.stage ~= "cutscene" and getElementHealth(vehicle) <= 250 then
@@ -211,6 +213,22 @@ local function startMissionWatchdog()
         end
     end, 250, 0))
 end
+
+local function setStoryVehicleState(vehicle, role, profile)
+    setElementDimension(vehicle, DRIVETHRU.dimension)
+    setVehicleColor(vehicle, profile.primaryColor[1], profile.primaryColor[2], profile.primaryColor[3], profile.secondaryColor[1],
+                    profile.secondaryColor[2], profile.secondaryColor[3])
+    if profile.plate then
+        setVehiclePlateText(vehicle, profile.plate)
+    end
+    setVehicleDamageProof(vehicle, false)
+    setVehicleLocked(vehicle, false)
+    setVehicleEngineState(vehicle, false)
+    setElementData(vehicle, DRIVETHRU.vehicleRoleData, role, true)
+    setElementSyncer(vehicle, mission.leader, true, true)
+end
+
+local createMissionActor
 
 local function createGreenwood()
     local profile = DRIVETHRU.vehicle
@@ -226,6 +244,7 @@ local function createGreenwood()
     setVehicleLocked(vehicle, false)
     setVehicleEngineState(vehicle, false)
     setElementData(vehicle, DRIVETHRU.vehicleData, true, true)
+    setElementData(vehicle, DRIVETHRU.vehicleRoleData, "greenwood_intro", true)
     setElementSyncer(vehicle, mission.leader, true, true)
     mission.entities.vehicle = vehicle
     local x, y, z = getElementPosition(vehicle)
@@ -237,7 +256,83 @@ local function createGreenwood()
     return true
 end
 
-local function createMissionActor(name, profile)
+local function createRestaurantVehicle(role, profile)
+    local position = profile.position
+    local vehicle = createVehicle(profile.model, position.x, position.y, position.z, 0, 0, position.heading)
+    if not vehicle then
+        return false
+    end
+    setStoryVehicleState(vehicle, role, profile)
+    mission.entities[role] = vehicle
+    if role == "greenwood" then
+        setElementData(vehicle, DRIVETHRU.vehicleData, true, true)
+        mission.entities.vehicle = vehicle
+    end
+    return vehicle
+end
+
+local function createRestaurantProtagonist(name, profile, vehicle)
+    local vehiclePosition = DRIVETHRU.restaurant.greenwood.position
+    local pedProfile = {
+        model = profile.model,
+        position = {x = vehiclePosition.x, y = vehiclePosition.y, scriptZ = vehiclePosition.scriptZ, heading = profile.position.heading},
+        walkingStyle = profile.walkingStyle,
+    }
+    if not createMissionActor(name, pedProfile) then
+        return false
+    end
+    setElementData(mission.entities[name], DRIVETHRU.actorRoleData, "protagonist", true)
+    return warpPedIntoVehicle(mission.entities[name], vehicle, profile.seat)
+end
+
+local function createRestaurantBallasDriver(vehicle)
+    local profile = DRIVETHRU.restaurant.ballasDriver
+    local position = DRIVETHRU.restaurant.voodoo.position
+    local ped = createPed(profile.model, position.x, position.y, position.z + 1.0, position.heading)
+    if not ped then
+        return false
+    end
+    setElementDimension(ped, DRIVETHRU.dimension)
+    giveWeapon(ped, DRIVETHRU.weapon.id, DRIVETHRU.weapon.ammo, true)
+    setElementData(ped, DRIVETHRU.missionActorData, true, true)
+    setElementData(ped, DRIVETHRU.actorRoleData, "ballas_driver", true)
+    setElementData(ped, "drivethru.actor", "ballas_driver", true)
+    setElementSyncer(ped, mission.leader, true, true)
+    mission.entities.ballas_driver = ped
+    return warpPedIntoVehicle(ped, vehicle, profile.seat)
+end
+
+local function rebuildRestaurantWorld()
+    if not mission.running or mission.stage ~= "restaurant_rebuild" then
+        return
+    end
+    local profile = DRIVETHRU.restaurant
+    local greenwood = createRestaurantVehicle("greenwood", profile.greenwood)
+    if not greenwood then
+        return failMission("Restaurant Greenwood could not be reconstructed")
+    end
+    for _, name in ipairs({"smoke", "sweet", "ryder"}) do
+        if not createRestaurantProtagonist(name, DRIVETHRU.actors[name], greenwood) then
+            return failMission("Restaurant protagonist reconstruction failed: " .. name)
+        end
+    end
+    if not warpPedIntoVehicle(mission.leader, greenwood, 0) then
+        return failMission("CJ could not be warped into the reconstructed Greenwood")
+    end
+    local voodoo = createRestaurantVehicle("voodoo", profile.voodoo)
+    if not voodoo then
+        return failMission("Pursuit Voodoo could not be reconstructed")
+    end
+    setElementHealth(voodoo, profile.voodoo.health)
+    if not createRestaurantBallasDriver(voodoo) then
+        return failMission("Ballas pursuit driver could not be reconstructed")
+    end
+    mission.stage = "restaurant_barrier"
+    triggerClientEvent(mission.leader, "drivethru:restaurantRebuilt", resourceRoot, mission.entities)
+    outputDebugString("[drive-thru] Restaurant reconstruction created; waiting for native policy and streaming barrier")
+end
+
+createMissionActor = function(name, profile)
     -- GTA's CREATE_CHAR converts script ground Z to the native ped centre by
     -- adding one metre. MTA createPed consumes the centre directly.
     local ped = createPed(profile.model, profile.position.x, profile.position.y, profile.position.scriptZ + 1.0, profile.position.heading)
@@ -376,14 +471,15 @@ local function beginWorldAfterCutscene()
     end, DRIVETHRU.actorEntryTimeout, 1))
 end
 
-local function startFileCutscene()
+local function startFileCutscene(purpose)
+    local name = DRIVETHRU.cutscenes[purpose]
     mission.cutsceneSerial = mission.cutsceneSerial + 1
-    mission.cutscene = {id = mission.cutsceneSerial, ready = false, started = false, finished = false}
+    mission.cutscene = {id = mission.cutsceneSerial, name = name, purpose = purpose, ready = false, started = false, finished = false}
     mission.stage = "cutscene"
-    triggerClientEvent(mission.leader, "drivethru:cutscenePrepare", resourceRoot, mission.cutscene.id)
+    triggerClientEvent(mission.leader, "drivethru:cutscenePrepare", resourceRoot, mission.cutscene.id, name, purpose == "intro")
     rememberTimer(setTimer(function(expectedId)
         if mission.cutscene and mission.cutscene.id == expectedId and not mission.cutscene.ready then
-            failMission("SWEET2A loading timed out")
+            failMission(name .. " loading timed out")
         end
     end, DRIVETHRU.cutscene.loadTimeout + DRIVETHRU.cutscene.appearanceTimeout, 1, mission.cutscene.id))
 end
@@ -411,7 +507,7 @@ local function startMission(player)
     triggerClientEvent(player, "drivethru:start", resourceRoot)
     outputDebugString(("[drive-thru] Starting SWEET2A for leader %s in dimension %d"):format(getPlayerName(player), DRIVETHRU.dimension))
     startMissionWatchdog()
-    startFileCutscene()
+    startFileCutscene("intro")
 end
 
 addEvent("drivethru:cutsceneReady", true)
@@ -421,7 +517,7 @@ addEventHandler("drivethru:cutsceneReady", resourceRoot, function(sceneId, resul
         return
     end
     if result ~= "ready" then
-        return failMission("SWEET2A preparation failed: " .. tostring(result) .. " " .. tostring(details or ""))
+        return failMission(scene.name .. " preparation failed: " .. tostring(result) .. " " .. tostring(details or ""))
     end
     scene.ready = true
     scene.started = true
@@ -444,14 +540,15 @@ addEventHandler("drivethru:cutsceneFinished", resourceRoot, function(sceneId, re
         return
     end
     if result ~= "finished" then
-        return failMission("SWEET2A playback failed: " .. tostring(result))
+        return failMission(scene.name .. " playback failed: " .. tostring(result))
     end
     scene.finished = true
-    outputDebugString(("[drive-thru] SWEET2A finished skipped=%s elapsed=%s ms"):format(tostring(skipped == true), tostring(elapsed or "?")))
+    outputDebugString(("[drive-thru] %s finished skipped=%s elapsed=%s ms"):format(scene.name, tostring(skipped == true),
+                                                                                   tostring(elapsed or "?")))
     triggerClientEvent(mission.leader, "drivethru:cutsceneRelease", resourceRoot, scene.id)
     rememberTimer(setTimer(function(expectedId)
         if mission.cutscene and mission.cutscene.id == expectedId then
-            failMission("SWEET2A cleanup timed out")
+            failMission(scene.name .. " cleanup timed out")
         end
     end, DRIVETHRU.cutscene.releaseTimeout, 1, scene.id))
 end)
@@ -463,10 +560,59 @@ addEventHandler("drivethru:cutsceneReleased", resourceRoot, function(sceneId, re
         return
     end
     if result ~= "released" then
-        return failMission("SWEET2A native state was not released")
+        return failMission(scene.name .. " native state was not released")
     end
+    local purpose = scene.purpose
     mission.cutscene = nil
-    beginWorldAfterCutscene()
+    if purpose == "intro" then
+        beginWorldAfterCutscene()
+    else
+        mission.stage = "restaurant_rebuild"
+        rebuildRestaurantWorld()
+    end
+end)
+
+addEvent("drivethru:restaurantCameraReady", true)
+addEventHandler("drivethru:restaurantCameraReady", resourceRoot, function(result, details)
+    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "restaurant_camera" then
+        return
+    end
+    if result ~= "ready" then
+        return failMission("Restaurant camera transition failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    mission.stage = "restaurant_teardown"
+    local leader = mission.leader
+    local staging = DRIVETHRU.restaurant.cjStaging
+    removePedFromVehicle(leader)
+    setElementPosition(leader, staging.x, staging.y, staging.scriptZ + 1.0)
+    setElementFrozen(leader, true)
+    destroyMissionEntities()
+    triggerClientEvent(leader, "drivethru:restaurantCameraRelease", resourceRoot)
+    outputDebugString("[drive-thru] Vanilla restaurant teardown complete under native black fade")
+end)
+
+addEvent("drivethru:restaurantCameraReleased", true)
+addEventHandler("drivethru:restaurantCameraReleased", resourceRoot, function(result, details)
+    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "restaurant_teardown" then
+        return
+    end
+    if result ~= "released" then
+        return failMission("Restaurant camera release failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    startFileCutscene("restaurant")
+end)
+
+addEvent("drivethru:restaurantRebuildReady", true)
+addEventHandler("drivethru:restaurantRebuildReady", resourceRoot, function(result, details)
+    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "restaurant_barrier" then
+        return
+    end
+    if result ~= "ready" then
+        return failMission("Restaurant reconstruction barrier failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    mission.stage = "restaurant_checkpoint"
+    outputDebugString("[drive-thru] CHECKPOINT PASSED: SWEET2B released; Greenwood, crew, CJ, Voodoo and Ballas driver rebuilt; no pursuit task assigned")
+    triggerClientEvent(mission.leader, "drivethru:restaurantCheckpoint", resourceRoot)
 end)
 
 addEvent("drivethru:actorTasksReady", true)
@@ -536,7 +682,7 @@ addEventHandler("drivethru:arrivalReport", resourceRoot, function(onAllWheels)
         outputDebugString("[drive-thru] Rejected stale 09D0 arrival report outside the SCM box", 2)
         return
     end
-    mission.stage = "checkpoint"
+    mission.stage = "restaurant_camera"
     triggerClientEvent(player, "drivethru:checkpointReached", resourceRoot)
     outputDebugString(("[drive-thru] CHECKPOINT PASSED: restaurant gate position=(%.2f, %.2f, %.2f) driver=true allWheels=true"):format(x, y, z))
 end)
@@ -627,7 +773,7 @@ addCommandHandler("drivethruskip", function(player)
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[drive-thru] Resource ready. Use /drivethru to start the SWEET2A to restaurant checkpoint.")
+    outputDebugString("[drive-thru] Resource ready. Use /drivethru to run through SWEET2B and the pre-pursuit reconstruction checkpoint.")
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()

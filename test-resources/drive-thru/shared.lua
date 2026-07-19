@@ -1,7 +1,9 @@
 DRIVETHRU = {
     dimension = 4102,
     missionActorData = "drivethru.missionActor",
+    actorRoleData = "drivethru.actorRole",
     vehicleData = "drivethru.greenwood",
+    vehicleRoleData = "drivethru.vehicleRole",
     vehicle = {
         model = 492,
         -- CREATE_CAR adds the model collision base offset to script Z before
@@ -13,6 +15,8 @@ DRIVETHRU = {
         secondaryColor = {100, 100, 100},
         bounceRadioChannel = 4,
         doorLockMode = 1,
+        tyresCanBurst = false,
+        proofs = {bullet = false, fire = true, explosion = false, collision = false, melee = false},
     },
     cj = {
         model = 0,
@@ -55,14 +59,53 @@ DRIVETHRU = {
         radiusZ = 4.0,
     },
     cutscene = {
-        name = "SWEET2A",
         fadeInDuration = 1.0,
         appearanceStableSamples = 3,
         appearanceTimeout = 10000,
         loadTimeout = 60000,
         finishTimeout = 60000,
+        -- SWEET2B still has a vanilla text cue ending at 82.680 seconds.
+        -- Keep the shorter generic watchdog for SWEET2A while allowing the
+        -- restaurant cutscene to reach its native completion signal.
+        finishTimeoutByName = {SWEET2B = 120000},
         releaseTimeout = 5000,
         pollInterval = 50,
+    },
+    cutscenes = {
+        intro = "SWEET2A",
+        restaurant = "SWEET2B",
+    },
+    restaurant = {
+        camera = {
+            position = {x = 2405.9749, y = -1882.4752, z = 15.2036},
+            target = {x = 2405.5693, y = -1883.3892, z = 15.2158},
+            fadeOutDuration = 1.0,
+        },
+        cjStaging = {x = 2364.1926, y = -1914.0768, scriptZ = 12.4235},
+        preload = {x = 2397.6443, y = -1880.2762, z = 23.8686, heading = 160.0},
+        greenwood = {
+            model = 492,
+            position = {x = 2396.36, y = -1917.96, scriptZ = 12.38, z = 12.88, heading = 267.3},
+            plate = "GROVE4L",
+            primaryColor = {78, 104, 129},
+            secondaryColor = {100, 100, 100},
+            doorLockMode = 1,
+            tyresCanBurst = false,
+            proofs = {bullet = false, fire = true, explosion = false, collision = false, melee = false},
+        },
+        voodoo = {
+            model = 412,
+            -- The installed voodoo COL3 minimum Z is -0.5499315.
+            position = {x = 2411.3098, y = -1928.8369, scriptZ = 12.3906, z = 12.9405315, heading = 178.7106},
+            primaryColor = {105, 30, 59},
+            secondaryColor = {105, 30, 59},
+            health = 2700,
+            doorLockMode = 3,
+            tyresCanBurst = false,
+        },
+        ballasDriver = {model = 103, seat = 0, accuracy = 40},
+        reconstructionTimeout = 10000,
+        stableSamples = 3,
     },
     audio = {
         loadTimeout = 30000,

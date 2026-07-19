@@ -53,6 +53,15 @@ enum eDoorLock : int32_t
     DOOR_LOCK_SKIP_SHUT_DOORS,
 };
 
+struct SVehiclePhysicalProofs
+{
+    bool bullet{};
+    bool fire{};
+    bool explosion{};
+    bool collision{};
+    bool melee{};
+};
+
 #define SIREN_TYPE_FIRST 1
 #define SIREN_TYPE_LAST  6
 #define SIREN_ID_MAX     7
@@ -346,4 +355,5 @@ public:
     virtual bool      IsOnAllWheels() const = 0;
     virtual eDoorLock GetDoorLockMode() const = 0;
     virtual void      SetDoorLockMode(eDoorLock mode) = 0;
+    virtual void      SetPhysicalProofs(const SVehiclePhysicalProofs& proofs) = 0;
 };

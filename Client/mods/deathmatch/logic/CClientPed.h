@@ -418,6 +418,8 @@ public:
     bool SetMissionActor(bool enabled);
     bool IsStoryProtected() const noexcept { return m_bStoryProtected; }
     bool SetStoryProtected(bool enabled);
+    bool GetSuffersCriticalHits() const noexcept { return m_suffersCriticalHits.value_or(true); }
+    bool SetSuffersCriticalHits(bool suffersCriticalHits);
 
     void                                    AddProjectile(CClientProjectile* pProjectile) { m_Projectiles.push_back(pProjectile); }
     void                                    RemoveProjectile(CClientProjectile* pProjectile) { m_Projectiles.remove(pProjectile); }
@@ -607,6 +609,7 @@ protected:
     void _ChangeModel();
     void ApplyMissionActorState();
     void ApplyStoryProtectionState();
+    void ApplySuffersCriticalHitsState();
 
     void ModelRequestCallback(CModelInfo* pModelInfo);
 
@@ -738,6 +741,7 @@ public:
     bool                                     m_bStoryProtected{false};
     std::optional<SPedCreatedByState>        m_missionActorNativeState;
     std::optional<SPedStoryProtectionState>  m_storyProtectionNativeState;
+    std::optional<bool>                      m_suffersCriticalHits;
     std::list<CClientProjectile*>            m_Projectiles;
     unsigned char                            m_ucAlpha;
     float                                    m_fTargetRotation;

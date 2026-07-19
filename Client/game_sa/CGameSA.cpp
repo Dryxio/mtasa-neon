@@ -114,6 +114,7 @@ namespace
     constexpr std::uintptr_t VAR_FileCutsceneRunning = 0xB5F851;
     constexpr std::uintptr_t VAR_FileCutsceneProcessing = 0xB5F852;
     constexpr std::uintptr_t VAR_FileCutsceneSkipped = 0xB5F854;
+    constexpr std::uintptr_t VAR_DisableStreaming = 0x9654B0;
     constexpr unsigned int   MODEL_CSPLAY = 1;
     constexpr unsigned int   MODEL_CUTOBJ01 = 300;
     constexpr unsigned int   MODEL_CUTOBJ13 = 312;
@@ -1750,10 +1751,15 @@ bool CGameSA::IsFileCutsceneLoaded() const
             !AreManagedFileCutsceneModelMappingsInstalled())
             return false;
 
+        // Vanilla missions disable world streaming immediately before
+        // LOAD_CUTSCENE. CCutsceneMgr restores this flag after postload or
+        // teardown, so preserve that native loading window for managed scenes.
+        *reinterpret_cast<bool*>(VAR_DisableStreaming) = true;
         reinterpret_cast<void(__cdecl*)(const char*)>(FUNC_LoadFileCutscene)(g_managedFileCutsceneName);
         g_preloadingManagedFileCutscene = false;
         if (!IsFileCutsceneActive())
         {
+            *reinterpret_cast<bool*>(VAR_DisableStreaming) = false;
             RestoreManagedFileCutsceneModelMappings(m_pStreaming);
             return false;
         }

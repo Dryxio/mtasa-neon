@@ -498,8 +498,17 @@ public:
     void      LockDoors(bool bLocked);
     eDoorLock GetDoorLockMode() const override { return GetVehicleInterface()->m_doorLock; }
     void      SetDoorLockMode(eDoorLock mode) override { GetVehicleInterface()->m_doorLock = mode; }
-    bool      AreDoorsUndamageable() { return m_doorsUndamageable; }
-    void      SetDoorsUndamageable(bool bUndamageable) { m_doorsUndamageable = bUndamageable; }
+    void      SetPhysicalProofs(const SVehiclePhysicalProofs& proofs) override
+    {
+        auto* physical = static_cast<CPhysicalSAInterface*>(GetVehicleInterface());
+        physical->bBulletProof = proofs.bullet;
+        physical->bFireProof = proofs.fire;
+        physical->bExplosionProof = proofs.explosion;
+        physical->bCollisionProof = proofs.collision;
+        physical->bMeeleProof = proofs.melee;
+    }
+    bool AreDoorsUndamageable() { return m_doorsUndamageable; }
+    void SetDoorsUndamageable(bool bUndamageable) { m_doorsUndamageable = bUndamageable; }
 
     DWORD GetBaseVehicleType();
 

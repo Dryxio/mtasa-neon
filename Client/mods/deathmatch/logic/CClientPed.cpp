@@ -3689,6 +3689,7 @@ void CClientPed::_CreateModel()
         // starts evaluating ambient task transitions on the new instance.
         ApplyMissionActorState();
         ApplyStoryProtectionState();
+        ApplySuffersCriticalHitsState();
 
         g_pMultiplayer->AddRemoteDataStorage(m_pPlayerPed, m_remoteDataStorage);
 
@@ -4345,6 +4346,29 @@ void CClientPed::ApplyStoryProtectionState()
     // an actor that it does not own.
     m_storyProtectionNativeState = m_pPlayerPed->GetStoryProtectionState();
     m_pPlayerPed->SetStoryProtectionState({true, true, true, true, false});
+}
+
+bool CClientPed::SetSuffersCriticalHits(bool suffersCriticalHits)
+{
+    if (GetType() != CCLIENTPED)
+        return false;
+
+    // Keep this bit separate from the grouped protagonist policy. Enemy
+    // actors often disable critical hits without becoming untargetable or
+    // protected from vehicle jacking.
+    m_suffersCriticalHits = suffersCriticalHits;
+    ApplySuffersCriticalHitsState();
+    return true;
+}
+
+void CClientPed::ApplySuffersCriticalHitsState()
+{
+    if (!m_suffersCriticalHits || !m_pPlayerPed)
+        return;
+
+    auto state = m_pPlayerPed->GetStoryProtectionState();
+    state.noCriticalHits = !*m_suffersCriticalHits;
+    m_pPlayerPed->SetStoryProtectionState(state);
 }
 
 void CClientPed::InternalWarpIntoVehicle(CVehicle* pGameVehicle)

@@ -148,6 +148,7 @@ void CLuaVehicleDefs::LoadFunctions()
         {"setVehicleLocked", SetVehicleLocked},
         {"setVehicleDoorLockMode", ArgumentParser<SetVehicleDoorLockMode>},
         {"setVehicleTyresCanBurst", ArgumentParser<SetVehicleTyresCanBurst>},
+        {"setVehiclePhysicalProofs", ArgumentParser<SetVehiclePhysicalProofs>},
         {"setVehicleDoorsUndamageable", SetVehicleDoorsUndamageable},
         {"setVehicleSirensOn", SetVehicleSirensOn},
         {"addVehicleUpgrade", AddVehicleUpgrade},
@@ -1867,6 +1868,11 @@ bool CLuaVehicleDefs::SetVehicleTyresCanBurst(CClientVehicle* vehicle, bool canB
 {
     vehicle->SetTyresCanBurst(canBurst);
     return true;
+}
+
+bool CLuaVehicleDefs::SetVehiclePhysicalProofs(CClientVehicle* vehicle, bool bullet, bool fire, bool explosion, bool collision, bool melee)
+{
+    return vehicle->SetPhysicalProofs({bullet, fire, explosion, collision, melee});
 }
 
 int CLuaVehicleDefs::SetVehicleDoorsUndamageable(lua_State* luaVM)

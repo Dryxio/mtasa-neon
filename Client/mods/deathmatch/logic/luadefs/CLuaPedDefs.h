@@ -86,6 +86,7 @@ public:
     LUA_DECLARE(IsPedDead);
     static bool IsPedMissionActor(CClientPed* ped);
     static bool IsPedStoryProtected(CClientPed* ped);
+    static bool GetPedSuffersCriticalHits(CClientPed* ped);
 
     LUA_DECLARE(SetPedRotation);
     LUA_DECLARE(SetPedCanBeKnockedOffBike);
@@ -137,8 +138,11 @@ public:
     LUA_DECLARE(SetPedTaskSequence);
     static int  GetPedTaskSequenceProgress(CClientPed* ped);
     static bool SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle);
+    static bool SetPedDriveTo(CClientPed* ped, CClientVehicle* vehicle, CVector target, float speed, std::optional<std::variant<std::string, int>> driveMode,
+                              std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);
     static bool SetPedStoryProtected(CClientPed* ped, bool enabled);
+    static bool SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits);
     static bool IsPedBleeding(CClientPed* ped);
     static bool SetPedBleeding(CClientPed* ped, bool bleeding);
 

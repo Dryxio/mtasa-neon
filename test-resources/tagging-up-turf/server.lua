@@ -3438,7 +3438,12 @@ local function finishDemoScene(scene)
     outputDebugString(("[tagging-up-turf] Sweet demonstration scene #%d %s after %d ms; camera/audio cleanup acknowledged by every participant")
                           :format(scene.id, skipped and "skipped" or "completed", getTickCount() - scene.startedAt))
     cancelDemoScene(skipped and "skipped" or "completed")
-    mission.vehiclePlayerOnlyLocked = true
+
+    -- SWEET1 can apply LOCKOUT_PLAYER_ONLY immediately after queuing this task
+    -- because Sweet is an ordinary CPed in single-player. Synchronized MTA
+    -- script peds use CPlayerPed internally, so the same lock aborts Sweet's
+    -- running entry task. Defer it until the authoritative seat confirmation.
+    mission.vehiclePlayerOnlyLocked = false
     setStage("tags_idlewood", {deferTraceStep = not skipped, traceSkipped = skipped})
     startTransitionAudio(TAGUP.transitionAudio.engineRunning, "engine_running")
     startSweetReturnEnter(ped)
@@ -3877,6 +3882,8 @@ local function tryCompleteSweetReturnEnter()
     outputDebugString(("[tagging-up-turf] Sweet native passenger entry #%d confirmed by task observation and server vehicle state (seat=%d)"):format(
                           enter.id, enter.seat))
     cancelDemoEnter("completed")
+    mission.vehiclePlayerOnlyLocked = true
+    outputDebugString("[tagging-up-turf] Greenwood LOCKOUT_PLAYER_ONLY armed after Sweet entered the passenger seat")
     broadcastState({message = "Sweet est remonte dans la Greenwood."})
 end
 

@@ -829,6 +829,16 @@ bool CClientVehicle::SetDoorLockMode(int mode)
     return true;
 }
 
+bool CClientVehicle::SetPhysicalProofs(const SVehiclePhysicalProofs& proofs)
+{
+    // SCM vehicle proofs are five independent native bits. Retain the exact
+    // tuple so a streamed vehicle receives it again after native recreation.
+    m_scriptPhysicalProofs = proofs;
+    if (m_pVehicle)
+        m_pVehicle->SetPhysicalProofs(proofs);
+    return true;
+}
+
 bool CClientVehicle::AreDoorsUndamageable()
 {
     return m_pVehicle ? m_pVehicle->AreDoorsUndamageable() : m_bDoorsUndamageable;
@@ -2672,6 +2682,8 @@ void CClientVehicle::Create()
         _SetAdjustablePropertyValue(m_usAdjustablePropertyValue);
         m_pVehicle->SetSwingingDoorsAllowed(m_bSwingingDoorsAllowed);
         m_pVehicle->SetDoorLockMode(m_doorLockMode);
+        if (m_scriptPhysicalProofs)
+            m_pVehicle->SetPhysicalProofs(*m_scriptPhysicalProofs);
         m_pVehicle->SetDoorsUndamageable(m_bDoorsUndamageable);
         m_pVehicle->SetCanShootPetrolTank(m_bCanShootPetrolTank);
         m_pVehicle->SetTaxiLightOn(m_bTaxiLightOn);

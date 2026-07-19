@@ -47,6 +47,7 @@ Do not build a client-local `main.scm` VM independently on every participant. Th
 | --- | --- |
 | Neon source | `/Users/salimtrouve/Documents/GitHub/mtasa-neon` |
 | GTA reverse source | `/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio` |
+| Local decompiled `main.scm` navigation aid | `/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/reference/scripts/main-scm-decompiled/fakeMainOutputFile.sc` |
 | Reverse verification tooling | `/Users/salimtrouve/Documents/GitHub/auto-re-agent` |
 | Target GTA executable | `/Users/salimtrouve/Documents/GTA-SanAndreas/GTA_SA.EXE` |
 | Reliable VM GTA installation | `C:\dev\GTA-SA` |

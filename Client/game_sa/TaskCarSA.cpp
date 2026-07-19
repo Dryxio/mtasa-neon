@@ -198,3 +198,43 @@ CTaskComplexCarDriveWanderSA::CTaskComplexCarDriveWanderSA(CVehicle* pTargetVehi
         // clang-format on
     }
 }
+
+// ##############################################################################
+// ## Name:    CTaskComplexCarDriveToPoint
+// ## Purpose: Drives along GTA's road graph to a finite world point
+// ##############################################################################
+
+CTaskComplexCarDriveToPointSA::CTaskComplexCarDriveToPointSA(CVehicle* pTargetVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
+                                                             int iDesiredVehicleModel, float fRadius, int iDrivingStyle)
+    : CTaskComplexSA()
+{
+    CVehicleSA* pTargetVehicleSA = pTargetVehicle ? dynamic_cast<CVehicleSA*>(pTargetVehicle) : nullptr;
+    if (pTargetVehicle && !pTargetVehicleSA)
+        return;
+
+    CreateTaskInterface(sizeof(CTaskComplexCarDriveToPointSAInterface));
+    if (!IsValid())
+        return;
+
+    DWORD dwFunc = FUNC_CTaskComplexCarDriveToPoint__Constructor;
+    DWORD dwVehiclePtr = pTargetVehicleSA ? reinterpret_cast<DWORD>(pTargetVehicleSA->GetInterface()) : 0;
+    DWORD dwTargetPtr = reinterpret_cast<DWORD>(&vecTarget);
+    DWORD dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+
+    // The null vehicle path is intentional for sequence children. GTA's car
+    // drive base binds the ped's current vehicle when each child activates.
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThisInterface
+        push    iDrivingStyle
+        push    fRadius
+        push    iDesiredVehicleModel
+        push    iDriveMode
+        push    fSpeed
+        push    dwTargetPtr
+        push    dwVehiclePtr
+        call    dwFunc
+    }
+    // clang-format on
+}

@@ -31,6 +31,7 @@ namespace
         LEAVE_CAR,
         GO_TO,
         SHOOT_AT,
+        DRIVE_TO,
     };
 
     struct SPedSequenceTask
@@ -44,7 +45,102 @@ namespace
         int              timeout{-2};
         int              duration{1000};
         int              burstLength{5};
+        float            speed{};
+        int              driveMode{};
+        int              desiredVehicleModel{-1};
+        int              drivingStyle{DRIVING_STYLE_STOP_FOR_CARS};
     };
+
+    bool ParseDrivingStyle(const std::variant<std::string, int>& value, int& style)
+    {
+        if (std::holds_alternative<int>(value))
+        {
+            style = std::get<int>(value);
+        }
+        else
+        {
+            const std::string& name = std::get<std::string>(value);
+            if (stricmp(name.c_str(), "stop_for_cars") == 0)
+                style = DRIVING_STYLE_STOP_FOR_CARS;
+            else if (stricmp(name.c_str(), "slow_down_for_cars") == 0)
+                style = DRIVING_STYLE_SLOW_DOWN_FOR_CARS;
+            else if (stricmp(name.c_str(), "avoid_cars") == 0)
+                style = DRIVING_STYLE_AVOID_CARS;
+            else if (stricmp(name.c_str(), "plough_through") == 0)
+                style = DRIVING_STYLE_PLOUGH_THROUGH;
+            else if (stricmp(name.c_str(), "stop_for_cars_ignore_lights") == 0)
+                style = DRIVING_STYLE_STOP_FOR_CARS_IGNORE_LIGHTS;
+            else if (stricmp(name.c_str(), "avoid_cars_obey_lights") == 0)
+                style = DRIVING_STYLE_AVOID_CARS_OBEY_LIGHTS;
+            else if (stricmp(name.c_str(), "avoid_cars_stop_for_peds_obey_lights") == 0)
+                style = DRIVING_STYLE_AVOID_CARS_STOP_FOR_PEDS_OBEY_LIGHTS;
+            else
+                return false;
+        }
+        return style >= DRIVING_STYLE_STOP_FOR_CARS && style <= DRIVING_STYLE_AVOID_CARS_STOP_FOR_PEDS_OBEY_LIGHTS;
+    }
+
+    bool ParseDriveMode(const std::variant<std::string, int>& value, int& mode)
+    {
+        if (std::holds_alternative<int>(value))
+        {
+            mode = std::get<int>(value);
+        }
+        else
+        {
+            const std::string& name = std::get<std::string>(value);
+            if (stricmp(name.c_str(), "normal") == 0)
+                mode = 0;
+            else if (stricmp(name.c_str(), "accurate") == 0)
+                mode = 1;
+            else if (stricmp(name.c_str(), "straight_line") == 0)
+                mode = 2;
+            else if (stricmp(name.c_str(), "racing") == 0)
+                mode = 3;
+            else
+                return false;
+        }
+        return mode >= 0 && mode <= 3;
+    }
+
+    bool ReadSequenceChoice(lua_State* luaVM, int tableIndex, const char* name, const char* defaultName, bool driveMode, int& result, SString& error)
+    {
+        lua_getfield(luaVM, tableIndex, name);
+        std::variant<std::string, int> value;
+        if (lua_isnoneornil(luaVM, -1))
+            value = std::string(defaultName);
+        else if (lua_isnumber(luaVM, -1))
+        {
+            const double numericValue = lua_tonumber(luaVM, -1);
+            if (!std::isfinite(numericValue) || numericValue != std::floor(numericValue))
+            {
+                lua_pop(luaVM, 1);
+                error = SString("field '%s' must be an integer or supported name", name);
+                return false;
+            }
+            value = static_cast<int>(numericValue);
+        }
+        else if (lua_isstring(luaVM, -1))
+            value = std::string(lua_tostring(luaVM, -1));
+        else
+        {
+            lua_pop(luaVM, 1);
+            error = SString("field '%s' must be an integer or supported name", name);
+            return false;
+        }
+        lua_pop(luaVM, 1);
+
+        const bool valid = driveMode ? ParseDriveMode(value, result) : ParseDrivingStyle(value, result);
+        if (!valid)
+            error = SString("field '%s' is outside the native range", name);
+        return valid;
+    }
+
+    bool OwnsDrivenVehicle(CClientPed* ped, CClientVehicle* vehicle)
+    {
+        auto* deathmatchVehicle = dynamic_cast<CDeathmatchVehicle*>(vehicle);
+        return vehicle && (vehicle->IsLocalEntity() || vehicle->GetOccupant(0) == ped || (deathmatchVehicle && deathmatchVehicle->IsSyncing()));
+    }
 
     bool ReadSequenceNumber(lua_State* luaVM, int tableIndex, const char* name, double& value, double defaultValue, bool required, SString& error)
     {
@@ -178,8 +274,10 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedShootAt", ArgumentParser<SetPedShootAt>},
         {"setPedTaskSequence", SetPedTaskSequence},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
+        {"setPedDriveTo", ArgumentParser<SetPedDriveTo>},
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
+        {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
         {"setPedBleeding", ArgumentParser<SetPedBleeding>},
         {"playPedVoiceLine", ArgumentParser<PlayPedVoiceLine>},
 
@@ -208,6 +306,7 @@ void CLuaPedDefs::LoadFunctions()
         {"getPedCameraRotation", GetPedCameraRotation},
         {"isPedMissionActor", ArgumentParser<IsPedMissionActor>},
         {"isPedStoryProtected", ArgumentParser<IsPedStoryProtected>},
+        {"getPedSuffersCriticalHits", ArgumentParser<GetPedSuffersCriticalHits>},
 
         {"getPedStat", GetPedStat},
         {"getPedOxygenLevel", GetPedOxygenLevel},
@@ -353,6 +452,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setTaskSequence", "setPedTaskSequence");
     lua_classfunction(luaVM, "getTaskSequenceProgress", "getPedTaskSequenceProgress");
     lua_classfunction(luaVM, "setDriveWander", "setPedDriveWander");
+    lua_classfunction(luaVM, "setDriveTo", "setPedDriveTo");
     lua_classfunction(luaVM, "setMissionActor", "setPedMissionActor");
     lua_classfunction(luaVM, "setBleeding", "setPedBleeding");
     lua_classfunction(luaVM, "playVoiceLine", "playPedVoiceLine");
@@ -3063,6 +3163,28 @@ int CLuaPedDefs::SetPedTaskSequence(lua_State* luaVM)
                 }
             }
         }
+        else if (stricmp(taskNameCopy.c_str(), "drive_to") == 0)
+        {
+            description.type = ePedSequenceTask::DRIVE_TO;
+            if (ReadSequenceTarget(luaVM, descriptorIndex, description.target, error))
+            {
+                double     speed, vehicleModel;
+                const bool valuesRead = ReadSequenceNumber(luaVM, descriptorIndex, "speed", speed, 0.0, true, error) &&
+                                        ReadSequenceNumber(luaVM, descriptorIndex, "vehicleModel", vehicleModel, -1.0, false, error) &&
+                                        ReadSequenceChoice(luaVM, descriptorIndex, "mode", "normal", true, description.driveMode, error) &&
+                                        ReadSequenceChoice(luaVM, descriptorIndex, "drivingStyle", "stop_for_cars", false, description.drivingStyle, error);
+                if (valuesRead)
+                {
+                    description.speed = static_cast<float>(speed);
+                    description.desiredVehicleModel = static_cast<int>(vehicleModel);
+                    if (description.speed < 0.0f || description.speed >= 255.0f || vehicleModel != std::floor(vehicleModel) ||
+                        (description.desiredVehicleModel != -1 && !CClientVehicleManager::IsValidModel(description.desiredVehicleModel)))
+                    {
+                        error = "drive_to speed or vehicleModel is outside the native range";
+                    }
+                }
+            }
+        }
         else
         {
             error = SString("unsupported task type '%s'", taskNameCopy.c_str());
@@ -3071,6 +3193,18 @@ int CLuaPedDefs::SetPedTaskSequence(lua_State* luaVM)
         lua_pop(luaVM, 1);
         if (!error.empty())
             return fail(SString("task %u: %s", i + 1, error.c_str()));
+    }
+
+    const bool hasDriveTo = std::any_of(descriptions.begin(), descriptions.begin() + taskCount,
+                                        [](const SPedSequenceTask& description) { return description.type == ePedSequenceTask::DRIVE_TO; });
+    if (hasDriveTo)
+    {
+        CClientVehicle* vehicle = ped->GetOccupiedVehicle();
+        if (!vehicle || !vehicle->IsStreamedIn() || vehicle->IsBlown() || !vehicle->GetGameVehicle() || vehicle->GetOccupant(0) != ped ||
+            !OwnsDrivenVehicle(ped, vehicle))
+        {
+            return fail("drive_to requires the synchronized ped to own and drive its streamed vehicle");
+        }
     }
 
     std::array<CTask*, 8> tasks{};
@@ -3089,6 +3223,12 @@ int CLuaPedDefs::SetPedTaskSequence(lua_State* luaVM)
             case ePedSequenceTask::SHOOT_AT:
                 tasks[i] = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &description.target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
                                                                            static_cast<short>(description.burstLength), description.duration);
+                break;
+            case ePedSequenceTask::DRIVE_TO:
+                // Null matches SCM sequence placeholders (-1, -1). GTA binds
+                // the ped's current vehicle when this child becomes active.
+                tasks[i] = g_pGame->GetTasks()->CreateTaskComplexCarDriveToPoint(nullptr, description.target, description.speed, description.driveMode,
+                                                                                 description.desiredVehicleModel, -1.0f, description.drivingStyle);
                 break;
         }
 
@@ -3124,43 +3264,34 @@ bool CLuaPedDefs::SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, fl
     // Wander changes the vehicle autopilot, not just the passenger ped. Refuse
     // to run it where another client owns the unoccupied vehicle, otherwise its
     // next sync packet would overwrite the native road AI movement.
-    auto*      deathmatchVehicle = dynamic_cast<CDeathmatchVehicle*>(vehicle);
-    const bool ownsVehicle = vehicle->IsLocalEntity() || vehicle->GetOccupant(0) == ped || (deathmatchVehicle && deathmatchVehicle->IsSyncing());
-    if (!ownsVehicle || (vehicle->GetOccupant(0) && vehicle->GetOccupant(0) != ped))
+    if (!OwnsDrivenVehicle(ped, vehicle) || (vehicle->GetOccupant(0) && vehicle->GetOccupant(0) != ped))
         return false;
 
     int style = DRIVING_STYLE_STOP_FOR_CARS;
-    if (drivingStyle.has_value())
-    {
-        if (std::holds_alternative<int>(*drivingStyle))
-        {
-            style = std::get<int>(*drivingStyle);
-        }
-        else
-        {
-            const std::string& name = std::get<std::string>(*drivingStyle);
-            if (stricmp(name.c_str(), "stop_for_cars") == 0)
-                style = DRIVING_STYLE_STOP_FOR_CARS;
-            else if (stricmp(name.c_str(), "slow_down_for_cars") == 0)
-                style = DRIVING_STYLE_SLOW_DOWN_FOR_CARS;
-            else if (stricmp(name.c_str(), "avoid_cars") == 0)
-                style = DRIVING_STYLE_AVOID_CARS;
-            else if (stricmp(name.c_str(), "plough_through") == 0)
-                style = DRIVING_STYLE_PLOUGH_THROUGH;
-            else if (stricmp(name.c_str(), "stop_for_cars_ignore_lights") == 0)
-                style = DRIVING_STYLE_STOP_FOR_CARS_IGNORE_LIGHTS;
-            else if (stricmp(name.c_str(), "avoid_cars_obey_lights") == 0)
-                style = DRIVING_STYLE_AVOID_CARS_OBEY_LIGHTS;
-            else if (stricmp(name.c_str(), "avoid_cars_stop_for_peds_obey_lights") == 0)
-                style = DRIVING_STYLE_AVOID_CARS_STOP_FOR_PEDS_OBEY_LIGHTS;
-            else
-                return false;
-        }
-    }
-    if (style < DRIVING_STYLE_STOP_FOR_CARS || style > DRIVING_STYLE_AVOID_CARS_STOP_FOR_PEDS_OBEY_LIGHTS)
+    if (drivingStyle.has_value() && !ParseDrivingStyle(*drivingStyle, style))
         return false;
 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexCarDriveWander(vehicle->GetGameVehicle(), speed, style);
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedDriveTo(CClientPed* ped, CClientVehicle* vehicle, CVector target, float speed, std::optional<std::variant<std::string, int>> driveMode,
+                                std::optional<std::variant<std::string, int>> drivingStyle)
+{
+    if (!ped->IsStreamedIn() || ped->IsDead() || !vehicle->IsStreamedIn() || vehicle->IsBlown() || !ped->GetGamePlayer() || !vehicle->GetGameVehicle() ||
+        (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || ped->GetOccupiedVehicle() != vehicle || vehicle->GetOccupant(0) != ped ||
+        !OwnsDrivenVehicle(ped, vehicle) || !std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) || !std::isfinite(speed) ||
+        speed < 0.0f || speed >= 255.0f)
+    {
+        return false;
+    }
+
+    int mode = 0;
+    int style = DRIVING_STYLE_STOP_FOR_CARS;
+    if ((driveMode.has_value() && !ParseDriveMode(*driveMode, mode)) || (drivingStyle.has_value() && !ParseDrivingStyle(*drivingStyle, style)))
+        return false;
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexCarDriveToPoint(vehicle->GetGameVehicle(), target, speed, mode, -1, -1.0f, style);
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 
@@ -3174,6 +3305,11 @@ bool CLuaPedDefs::IsPedMissionActor(CClientPed* ped)
 bool CLuaPedDefs::IsPedStoryProtected(CClientPed* ped)
 {
     return ped && ped->GetType() == CCLIENTPED && ped->IsStoryProtected();
+}
+
+bool CLuaPedDefs::GetPedSuffersCriticalHits(CClientPed* ped)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->GetSuffersCriticalHits();
 }
 
 bool CLuaPedDefs::SetPedMissionActor(CClientPed* ped, bool enabled)
@@ -3194,6 +3330,11 @@ bool CLuaPedDefs::SetPedStoryProtected(CClientPed* ped, bool enabled)
     // Persist the policy on the MTA element because streaming and model swaps
     // replace the underlying GTA CPed instance.
     return ped->SetStoryProtected(enabled);
+}
+
+bool CLuaPedDefs::SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->SetSuffersCriticalHits(suffersCriticalHits);
 }
 
 bool CLuaPedDefs::killPedTask(CClientPed* ped, taskType taskType, std::uint8_t taskNumber, std::optional<bool> gracefully)

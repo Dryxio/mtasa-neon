@@ -208,6 +208,7 @@ public:
     void  SetDoorsLocked(bool bLocked);
     int   GetDoorLockMode() const;
     bool  SetDoorLockMode(int mode);
+    bool  SetPhysicalProofs(const SVehiclePhysicalProofs& proofs);
 
 private:
     void SetDoorOpenRatioInterpolated(unsigned char ucDoor, float fRatio, unsigned long ulDelay);
@@ -638,6 +639,7 @@ protected:
     bool                                        m_bSyncUnoccupiedDamage;
     bool                                        m_bTyresCanBurst;
     bool                                        m_bScriptTyresCanBurstOverride;
+    std::optional<SVehiclePhysicalProofs>       m_scriptPhysicalProofs;
     SFixedArray<unsigned char, MAX_DOORS>       m_ucDoorStates;
     SFixedArray<unsigned char, MAX_WHEELS>      m_ucWheelStates;
     SFixedArray<unsigned char, MAX_PANELS>      m_ucPanelStates;

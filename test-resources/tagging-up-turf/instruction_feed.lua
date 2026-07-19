@@ -1,35 +1,46 @@
--- Generic, presentation-only mission trace. Mission code can publish status and
--- progress here, but this module exposes no path back into gameplay state.
+-- Passive presentation layer for the story runtime. Mission code publishes
+-- execution facts here, but neither the HUD nor chat feed can affect gameplay.
 
 TAGUP_TRACE = TAGUP_TRACE or {}
 
 local DESIGN_WIDTH = 1920
 local DESIGN_HEIGHT = 1080
-local MAX_VISIBLE_STEPS = 5
 local TOGGLE_KEY = "F7"
-local CHATBOX_FONT_PATH = ":chatbox/fonts/Arial.ttf"
+local HISTORY_COUNT = 2
 
+-- This is deliberately styled as a GTA:SA HUD feed instead of a Neon tool
+-- panel. Bank Gothic is one of MTA's bundled San Andreas fonts, so the overlay
+-- does not need to borrow assets from another resource.
 local palette = {
-    panel = {3, 2, 1, 224},
-    panelEdge = {218, 132, 30, 150},
-    header = {10, 6, 2, 245},
-    accent = {235, 145, 36, 255},
-    accentSoft = {213, 116, 18, 58},
-    text = {255, 239, 207, 255},
-    textMuted = {202, 177, 139, 255},
-    track = {123, 75, 24, 120},
-    queued = {142, 121, 91, 255},
-    failed = {244, 101, 101, 255},
-    skipped = {210, 164, 76, 255},
+    backdrop = {0, 0, 0, 142},
+    divider = {255, 255, 255, 38},
+    gold = {246, 194, 78, 255},
+    white = {238, 238, 230, 255},
+    muted = {176, 176, 166, 255},
+    live = {92, 158, 75, 255},
+    failed = {198, 65, 58, 255},
+    skipped = {215, 159, 65, 255},
+}
+
+-- Chat uses one extra hue that the HUD does not need: blue identifies the
+-- concrete GTA task class, keeping it visually distinct from the gold SCM
+-- command and from the white presentation copy.
+local chatColors = {
+    task = "#74BFEA",
+    muted = "#B0B0A6",
+    white = "#EEEEEA",
 }
 
 local state = {
     visible = false,
     visibility = 0,
     steps = {},
+    history = {},
     currentIndex = nil,
-    title = "MISSION TRACE",
-    subtitle = "AWAITING SEQUENCE",
+    chatEnabled = false,
+    chatLastIndex = nil,
+    title = "STORY RUNTIME",
+    subtitle = "AWAITING EXECUTION",
     liveSequence = false,
     transitionTick = 0,
     lastFrameTick = getTickCount(),
@@ -52,30 +63,17 @@ local statusAliases = {
     skipped = "skipped",
 }
 
-local fonts = {}
+local fonts = {
+    category = {value = "bankgothic", scale = 0.52},
+    primitive = {value = "pricedown", scale = 1.50},
+    caption = {value = "bankgothic", scale = 0.62},
+    history = {value = "pricedown", scale = 0.84},
+    historyMeta = {value = "bankgothic", scale = 0.44},
+}
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
 end
-
-local function createTraceFont(pixelSize, bold, fallback, fallbackScale)
-    local screenWidth, screenHeight = guiGetScreenSize()
-    -- Keep text readable on small displays independently from the panel's tighter
-    -- layout scale. The font file is shared by the active chatbox resource.
-    local fontScale = clamp(math.min(screenWidth / DESIGN_WIDTH, screenHeight / DESIGN_HEIGHT), 0.8, 1.4)
-    local font = dxCreateFont(CHATBOX_FONT_PATH, math.floor(pixelSize * fontScale + 0.5), bold)
-    if font then
-        return {value = font, scale = 1}
-    end
-    outputDebugString(("[tagging-up-turf] Could not load chatbox font %s; using %s fallback"):format(CHATBOX_FONT_PATH, fallback), 2)
-    return {value = fallback, scale = fallbackScale}
-end
-
-fonts.header = createTraceFont(22, true, "default-bold", 1.35)
-fonts.title = createTraceFont(17, true, "default-bold", 1.15)
-fonts.body = createTraceFont(14, false, "default", 1.05)
-fonts.status = createTraceFont(12, true, "default-bold", 0.92)
-fonts.footer = createTraceFont(12, false, "default", 0.9)
 
 local function color(entry, opacity)
     return tocolor(entry[1], entry[2], entry[3], math.floor(entry[4] * clamp(opacity or 1, 0, 1) + 0.5))
@@ -115,8 +113,55 @@ local function resolveStep(reference)
     return nil
 end
 
+local function publishChatStep(index, force, statusLabel)
+    if not state.chatEnabled or not state.steps[index] or (not force and state.chatLastIndex == index) then
+        return
+    end
+
+    local step = state.steps[index]
+    local primitiveColor = "#F6C24E"
+    if statusLabel == "FAILED" then
+        primitiveColor = "#C6413A"
+    elseif statusLabel == "SKIPPED" or statusLabel == "DEBUG SKIP" then
+        primitiveColor = "#D79F41"
+    end
+    local status = statusLabel and (statusLabel .. " // ") or ""
+    if step.originalTask then
+        outputChatBox(("%s%s%s %s// %s"):format(primitiveColor, status, step.primitive, chatColors.muted,
+                                                string.upper(step.category)), 255, 255, 255, true)
+        outputChatBox(("%sGTA TASK: %s %s// %s%s"):format(chatColors.task, step.originalTask, chatColors.muted, chatColors.white,
+                                                          step.title), 255, 255, 255, true)
+    else
+        outputChatBox(("%s%s%s %s// %s %s%s"):format(primitiveColor, status, step.primitive, chatColors.muted,
+                                                       string.upper(step.category), chatColors.white, step.title), 255, 255, 255, true)
+    end
+    state.chatLastIndex = index
+end
+
 local function setTransition()
     state.transitionTick = getTickCount()
+end
+
+local function pushHistory(index, status)
+    local step = state.steps[index]
+    if not step then
+        return
+    end
+
+    local latest = state.history[#state.history]
+    if latest and latest.index == index and latest.status == status then
+        return
+    end
+
+    state.history[#state.history + 1] = {
+        index = index,
+        primitive = step.primitive,
+        category = step.category,
+        status = status,
+    }
+    while #state.history > HISTORY_COUNT do
+        table.remove(state.history, 1)
+    end
 end
 
 local function deriveSequenceStatuses(currentIndex)
@@ -128,7 +173,7 @@ local function deriveSequenceStatuses(currentIndex)
             end
         elseif index == currentIndex then
             step.status = "active"
-        elseif step.status ~= "failed" and step.status ~= "skipped" then
+        elseif step.status ~= "failed" and step.status ~= "skipped" and step.status ~= "done" then
             step.status = "queued"
         end
     end
@@ -149,7 +194,11 @@ function TAGUP_TRACE.setSequence(sequence, options)
             step = {
                 id = source.id or index,
                 title = source.title or source.label or source.name,
-                detail = source.detail or source.description,
+                explanation = source.explanation or source.description,
+                detail = source.detail,
+                category = source.category or source.kind or "RUNTIME",
+                primitive = source.primitive or source.opcode,
+                originalTask = source.originalTask or source.gtaTask,
                 status = normalizeStatus(source.status),
                 progress = normalizeProgress(source.progress),
             }
@@ -159,9 +208,11 @@ function TAGUP_TRACE.setSequence(sequence, options)
 
         step.status = step.status or "queued"
         step.progress = step.progress or (step.status == "done" and 1 or 0)
-        if step.detail ~= nil then
-            step.detail = tostring(step.detail)
-        end
+        step.explanation = step.explanation and tostring(step.explanation) or "A runtime operation is being observed without influencing mission state."
+        step.detail = step.detail and tostring(step.detail) or nil
+        step.category = tostring(step.category or "RUNTIME")
+        step.primitive = step.primitive and tostring(step.primitive) or "SCRIPT COMMAND"
+        step.originalTask = step.originalTask and tostring(step.originalTask) or nil
         if step.status == "active" and not initialCurrentIndex then
             initialCurrentIndex = index
         end
@@ -172,11 +223,16 @@ function TAGUP_TRACE.setSequence(sequence, options)
 
     options = type(options) == "table" and options or {}
     state.steps = steps
+    state.history = {}
+    state.chatLastIndex = nil
     state.currentIndex = initialCurrentIndex
-    state.title = type(options.title) == "string" and options.title or "MISSION TRACE"
-    state.subtitle = type(options.subtitle) == "string" and options.subtitle or "INSTRUCTION FEED"
+    state.title = type(options.title) == "string" and options.title or "STORY RUNTIME"
+    state.subtitle = type(options.subtitle) == "string" and options.subtitle or "LIVE EXECUTION"
     state.liveSequence = options.live == true
     setTransition()
+    if initialCurrentIndex then
+        publishChatStep(initialCurrentIndex, false)
+    end
     return true
 end
 
@@ -186,6 +242,16 @@ function TAGUP_TRACE.setCurrent(reference, detail)
         return false
     end
 
+    local previousIndex = state.currentIndex
+    if previousIndex and previousIndex ~= index then
+        local previous = state.steps[previousIndex]
+        if previous.status == "active" then
+            previous.status = "done"
+            previous.progress = 1
+            pushHistory(previousIndex, "done")
+        end
+    end
+
     state.currentIndex = index
     deriveSequenceStatuses(index)
     if detail ~= nil then
@@ -193,12 +259,12 @@ function TAGUP_TRACE.setCurrent(reference, detail)
     end
     state.steps[index].changedTick = getTickCount()
     setTransition()
+    publishChatStep(index, false)
     return true
 end
 
--- Debug stage skips must remain visually distinct from successful execution.
--- This advances the cursor while preserving completed history and marking only
--- the bypassed range as skipped.
+-- Debug skips remain visibly different from execution. They only alter the
+-- presentation cursor and cannot request a server stage change.
 function TAGUP_TRACE.skipTo(reference, detail)
     local index = resolveStep(reference)
     if not index or (state.currentIndex and index < state.currentIndex) then
@@ -210,11 +276,12 @@ function TAGUP_TRACE.skipTo(reference, detail)
         local step = state.steps[stepIndex]
         if step.status ~= "done" and step.status ~= "failed" then
             step.status = "skipped"
+            pushHistory(stepIndex, "skipped")
         end
     end
     for stepIndex = index + 1, #state.steps do
         local step = state.steps[stepIndex]
-        if step.status ~= "failed" and step.status ~= "skipped" then
+        if step.status ~= "failed" and step.status ~= "skipped" and step.status ~= "done" then
             step.status = "queued"
         end
     end
@@ -226,6 +293,7 @@ function TAGUP_TRACE.skipTo(reference, detail)
     end
     state.steps[index].changedTick = getTickCount()
     setTransition()
+    publishChatStep(index, true, "DEBUG SKIP")
     return true
 end
 
@@ -240,19 +308,26 @@ function TAGUP_TRACE.setStatus(reference, status, detail)
     step.status = normalized
     if normalized == "done" then
         step.progress = 1
+        pushHistory(index, "done")
     elseif normalized == "active" then
         state.currentIndex = index
+        setTransition()
+        publishChatStep(index, false)
+    elseif normalized == "failed" or normalized == "skipped" then
+        pushHistory(index, normalized)
+        if state.currentIndex == index then
+            publishChatStep(index, true, normalized == "failed" and "FAILED" or "SKIPPED")
+        end
     end
     if detail ~= nil then
         step.detail = tostring(detail)
     end
     step.changedTick = getTickCount()
-    setTransition()
     return true
 end
 
--- A terminal failure cancels every still-pending operation. Keeping those rows as
--- queued would falsely suggest that a stopped mission is about to resume.
+-- A terminal failure cancels every still-pending operation. Leaving them as
+-- queued would make a stopped runtime look as if it were about to resume.
 function TAGUP_TRACE.fail(reference, detail)
     local index = resolveStep(reference)
     if not index then
@@ -267,11 +342,13 @@ function TAGUP_TRACE.fail(reference, detail)
         end
     end
     state.currentIndex = index
+    pushHistory(index, "failed")
     if detail ~= nil then
         state.steps[index].detail = tostring(detail)
     end
     state.steps[index].changedTick = getTickCount()
     setTransition()
+    publishChatStep(index, true, "FAILED")
     return true
 end
 
@@ -293,9 +370,11 @@ end
 
 function TAGUP_TRACE.reset()
     state.steps = {}
+    state.history = {}
     state.currentIndex = nil
-    state.title = "MISSION TRACE"
-    state.subtitle = "AWAITING SEQUENCE"
+    state.chatLastIndex = nil
+    state.title = "STORY RUNTIME"
+    state.subtitle = "AWAITING EXECUTION"
     state.liveSequence = false
     setTransition()
     return true
@@ -314,69 +393,132 @@ function TAGUP_TRACE.isVisible()
     return state.visible
 end
 
--- A local preview keeps visual QA independent from the mission state machine.
+function TAGUP_TRACE.toggleChat(forceEnabled)
+    if type(forceEnabled) == "boolean" then
+        state.chatEnabled = forceEnabled
+    else
+        state.chatEnabled = not state.chatEnabled
+    end
+    return state.chatEnabled
+end
+
+function TAGUP_TRACE.isChatEnabled()
+    return state.chatEnabled
+end
+
+-- The preview exercises the same rich presentation data as a live mission but
+-- remains entirely local, making visual QA safe between gameplay runs.
 function TAGUP_TRACE.preview()
     if state.liveSequence then
         return false
     end
     TAGUP_TRACE.setSequence({
-        {id = "intro", title = "Meet Sweet", detail = "Grove Street", status = "done"},
-        {id = "drive", title = "Drive to Idlewood", detail = "Greenwood route", status = "done"},
-        {id = "demo", title = "Watch the demonstration", detail = "Sweet is spraying", status = "active"},
-        {id = "idlewood", title = "Cover two Ballas tags", detail = "Queued"},
-        {id = "ballas", title = "Move into Ballas territory", detail = "Queued"},
-        {id = "rooftop", title = "Reach the rooftop tag", detail = "Queued"},
-        {id = "return", title = "Bring Sweet home", detail = "Queued"},
-    }, {title = "TAGGING UP TURF", subtitle = "CO-OP MISSION TRACE"})
-    TAGUP_TRACE.setCurrent("demo")
-    TAGUP_TRACE.setProgress("demo", 0.62, "Spray demonstration 62%")
+        {
+            id = "cutscene",
+            title = "GTA plays the original SWEET1A cutscene",
+            category = "NATIVE CUTSCENE",
+            primitive = "DAT / CUT / IFP",
+            explanation = "Neon leases GTA's camera and synchronizes native loading, playback and cleanup across the party.",
+            detail = "Track 739 finished naturally",
+            status = "done",
+        },
+        {
+            id = "sequence",
+            title = "Sweet performs one composed task sequence",
+            category = "NATIVE TASK",
+            primitive = "0615 / 0618 / 0646 · PERFORM_SEQUENCE_TASK",
+            originalTask = "CTaskComplexSequence -> CTaskComplexUseSequence",
+            explanation = "GTA owns the leave-car, walk and shoot hierarchy while Lua only observes the active child.",
+            detail = "GET_SEQUENCE_PROGRESS = 2 · shooting",
+            status = "active",
+            progress = 0.62,
+        },
+        {
+            id = "tag",
+            title = "Spray hits advance the gang tag",
+            category = "NATIVE GAMEPLAY",
+            primitive = "0702 / CShotInfo",
+            explanation = "Real spray-can impacts update GTA's eight-step alpha path before the server validates progress.",
+            detail = "Queued after demonstration",
+        },
+        {
+            id = "recording",
+            title = "The Greenwood follows recording 207",
+            category = "NATIVE RECORDING",
+            primitive = "07C0 / 05EB / 060E",
+            explanation = "A resource-owned native RRR slot drives the car while ordinary MTA replication stays active.",
+            detail = "Queued for the rooftop transition",
+        },
+    }, {title = "TAGGING UP TURF", subtitle = "PRESENTATION PREVIEW"})
+    pushHistory(1, "done")
+    TAGUP_TRACE.setCurrent("sequence")
+    TAGUP_TRACE.setProgress("sequence", 0.62, "GET_SEQUENCE_PROGRESS = 2 · shooting")
     TAGUP_TRACE.toggle(true)
     return true
 end
 
-local function getVisibleRange()
-    local count = #state.steps
-    if count <= MAX_VISIBLE_STEPS then
-        return 1, count
+local function drawText(text, left, top, right, bottom, textColor, scale, font, alignX, alignY, opacity, wordBreak, outline)
+    text = tostring(text or "")
+    outline = math.max(1, outline or 1)
+    local shadow = color({0, 0, 0, 255}, opacity)
+    for offsetX = -outline, outline, outline do
+        for offsetY = -outline, outline, outline do
+            if offsetX ~= 0 or offsetY ~= 0 then
+                dxDrawText(text, left + offsetX, top + offsetY, right + offsetX, bottom + offsetY, shadow, scale, font, alignX, alignY, true,
+                           wordBreak == true, false, false)
+            end
+        end
     end
-
-    local focus = state.currentIndex or 1
-    local first = clamp(focus - 2, 1, count - MAX_VISIBLE_STEPS + 1)
-    return first, first + MAX_VISIBLE_STEPS - 1
-end
-
-local function drawText(text, left, top, right, bottom, textColor, scale, font, alignX, alignY, opacity)
-    local shadow = color({0, 0, 0, 180}, opacity)
-    dxDrawText(text, left + scale, top + scale, right + scale, bottom + scale, shadow, scale, font, alignX, alignY, true, false, false, false)
-    dxDrawText(text, left, top, right, bottom, textColor, scale, font, alignX, alignY, true, false, false, false)
-end
-
-local function getStatusVisual(step)
-    if step.status == "active" then
-        return palette.accent, "ACTIVE", 1
-    elseif step.status == "done" then
-        return palette.textMuted, "DONE", 0.52
-    elseif step.status == "failed" then
-        return palette.failed, "FAILED", 0.95
-    elseif step.status == "skipped" then
-        return palette.skipped, "SKIPPED", 0.46
-    end
-    return palette.queued, "NEXT", 0.40
+    dxDrawText(text, left, top, right, bottom, textColor, scale, font, alignX, alignY, true, wordBreak == true, false, false)
 end
 
 local function drawEmptyState(x, y, width, scale, opacity)
-    local height = 180 * scale
-    dxDrawRectangle(x, y, width, height, color(palette.panel, opacity), false)
-    dxDrawRectangle(x, y, width, 3 * scale, color(palette.accent, opacity), false)
-    dxDrawRectangle(x, y, 3 * scale, height, color(palette.accent, opacity), false)
-    dxDrawRectangle(x + width - 2 * scale, y, 2 * scale, height, color(palette.panelEdge, opacity), false)
-    dxDrawRectangle(x, y + height - 2 * scale, width, 2 * scale, color(palette.panelEdge, opacity), false)
-    drawText("MISSION TRACE", x + 26 * scale, y + 22 * scale, x + width - 22 * scale, y + 58 * scale, color(palette.accent, opacity), fonts.header.scale,
-             fonts.header.value, "left", "center", opacity)
-    drawText("No instruction sequence has been supplied.", x + 26 * scale, y + 72 * scale, x + width - 26 * scale, y + 106 * scale,
-             color(palette.textMuted, opacity), fonts.body.scale, fonts.body.value, "left", "center", opacity)
-    drawText("/taguptracepreview  -  local visual preview", x + 26 * scale, y + 124 * scale, x + width - 26 * scale, y + 158 * scale,
-             color(palette.queued, opacity), fonts.footer.scale, fonts.footer.value, "left", "center", opacity)
+    local textScale = clamp(scale, 0.8, 1.4)
+    dxDrawRectangle(x, y, width, 78 * scale, color(palette.backdrop, opacity), false)
+    drawText("NATIVE RUNTIME", x + 16 * scale, y + 7 * scale, x + width - 16 * scale, y + 29 * scale, color(palette.muted, opacity),
+             fonts.category.scale * textScale,
+             fonts.category.value, "right", "center", opacity, false, 2 * textScale)
+    drawText("AWAITING SCRIPT COMMAND", x + 16 * scale, y + 27 * scale, x + width - 16 * scale, y + 67 * scale, color(palette.gold, opacity),
+             fonts.primitive.scale * textScale, fonts.primitive.value, "right", "center", opacity, false, 2 * textScale)
+end
+
+local function historyColor(status)
+    if status == "failed" then
+        return palette.failed
+    elseif status == "skipped" then
+        return palette.skipped
+    end
+    return palette.live
+end
+
+local function historyStatusLabel(status)
+    if status == "failed" then
+        return "FAILED"
+    elseif status == "skipped" then
+        return "SKIPPED"
+    end
+    return "DONE"
+end
+
+local function drawHistory(x, y, width, scale, opacity, textScale)
+    local rowHeight = 48 * scale
+    local rowOpacities = {0.94, 0.70}
+
+    for row = 1, math.min(HISTORY_COUNT, #state.history) do
+        local entry = state.history[#state.history - row + 1]
+        local rowY = y + (row - 1) * rowHeight
+        local rowOpacity = opacity * rowOpacities[row]
+        local statusVisual = historyColor(entry.status)
+
+        if row > 1 then
+            dxDrawRectangle(x, rowY, width, 1 * scale, color(palette.divider, opacity), false)
+        end
+        drawText(entry.primitive, x, rowY + 2 * scale, x + width, rowY + 28 * scale, color(palette.white, rowOpacity),
+                 fonts.history.scale * textScale, fonts.history.value, "right", "center", rowOpacity, false, 1.5 * textScale)
+        drawText(historyStatusLabel(entry.status) .. "  //  " .. string.upper(entry.category), x, rowY + 27 * scale, x + width,
+                 rowY + 45 * scale, color(statusVisual, rowOpacity), fonts.historyMeta.scale * textScale, fonts.historyMeta.value, "right", "center",
+                 rowOpacity, false, 1.5 * textScale)
+    end
 end
 
 local function renderTrace()
@@ -400,90 +542,40 @@ local function renderTrace()
 
     local screenWidth, screenHeight = guiGetScreenSize()
     local scale = clamp(math.min(screenWidth / DESIGN_WIDTH, screenHeight / DESIGN_HEIGHT), 0.65, 1.4)
+    local textScale = clamp(scale, 0.8, 1.4)
     local opacity = easeOutCubic(state.visibility)
-    local width = 590 * scale
-    local x = screenWidth - width - 52 * scale
-    local y = 145 * scale
+    local width = 680 * scale
+    local x = screenWidth - width - 48 * scale
+    local y = 350 * scale
 
-    if #state.steps == 0 then
+    if #state.steps == 0 or not state.currentIndex or not state.steps[state.currentIndex] then
         drawEmptyState(x, y, width, scale, opacity)
         return
     end
 
-    local first, last = getVisibleRange()
-    local rowCount = last - first + 1
-    local headerHeight = 108 * scale
-    local rowHeight = 90 * scale
-    local footerHeight = 44 * scale
-    local panelHeight = headerHeight + rowCount * rowHeight + footerHeight
-    local transition = easeOutCubic(clamp((now - state.transitionTick) / 320, 0, 1))
+    local current = state.steps[state.currentIndex]
+    local historyRows = math.min(HISTORY_COUNT, #state.history)
+    local boxHeight = (historyRows > 0 and 145 + historyRows * 48 or 128) * scale
+    local contentX = x + 18 * scale
+    local contentRight = x + width - 18 * scale
+    local transition = easeOutCubic(clamp((now - state.transitionTick) / 260, 0, 1))
+    local contentOffset = (1 - transition) * 18 * scale
+    local statusVisual = current.status == "failed" and palette.failed or palette.gold
 
-    dxDrawRectangle(x, y, width, panelHeight, color(palette.panel, opacity), false)
-    dxDrawRectangle(x, y, width, headerHeight, color(palette.header, opacity), false)
-    dxDrawRectangle(x, y, width, 3 * scale, color(palette.accent, opacity), false)
-    dxDrawRectangle(x, y, 3 * scale, panelHeight, color(palette.accent, opacity), false)
-    dxDrawRectangle(x + width - 2 * scale, y, 2 * scale, panelHeight, color(palette.panelEdge, opacity), false)
-    dxDrawRectangle(x, y + panelHeight - 2 * scale, width, 2 * scale, color(palette.panelEdge, opacity), false)
-    dxDrawRectangle(x, y + headerHeight - 2 * scale, width, 2 * scale, color(palette.panelEdge, opacity), false)
+    dxDrawRectangle(x, y, width, boxHeight, color(palette.backdrop, opacity), false)
 
-    local currentNumber = state.currentIndex or 0
-    drawText(state.title, x + 26 * scale, y + 17 * scale, x + width - 120 * scale, y + 54 * scale, color(palette.accent, opacity), fonts.header.scale,
-             fonts.header.value, "left", "center", opacity)
-    drawText(("%02d / %02d"):format(currentNumber, #state.steps), x + width - 114 * scale, y + 17 * scale, x + width - 24 * scale, y + 54 * scale,
-             color(palette.accent, opacity), fonts.title.scale, fonts.title.value, "right", "center", opacity)
-    drawText(state.subtitle, x + 26 * scale, y + 62 * scale, x + width - 24 * scale, y + 91 * scale, color(palette.textMuted, opacity), fonts.body.scale,
-             fonts.body.value, "left", "center", opacity)
+    drawText(string.upper(current.category), contentX + contentOffset, y + 9 * scale, contentRight + contentOffset, y + 31 * scale,
+             color(palette.muted, opacity),
+             fonts.category.scale * textScale, fonts.category.value, "right", "center", opacity, false, 2 * textScale)
+    drawText(current.primitive, contentX + contentOffset, y + 30 * scale, contentRight + contentOffset, y + 80 * scale, color(statusVisual, opacity),
+             fonts.primitive.scale * textScale, fonts.primitive.value, "right", "center", opacity, false, 2.5 * textScale)
+    drawText(current.title, contentX + contentOffset, y + 80 * scale, contentRight + contentOffset, y + 116 * scale, color(palette.white, opacity),
+             fonts.caption.scale * textScale, fonts.caption.value, "right", "center", opacity, true, 2 * textScale)
 
-    local rowsTop = y + headerHeight
-
-    for visibleIndex = 0, rowCount - 1 do
-        local index = first + visibleIndex
-        local step = state.steps[index]
-        local rowY = rowsTop + visibleIndex * rowHeight
-        local visualColor, statusLabel, statusOpacity = getStatusVisual(step)
-        local rowOpacity = opacity * statusOpacity
-        local isActive = step.status == "active"
-
-        step.displayProgress = step.displayProgress + (step.progress - step.displayProgress) * math.min(1, delta / 140)
-
-        if isActive then
-            dxDrawRectangle(x + 3 * scale, rowY, width - 5 * scale, rowHeight, color(palette.accentSoft, opacity * (0.82 + 0.18 * transition)), false)
-            dxDrawRectangle(x + 3 * scale, rowY, 7 * scale, rowHeight, color(palette.accent, opacity), false)
-        end
-
-        drawText(("%02d"):format(index), x + 19 * scale, rowY + 12 * scale, x + 55 * scale, rowY + 43 * scale, color(visualColor, rowOpacity),
-                 fonts.status.scale, fonts.status.value, "center", "center", rowOpacity)
-        local contentX = x + 64 * scale
-        drawText(step.title, contentX, rowY + 11 * scale, x + width - 112 * scale, rowY + 44 * scale,
-                 color(isActive and palette.accent or palette.text, rowOpacity), fonts.title.scale,
-                 fonts.title.value, "left", "center", rowOpacity)
-        drawText(step.detail or "", contentX, rowY + 47 * scale, x + width - 112 * scale, rowY + 73 * scale, color(palette.textMuted, rowOpacity),
-                 fonts.body.scale, fonts.body.value, "left", "center", rowOpacity)
-        drawText(statusLabel, x + width - 106 * scale, rowY + 13 * scale, x + width - 22 * scale, rowY + 42 * scale, color(visualColor, rowOpacity),
-                 fonts.status.scale, fonts.status.value, "right", "center", rowOpacity)
-
-        if isActive or step.displayProgress > 0 then
-            local progressX = contentX
-            local progressY = rowY + rowHeight - 10 * scale
-            local progressWidth = width - (contentX - x) - 22 * scale
-            dxDrawRectangle(progressX, progressY, progressWidth, 3 * scale, color(palette.track, rowOpacity), false)
-            dxDrawRectangle(progressX, progressY, progressWidth * step.displayProgress, 3 * scale, color(visualColor, rowOpacity), false)
-        end
+    if historyRows > 0 then
+        dxDrawRectangle(contentX, y + 126 * scale, contentRight - contentX, 1 * scale, color(palette.divider, opacity), false)
+        drawHistory(contentX, y + 137 * scale, contentRight - contentX, scale, opacity, textScale)
     end
-
-    local hiddenBefore = first - 1
-    local hiddenAfter = #state.steps - last
-    local rangeLabel
-    if hiddenBefore > 0 or hiddenAfter > 0 then
-        rangeLabel = ("%d earlier  /  %d queued"):format(hiddenBefore, hiddenAfter)
-    else
-        rangeLabel = "FULL SEQUENCE"
-    end
-    local footerY = y + panelHeight - footerHeight
-    drawText(rangeLabel, x + 26 * scale, footerY, x + width - 175 * scale, y + panelHeight, color(palette.queued, opacity), fonts.footer.scale,
-             fonts.footer.value, "left", "center", opacity)
-    drawText(TOGGLE_KEY .. " // HIDE", x + width - 165 * scale, footerY, x + width - 22 * scale, y + panelHeight, color(palette.accent, opacity),
-             fonts.status.scale, fonts.status.value, "right", "center", opacity)
 end
 
 local function toggleFromInput(sourceName, argument)
@@ -501,21 +593,43 @@ local function toggleFromInput(sourceName, argument)
         elseif argument == "off" or argument == "0" or argument == "false" then
             forced = false
         else
-            outputChatBox("[Tag trace] Usage: /taguptrace [on|off].", 244, 180, 100)
+            outputChatBox("[Story runtime] Usage: /taguptrace [on|off].", 244, 180, 100)
             return
         end
     end
 
     local visible = TAGUP_TRACE.toggle(forced)
-    outputChatBox(("[Tag trace] %s. Toggle: /taguptrace or %s."):format(visible and "visible" or "hidden", TOGGLE_KEY), 145, 220, 175)
+    outputChatBox(("[Story runtime] Monitor %s. Toggle: /taguptrace or %s."):format(visible and "visible" or "hidden", TOGGLE_KEY), 145, 220, 175)
+end
+
+local function toggleChatFromInput(_, argument)
+    local forced
+    if type(argument) == "string" and argument ~= "" then
+        argument = string.lower(argument)
+        if argument == "on" or argument == "1" or argument == "true" then
+            forced = true
+        elseif argument == "off" or argument == "0" or argument == "false" then
+            forced = false
+        else
+            outputChatBox("[Story runtime] Usage: /taguptracechat [on|off].", 244, 180, 100)
+            return
+        end
+    end
+
+    local enabled = TAGUP_TRACE.toggleChat(forced)
+    outputChatBox(("[Story runtime] Chat trace %s. Toggle: /taguptracechat."):format(enabled and "enabled" or "disabled"), 145, 220, 175)
+    if enabled and state.currentIndex then
+        publishChatStep(state.currentIndex, true)
+    end
 end
 
 addCommandHandler("taguptrace", toggleFromInput)
+addCommandHandler("taguptracechat", toggleChatFromInput)
 addCommandHandler("taguptracepreview", function()
     if TAGUP_TRACE.preview() then
-        outputChatBox("[Tag trace] Local preview loaded. It is not connected to mission state.", 145, 220, 175)
+        outputChatBox("[Story runtime] Local presentation preview loaded; mission state is untouched.", 145, 220, 175)
     else
-        outputChatBox("[Tag trace] Preview unavailable while a live mission trace is active.", 244, 180, 100)
+        outputChatBox("[Story runtime] Preview unavailable while a live mission trace is active.", 244, 180, 100)
     end
 end)
 bindKey(TOGGLE_KEY, "down", toggleFromInput)

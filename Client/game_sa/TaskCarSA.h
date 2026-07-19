@@ -25,6 +25,7 @@ typedef DWORD AnimationId;
 #define FUNC_CTaskComplexEnterBoatAsDriver__Constructor   0x63B5E0
 #define FUNC_CTaskComplexLeaveCar__Constructor            0x63B8C0
 #define FUNC_CTaskComplexCarDriveWander__Constructor      0x63CB10
+#define FUNC_CTaskComplexCarDriveToPoint__Constructor     0x63CE00
 
 // ##############################################################################
 // ## Name:    CTaskComplexEnterCar
@@ -224,4 +225,41 @@ class CTaskComplexCarDriveWanderSA : public virtual CTaskComplexSA, public virtu
 public:
     CTaskComplexCarDriveWanderSA() {};
     CTaskComplexCarDriveWanderSA(CVehicle* pTargetVehicle, float fSpeed, int iDrivingStyle);
+};
+
+// ##############################################################################
+// ## Name:    CTaskComplexCarDriveToPoint
+// ## Purpose: Drives along GTA's road graph to a finite world point
+// ##############################################################################
+
+class CTaskComplexCarDriveToPointSAInterface : public CTaskComplexSAInterface
+{
+public:
+    CVehicle* m_pTargetVehicle;
+    float     m_fCruiseSpeed;
+    int       m_iDesiredCarModel;
+    int       m_iCarDrivingStyle;
+
+    bool          m_bAsDriver;
+    unsigned char m_nOriginalDrivingStyle;
+    signed char   m_nOriginalMission;
+    unsigned char m_nOriginalSpeed;
+    bool          m_bIsCarSetUp;
+    char          m_pad[3];
+
+    CVector m_vecTargetPoint;
+    int     m_iDriveMode;
+    float   m_fTargetRadius;
+    bool    m_bFinished;
+};
+// Opcode 05D1 allocates 0x3C bytes and the original constructor writes the
+// target, mode, radius and completion flag at +0x24 through +0x38.
+static_assert(sizeof(CTaskComplexCarDriveToPointSAInterface) == 0x3C, "Invalid CTaskComplexCarDriveToPointSAInterface size");
+
+class CTaskComplexCarDriveToPointSA : public virtual CTaskComplexSA, public virtual CTaskComplexCarDriveToPoint
+{
+public:
+    CTaskComplexCarDriveToPointSA() {};
+    CTaskComplexCarDriveToPointSA(CVehicle* pTargetVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode, int iDesiredVehicleModel, float fRadius,
+                                  int iDrivingStyle);
 };

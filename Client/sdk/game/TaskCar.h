@@ -73,3 +73,9 @@ class CTaskComplexCarDriveWander : public virtual CTaskComplex
 public:
     virtual ~CTaskComplexCarDriveWander() {};
 };
+
+class CTaskComplexCarDriveToPoint : public virtual CTaskComplex
+{
+public:
+    virtual ~CTaskComplexCarDriveToPoint() {};
+};
