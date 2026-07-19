@@ -2651,6 +2651,24 @@ local function releaseSweetDemoCamera(scene, preserveFade)
     return ok and result ~= false
 end
 
+local function stopSweetDemoFacialTalk(scene, reason)
+    if not scene or not scene.facialTalkActive then
+        return true
+    end
+
+    local cue = scene.facialTalkCue
+    scene.facialTalkActive = nil
+    scene.facialTalkCue = nil
+    local ok, stopped = false, false
+    if isElement(scene.sweet) and type(stopPedFacialTalk) == "function" then
+        ok, stopped = pcall(stopPedFacialTalk, scene.sweet)
+    end
+    local success = ok and stopped == true
+    outputDebugString(("[tagging-up-turf] Sweet demo scene #%d facial stop cue=%s result=%s reason=%s"):format(
+                          scene.id, tostring(cue), tostring(success), tostring(reason or "cleanup")), success and 3 or 2)
+    return success
+end
+
 local function clearSweetDemoScene(reason, preserveFade)
     local scene = state.demoScene
     if not scene then
@@ -2662,6 +2680,7 @@ local function clearSweetDemoScene(reason, preserveFade)
             killTimer(scene[timerName])
         end
     end
+    stopSweetDemoFacialTalk(scene, reason or "cleanup")
     local cameraReleased = releaseSweetDemoCamera(scene, preserveFade)
     local audioReleased = releaseSweetDemoAudio(scene)
     outputDebugString(("[tagging-up-turf] Sweet demo scene #%d cleanup camera=%s audio=%s reason=%s"):format(
@@ -2835,7 +2854,20 @@ local function playSweetDemoAudio(scene, cue)
         return
     end
     printMissionText(cue == "approach" and "SWE1_AR" or "SWE1_CA", 10000)
+    local facialOk, facialStarted = false, false
+    if isElement(scene.sweet) and type(setPedFacialTalk) == "function" then
+        facialOk, facialStarted = pcall(setPedFacialTalk, scene.sweet, TAGUP.sweetDemoScene.facialTalkDuration)
+    end
+    if not facialOk or facialStarted ~= true then
+        callMissionTextApi("clearMissionTexts")
+        triggerServerEvent("tagup:sweetDemoSceneAudioFinished", resourceRoot, scene.id, cue, "facial_start_refused")
+        return
+    end
+    scene.facialTalkActive = true
+    scene.facialTalkCue = cue
     scene.playingCue = cue
+    outputDebugString(("[tagging-up-turf] Sweet demo scene #%d facial start cue=%s duration=%d"):format(
+                          scene.id, cue, TAGUP.sweetDemoScene.facialTalkDuration))
     traceCurrent(cue == "approach" and "demo_audio_ar" or "demo_audio_ca")
     scene.audioTimer = setTimer(function()
         local active = state.demoScene
@@ -2846,13 +2878,27 @@ local function playSweetDemoAudio(scene, cue)
         if not ok then
             killTimer(active.audioTimer)
             active.audioTimer = nil
+            stopSweetDemoFacialTalk(active, "audio_query_failed")
+            callMissionTextApi("clearMissionTexts")
             triggerServerEvent("tagup:sweetDemoSceneAudioFinished", resourceRoot, active.id, cue, "query_failed")
         elseif finished then
             killTimer(active.audioTimer)
             active.audioTimer = nil
+            local facialStopped
+            if cue == "approach" then
+                callMissionTextApi("clearMissionTexts")
+                facialStopped = stopSweetDemoFacialTalk(active, "natural_audio_finish")
+            else
+                facialStopped = stopSweetDemoFacialTalk(active, "natural_audio_finish")
+                callMissionTextApi("clearMissionTexts")
+            end
             active.playingCue = nil
+            if not facialStopped then
+                triggerServerEvent("tagup:sweetDemoSceneAudioFinished", resourceRoot, active.id, cue, "facial_stop_refused")
+                return
+            end
             traceProgress(cue == "approach" and "demo_audio_ar" or "demo_audio_ca", 1,
-                          ("NATIVE MISSION AUDIO · %s natural finish"):format(cue))
+                          ("NATIVE MISSION AUDIO + FACTALK · %s natural finish"):format(cue))
             triggerServerEvent("tagup:sweetDemoSceneAudioFinished", resourceRoot, active.id, cue, "finished")
         end
     end, 100, 0)

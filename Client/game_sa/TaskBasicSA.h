@@ -31,6 +31,8 @@ class CObjectSAInterface;
 #define FUNC_CTaskComplexSunbathe__Constructor       0x631F80
 #define FUNC_CTASKSimplePlayerOnFoot__Constructor    0x685750
 #define FUNC_CTASKComplexFacial__Constructor         0x690D20
+#define FUNC_CTASKComplexFacial__SetRequest          0x691230
+#define FUNC_CTASKComplexFacial__StopAll             0x691250
 #define VTBL_CTaskSimpleCarFallOut                   0x86EFD0
 
 ///////////////////////
@@ -282,13 +284,24 @@ public:
 class CTaskComplexFacialSAInterface : public CTaskComplexSAInterface
 {
 public:
-    BYTE m_Pad[32];
+    BYTE              m_OpaqueState[4];
+    eFacialExpression m_RequestA;
+    int               m_DurationA;
+    eFacialExpression m_RequestB;
+    int               m_DurationB;
 };
+static_assert(sizeof(CTaskComplexFacialSAInterface) == 0x20, "Unexpected CTaskComplexFacialSAInterface size");
+static_assert(offsetof(CTaskComplexFacialSAInterface, m_RequestA) == 0x10, "Invalid facial request A offset");
+static_assert(offsetof(CTaskComplexFacialSAInterface, m_DurationB) == 0x1C, "Invalid facial duration B offset");
 
 class CTaskComplexFacialSA : public virtual CTaskComplexSA, public virtual CTaskComplexFacial
 {
 public:
     CTaskComplexFacialSA();
+    explicit CTaskComplexFacialSA(bool createNativeTask);
+
+    void SetRequest(eFacialExpression typeA, int durationA, eFacialExpression typeB, int durationB) override;
+    void StopAll() override;
 };
 
 class CTaskComplexInWaterSAInterface : public CTaskComplexSAInterface

@@ -221,6 +221,9 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_COMPLEX_SEEK_ENTITY:
             pTaskSA = new CTaskComplexSeekEntityRadiusAngleOffsetSA;
             break;
+        case TASK_COMPLEX_FACIAL:
+            pTaskSA = new CTaskComplexFacialSA(false);
+            break;
 
         // Car accessories
         case TASK_SIMPLE_CAR_SET_PED_IN_AS_PASSENGER:

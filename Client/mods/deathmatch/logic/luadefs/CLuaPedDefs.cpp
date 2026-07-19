@@ -41,6 +41,22 @@ namespace
         }
         return true;
     }
+
+    CTaskComplexFacial* GetPedFacialTask(CClientPed* ped, bool requireSubTask)
+    {
+        // Facial animation is local presentation, so every participant may
+        // drive a streamed script ped's controller. Remote player elements are
+        // excluded because their facial state belongs to another client.
+        if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && ped->GetType() != CCLIENTPED))
+            return nullptr;
+
+        CTaskManager* taskManager = ped->GetTaskManager();
+        CTask*        task = taskManager ? taskManager->GetTaskSecondary(TASK_SECONDARY_FACIAL_COMPLEX) : nullptr;
+        if (!task || task->GetTaskType() != TASK_COMPLEX_FACIAL || (requireSubTask && !task->GetSubTask()))
+            return nullptr;
+
+        return dynamic_cast<CTaskComplexFacial*>(task);
+    }
 }  // namespace
 
 void CLuaPedDefs::LoadFunctions()
@@ -94,6 +110,8 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedKillOnFoot", ArgumentParser<SetPedKillOnFoot>},
         {"setPedWander", ArgumentParser<SetPedWander>},
         {"setPedScriptedSpeechMuted", ArgumentParser<SetPedScriptedSpeechMuted>},
+        {"setPedFacialTalk", ArgumentParser<SetPedFacialTalk>},
+        {"stopPedFacialTalk", ArgumentParser<StopPedFacialTalk>},
         {"setPedShootAt", ArgumentParser<SetPedShootAt>},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
@@ -263,6 +281,8 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setKillOnFoot", "setPedKillOnFoot");
     lua_classfunction(luaVM, "setWander", "setPedWander");
     lua_classfunction(luaVM, "setScriptedSpeechMuted", "setPedScriptedSpeechMuted");
+    lua_classfunction(luaVM, "setFacialTalk", "setPedFacialTalk");
+    lua_classfunction(luaVM, "stopFacialTalk", "stopPedFacialTalk");
     lua_classfunction(luaVM, "setShootAt", "setPedShootAt");
     lua_classfunction(luaVM, "setDriveWander", "setPedDriveWander");
     lua_classfunction(luaVM, "setMissionActor", "setPedMissionActor");
@@ -2800,6 +2820,31 @@ bool CLuaPedDefs::SetPedScriptedSpeechMuted(CClientPed* ped, bool muted)
         ped->GetGamePlayer()->DisableSpeechForScript(false);
     else
         ped->GetGamePlayer()->EnableSpeechForScript();
+    return true;
+}
+
+bool CLuaPedDefs::SetPedFacialTalk(CClientPed* ped, int duration)
+{
+    if (duration < 0)
+        return false;
+
+    CTaskComplexFacial* facialTask = GetPedFacialTask(ped, false);
+    if (!facialTask)
+        return false;
+
+    // Opcodes 0967/0968 use request B NONE with a zero duration. Keeping those
+    // exact arguments avoids inheriting a stale chained expression.
+    facialTask->SetRequest(eFacialExpression::TALKING, duration, eFacialExpression::NONE, 0);
+    return true;
+}
+
+bool CLuaPedDefs::StopPedFacialTalk(CClientPed* ped)
+{
+    CTaskComplexFacial* facialTask = GetPedFacialTask(ped, true);
+    if (!facialTask)
+        return false;
+
+    facialTask->StopAll();
     return true;
 }
 

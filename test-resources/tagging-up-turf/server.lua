@@ -3686,8 +3686,14 @@ end)
 addEvent("tagup:sweetDemoSceneAudioFinished", true)
 addEventHandler("tagup:sweetDemoSceneAudioFinished", resourceRoot, function(sceneId, cue, result)
     local player, scene = client, mission.demoScene
-    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) or result ~= "finished" then
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isMissionPlayer(player) then
         return
+    end
+    if result ~= "finished" then
+        outputDebugString(("[tagging-up-turf] Sweet demo scene #%d player=%s cue=%s failed=%s"):format(
+                              scene.id, getPlayerName(player), tostring(cue), tostring(result)), 2)
+        cancelDemoScene("client_audio_" .. tostring(result))
+        return failMission("Le dialogue natif de Sweet a echoue: " .. tostring(result))
     end
     local field = cue == "approach" and "approachFinishedPlayers" or cue == "checkout" and "checkoutFinishedPlayers" or nil
     if not field or not scene[field] or scene[field][player] then

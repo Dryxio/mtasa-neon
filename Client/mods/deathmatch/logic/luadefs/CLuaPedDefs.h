@@ -130,6 +130,8 @@ public:
     static bool SetPedKillOnFoot(CClientPed* ped, CClientPed* target);
     static bool SetPedWander(CClientPed* ped, std::optional<std::string> movement, std::optional<int> direction, std::optional<bool> wanderSensibly);
     static bool SetPedScriptedSpeechMuted(CClientPed* ped, bool muted);
+    static bool SetPedFacialTalk(CClientPed* ped, int duration);
+    static bool StopPedFacialTalk(CClientPed* ped);
     static bool SetPedShootAt(CClientPed* ped, CVector target, std::optional<int> duration, std::optional<int> burstLength);
     static bool SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);

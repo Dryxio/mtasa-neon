@@ -118,6 +118,7 @@ TAGUP = {
     },
     sweetDemoScene = {
         audio = {approach = 37416, checkout = 37444, engineRunning = 37445},
+        facialTalkDuration = 3000,
         camera = {
             establishing = {
                 position = {x = 2082.5332, y = -1650.2444, z = 14.8007},

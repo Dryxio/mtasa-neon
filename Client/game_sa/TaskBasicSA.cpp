@@ -309,8 +309,18 @@ CTaskSimplePlayerOnFootSA::CTaskSimplePlayerOnFootSA()
 ////////////////////
 // Complex facial //
 ////////////////////
-CTaskComplexFacialSA::CTaskComplexFacialSA()
+CTaskComplexFacialSA::CTaskComplexFacialSA() : CTaskComplexFacialSA(true)
 {
+}
+
+CTaskComplexFacialSA::CTaskComplexFacialSA(bool createNativeTask)
+{
+    // GTA owns the persistent secondary facial task. The task-management
+    // system wraps that existing interface with false instead of allocating a
+    // second controller whose requests would never reach the ped.
+    if (!createNativeTask)
+        return;
+
     CreateTaskInterface(sizeof(CTaskComplexFacialSAInterface));
     if (!IsValid())
         return;
@@ -324,6 +334,19 @@ CTaskComplexFacialSA::CTaskComplexFacialSA()
         call    dwFunc
     }
     // clang-format on
+}
+
+void CTaskComplexFacialSA::SetRequest(eFacialExpression typeA, int durationA, eFacialExpression typeB, int durationB)
+{
+    using SetRequest = void(__thiscall*)(CTaskComplexFacialSAInterface*, eFacialExpression, int, eFacialExpression, int);
+    reinterpret_cast<SetRequest>(FUNC_CTASKComplexFacial__SetRequest)(static_cast<CTaskComplexFacialSAInterface*>(GetInterface()), typeA, durationA, typeB,
+                                                                      durationB);
+}
+
+void CTaskComplexFacialSA::StopAll()
+{
+    using StopAll = void(__thiscall*)(CTaskComplexFacialSAInterface*);
+    reinterpret_cast<StopAll>(FUNC_CTASKComplexFacial__StopAll)(static_cast<CTaskComplexFacialSAInterface*>(GetInterface()));
 }
 
 CTaskComplexInWaterSA::CTaskComplexInWaterSA()

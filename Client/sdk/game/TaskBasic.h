@@ -102,10 +102,26 @@ public:
 ////////////////////
 // Complex facial //
 ////////////////////
+enum class eFacialExpression : int
+{
+    NONE = -1,
+    SURPRISE_PANIC = 0,
+    SURPRISE_MILD = 1,
+    CURIOSITY = 2,
+    ANGER = 3,
+    HAPPINESS = 4,
+    SADNESS = 5,
+    MAX_NUM_EMOTIONS = 6,
+    TALKING = 7,
+    CHEWING = 8,
+};
+
 class CTaskComplexFacial : public virtual CTaskComplex
 {
 public:
     virtual ~CTaskComplexFacial() {};
+    virtual void SetRequest(eFacialExpression typeA, int durationA, eFacialExpression typeB = eFacialExpression::NONE, int durationB = 0) = 0;
+    virtual void StopAll() = 0;
 };
 
 class CTaskComplexInWater : public virtual CTaskComplex
