@@ -1073,29 +1073,77 @@ and 71/72/73 mirror capacity boundaries, visible mirror-plane behavior,
 vanilla disable/restore, and mirror off/on transitions. These remain test cases,
 not confirmed runtime results.
 
-## FileID relocation prerequisite (no native patch yet)
+## FileID stock-only relocation (built; gameplay validation pending)
 
-Neon now captures GTA SA's stock FileID layout through
-`Client/game_sa/CFileIDRuntimeSA.*` before any native-world feature can mutate
-the executable. Ten manifested HOODLUM instructions supply the TXD, COL, IPL,
-DAT, IFP, RRR and SCM bases, the streaming-table begin/end, and the global
-model-pointer array. Exact bytes, operands, PE32 headers, partition ordering,
-sentinels, table stride/count and mapped readability are validated read-only.
+The integrated master checkpoint extends the existing read-only abstraction
+into a validated process-lifetime relocation. On 2026-07-19 its exact ten-file
+set was synchronized with SHA-256 verification to the VM-local tree; `Game SA`
+and `Client Deathmatch` both built successfully as `Release|Win32`. The Game SA
+post-link `hookcheck` also passed after the unsigned IMG-chain hook was given
+the required local-size verifier. The checkpoint has not yet been run in game.
+Startup still captures ten exact HOODLUM anchors before native-world mutation,
+then validates every relocation operand twice: once during capture and once
+immediately before the first native write.
 
-This removes MTA-owned static captures and direct `20000/25000` partition
-arithmetic from Game SA, Multiplayer SA, Client Core and Client Deathmatch,
-including naked ASM hooks. It deliberately leaves the stock partition and
-26,316-entry table untouched. The successful diagnostic ends in
-`nativeWrites=no`; the off-game mirror validator is
-`utils/extended-world/validate_native_file_id_runtime.py`.
+The target contiguous layout is:
 
-The future 44,325-entry stock-only checkpoint must update this single runtime
-layout after its transactional relocation. It must not introduce new private
-copies of table pointers or partition constants. DAT, streamed SCM, IFP/RRR and
-paths/nodes are represented only to preserve the contiguous namespace and
-remain outside the current activation scope.
+```text
+DFF 0          TXD 32000      COL 40000      IPL 40512
+DAT 41536      IFP 41600      RRR 41780      SCM 42255
+loaded 42337   requested 42339 total 42341
+```
 
-The user-run baseline gate completed on 2026-07-18 with format-1 ticket
+This reserves 32,000 DFF IDs, 8,000 TXD IDs, 512 COL IDs and 1,024 IPL IDs.
+DAT is GTA's path-node FileID partition and remains exactly 64 entries; IFP,
+RRR and SCM also retain their stock counts of 180, 475 and 82. Consequently the
+correct scope-reduced total is 42,341, not the earlier 44,325 estimate that
+included a 2,048-entry DAT partition. Paths/nodes, new DAT content, streamed
+SCM and new IFP/RRR content remain out of scope, but their bases must move to
+preserve the namespace.
+
+`CFileIDRelocationSA.Manifest.inc` is generated from Fastman92
+`FileIDlimit.cpp` and `GTASA_int32_base_movsx_patches.h`. Its 1,276 disjoint
+writes comprise 712 model-table operands, 308 streaming-table operands, 222
+pure partition-base operands, 27 linked-list `movsx` to `movzx` corrections,
+four 16-bit sentinel IDs, two save/load compatibility hooks, and one Neon
+control-flow hook for `nextModelOnCd`. That extra hook preserves `0xFFFF` as the
+end-of-IMG-chain condition after the corresponding load becomes unsigned; a
+plain `movzx` would otherwise compare 65,535 with stock `-1` and index out of
+range. The generator intentionally excludes compact-executable mirrors above
+`0x01000000`, as MTA runs the normal HOODLUM image.
+
+The installer allocates 32,001 model pointers and 42,342 streaming records,
+copies every stock partition into its new base, copies the four list sentinels,
+prepares all writes before commit, and publishes the relocated arrays only
+after all writes succeed. Since non-model FileIDs now exceed 32,767, the 27
+linked-list reads are made unsigned while DFF IDs remain at or below 31,999 and
+retain the signed 16-bit model-ID contract. Save/load hooks continue to
+serialize exactly the stock 26,316 records in stock partition order, including
+the four list sentinels, so this checkpoint does not resize or misalign GTA's
+save block.
+
+This checkpoint reserves FileID address space only. It deliberately does not
+patch CTxdStore, CColStore or CIplStore counts and does not adopt FLA operands
+derived from enlarged store sizes; those arrays remain at their current
+capacities until the stores/pools checkpoint. The existing MTA runtime accessors
+remain the sole pointer/layout source for Game SA, Multiplayer SA, Client Core
+and Client Deathmatch.
+
+The off-game validator now checks exact coverage/counts, write non-overlap,
+pointer displacement domains, partition boundaries, 16-bit width contracts,
+stable raw-executable opcodes/sentinels/hooks, and byte-for-byte regeneration
+from the local FLA and HOODLUM references. The key FLA boundary references are
+the model pointers around `FileIDlimit.cpp:7427`, streaming pointers around
+`:8187`, base IDs around `:8665`, sentinel initialization around `:9320`, and
+save/load patching around `:9376` and `:15887`; GTA reversed documents the
+stock save/load loops in `source/game_sa/Streaming.cpp:1187`.
+
+The final pre-game gate passed the native FileID validator with 1,276 writes,
+all 98 runnable extended-world tests, two fixture-dependent skips and
+`git diff --check`. Gameplay validation must now cover stock San Andreas first,
+without activating a native-world pack.
+
+The preceding read-only baseline gate completed on 2026-07-18 with format-1 ticket
 `7a1a461a`. Both the initial stock process and the authorized replacement
 process captured the exact stock partitions and 26,316-entry table with
 `nativeWrites=no`. Bullworth then registered archive 6, 952 models, 166 TXDs,

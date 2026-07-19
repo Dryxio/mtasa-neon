@@ -224,14 +224,12 @@ CGameSA::CGameSA()
         // Find the game version and initialize m_eGameVersion so GetGameVersion() will return the correct value
         FindGameVersion();
 
-        // Capture GTA's complete FileID layout before any native-world
-        // feature can install patches. This checkpoint is deliberately
-        // read-only: an unknown executable or operand layout is refused.
+        // Capture and preflight GTA's complete stock FileID layout before any
+        // native-world feature can install patches. An unknown executable or
+        // operand layout is refused before the later relocation commit.
         std::string fileIDError;
         if (!m_fileIDs.CaptureStockLayout(m_eGameVersion, fileIDError))
             throw std::runtime_error(SString("Unable to capture GTA FileID layout: %s", fileIDError.c_str()));
-        CModelInfoSAInterface::ms_modelInfoPtrs = reinterpret_cast<CBaseModelInfoSAInterface**>(m_fileIDs.GetModelInfoArray());
-
         char        legacySelectorValue[8]{};
         const DWORD legacySelectorLength = GetEnvironmentVariableA("MTA_NATIVE_BW_MODEL_STORES", legacySelectorValue, sizeof(legacySelectorValue));
         const bool  legacySelectorEnabled = legacySelectorLength == 1 && legacySelectorValue[0] == '1';
@@ -262,6 +260,15 @@ CGameSA::CGameSA()
         // inline model stores before CModelInfo::Initialise can populate them.
         if (!suppressLegacyNativeWorld)
             CNativeModelStoreSA::InstallFromEnvironment(m_eGameVersion);
+
+        // Install the process-lifetime FileID tables only after the optional
+        // model-store preflight has consumed its stock instruction signatures.
+        // A few GTA instructions contain both operands, so this ordering keeps
+        // both independently validated patches transactional.
+        std::string fileIDRelocationError;
+        if (!m_fileIDs.InstallStockRelocation(fileIDRelocationError))
+            throw std::runtime_error(SString("Unable to relocate GTA FileIDs: %s", fileIDRelocationError.c_str()));
+        CModelInfoSAInterface::ms_modelInfoPtrs = reinterpret_cast<CBaseModelInfoSAInterface**>(m_fileIDs.GetModelInfoArray());
 
         m_bAsyncScriptEnabled = false;
         m_bAsyncScriptForced = false;

@@ -299,11 +299,10 @@ key. Stock model infos retain only the key rather than the original source
 name, so a stock collision diagnostic can identify its model ID, key, and the
 custom stem but not reconstruct the stock spelling.
 
-### Read-only FileID runtime abstraction
+### FileID runtime abstraction and stock-only relocation
 
-The next relocation prerequisite is implemented without changing one GTA
-operand or allocation. `CFileIDRuntimeSA` validates ten HOODLUM instructions
-and captures the complete stock layout before any native-world startup path can
+The abstraction baseline on `master` validates ten HOODLUM instructions and
+captures the complete stock layout before any native-world startup path can
 install a patch:
 
 ```text
@@ -312,11 +311,19 @@ DAT 25511      IFP 25575      RRR 25755      SCM 26230
 loaded 26312   requested 26314 total 26316
 ```
 
-The DAT, IFP, RRR and SCM boundaries are retained only because every future
-streaming-table relocation must preserve the complete contiguous namespace.
-This checkpoint does not load, enlarge or otherwise add support for those
-content types; paths/nodes and missions remain outside the current static-world
-scope.
+The isolated `codex/native-world-fileid-relocation` follow-up then validates and
+installs this target layout:
+
+```text
+DFF 0          TXD 32000      COL 40000      IPL 40512
+DAT 41536      IFP 41600      RRR 41780      SCM 42255
+loaded 42337   requested 42339 total 42341
+```
+
+DAT is GTA's path-node partition. It stays at 64 entries, while IFP, RRR and
+SCM keep their stock counts. Paths/nodes, missions and new DAT/IFP/RRR/SCM
+content remain outside the static-world scope. This is why the scope-reduced
+table has 42,341 entries rather than the old 44,325 estimate with DAT 2,048.
 
 `CGame` now exposes the captured layout plus the model-pointer and streaming
 arrays. Game SA, Multiplayer SA, Client Core and Client Deathmatch consume that
@@ -325,11 +332,23 @@ or absolute ASM indexing. Naked multiplayer hooks receive an MTA-owned pointer
 captured before hook installation. Model/TXD Lua image operations derive both
 partition bases and counts from the runtime layout.
 
-The manifest is `Client/game_sa/CFileIDRuntimeSA.Manifest.inc`. Runtime startup
-checks the PE32 headers, exact instruction bytes and operands, strict partition
-ordering, sentinel positions, table stride/count, and full readability of both
-arrays. A mismatch aborts before native-world mutation. A successful stock
-capture emits one diagnostic ending in `nativeWrites=no`.
+The capture manifest is `Client/game_sa/CFileIDRuntimeSA.Manifest.inc`; the
+generated relocation manifest is `Client/game_sa/CFileIDRelocationSA.Manifest.inc`.
+Runtime startup checks the PE32 headers, exact instruction bytes and operands,
+strict partition ordering, sentinel positions, table stride/count, and full
+readability of both arrays. It rechecks all 1,276 relocation writes directly
+before commit. A mismatch aborts before FileID mutation. Successful diagnostics
+first end in `state=prepared ... nativeWrites=no`, then
+`state=installed ... total=42341 ... nativeWrites=yes datExpansion=no
+pathsExpansion=no`.
+
+The relocation reserves 32,000 DFF, 8,000 TXD, 512 COL and 1,024 IPL FileIDs,
+but leaves the actual TXD/COL/IPL store counts unchanged for the next checkpoint.
+It patches all relocated table pointers and pure base operands, makes 27
+16-bit streaming-list reads unsigned, preserves the `nextModelOnCd` `0xFFFF`
+termination branch with a dedicated hook, relocates the four sentinels, and
+hooks save/load so the vanilla 26,316-byte flag block, including four sentinel
+records, remains compatible.
 
 The same contract can be checked off-game with:
 
@@ -339,11 +358,9 @@ python3 utils/extended-world/validate_native_file_id_runtime.py \
 python3 -m unittest utils.extended-world.tests.test_native_file_id_runtime
 ```
 
-This is an abstraction checkpoint, not the 44,325-entry relocation. The later
-stock-only relocation must replace the stock-operand requirement with a
-transactional validated layout transition and update this same runtime object;
-no consumer may regain a private pointer or reconstruct a partition from a
-constant.
+The relocation follow-up is locally validated but has not been VM-synchronized,
+compiled or tested in game. No consumer may regain a private pointer or
+reconstruct a partition from a constant.
 
 The user-run 2026-07-18 live gate used format-1 ticket `46a33f60`. The exact
 cached Bullworth payload passed its semantic and executable preflights, the
@@ -365,8 +382,9 @@ an exact reconnect revalidated the same process lease, preserved the model
 store occupancy and 4008-block streaming floor, and `/nativebw` returned to the
 native city afterwards. No new client/server dump, FileID mismatch, native
 preflight failure, capacity failure, exception or fatal diagnostic appeared.
-This proves the abstraction against the stock table; it does not authorize the
-44,325-entry relocation or any new streamed content type.
+This proves the abstraction against the stock table; it does not constitute a
+runtime test of the new 42,341-entry relocation or authorize any new streamed
+content type.
 
 Format 1 accepts exterior static binary IPLs only: every placement has area
 flags zero, no LOD link (`lodIndex == -1`), X/Y in `[-10000, 9999]`, and Z in

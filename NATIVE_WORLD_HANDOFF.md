@@ -773,19 +773,42 @@ crash diagnostic, and the server recorded clean join/quit/reconnect cycles.
 The expected post-activation transport refusals preserved the existing native
 world rather than attempting to republish into the active registrar.
 
-The FileID abstraction checkpoint is complete on `master`. It does not relocate
-or enlarge the stock 26,316-entry table. It validates ten read-only HOODLUM
-anchors at startup, captures every partition and the two global arrays into
-`CFileIDRuntimeSA`, and routes the Game SA, Multiplayer SA, Client Core and
-Client Deathmatch consumers through the runtime `CGame` API. This includes
-naked ASM hooks, clothes/player.img caching, model replacement, TXD
-allocation/image APIs and memory statistics. The old static captures and stock
-DFF/TXD arithmetic are covered by a source-contract test.
+The FileID abstraction and stock-only relocation checkpoints are complete on
+`master`. The relocation was developed in the isolated
+`codex/native-world-fileid-relocation` worktree, rebased without conflict over
+the story changes, then fast-forwarded into `master`. On 2026-07-19 its exact
+file set was synchronized with verified hashes to the VM-local tree. `Game SA`
+and `Client Deathmatch` both built successfully as `Release|Win32`, including
+the Game SA post-link hook verifier. It has not yet been launched in game.
 
-The off-game validator passed against the local stock executable with all ten
-anchors and `nativeWrites=no`. The focused suite passed 95 tests with two
-optional skips. After regeneration, `Game SA`, `Multiplayer SA`, `Client Core`
-and `Client Deathmatch` all built as `Release|Win32` with zero errors.
+The checkpoint installs the stock-only FileID relocation after the optional
+model-store preflight. The resulting layout is DFF 0, TXD 32,000, COL 40,000,
+IPL 40,512, DAT 41,536, IFP 41,600, RRR 41,780, SCM 42,255, loaded 42,337,
+requested 42,339 and total 42,341. The old 44,325 figure assumed DAT 2,048;
+DAT is the path-node partition and is now explicitly kept at its stock count of
+64. IFP/RRR/SCM counts also remain stock. Only DFF/TXD/COL/IPL address space is
+reserved at this checkpoint; TXD/COL/IPL store counts are not enlarged yet.
+
+The generated manifest contains 1,276 non-overlapping normal-executable writes:
+712 model pointers, 308 streaming pointers, 222 base operands, 27 unsigned
+linked-list opcode fixes, four sentinel IDs, two save/load redirects and one
+`nextModelOnCd` sentinel-control hook. The latter prevents unsigned `0xFFFF`
+from bypassing GTA's stock 32-bit `-1` end-of-chain comparison. The new tables
+are process-lifetime allocations, the complete stock contents are mapped
+partition by partition, and save compatibility remains exactly 26,316 flag
+bytes including the four list sentinels. Capture and the final pre-commit pass
+both require all expected operands.
+Existing runtime `CGame` accessors still route Game SA, Multiplayer SA, Client
+Core and Client Deathmatch consumers through the relocated state.
+
+The focused static suite and off-game raw HOODLUM validator pass, including
+deterministic regeneration from the local FLA sources: 1,276 writes, 98
+runnable extended-world tests, two fixture-dependent skips and a clean diff
+check. The reviewed `utils/vm-build.ps1` transaction copied all ten checkpoint
+files, then a one-file corrective transaction added the mandatory local-size
+verification to the naked IMG-chain hook. The final `Game SA` and `Client
+Deathmatch` builds completed with zero errors. The remaining gate is stock-SA
+runtime validation before any city pack is activated.
 
 The user-run live gate completed on 2026-07-18 with format-1 ticket `7a1a461a`.
 The initial stock process and the authorized replacement process both emitted
@@ -797,11 +820,11 @@ and process lease, retained `14854/32000` Atomic, `136/512` DamageAtomic and
 `175/1024` Time occupancy, and clamped the streaming request to 4008 blocks.
 The client/server logs contained no FileID mismatch, preflight/capacity failure,
 exception or fatal diagnostic, and no new dump was created. DFF/TXD
-replace/restore should still be repeated as a focused regression when the
-44,325-entry relocation changes the table itself. Do not begin that relocation
-by reintroducing any private pointer or partition constant.
+replace/restore must be repeated as a focused regression when the new
+42,341-entry relocation is first run. Do not reintroduce any private pointer or
+partition constant.
 
-After authorized activation, item 1 is complete: E2 extends the E1 format-2
+After the preceding authorized activation, item 1 is complete: E2 extends the E1 format-2
 transport boundary with strict authorization/startup without weakening format
 1. Continue with:
 
