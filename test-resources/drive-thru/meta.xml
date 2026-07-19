@@ -1,0 +1,9 @@
+<meta>
+    <info author="MTA Neon" name="Drive-Thru (story checkpoint)" type="script" version="0.1.0" />
+
+    <script src="shared.lua" type="shared" cache="false" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+
+    <min_mta_version client="1.6.0" server="1.6.0" />
+</meta>

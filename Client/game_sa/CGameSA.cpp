@@ -115,10 +115,17 @@ namespace
     constexpr std::uintptr_t VAR_FileCutsceneProcessing = 0xB5F852;
     constexpr std::uintptr_t VAR_FileCutsceneSkipped = 0xB5F854;
     constexpr unsigned int   MODEL_CSPLAY = 1;
+    constexpr unsigned int   MODEL_CUTOBJ01 = 300;
+    constexpr unsigned int   MODEL_CUTOBJ13 = 312;
+    constexpr std::size_t    MTA_CUTSCENE_OBJECT_SLOT_COUNT = MODEL_CUTOBJ13 - MODEL_CUTOBJ01 + 1;
     constexpr unsigned int   FILE_CUTSCENE_STREAMING_FLAGS = 0x1C;
+    constexpr const char*    MTA_CUTSCENE_OBJECT_SPECIAL_CHARACTER_NAMES[] = {
+        "RYDER2", "RYDER3", "EMMET", "ANDRE", "KENDL", "JETHRO", "ZERO", "TBONE", "SINDACO", "JANITOR", "BBTHIN", "SMOKEV", "PSYCHO",
+    };
+    static_assert(std::size(MTA_CUTSCENE_OBJECT_SPECIAL_CHARACTER_NAMES) == MTA_CUTSCENE_OBJECT_SLOT_COUNT);
 
     bool                       g_suppressManagedFileCutsceneSkipInput{};
-    bool                       g_restoreManagedFileCutscenePlayerModel{};
+    bool                       g_restoreManagedFileCutsceneModelMappings{};
     bool                       g_preloadingManagedFileCutscene{};
     char                       g_managedFileCutsceneName[8]{};
     CBaseModelInfoSAInterface* g_stockCutscenePlayerModelInfo{};
@@ -126,14 +133,30 @@ namespace
     CStreamingInfo             g_stockCutscenePlayerStreamingInfo{};
     CStreamingInfo             g_mtaSpecialCharacterStreamingInfo{};
     bool                       g_cutscenePlayerMappingsCaptured{};
+    CBaseModelInfoSAInterface* g_stockCutsceneObjectModelInfos[MTA_CUTSCENE_OBJECT_SLOT_COUNT]{};
+    CBaseModelInfoSAInterface* g_mtaCutsceneObjectModelInfos[MTA_CUTSCENE_OBJECT_SLOT_COUNT]{};
+    CStreamingInfo             g_stockCutsceneObjectStreamingInfos[MTA_CUTSCENE_OBJECT_SLOT_COUNT]{};
+    bool                       g_cutsceneObjectMappingsCaptured{};
 
-    bool InstallManagedFileCutscenePlayerModel(CStreaming* streaming)
+    bool InstallManagedFileCutsceneModelMappings(CStreaming* streaming)
     {
         auto* currentModelInfo = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
         auto* streamingInfo = streaming->GetStreamingInfo(MODEL_CSPLAY);
         if (!g_cutscenePlayerMappingsCaptured || !currentModelInfo || !streamingInfo || currentModelInfo != g_mtaSpecialCharacterModelInfo ||
             currentModelInfo->usNumberOfRefs != 0)
             return false;
+
+        if (!g_cutsceneObjectMappingsCaptured)
+            return false;
+
+        for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+        {
+            const unsigned int modelId = MODEL_CUTOBJ01 + static_cast<unsigned int>(index);
+            auto*              objectModelInfo = CModelInfoSAInterface::GetModelInfo(modelId);
+            if (!objectModelInfo || !streaming->GetStreamingInfo(modelId) || objectModelInfo == g_stockCutsceneObjectModelInfos[index] ||
+                objectModelInfo->usNumberOfRefs != 0)
+                return false;
+        }
 
         // MTA replaces GTA's stock slot 1 with TRUTH during initialization.
         // RequestSpecialModel cannot reverse that operation for CSPLAY because
@@ -147,13 +170,64 @@ namespace
         CModelInfoSAInterface::ms_modelInfoPtrs[MODEL_CSPLAY] = g_stockCutscenePlayerModelInfo;
         *streamingInfo = g_stockCutscenePlayerStreamingInfo;
         streaming->RequestModel(MODEL_CSPLAY, FILE_CUTSCENE_STREAMING_FLAGS);
+
+        // MTA also repurposes CUTOBJ01 through CUTOBJ13 as playable special
+        // characters. GTA assigns the first nonstandard cutscene model to
+        // CUTOBJ01 before it scans for another free slot. An unskinned prop
+        // such as SWEET2A's cigarette would consequently enter CPedModelInfo
+        // and crash while that class builds its bone collision model. Restore
+        // the original generic slots for the complete native load lifecycle.
+        for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+        {
+            const unsigned int modelId = MODEL_CUTOBJ01 + static_cast<unsigned int>(index);
+            auto*              objectStreamingInfo = streaming->GetStreamingInfo(modelId);
+
+            streaming->RemoveModel(modelId);
+            g_mtaCutsceneObjectModelInfos[index] = CModelInfoSAInterface::GetModelInfo(modelId);
+            CModelInfoSAInterface::ms_modelInfoPtrs[modelId] = g_stockCutsceneObjectModelInfos[index];
+            *objectStreamingInfo = g_stockCutsceneObjectStreamingInfos[index];
+        }
         return true;
     }
 
-    void RestoreManagedFileCutscenePlayerModel(CStreaming* streaming)
+    bool AreManagedFileCutsceneModelMappingsInstalled()
     {
-        if (!g_restoreManagedFileCutscenePlayerModel)
+        if (CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY) != g_stockCutscenePlayerModelInfo)
+            return false;
+
+        for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+        {
+            if (CModelInfoSAInterface::GetModelInfo(MODEL_CUTOBJ01 + static_cast<unsigned int>(index)) != g_stockCutsceneObjectModelInfos[index])
+                return false;
+        }
+        return true;
+    }
+
+    void RestoreManagedFileCutsceneModelMappings(CStreaming* streaming)
+    {
+        if (!g_restoreManagedFileCutsceneModelMappings)
             return;
+
+        if (g_cutsceneObjectMappingsCaptured)
+        {
+            for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+            {
+                const unsigned int modelId = MODEL_CUTOBJ01 + static_cast<unsigned int>(index);
+                auto*              streamingInfo = streaming->GetStreamingInfo(modelId);
+                if (!streamingInfo || !g_mtaCutsceneObjectModelInfos[index])
+                    continue;
+
+                streaming->RemoveModel(modelId);
+                CModelInfoSAInterface::ms_modelInfoPtrs[modelId] = g_mtaCutsceneObjectModelInfos[index];
+
+                // RequestSpecialModel rebuilds the extra.img directory entry
+                // and texture mapping for each MTA special character. Copying
+                // the cutscene-era CStreamingInfo back verbatim can retain an
+                // invalid archive range and makes GTA report model-load errors
+                // such as KENDL in slot 304 after native cutscene teardown.
+                streaming->RequestSpecialModel(modelId, MTA_CUTSCENE_OBJECT_SPECIAL_CHARACTER_NAMES[index], 0);
+            }
+        }
 
         auto* streamingInfo = streaming->GetStreamingInfo(MODEL_CSPLAY);
         if (g_cutscenePlayerMappingsCaptured && streamingInfo && g_mtaSpecialCharacterModelInfo)
@@ -166,7 +240,7 @@ namespace
             *streamingInfo = g_mtaSpecialCharacterStreamingInfo;
             streaming->RequestModel(MODEL_CSPLAY, 0);
         }
-        g_restoreManagedFileCutscenePlayerModel = false;
+        g_restoreManagedFileCutsceneModelMappings = false;
     }
 
     bool __cdecl FileCutsceneSkipInputHook()
@@ -1230,6 +1304,29 @@ void CGameSA::SetupSpecialCharacters()
         g_cutscenePlayerMappingsCaptured = true;
     }
 
+    if (!g_cutsceneObjectMappingsCaptured)
+    {
+        bool capturedEveryMapping = true;
+        for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+        {
+            const unsigned int modelId = MODEL_CUTOBJ01 + static_cast<unsigned int>(index);
+            auto*              modelInfo = CModelInfoSAInterface::GetModelInfo(modelId);
+            auto*              streamingInfo = m_pStreaming->GetStreamingInfo(modelId);
+            if (!modelInfo || !streamingInfo)
+            {
+                capturedEveryMapping = false;
+                break;
+            }
+
+            g_stockCutsceneObjectModelInfos[index] = modelInfo;
+            g_stockCutsceneObjectStreamingInfos[index] = *streamingInfo;
+            g_stockCutsceneObjectStreamingInfos[index].prevId = UINT16_MAX;
+            g_stockCutsceneObjectStreamingInfos[index].nextId = UINT16_MAX;
+            g_stockCutsceneObjectStreamingInfos[index].loadState = eModelLoadState::LOADSTATE_NOT_LOADED;
+        }
+        g_cutsceneObjectMappingsCaptured = capturedEveryMapping;
+    }
+
     ModelInfo[1].MakePedModel("TRUTH");
     g_mtaSpecialCharacterModelInfo = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
     ModelInfo[2].MakePedModel("MACCER");
@@ -1264,19 +1361,8 @@ void CGameSA::SetupSpecialCharacters()
     ModelInfo[297].MakePedModel("MADDOGG");
     ModelInfo[298].MakePedModel("CAT");
     ModelInfo[299].MakePedModel("CLAUDE");
-    ModelInfo[300].MakePedModel("RYDER2");
-    ModelInfo[301].MakePedModel("RYDER3");
-    ModelInfo[302].MakePedModel("EMMET");
-    ModelInfo[303].MakePedModel("ANDRE");
-    ModelInfo[304].MakePedModel("KENDL");
-    ModelInfo[305].MakePedModel("JETHRO");
-    ModelInfo[306].MakePedModel("ZERO");
-    ModelInfo[307].MakePedModel("TBONE");
-    ModelInfo[308].MakePedModel("SINDACO");
-    ModelInfo[309].MakePedModel("JANITOR");
-    ModelInfo[310].MakePedModel("BBTHIN");
-    ModelInfo[311].MakePedModel("SMOKEV");
-    ModelInfo[312].MakePedModel("PSYCHO");
+    for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+        ModelInfo[MODEL_CUTOBJ01 + index].MakePedModel(MTA_CUTSCENE_OBJECT_SPECIAL_CHARACTER_NAMES[index]);
 
     // ModelInfo[190].MakePedModel ( "BARBARA" );
     // ModelInfo[191].MakePedModel ( "HELENA" );
@@ -1630,10 +1716,10 @@ bool CGameSA::LoadFileCutscene(const char* name)
     // MTA permanently repurposes GTA's CSPLAY slot 1 as TRUTH. Temporarily put
     // back the captured vanilla model mapping for native cutscene playback;
     // requesting "csplay" as a special model would search the wrong directory.
-    if (!InstallManagedFileCutscenePlayerModel(m_pStreaming))
+    if (!InstallManagedFileCutsceneModelMappings(m_pStreaming))
         return false;
 
-    g_restoreManagedFileCutscenePlayerModel = true;
+    g_restoreManagedFileCutsceneModelMappings = true;
     g_preloadingManagedFileCutscene = true;
     std::memcpy(g_managedFileCutsceneName, name, std::strlen(name) + 1);
     g_suppressManagedFileCutsceneSkipInput = true;
@@ -1660,14 +1746,15 @@ bool CGameSA::IsFileCutsceneLoaded() const
             return false;
 
         auto* cutscenePlayerModel = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
-        if (!cutscenePlayerModel || cutscenePlayerModel->ulHashKey != m_pKeyGen->GetUppercaseKey("csplay") || !cutscenePlayerModel->pRwObject)
+        if (!cutscenePlayerModel || cutscenePlayerModel->ulHashKey != m_pKeyGen->GetUppercaseKey("csplay") || !cutscenePlayerModel->pRwObject ||
+            !AreManagedFileCutsceneModelMappingsInstalled())
             return false;
 
         reinterpret_cast<void(__cdecl*)(const char*)>(FUNC_LoadFileCutscene)(g_managedFileCutsceneName);
         g_preloadingManagedFileCutscene = false;
         if (!IsFileCutsceneActive())
         {
-            RestoreManagedFileCutscenePlayerModel(m_pStreaming);
+            RestoreManagedFileCutsceneModelMappings(m_pStreaming);
             return false;
         }
     }
@@ -1716,6 +1803,6 @@ bool CGameSA::DeleteFileCutscene()
         reinterpret_cast<void(__cdecl*)()>(FUNC_DeleteFileCutscene)();
 
     const bool deleted = !IsFileCutsceneActive();
-    RestoreManagedFileCutscenePlayerModel(m_pStreaming);
+    RestoreManagedFileCutsceneModelMappings(m_pStreaming);
     return deleted;
 }
