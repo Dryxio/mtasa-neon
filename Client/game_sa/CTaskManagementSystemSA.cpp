@@ -63,6 +63,31 @@ CTaskSA* CTaskManagementSystemSA::AddTask(CTaskSA* pTask)
     return pTask;
 }
 
+CTaskSAInterface* CTaskManagementSystemSA::TakeTaskInterface(CTaskSA* pTask)
+{
+    if (!pTask || !pTask->GetInterface())
+        return nullptr;
+
+    for (auto iter = m_TaskList.begin(); iter != m_TaskList.end(); ++iter)
+    {
+        STaskListItem* pItem = *iter;
+        if (pItem->pTaskSA != pTask)
+            continue;
+
+        // A sequence template takes ownership of its child interfaces. Remove
+        // the MTA wrapper first so GTA's later template flush cannot leave a
+        // stale management entry pointing at the destroyed child.
+        CTaskSAInterface* pTaskInterface = pItem->taskInterface;
+        m_TaskList.erase(iter);
+        delete pItem;
+        pTask->SetInterface(nullptr);
+        delete pTask;
+        return pTaskInterface;
+    }
+
+    return nullptr;
+}
+
 // Only called from HOOK_CTask_Operator_Delete
 void CTaskManagementSystemSA::RemoveTask(CTaskSAInterface* pTaskInterface)
 {

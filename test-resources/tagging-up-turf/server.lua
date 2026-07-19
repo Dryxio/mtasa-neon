@@ -338,7 +338,7 @@ local function cancelDemoShoot(reason)
         killTimer(shoot.completionTimer)
     end
     if isElement(mission.leader) then
-        triggerClientEvent(mission.leader, "tagup:sweetDemoShootCancel", resourceRoot, shoot.id, reason or "server_cancelled")
+        triggerClientEvent(mission.leader, "tagup:sweetDemoSequenceCancel", resourceRoot, shoot.id, reason or "server_cancelled")
     end
 end
 
@@ -2264,7 +2264,7 @@ finishMission = function(passed, traceExtra)
         broadcastState(traceExtra)
         for _, player in ipairs(mission.party) do
             if isElement(player) then
-                givePlayerMoney(player, 500)
+                givePlayerMoney(player, 200)
             end
         end
     end
@@ -3296,6 +3296,8 @@ addCommandHandler("tagupskip", function(player)
     end
 end)
 
+local startDemoSequence
+
 local function startDemoWalk(sweet, kind, overrideProfile)
     local profile = overrideProfile or TAGUP.sweetDemoWalk
     local exitX, exitY, exitZ = getElementPosition(sweet)
@@ -3329,13 +3331,13 @@ local function startDemoWalk(sweet, kind, overrideProfile)
     triggerClientEvent(mission.leader, "tagup:sweetDemoWalkStart", resourceRoot, walk.id, sweet, profile)
 end
 
-local function tryStartDemoWalkAfterStaging()
+local function tryStartDemoSequenceAfterStaging()
     local scene = mission.demoScene
     local sweet = mission.entities.sweet
-    if not scene or not scene.actorsStaged or not scene.sweetLeaveComplete or mission.demoWalk or not isElement(sweet) then
+    if not scene or not scene.actorsStaged or not scene.sweetLeaveComplete or mission.demoShoot or not isElement(sweet) then
         return
     end
-    startDemoWalk(sweet)
+    startDemoSequence(sweet)
 end
 
 local function tryCompleteDemoLeave()
@@ -3351,7 +3353,7 @@ local function tryCompleteDemoLeave()
     if scene then
         scene.sweetLeaveComplete = true
     end
-    tryStartDemoWalkAfterStaging()
+    tryStartDemoSequenceAfterStaging()
 end
 
 local function startDemoLeave()
@@ -3548,7 +3550,7 @@ local function stageDemoActors(scene)
     outputDebugString(("[tagging-up-turf] Sweet staged at SCM coordinate=(%.2f, %.2f, %.2f, heading=%.1f); sequence gate leaveComplete=%s"):format(
                           profile.sweetStage.x, profile.sweetStage.y, profile.sweetStage.z, profile.sweetStage.heading,
                           tostring(scene.sweetLeaveComplete)))
-    tryStartDemoWalkAfterStaging()
+    tryStartDemoSequenceAfterStaging()
     for _, player in ipairs(scene.players) do
         if isElement(player) then
             triggerClientEvent(player, "tagup:sweetDemoSceneStaged", resourceRoot, scene.id)
@@ -3837,9 +3839,13 @@ addEventHandler("tagup:sweetDemoLeaveResult", resourceRoot, function(leaveId, pe
     tryCompleteDemoLeave()
 end)
 
-local function startDemoShoot(ped, distanceFromWalkTarget)
+startDemoSequence = function(ped)
     local profile = TAGUP.sweetDemoShoot
     local demo = TAGUP.demoTag
+    local vehicle = mission.entities.vehicle
+    if not isElement(vehicle) then
+        return failMission("La Greenwood a disparu avant la sequence native de demonstration.")
+    end
     giveWeapon(ped, TAGUP.sprayWeapon, 500, true)
     setElementSyncer(ped, mission.leader)
 
@@ -3850,15 +3856,15 @@ local function startDemoShoot(ped, distanceFromWalkTarget)
         if not mission.running or mission.stage ~= "demo" or not mission.demoShoot or mission.demoShoot.id ~= expectedId then
             return
         end
-        outputDebugString(("[tagging-up-turf] Sweet native shoot #%d exceeded the %d ms server guard"):format(expectedId,
-                                                                                                            profile.guardTimeout), 1)
+        outputDebugString(("[tagging-up-turf] Sweet native sequence #%d exceeded the %d ms server guard"):format(
+                              expectedId, profile.sequenceGuardTimeout), 1)
         cancelDemoShoot("server_timeout")
-        failMission("Le tir natif de Sweet a depasse le delai de garde.")
-    end, profile.guardTimeout, 1, shoot.id))
+        failMission("La sequence native de demonstration de Sweet a depasse le delai de garde.")
+    end, profile.sequenceGuardTimeout, 1, shoot.id))
 
-    outputDebugString(("[tagging-up-turf] Sweet go-to accepted at %.2f m; starting native shoot #%d (duration=%d, burst=%d)"):format(
-        distanceFromWalkTarget, shoot.id, profile.duration, profile.burstLength))
-    triggerClientEvent(mission.leader, "tagup:sweetDemoShootStart", resourceRoot, shoot.id, ped, demo, profile)
+    outputDebugString(("[tagging-up-turf] Starting Sweet native sequence #%d: leave_car -> walk -> shoot (shoot duration=%d, burst=%d)"):format(
+                          shoot.id, profile.duration, profile.burstLength))
+    triggerClientEvent(mission.leader, "tagup:sweetDemoSequenceStart", resourceRoot, shoot.id, ped, vehicle, demo, TAGUP.sweetDemoWalk, profile)
 end
 
 local function tryCompleteSweetReturnEnter()
@@ -3953,12 +3959,12 @@ addEventHandler("tagup:sweetDemoWalkResult", resourceRoot, function(walkId, ped,
         setElementRotation(ped, 0, 0, TAGUP.sweetDemoScene.sweetFinal.heading)
         playDemoCheckoutAudio(scene)
     else
-        startDemoShoot(ped, distance)
+        failMission("Une marche de demonstration non sequentielle a ete lancee par erreur.")
     end
 end)
 
-addEvent("tagup:sweetDemoShootResult", true)
-addEventHandler("tagup:sweetDemoShootResult", resourceRoot, function(shootId, ped, result, details)
+addEvent("tagup:sweetDemoSequenceResult", true)
+addEventHandler("tagup:sweetDemoSequenceResult", resourceRoot, function(shootId, ped, result, details)
     local player = client
     local shoot = mission.demoShoot
     if source ~= resourceRoot or not mission.running or mission.stage ~= "demo" or player ~= mission.leader or not isMissionPlayer(player) or
@@ -3968,7 +3974,7 @@ addEventHandler("tagup:sweetDemoShootResult", resourceRoot, function(shootId, pe
     end
 
     details = tostring(details or "")
-    outputDebugString(("[tagging-up-turf] Sweet native shoot #%d result=%s (%s)"):format(shoot.id, tostring(result), details:sub(1, 240)))
+    outputDebugString(("[tagging-up-turf] Sweet native sequence #%d result=%s (%s)"):format(shoot.id, tostring(result), details:sub(1, 240)))
     if getElementSyncer(ped) ~= player then
         cancelDemoShoot("invalid_syncer")
         return failMission("Le resultat du tir de Sweet ne vient plus de son syncer.")
@@ -3978,11 +3984,11 @@ addEventHandler("tagup:sweetDemoShootResult", resourceRoot, function(shootId, pe
     -- interrupts it. Any spontaneous task end before our authoritative tag reaches
     -- 100% is therefore a failure, not the success condition for this stage.
     cancelDemoShoot("client_" .. tostring(result))
-    failMission("Le tir natif de Sweet s'est termine avant que le tag soit recouvert: " .. tostring(result))
+    failMission("La sequence native de Sweet s'est terminee avant que le tag soit recouvert: " .. tostring(result))
 end)
 
-addEvent("tagup:sweetDemoShootObserved", true)
-addEventHandler("tagup:sweetDemoShootObserved", resourceRoot, function(shootId, ped)
+addEvent("tagup:sweetDemoSequenceShootObserved", true)
+addEventHandler("tagup:sweetDemoSequenceShootObserved", resourceRoot, function(shootId, ped)
     local player = client
     local shoot = mission.demoShoot
     if source ~= resourceRoot or not mission.running or mission.stage ~= "demo" or player ~= mission.leader or not isMissionPlayer(player) or
@@ -4018,7 +4024,7 @@ addEventHandler("tagup:sweetDemoShootObserved", resourceRoot, function(shootId, 
         demoScene.shootObserved = true
         tryStartDemoSprayCamera(demoScene)
     end
-    outputDebugString(("[tagging-up-turf] Sweet native shoot #%d observed after %d ms; waiting for native tag hits (task ceiling=%d ms)"):format(
+    outputDebugString(("[tagging-up-turf] Sweet native sequence #%d reached shoot task after %d ms; waiting for native tag hits (task ceiling=%d ms)"):format(
         shoot.id, shoot.observedAt - shoot.requestedAt, profile.duration))
 end)
 
@@ -4030,7 +4036,7 @@ local function completeDemoTag(active)
     local profile = TAGUP.sweetDemoShoot
     active.nativeCancelled = true
     setElementData(mission.entities.demoTag, "tagup.paintAlpha", 255, true)
-    triggerClientEvent(mission.leader, "tagup:sweetDemoShootCancel", resourceRoot, active.id, "authoritative_tag_complete")
+    triggerClientEvent(mission.leader, "tagup:sweetDemoSequenceCancel", resourceRoot, active.id, "authoritative_tag_complete")
     outputDebugString(("[tagging-up-turf] Sweet demo tag reached native alpha 255; honoring SCM WAIT %d"):format(profile.postCompletionWait))
 
     active.completionTimer = rememberTimer(setTimer(function(completedId)

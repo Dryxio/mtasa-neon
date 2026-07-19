@@ -156,4 +156,9 @@ public:
 
     // Appended to preserve every established CTasks vtable index.
     virtual CTaskComplex* CreateTaskComplexTurnToFaceEntity(CPed* pTarget) = 0;
+
+    // Appended native sequence surface. The factory consumes every child task,
+    // matching OPEN/CLOSE/PERFORM/CLEAR_SEQUENCE_TASK ownership.
+    virtual CTaskComplex* CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat = false) = 0;
+    virtual int           GetTaskSequenceProgress(CPed* pPed) = 0;
 };

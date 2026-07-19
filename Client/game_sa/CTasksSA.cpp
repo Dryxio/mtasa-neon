@@ -13,6 +13,7 @@
 #include "CGameSA.h"
 #include "CPedSA.h"
 #include "CTaskManagementSystemSA.h"
+#include "CTaskManagerSA.h"
 #include "CTasksSA.h"
 #include "TaskAttackSA.h"
 #include "TaskBasicSA.h"
@@ -339,6 +340,69 @@ CTaskComplex* CTasksSA::CreateTaskComplexTurnToFaceEntity(CPed* pTarget)
     auto* pTask = NewTask<CTaskComplexTurnToFaceEntityOrCoordSA>(pTarget);
     m_pTaskManagementSystem->AddTask(pTask);
     return pTask;
+}
+
+CTaskComplex* CTasksSA::CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat)
+{
+    CTaskSA*          taskWrappers[8] = {};
+    CTaskSAInterface* taskInterfaces[8] = {};
+    bool              valid = pTasks && uiTaskCount > 0 && uiTaskCount <= 8;
+
+    if (valid)
+    {
+        for (size_t i = 0; i < uiTaskCount; ++i)
+        {
+            taskWrappers[i] = dynamic_cast<CTaskSA*>(pTasks[i]);
+            if (!taskWrappers[i] || !taskWrappers[i]->IsValid() || taskWrappers[i]->GetInterface()->m_pParent ||
+                m_pTaskManagementSystem->GetTask(taskWrappers[i]->GetInterface()) != taskWrappers[i])
+            {
+                valid = false;
+                break;
+            }
+        }
+    }
+
+    if (!valid)
+    {
+        if (pTasks)
+        {
+            for (size_t i = 0; i < uiTaskCount && i < 8; ++i)
+            {
+                auto* pTask = dynamic_cast<CTaskSA*>(pTasks[i]);
+                if (pTask && pTask->IsValid())
+                    pTask->Destroy();
+                else
+                    delete pTask;
+            }
+        }
+        return nullptr;
+    }
+
+    for (size_t i = 0; i < uiTaskCount; ++i)
+        taskInterfaces[i] = m_pTaskManagementSystem->TakeTaskInterface(taskWrappers[i]);
+
+    auto* pSequence = NewTask<CTaskComplexUseSequenceSA>(taskInterfaces, uiTaskCount, bRepeat);
+    m_pTaskManagementSystem->AddTask(pSequence);
+    return pSequence;
+}
+
+int CTasksSA::GetTaskSequenceProgress(CPed* pPed)
+{
+    if (!pPed || !pPed->GetPedIntelligence())
+        return -1;
+
+    CTaskManager* pTaskManager = pPed->GetPedIntelligence()->GetTaskManager();
+    if (!pTaskManager)
+        return -1;
+
+    for (int priority = TASK_PRIORITY_PHYSICAL_RESPONSE; priority < TASK_PRIORITY_MAX; ++priority)
+    {
+        auto* pTask = dynamic_cast<CTaskComplexUseSequenceSA*>(pTaskManager->FindTaskByType(priority, TASK_COMPLEX_USE_SEQUENCE));
+        if (pTask)
+            return pTask->GetCurrentTaskIndex();
+    }
+
+    return -1;
 }
 
 CTaskSimpleStandStill* CTasksSA::CreateTaskSimpleStandStill(int iDuration)

@@ -167,6 +167,7 @@ void CLuaAudioDefs::LoadFunctions()
 {
     constexpr static const std::pair<const char*, lua_CFunction> functions[]{// Audio funcs
                                                                              {"playSoundFrontEnd", PlaySoundFrontEnd},
+                                                                             {"playMissionPassedTune", ArgumentParser<PlayMissionPassedTune>},
                                                                              {"setAmbientSoundEnabled", SetAmbientSoundEnabled},
                                                                              {"isAmbientSoundEnabled", IsAmbientSoundEnabled},
                                                                              {"resetAmbientSounds", ResetAmbientSounds},
@@ -2508,6 +2509,14 @@ int CLuaAudioDefs::PlaySoundFrontEnd(lua_State* luaVM)
 
     lua_pushboolean(luaVM, false);
     return 1;
+}
+
+bool CLuaAudioDefs::PlayMissionPassedTune(unsigned int tune)
+{
+    // 0394 accepts the two story tune selectors and maps them to beat tracks
+    // 11 and 12. Keeping the selector surface prevents scripts from treating
+    // arbitrary beat tracks as mission-passed audio.
+    return tune >= 1 && tune <= 2 && CStaticFunctionDefinitions::PlayMissionPassedTune(tune);
 }
 
 int CLuaAudioDefs::SetAmbientSoundEnabled(lua_State* luaVM)

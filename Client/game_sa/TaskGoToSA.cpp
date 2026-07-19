@@ -174,14 +174,50 @@ CTaskComplexTurnToFaceEntityOrCoordSA::CTaskComplexTurnToFaceEntityOrCoordSA(CPe
     reinterpret_cast<Constructor>(FUNC_CTaskComplexTurnToFaceEntityOrCoord__Constructor)(pInterface, pTargetInterface, 0.5f, 0.2f);
 }
 
+namespace
+{
+    void DestroySequenceChild(CTaskSAInterface* pTask)
+    {
+        if (!pTask || !pTask->VTBL || !pTask->VTBL->DeletingDestructor)
+            return;
+
+        using DeletingDestructor = void(__thiscall*)(CTaskSAInterface*, unsigned char);
+        reinterpret_cast<DeletingDestructor>(pTask->VTBL->DeletingDestructor)(pTask, 1);
+    }
+}  // namespace
+
 CTaskComplexUseSequenceSA::CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepeat)
 {
-    if (!pTask)
-        return;
-    if (!pTask->IsValid())
+    CTaskSAInterface* pTaskInterface = pTask && pTask->IsValid() ? pTask->GetInterface() : nullptr;
+    if (pTaskInterface)
+        pTask->SetInterface(nullptr);
+    delete pTask;
+
+    if (pTaskInterface)
     {
-        delete pTask;
+        CTaskSAInterface* tasks[] = {pTaskInterface};
+        Initialize(tasks, 1, bRepeat);
+    }
+}
+
+CTaskComplexUseSequenceSA::CTaskComplexUseSequenceSA(CTaskSAInterface* const* pTasks, size_t uiTaskCount, bool bRepeat)
+{
+    Initialize(pTasks, uiTaskCount, bRepeat);
+}
+
+void CTaskComplexUseSequenceSA::Initialize(CTaskSAInterface* const* pTasks, size_t uiTaskCount, bool bRepeat)
+{
+    if (!pTasks || uiTaskCount == 0 || uiTaskCount > 8)
         return;
+
+    for (size_t i = 0; i < uiTaskCount; ++i)
+    {
+        if (!pTasks[i] || pTasks[i]->m_pParent)
+        {
+            for (size_t j = 0; j < uiTaskCount; ++j)
+                DestroySequenceChild(pTasks[j]);
+            return;
+        }
     }
 
     int   iSequenceIndex = -1;
@@ -197,8 +233,8 @@ CTaskComplexUseSequenceSA::CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepea
     // clang-format on
     if (iSequenceIndex < 0 || iSequenceIndex >= 64)
     {
-        pTask->Destroy();
-        delete pTask;
+        for (size_t i = 0; i < uiTaskCount; ++i)
+            DestroySequenceChild(pTasks[i]);
         return;
     }
 
@@ -221,19 +257,19 @@ CTaskComplexUseSequenceSA::CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepea
     // clang-format on
     *pActiveSequence = iSequenceIndex;
 
-    CTaskSAInterface* pChildInterface = pTask->GetInterface();
-    pTask->SetInterface(nullptr);
-    delete pTask;
-
     dwFunc = FUNC_CTaskComplexSequence__AddTask;
-    // clang-format off
-    __asm
+    for (size_t i = 0; i < uiTaskCount; ++i)
     {
-        push    pChildInterface
-        mov     ecx, dwSequenceInterface
-        call    dwFunc
+        CTaskSAInterface* pChildInterface = pTasks[i];
+        // clang-format off
+        __asm
+        {
+            push    pChildInterface
+            mov     ecx, dwSequenceInterface
+            call    dwFunc
+        }
+        // clang-format on
     }
-    // clang-format on
 
     pSequence->m_uiRepeatMode = bRepeat ? 1u : 0u;
     pOpened[iSequenceIndex] = false;
@@ -281,4 +317,10 @@ CTaskComplexUseSequenceSA::CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepea
     {
         pSequence->m_bFlushTasks = true;
     }
+}
+
+int CTaskComplexUseSequenceSA::GetCurrentTaskIndex() const
+{
+    const auto* pInterface = static_cast<const CTaskComplexUseSequenceSAInterface*>(GetInterface());
+    return pInterface ? pInterface->m_iCurrentTask : -1;
 }

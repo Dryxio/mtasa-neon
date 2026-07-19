@@ -26,6 +26,68 @@
 
 namespace
 {
+    enum class ePedSequenceTask
+    {
+        LEAVE_CAR,
+        GO_TO,
+        SHOOT_AT,
+    };
+
+    struct SPedSequenceTask
+    {
+        ePedSequenceTask type{};
+        CClientVehicle*  vehicle{};
+        CVector          target{};
+        int              moveState{PedMoveState::PEDMOVE_WALK};
+        float            radius{0.5f};
+        float            slowdownRadius{2.0f};
+        int              timeout{-2};
+        int              duration{1000};
+        int              burstLength{5};
+    };
+
+    bool ReadSequenceNumber(lua_State* luaVM, int tableIndex, const char* name, double& value, double defaultValue, bool required, SString& error)
+    {
+        lua_getfield(luaVM, tableIndex, name);
+        if (lua_isnoneornil(luaVM, -1))
+        {
+            lua_pop(luaVM, 1);
+            if (required)
+            {
+                error = SString("missing numeric field '%s'", name);
+                return false;
+            }
+            value = defaultValue;
+            return true;
+        }
+        if (!lua_isnumber(luaVM, -1))
+        {
+            lua_pop(luaVM, 1);
+            error = SString("field '%s' must be a number", name);
+            return false;
+        }
+        value = lua_tonumber(luaVM, -1);
+        lua_pop(luaVM, 1);
+        if (!std::isfinite(value))
+        {
+            error = SString("field '%s' must be finite", name);
+            return false;
+        }
+        return true;
+    }
+
+    bool ReadSequenceTarget(lua_State* luaVM, int tableIndex, CVector& target, SString& error)
+    {
+        double x, y, z;
+        if (!ReadSequenceNumber(luaVM, tableIndex, "x", x, 0.0, true, error) || !ReadSequenceNumber(luaVM, tableIndex, "y", y, 0.0, true, error) ||
+            !ReadSequenceNumber(luaVM, tableIndex, "z", z, 0.0, true, error))
+        {
+            return false;
+        }
+        target = CVector(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+        return true;
+    }
+
     bool DispatchPedScriptCommandTask(CPed* ped, CTask* task)
     {
         if (!task)
@@ -114,6 +176,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedFacialTalk", ArgumentParser<SetPedFacialTalk>},
         {"stopPedFacialTalk", ArgumentParser<StopPedFacialTalk>},
         {"setPedShootAt", ArgumentParser<SetPedShootAt>},
+        {"setPedTaskSequence", SetPedTaskSequence},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
@@ -163,6 +226,7 @@ void CLuaPedDefs::LoadFunctions()
         {"getPedTotalAmmo", GetPedTotalAmmo},
         {"getPedOccupiedVehicle", GetPedOccupiedVehicle},
         {"getPedOccupiedVehicleSeat", GetPedOccupiedVehicleSeat},
+        {"getPedTaskSequenceProgress", ArgumentParser<GetPedTaskSequenceProgress>},
         {"getPedBonePosition", GetPedBonePosition},
         {"getPedClothes", GetPedClothes},
         {"getPedMoveState", GetPedMoveState},
@@ -286,6 +350,8 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setFacialTalk", "setPedFacialTalk");
     lua_classfunction(luaVM, "stopFacialTalk", "stopPedFacialTalk");
     lua_classfunction(luaVM, "setShootAt", "setPedShootAt");
+    lua_classfunction(luaVM, "setTaskSequence", "setPedTaskSequence");
+    lua_classfunction(luaVM, "getTaskSequenceProgress", "getPedTaskSequenceProgress");
     lua_classfunction(luaVM, "setDriveWander", "setPedDriveWander");
     lua_classfunction(luaVM, "setMissionActor", "setPedMissionActor");
     lua_classfunction(luaVM, "setBleeding", "setPedBleeding");
@@ -2880,6 +2946,170 @@ bool CLuaPedDefs::SetPedShootAt(CClientPed* ped, CVector target, std::optional<i
     auto* task = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
                                                                  static_cast<short>(taskBurstLength), taskDuration);
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+int CLuaPedDefs::SetPedTaskSequence(lua_State* luaVM)
+{
+    auto fail = [luaVM](const SString& reason)
+    {
+        m_pScriptDebugging->LogError(luaVM, "setPedTaskSequence: %s", reason.c_str());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    };
+
+    auto* ped = dynamic_cast<CClientPed*>(lua_toelement(luaVM, 1));
+    if (!ped)
+        return fail("argument 1 must be a ped");
+    if (!ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+        return fail("ped is not a live local or synchronized streamed ped");
+    if (!lua_istable(luaVM, 2))
+        return fail("argument 2 must be a sequence task table");
+
+    const size_t taskCount = lua_objlen(luaVM, 2);
+    if (taskCount == 0 || taskCount > 8)
+        return fail("sequence must contain between 1 and 8 tasks");
+
+    bool repeat = false;
+    if (!lua_isnoneornil(luaVM, 3))
+    {
+        if (!lua_isboolean(luaVM, 3))
+            return fail("argument 3 must be a boolean");
+        repeat = lua_toboolean(luaVM, 3) != 0;
+    }
+
+    std::array<SPedSequenceTask, 8> descriptions;
+    for (size_t i = 0; i < taskCount; ++i)
+    {
+        lua_rawgeti(luaVM, 2, i + 1);
+        if (!lua_istable(luaVM, -1))
+        {
+            lua_pop(luaVM, 1);
+            return fail(SString("task %u must be a table", i + 1));
+        }
+
+        const int descriptorIndex = lua_gettop(luaVM);
+        lua_getfield(luaVM, descriptorIndex, "task");
+        const char* taskName = lua_isstring(luaVM, -1) ? lua_tostring(luaVM, -1) : nullptr;
+        if (!taskName)
+        {
+            lua_pop(luaVM, 2);
+            return fail(SString("task %u is missing string field 'task'", i + 1));
+        }
+        const SString taskNameCopy = taskName;
+        lua_pop(luaVM, 1);
+
+        SPedSequenceTask& description = descriptions[i];
+        SString           error;
+        if (stricmp(taskNameCopy.c_str(), "leave_car") == 0)
+        {
+            description.type = ePedSequenceTask::LEAVE_CAR;
+            lua_getfield(luaVM, descriptorIndex, "vehicle");
+            description.vehicle = dynamic_cast<CClientVehicle*>(lua_toelement(luaVM, -1));
+            lua_pop(luaVM, 1);
+            if (!description.vehicle || !description.vehicle->IsStreamedIn() || !description.vehicle->GetGameVehicle())
+                error = "field 'vehicle' must be a streamed vehicle";
+        }
+        else if (stricmp(taskNameCopy.c_str(), "go_to") == 0)
+        {
+            description.type = ePedSequenceTask::GO_TO;
+            if (ReadSequenceTarget(luaVM, descriptorIndex, description.target, error))
+            {
+                lua_getfield(luaVM, descriptorIndex, "movement");
+                const char* movement = lua_isnoneornil(luaVM, -1) ? "walk" : (lua_isstring(luaVM, -1) ? lua_tostring(luaVM, -1) : nullptr);
+                if (!movement)
+                    error = "field 'movement' must be walk, run, or sprint";
+                else if (stricmp(movement, "walk") == 0)
+                    description.moveState = PedMoveState::PEDMOVE_WALK;
+                else if (stricmp(movement, "run") == 0)
+                    description.moveState = PedMoveState::PEDMOVE_RUN;
+                else if (stricmp(movement, "sprint") == 0)
+                    description.moveState = PedMoveState::PEDMOVE_SPRINT;
+                else
+                    error = "field 'movement' must be walk, run, or sprint";
+                lua_pop(luaVM, 1);
+
+                double     radius, slowdownRadius, timeout;
+                const bool valuesRead = error.empty() && ReadSequenceNumber(luaVM, descriptorIndex, "radius", radius, 0.5, false, error) &&
+                                        ReadSequenceNumber(luaVM, descriptorIndex, "slowdownRadius", slowdownRadius, 2.0, false, error) &&
+                                        ReadSequenceNumber(luaVM, descriptorIndex, "timeout", timeout, -2.0, false, error);
+                if (valuesRead)
+                {
+                    description.radius = static_cast<float>(radius);
+                    description.slowdownRadius = static_cast<float>(slowdownRadius);
+                    description.timeout = static_cast<int>(timeout);
+                    if (description.radius <= 0.0f || description.slowdownRadius < description.radius || description.timeout < -2 ||
+                        timeout != std::floor(timeout))
+                        error = "go_to radius, slowdownRadius, or timeout is outside the native range";
+                }
+            }
+        }
+        else if (stricmp(taskNameCopy.c_str(), "shoot_at") == 0)
+        {
+            description.type = ePedSequenceTask::SHOOT_AT;
+            if (ReadSequenceTarget(luaVM, descriptorIndex, description.target, error))
+            {
+                double     duration, burstLength;
+                const bool valuesRead = ReadSequenceNumber(luaVM, descriptorIndex, "duration", duration, 1000.0, false, error) &&
+                                        ReadSequenceNumber(luaVM, descriptorIndex, "burstLength", burstLength, 5.0, false, error);
+                if (valuesRead)
+                {
+                    description.duration = static_cast<int>(duration);
+                    description.burstLength = static_cast<int>(burstLength);
+                    if ((description.target.fX == 0.0f && description.target.fY == 0.0f) || description.burstLength < 1 || description.burstLength > 32767 ||
+                        duration != std::floor(duration) || burstLength != std::floor(burstLength))
+                    {
+                        error = "shoot_at target or burstLength is outside the native range";
+                    }
+                }
+            }
+        }
+        else
+        {
+            error = SString("unsupported task type '%s'", taskNameCopy.c_str());
+        }
+
+        lua_pop(luaVM, 1);
+        if (!error.empty())
+            return fail(SString("task %u: %s", i + 1, error.c_str()));
+    }
+
+    std::array<CTask*, 8> tasks{};
+    for (size_t i = 0; i < taskCount; ++i)
+    {
+        const SPedSequenceTask& description = descriptions[i];
+        switch (description.type)
+        {
+            case ePedSequenceTask::LEAVE_CAR:
+                tasks[i] = g_pGame->GetTasks()->CreateTaskComplexLeaveCar(description.vehicle->GetGameVehicle());
+                break;
+            case ePedSequenceTask::GO_TO:
+                tasks[i] = g_pGame->GetTasks()->CreateTaskComplexGoToPointAndStandStill(description.moveState, description.target, description.radius,
+                                                                                        description.slowdownRadius, description.timeout);
+                break;
+            case ePedSequenceTask::SHOOT_AT:
+                tasks[i] = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &description.target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
+                                                                           static_cast<short>(description.burstLength), description.duration);
+                break;
+        }
+
+        if (!tasks[i])
+        {
+            for (size_t j = 0; j < i; ++j)
+                tasks[j]->Destroy();
+            return fail(SString("native task factory refused task %u", i + 1));
+        }
+    }
+
+    CTask* sequence = g_pGame->GetTasks()->CreateTaskComplexSequence(tasks.data(), taskCount, repeat);
+    lua_pushboolean(luaVM, DispatchPedScriptCommandTask(ped->GetGamePlayer(), sequence));
+    return 1;
+}
+
+int CLuaPedDefs::GetPedTaskSequenceProgress(CClientPed* ped)
+{
+    if (!ped || !ped->IsStreamedIn() || !ped->GetGamePlayer())
+        return -1;
+    return g_pGame->GetTasks()->GetTaskSequenceProgress(ped->GetGamePlayer());
 }
 
 bool CLuaPedDefs::SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle)

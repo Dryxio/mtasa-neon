@@ -352,6 +352,7 @@ public:
 
     // Audio funcs
     static bool PlaySoundFrontEnd(unsigned char ucSound);
+    static bool PlayMissionPassedTune(unsigned int tune);
     static bool SetAmbientSoundEnabled(eAmbientSoundType eType, bool bMute);
     static bool IsAmbientSoundEnabled(eAmbientSoundType eType, bool& bOutMute);
     static bool ResetAmbientSounds();

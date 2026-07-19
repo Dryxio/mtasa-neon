@@ -134,6 +134,8 @@ public:
     static bool SetPedFacialTalk(CClientPed* ped, int duration);
     static bool StopPedFacialTalk(CClientPed* ped);
     static bool SetPedShootAt(CClientPed* ped, CVector target, std::optional<int> duration, std::optional<int> burstLength);
+    LUA_DECLARE(SetPedTaskSequence);
+    static int  GetPedTaskSequenceProgress(CClientPed* ped);
     static bool SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);
     static bool SetPedStoryProtected(CClientPed* ped, bool enabled);

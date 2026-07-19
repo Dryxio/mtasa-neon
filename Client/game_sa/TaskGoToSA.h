@@ -214,4 +214,10 @@ class CTaskComplexUseSequenceSA : public virtual CTaskComplexSA
 public:
     CTaskComplexUseSequenceSA() {};
     CTaskComplexUseSequenceSA(CTaskSA* pTask, bool bRepeat);
+    CTaskComplexUseSequenceSA(CTaskSAInterface* const* pTasks, size_t uiTaskCount, bool bRepeat);
+
+    int GetCurrentTaskIndex() const;
+
+private:
+    void Initialize(CTaskSAInterface* const* pTasks, size_t uiTaskCount, bool bRepeat);
 };

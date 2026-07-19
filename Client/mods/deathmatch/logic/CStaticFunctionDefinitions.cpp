@@ -4739,6 +4739,14 @@ bool CStaticFunctionDefinitions::PlaySoundFrontEnd(unsigned char ucSound)
     return true;
 }
 
+bool CStaticFunctionDefinitions::PlayMissionPassedTune(unsigned int tune)
+{
+    // GTA opcode 0394 preloads tune + 10 before starting the beat track. The
+    // audio-engine wrapper performs those same two native calls in that order.
+    g_pGame->GetAudioEngine()->PlayBeatTrack(static_cast<short>(tune + 10));
+    return true;
+}
+
 bool CStaticFunctionDefinitions::SetAmbientSoundEnabled(eAmbientSoundType eType, bool bMute)
 {
     g_pGame->GetAudioEngine()->SetAmbientSoundEnabled(eType, bMute);

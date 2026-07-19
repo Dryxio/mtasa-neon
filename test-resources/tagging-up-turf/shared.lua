@@ -114,6 +114,7 @@ TAGUP = {
         weaponAccuracy = 90,
         postCompletionWait = 1000,
         guardTimeout = 23000,
+        sequenceGuardTimeout = 45000,
         serverMaxDistance = 6,
     },
     sweetDemoScene = {

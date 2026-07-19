@@ -22,10 +22,11 @@ public:
     CTaskManagementSystemSA();
     ~CTaskManagementSystemSA();
 
-    CTaskSA* AddTask(CTaskSA* pTask);
-    void     RemoveTask(CTaskSAInterface* pTaskInterface);
-    CTaskSA* GetTask(CTaskSAInterface* pTaskInterface);
-    CTaskSA* CreateAppropriateTask(CTaskSAInterface* pTaskInterface, int iTaskType);
+    CTaskSA*          AddTask(CTaskSA* pTask);
+    void              RemoveTask(CTaskSAInterface* pTaskInterface);
+    CTaskSAInterface* TakeTaskInterface(CTaskSA* pTask);
+    CTaskSA*          GetTask(CTaskSAInterface* pTaskInterface);
+    CTaskSA*          CreateAppropriateTask(CTaskSAInterface* pTaskInterface, int iTaskType);
 
 private:
     struct STaskListItem

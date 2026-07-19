@@ -127,6 +127,8 @@ public:
     bool                       AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds = false);
     CTaskComplexPartnerChat*   CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled);
     CTaskComplex*              CreateTaskComplexTurnToFaceEntity(CPed* pTarget);
+    CTaskComplex*              CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat = false);
+    int                        GetTaskSequenceProgress(CPed* pPed);
 
     static void StaticSetHooks();
 };

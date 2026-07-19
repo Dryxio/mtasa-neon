@@ -20,6 +20,7 @@ public:
 
     // Audio funcs
     LUA_DECLARE(PlaySoundFrontEnd);
+    static bool PlayMissionPassedTune(unsigned int tune);
     LUA_DECLARE(SetAmbientSoundEnabled);
     LUA_DECLARE(IsAmbientSoundEnabled);
     LUA_DECLARE(ResetAmbientSounds);

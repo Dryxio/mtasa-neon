@@ -25,6 +25,7 @@ local state = {
     demoLeave = nil,
     demoWalk = nil,
     demoShoot = nil,
+    demoSequence = nil,
     demoEnter = nil,
     demoScene = nil,
     demoAudioPreload = nil,
@@ -49,6 +50,7 @@ local state = {
     nativeTagHelpStarted = 0,
     nativeHelpFlags = {},
     checkpointGroundProbeToken = nil,
+    missionPassedTunePlayed = false,
     traceStarted = false,
     traceDemoTagActive = false,
     traceCurrentStep = nil,
@@ -395,12 +397,12 @@ local MISSION_TRACE_SEQUENCE = {
     {id = "drive_idlewood", title = "LOCATE CAR AT IDLEWOOD", detail = "SCM GATE · 4 m box + 09D0 all wheels / vehicle anchored"},
     {id = "leave_car", title = "05CD · TASK LEAVE CAR", detail = "NATIVE VERIFIED · MTA vehicle lifecycle"},
     {id = "go_to", title = "05D3 · GO STRAIGHT TO COORD", detail = "NATIVE VERIFIED · Sweet / walk"},
-    {id = "go_to_wait", title = "OBSERVE NATIVE GO-TO", detail = "LUA TASK POLL · approximates sequence progress"},
-    {id = "demo_setup", title = "PREPARE SPRAY DEMO", detail = "LUA SUBSTITUTE · weapon + heading"},
+    {id = "go_to_wait", title = "OBSERVE NATIVE GO-TO", detail = "GET_SEQUENCE_PROGRESS · native task index 1"},
+    {id = "demo_setup", title = "COMPOSE SPRAY DEMO", detail = "NATIVE SEQUENCE · leave car / walk / shoot"},
     {id = "accuracy", title = "02E2 · SET CHAR ACCURACY", detail = "NATIVE VERIFIED · value 90"},
     {id = "shoot_rate", title = "07DD · SET CHAR SHOOT RATE", detail = "NATIVE VERIFIED · value 100"},
     {id = "shoot", title = "0668 · SHOOT AT COORD", detail = "NATIVE VERIFIED · burst 5 / ceiling 15 s"},
-    {id = "shoot_wait", title = "OBSERVE NATIVE GUN CTRL", detail = "LUA TASK POLL · TASK_SIMPLE_GUN_CTRL"},
+    {id = "shoot_wait", title = "OBSERVE NATIVE GUN CTRL", detail = "GET_SEQUENCE_PROGRESS · native task index 2"},
     {id = "demo_tag", title = "0702 NATIVE · TAG PERCENT", detail = "NATIVE SPRAY PROGRESS · demo 0%"},
     {id = "demo_wait", title = "CANCEL TASK + WAIT 1000", detail = "NEON LIFECYCLE + SCM FLOW"},
     {id = "demo_camera", title = "SCRIPT CAMERA · SWEET DEMO", detail = "NATIVE VERIFIED · fixed + vector move/track"},
@@ -2361,6 +2363,162 @@ addEventHandler("tagup:sweetDemoShootCancel", resourceRoot, function(shootId, re
     if state.demoShoot and state.demoShoot.id == shootId then
         outputDebugString(("[tagging-up-turf] Cancelling Sweet native shoot #%d: %s"):format(shootId, tostring(reason)))
         clearDemoShoot(true)
+        if reason == "authoritative_tag_complete" then
+            traceCurrent("demo_wait")
+        end
+    end
+end)
+
+local function clearDemoSequence(cancelNative)
+    local sequence = state.demoSequence
+    if not sequence then
+        return
+    end
+    if isTimer(sequence.retryTimer) then
+        killTimer(sequence.retryTimer)
+    end
+    if isTimer(sequence.monitorTimer) then
+        killTimer(sequence.monitorTimer)
+    end
+    if cancelNative and sequence.accepted and isElement(sequence.ped) and isElementSyncer(sequence.ped) then
+        killPedTask(sequence.ped, "primary", 3, false)
+        killPedTask(sequence.ped, "secondary", 0, false)
+    end
+    state.demoSequence = nil
+end
+
+local function reportDemoSequence(result, details)
+    local sequence = state.demoSequence
+    if not sequence then
+        return
+    end
+    local id, ped = sequence.id, sequence.ped
+    traceFail(result .. " · " .. tostring(details or ""))
+    clearDemoSequence(false)
+    triggerServerEvent("tagup:sweetDemoSequenceResult", resourceRoot, id, ped, result, details)
+end
+
+local function beginDemoSequence()
+    local sequence = state.demoSequence
+    if not sequence then
+        return
+    end
+    if not isElement(sequence.ped) or not isElement(sequence.vehicle) or not isElement(state.demoTag) then
+        return reportDemoSequence("destroyed", "Sweet, Greenwood ou demoTag absent avant la sequence")
+    end
+    if not isElementStreamedIn(sequence.ped) or not isElementStreamedIn(sequence.vehicle) or not isElementSyncer(sequence.ped) or
+        getPedWeapon(sequence.ped) ~= TAGUP.sprayWeapon then
+        if getTickCount() - sequence.requestedAt < 5000 then
+            sequence.retryTimer = setTimer(beginDemoSequence, 250, 1)
+            return
+        end
+        return reportDemoSequence("not_ready", "ped/vehicule non streame, syncer perdu ou spraycan absent")
+    end
+    if type(setPedTaskSequence) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
+        return reportDemoSequence("api_unavailable", "API de sequence native absente du client Neon")
+    end
+
+    traceCurrent("demo_setup", "NATIVE VERIFIED · OPEN/CLOSE/PERFORM/CLEAR sequence")
+    traceCurrent("accuracy")
+    if type(setPedWeaponAccuracy) ~= "function" or not setPedWeaponAccuracy(sequence.ped, sequence.shootProfile.weaponAccuracy) then
+        return reportDemoSequence("weapon_accuracy_refused", "SET_CHAR_ACCURACY 90 refuse")
+    end
+    traceCurrent("shoot_rate")
+    if type(setPedWeaponShootingRate) ~= "function" or not setPedWeaponShootingRate(sequence.ped, sequence.shootProfile.shootingRate) then
+        return reportDemoSequence("shooting_rate_refused", "SET_CHAR_SHOOT_RATE 100 refuse")
+    end
+
+    applyGangTagState(state.demoTag)
+    local tagProgress = type(getObjectGangTagProgress) == "function" and getObjectGangTagProgress(state.demoTag) or false
+    if not isElementStreamedIn(state.demoTag) or type(tagProgress) ~= "number" then
+        return reportDemoSequence("native_tag_unavailable", "demoTag non streame ou progression native indisponible")
+    end
+
+    local walk, target, shoot = sequence.walkProfile, sequence.target, sequence.shootProfile
+    sequence.accepted = setPedTaskSequence(sequence.ped, {
+        {task = "leave_car", vehicle = sequence.vehicle},
+        {
+            task = "go_to",
+            x = walk.target.x,
+            y = walk.target.y,
+            z = walk.target.z,
+            movement = walk.movement,
+            radius = walk.radius,
+            slowdownRadius = walk.slowdownRadius,
+            timeout = walk.timeout,
+        },
+        {task = "shoot_at", x = target.x, y = target.y, z = target.z, duration = shoot.duration, burstLength = shoot.burstLength},
+    }, false)
+    if not sequence.accepted then
+        return reportDemoSequence("refused", "setPedTaskSequence a retourne false")
+    end
+
+    sequence.acceptedAt = getTickCount()
+    sequence.seenNativeTask = false
+    sequence.lastProgress = -1
+    outputDebugString(('[tagging-up-turf] Client accepted Sweet native sequence #%d: leave_car -> go_to -> shoot_at'):format(sequence.id))
+    sequence.monitorTimer = setTimer(function()
+        local active = state.demoSequence
+        if not active then
+            return
+        end
+        if not isElement(active.ped) or not isElementStreamedIn(active.ped) or not isElementSyncer(active.ped) then
+            return reportDemoSequence("ownership_lost", "Sweet detruit, sorti du streaming ou plus syncer")
+        end
+
+        local progress = getPedTaskSequenceProgress(active.ped)
+        local elapsed = getTickCount() - active.acceptedAt
+        if type(progress) == "number" and progress >= 0 then
+            active.seenNativeTask = true
+            if progress ~= active.lastProgress then
+                active.lastProgress = progress
+                outputDebugString(('[tagging-up-turf] Sweet native sequence #%d progress=%d after %d ms'):format(active.id, progress, elapsed))
+                if progress == 1 then
+                    traceCurrent("go_to")
+                    traceCurrent("go_to_wait", "NATIVE VERIFIED · GET_SEQUENCE_PROGRESS = 1")
+                elseif progress == 2 then
+                    traceCurrent("shoot")
+                    traceCurrent("shoot_wait", "NATIVE VERIFIED · GET_SEQUENCE_PROGRESS = 2")
+                    triggerServerEvent("tagup:sweetDemoSequenceShootObserved", resourceRoot, active.id, active.ped)
+                end
+            end
+        elseif active.seenNativeTask then
+            return reportDemoSequence("ended_before_tag", ("elapsed=%d ms, lastProgress=%d"):format(elapsed, active.lastProgress))
+        elseif elapsed > 1500 then
+            return reportDemoSequence("not_observed", "TASK_COMPLEX_USE_SEQUENCE jamais observee")
+        end
+
+        if elapsed > active.shootProfile.sequenceGuardTimeout then
+            return reportDemoSequence("client_timeout", ("elapsed=%d ms, lastProgress=%d"):format(elapsed, active.lastProgress))
+        end
+    end, 50, 0)
+end
+
+addEvent("tagup:sweetDemoSequenceStart", true)
+addEventHandler("tagup:sweetDemoSequenceStart", resourceRoot, function(sequenceId, ped, vehicle, target, walkProfile, shootProfile)
+    clearDemoSequence(true)
+    if not state.active or state.stage ~= "demo" or localPlayer ~= state.leader or ped ~= state.sweet or vehicle ~= state.vehicle or
+        type(target) ~= "table" or type(walkProfile) ~= "table" or type(shootProfile) ~= "table" then
+        return
+    end
+    state.demoSequence = {
+        id = sequenceId,
+        ped = ped,
+        vehicle = vehicle,
+        target = target,
+        walkProfile = walkProfile,
+        shootProfile = shootProfile,
+        requestedAt = getTickCount(),
+        accepted = false,
+    }
+    beginDemoSequence()
+end)
+
+addEvent("tagup:sweetDemoSequenceCancel", true)
+addEventHandler("tagup:sweetDemoSequenceCancel", resourceRoot, function(sequenceId, reason)
+    if state.demoSequence and state.demoSequence.id == sequenceId then
+        outputDebugString(('[tagging-up-turf] Cancelling Sweet native sequence #%d: %s'):format(sequenceId, tostring(reason)))
+        clearDemoSequence(true)
         if reason == "authoritative_tag_complete" then
             traceCurrent("demo_wait")
         end
@@ -4554,6 +4712,7 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
             clearDemoLeave(true)
             clearDemoWalk(true)
             clearDemoShoot(true)
+            clearDemoSequence(true)
         end
         if previousStage == "ballas_departure" and state.stage ~= "ballas_departure" and state.ballasDeparture then
             clearBallasDeparture(state.stage ~= "tags_ballas", "stage_changed_to_" .. tostring(state.stage))
@@ -4595,6 +4754,11 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
         end
         setStageNavigation(state.stage)
         beginMissionStageText(state.stage)
+        if state.stage == "complete" and not state.missionPassedTunePlayed then
+            state.missionPassedTunePlayed = true
+            local ok, played = pcall(playMissionPassedTune, 1)
+            outputDebugString(('[tagging-up-turf] Native PLAY_MISSION_PASSED_TUNE 1: %s'):format(tostring(ok and played == true)))
+        end
     end
     if state.stage == "tags_idlewood" or state.stage == "tags_ballas" or (state.stage == "rooftop" and state.rooftopTagRevealed) then
         syncTagBlips()
@@ -4621,6 +4785,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     clearDemoLeave(true)
     clearDemoWalk(true)
     clearDemoShoot(true)
+    clearDemoSequence(true)
     clearSweetReturnEnter(true)
     clearBallasDeparture(true)
     clearBallasGangScene("mission_stopped")
@@ -4662,6 +4827,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.lastOffscreenStorageReport = 0
     state.greenwoodNativeLogMode = nil
     state.storyProtectionLogged = false
+    state.missionPassedTunePlayed = false
     if state.missionTextReady then
         callMissionTextApi("releaseMissionText")
     end
@@ -4954,6 +5120,7 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     clearDemoLeave(true)
     clearDemoWalk(true)
     clearDemoShoot(true)
+    clearDemoSequence(true)
     clearSweetReturnEnter(true)
     clearBallasDeparture(true)
     clearBallasGangScene("resource_stopped")
