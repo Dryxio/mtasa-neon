@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <float.h>
 #include "CAESoundManagerSA.h"
 #include "CAEAudioHardwareSA.h"
 #include "CAudioEngineSA.h"
@@ -380,6 +381,17 @@ void CAudioEngineSA::PreloadMissionAudio(unsigned short usAudioEvent, int slot)
 {
     DWORD dwFunc = 0x507290;  // CAudioEngine__PreloadMissionAudio
     DWORD AudioEvent = usAudioEvent;
+
+    // GTA resolves script-slot events with x87 float arithmetic. At exact
+    // 200-event bank boundaries (for example SWE1_AA, 37400), extended
+    // precision keeps the deliberately imprecise 0.005f product just below
+    // the next integer and selects the previous bank. The original game runs
+    // this path at 24-bit precision, where the product rounds to that integer.
+    // Lua or third-party code can leave the game thread at another precision,
+    // so scope the vanilla control word to the resolver call and restore it.
+    unsigned int previousControl{};
+    unsigned int currentControl{};
+    const bool   restorePrecision = _controlfp_s(&previousControl, 0, 0) == 0 && _controlfp_s(&currentControl, _PC_24, _MCW_PC) == 0;
     // clang-format off
     __asm
     {
@@ -389,6 +401,8 @@ void CAudioEngineSA::PreloadMissionAudio(unsigned short usAudioEvent, int slot)
         call    dwFunc
     }
     // clang-format on
+
+    if (restorePrecision) _controlfp_s(&currentControl, previousControl, _MCW_PC);
 }
 
 unsigned char CAudioEngineSA::GetMissionAudioLoadingStatus(int slot)
