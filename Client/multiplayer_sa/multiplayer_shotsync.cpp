@@ -91,6 +91,11 @@ VOID InitShotsyncHooks()
     HookInstall(HOOKPOS_CWeapon__PostFire2, (DWORD)HOOK_CWeapon__PostFire2, 6);
     HookInstall(HOOKPOS_CPedIK__PointGunInDirection, (DWORD)HOOK_CPedIK__PointGunInDirection, 7);
     HookInstall(HOOKPOS_CTaskSimpleGangDriveBy__PlayerTarget, (DWORD)HOOK_CTaskSimpleGangDriveBy__PlayerTarget, 6);
+    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerA, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
+    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerB, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
+    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerC, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
+    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerD, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
+    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerE, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
     HookInstall(HOOKPOS_CWeapon__Fire_Sniper, (DWORD)HOOK_CWeapon__Fire_Sniper, 6);
     HookInstall(HOOKPOS_CEventDamage__AffectsPed, (DWORD)HOOK_CEventDamage__AffectsPed, 6);
     HookInstall(HOOKPOS_CEventVehicleExplosion__AffectsPed, (DWORD)HOOK_CEventVehicleExplosion__AffectsPed, 5);
@@ -135,6 +140,45 @@ bool IsLocalPlayer(CPedSAInterface* pPedInterface)
         return IsLocalPlayer(pPedEntity->pEntity);
     }
     return false;
+}
+
+namespace
+{
+    constexpr std::size_t GANG_DRIVEBY_FROM_SCRIPT_COMMAND_OFFSET = 0x0E;
+
+    bool __cdecl ShouldUseGangDriveByAIControl(const void* pTaskInterface, CPedSAInterface* pPedInterface)
+    {
+        const auto* taskBytes = static_cast<const std::uint8_t*>(pTaskInterface);
+        return taskBytes[GANG_DRIVEBY_FROM_SCRIPT_COMMAND_OFFSET] && !IsLocalPlayer(pPedInterface);
+    }
+}
+
+static void __declspec(naked) HOOK_CTaskSimpleGangDriveBy__IsPlayer()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // Every MTA ped uses CPlayerPed internally. GTA would therefore read its
+    // pad and camera in a drive-by even when a script assigned an AI target.
+    // ESI and EBP are the task and ped throughout the audited native function.
+    // clang-format off
+    __asm
+    {
+        push    ecx
+        push    esi
+        call    ShouldUseGangDriveByAIControl
+        add     esp, 8
+        test    al, al
+        jz      NativeIsPlayer
+
+        xor     al, al
+        ret
+
+    NativeIsPlayer:
+        mov     ecx, ebp
+        mov     eax, 0x5DF8F0
+        jmp     eax
+    }
+    // clang-format on
 }
 
 VOID WriteGunDirectionDataForPed(CPedSAInterface* pPedInterface, float* fGunDirectionX, float* fGunDirectionY, eVehicleAimDirection* cGunDirection)

@@ -90,12 +90,15 @@ public:
     CEntity* m_pTargetEntity;
     CVector  m_vecCoords;
 };
+static_assert(sizeof(CTaskSimpleGangDriveBySAInterface) == 0x44, "Unexpected CTaskSimpleGangDriveBySAInterface size");
 
 class CTaskSimpleGangDriveBySA : public virtual CTaskSimpleSA, public virtual CTaskSimpleGangDriveBy
 {
 public:
     CTaskSimpleGangDriveBySA() {};
     CTaskSimpleGangDriveBySA(CEntity* pTargetEntity, const CVector* pVecTarget, float fAbortRange, char FrequencyPercentage, char nDrivebyStyle, bool bSeatRHS);
+
+    void SetFromScriptCommand(bool bFromScriptCommand) override;
 };
 
 class CTaskSimpleUseGunSAInterface : public CTaskSimpleSAInterface

@@ -64,6 +64,16 @@ CTaskSimpleGangDriveBySA::CTaskSimpleGangDriveBySA(CEntity* pTargetEntity, const
     // clang-format on
 }
 
+void CTaskSimpleGangDriveBySA::SetFromScriptCommand(bool bFromScriptCommand)
+{
+    if (!IsValid())
+        return;
+
+    // Opcode 0713 writes this byte after construction, before routing the task
+    // through GTA's scripted-event path. Preserve that native distinction.
+    static_cast<CTaskSimpleGangDriveBySAInterface*>(GetInterface())->m_bFromScriptCommand = bFromScriptCommand;
+}
+
 CTaskSimpleUseGunSA::CTaskSimpleUseGunSA(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength, unsigned char bAimImmediate)
 {
     CreateTaskInterface(sizeof(CTaskSimpleUseGunSAInterface));

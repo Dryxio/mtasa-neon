@@ -20,6 +20,10 @@ class CTaskSimpleGangDriveBy : public virtual CTaskSimple
 {
 public:
     virtual ~CTaskSimpleGangDriveBy() {};
+
+    // Script-created drive-by tasks use a distinct native control path from
+    // the interactive player drive-by state managed by MTA.
+    virtual void SetFromScriptCommand(bool bFromScriptCommand) = 0;
 };
 
 enum eGunCommand

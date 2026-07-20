@@ -140,6 +140,8 @@ public:
     static bool SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedDriveTo(CClientPed* ped, CClientVehicle* vehicle, CVector target, float speed, std::optional<std::variant<std::string, int>> driveMode,
                               std::optional<std::variant<std::string, int>> drivingStyle);
+    static bool SetPedDriveBy(CClientPed* ped, std::variant<CClientPed*, CClientVehicle*, CVector> target, float abortRange,
+                              std::optional<std::variant<std::string, int>> driveByStyle, std::optional<bool> seatRHS, std::optional<int> frequencyPercentage);
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);
     static bool SetPedStoryProtected(CClientPed* ped, bool enabled);
     static bool SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits);

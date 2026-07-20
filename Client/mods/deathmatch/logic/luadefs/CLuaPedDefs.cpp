@@ -103,6 +103,39 @@ namespace
         return mode >= 0 && mode <= 3;
     }
 
+    bool ParseDriveByStyle(const std::variant<std::string, int>& value, int& style)
+    {
+        if (std::holds_alternative<int>(value))
+        {
+            style = std::get<int>(value);
+        }
+        else
+        {
+            const std::string& name = std::get<std::string>(value);
+            if (stricmp(name.c_str(), "fixed_lhs") == 0)
+                style = 0;
+            else if (stricmp(name.c_str(), "fixed_rhs") == 0)
+                style = 1;
+            else if (stricmp(name.c_str(), "start_from_lhs") == 0)
+                style = 2;
+            else if (stricmp(name.c_str(), "start_from_rhs") == 0)
+                style = 3;
+            else if (stricmp(name.c_str(), "ai_side") == 0)
+                style = 4;
+            else if (stricmp(name.c_str(), "fixed_fwd") == 0)
+                style = 5;
+            else if (stricmp(name.c_str(), "fixed_back") == 0)
+                style = 6;
+            else if (stricmp(name.c_str(), "ai_fwd_back") == 0)
+                style = 7;
+            else if (stricmp(name.c_str(), "ai_all_directions") == 0)
+                style = 8;
+            else
+                return false;
+        }
+        return style >= 0 && style <= 8;
+    }
+
     bool ReadSequenceChoice(lua_State* luaVM, int tableIndex, const char* name, const char* defaultName, bool driveMode, int& result, SString& error)
     {
         lua_getfield(luaVM, tableIndex, name);
@@ -275,6 +308,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedTaskSequence", SetPedTaskSequence},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
         {"setPedDriveTo", ArgumentParser<SetPedDriveTo>},
+        {"setPedDriveBy", ArgumentParser<SetPedDriveBy>},
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
@@ -453,6 +487,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "getTaskSequenceProgress", "getPedTaskSequenceProgress");
     lua_classfunction(luaVM, "setDriveWander", "setPedDriveWander");
     lua_classfunction(luaVM, "setDriveTo", "setPedDriveTo");
+    lua_classfunction(luaVM, "setDriveBy", "setPedDriveBy");
     lua_classfunction(luaVM, "setMissionActor", "setPedMissionActor");
     lua_classfunction(luaVM, "setBleeding", "setPedBleeding");
     lua_classfunction(luaVM, "playVoiceLine", "playPedVoiceLine");
@@ -3292,6 +3327,63 @@ bool CLuaPedDefs::SetPedDriveTo(CClientPed* ped, CClientVehicle* vehicle, CVecto
         return false;
 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexCarDriveToPoint(vehicle->GetGameVehicle(), target, speed, mode, -1, -1.0f, style);
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedDriveBy(CClientPed* ped, std::variant<CClientPed*, CClientVehicle*, CVector> target, float abortRange,
+                                std::optional<std::variant<std::string, int>> driveByStyle, std::optional<bool> seatRHS, std::optional<int> frequencyPercentage)
+{
+    if (!ped || ped->GetType() != CCLIENTPED || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() ||
+        (!ped->IsLocalEntity() && !ped->IsSyncing()) || !std::isfinite(abortRange) || abortRange < 0.0f)
+    {
+        return false;
+    }
+
+    CClientVehicle* occupiedVehicle = ped->GetOccupiedVehicle();
+    if (!occupiedVehicle || !occupiedVehicle->IsStreamedIn() || occupiedVehicle->IsBlown() || !occupiedVehicle->GetGameVehicle() ||
+        !OwnsDrivenVehicle(ped, occupiedVehicle))
+    {
+        return false;
+    }
+
+    int style = 8;
+    if (driveByStyle.has_value() && !ParseDriveByStyle(*driveByStyle, style))
+        return false;
+
+    const int frequency = frequencyPercentage.value_or(100);
+    if (frequency < 0 || frequency > 100)
+        return false;
+
+    CEntity*       nativeTarget = nullptr;
+    CVector        targetPosition{};
+    const CVector* nativeTargetPosition = nullptr;
+    if (std::holds_alternative<CClientPed*>(target))
+    {
+        CClientPed* targetPed = std::get<CClientPed*>(target);
+        if (!targetPed || targetPed == ped || !targetPed->IsStreamedIn() || targetPed->IsDead() || !targetPed->GetGamePlayer())
+            return false;
+        nativeTarget = targetPed->GetGamePlayer();
+    }
+    else if (std::holds_alternative<CClientVehicle*>(target))
+    {
+        CClientVehicle* targetVehicle = std::get<CClientVehicle*>(target);
+        if (!targetVehicle || targetVehicle == occupiedVehicle || !targetVehicle->IsStreamedIn() || targetVehicle->IsBlown() ||
+            !targetVehicle->GetGameVehicle())
+            return false;
+        nativeTarget = targetVehicle->GetGameVehicle();
+    }
+    else
+    {
+        targetPosition = std::get<CVector>(target);
+        if (!std::isfinite(targetPosition.fX) || !std::isfinite(targetPosition.fY) || !std::isfinite(targetPosition.fZ))
+            return false;
+        nativeTargetPosition = &targetPosition;
+    }
+
+    auto* task = g_pGame->GetTasks()->CreateTaskSimpleGangDriveBy(nativeTarget, nativeTargetPosition, abortRange, static_cast<char>(frequency),
+                                                                  static_cast<char>(style), seatRHS.value_or(false));
+    if (task)
+        task->SetFromScriptCommand(true);
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 
