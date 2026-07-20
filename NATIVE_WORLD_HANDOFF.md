@@ -110,8 +110,9 @@ implemented and passed its explicitly authorized publish/cache-hit live gate
 while remaining inert. Checkpoint E2, the generic format-2 authorization and
 startup route, is implemented in the current checkpoint and passed the
 explicitly authorized automated live and negative gates recorded below. The
-next unfinished milestone is proving a genuinely different second city through
-the same format-2 pipeline without city-specific C++.
+next infrastructure checkpoint is the atomic TXD/COL/IPL store-and-FileID-span
+expansion. The next pack milestone is proving a genuinely different second city
+through the same format-2 pipeline without city-specific C++.
 
 Relevant earlier extended-world foundations include the enlarged world sectors,
 coordinate/network ranges, water bounds, renderer capacity, radar composition,
@@ -779,7 +780,8 @@ compact corrective pass. The relocation was developed in the isolated
 the story changes, then fast-forwarded into `master`. On 2026-07-19 its exact
 file set was synchronized with verified hashes to the VM-local tree. `Game SA`
 and `Client Deathmatch` both built successfully as `Release|Win32`, including
-the Game SA post-link hook verifier. It has not yet been launched in game.
+the Game SA post-link hook verifier. The compact form later passed the live gate
+recorded below.
 
 The corrected checkpoint installs DFF 0, TXD 32,000, COL 37,000, IPL 37,255,
 DAT 37,511, IFP 37,575, RRR 37,755, SCM 38,230, loaded 38,312, requested
@@ -806,8 +808,8 @@ runnable extended-world tests, two fixture-dependent skips and a clean diff
 check. The reviewed `utils/vm-build.ps1` transaction copied all ten checkpoint
 files, then a one-file corrective transaction added the mandatory local-size
 verification to the naked IMG-chain hook. The final `Game SA` and `Client
-Deathmatch` builds completed with zero errors. The remaining gate is stock-SA
-runtime validation before any city pack is activated.
+Deathmatch` builds completed with zero errors. At that stage, the remaining gate
+was stock-SA runtime validation before any city pack was activated.
 
 The first runtime attempt failed closed during capture, before native writes,
 at operand `0x006B2187`. The generated FLA manifest had resolved the shared
@@ -817,8 +819,7 @@ The generator now validates all file-stable pointer operands against the raw
 HOODLUM executable, with only five exact unpacker-reconstructed sites exempted,
 and tests pin both SA IDs. The corrected manifest, richer expected/actual
 runtime diagnostic, 99-test suite, `Game SA` build/hookcheck and `Client
-Deathmatch` build all pass. Repeat the stock-SA runtime gate with this rebuilt
-DLL.
+Deathmatch` build all passed, enabling the next stock-SA runtime retry.
 
 The retry passed capture/installation but crashed in the active appended
 HOODLUM body at `0x01567513`. FileID 40,001 (`ESI=0x9C41`) had been
@@ -832,8 +833,8 @@ This also invalidates the same low-only assumption in the world-sector manifest;
 its five omitted high CodeMover sites require a separate completeness audit.
 The checkpoint was fast-forwarded into `master` as `fd50b6e07`, synchronized
 with verified hashes on 2026-07-19, and rebuilt successfully as `Game SA` plus
-`Client Deathmatch` in `Release|Win32`. The corrected stock-SA live retry is the
-remaining gate.
+`Client Deathmatch` in `Release|Win32`. The corrected stock-SA live retry then
+followed.
 
 That live retry reached the 1,398-site installation and then crashed at
 `0x00410B57`. `CStreaming::Update` used the relocated COL-to-IPL pointer span
@@ -844,10 +845,9 @@ patches (`FileIDlimit.cpp:8351`) separate from the COL count/allocation patches
 capacity. The isolated `codex/native-world-fileid-compact` correction now uses
 5,000/255/256 TXD/COL/IPL spans and total 38,316. Its static regression pins the
 exact `0x00410B32` to `0x00410BE0` COL-loop distance. Rebuild and live testing
-of this compact correction were the remaining gates. Its exact eight-file set
-was synchronized with verified hashes on 2026-07-19, and `Game SA` plus
-`Client Deathmatch` then rebuilt successfully as `Release|Win32`. Only the
-stock-SA live retry remains pending.
+of this compact correction were the remaining gates at that point. Its exact
+eight-file set was synchronized with verified hashes on 2026-07-19, and `Game SA` plus
+`Client Deathmatch` then rebuilt successfully as `Release|Win32`.
 
 The user-run live gate completed on 2026-07-18 with format-1 ticket `7a1a461a`.
 The initial stock process and the authorized replacement process both emitted
@@ -858,40 +858,87 @@ before and after an exact reconnect; the reconnect revalidated the same ticket
 and process lease, retained `14854/32000` Atomic, `136/512` DamageAtomic and
 `175/1024` Time occupancy, and clamped the streaming request to 4008 blocks.
 The client/server logs contained no FileID mismatch, preflight/capacity failure,
-exception or fatal diagnostic, and no new dump was created. DFF/TXD
-replace/restore must be repeated as a focused regression when the new
-38,316-entry relocation is first run. Do not reintroduce any private pointer or
-partition constant.
+exception or fatal diagnostic, and no new dump was created. At that stage,
+DFF/TXD replace/restore still had to be repeated as a focused regression when
+the new 38,316-entry relocation first ran. Do not reintroduce any private
+pointer or partition constant.
 
-After the preceding authorized activation, item 1 is complete: E2 extends the E1 format-2
-transport boundary with strict authorization/startup without weakening format
-1. Continue with:
+The compact 38,316-entry relocation completed its user-run live gate on
+2026-07-20 with format-1 ticket `7f93d606`. The same process reported
+`state=prepared` against the stock 26,316-entry table and then `state=installed`
+with 1,398 patch sites, `nativeWrites=yes`, `datExpansion=no`, and
+`pathsExpansion=no`. Bullworth registered archive 6, 952 models, 166 TXDs,
+collision slot 252 and IPL slots 191 through 197. Teleport out/back, an exact
+reconnect, and a later server restart all retained the active process lease,
+the 4,008-block streaming floor, and `14854/32000`, `136/512`, `175/1024`
+native model-store occupancy.
 
-1. Prove that a second city, preferably Carcer, uses the same pipeline without
-   city-specific C++.
-2. Build a deterministic aggregate startup plan for multiple packs, including
-   conflict detection and all combined pool/store/archive/streaming limits.
-3. Transactionally register San Andreas plus Bullworth plus Carcer in one
-   process through native GTA streaming.
-4. Tune streaming memory, buffers, request lists, spatial IPL behavior and
-   LOD/prefetch behavior for seamless repeated flights and stable FPS.
-5. Add optional pack components and validators for radar, water,
-   CULL/occlusion, audio, timecycle and interiors. Do not expand paths/nodes,
-   DAT, streamed SCM, IFP/RRR, missions/savegames or ambient population as part
-   of the static multi-city target.
-6. Add server/admin/client status APIs for cached, restart-required, active,
-   refused, and planned packs, with explicit process-lifetime semantics.
-7. Provide reproducible pack conversion, canonical-manifest generation,
-   conflict reporting, budget estimation, and FLA/GTA UG configuration
-   comparison tools.
-8. Harden with fuzzing, hostile-server cases, cache/ticket recovery, telemetry,
-   long reconnect/restart cycles, and several-hour multi-city endurance tests.
-9. Freeze protocol/pack versions, document deployment and rollback, add CI
-    fixtures, and retire or isolate the old custom-streaming workarounds.
+The Perry slice supplied the focused script-facing replacement lifecycle
+regression: its complete 285-model TXD/COL/DFF load succeeded, San Andreas and
+Bullworth remained usable, and resource stop ran `releaseSlice()` with
+`engineFreeModel()` cleanup. Perry was restored to `startup=0`; after server
+restart and reconnect it was absent, while `/nativebw` still succeeded with the
+same ticket. No FileID mismatch, preflight/capacity failure, exception, fatal
+diagnostic, or new dump appeared. Because the resource does not log every freed
+dynamic slot or expose a dynamic high-water counter, retain a future telemetry
+test for numerical pool-watermark proof. The stock-only relocation checkpoint
+is nevertheless complete in observable gameplay. Do not enlarge TXD/COL/IPL
+FileID spans until their stores and every coupled loop/allocation are patched in
+the same checkpoint.
 
-Practical milestones are: Bullworth without preinstallation; Carcer through the
-same generic path; Bullworth and Carcer simultaneously; seamless native flights;
-city radar/environment support; then production hardening.
+The updated checkpoint sequence is:
+
+1. **Reproducible inventory — complete.** Source hashes, aggregate DFF/TXD/COL/
+   IPL counts, store requirements and admission failures are frozen. The VC
+   legacy DFF, 57 COL2 records and Carcer's out-of-profile/large textures remain
+   an explicit conversion/admission queue for the canonical-pack checkpoint;
+   the audit does not hide them by raising limits.
+2. **MTA FileID abstraction — complete.** Runtime layout accessors and the
+   read-only executable validation boundary are installed across the known MTA
+   consumers.
+3. **Compact stock-only FileID relocation — complete.** The 38,316-entry,
+   1,398-site layout passed stock SA, Bullworth, reconnect, server-restart and
+   dynamic TXD/COL/DFF replacement-lifecycle gates.
+4. **Stores and pools — next.** Atomically install 8,000 TXD, 512 COL and 1,024
+   IPL stores with their FileID spans, then cover ColModel, buildings and
+   QuadTreeNodes and add numerical high-water telemetry. The three static model
+   stores are already at 32,000/512/1,024. With DAT/path nodes kept at the stock
+   64 entries, the provisional downstream layout ends at 42,341 FileIDs rather
+   than the obsolete 44,325 target that assumed a 2,048-entry DAT expansion.
+5. **Canonical pack v3 and second-city proof.** Add deterministic multi-IMG
+   naming/remap, collision-free hashes, spatial COL/IPL and LOD policy, 64-bit
+   budgets, multi-GiB transactional cache accounting, and reviewed conversion
+   for the catalog admission queue. Prove Carcer through the generic pipeline
+   without city-specific C++.
+6. **Aggregate no-mutation planner.** Plan SA plus Bullworth, Vice City,
+   Liberty City and Carcer together; reject every collision/capacity error
+   before mutation and pin all partition boundary cases.
+7. **Transactional multi-city activation.** Register all four imported cities
+   beside San Andreas in one process, then test repeated cross-city streaming,
+   collisions, LODs, D3D reset/minimize, memory pressure, death/respawn,
+   reconnect and resource restart.
+8. **MTA/API/network completion.** Audit logical model-ID width, remaining
+   coordinate/streamer bounds, `IsOutOfBounds`, script APIs, serialization,
+   protocol capabilities and legacy-client refusal. Build every affected
+   client/server producer and consumer when protocol or ABI changes.
+9. **Streaming/render/memory tuning.** Measure and tune streaming memory,
+   buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
+   LOD/prefetch behavior using high-water and multi-hour traces rather than
+   larger constants alone.
+10. **Optional environment follow-ups.** Add radar, water, zones,
+    CULL/occlusion, audio, timecycle and interiors as separately validated pack
+    components. Paths/nodes, DAT expansion, streamed SCM, new IFP/RRR,
+    missions/savegames and ambient population remain outside the static MTA
+    multi-city target.
+11. **Production gate.** Add hostile-input/cache recovery tests, long
+    reconnect/restart and several-hour city-tour endurance runs, freeze pack and
+    protocol versions, document deployment/rollback, add CI fixtures, and
+    retire or isolate obsolete custom-streaming workarounds.
+
+Practical milestones are now: enlarged stores/pools; Carcer through pack v3;
+aggregate dry-run of every city; all four imported cities active beside San
+Andreas; seamless native flights; optional environment support; production
+hardening.
 
 ## VM and verification quick reference
 

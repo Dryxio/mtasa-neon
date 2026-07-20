@@ -378,9 +378,10 @@ python3 -m unittest utils.extended-world.tests.test_native_file_id_runtime
 The earlier expanded-span build was VM-synchronized and compiled successfully,
 but failed the stock-SA live gate above. The compact correction is locally
 validated, VM-synchronized with verified hashes and rebuilt successfully in
-`Game SA` plus `Client Deathmatch` as `Release|Win32`. It awaits the stock-SA
-live retry. No consumer may regain a private pointer or reconstruct a partition
-from a constant.
+`Game SA` plus `Client Deathmatch` as `Release|Win32`. It passed the stock-SA,
+Bullworth, reconnect and dynamic-replacement live gate recorded below. No
+consumer may regain a private pointer or reconstruct a partition from a
+constant.
 
 The user-run 2026-07-18 live gate used format-1 ticket `46a33f60`. The exact
 cached Bullworth payload passed its semantic and executable preflights, the
@@ -405,6 +406,27 @@ preflight failure, capacity failure, exception or fatal diagnostic appeared.
 This proves the abstraction against the stock table; it does not constitute a
 runtime test of the new 38,316-entry compact relocation or authorize any new
 streamed content type.
+
+The separate compact-relocation gate completed on 2026-07-20 with format-1
+ticket `7f93d606`. The client progressed from the captured stock layout
+(`total=26316`, `nativeWrites=no`) to the installed target layout
+(`total=38316`, 1,398 patch sites, `nativeWrites=yes`, `datExpansion=no`,
+`pathsExpansion=no`). Bullworth registered archive 6, 952 models, 166 TXDs,
+collision slot 252 and IPL slots 191 through 197. `/nativebw`, `/nativeback`,
+an exact reconnect and a post-server-restart `/nativebw` all passed with the
+same active process lease, stable native model-store diagnostics and the
+4,008-block streaming floor.
+
+The Perry slice then completed its 285-model TXD/COL/DFF load and exercised the
+script replacement lifecycle before resource stop ran `releaseSlice()` and
+`engineFreeModel()` cleanup. Perry was returned to `startup=0`; the subsequent
+server restart/reconnect left it absent and Bullworth operational. No FileID,
+preflight, capacity, exception, fatal, or new-dump diagnostic appeared. This is
+observable lifecycle coverage rather than a per-slot high-water proof because
+the resource does not log each released slot. The compact stock-only FileID
+checkpoint is complete. The next native capacity change must install the
+8,000/512/1,024 TXD/COL/IPL stores, matching FileID spans, allocations, loop
+bounds, sentinels and validators atomically.
 
 Format 1 accepts exterior static binary IPLs only: every placement has area
 flags zero, no LOD link (`lodIndex == -1`), X/Y in `[-10000, 9999]`, and Z in

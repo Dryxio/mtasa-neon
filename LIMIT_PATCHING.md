@@ -1077,14 +1077,15 @@ and 71/72/73 mirror capacity boundaries, visible mirror-plane behavior,
 vanilla disable/restore, and mirror off/on transitions. These remain test cases,
 not confirmed runtime results.
 
-## FileID stock-only relocation (compact corrective build; live gate pending)
+## FileID stock-only relocation (compact corrective build; live gate complete)
 
 The integrated master checkpoint extends the existing read-only abstraction
 into a validated process-lifetime relocation. On 2026-07-19 its exact ten-file
 set was synchronized with SHA-256 verification to the VM-local tree; `Game SA`
 and `Client Deathmatch` both built successfully as `Release|Win32`. The Game SA
 post-link `hookcheck` also passed after the unsigned IMG-chain hook was given
-the required local-size verifier. The checkpoint has not yet been run in game.
+the required local-size verifier. The user-run live gate described below later
+completed without a new crash or fatal diagnostic.
 Startup still captures ten exact HOODLUM anchors before native-world mutation,
 then validates every relocation operand twice: once during capture and once
 immediately before the first native write.
@@ -1144,8 +1145,8 @@ stock save/load loops in `source/game_sa/Streaming.cpp:1187`.
 
 The initial pre-game gate passed the native FileID validator with 1,276 writes,
 all 98 runnable extended-world tests, two fixture-dependent skips and
-`git diff --check`. Gameplay validation must now cover stock San Andreas first,
-without activating a native-world pack.
+`git diff --check`. At that stage, gameplay validation still had to cover stock
+San Andreas first, without activating a native-world pack.
 
 The first attempted stock launch then stopped safely before any native write at
 model-pointer operand `0x006B2187`. The FLA expression used the name
@@ -1158,8 +1159,8 @@ executable. The generator and off-game validator now compare every file-stable
 pointer/base operand with the raw executable and exempt only five explicitly
 listed operands reconstructed by the HOODLUM unpacker. A regression test pins
 both GTA SA model IDs. The corrected gate passes 99 tests with two skips, and
-both Win32 projects rebuild successfully; the stock gameplay retry remains
-pending.
+both Win32 projects rebuild successfully; the stock gameplay retry was the next
+gate.
 
 That retry installed the relocation and then crashed in
 `CStreamingInfo::AddToList` at `gta_sa.exe+0x01167513`. The dump held
@@ -1175,7 +1176,7 @@ all 1,398 writes match it, including the crash-site opcode. This corrective
 checkpoint was fast-forwarded into `master` as `fd50b6e07`, synchronized with
 verified hashes to the VM-local tree on 2026-07-19, and rebuilt successfully as
 `Game SA` plus `Client Deathmatch` in `Release|Win32`. The corrected stock
-gameplay retry remains pending.
+gameplay retry followed.
 
 The 1,398-site retry passed the previous crash point, then failed at
 `CStreaming::Update+0x4E7` (`0x00410B57`) on 2026-07-19. The loop derives its
@@ -1190,7 +1191,7 @@ regression test pins the exact `CStreaming::Update` pointer distance. The final
 40,000/40,512 boundaries are deferred to the stores/pools checkpoint. The
 compact eight-file correction was synchronized with verified hashes on
 2026-07-19 and `Game SA` plus `Client Deathmatch` rebuilt successfully as
-`Release|Win32`; its stock-SA live retry remains pending.
+`Release|Win32`; it was then ready for the final stock-SA live retry.
 
 The preceding read-only baseline gate completed on 2026-07-18 with format-1 ticket
 `7a1a461a`. Both the initial stock process and the authorized replacement
@@ -1202,6 +1203,30 @@ model-store occupancy; `/nativebw` remained usable afterwards. The client and
 server logs contained no FileID, preflight, capacity, exception or fatal
 diagnostic, and no new crash dump was created. The expected duplicate transport
 refusal retained `existing-native-world=preserved`.
+
+The compact relocation itself completed its user-run live gate on 2026-07-20
+with format-1 ticket `7f93d606`. Startup first reported the prepared stock
+26,316-entry layout with `nativeWrites=no`, then installed all 1,398 writes and
+the 38,316-entry layout with `nativeWrites=yes`, `datExpansion=no` and
+`pathsExpansion=no`. Bullworth registered archive 6, 952 models, 166 TXDs,
+collision slot 252 and IPL slots 191 through 197. `/nativebw`, `/nativeback`,
+another `/nativebw`, and an exact reconnect all passed while retaining the same
+process lease, `14854/32000` Atomic, `136/512` DamageAtomic and `175/1024` Time
+occupancy, and the 4,008-block streaming floor.
+
+The focused dynamic replacement regression then started the Perry slice, which
+reported its complete 285-model load, exercised the resource-owned model and
+TXD/COL/DFF replacement path, and returned cleanly to San Andreas and Bullworth.
+Stopping Perry invoked its `releaseSlice()` cleanup path, including
+`engineFreeModel()` for requested model IDs. After restoring Perry to
+`startup=0`, restarting the server, reconnecting, and teleporting to Bullworth
+again, the authorization remained active and the native-store diagnostics were
+unchanged. There was no FileID mismatch, preflight/capacity failure, exception,
+fatal diagnostic, or new crash dump. The logs do not expose a per-dynamic-slot
+high-water counter, so this proves the observable load/stop/reconnect lifecycle,
+not a numerical per-slot deallocation audit. The stock-only compact FileID
+relocation gate is complete; enlarged TXD/COL/IPL spans remain coupled to the
+next stores/pools checkpoint.
 
 ## Candidate areas for future work
 
