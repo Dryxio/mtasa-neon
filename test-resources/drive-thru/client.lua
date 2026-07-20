@@ -16,6 +16,10 @@ local state = {
     restaurantCamera = nil,
     restaurantRebuildTimer = nil,
     pursuitBlip = nil,
+    pursuitPedBlips = {},
+    pursuitTimers = {},
+    footCombat = false,
+    supportChatAccepted = false,
 }
 
 local SCM_DESTINATION_BLIP_COLOR = {226, 192, 99, 255}
@@ -42,6 +46,10 @@ end
 
 local function printMissionText(key, duration)
     return ensureMissionText() and callMissionTextApi("showMissionText", key, duration, 1)
+end
+
+local function printMissionHelp(key, permanent)
+    return ensureMissionText() and callMissionTextApi("showMissionHelp", key, permanent == true)
 end
 
 local function destroyNavigation()
@@ -95,13 +103,19 @@ local function applyActorPolicies(ped)
         return false
     end
     local role = getElementData(ped, DRIVETHRU.actorRoleData)
-    if role == "ballas_driver" then
+    if role == "ballas_driver" or role == "ballas_passenger" then
         if type(setPedSuffersCriticalHits) ~= "function" or type(getPedSuffersCriticalHits) ~= "function" or
             type(setPedWeaponAccuracy) ~= "function" then
             return false
         end
+        local profile = role == "ballas_driver" and DRIVETHRU.restaurant.ballasDriver or DRIVETHRU.chase.ballasPassenger
         return setPedSuffersCriticalHits(ped, false) == true and getPedSuffersCriticalHits(ped) == false and
-                   setPedWeaponAccuracy(ped, DRIVETHRU.restaurant.ballasDriver.accuracy) == true
+                   setPedWeaponAccuracy(ped, profile.accuracy) == true
+    elseif role == "grove_support" then
+        -- The isolated mission dimension has no ambient attackers. Keep the
+        -- support actors at GTA's mission-ped classification without adding
+        -- protagonist protection flags they did not receive in SWEET3.
+        return true
     end
     return type(setPedStoryProtected) == "function" and setPedStoryProtected(ped, true) == true
 end
@@ -276,6 +290,12 @@ local function clearClientState(reason)
         killTimer(state.restaurantRebuildTimer)
     end
     state.restaurantRebuildTimer = nil
+    for _, timer in ipairs(state.pursuitTimers) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    state.pursuitTimers = {}
     clearAudio(reason)
     clearFileCutscene(reason, false)
     clearRestaurantCamera(reason, false)
@@ -284,6 +304,12 @@ local function clearClientState(reason)
         destroyElement(state.pursuitBlip)
     end
     state.pursuitBlip = nil
+    for _, blip in ipairs(state.pursuitPedBlips) do
+        if isElement(blip) then
+            destroyElement(blip)
+        end
+    end
+    state.pursuitPedBlips = {}
     for _, ped in pairs(state.actors) do
         if isElement(ped) then
             if type(setPedMissionActor) == "function" then
@@ -295,6 +321,7 @@ local function clearClientState(reason)
         end
     end
     if state.missionTextReady then
+        callMissionTextApi("clearMissionHelp")
         callMissionTextApi("clearMissionTexts")
         callMissionTextApi("releaseMissionText")
     end
@@ -305,6 +332,8 @@ local function clearClientState(reason)
     state.missionTextReady = false
     state.checkpointReached = false
     state.greenwoodPolicyLogged = false
+    state.footCombat = false
+    state.supportChatAccepted = false
 end
 
 addEvent("drivethru:start", true)
@@ -717,6 +746,77 @@ local function vehicleMatchesReconstruction(vehicle, profile)
     return true, ("position=(%.3f,%.3f,%.3f) heading=%.2f"):format(x, y, z, heading)
 end
 
+local function rememberPursuitTimer(timer)
+    state.pursuitTimers[#state.pursuitTimers + 1] = timer
+    return timer
+end
+
+local function clearPursuitNavigation()
+    if isElement(state.pursuitBlip) then
+        destroyElement(state.pursuitBlip)
+    end
+    state.pursuitBlip = nil
+    for _, blip in ipairs(state.pursuitPedBlips) do
+        if isElement(blip) then
+            destroyElement(blip)
+        end
+    end
+    state.pursuitPedBlips = {}
+end
+
+local function showPursuitVehicleNavigation(voodoo)
+    destroyNavigation()
+    clearPursuitNavigation()
+    if not isElement(voodoo) then
+        return
+    end
+    state.pursuitBlip = createBlipAttachedTo(voodoo, 0, 2, unpack(SCM_THREAT_BLIP_COLOR))
+    if isElement(state.pursuitBlip) then
+        setElementDimension(state.pursuitBlip, DRIVETHRU.dimension)
+    end
+end
+
+local function showPursuitPedNavigation()
+    destroyNavigation()
+    clearPursuitNavigation()
+    for _, name in ipairs({"ballas_driver", "ballas_passenger"}) do
+        local ped = state.actors[name]
+        if isElement(ped) and not isPedDead(ped) then
+            local blip = createBlipAttachedTo(ped, 0, 2, unpack(SCM_THREAT_BLIP_COLOR))
+            if isElement(blip) then
+                setElementDimension(blip, DRIVETHRU.dimension)
+                state.pursuitPedBlips[#state.pursuitPedBlips + 1] = blip
+            end
+        end
+    end
+end
+
+local function dispatchDriveBy(ped, target, profile)
+    return isElement(ped) and isElement(target) and type(setPedDriveBy) == "function" and
+               setPedDriveBy(ped, target, profile.abortRange, profile.style, profile.seatRHS, profile.frequency) == true
+end
+
+local function tryStartSupportChat()
+    if not state.active or state.supportChatAccepted then
+        return state.supportChatAccepted
+    end
+    local mate1, mate2 = state.actors.mate1, state.actors.mate2
+    if not isElement(mate1) or not isElement(mate2) or not isElementStreamedIn(mate1) or not isElementStreamedIn(mate2) or
+        not isElementSyncer(mate1) or not isElementSyncer(mate2) or not applyActorPolicies(mate1) or not applyActorPolicies(mate2) then
+        return false
+    end
+    if type(setPedChatWith) ~= "function" then
+        triggerServerEvent("drivethru:supportChatReady", resourceRoot, "api_unavailable")
+        return false
+    end
+    local lead = setPedChatWith(mate1, mate2, true, true, true)
+    local reply = setPedChatWith(mate2, mate1, false, true, true)
+    state.supportChatAccepted = lead == true and reply == true
+    outputDebugString(("[drive-thru] Grove support chat acceptance=%s/%s"):format(tostring(lead), tostring(reply)))
+    triggerServerEvent("drivethru:supportChatReady", resourceRoot, state.supportChatAccepted and "accepted" or "refused")
+    return state.supportChatAccepted
+end
+
 addEvent("drivethru:restaurantRebuilt", true)
 addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
     if source ~= resourceRoot or not state.active or type(entities) ~= "table" then
@@ -731,13 +831,7 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
         ballas_driver = entities.ballas_driver,
     }
     local voodoo = entities.voodoo
-    if isElement(state.pursuitBlip) then
-        destroyElement(state.pursuitBlip)
-    end
-    state.pursuitBlip = createBlipAttachedTo(voodoo, 0, 2, unpack(SCM_THREAT_BLIP_COLOR))
-    if isElement(state.pursuitBlip) then
-        setElementDimension(state.pursuitBlip, DRIVETHRU.dimension)
-    end
+    showPursuitVehicleNavigation(voodoo)
 
     local startedAt = getTickCount()
     local stableSamples = 0
@@ -748,7 +842,7 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
         end
         local greenwoodReady, greenwoodDetails = vehicleMatchesReconstruction(state.vehicle, DRIVETHRU.restaurant.greenwood)
         local voodooReady, voodooDetails = vehicleMatchesReconstruction(voodoo, DRIVETHRU.restaurant.voodoo)
-        if voodooReady and math.abs(getElementHealth(voodoo) - DRIVETHRU.restaurant.voodoo.health) > 0.5 then
+        if voodooReady and math.abs(getElementHealth(voodoo) - DRIVETHRU.restaurant.voodoo.initialStreamHealth) > 0.5 then
             voodooReady = false
             voodooDetails = voodooDetails .. (" health=%.1f"):format(getElementHealth(voodoo))
         end
@@ -783,14 +877,276 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
     end, 100, 0)
 end)
 
-addEvent("drivethru:restaurantCheckpoint", true)
-addEventHandler("drivethru:restaurantCheckpoint", resourceRoot, function()
+addEvent("drivethru:pursuitRoute", true)
+addEventHandler("drivethru:pursuitRoute", resourceRoot, function(entities)
+    if source ~= resourceRoot or not state.active or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "pursuit_route_barrier"
+    state.vehicle = entities.vehicle
+    state.actors.ballas_driver = entities.ballas_driver
+    local driver, voodoo = entities.ballas_driver, entities.voodoo
+    local requestedAt = getTickCount()
+    local accepted = false
+    local lastIndex = nil
+    local timer
+    timer = rememberPursuitTimer(setTimer(function()
+        if not state.active or state.stage ~= "pursuit_route_barrier" then
+            return
+        end
+        if not isElement(driver) or not isElement(voodoo) then
+            killTimer(timer)
+            return triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "elements_missing")
+        end
+        local ready = isElementStreamedIn(driver) and isElementStreamedIn(voodoo) and isElementSyncer(driver) and
+                          isElementSyncer(voodoo) and applyActorPolicies(driver) and applyGreenwoodPolicies(voodoo) and
+                          getPedOccupiedVehicle(driver) == voodoo and getPedOccupiedVehicleSeat(driver) == 0 and
+                          math.abs(getElementHealth(voodoo) - DRIVETHRU.restaurant.voodoo.health) <= 0.5
+        if ready and not accepted then
+            if type(setPedTaskSequence) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
+                killTimer(timer)
+                return triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "api_unavailable")
+            end
+            local sequence = {}
+            for index, point in ipairs(DRIVETHRU.chase.route) do
+                sequence[index] = {
+                    task = "drive_to",
+                    x = point.x,
+                    y = point.y,
+                    z = point.z,
+                    speed = point.speed,
+                    mode = DRIVETHRU.chase.drivingMode,
+                    vehicleModel = DRIVETHRU.chase.vehicleModel,
+                    drivingStyle = DRIVETHRU.chase.drivingStyle,
+                }
+            end
+            accepted = setPedTaskSequence(driver, sequence, false) == true
+            outputDebugString("[drive-thru] Ballas eight-point route acceptance=" .. tostring(accepted))
+            if not accepted then
+                killTimer(timer)
+                return triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "refused")
+            end
+        end
+        if accepted then
+            local index = getPedTaskSequenceProgress(driver)
+            if index ~= lastIndex then
+                lastIndex = index
+                outputDebugString(("[drive-thru] Ballas route native sequence index=%d"):format(index))
+            end
+            if index >= 0 then
+                killTimer(timer)
+                triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "active",
+                                   ("index=%d elapsed=%dms"):format(index, getTickCount() - requestedAt))
+                return
+            end
+        end
+        if getTickCount() - requestedAt >= DRIVETHRU.chase.routeActivationTimeout then
+            killTimer(timer)
+            triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "timeout",
+                               ("accepted=%s index=%s health=%.1f"):format(tostring(accepted), tostring(lastIndex),
+                                                                           getElementHealth(voodoo)))
+        end
+    end, DRIVETHRU.chase.monitorInterval, 0))
+end)
+
+addEvent("drivethru:pursuitActorsCreated", true)
+addEventHandler("drivethru:pursuitActorsCreated", resourceRoot, function(entities)
+    if source ~= resourceRoot or not state.active or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "pursuit_task_barrier"
+    state.vehicle = entities.vehicle
+    for _, name in ipairs({"smoke", "sweet", "ryder", "ballas_driver", "ballas_passenger", "mate1", "mate2"}) do
+        state.actors[name] = entities[name]
+    end
+    tryStartSupportChat()
+    local voodoo = entities.voodoo
+    local requestedAt = getTickCount()
+    local assigned = false
+    local timer
+    timer = rememberPursuitTimer(setTimer(function()
+        if not state.active or state.stage ~= "pursuit_task_barrier" then
+            return
+        end
+        local ready = isElement(state.vehicle) and isElement(voodoo) and isElementStreamedIn(state.vehicle) and
+                          isElementStreamedIn(voodoo) and isElementSyncer(state.vehicle) and isElementSyncer(voodoo) and
+                          applyGreenwoodPolicies(state.vehicle) and applyGreenwoodPolicies(voodoo)
+        for _, name in ipairs({"sweet", "ryder", "ballas_driver", "ballas_passenger"}) do
+            local ped = state.actors[name]
+            ready = ready and isElement(ped) and isElementStreamedIn(ped) and isElementSyncer(ped) and applyActorPolicies(ped)
+        end
+        ready = ready and getPedOccupiedVehicle(state.actors.ballas_driver) == voodoo and
+                    getPedOccupiedVehicleSeat(state.actors.ballas_driver) == 0 and
+                    getPedOccupiedVehicle(state.actors.ballas_passenger) == voodoo and
+                    getPedOccupiedVehicleSeat(state.actors.ballas_passenger) == DRIVETHRU.chase.ballasPassenger.seat and
+                    getPedOccupiedVehicle(state.actors.ryder) == state.vehicle and
+                    getPedOccupiedVehicleSeat(state.actors.ryder) == DRIVETHRU.actors.ryder.seat and
+                    getPedOccupiedVehicle(state.actors.sweet) == state.vehicle and
+                    getPedOccupiedVehicleSeat(state.actors.sweet) == DRIVETHRU.actors.sweet.seat
+
+        if ready and not assigned then
+            if type(isPedDoingTask) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
+                killTimer(timer)
+                return triggerServerEvent("drivethru:pursuitTasksReady", resourceRoot, "api_unavailable")
+            end
+            local passenger = dispatchDriveBy(state.actors.ballas_passenger, state.vehicle, DRIVETHRU.chase.driveBy.ballasPassenger)
+            local ryder = dispatchDriveBy(state.actors.ryder, voodoo, DRIVETHRU.chase.driveBy.ryder)
+            local sweet = dispatchDriveBy(state.actors.sweet, voodoo, DRIVETHRU.chase.driveBy.sweet)
+            assigned = passenger and ryder and sweet
+            outputDebugString(("[drive-thru] Pursuit drive-by assignment=%s/%s/%s"):format(tostring(passenger), tostring(ryder),
+                                                                                              tostring(sweet)))
+            if not assigned then
+                killTimer(timer)
+                return triggerServerEvent("drivethru:pursuitTasksReady", resourceRoot, "refused")
+            end
+        end
+        if assigned then
+            local passengerActive = isPedDoingTask(state.actors.ballas_passenger, "TASK_SIMPLE_GANG_DRIVEBY")
+            local ryderActive = isPedDoingTask(state.actors.ryder, "TASK_SIMPLE_GANG_DRIVEBY")
+            local sweetActive = isPedDoingTask(state.actors.sweet, "TASK_SIMPLE_GANG_DRIVEBY")
+            local routeIndex = getPedTaskSequenceProgress(state.actors.ballas_driver)
+            if passengerActive and ryderActive and sweetActive and routeIndex >= 0 then
+                killTimer(timer)
+                outputDebugString(("[drive-thru] Three native drive-bys active with Ballas route index=%d"):format(routeIndex))
+                triggerServerEvent("drivethru:pursuitTasksReady", resourceRoot, "active",
+                                   ("route=%d elapsed=%dms"):format(routeIndex, getTickCount() - requestedAt))
+                return
+            end
+        end
+        if getTickCount() - requestedAt >= DRIVETHRU.chase.taskActivationTimeout then
+            killTimer(timer)
+            triggerServerEvent("drivethru:pursuitTasksReady", resourceRoot, "timeout", "native tasks were not all observed active")
+        end
+    end, DRIVETHRU.chase.monitorInterval, 0))
+end)
+
+addEvent("drivethru:pursuitStarted", true)
+addEventHandler("drivethru:pursuitStarted", resourceRoot, function(entities)
+    if source ~= resourceRoot or not state.active or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "chase"
+    state.footCombat = false
+    state.vehicle = entities.vehicle
+    showPursuitVehicleNavigation(entities.voodoo)
+    setCameraTarget(localPlayer)
+    fadeCamera(true, 1.0)
+    printMissionText("SWE3_B", 3000)
+    outputDebugString("[drive-thru] CHASE STARTED after native route and drive-by activation barrier")
+end)
+
+addEvent("drivethru:chaseHelp", true)
+addEventHandler("drivethru:chaseHelp", resourceRoot, function()
+    if source == resourceRoot and state.active and state.stage == "chase" then
+        printMissionHelp("SWE3_H")
+    end
+end)
+
+addEvent("drivethru:chaseNavigation", true)
+addEventHandler("drivethru:chaseNavigation", resourceRoot, function(mode, entities)
+    if source ~= resourceRoot or not state.active or state.stage ~= "chase" then
+        return
+    end
+    if mode == "vehicle" then
+        clearPursuitNavigation()
+        showVehicleNavigation()
+        printMissionText("TW2_X", 3000)
+    elseif state.footCombat then
+        showPursuitPedNavigation()
+    else
+        showPursuitVehicleNavigation(type(entities) == "table" and entities.voodoo or nil)
+        printMissionText("SWE3_B", 3000)
+    end
+end)
+
+addEvent("drivethru:footCombat", true)
+addEventHandler("drivethru:footCombat", resourceRoot, function(entities, reason)
+    if source ~= resourceRoot or not state.active or state.stage ~= "chase" or type(entities) ~= "table" then
+        return
+    end
+    state.footCombat = true
+    for _, name in ipairs({"ballas_driver", "ballas_passenger"}) do
+        state.actors[name] = entities[name]
+    end
+    showPursuitPedNavigation()
+    callMissionTextApi("clearMissionHelp")
+    printMissionText("K_BALLA", 6000)
+
+    local expected = {}
+    local accepted = true
+    if type(setPedKillOnFoot) ~= "function" or type(isPedDoingTask) ~= "function" then
+        return triggerServerEvent("drivethru:footCombatReady", resourceRoot, "api_unavailable")
+    end
+    for _, name in ipairs({"ballas_driver", "ballas_passenger"}) do
+        local ped = state.actors[name]
+        if isElement(ped) and not isPedDead(ped) then
+            expected[name] = "kill"
+            accepted = setPedKillOnFoot(ped, localPlayer) == true and accepted
+        end
+    end
+    local driver, passenger = state.actors.ballas_driver, state.actors.ballas_passenger
+    if isElement(driver) and not isPedDead(driver) then
+        expected.ryder = "driveby"
+        accepted = dispatchDriveBy(state.actors.ryder, driver, DRIVETHRU.chase.driveBy.ryderOnFoot) and accepted
+    end
+    if isElement(passenger) and not isPedDead(passenger) then
+        expected.sweet = "driveby"
+        accepted = dispatchDriveBy(state.actors.sweet, passenger, DRIVETHRU.chase.driveBy.sweetOnFoot) and accepted
+    end
+    outputDebugString(("[drive-thru] Foot-combat acceptance=%s trigger=%s"):format(tostring(accepted), tostring(reason)))
+    if not accepted then
+        return triggerServerEvent("drivethru:footCombatReady", resourceRoot, "refused")
+    end
+
+    local requestedAt = getTickCount()
+    local timer
+    timer = rememberPursuitTimer(setTimer(function()
+        if not state.active or state.stage ~= "chase" then
+            return
+        end
+        local active = true
+        for name, kind in pairs(expected) do
+            local ped = state.actors[name]
+            if isElement(ped) and not isPedDead(ped) then
+                local task = kind == "kill" and "TASK_COMPLEX_KILL_PED_ON_FOOT" or "TASK_SIMPLE_GANG_DRIVEBY"
+                active = isPedDoingTask(ped, task) and active
+            end
+        end
+        if active then
+            killTimer(timer)
+            triggerServerEvent("drivethru:footCombatReady", resourceRoot, "active",
+                               ("elapsed=%dms"):format(getTickCount() - requestedAt))
+        elseif getTickCount() - requestedAt >= DRIVETHRU.chase.taskActivationTimeout then
+            killTimer(timer)
+            triggerServerEvent("drivethru:footCombatReady", resourceRoot, "timeout")
+        end
+    end, DRIVETHRU.chase.monitorInterval, 0))
+end)
+
+addEvent("drivethru:chaseCheckpoint", true)
+addEventHandler("drivethru:chaseCheckpoint", resourceRoot, function(entities)
     if source ~= resourceRoot or not state.active then
         return
     end
-    state.stage = "restaurant_checkpoint"
-    outputChatBox("Drive-Thru: SWEET2B et reconstruction pre-poursuite valides.", 80, 220, 120)
-    outputChatBox("Le noir ecran est la frontiere SCM exacte. Utilise /drivethruabort apres verification des logs.", 220, 220, 220)
+    state.stage = "chase_checkpoint"
+    for _, timer in ipairs(state.pursuitTimers) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    state.pursuitTimers = {}
+    clearAudio("chase_complete")
+    callMissionTextApi("clearMissionHelp")
+    destroyNavigation()
+    clearPursuitNavigation()
+    for _, name in ipairs({"sweet", "ryder"}) do
+        local ped = state.actors[name]
+        if isElement(ped) and type(killPedTask) == "function" then
+            pcall(killPedTask, ped, "primary", 3, false)
+        end
+    end
+    outputChatBox("Drive-Thru: poursuite native validee, les deux Ballas sont morts.", 80, 220, 120)
+    outputChatBox("Checkpoint arrete avant le retour a Grove. Utilise /drivethruabort apres verification.", 220, 220, 220)
 end)
 
 addEvent("drivethru:failed", true)
@@ -820,6 +1176,9 @@ addEventHandler("onClientElementStreamIn", root, function()
     end
     if getElementData(source, DRIVETHRU.missionActorData) == true then
         applyActorPolicies(source)
+        if getElementData(source, DRIVETHRU.actorRoleData) == "grove_support" then
+            tryStartSupportChat()
+        end
     elseif getElementData(source, DRIVETHRU.vehicleData) == true or type(getElementData(source, DRIVETHRU.vehicleRoleData)) == "string" then
         applyGreenwoodPolicies(source)
     end

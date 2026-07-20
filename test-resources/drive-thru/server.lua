@@ -15,6 +15,10 @@ local mission = {
     actorTasksAccepted = false,
     actorsSeated = false,
     introFinished = false,
+    chaseDialoguePhase = nil,
+    chaseLineIndex = 0,
+    chaseDamageThreshold = nil,
+    footCombat = false,
 }
 
 local function rememberTimer(timer)
@@ -158,6 +162,10 @@ local function resetMissionState()
     mission.actorTasksAccepted = false
     mission.actorsSeated = false
     mission.introFinished = false
+    mission.chaseDialoguePhase = nil
+    mission.chaseLineIndex = 0
+    mission.chaseDamageThreshold = nil
+    mission.footCombat = false
 end
 
 local function cleanupMission(reason, restore)
@@ -204,7 +212,8 @@ local function startMissionWatchdog()
             return failMission("The Greenwood element disappeared", "SWE3_D")
         end
         if isElement(vehicle) and mission.stage ~= "cutscene" and getElementHealth(vehicle) <= 250 then
-            return failMission("The Greenwood health reached the vanilla 250 threshold", "SWE2_KC")
+            local textKey = mission.stage == "chase" and "SWE2_KA" or "SWE2_KC"
+            return failMission("The Greenwood health reached the vanilla 250 threshold", textKey)
         end
         for _, actor in ipairs({"sweet", "ryder", "smoke"}) do
             if mission.entities[actor] and not isElement(mission.entities[actor]) then
@@ -300,6 +309,52 @@ local function createRestaurantBallasDriver(vehicle)
     setElementSyncer(ped, mission.leader, true, true)
     mission.entities.ballas_driver = ped
     return warpPedIntoVehicle(ped, vehicle, profile.seat)
+end
+
+local function createChaseBallasPassenger(vehicle)
+    local profile = DRIVETHRU.chase.ballasPassenger
+    local position = DRIVETHRU.restaurant.voodoo.position
+    local ped = createPed(profile.model, position.x, position.y, position.z + 1.0, position.heading)
+    if not ped then
+        return false
+    end
+    setElementDimension(ped, DRIVETHRU.dimension)
+    giveWeapon(ped, DRIVETHRU.weapon.id, DRIVETHRU.weapon.ammo, true)
+    setElementData(ped, DRIVETHRU.missionActorData, true, true)
+    setElementData(ped, DRIVETHRU.actorRoleData, "ballas_passenger", true)
+    setElementData(ped, "drivethru.actor", "ballas_passenger", true)
+    setElementSyncer(ped, mission.leader, true, true)
+    mission.entities.ballas_passenger = ped
+    return warpPedIntoVehicle(ped, vehicle, profile.seat)
+end
+
+local function createChaseSupportActor(name, profile)
+    local position = profile.position
+    local ped = createPed(profile.model, position.x, position.y, position.scriptZ + 1.0, position.heading)
+    if not ped then
+        return false
+    end
+    setElementDimension(ped, DRIVETHRU.dimension)
+    setElementHealth(ped, profile.health)
+    giveWeapon(ped, DRIVETHRU.weapon.id, DRIVETHRU.weapon.ammo, true)
+    setElementData(ped, DRIVETHRU.missionActorData, true, true)
+    setElementData(ped, DRIVETHRU.actorRoleData, "grove_support", true)
+    setElementData(ped, "drivethru.actor", name, true)
+    setElementSyncer(ped, mission.leader, true, true)
+    mission.entities[name] = ped
+    return true
+end
+
+local function createChaseActors()
+    if not createChaseBallasPassenger(mission.entities.voodoo) then
+        return false, "Ballas passenger"
+    end
+    for _, name in ipairs({"mate1", "mate2"}) do
+        if not createChaseSupportActor(name, DRIVETHRU.chase.support[name]) then
+            return false, name
+        end
+    end
+    return true
 end
 
 local function rebuildRestaurantWorld()
@@ -398,6 +453,141 @@ local function queueNextDriveLine()
     if profile then
         queueAudio(profile, "drive", nextIndex)
     end
+end
+
+local function finishChaseDialoguePhase()
+    local vehicle = mission.entities.vehicle
+    if mission.chaseDialoguePhase == "chase" then
+        mission.chaseDialoguePhase = "await_first_damage"
+        mission.chaseDamageThreshold = isElement(vehicle) and getElementHealth(vehicle) - 60 or nil
+    elseif mission.chaseDialoguePhase == "chaseDamageFirst" then
+        mission.chaseDialoguePhase = "await_second_damage"
+        mission.chaseDamageThreshold = isElement(vehicle) and getElementHealth(vehicle) - 60 or nil
+    elseif mission.chaseDialoguePhase == "chaseDamageSecond" then
+        mission.chaseDialoguePhase = "done"
+        mission.chaseDamageThreshold = nil
+    end
+end
+
+local function queueNextChaseLine()
+    if not mission.running or mission.stage ~= "chase" or mission.audio or not mission.leaderInVehicle then
+        return
+    end
+    local profiles = DRIVETHRU.audio[mission.chaseDialoguePhase]
+    if type(profiles) ~= "table" then
+        return
+    end
+    local nextIndex = mission.chaseLineIndex + 1
+    local profile = profiles[nextIndex]
+    if profile then
+        queueAudio(profile, "chase", nextIndex)
+    else
+        finishChaseDialoguePhase()
+    end
+end
+
+local function startChaseDialoguePhase(phase)
+    mission.chaseDialoguePhase = phase
+    mission.chaseLineIndex = 0
+    mission.chaseDamageThreshold = nil
+    queueNextChaseLine()
+end
+
+local beginFootCombat
+local completeChase
+
+local function monitorChase()
+    if not mission.running or mission.finishing or mission.stage ~= "chase" then
+        return
+    end
+    local driver = mission.entities.ballas_driver
+    local passenger = mission.entities.ballas_passenger
+    local driverDead = not isElement(driver) or isPedDead(driver)
+    local passengerDead = not isElement(passenger) or isPedDead(passenger)
+    if driverDead and passengerDead then
+        return completeChase()
+    end
+    if driverDead or passengerDead then
+        beginFootCombat("one Ballas died during the vehicle chase")
+    end
+
+    for _, name in ipairs({"mate1", "mate2"}) do
+        local ped = mission.entities[name]
+        if not isElement(ped) or isPedDead(ped) then
+            return failMission("The Grove support actors were killed", "TW2_Y")
+        end
+    end
+
+    local voodoo = mission.entities.voodoo
+    if not isElement(voodoo) then
+        return failMission("The Voodoo element disappeared")
+    end
+    if getElementHealth(voodoo) <= 250 then
+        beginFootCombat("Voodoo reached the vanilla 250 health threshold")
+    elseif not mission.footCombat then
+        local x, y, z = getElementPosition(voodoo)
+        local hub = DRIVETHRU.chase.hub
+        if math.abs(x - hub.x) <= hub.radiusX and math.abs(y - hub.y) <= hub.radiusY and math.abs(z - hub.z) <= hub.radiusZ then
+            return failMission("The Ballas reached Grove Street before they were stopped", "TW2_Y")
+        end
+    end
+
+    if not mission.audio and mission.leaderInVehicle and isElement(mission.entities.vehicle) and mission.chaseDamageThreshold then
+        local health = getElementHealth(mission.entities.vehicle)
+        if health <= mission.chaseDamageThreshold then
+            if mission.chaseDialoguePhase == "await_first_damage" then
+                startChaseDialoguePhase("chaseDamageFirst")
+            elseif mission.chaseDialoguePhase == "await_second_damage" then
+                startChaseDialoguePhase("chaseDamageSecond")
+            end
+        end
+    end
+end
+
+beginFootCombat = function(reason)
+    if not mission.running or mission.finishing or mission.stage ~= "chase" or mission.footCombat then
+        return
+    end
+    mission.footCombat = true
+    outputDebugString("[drive-thru] Vehicle-to-foot combat transition: " .. tostring(reason))
+    triggerClientEvent(mission.leader, "drivethru:footCombat", resourceRoot, mission.entities, reason)
+end
+
+completeChase = function()
+    if not mission.running or mission.finishing or mission.stage ~= "chase" then
+        return
+    end
+    mission.stage = "chase_checkpoint"
+    mission.audio = nil
+    outputDebugString(("[drive-thru] CHECKPOINT PASSED: both Ballas dead after native route and three drive-bys; footCombat=%s"):format(
+                          tostring(mission.footCombat)))
+    triggerClientEvent(mission.leader, "drivethru:chaseCheckpoint", resourceRoot, mission.entities)
+end
+
+local function beginChase()
+    if not mission.running or mission.stage ~= "pursuit_task_barrier" then
+        return
+    end
+    mission.stage = "chase"
+    mission.leaderInVehicle = getPedOccupiedVehicle(mission.leader) == mission.entities.vehicle and
+                                  getPedOccupiedVehicleSeat(mission.leader) == 0
+    mission.footCombat = false
+    setElementFrozen(mission.leader, false)
+    setVehicleEngineState(mission.entities.vehicle, true)
+    setVehicleEngineState(mission.entities.voodoo, true)
+    triggerClientEvent(mission.leader, "drivethru:pursuitStarted", resourceRoot, mission.entities)
+    outputDebugString("[drive-thru] Native pursuit active; three drive-by tasks observed before fade-in")
+    rememberTimer(setTimer(function()
+        if mission.running and mission.stage == "chase" then
+            startChaseDialoguePhase("chase")
+        end
+    end, 2000, 1))
+    rememberTimer(setTimer(function()
+        if mission.running and mission.stage == "chase" and isElement(mission.leader) then
+            triggerClientEvent(mission.leader, "drivethru:chaseHelp", resourceRoot)
+        end
+    end, DRIVETHRU.chase.helpDelay, 1))
+    rememberTimer(setTimer(monitorChase, DRIVETHRU.chase.monitorInterval, 0))
 end
 
 local function beginDrive()
@@ -610,9 +800,84 @@ addEventHandler("drivethru:restaurantRebuildReady", resourceRoot, function(resul
     if result ~= "ready" then
         return failMission("Restaurant reconstruction barrier failed: " .. tostring(result) .. " " .. tostring(details or ""))
     end
-    mission.stage = "restaurant_checkpoint"
-    outputDebugString("[drive-thru] CHECKPOINT PASSED: SWEET2B released; Greenwood, crew, CJ, Voodoo and Ballas driver rebuilt; no pursuit task assigned")
-    triggerClientEvent(mission.leader, "drivethru:restaurantCheckpoint", resourceRoot)
+    setVehicleEngineState(mission.entities.vehicle, true)
+    setVehicleEngineState(mission.entities.voodoo, true)
+    -- Entity creation compresses vehicle health to 12 bits and therefore
+    -- initially exposes 2047.5. Once the leader confirms the streamed native
+    -- vehicle, this ordinary health RPC carries the full SWEET3 value.
+    setElementHealth(mission.entities.voodoo, DRIVETHRU.restaurant.voodoo.health)
+    mission.stage = "pursuit_route_barrier"
+    outputDebugString("[drive-thru] SWEET2B reconstruction passed; Voodoo health rearmed to 2700 before native route assignment")
+    triggerClientEvent(mission.leader, "drivethru:pursuitRoute", resourceRoot, mission.entities)
+end)
+
+addEvent("drivethru:pursuitRouteReady", true)
+addEventHandler("drivethru:pursuitRouteReady", resourceRoot, function(result, details)
+    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "pursuit_route_barrier" then
+        return
+    end
+    if result ~= "active" then
+        return failMission("Ballas route assignment failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    local driver, voodoo = mission.entities.ballas_driver, mission.entities.voodoo
+    if not isElement(driver) or not isElement(voodoo) or getElementSyncer(driver) ~= client or getElementSyncer(voodoo) ~= client or
+        getPedOccupiedVehicle(driver) ~= voodoo or getPedOccupiedVehicleSeat(driver) ~= 0 then
+        return failMission("Ballas route was reported active without authoritative driver ownership and seat state")
+    end
+    local created, failedActor = createChaseActors()
+    if not created then
+        return failMission("Pursuit actor creation failed: " .. tostring(failedActor))
+    end
+    setElementHealth(mission.entities.vehicle, DRIVETHRU.chase.greenwoodHealth)
+    mission.stage = "pursuit_task_barrier"
+    outputDebugString("[drive-thru] Driver route active; Ballas passenger and two Grove support actors created in SCM order")
+    triggerClientEvent(mission.leader, "drivethru:pursuitActorsCreated", resourceRoot, mission.entities)
+end)
+
+addEvent("drivethru:pursuitTasksReady", true)
+addEventHandler("drivethru:pursuitTasksReady", resourceRoot, function(result, details)
+    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "pursuit_task_barrier" then
+        return
+    end
+    if result ~= "active" then
+        return failMission("Pursuit task assignment failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    local expected = {
+        ballas_passenger = {vehicle = mission.entities.voodoo, seat = DRIVETHRU.chase.ballasPassenger.seat},
+        ryder = {vehicle = mission.entities.vehicle, seat = DRIVETHRU.actors.ryder.seat},
+        sweet = {vehicle = mission.entities.vehicle, seat = DRIVETHRU.actors.sweet.seat},
+    }
+    for name, profile in pairs(expected) do
+        local ped = mission.entities[name]
+        if not isElement(ped) or getElementSyncer(ped) ~= client or getPedOccupiedVehicle(ped) ~= profile.vehicle or
+            getPedOccupiedVehicleSeat(ped) ~= profile.seat then
+            return failMission("Pursuit task report failed authoritative validation for " .. name)
+        end
+    end
+    beginChase()
+end)
+
+addEvent("drivethru:footCombatReady", true)
+addEventHandler("drivethru:footCombatReady", resourceRoot, function(result, details)
+    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "chase" or not mission.footCombat then
+        return
+    end
+    if result ~= "active" then
+        return failMission("Vehicle-to-foot combat task assignment failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    outputDebugString("[drive-thru] Surviving Ballas and Grove shooters accepted the native on-foot retargeting")
+end)
+
+addEvent("drivethru:supportChatReady", true)
+addEventHandler("drivethru:supportChatReady", resourceRoot, function(result)
+    if source ~= resourceRoot or client ~= mission.leader or not mission.running or
+        (mission.stage ~= "pursuit_task_barrier" and mission.stage ~= "chase") then
+        return
+    end
+    if result ~= "accepted" then
+        return failMission("Grove support chat assignment failed: " .. tostring(result))
+    end
+    outputDebugString("[drive-thru] Grove support chat tasks accepted after both distant actors streamed in")
 end)
 
 addEvent("drivethru:actorTasksReady", true)
@@ -665,6 +930,9 @@ addEventHandler("drivethru:audioFinished", resourceRoot, function(audioId, resul
     elseif audio.purpose == "drive" then
         mission.driveLineIndex = audio.index
         rememberTimer(setTimer(queueNextDriveLine, DRIVETHRU.audio.gap, 1))
+    elseif audio.purpose == "chase" then
+        mission.chaseLineIndex = audio.index
+        rememberTimer(setTimer(queueNextChaseLine, DRIVETHRU.audio.gap, 1))
     end
 end)
 
@@ -698,6 +966,9 @@ addEventHandler("onVehicleEnter", root, function(ped, seat)
         elseif mission.stage == "drive" then
             triggerClientEvent(ped, "drivethru:stage", resourceRoot, "drive", mission.entities)
             rememberTimer(setTimer(queueNextDriveLine, DRIVETHRU.audio.gap, 1))
+        elseif mission.stage == "chase" then
+            triggerClientEvent(ped, "drivethru:chaseNavigation", resourceRoot, "target", mission.entities)
+            rememberTimer(setTimer(queueNextChaseLine, DRIVETHRU.audio.gap, 1))
         end
     else
         for _, name in ipairs({"smoke", "sweet", "ryder"}) do
@@ -715,6 +986,8 @@ addEventHandler("onVehicleExit", root, function(ped, seat)
         mission.leaderInVehicle = false
         if mission.stage == "drive" then
             triggerClientEvent(ped, "drivethru:stage", resourceRoot, "return_car", mission.entities)
+        elseif mission.stage == "chase" then
+            triggerClientEvent(ped, "drivethru:chaseNavigation", resourceRoot, "vehicle", mission.entities)
         end
     end
 end)
@@ -722,6 +995,8 @@ end)
 addEventHandler("onVehicleExplode", root, function()
     if mission.running and source == mission.entities.vehicle then
         failMission("The Greenwood was destroyed", "SWE3_D")
+    elseif mission.running and source == mission.entities.voodoo then
+        beginFootCombat("Voodoo exploded")
     end
 end)
 
@@ -737,6 +1012,16 @@ addEventHandler("onPedWasted", root, function()
         failMission("Ryder died", "SWE3_F")
     elseif source == mission.entities.smoke then
         failMission("Smoke died", "SWE3_G")
+    elseif source == mission.entities.ballas_driver or source == mission.entities.ballas_passenger then
+        local driverDead = not isElement(mission.entities.ballas_driver) or isPedDead(mission.entities.ballas_driver)
+        local passengerDead = not isElement(mission.entities.ballas_passenger) or isPedDead(mission.entities.ballas_passenger)
+        if driverDead and passengerDead then
+            completeChase()
+        else
+            beginFootCombat("one Ballas was killed")
+        end
+    elseif source == mission.entities.mate1 or source == mission.entities.mate2 then
+        failMission("The Grove support actors were killed", "TW2_Y")
     end
 end)
 
@@ -773,7 +1058,7 @@ addCommandHandler("drivethruskip", function(player)
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[drive-thru] Resource ready. Use /drivethru to run through SWEET2B and the pre-pursuit reconstruction checkpoint.")
+    outputDebugString("[drive-thru] Resource ready. Use /drivethru to run SWEET2A, SWEET2B and the native Ballas chase checkpoint.")
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
