@@ -22,7 +22,10 @@ TAGUP = {
         },
     },
     missionActorData = "tagup.missionActor",
-    start = {2508.16, -1666.47, 13.0, 16},
+    -- CREATE_CAR receives the model base position; MTA creates vehicles from
+    -- their centre, which is 0.5 m higher for the Greenwood.
+    start = {2508.16, -1666.47, 13.5, 16},
+    vehicleColors = {78, 104, 129, 100, 100, 100},
     sweetStart = {2518.07, -1668.82, 13.1, 90},
     fileCutscene = {
         name = "SWEET1A",
@@ -195,7 +198,11 @@ TAGUP = {
     },
     offscreenStorage = {
         position = {2487.1721, -1666.3010, -100.3438},
-        minimumDistance = 30.0,
+        -- These are opcode LOCATE_CHAR_ANY_MEANS_CAR_3D axis extents, not
+        -- radial distances. SWEET1 intentionally uses a different boolean at
+        -- the rooftop: outside this box OR off screen.
+        ballasBox = {30.0, 30.0, 10.0},
+        rooftopBox = {100.0, 100.0, 10.0},
         reportInterval = 250,
     },
     ballasDeparture = {

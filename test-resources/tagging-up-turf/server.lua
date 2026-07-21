@@ -2106,7 +2106,7 @@ local function advanceAfterTags(extra)
     end
 end
 
-failMission = function(reason)
+failMission = function(reason, failureTextKey)
     if not mission.running or mission.finishing or mission.stage == "failed" then
         return
     end
@@ -2125,11 +2125,62 @@ failMission = function(reason)
     cancelFinalScene("mission_failed")
     cancelTransitionAudio("mission_failed")
     mission.stage = "failed"
-    broadcastState({failureReason = reason or "La mission a echoue."})
+    broadcastState({failureReason = reason or "La mission a echoue.", failureTextKey = failureTextKey})
     outputDebugString("[tagging-up-turf] Failed: " .. tostring(reason))
     rememberTimer(setTimer(function()
         finishMission(false)
     end, 3500, 1))
+end
+
+local sprayRequiredStages = {
+    enter_car = true,
+    drive_idlewood = true,
+    demo = true,
+    tags_idlewood = true,
+    return_car = true,
+    drive_ballas = true,
+    ballas_departure = true,
+    tags_ballas = true,
+    rooftop = true,
+}
+
+local function hasWeapon(ped, weapon)
+    for slot = 0, 12 do
+        if getPedWeapon(ped, slot) == weapon then
+            return true
+        end
+    end
+    return false
+end
+
+local function isSpraycanRequired()
+    return sprayRequiredStages[mission.stage] and not (mission.stage == "rooftop" and mission.completedTags[3])
+end
+
+local function startSpraycanMonitor()
+    -- SWEET1 checks CJ's inventory in every active gameplay loop through the
+    -- rooftop tag, then deliberately stops checking before recording 207.
+    rememberTimer(setTimer(function()
+        local leader = mission.leader
+        if mission.running and not mission.finishing and isSpraycanRequired() and isElement(leader) and
+            not hasWeapon(leader, TAGUP.sprayWeapon) then
+            failMission("CJ n'a plus de bombe de peinture.", "SWE1SPF")
+        end
+    end, 100, 0))
+end
+
+local function grantWeaponAmmo(ped, weapon, ammo, setAsCurrent)
+    local remaining = ammo
+    local firstGrant = true
+    while remaining > 0 do
+        local granted = math.min(remaining, 9999)
+        if not giveWeapon(ped, weapon, granted, setAsCurrent == true and firstGrant) then
+            return false
+        end
+        firstGrant = false
+        remaining = remaining - granted
+    end
+    return true
 end
 
 addEvent("tagup:vehiclePlaybackResult", true)
@@ -2339,10 +2390,12 @@ local function setupMissionPlayers(useCutsceneCJ)
         setElementDimension(player, TAGUP.dimension)
         setElementPosition(player, offsets[index][1], offsets[index][2], offsets[index][3])
         setElementRotation(player, 0, 0, offsets[index][4])
-        setElementHealth(player, 100)
-        setPedArmor(player, 0)
-        takeAllWeapons(player)
-        giveWeapon(player, TAGUP.sprayWeapon, 1000, true)
+        -- SWEET1 preserves CJ's health, armour and existing inventory. MTA
+        -- caps one giveWeapon call at 9999 rounds, so split GTA's additive
+        -- 30000-round grant without replacing the rest of the loadout.
+        if not grantWeaponAmmo(player, TAGUP.sprayWeapon, 30000, true) then
+            return false
+        end
         setElementFrozen(player, true)
     end
     return true
@@ -2354,7 +2407,7 @@ createMissionEntities = function(requester)
         return false
     end
     setElementDimension(vehicle, TAGUP.dimension)
-    setVehicleColor(vehicle, 25, 86, 39, 25, 86, 39)
+    setVehicleColor(vehicle, unpack(TAGUP.vehicleColors))
     setVehiclePlateText(vehicle, TAGUP.vehiclePlate)
     setVehicleEngineState(vehicle, true)
     mission.entities.vehicle = vehicle
@@ -2372,7 +2425,9 @@ createMissionEntities = function(requester)
     -- SWEET1 assigns Sweet's GANG2 motion group for the lifetime of this ped.
     setPedWalkingStyle(sweet, TAGUP.introScene.sweetWalkingStyle)
     setElementHealth(sweet, 500)
-    giveWeapon(sweet, TAGUP.sprayWeapon, 30000, true)
+    if not grantWeaponAmmo(sweet, TAGUP.sprayWeapon, 30000, true) then
+        return false
+    end
     mission.entities.sweet = sweet
     setElementSyncer(sweet, requester)
 
@@ -2420,6 +2475,7 @@ local function startMission(requester, checkpoint)
     if not setupMissionPlayers(not checkpoint) then
         return failMission("L'apparence vanilla de CJ n'a pas pu etre appliquee au leader.")
     end
+    startSpraycanMonitor()
 
     if not checkpoint then
         startFileCutscene()
@@ -3217,6 +3273,18 @@ addCommandHandler("tagupabort", function(player)
     if mission.running and isMissionPlayer(player) then
         failMission("Mission abandonnee.")
     end
+end)
+
+addCommandHandler("taguplosespray", function(player)
+    if not mission.running or mission.finishing or player ~= mission.leader then
+        return
+    end
+    if not isSpraycanRequired() then
+        outputChatBox("SWEET1 ne surveille plus le spraycan a cette phase.", player, 255, 190, 80)
+        return
+    end
+    outputDebugString(("[tagging-up-turf] Forced SWE1SPF test requested by %s at stage=%s"):format(getPlayerName(player), mission.stage))
+    takeWeapon(player, TAGUP.sprayWeapon)
 end)
 
 addCommandHandler("tagupskip", function(player)
@@ -4541,7 +4609,7 @@ addEventHandler("tagup:vehicleReminder", resourceRoot, function(stage)
 end)
 
 addEvent("tagup:storeOffscreenActors", true)
-addEventHandler("tagup:storeOffscreenActors", resourceRoot, function(stage)
+addEventHandler("tagup:storeOffscreenActors", resourceRoot, function(stage, offscreen)
     -- A final rooftop visibility report can already be in flight when the last
     -- tag starts recording 207. Once playback owns the actors, never let that
     -- stale report freeze and store the Greenwood again before playback starts.
@@ -4555,7 +4623,10 @@ addEventHandler("tagup:storeOffscreenActors", resourceRoot, function(stage)
     end
     local px, py, pz = getElementPosition(mission.leader)
     local vx, vy, vz = getElementPosition(vehicle)
-    if getDistanceBetweenPoints3D(px, py, pz, vx, vy, vz) < TAGUP.offscreenStorage.minimumDistance then
+    local limits = stage == "tags_ballas" and TAGUP.offscreenStorage.ballasBox or TAGUP.offscreenStorage.rooftopBox
+    local outsideBox = math.abs(px - vx) > limits[1] or math.abs(py - vy) > limits[2] or math.abs(pz - vz) > limits[3]
+    if (stage == "tags_ballas" and (not outsideBox or offscreen ~= true)) or
+        (stage == "rooftop" and not outsideBox and offscreen ~= true) then
         return
     end
     local storage = TAGUP.offscreenStorage.position
@@ -4563,7 +4634,8 @@ addEventHandler("tagup:storeOffscreenActors", resourceRoot, function(stage)
     setElementFrozen(sweet, true)
     setElementPosition(vehicle, storage[1], storage[2], storage[3])
     mission.offscreenStored = true
-    outputDebugString(("[tagging-up-turf] Sweet and Greenwood stored below world after leader off-screen confirmation at stage=%s"):format(stage))
+    outputDebugString(("[tagging-up-turf] Sweet and Greenwood stored below world at stage=%s outsideBox=%s offscreen=%s"):format(
+                          stage, tostring(outsideBox), tostring(offscreen == true)))
 end)
 
 local function isNativeTagAlphaStep(previousAlpha, currentAlpha)

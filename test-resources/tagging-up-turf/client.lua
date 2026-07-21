@@ -109,7 +109,7 @@ local function scheduleMissionText(stage, delay, callback)
     table.insert(state.missionTextTimers, timer)
 end
 
-local function beginMissionStageText(stage)
+local function beginMissionStageText(stage, failureTextKey)
     killMissionTextTimers()
     state.nativeTagHelpPhase = 0
     state.nativeTagHelpStarted = getTickCount()
@@ -145,6 +145,9 @@ local function beginMissionStageText(stage)
         -- SWEX_AH and its follow-up are owned by transition mission audio.
     elseif stage == "failed" then
         callMissionTextApi("clearMissionTexts")
+        if type(failureTextKey) == "string" then
+            printMissionText(failureTextKey, 10000)
+        end
         callMissionTextApi("showMissionBigText", "M_FAIL", 5000, 1)
     elseif stage == "complete" then
         callMissionTextApi("clearMissionTexts")
@@ -298,11 +301,11 @@ local function updateNativeMissionHelp()
             ((math.abs(x - 2374.0) <= 1.4 and math.abs(y + 1534.1) <= 1.4 and math.abs(z - 23.0) <= 2.0) or
              (math.abs(x - 2352.3) <= 3 and math.abs(y + 1552.1) <= 3) or
              (math.abs(x - 2420.7) <= 3 and math.abs(y + 1572.1) <= 3)) then
-            state.nativeHelpFlags.jump1 = printMissionHelp("JUMPH1")
+            state.nativeHelpFlags.jump1 = printMissionHelp("JMPHID")
         elseif not state.nativeHelpFlags.radar and math.abs(x - 2373.5) <= 3 and math.abs(y + 1547.2) <= 3 then
             state.nativeHelpFlags.radar = printMissionHelp("RADAR5")
         elseif not state.nativeHelpFlags.jump2 and math.abs(x - 2378.7546) <= 3 and math.abs(y + 1555.8896) <= 3 then
-            state.nativeHelpFlags.jump2 = printMissionHelp("JUMPH2")
+            state.nativeHelpFlags.jump2 = printMissionHelp("JMPHID2")
         end
     end
 end
@@ -4972,7 +4975,7 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
             clearSweetDemoAudioPreload("stage_changed_to_" .. tostring(state.stage))
         end
         setStageNavigation(state.stage)
-        beginMissionStageText(state.stage)
+        beginMissionStageText(state.stage, payload.failureTextKey)
         if state.stage == "complete" and not state.missionPassedTunePlayed then
             state.missionPassedTunePlayed = true
             local ok, played = pcall(playMissionPassedTune, 1)
@@ -5231,16 +5234,21 @@ addEventHandler("onClientPreRender", root, function()
     if state.active and isElement(state.vehicle) then
         applyGreenwoodNativeState()
     end
-    if state.active and localPlayer == state.leader and (state.stage == "tags_ballas" or state.stage == "rooftop") and isElement(state.vehicle) and
-        (not isElementStreamedIn(state.vehicle) or not isElementOnScreen(state.vehicle)) then
+    if state.active and localPlayer == state.leader and (state.stage == "tags_ballas" or state.stage == "rooftop") and isElement(state.vehicle) then
+        local streamed = isElementStreamedIn(state.vehicle)
+        local offscreen = not streamed or not isElementOnScreen(state.vehicle)
+        local limits = state.stage == "tags_ballas" and TAGUP.offscreenStorage.ballasBox or TAGUP.offscreenStorage.rooftopBox
+        local px, py, pz = getElementPosition(localPlayer)
+        local vx, vy, vz = getElementPosition(state.vehicle)
+        local outsideBox = math.abs(px - vx) > limits[1] or math.abs(py - vy) > limits[2] or math.abs(pz - vz) > limits[3]
+        local shouldStore = state.stage == "tags_ballas" and outsideBox and offscreen or state.stage == "rooftop" and (outsideBox or offscreen)
+        if not shouldStore then
+            return
+        end
         local now = getTickCount()
         if now - state.lastOffscreenStorageReport >= TAGUP.offscreenStorage.reportInterval then
-            local px, py, pz = getElementPosition(localPlayer)
-            local vx, vy, vz = getElementPosition(state.vehicle)
-            if getDistanceBetweenPoints3D(px, py, pz, vx, vy, vz) >= TAGUP.offscreenStorage.minimumDistance then
-                state.lastOffscreenStorageReport = now
-                triggerServerEvent("tagup:storeOffscreenActors", resourceRoot, state.stage)
-            end
+            state.lastOffscreenStorageReport = now
+            triggerServerEvent("tagup:storeOffscreenActors", resourceRoot, state.stage, offscreen)
         end
     end
 end)
