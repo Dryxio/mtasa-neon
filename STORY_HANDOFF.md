@@ -62,6 +62,138 @@ Target executable SHA-256:
 
 `main.scm` is authoritative for mission control flow, coordinates, conditions, and opcode parameters. Decompiled text is a navigation aid and can contain errors. The GTA executable is authoritative for the native behavior behind each opcode.
 
+## Mission parity protocol
+
+The phrase `1:1 with vanilla` means exhaustive classification of the reachable
+mission graph, not a review of the happy path. Do not claim parity from a
+successful end-to-end run alone. Before implementation, construct a coverage
+map for the complete mission script, then keep it current as evidence changes.
+
+The goal is to discover missing behavior before the first in-game run. Follow
+this order:
+
+1. Identify the exact mission script, entry and exit labels, subroutines,
+   cutscene names, GXT blocks, audio tables, vehicle recordings, external
+   scripts, and cleanup paths.
+2. Build the control-flow graph for every reachable success, failure, skip,
+   retry, timeout, actor-death, vehicle-damage, player-exit, and alternate-route
+   branch. Include loops whose monitoring conditions change by phase.
+3. Classify every reachable SCM opcode. Consecutive instructions may share one
+   row only when they implement one indivisible effect and have no independent
+   native state or failure behavior.
+4. Establish the multiplayer scope before coding. Every excluded operation
+   needs a precise category and reason. Never silently omit an opcode because
+   it looks like bookkeeping or has no immediate visual effect.
+5. Audit every native semantic not already proven for the exact target build.
+   Search existing Neon primitives first, then the target assembly and
+   `gta-reversed-dryxio`, before proposing new C++.
+6. Design the smallest reusable primitive set and isolated harnesses needed by
+   the whole mission. Front-load cross-cutting behavior such as ownership,
+   streaming, task sequencing, collision policy, damage, camera, and cleanup.
+7. Implement mission phases from the completed map. Treat each actor or vehicle
+   creation and reconstruction as a distinct event, even when it reuses the
+   same model or logical role.
+8. Run a fresh parity audit after the full mission works. Start from the SCM
+   graph and coverage table, not from the implementation, so existing code does
+   not bias the review.
+
+### Required coverage matrix
+
+Keep the mission matrix in the resource README or a dedicated mission audit
+document. Use exact SCM labels or bytecode offsets so another agent can resume
+without reconstructing the mapping from prose.
+
+| SCM label or offset | Entry condition and phase | Vanilla operation and exact parameters | Native effect or dependency | Multiplayer relevance | Neon implementation | Evidence | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `label / 0x...` | Branch, loop, or transition that reaches it | Opcode sequence, coordinates, models, seats, flags, timings, text and audio keys | Engine behavior, implicit state, streaming or task dependency | Required, adapted, or excluded with reason | API, resource function, harness, or explicit gap | SCM, ASM/reverse, static test, logs, visual test | `implemented`, `adapted`, `excluded`, `missing`, or `uncertain` |
+
+The matrix must cover at least:
+
+- every actor and vehicle creation, deletion, reconstruction, seat assignment,
+  model, color, health, weapon, proof, door, tyre, collision, targeting, mission,
+  and persistence property;
+- every native task, sequence child, driving style, speed, coordinate, radius,
+  timeout, repetition rule, cancellation, and transition between vehicle and
+  on-foot behavior;
+- every camera, fade, widescreen, cutscene, subtitle, objective, checkpoint,
+  blip, audio event, conversation interruption, animation, look-at, and tune;
+- every success, failure, low-health, death, explosion, player-exit,
+  out-of-range, alternate-scene, skip, and cleanup branch;
+- the exact phases during which each monitor is active. A condition that exists
+  in one SCM loop must not remain globally active in later phases;
+- all state intentionally retained after success or failure, including player
+  position, vehicle, weapons, camera, actors, and mission-owned leases.
+
+### Scope and exclusion ledger
+
+Maintain a second, short table beside the coverage matrix. This prevents
+multiplayer scope decisions from becoming accidental omissions.
+
+| SCM operation | Classification | Reason | Visible consequence checked | Revisit trigger |
+| --- | --- | --- | --- | --- |
+| Exact opcode or block | `required`, `adapted multiplayer`, or `excluded solo bookkeeping` | Concrete architectural or user-scope reason | What was inspected to prove the exclusion is not visibly relevant | Condition that would make it necessary later |
+
+The default solo-bookkeeping exclusions in this handoff remain valid, but each
+mission must still list where they occur. An operation is not bookkeeping merely
+because its effect is delayed or invisible near the player. Before excluding a
+flag or property, find its native readers and check effects during streaming,
+damage, destruction, task changes, syncer migration, and phase transitions.
+
+### Three independent levels of proof
+
+Record these separately. One level must never stand in for another:
+
+| Proof level | Question answered | Typical evidence |
+| --- | --- | --- |
+| SCM intent | What does the mission request, and on which branch? | Raw bytecode, verified decompile, labels, parameters and offsets |
+| Native semantics | What does the target GTA build actually do with that request? | Target assembly, layout checks, gta-reversed comparison and native call graph |
+| Runtime observation | Did Neon reproduce the intended world result and lifecycle? | Acceptance plus task observation, authoritative state, logs and the user's visual test |
+
+Decompiled SCM is never sufficient native-semantics evidence. A plausible
+`gta-reversed-dryxio` implementation is never sufficient target evidence. A Lua
+return value is never sufficient runtime evidence for a native task.
+
+### Harness and checkpoint rules
+
+Each checkpoint should validate one independently diagnosable capability and
+leave the mission runnable. Its PASS criteria must measure the intended effect
+directly and include negative guards against plausible false positives. For
+example, route simulation requires horizontal movement, valid world height,
+task progress, retained ownership, and no unexpected stream-out. Raw 3D
+distance alone can incorrectly count a vehicle falling through unloaded world
+collision as successful driving.
+
+Before asking the user to test, provide:
+
+- exact commands and ordering;
+- expected actors, vehicles, seats, colors, positions, camera, text, audio and
+  approximate timing;
+- the expected task, ownership, health and lifecycle log evidence;
+- explicit failure signs and which log lines distinguish their likely causes;
+- cleanup or retry commands that do not require restarting unrelated work.
+
+After the test, correlate visual feedback with client and server logs. A PASS is
+valid only when all required predicates agree. If a metric was capable of a
+false positive, invalidate that result, repair the harness, and repeat it.
+
+### Parity completion gate
+
+Do not write `1:1`, `complete`, or `no missing behavior` unless all of the
+following are true:
+
+- the reachable SCM graph has no unclassified block;
+- the coverage matrix has no `missing` or unexplained `uncertain` row;
+- every exclusion appears in the scope ledger with a concrete reason;
+- all creations and reconstructions were compared independently;
+- every required native semantic has target evidence or a previously verified
+  reusable primitive with matching parameters;
+- success, failure, alternate, skip, interruption and cleanup paths are covered;
+- static evidence and runtime evidence are clearly distinguished;
+- the final fresh audit found no behavior only inferred from existing Neon code.
+
+If in-game validation is still pending, say `statically mapped and awaiting
+in-game validation`, never `1:1 validated`.
+
 ## Mandatory reverse-engineering gate
 
 Before implementing or exposing any native behavior:
