@@ -66,7 +66,7 @@ local function createPhaseTarget(session, phase)
     destroyTarget(session)
     local x, y, z = targetPosition(phase)
     local target
-    if phase == "vehicle" then
+    if phase == "vehicle" or phase == "coordinate" then
         target = createVehicle(536, x, y, z, 0, 0, 0)
         if isElement(target) then
             setElementHealth(target, 1500)
@@ -93,7 +93,7 @@ local function createPhaseTarget(session, phase)
     session.serverDamageObserved = false
     session.serverShooterVehicleDamageObserved = false
 
-    local coordinate = phase == "coordinate" and {x, y, z + 0.65} or false
+    local coordinate = phase == "coordinate" and {x, y, z} or false
     triggerClientEvent(session.player, "nativeDriveBy:phase", resourceRoot, session.id, phase, session.shooter, session.vehicle, target, coordinate)
     outputDebugString(("[native drive-by] PHASE id=%d type=%s targetHealth=%.1f"):format(session.id, phase, session.initialTargetHealth), 3)
     return true
@@ -195,6 +195,9 @@ addEventHandler("nativeDriveBy:evidence", resourceRoot, function(sessionId, phas
         outputChatBox(("[native drive-by] TASK active %s apres %d ms"):format(phase, tonumber(a) or -1), player, unpack(colour))
     elseif evidence == "fire" then
         outputChatBox(("[native drive-by] FIRE %s ammo %d -> %d"):format(phase, tonumber(a) or -1, tonumber(b) or -1), player, unpack(colour))
+    elseif evidence == "sustained_fire" then
+        outputChatBox(("[native drive-by] FIRE soutenu %s: %d tirs en %d ms"):format(
+                          phase, tonumber(a) or -1, tonumber(b) or -1), player, unpack(colour))
     elseif evidence == "damage" then
         outputChatBox(("[native drive-by] DAMAGE client %s %.1f -> %.1f"):format(phase, tonumber(a) or -1, tonumber(b) or -1), player, unpack(colour))
     elseif evidence == "source_vehicle_intact" then

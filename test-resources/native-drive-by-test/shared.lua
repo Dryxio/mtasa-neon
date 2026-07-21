@@ -12,5 +12,9 @@ NATIVE_DRIVE_BY = {
     abortRange = 5000.0,
     style = "ai_all_directions",
     seatRHS = true,
-    frequency = 100,
+    frequency = 99,
+    accuracy = 60,
+    shootingRate = 99,
+    minimumShots = 40,
+    phaseTimeout = 25000,
 }

@@ -96,8 +96,10 @@ VOID InitShotsyncHooks()
     HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerC, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
     HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerD, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
     HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerE, (DWORD)HOOK_CTaskSimpleGangDriveBy__IsPlayer);
-    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerF, (DWORD)HOOK_CTaskSimpleGangDriveByHelper__IsPlayer);
+    HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerF, (DWORD)HOOK_CTaskSimpleGangDriveByFireHelper__IsPlayer);
     HookInstallCall(HOOKPOS_CTaskSimpleGangDriveBy__IsPlayerG, (DWORD)HOOK_CTaskSimpleGangDriveByHelper__IsPlayer);
+    HookInstall(HOOKPOS_CTaskSimpleGangDriveBy__FireEpilogue, (DWORD)HOOK_CTaskSimpleGangDriveBy__FireEpilogue, 7);
+    HookInstall(HOOKPOS_CWeapon_FireInstantHit_PlayerSpread, (DWORD)HOOK_CWeapon_FireInstantHit_PlayerSpread, 6);
     HookInstall(HOOKPOS_CWeapon__Fire_Sniper, (DWORD)HOOK_CWeapon__Fire_Sniper, 6);
     HookInstall(HOOKPOS_CEventDamage__AffectsPed, (DWORD)HOOK_CEventDamage__AffectsPed, 6);
     HookInstall(HOOKPOS_CEventVehicleExplosion__AffectsPed, (DWORD)HOOK_CEventVehicleExplosion__AffectsPed, 5);
@@ -147,11 +149,19 @@ bool IsLocalPlayer(CPedSAInterface* pPedInterface)
 namespace
 {
     constexpr std::size_t GANG_DRIVEBY_FROM_SCRIPT_COMMAND_OFFSET = 0x0E;
+    CPedSAInterface*      g_pScriptGangDriveByFiringPed = nullptr;
 
     bool __cdecl ShouldUseGangDriveByAIControl(const void* pTaskInterface, CPedSAInterface* pPedInterface)
     {
         const auto* taskBytes = static_cast<const std::uint8_t*>(pTaskInterface);
         return taskBytes[GANG_DRIVEBY_FROM_SCRIPT_COMMAND_OFFSET] && !IsLocalPlayer(pPedInterface);
+    }
+
+    bool __cdecl BeginScriptGangDriveByFire(const void* pTaskInterface, CPedSAInterface* pPedInterface)
+    {
+        const bool useAIControl = ShouldUseGangDriveByAIControl(pTaskInterface, pPedInterface);
+        g_pScriptGangDriveByFiringPed = useAIControl ? pPedInterface : nullptr;
+        return useAIControl;
     }
 }
 
@@ -207,6 +217,88 @@ static void __declspec(naked) HOOK_CTaskSimpleGangDriveByHelper__IsPlayer()
     NativeIsPlayer:
         mov     ecx, edi
         mov     eax, 0x5DF8F0
+        jmp     eax
+    }
+    // clang-format on
+}
+
+static void __declspec(naked) HOOK_CTaskSimpleGangDriveByFireHelper__IsPlayer()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // Mark only the nested weapon-fire call. MTA peds are backed by
+    // CPlayerPed, but GTA's scripted NPC drive-by reaches CWeapon without
+    // CPlayerData and therefore skips the player-only accuracy spread.
+    // clang-format off
+    __asm
+    {
+        push    edi
+        push    ebp
+        call    BeginScriptGangDriveByFire
+        add     esp, 8
+        test    al, al
+        jz      NativeIsPlayer
+
+        xor     al, al
+        ret
+
+    NativeIsPlayer:
+        mov     ecx, edi
+        mov     eax, 0x5DF8F0
+        jmp     eax
+    }
+    // clang-format on
+}
+
+static void __declspec(naked) HOOK_CWeapon_FireInstantHit_PlayerSpread()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // The target executable loads CPed::m_pPlayerData here before applying
+    // random player spread. Present a null pointer only for the nested AI
+    // drive-by shot, matching an ordinary GTA NPC without mutating its actual
+    // MTA player data or the vehicle collision policy.
+    // clang-format off
+    __asm
+    {
+        cmp     ebp, g_pScriptGangDriveByFiringPed
+        jne     NativePlayerData
+
+        xor     ecx, ecx
+        jmp     Continue
+
+    NativePlayerData:
+        mov     ecx, [ebp+480h]
+
+    Continue:
+        mov     eax, HOOKPOS_CWeapon_FireInstantHit_PlayerSpread
+        add     eax, 6
+        jmp     eax
+    }
+    // clang-format on
+}
+
+static void __declspec(naked) HOOK_CTaskSimpleGangDriveBy__FireEpilogue()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // The firing helper has a single audited epilogue. Clear the narrow
+    // context there so later shots by the same MTA ped keep their normal
+    // player semantics after the scripted task has stopped.
+    // clang-format off
+    __asm
+    {
+        pushad
+        mov     g_pScriptGangDriveByFiringPed, 0
+        popad
+
+        pop     edi
+        pop     esi
+        pop     ebp
+        pop     ebx
+        add     esp, 3Ch
+        mov     eax, HOOKPOS_CTaskSimpleGangDriveBy__FireEpilogue
+        add     eax, 7
         jmp     eax
     }
     // clang-format on

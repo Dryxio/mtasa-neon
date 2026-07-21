@@ -120,10 +120,10 @@ local function beginPhase()
     if type(setPedMissionActor) ~= "function" or not setPedMissionActor(test.shooter, true) then
         return fail("PED_MISSION refuse pour le tireur")
     end
-    if type(setPedWeaponAccuracy) ~= "function" or not setPedWeaponAccuracy(test.shooter, 100) then
+    if type(setPedWeaponAccuracy) ~= "function" or not setPedWeaponAccuracy(test.shooter, NATIVE_DRIVE_BY.accuracy) then
         return fail("accuracy native refusee")
     end
-    if type(setPedWeaponShootingRate) ~= "function" or not setPedWeaponShootingRate(test.shooter, 100) then
+    if type(setPedWeaponShootingRate) ~= "function" or not setPedWeaponShootingRate(test.shooter, NATIVE_DRIVE_BY.shootingRate) then
         return fail("shooting rate natif refuse")
     end
 
@@ -153,9 +153,14 @@ local function beginPhase()
         end
 
         local ammo = getPedTotalAmmo(current.shooter)
+        local shots = current.initialAmmo - ammo
         if ammo < current.initialAmmo and not current.fireObserved then
             current.fireObserved = true
             report("fire", current.initialAmmo, ammo)
+        end
+        if shots >= NATIVE_DRIVE_BY.minimumShots and not current.sustainedFireObserved then
+            current.sustainedFireObserved = true
+            report("sustained_fire", shots, elapsed)
         end
 
         if isElement(current.target) then
@@ -173,7 +178,7 @@ local function beginPhase()
                 current.initialShooterVehicleHealth, shooterVehicleHealth))
         end
 
-        if current.taskObserved and current.fireObserved and current.damageObserved then
+        if current.taskObserved and current.fireObserved and current.sustainedFireObserved and current.damageObserved then
             if not current.sourceVehicleIntactObserved then
                 current.sourceVehicleIntactObserved = true
                 report("source_vehicle_intact", current.initialShooterVehicleHealth, shooterVehicleHealth)
@@ -186,9 +191,10 @@ local function beginPhase()
             return
         end
 
-        if elapsed > 15000 then
-            return fail(("timeout task=%s fire=%s damage=%s ammo=%d"):format(
-                tostring(current.taskObserved), tostring(current.fireObserved), tostring(current.damageObserved), ammo))
+        if elapsed > NATIVE_DRIVE_BY.phaseTimeout then
+            return fail(("timeout task=%s fire=%s sustained=%s damage=%s shots=%d"):format(
+                tostring(current.taskObserved), tostring(current.fireObserved), tostring(current.sustainedFireObserved),
+                tostring(current.damageObserved), shots))
         end
     end, 100, 0)
 end

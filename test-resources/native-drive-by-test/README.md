@@ -11,14 +11,17 @@ running the Drive-Thru mission or approximating weapon fire in Lua.
    The tester drives while Ballas2 occupies MTA seat `1`, owns a TEC9, and is
    synchronized by the tester.
 3. Let the three automatic phases run. Each phase must independently report
-   `ACCEPT`, observation of `TASK_SIMPLE_GANG_DRIVEBY`, an ammo decrease, and
-   real target-health damage on both client and server. The vehicle target is
-   placed on the passenger side; the ped and coordinate targets are placed
-   across the cabin so GTA must select its native cross-vehicle animation.
+   `ACCEPT`, observation of `TASK_SIMPLE_GANG_DRIVEBY`, at least 40 shots, and
+   real target-health damage on both client and server. The harness keeps the
+   native default ped accuracy of `60` and SWEET3-style frequency/rate `99`
+   instead of masking dispersion defects with perfect accuracy. The vehicle
+   target is placed on the passenger side; the ped and coordinate targets are
+   placed across the cabin so GTA must select its native cross-vehicle animation.
    Rotate the gameplay camera throughout all three phases: the passenger's
    weapon and arms must remain aligned with the target instead of following
    the camera. Every phase also proves that the shooter's own Voodoo retained
-   its health.
+   its health throughout the sustained firing window, rather than ending the
+   phase after the first lucky target hit.
 4. The vehicle phase queues cancellation after returning from the monitor
    callback, logs entry and return from `killPedTask`, then verifies that the
    native primary task is no longer active.
@@ -26,8 +29,10 @@ running the Drive-Thru mission or approximating weapon fire in Lua.
    task is active. The client waits another 500 ms, reports the surviving task
    state, and clears it if GTA did not finish it naturally.
 6. The coordinate phase passes only a `Vector3` to the primitive. A collocated
-   frozen ped is used solely to prove that native bullets fired at the raw
-   coordinate cause world damage.
+   frozen vehicle is used solely as a broad collision witness for native
+   bullets fired at that raw coordinate. This keeps the native accuracy of
+   `60` without making the phase depend on a lucky hit against a ped-sized
+   witness.
 7. Confirm the terminal `COMPLETE` log, then run `/nativedrivebycleanup` to
    destroy the harness and restore the tester's original position.
 
@@ -66,8 +71,22 @@ using `0x621960` or `0x627600`, before the required animation is consumed at
 `0x627D81` in the firing helper and `0x62838D` in the IK helper must all select
 AI control. Otherwise `CWeapon::Fire` still receives the task target at
 `0x628328`, but `CPedIK::PointGunInDirection` receives camera-derived angles
-at `0x62876D`. In the target-directed instant-hit path,
-`0x740697` writes the shooter's occupied vehicle to `CWorld::pIgnoreEntity` at
-`0xB7CD68`. The current `gta-reversed-dryxio` control flow agrees with those
-instructions, including the own-vehicle exclusion, so no reverse correction
-or GTA-reversed build is required.
+at `0x62876D`.
+
+The integrated SWEET3 chase exposed one additional CPlayerPed mismatch. At
+`0x73FF1E`, target-directed `CWeapon::FireInstantHit` loads
+`CPed::m_pPlayerData` before the random player-spread branch. A vanilla NPC has
+no player data and skips that branch, while every synchronized MTA ped is
+CPlayerPed-backed and incorrectly took it even after the gang-drive-by task
+selected AI control. Neon now presents a null player-data result only between
+the audited firing-helper entry at `0x627D81` and its single epilogue at
+`0x62833E`. It does not mutate the ped, change accuracy, alter weapon damage,
+or affect ordinary player drive-bys.
+
+The native occupied-vehicle ignore at `0x740697` is conditional on vehicle
+flag `0x42D & 4`; it is not forced by Neon. Preventing the MTA-only player
+spread preserves that original collision policy while removing rays that a
+vanilla NPC would never generate. The current `gta-reversed-dryxio`
+`CTaskSimpleGangDriveBy` and `CWeapon::FireInstantHit` control flow agrees with
+all decisive instructions, so no reverse correction or GTA-reversed build is
+required.
