@@ -222,6 +222,9 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_COMPLEX_DIE:
             pTaskSA = new CTaskComplexDieSA;
             break;
+        case TASK_COMPLEX_SMART_FLEE_ENTITY:
+            pTaskSA = new CTaskComplexSmartFleeEntitySA;
+            break;
         case TASK_SIMPLE_STEALTH_KILL:
             pTaskSA = new CTaskSimpleStealthKillSA;
             break;

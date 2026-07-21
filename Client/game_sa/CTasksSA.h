@@ -92,10 +92,10 @@ public:
 
     CTaskComplexInWater* CreateTaskComplexInWater();
 
-    CTaskComplexDie*        CreateTaskComplexDie(const eWeaponType eMeansOfDeath = WEAPONTYPE_UNARMED, const AssocGroupId animGroup = 0 /*ANIM_STD_PED*/,
-                                                 const AnimationId anim = 0 /*ANIM_STD_KO_FRONT*/, const float fBlendDelta = 4.0f, const float fAnimSpeed = 0.0f,
-                                                 const bool bBeingKilledByStealth = false, const bool bFallingToDeath = false, const int iFallToDeathDir = 0,
-                                                 const bool bFallToDeathOverRailing = false);
+    CTaskComplexDie* CreateTaskComplexDie(const eWeaponType eMeansOfDeath = WEAPONTYPE_UNARMED, const AssocGroupId animGroup = 0 /*ANIM_STD_PED*/,
+                                          const AnimationId anim = 0 /*ANIM_STD_KO_FRONT*/, const float fBlendDelta = 4.0f, const float fAnimSpeed = 0.0f,
+                                          const bool bBeingKilledByStealth = false, const bool bFallingToDeath = false, const int iFallToDeathDir = 0,
+                                          const bool bFallToDeathOverRailing = false);
     CTaskSimpleStealthKill* CreateTaskSimpleStealthKill(bool bAttacker, class CPed* pPed, const AnimationId anim);
     CTaskSimpleDead*        CreateTaskSimpleDead(unsigned int uiDeathTimeMS, bool bUnk2);
     CTaskSimpleBeHit*       CreateTaskSimpleBeHit(CPed* pPedAttacker, ePedPieceTypes hitBodyPart, int hitBodySide, int weaponId);
@@ -131,6 +131,8 @@ public:
     int                          GetTaskSequenceProgress(CPed* pPed);
     CTaskComplexCarDriveToPoint* CreateTaskComplexCarDriveToPoint(CVehicle* pVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
                                                                   int iDesiredVehicleModel, float fRadius, int iDrivingStyle);
+    CTaskComplex*                CreateTaskComplexSmartFleeEntity(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod,
+                                                                  float fPositionChangeTolerance);
 
     static void StaticSetHooks();
 };

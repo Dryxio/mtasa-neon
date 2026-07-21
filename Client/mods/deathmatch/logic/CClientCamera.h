@@ -127,6 +127,7 @@ private:
     void           RestoreScriptCameraLease(bool preserveFade = false);
     void           InvalidateCachedTransforms() const;
     void           SetCenterOfWorldCached(const CVector* pPosition, float fRotationRadians);
+    void           UpdateCenterOfWorldFromMatrix(const CMatrix& matrix);
     void           UpdateCenterOfWorldFromFixedMatrix();
     const CMatrix& AcquirePulseMatrix() const;
     const CVector& AcquirePulseEuler(const CMatrix& matrix) const;

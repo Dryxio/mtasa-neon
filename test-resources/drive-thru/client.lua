@@ -20,11 +20,54 @@ local state = {
     pursuitTimers = {},
     footCombat = false,
     supportChatAccepted = false,
+    returnPhase = nil,
+    returnScene = nil,
+    hoodFailure = nil,
 }
 
 local SCM_DESTINATION_BLIP_COLOR = {226, 192, 99, 255}
 local SCM_FRIENDLY_BLIP_COLOR = {0, 0, 255, 255}
 local SCM_THREAT_BLIP_COLOR = {255, 0, 0, 255}
+
+local MISSION_TRACE_SEQUENCE = {
+    {id = "mission_start", title = "The server opens an authoritative SWEET3 run", category = "SERVER AUTHORITY", primitive = "MISSION STATE"},
+    {id = "sweet2a", title = "GTA plays the original SWEET2A file cutscene", category = "NATIVE CUTSCENE", primitive = "DAT / CUT / IFP + SWEET2A"},
+    {id = "crew", title = "The server creates CJ's crew and the Greenwood", category = "SCM ADAPTER", primitive = "009A / 00A5 · CREATE_CHAR / CREATE_CAR"},
+    {id = "entry", title = "Sweet, Ryder and Smoke enter their exact seats", category = "NATIVE TASK", primitive = "05CA · TASK_ENTER_CAR_AS_PASSENGER", originalTask = "CTaskComplexEnterCarAsPassenger"},
+    {id = "intro_audio", title = "GTA plays the initial SWEET3 dialogue chain", category = "NATIVE AUDIO", primitive = "03CF / 03D1 · SWE2_AA..."},
+    {id = "drive_restaurant", title = "The Greenwood reaches the exact Cluckin' Bell gate", category = "NATIVE PREDICATE", primitive = "09D0 · LOCATE_CAR_3D + ALL WHEELS"},
+    {id = "restaurant_camera", title = "A fixed wide shot owns the restaurant transition", category = "NATIVE CAMERA", primitive = "015F / 0160 + DO_FADE"},
+    {id = "sweet2b", title = "GTA plays the original SWEET2B file cutscene", category = "NATIVE CUTSCENE", primitive = "DAT / CUT / IFP + SWEET2B"},
+    {id = "rebuild", title = "The server reconstructs every pursuit actor and vehicle", category = "SCM ADAPTER", primitive = "DELETE + CREATE + WARP UNDER BLACK"},
+    {id = "route", title = "The Ballas driver receives the exact eight-point route", category = "NATIVE SEQUENCE", primitive = "0615 / 05D1 / 0618 · DRIVE_TO", originalTask = "CTaskComplexCarDriveToPoint -> CTaskComplexUseSequence"},
+    {id = "driveby", title = "Ballas, Ryder and Sweet receive native drive-by tasks", category = "NATIVE TASK", primitive = "0713 · TASK_DRIVE_BY", originalTask = "CTaskSimpleGangDriveBy"},
+    {id = "chase", title = "The synchronized pursuit is visible and damage-active", category = "SERVER AUTHORITY", primitive = "CHASE HEALTH / DEATH GATES"},
+    {id = "foot_combat", title = "Surviving Ballas transition to on-foot combat", category = "NATIVE TASK", primitive = "05E2 · TASK_KILL_CHAR_ON_FOOT", originalTask = "CTaskComplexKillPedOnFoot"},
+    {id = "return_grove", title = "CJ drives Sweet and Ryder to the Grove gate", category = "NATIVE PREDICATE", primitive = "09D0 · LOCATE_CAR_3D + ALL WHEELS"},
+    {id = "grove_scene", title = "The Grove camera and departure sequences run", category = "NATIVE CAMERA / TASK", primitive = "VECTOR CAMERA + 05CD / 05D3", originalTask = "CTaskComplexLeaveCar -> CTaskComplexGoToPointAndStandStillTimed"},
+    {id = "return_smoke", title = "CJ drives Smoke to his exact home gate", category = "NATIVE PREDICATE", primitive = "09D0 · LOCATE_CAR_3D + ALL WHEELS"},
+    {id = "smoke_scene", title = "Smoke leaves during the original final camera", category = "NATIVE CAMERA / TASK", primitive = "FIXED CAMERA + 05CD / 05D3", originalTask = "CTaskComplexLeaveCar -> CTaskComplexGoToPointAndStandStillTimed"},
+    {id = "mission_end", title = "The server awards $200 and plays the native tune", category = "SERVER AUTHORITY", primitive = "0394 · MISSION PASSED TUNE"},
+    {id = "vehicle_warning", title = "GTA plays the phase-specific wreck warning", category = "NATIVE AUDIO", primitive = "03CF / 03D1 · SWE2_KA / KB / KC"},
+    {id = "flee", title = "The surviving crew bails out and flees from CJ", category = "NATIVE SEQUENCE", primitive = "0622 + 05DD · LEAVE IMMEDIATELY / SMART FLEE", originalTask = "CTaskComplexLeaveCar -> CTaskComplexSmartFleeEntity"},
+    {id = "hood_camera", title = "The Ballas arrival takes over the fixed camera", category = "NATIVE CAMERA", primitive = "DO_FADE + LOAD_SCENE"},
+    {id = "hood_driveby", title = "The Voodoo passenger fires at the Grove coordinate", category = "NATIVE TASK", primitive = "0713 · TASK_DRIVE_BY COORD", originalTask = "CTaskSimpleGangDriveBy"},
+    {id = "hood_deaths", title = "The two Grove actors receive timed scripted deaths", category = "NATIVE TASK", primitive = "05BE · TASK_DIE", originalTask = "CTaskComplexDie"},
+    {id = "failure_restore", title = "Camera, control and frozen state are restored", category = "NATIVE CLEANUP", primitive = "CAMERA BEHIND + CONTROL ON"},
+    {id = "mission_failed", title = "The server commits the vanilla failure result", category = "SERVER AUTHORITY", primitive = "PRINT_BIG · M_FAIL"},
+}
+
+local function traceCurrent(step)
+    if type(DRIVETHRU_TRACE) == "table" then
+        DRIVETHRU_TRACE.setCurrent(step)
+    end
+end
+
+local function traceStart()
+    if type(DRIVETHRU_TRACE) == "table" and DRIVETHRU_TRACE.setSequence(MISSION_TRACE_SEQUENCE) then
+        traceCurrent("mission_start")
+    end
+end
 
 local function callMissionTextApi(name, ...)
     local api = _G[name]
@@ -92,6 +135,27 @@ local function showDestinationNavigation()
     state.navigation = "destination"
 end
 
+local function showReturnDestinationNavigation(phase)
+    destroyNavigation()
+    local profile = DRIVETHRU.returnTrip[phase]
+    if not profile then
+        return
+    end
+    local destination = profile.navigation
+    state.blip = createBlip(destination.x, destination.y, destination.z, 0, 2, unpack(SCM_DESTINATION_BLIP_COLOR))
+    if isElement(state.blip) then
+        setElementDimension(state.blip, DRIVETHRU.dimension)
+    end
+    local area = profile.destination
+    if type(renderScriptImportantArea) ~= "function" then
+        state.marker = createMarker(area.x, area.y, area.z - 1.0, "cylinder", math.max(area.radiusX, area.radiusY), 255, 0, 0, 180)
+        if isElement(state.marker) then
+            setElementDimension(state.marker, DRIVETHRU.dimension)
+        end
+    end
+    state.navigation = "return_destination"
+end
+
 local function applyActorPolicies(ped)
     if not isElement(ped) or getElementType(ped) ~= "ped" or getElementData(ped, DRIVETHRU.missionActorData) ~= true then
         return false
@@ -112,10 +176,14 @@ local function applyActorPolicies(ped)
         return setPedSuffersCriticalHits(ped, false) == true and getPedSuffersCriticalHits(ped) == false and
                    setPedWeaponAccuracy(ped, profile.accuracy) == true
     elseif role == "grove_support" then
-        -- The isolated mission dimension has no ambient attackers. Keep the
-        -- support actors at GTA's mission-ped classification without adding
-        -- protagonist protection flags they did not receive in SWEET3.
-        return true
+        if type(setPedStayInSamePlace) ~= "function" or type(getPedStayInSamePlace) ~= "function" or
+            type(setPedNeverTargeted) ~= "function" or type(isPedNeverTargeted) ~= "function" then
+            return false
+        end
+        -- SWEET3 applies these two scalar CPed flags before TASK_CHAT. Keep
+        -- them independent from the broader protagonist protection policy.
+        return setPedStayInSamePlace(ped, true) == true and getPedStayInSamePlace(ped) == true and
+                   setPedNeverTargeted(ped, true) == true and isPedNeverTargeted(ped) == true
     end
     return type(setPedStoryProtected) == "function" and setPedStoryProtected(ped, true) == true
 end
@@ -281,6 +349,61 @@ local function clearRestaurantCamera(reason, preserveFade)
     return released
 end
 
+local function clearReturnScene(reason, preserveFade)
+    local scene = state.returnScene
+    if not scene then
+        return true
+    end
+    for _, timer in ipairs({scene.leaseTimer, scene.cameraReadyTimer, scene.departureMonitor, scene.releaseTimer}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    for _, timer in ipairs(scene.departureTimers or {}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    local released = true
+    if scene.cameraToken and type(releaseScriptCamera) == "function" then
+        local ok, result = pcall(releaseScriptCamera, scene.cameraToken, preserveFade == true)
+        released = ok and result == true
+    end
+    state.returnScene = nil
+    outputDebugString(("[drive-thru] Return scene cleared released=%s reason=%s"):format(tostring(released),
+                                                                                         tostring(reason or "cleanup")))
+    return released
+end
+
+local function clearHoodFailure(reason, preserveFade)
+    local failure = state.hoodFailure
+    if not failure then
+        return true
+    end
+    for _, timer in ipairs(failure.timers or {}) do
+        if isTimer(timer) then
+            killTimer(timer)
+        end
+    end
+    local released = true
+    if failure.cameraToken and type(releaseScriptCamera) == "function" then
+        local ok, result = pcall(releaseScriptCamera, failure.cameraToken, preserveFade == true)
+        released = ok and result == true
+    end
+    for _, token in ipairs(failure.streamingLeases or {}) do
+        if type(releaseElementStreamingLease) == "function" then
+            local ok, result = pcall(releaseElementStreamingLease, token)
+            released = ok and result == true and released
+        else
+            released = false
+        end
+    end
+    state.hoodFailure = nil
+    outputDebugString(("[drive-thru] Hood failure cleared released=%s reason=%s"):format(tostring(released),
+                                                                                         tostring(reason or "cleanup")))
+    return released
+end
+
 local function clearClientState(reason)
     if isTimer(state.entryTimer) then
         killTimer(state.entryTimer)
@@ -299,6 +422,8 @@ local function clearClientState(reason)
     clearAudio(reason)
     clearFileCutscene(reason, false)
     clearRestaurantCamera(reason, false)
+    clearReturnScene(reason, false)
+    clearHoodFailure(reason, false)
     destroyNavigation()
     if isElement(state.pursuitBlip) then
         destroyElement(state.pursuitBlip)
@@ -334,6 +459,7 @@ local function clearClientState(reason)
     state.greenwoodPolicyLogged = false
     state.footCombat = false
     state.supportChatAccepted = false
+    state.returnPhase = nil
 end
 
 addEvent("drivethru:start", true)
@@ -343,6 +469,7 @@ addEventHandler("drivethru:start", resourceRoot, function(vehicle)
     state.stage = "preparing"
     state.vehicle = vehicle
     ensureMissionText()
+    traceStart()
 end)
 
 addEvent("drivethru:cutscenePrepare", true)
@@ -362,6 +489,7 @@ addEventHandler("drivethru:cutscenePrepare", resourceRoot, function(sceneId, nam
         return triggerServerEvent("drivethru:cutsceneReady", resourceRoot, sceneId, "mission_text_unavailable", "SWEET3")
     end
     local scene = {id = sceneId, name = name, requestedAt = getTickCount(), appearanceStableSamples = 0}
+    traceCurrent(name == "SWEET2A" and "sweet2a" or "sweet2b")
     state.cutscene = scene
     state.stage = "cutscene"
     if requiresAppearance ~= true then
@@ -546,7 +674,7 @@ local function beginActorEntry(entities)
 end
 
 addEvent("drivethru:stage", true)
-addEventHandler("drivethru:stage", resourceRoot, function(stage, entities)
+addEventHandler("drivethru:stage", resourceRoot, function(stage, entities, suppressInstruction)
     if source ~= resourceRoot or not state.active then
         return
     end
@@ -555,11 +683,14 @@ addEventHandler("drivethru:stage", resourceRoot, function(stage, entities)
         state.vehicle = entities.vehicle or state.vehicle
     end
     if stage == "actor_entry" then
+        traceCurrent("crew")
+        traceCurrent("entry")
         beginActorEntry(entities)
     elseif stage == "enter_car" then
         printMissionText("TWAR2_A", 6000)
         showVehicleNavigation()
     elseif stage == "drive" then
+        traceCurrent("drive_restaurant")
         showDestinationNavigation()
         printMissionText("TWAR2_C", 6000)
         if getPedOccupiedVehicle(localPlayer) == state.vehicle then
@@ -567,7 +698,9 @@ addEventHandler("drivethru:stage", resourceRoot, function(stage, entities)
         end
     elseif stage == "return_car" then
         showVehicleNavigation()
-        printMissionText("TW2_X", 3000)
+        if suppressInstruction ~= true then
+            printMissionText("TW2_X", 3000)
+        end
     end
 end)
 
@@ -584,6 +717,9 @@ addEventHandler("drivethru:audioPrepare", resourceRoot, function(audioId, profil
         return
     end
     clearAudio("replaced")
+    if state.stage == "actor_entry" or state.stage == "enter_car" or state.stage == "drive" then
+        traceCurrent("intro_audio")
+    end
     if type(requestMissionAudio) ~= "function" or type(isMissionAudioLoaded) ~= "function" or type(playMissionAudio) ~= "function" or
         type(isMissionAudioFinished) ~= "function" or type(releaseMissionAudio) ~= "function" then
         return triggerServerEvent("drivethru:audioReady", resourceRoot, audioId, "api_unavailable")
@@ -640,6 +776,7 @@ addEventHandler("drivethru:audioStart", resourceRoot, function(audioId)
             local elapsed = getTickCount() - audio.startedAt
             killTimer(audio.finishTimer)
             stopSpeaker(audio)
+            callMissionTextApi("clearMissionTexts")
             pcall(releaseMissionAudio, audio.handle)
             audio.handle = nil
             state.audio = nil
@@ -658,6 +795,7 @@ addEventHandler("drivethru:checkpointReached", resourceRoot, function()
         return
     end
     state.stage = "restaurant_camera"
+    traceCurrent("restaurant_camera")
     state.checkpointReached = true
     destroyNavigation()
     clearAudio("restaurant_transition")
@@ -823,6 +961,7 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
         return
     end
     state.stage = "restaurant_barrier"
+    traceCurrent("rebuild")
     state.vehicle = entities.vehicle
     state.actors = {
         smoke = entities.smoke,
@@ -834,6 +973,7 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
     showPursuitVehicleNavigation(voodoo)
 
     local startedAt = getTickCount()
+    local lastWaitReportAt = startedAt
     local stableSamples = 0
     local lastDetails = "not sampled"
     state.restaurantRebuildTimer = setTimer(function()
@@ -851,7 +991,8 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
         for _, name in ipairs({"smoke", "sweet", "ryder", "ballas_driver"}) do
             local ped = state.actors[name]
             local expectedVehicle = name == "ballas_driver" and voodoo or state.vehicle
-            local expectedSeat = name == "ballas_driver" and DRIVETHRU.restaurant.ballasDriver.seat or DRIVETHRU.actors[name].seat
+            local expectedSeat = name == "ballas_driver" and DRIVETHRU.restaurant.ballasDriver.seat or
+                                     DRIVETHRU.restaurant.passengerSeats[name]
             local ready = isElement(ped) and isElementStreamedIn(ped) and isElementSyncer(ped) and applyActorPolicies(ped) and
                               getPedOccupiedVehicle(ped) == expectedVehicle and getPedOccupiedVehicleSeat(ped) == expectedSeat
             actorsReady = actorsReady and ready
@@ -864,15 +1005,19 @@ addEventHandler("drivethru:restaurantRebuilt", resourceRoot, function(entities)
         lastDetails = ("greenwood[%s] voodoo[%s] cj=%s %s stable=%d/%d"):format(
                           greenwoodDetails, voodooDetails, tostring(cjReady), table.concat(seatDetails, ","), stableSamples,
                           DRIVETHRU.restaurant.stableSamples)
+        local now = getTickCount()
         if stableSamples >= DRIVETHRU.restaurant.stableSamples then
             killTimer(state.restaurantRebuildTimer)
             state.restaurantRebuildTimer = nil
             outputDebugString("[drive-thru] PRE-PURSUIT RECONSTRUCTION READY: " .. lastDetails)
             triggerServerEvent("drivethru:restaurantRebuildReady", resourceRoot, "ready", lastDetails)
-        elseif getTickCount() - startedAt >= DRIVETHRU.restaurant.reconstructionTimeout then
+        elseif now - startedAt >= DRIVETHRU.restaurant.reconstructionTimeout then
             killTimer(state.restaurantRebuildTimer)
             state.restaurantRebuildTimer = nil
             triggerServerEvent("drivethru:restaurantRebuildReady", resourceRoot, "timeout", lastDetails)
+        elseif now - lastWaitReportAt >= 1000 then
+            lastWaitReportAt = now
+            outputDebugString(("[drive-thru] Reconstruction waiting after %d ms: %s"):format(now - startedAt, lastDetails))
         end
     end, 100, 0)
 end)
@@ -883,70 +1028,10 @@ addEventHandler("drivethru:pursuitRoute", resourceRoot, function(entities)
         return
     end
     state.stage = "pursuit_route_barrier"
+    traceCurrent("route")
     state.vehicle = entities.vehicle
     state.actors.ballas_driver = entities.ballas_driver
-    local driver, voodoo = entities.ballas_driver, entities.voodoo
-    local requestedAt = getTickCount()
-    local accepted = false
-    local lastIndex = nil
-    local timer
-    timer = rememberPursuitTimer(setTimer(function()
-        if not state.active or state.stage ~= "pursuit_route_barrier" then
-            return
-        end
-        if not isElement(driver) or not isElement(voodoo) then
-            killTimer(timer)
-            return triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "elements_missing")
-        end
-        local ready = isElementStreamedIn(driver) and isElementStreamedIn(voodoo) and isElementSyncer(driver) and
-                          isElementSyncer(voodoo) and applyActorPolicies(driver) and applyGreenwoodPolicies(voodoo) and
-                          getPedOccupiedVehicle(driver) == voodoo and getPedOccupiedVehicleSeat(driver) == 0 and
-                          math.abs(getElementHealth(voodoo) - DRIVETHRU.restaurant.voodoo.health) <= 0.5
-        if ready and not accepted then
-            if type(setPedTaskSequence) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
-                killTimer(timer)
-                return triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "api_unavailable")
-            end
-            local sequence = {}
-            for index, point in ipairs(DRIVETHRU.chase.route) do
-                sequence[index] = {
-                    task = "drive_to",
-                    x = point.x,
-                    y = point.y,
-                    z = point.z,
-                    speed = point.speed,
-                    mode = DRIVETHRU.chase.drivingMode,
-                    vehicleModel = DRIVETHRU.chase.vehicleModel,
-                    drivingStyle = DRIVETHRU.chase.drivingStyle,
-                }
-            end
-            accepted = setPedTaskSequence(driver, sequence, false) == true
-            outputDebugString("[drive-thru] Ballas eight-point route acceptance=" .. tostring(accepted))
-            if not accepted then
-                killTimer(timer)
-                return triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "refused")
-            end
-        end
-        if accepted then
-            local index = getPedTaskSequenceProgress(driver)
-            if index ~= lastIndex then
-                lastIndex = index
-                outputDebugString(("[drive-thru] Ballas route native sequence index=%d"):format(index))
-            end
-            if index >= 0 then
-                killTimer(timer)
-                triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "active",
-                                   ("index=%d elapsed=%dms"):format(index, getTickCount() - requestedAt))
-                return
-            end
-        end
-        if getTickCount() - requestedAt >= DRIVETHRU.chase.routeActivationTimeout then
-            killTimer(timer)
-            triggerServerEvent("drivethru:pursuitRouteReady", resourceRoot, "timeout",
-                               ("accepted=%s index=%s health=%.1f"):format(tostring(accepted), tostring(lastIndex),
-                                                                           getElementHealth(voodoo)))
-        end
-    end, DRIVETHRU.chase.monitorInterval, 0))
+    outputDebugString("[drive-thru] Ballas route delegated to the server-owned native task runtime")
 end)
 
 addEvent("drivethru:pursuitActorsCreated", true)
@@ -955,6 +1040,7 @@ addEventHandler("drivethru:pursuitActorsCreated", resourceRoot, function(entitie
         return
     end
     state.stage = "pursuit_task_barrier"
+    traceCurrent("driveby")
     state.vehicle = entities.vehicle
     for _, name in ipairs({"smoke", "sweet", "ryder", "ballas_driver", "ballas_passenger", "mate1", "mate2"}) do
         state.actors[name] = entities[name]
@@ -980,9 +1066,9 @@ addEventHandler("drivethru:pursuitActorsCreated", resourceRoot, function(entitie
                     getPedOccupiedVehicle(state.actors.ballas_passenger) == voodoo and
                     getPedOccupiedVehicleSeat(state.actors.ballas_passenger) == DRIVETHRU.chase.ballasPassenger.seat and
                     getPedOccupiedVehicle(state.actors.ryder) == state.vehicle and
-                    getPedOccupiedVehicleSeat(state.actors.ryder) == DRIVETHRU.actors.ryder.seat and
+                    getPedOccupiedVehicleSeat(state.actors.ryder) == DRIVETHRU.restaurant.passengerSeats.ryder and
                     getPedOccupiedVehicle(state.actors.sweet) == state.vehicle and
-                    getPedOccupiedVehicleSeat(state.actors.sweet) == DRIVETHRU.actors.sweet.seat
+                    getPedOccupiedVehicleSeat(state.actors.sweet) == DRIVETHRU.restaurant.passengerSeats.sweet
 
         if ready and not assigned then
             if type(isPedDoingTask) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
@@ -1026,6 +1112,7 @@ addEventHandler("drivethru:pursuitStarted", resourceRoot, function(entities)
         return
     end
     state.stage = "chase"
+    traceCurrent("chase")
     state.footCombat = false
     state.vehicle = entities.vehicle
     showPursuitVehicleNavigation(entities.voodoo)
@@ -1043,14 +1130,16 @@ addEventHandler("drivethru:chaseHelp", resourceRoot, function()
 end)
 
 addEvent("drivethru:chaseNavigation", true)
-addEventHandler("drivethru:chaseNavigation", resourceRoot, function(mode, entities)
+addEventHandler("drivethru:chaseNavigation", resourceRoot, function(mode, entities, suppressInstruction)
     if source ~= resourceRoot or not state.active or state.stage ~= "chase" then
         return
     end
     if mode == "vehicle" then
         clearPursuitNavigation()
         showVehicleNavigation()
-        printMissionText("TW2_X", 3000)
+        if suppressInstruction ~= true then
+            printMissionText("TW2_X", 3000)
+        end
     elseif state.footCombat then
         showPursuitPedNavigation()
     else
@@ -1059,12 +1148,447 @@ addEventHandler("drivethru:chaseNavigation", resourceRoot, function(mode, entiti
     end
 end)
 
+addEvent("drivethru:greenwoodFailureTasks", true)
+addEventHandler("drivethru:greenwoodFailureTasks", resourceRoot, function(actorNames, entities)
+    if source ~= resourceRoot or not state.active or type(actorNames) ~= "table" or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "greenwood_failure"
+    state.vehicle = entities.vehicle or state.vehicle
+    destroyNavigation()
+    clearPursuitNavigation()
+    traceCurrent("vehicle_warning")
+    traceCurrent("flee")
+    if type(setPedTaskSequence) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
+        return triggerServerEvent("drivethru:greenwoodFailureTasksReady", resourceRoot, "api_unavailable")
+    end
+    local requestedAt = getTickCount()
+    local accepted, observed = {}, {}
+    local timer
+    timer = rememberPursuitTimer(setTimer(function()
+        if not state.active or state.stage ~= "greenwood_failure" then
+            return
+        end
+        local allReady, allActive = true, true
+        local details = {}
+        for _, name in ipairs(actorNames) do
+            local ped = entities[name]
+            state.actors[name] = ped
+            local ready = isElement(ped) and isElementStreamedIn(ped) and isElementSyncer(ped) and isElement(state.vehicle) and
+                              isElementStreamedIn(state.vehicle) and applyActorPolicies(ped)
+            allReady = allReady and ready
+            if ready and not accepted[name] then
+                accepted[name] = setPedTaskSequence(ped, {
+                    {task = "leave_car_immediately", vehicle = state.vehicle},
+                    {
+                        task = "smart_flee",
+                        target = localPlayer,
+                        safeDistance = 100.0,
+                        duration = 10000,
+                    },
+                }, false) == true
+                if not accepted[name] then
+                    killTimer(timer)
+                    return triggerServerEvent("drivethru:greenwoodFailureTasksReady", resourceRoot, "refused", name)
+                end
+            end
+            local index = accepted[name] and getPedTaskSequenceProgress(ped) or -1
+            if index >= 0 then
+                observed[name] = true
+            end
+            allActive = allActive and observed[name] == true
+            details[#details + 1] = ("%s=%s/%s"):format(name, tostring(accepted[name] == true), tostring(index))
+        end
+        if allReady and allActive then
+            killTimer(timer)
+            triggerServerEvent("drivethru:greenwoodFailureTasksReady", resourceRoot, "active", table.concat(details, ","))
+        elseif getTickCount() - requestedAt >= DRIVETHRU.chase.taskActivationTimeout then
+            killTimer(timer)
+            triggerServerEvent("drivethru:greenwoodFailureTasksReady", resourceRoot, "timeout", table.concat(details, ","))
+        end
+    end, DRIVETHRU.chase.monitorInterval, 0))
+end)
+
+local function rememberHoodFailureTimer(failure, timer)
+    failure.timers[#failure.timers + 1] = timer
+    return timer
+end
+
+local function getObservedDeathTask(ped)
+    for _, taskName in ipairs({"TASK_COMPLEX_DIE", "TASK_SIMPLE_DIE", "TASK_SIMPLE_DEAD"}) do
+        if isPedDoingTask(ped, taskName) then
+            return taskName
+        end
+    end
+    return nil
+end
+
+local function acquireHoodFailureStreamingLease(failure, name)
+    if failure.streamingLeaseByName[name] then
+        return true
+    end
+    local element = failure.entities[name]
+    local lease = isElement(element) and acquireElementStreamingLease(element) or false
+    if not lease then
+        return false
+    end
+    failure.streamingLeaseByName[name] = lease
+    failure.streamingLeases[#failure.streamingLeases + 1] = lease
+    return true
+end
+
+local function hoodFailureReadiness(failure)
+    local entities = failure.entities
+    local profile = DRIVETHRU.chase.hoodFailure
+    local voodoo = entities.voodoo
+    local driver = entities.ballas_driver
+    local passenger = entities.ballas_passenger
+    local ready = isElement(voodoo) and isElementStreamedIn(voodoo) and isElementSyncer(voodoo) and
+                      applyGreenwoodPolicies(voodoo)
+    local details = {}
+
+    local vx, vy, vz = 0, 0, 0
+    local voodooDistance = math.huge
+    if isElement(voodoo) then
+        vx, vy, vz = getElementPosition(voodoo)
+        local hub = DRIVETHRU.chase.hub
+        voodooDistance = getDistanceBetweenPoints3D(vx, vy, vz, hub.x, hub.y, hub.z)
+    end
+    ready = ready and voodooDistance <= profile.sceneRadius
+    details[#details + 1] = ("voodoo=%.2f@(%.2f,%.2f,%.2f)"):format(voodooDistance, vx, vy, vz)
+
+    for _, entry in ipairs({
+        {name = "ballas_driver", ped = driver, seat = 0},
+        {name = "ballas_passenger", ped = passenger, seat = DRIVETHRU.chase.ballasPassenger.seat},
+    }) do
+        local exists = isElement(entry.ped)
+        local streamed = exists and isElementStreamedIn(entry.ped)
+        local authoritative = streamed and isElementSyncer(entry.ped)
+        local policiesReady = authoritative and applyActorPolicies(entry.ped)
+        local correctVehicle = exists and getPedOccupiedVehicle(entry.ped) == voodoo
+        local seat = exists and getPedOccupiedVehicleSeat(entry.ped) or "none"
+        local pedReady = exists and streamed and authoritative and policiesReady and correctVehicle and seat == entry.seat
+        ready = ready and pedReady
+        details[#details + 1] = ("%s=%s/stream:%s/sync:%s/policy:%s/vehicle:%s/seat:%s"):format(
+                                    entry.name, tostring(pedReady), tostring(streamed), tostring(authoritative),
+                                    tostring(policiesReady), tostring(correctVehicle), tostring(seat))
+    end
+
+    for _, name in ipairs({"mate1", "mate2"}) do
+        local ped = entities[name]
+        local expected = DRIVETHRU.chase.support[name].position
+        local px, py, pz = 0, 0, 0
+        local distance = math.huge
+        if isElement(ped) then
+            px, py, pz = getElementPosition(ped)
+            distance = getDistanceBetweenPoints3D(px, py, pz, expected.x, expected.y, expected.scriptZ + 1.0)
+        end
+        local bx, by, bz
+        if isElement(ped) then
+            bx, by, bz = getElementBonePosition(ped, 2)
+        end
+        local boneReady = type(bx) == "number" and type(by) == "number" and type(bz) == "number"
+        local pedReady = isElement(ped) and isElementStreamedIn(ped) and isElementSyncer(ped) and not isPedDead(ped) and
+                             applyActorPolicies(ped) and distance <= profile.supportPositionTolerance and boneReady
+        ready = ready and pedReady
+        details[#details + 1] = ("%s=%s/%.2f@(%.2f,%.2f,%.2f)/bone:%s"):format(name, tostring(pedReady), distance,
+                                                                                 px, py, pz, tostring(boneReady))
+    end
+
+    local chatReady = ready and tryStartSupportChat()
+    return ready and chatReady, table.concat(details, " ") .. " chat=" .. tostring(chatReady)
+end
+
+addEvent("drivethru:hoodFailurePrepare", true)
+addEventHandler("drivethru:hoodFailurePrepare", resourceRoot, function(failureId, entities)
+    if source ~= resourceRoot or not state.active or state.stage ~= "chase" or type(entities) ~= "table" then
+        return
+    end
+    local required = {"acquireScriptCamera", "releaseScriptCamera", "isScriptCameraLeaseActive", "resetScriptCamera",
+                      "setScriptCameraWidescreen", "setScriptCameraFixed", "fadeScriptCamera", "isScriptCameraFading",
+                      "enginePreloadWorldArea", "enginePreloadWorldAreaInDirection", "acquireElementStreamingLease",
+                      "releaseElementStreamingLease", "setPedStayInSamePlace", "getPedStayInSamePlace",
+                      "setPedNeverTargeted", "isPedNeverTargeted"}
+    for _, name in ipairs(required) do
+        if type(_G[name]) ~= "function" then
+            return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failureId, "api_unavailable", name)
+        end
+    end
+    clearAudio("hood_failure")
+    destroyNavigation()
+    clearPursuitNavigation()
+    callMissionTextApi("clearMissionHelp")
+    state.stage = "hood_failure_prepare"
+    traceCurrent("hood_camera")
+    local acquired, token = pcall(acquireScriptCamera, true)
+    if not acquired or type(token) ~= "number" then
+        return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failureId, "camera_refused", tostring(token))
+    end
+    local failure = {
+        id = tonumber(failureId),
+        entities = entities,
+        cameraToken = token,
+        timers = {},
+        streamingLeases = {},
+        streamingLeaseByName = {},
+    }
+    state.hoodFailure = failure
+    -- Overlap the runtime's route leases before it can complete or be
+    -- cancelled. The distant support actors are intentionally deferred until
+    -- Grove's camera and collision are loaded under black.
+    for _, name in ipairs({"ballas_driver", "voodoo"}) do
+        if not acquireHoodFailureStreamingLease(failure, name) then
+            clearHoodFailure("streaming_lease_refused", false)
+            return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failureId, "streaming_lease_refused", name)
+        end
+    end
+    failure.beginCameraPreparation = function()
+        if state.hoodFailure ~= failure or failure.cameraPreparationStarted then
+            return
+        end
+        failure.cameraPreparationStarted = true
+        if not fadeScriptCamera(token, false, DRIVETHRU.chase.hoodFailure.fadeDuration, 0, 0, 0) then
+            clearHoodFailure("fade_out_refused", false)
+            return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failureId, "fade_refused")
+        end
+        local fadeMonitor
+        fadeMonitor = rememberHoodFailureTimer(failure, setTimer(function()
+        if state.hoodFailure ~= failure then
+            return
+        end
+        if not isScriptCameraLeaseActive(failure.cameraToken) then
+            clearHoodFailure("lease_lost", false)
+            return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failure.id, "lease_lost")
+        end
+        local queried, fading = pcall(isScriptCameraFading, failure.cameraToken)
+        if not queried or fading ~= false then
+            return
+        end
+        killTimer(fadeMonitor)
+        local profile = DRIVETHRU.chase.hoodFailure
+        local camera = profile.camera
+        local cameraReady = resetScriptCamera(failure.cameraToken) and setScriptCameraWidescreen(failure.cameraToken, true) and
+                                setScriptCameraFixed(failure.cameraToken,
+                                                     Vector3(camera.position.x, camera.position.y, camera.position.z),
+                                                     Vector3(camera.target.x, camera.target.y, camera.target.z))
+        local collisionReady = pcall(enginePreloadWorldArea,
+                                     Vector3(profile.collision.x, profile.collision.y, profile.collision.z), "collisions")
+        local preloadCalled, preloadReady = pcall(enginePreloadWorldAreaInDirection,
+                                                  Vector3(profile.preload.x, profile.preload.y, profile.preload.z),
+                                                  profile.preload.heading)
+        if not cameraReady or not collisionReady or not preloadCalled or preloadReady ~= true then
+            clearHoodFailure("world_setup_refused", false)
+            return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failure.id, "world_setup_refused")
+        end
+        rememberHoodFailureTimer(failure, setTimer(function()
+            if state.hoodFailure ~= failure then
+                return
+            end
+            for _, name in ipairs({"ballas_driver", "ballas_passenger", "mate1", "mate2", "voodoo"}) do
+                if not acquireHoodFailureStreamingLease(failure, name) then
+                    clearHoodFailure("scene_lease_refused", false)
+                    return triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failure.id, "scene_lease_refused", name)
+                end
+            end
+
+            local startedAt = getTickCount()
+            local lastReportAt = startedAt
+            local stableSamples = 0
+            local lastDetails = "not sampled"
+            local readinessTimer
+            readinessTimer = rememberHoodFailureTimer(failure, setTimer(function()
+                if state.hoodFailure ~= failure then
+                    return
+                end
+                local sampleReady
+                sampleReady, lastDetails = hoodFailureReadiness(failure)
+                stableSamples = sampleReady and stableSamples + 1 or 0
+                local now = getTickCount()
+                if stableSamples >= profile.stableSamples then
+                    killTimer(readinessTimer)
+                    outputDebugString(("[drive-thru] HOOD FAILURE SCENE READY: %s stable=%d/%d"):format(
+                                          lastDetails, stableSamples, profile.stableSamples))
+                    triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failure.id, "ready", lastDetails)
+                elseif now - startedAt >= profile.setupTimeout then
+                    killTimer(readinessTimer)
+                    triggerServerEvent("drivethru:hoodFailureBlack", resourceRoot, failure.id, "scene_timeout", lastDetails)
+                elseif now - lastReportAt >= 1000 then
+                    lastReportAt = now
+                    outputDebugString(("[drive-thru] Hood scene waiting after %d ms: %s stable=%d/%d"):format(
+                                          now - startedAt, lastDetails, stableSamples, profile.stableSamples))
+                end
+            end, DRIVETHRU.chase.monitorInterval, 0))
+        end, profile.loadSceneWait, 1))
+        end, DRIVETHRU.chase.monitorInterval, 0))
+    end
+    triggerServerEvent("drivethru:hoodFailureLeasesReady", resourceRoot, failure.id)
+end)
+
+addEvent("drivethru:hoodFailureLeasesCommitted", true)
+addEventHandler("drivethru:hoodFailureLeasesCommitted", resourceRoot, function(failureId)
+    local failure = state.hoodFailure
+    if source ~= resourceRoot or not failure or failure.id ~= tonumber(failureId) or
+        type(failure.beginCameraPreparation) ~= "function" then
+        return
+    end
+    failure.beginCameraPreparation()
+end)
+
+addEvent("drivethru:hoodFailureFrozen", true)
+addEventHandler("drivethru:hoodFailureFrozen", resourceRoot, function(failureId, entities)
+    local failure = state.hoodFailure
+    if source ~= resourceRoot or not failure or failure.id ~= tonumber(failureId) or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "hood_failure_setup"
+    failure.entities = entities
+    local driver, passenger, voodoo = entities.ballas_driver, entities.ballas_passenger, entities.voodoo
+    for _, pair in ipairs({{driver, "ballas_driver"}, {passenger, "ballas_passenger"}}) do
+        if not isElement(pair[1]) or not isElementStreamedIn(pair[1]) or not isElementSyncer(pair[1]) or not applyActorPolicies(pair[1]) then
+            return triggerServerEvent("drivethru:hoodFailureActive", resourceRoot, failure.id, "ownership_missing", pair[2])
+        end
+    end
+    if not isElement(voodoo) or not isElementStreamedIn(voodoo) or not isElementSyncer(voodoo) or
+        type(setPedDriveTo) ~= "function" or type(setPedDriveBy) ~= "function" or type(setPedWeaponShootingRate) ~= "function" or
+        type(setPedWeaponAccuracy) ~= "function" or type(setPedTaskSequence) ~= "function" or
+        type(getPedTaskSequenceProgress) ~= "function" or type(isPedDoingTask) ~= "function" then
+        return triggerServerEvent("drivethru:hoodFailureActive", resourceRoot, failure.id, "api_or_vehicle_unavailable")
+    end
+    if type(killPedTask) == "function" then
+        pcall(killPedTask, passenger, "primary", 3, false)
+    end
+    local escape = DRIVETHRU.chase.hoodFailure.escape
+    local slowDrive = setPedDriveTo(driver, voodoo, Vector3(escape.target.x, escape.target.y, escape.target.z), escape.slowSpeed,
+                                    escape.drivingMode, escape.drivingStyle)
+    if slowDrive ~= true or not fadeScriptCamera(failure.cameraToken, true, DRIVETHRU.chase.hoodFailure.fadeDuration, 0, 0, 0) then
+        return triggerServerEvent("drivethru:hoodFailureActive", resourceRoot, failure.id, "slow_drive_or_fade_refused")
+    end
+    rememberHoodFailureTimer(failure, setTimer(function()
+        if state.hoodFailure ~= failure then
+            return
+        end
+        local driveBy = DRIVETHRU.chase.hoodFailure.driveBy
+        setPedWeaponAccuracy(passenger, driveBy.accuracy)
+        setPedWeaponShootingRate(passenger, driveBy.shootRate)
+        local accepted = setPedDriveBy(passenger, Vector3(driveBy.target.x, driveBy.target.y, driveBy.target.z), driveBy.abortRange,
+                                       driveBy.style, driveBy.seatRHS, driveBy.frequency)
+        if accepted ~= true then
+            return triggerServerEvent("drivethru:hoodFailureActive", resourceRoot, failure.id, "driveby_refused")
+        end
+        traceCurrent("hood_driveby")
+        triggerServerEvent("drivethru:hoodFailureActive", resourceRoot, failure.id, "active", "slow_drive=true driveby=true")
+        failure.deathAccepted = {}
+        failure.deathTaskObserved = {}
+        failure.deathReported = {}
+        local function dispatchDeath(name)
+            local ped = failure.entities[name]
+            local accepted = isElement(ped) and isElementStreamedIn(ped) and isElementSyncer(ped) and
+                                 setPedTaskSequence(ped, {{task = "die"}}, false) == true
+            failure.deathAccepted[name] = accepted
+            if not accepted then
+                triggerServerEvent("drivethru:hoodFailureActive", resourceRoot, failure.id, "die_refused", name)
+            end
+        end
+        local deathMonitor
+        deathMonitor = rememberHoodFailureTimer(failure, setTimer(function()
+            if state.hoodFailure ~= failure then
+                return
+            end
+            for _, name in ipairs({"mate1", "mate2"}) do
+                local ped = failure.entities[name]
+                if failure.deathAccepted[name] and not failure.deathReported[name] and isElement(ped) and isElementStreamedIn(ped) and
+                    isElementSyncer(ped) then
+                    local sequenceIndex = getPedTaskSequenceProgress(ped)
+                    local taskName = getObservedDeathTask(ped)
+                    if sequenceIndex >= 0 or taskName then
+                        failure.deathTaskObserved[name] = taskName or ("sequence:" .. tostring(sequenceIndex))
+                    end
+                    local health = getElementHealth(ped)
+                    if failure.deathTaskObserved[name] and type(health) == "number" then
+                        failure.deathReported[name] = true
+                        triggerServerEvent("drivethru:hoodFailureDeathObserved", resourceRoot, failure.id, name, health,
+                                           failure.deathTaskObserved[name])
+                    end
+                end
+            end
+            if failure.deathReported.mate1 and failure.deathReported.mate2 and isTimer(deathMonitor) then
+                killTimer(deathMonitor)
+            end
+        end, DRIVETHRU.chase.monitorInterval, 0))
+        traceCurrent("hood_deaths")
+        rememberHoodFailureTimer(failure, setTimer(dispatchDeath, DRIVETHRU.chase.hoodFailure.mate1DeathDelay, 1, "mate1"))
+        rememberHoodFailureTimer(failure, setTimer(dispatchDeath, DRIVETHRU.chase.hoodFailure.mate2DeathDelay, 1, "mate2"))
+    end, DRIVETHRU.chase.hoodFailure.revealDelay, 1))
+end)
+
+addEvent("drivethru:hoodFailureEscape", true)
+addEventHandler("drivethru:hoodFailureEscape", resourceRoot, function(failureId, entities)
+    local failure = state.hoodFailure
+    if source ~= resourceRoot or not failure or failure.id ~= tonumber(failureId) or type(entities) ~= "table" then
+        return
+    end
+    state.stage = "hood_failure_escape"
+    local escape = DRIVETHRU.chase.hoodFailure.escape
+    if not isElement(entities.ballas_driver) or not isElement(entities.voodoo) or
+        setPedDriveTo(entities.ballas_driver, entities.voodoo, Vector3(escape.target.x, escape.target.y, escape.target.z), escape.fastSpeed,
+                      escape.drivingMode, escape.drivingStyle) ~= true then
+        return triggerServerEvent("drivethru:hoodFailureEscapeBlack", resourceRoot, failure.id, "drive_refused")
+    end
+    rememberHoodFailureTimer(failure, setTimer(function()
+        if state.hoodFailure ~= failure or
+            not fadeScriptCamera(failure.cameraToken, false, DRIVETHRU.chase.hoodFailure.fadeDuration, 0, 0, 0) then
+            return triggerServerEvent("drivethru:hoodFailureEscapeBlack", resourceRoot, failure.id, "fade_refused")
+        end
+        local fadeStartedAt = getTickCount()
+        local fadeTimer
+        fadeTimer = rememberHoodFailureTimer(failure, setTimer(function()
+            if state.hoodFailure ~= failure then
+                return
+            end
+            local queried, fading = pcall(isScriptCameraFading, failure.cameraToken)
+            if not queried then
+                killTimer(fadeTimer)
+                return triggerServerEvent("drivethru:hoodFailureEscapeBlack", resourceRoot, failure.id, "fade_query_refused")
+            end
+            if fading == false then
+                killTimer(fadeTimer)
+                triggerServerEvent("drivethru:hoodFailureEscapeBlack", resourceRoot, failure.id, "black")
+            elseif getTickCount() - fadeStartedAt >= DRIVETHRU.chase.taskActivationTimeout then
+                killTimer(fadeTimer)
+                triggerServerEvent("drivethru:hoodFailureEscapeBlack", resourceRoot, failure.id, "fade_timeout")
+            end
+        end, DRIVETHRU.chase.monitorInterval, 0))
+    end, DRIVETHRU.chase.hoodFailure.postDeathDrive, 1))
+end)
+
+addEvent("drivethru:hoodFailureRestore", true)
+addEventHandler("drivethru:hoodFailureRestore", resourceRoot, function(failureId)
+    local failure = state.hoodFailure
+    if source ~= resourceRoot or not failure or failure.id ~= tonumber(failureId) then
+        return
+    end
+    state.stage = "hood_failure_restore"
+    local x, y, z = getElementPosition(localPlayer)
+    pcall(enginePreloadWorldArea, Vector3(x, y, z), "all")
+    rememberHoodFailureTimer(failure, setTimer(function()
+        if state.hoodFailure ~= failure then
+            return
+        end
+        local released = clearHoodFailure("restored", true)
+        setCameraTarget(localPlayer)
+        fadeCamera(true, DRIVETHRU.chase.hoodFailure.fadeDuration)
+        traceCurrent("failure_restore")
+        triggerServerEvent("drivethru:hoodFailureRestored", resourceRoot, failure.id, released and "restored" or "release_failed")
+    end, DRIVETHRU.chase.hoodFailure.loadSceneWait, 1))
+end)
+
 addEvent("drivethru:footCombat", true)
 addEventHandler("drivethru:footCombat", resourceRoot, function(entities, reason)
     if source ~= resourceRoot or not state.active or state.stage ~= "chase" or type(entities) ~= "table" then
         return
     end
     state.footCombat = true
+    traceCurrent("foot_combat")
     for _, name in ipairs({"ballas_driver", "ballas_passenger"}) do
         state.actors[name] = entities[name]
     end
@@ -1145,8 +1669,292 @@ addEventHandler("drivethru:chaseCheckpoint", resourceRoot, function(entities)
             pcall(killPedTask, ped, "primary", 3, false)
         end
     end
-    outputChatBox("Drive-Thru: poursuite native validee, les deux Ballas sont morts.", 80, 220, 120)
-    outputChatBox("Checkpoint arrete avant le retour a Grove. Utilise /drivethruabort apres verification.", 220, 220, 220)
+    outputDebugString("[drive-thru] Chase checkpoint complete; handing off to the SWEET3 return drive")
+end)
+
+addEvent("drivethru:returnDriveStarted", true)
+addEventHandler("drivethru:returnDriveStarted", resourceRoot, function(phase, entities, suppressInstruction)
+    local profile = type(phase) == "string" and DRIVETHRU.returnTrip[phase] or nil
+    if source ~= resourceRoot or not state.active or not profile or type(entities) ~= "table" then
+        return
+    end
+    state.returnPhase = phase
+    state.stage = profile.stage
+    traceCurrent(phase == "grove" and "return_grove" or "return_smoke")
+    state.vehicle = entities.vehicle or state.vehicle
+    for _, name in ipairs({"smoke", "sweet", "ryder"}) do
+        state.actors[name] = entities[name] or state.actors[name]
+    end
+    clearPursuitNavigation()
+    callMissionTextApi("clearMissionHelp")
+    if getPedOccupiedVehicle(localPlayer) == state.vehicle and getPedOccupiedVehicleSeat(localPlayer) == 0 then
+        showReturnDestinationNavigation(phase)
+        printMissionText(profile.instruction, 6000)
+    else
+        showVehicleNavigation()
+        if suppressInstruction ~= true then
+            printMissionText("TW2_X", 6000)
+        end
+    end
+end)
+
+addEvent("drivethru:vehicleReminderFinished", true)
+addEventHandler("drivethru:vehicleReminderFinished", resourceRoot, function(stage)
+    local matchingStage = state.stage == stage or (state.stage == "return_car" and stage == "drive")
+    if source ~= resourceRoot or not state.active or not matchingStage or getPedOccupiedVehicle(localPlayer) == state.vehicle then
+        return
+    end
+    local returning = stage == "return_grove_drive" or stage == "return_smoke_drive"
+    printMissionText("TW2_X", returning and 6000 or 3000)
+end)
+
+addEvent("drivethru:returnScenePrepare", true)
+addEventHandler("drivethru:returnScenePrepare", resourceRoot, function(sceneId, phase, entities)
+    local trip = type(phase) == "string" and DRIVETHRU.returnTrip[phase] or nil
+    if source ~= resourceRoot or not state.active or not trip or type(entities) ~= "table" then
+        return
+    end
+    clearAudio("return_scene_prepare")
+    destroyNavigation()
+    clearReturnScene("replaced", false)
+    state.returnPhase = phase
+    state.stage = "return_" .. phase .. "_scene_prepare"
+    traceCurrent(phase == "grove" and "grove_scene" or "smoke_scene")
+    state.vehicle = entities.vehicle or state.vehicle
+    for _, name in ipairs({"smoke", "sweet", "ryder"}) do
+        state.actors[name] = entities[name] or state.actors[name]
+    end
+    local required = {"acquireScriptCamera", "releaseScriptCamera", "isScriptCameraLeaseActive", "resetScriptCamera",
+                      "setScriptCameraWidescreen", "setScriptCameraPersist", "setScriptCameraFixed", "moveScriptCamera",
+                      "trackScriptCamera", "fadeScriptCamera"}
+    for _, name in ipairs(required) do
+        if type(_G[name]) ~= "function" then
+            return triggerServerEvent("drivethru:returnSceneReady", resourceRoot, sceneId, "api_unavailable", name)
+        end
+    end
+    if trip.scene.vehicleViewMode and type(setCameraViewMode) == "function" then
+        setCameraViewMode(trip.scene.vehicleViewMode)
+    end
+    local acquired, token = pcall(acquireScriptCamera, true)
+    if not acquired or not token then
+        return triggerServerEvent("drivethru:returnSceneReady", resourceRoot, sceneId, "camera_acquire_refused", tostring(token))
+    end
+    local scene = {id = sceneId, phase = phase, cameraToken = token, departureTimers = {}}
+    state.returnScene = scene
+    local camera = trip.scene.camera
+    local ready = resetScriptCamera(token) and setScriptCameraWidescreen(token, true)
+    if ready and camera.fixed then
+        ready = setScriptCameraFixed(token, Vector3(camera.fixed.position.x, camera.fixed.position.y, camera.fixed.position.z),
+                                     Vector3(camera.fixed.target.x, camera.fixed.target.y, camera.fixed.target.z), Vector3(0, 0, 0), true)
+    elseif ready then
+        ready = setScriptCameraPersist(token, true, true) and
+                    moveScriptCamera(token, Vector3(camera.move.from.x, camera.move.from.y, camera.move.from.z),
+                                     Vector3(camera.move.to.x, camera.move.to.y, camera.move.to.z), camera.move.duration, true) and
+                    trackScriptCamera(token, Vector3(camera.track.from.x, camera.track.from.y, camera.track.from.z),
+                                      Vector3(camera.track.to.x, camera.track.to.y, camera.track.to.z), camera.track.duration, true)
+    end
+    if not ready then
+        clearReturnScene("camera_setup_refused", false)
+        return triggerServerEvent("drivethru:returnSceneReady", resourceRoot, sceneId, "camera_setup_refused")
+    end
+    scene.leaseTimer = setTimer(function()
+        if state.returnScene ~= scene then
+            return
+        end
+        if not isScriptCameraLeaseActive(scene.cameraToken) then
+            triggerServerEvent("drivethru:returnSceneLeaseLost", resourceRoot, scene.id)
+            clearReturnScene("lease_lost", false)
+        end
+    end, 100, 0)
+    -- A successful native setter only proves dispatch. Observe the rendered
+    -- matrix before the server starts dialogue so zeroed scriptable vectors
+    -- can never masquerade as a valid camera scene.
+    scene.cameraReadyTimer = setTimer(function()
+        if state.returnScene ~= scene or not isScriptCameraLeaseActive(scene.cameraToken) then
+            return
+        end
+        scene.cameraReadyTimer = nil
+        local px, py, pz, tx, ty, tz = getCameraMatrix()
+        local expectedPosition = camera.fixed and camera.fixed.position or camera.move.from
+        local expectedTarget = camera.fixed and camera.fixed.target or camera.track.from
+        local positionError = getDistanceBetweenPoints3D(px, py, pz, expectedPosition.x, expectedPosition.y, expectedPosition.z)
+        local targetError = getDistanceBetweenPoints3D(tx, ty, tz, expectedTarget.x, expectedTarget.y, expectedTarget.z)
+        local details = ("position=(%.4f,%.4f,%.4f) target=(%.4f,%.4f,%.4f) error=%.3f/%.3f"):format(
+                            px, py, pz, tx, ty, tz, positionError, targetError)
+        outputDebugString(("[drive-thru] %s return camera observed: %s"):format(phase, details))
+        if positionError > DRIVETHRU.returnTrip.cameraObservationTolerance or
+            targetError > DRIVETHRU.returnTrip.cameraObservationTolerance then
+            clearReturnScene("camera_observation_failed", false)
+            return triggerServerEvent("drivethru:returnSceneReady", resourceRoot, scene.id, "camera_observation_failed", details)
+        end
+        triggerServerEvent("drivethru:returnSceneReady", resourceRoot, scene.id, "ready", details)
+    end, DRIVETHRU.returnTrip.cameraObservationDelay, 1)
+end)
+
+addEvent("drivethru:returnSceneLookAt", true)
+addEventHandler("drivethru:returnSceneLookAt", resourceRoot, function(sceneId, actorName, duration)
+    local scene, actor = state.returnScene, state.actors[actorName]
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isElement(actor) or type(setPedLookAt) ~= "function" then
+        return
+    end
+    local x, y, z = getElementPosition(actor)
+    setPedLookAt(localPlayer, Vector3(x, y, z + 0.7), tonumber(duration) or 15000, actor)
+end)
+
+addEvent("drivethru:returnSceneSkippable", true)
+addEventHandler("drivethru:returnSceneSkippable", resourceRoot, function(sceneId)
+    local scene = state.returnScene
+    if source == resourceRoot and scene and scene.id == tonumber(sceneId) then
+        scene.skippable = true
+    end
+end)
+
+addEvent("drivethru:returnSceneVectorCamera", true)
+addEventHandler("drivethru:returnSceneVectorCamera", resourceRoot, function(sceneId)
+    local scene = state.returnScene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or not isScriptCameraLeaseActive(scene.cameraToken) then
+        return
+    end
+    local camera = DRIVETHRU.returnTrip[scene.phase].scene.camera
+    local ready = resetScriptCamera(scene.cameraToken) and setScriptCameraPersist(scene.cameraToken, true, true) and
+                      moveScriptCamera(scene.cameraToken, Vector3(camera.move.from.x, camera.move.from.y, camera.move.from.z),
+                                       Vector3(camera.move.to.x, camera.move.to.y, camera.move.to.z), camera.move.duration, true) and
+                      trackScriptCamera(scene.cameraToken, Vector3(camera.track.from.x, camera.track.from.y, camera.track.from.z),
+                                        Vector3(camera.track.to.x, camera.track.to.y, camera.track.to.z), camera.track.duration, true)
+    if not ready then
+        triggerServerEvent("drivethru:returnSceneLeaseLost", resourceRoot, scene.id)
+    end
+end)
+
+addEvent("drivethru:returnSceneDepartures", true)
+addEventHandler("drivethru:returnSceneDepartures", resourceRoot, function(sceneId, phase, entities)
+    local scene = state.returnScene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) or scene.phase ~= phase or type(entities) ~= "table" then
+        return
+    end
+    if type(setPedTaskSequence) ~= "function" or type(getPedTaskSequenceProgress) ~= "function" then
+        return triggerServerEvent("drivethru:returnSceneDeparturesReady", resourceRoot, scene.id, "api_unavailable")
+    end
+    scene.departureRequestedAt = getTickCount()
+    scene.departureObserved = {}
+    scene.departureAccepted = {}
+    local profile = DRIVETHRU.returnTrip[phase].scene
+    local failed = false
+    local function reportFailure(result, details)
+        if failed or state.returnScene ~= scene then
+            return
+        end
+        failed = true
+        triggerServerEvent("drivethru:returnSceneDeparturesReady", resourceRoot, scene.id, result, details)
+    end
+    local function assignDeparture(departure)
+        if failed or state.returnScene ~= scene then
+            return
+        end
+        local ped = state.actors[departure.actor]
+        if not isElement(ped) or not isElement(state.vehicle) or not isElementStreamedIn(ped) or not isElementSyncer(ped) or
+            not applyActorPolicies(ped) then
+            return reportFailure("not_ready", departure.actor)
+        end
+        local accepted = setPedTaskSequence(ped, {
+            {task = "leave_car", vehicle = state.vehicle},
+            {
+                task = "go_to",
+                x = departure.target.x,
+                y = departure.target.y,
+                z = departure.target.z,
+                movement = "walk",
+                radius = 0.5,
+                slowdownRadius = 2.0,
+                timeout = departure.timeout,
+            },
+        }, false)
+        if accepted ~= true then
+            return reportFailure("refused", departure.actor)
+        end
+        scene.departureAccepted[departure.actor] = true
+        outputDebugString(("[drive-thru] %s return sequence accepted for %s"):format(phase, departure.actor))
+    end
+    for _, departure in ipairs(profile.departures) do
+        if departure.delay > 0 then
+            scene.departureTimers[#scene.departureTimers + 1] = setTimer(assignDeparture, departure.delay, 1, departure)
+        else
+            assignDeparture(departure)
+        end
+    end
+    scene.departureMonitor = setTimer(function()
+        if failed or state.returnScene ~= scene then
+            return
+        end
+        local allActive = true
+        local details = {}
+        for _, departure in ipairs(profile.departures) do
+            local ped = state.actors[departure.actor]
+            local index = scene.departureAccepted[departure.actor] and isElement(ped) and getPedTaskSequenceProgress(ped) or -1
+            if index >= 0 then
+                scene.departureObserved[departure.actor] = true
+            end
+            allActive = allActive and scene.departureObserved[departure.actor] == true
+            details[#details + 1] = ("%s=%s/%s"):format(departure.actor, tostring(scene.departureAccepted[departure.actor] == true),
+                                                         tostring(index))
+        end
+        if allActive then
+            killTimer(scene.departureMonitor)
+            scene.departureMonitor = nil
+            triggerServerEvent("drivethru:returnSceneDeparturesReady", resourceRoot, scene.id, "active", table.concat(details, ","))
+        elseif getTickCount() - scene.departureRequestedAt >= DRIVETHRU.returnTrip.departureActivationTimeout then
+            killTimer(scene.departureMonitor)
+            scene.departureMonitor = nil
+            reportFailure("timeout", table.concat(details, ","))
+        end
+    end, 100, 0)
+end)
+
+addEvent("drivethru:returnSceneRelease", true)
+addEventHandler("drivethru:returnSceneRelease", resourceRoot, function(sceneId, skipped)
+    local scene = state.returnScene
+    if source ~= resourceRoot or not scene or scene.id ~= tonumber(sceneId) then
+        return
+    end
+    scene.skippable = false
+    clearAudio(skipped and "return_scene_skipped" or "return_scene_complete")
+    if skipped then
+        local duration = DRIVETHRU.returnTrip.skipFadeOutDuration
+        if not isScriptCameraLeaseActive(scene.cameraToken) or not fadeScriptCamera(scene.cameraToken, false, duration, 0, 0, 0) then
+            clearReturnScene("skip_fade_refused", false)
+            return triggerServerEvent("drivethru:returnSceneReleased", resourceRoot, scene.id, "release_failed")
+        end
+        scene.releaseTimer = setTimer(function()
+            local released = clearReturnScene("skipped", true)
+            triggerServerEvent("drivethru:returnSceneReleased", resourceRoot, scene.id, released and "released" or "release_failed")
+        end, math.floor(duration * 1000 + DRIVETHRU.returnTrip.skipBlackHold), 1)
+    else
+        local released = clearReturnScene("completed", false)
+        triggerServerEvent("drivethru:returnSceneReleased", resourceRoot, scene.id, released and "released" or "release_failed")
+    end
+end)
+
+addEvent("drivethru:returnSceneReveal", true)
+addEventHandler("drivethru:returnSceneReveal", resourceRoot, function()
+    if source == resourceRoot and state.active then
+        fadeCamera(true, DRIVETHRU.returnTrip.skipFadeOutDuration)
+    end
+end)
+
+addEvent("drivethru:passed", true)
+addEventHandler("drivethru:passed", resourceRoot, function(reward, tune)
+    if source ~= resourceRoot or not state.active then
+        return
+    end
+    state.stage = "complete"
+    traceCurrent("mission_end")
+    clearAudio("mission_passed")
+    clearReturnScene("mission_passed", false)
+    destroyNavigation()
+    callMissionTextApi("showMissionBigText", "M_PASSS", DRIVETHRU.returnTrip.completionDisplayDuration, 1, tonumber(reward) or 200)
+    local ok, played = pcall(playMissionPassedTune, tonumber(tune) or 1)
+    outputDebugString(("[drive-thru] Mission-passed tune result=%s reward=$%d"):format(tostring(ok and played == true),
+                                                                                       tonumber(reward) or 200))
 end)
 
 addEvent("drivethru:failed", true)
@@ -1155,9 +1963,15 @@ addEventHandler("drivethru:failed", resourceRoot, function(textKey, reason)
         return
     end
     state.stage = "failed"
+    if type(DRIVETHRU_TRACE) == "table" then
+        DRIVETHRU_TRACE.fail("mission_failed")
+    end
     if type(textKey) == "string" then
         printMissionText(textKey, 2000)
     end
+    clearAudio("mission_failed")
+    clearReturnScene("mission_failed", false)
+    clearHoodFailure("mission_failed", false)
     callMissionTextApi("showMissionBigText", "M_FAIL", 5000, 1)
     outputDebugString("[drive-thru] Failure shown: " .. tostring(reason), 1)
 end)
@@ -1190,6 +2004,15 @@ addEventHandler("onClientVehicleEnter", root, function(player, seat)
     end
 end)
 
+addEventHandler("onClientKey", root, function(button, pressed)
+    local scene = state.returnScene
+    if pressed and (button == "space" or button == "enter") and scene and scene.skippable and not scene.skipRequested then
+        scene.skipRequested = true
+        triggerServerEvent("drivethru:returnSceneSkipRequest", resourceRoot, scene.id)
+        cancelEvent()
+    end
+end)
+
 addEventHandler("onClientPreRender", root, function()
     if not state.active then
         return
@@ -1202,15 +2025,36 @@ addEventHandler("onClientPreRender", root, function()
             triggerServerEvent("drivethru:cutsceneSkipRequest", resourceRoot, scene.id)
         end
     end
-    if state.navigation == "destination" and type(renderScriptImportantArea) == "function" then
-        local destination = DRIVETHRU.destination
-        renderScriptImportantArea(Vector3(destination.x, destination.y, destination.z), destination.radiusX, destination.radiusY, 1)
+    if type(renderScriptImportantArea) == "function" then
+        if state.navigation == "destination" then
+            local destination = DRIVETHRU.destination
+            renderScriptImportantArea(Vector3(destination.x, destination.y, destination.z), destination.radiusX, destination.radiusY, 1)
+        elseif state.navigation == "return_destination" and state.returnPhase then
+            local destination = DRIVETHRU.returnTrip[state.returnPhase].destination
+            local localId = state.returnPhase == "grove" and 2 or 3
+            renderScriptImportantArea(Vector3(destination.x, destination.y, destination.z), destination.radiusX, destination.radiusY, localId)
+        end
     end
 end)
 
 state.arrivalTimer = setTimer(function()
-    if not state.active or state.stage ~= "drive" or not isElement(state.vehicle) or getPedOccupiedVehicle(localPlayer) ~= state.vehicle or
+    if not state.active or not isElement(state.vehicle) or getPedOccupiedVehicle(localPlayer) ~= state.vehicle or
         getPedOccupiedVehicleSeat(localPlayer) ~= 0 then
+        return
+    end
+    if state.returnPhase and state.stage == DRIVETHRU.returnTrip[state.returnPhase].stage then
+        local x, y, z = getElementPosition(state.vehicle)
+        local destination = DRIVETHRU.returnTrip[state.returnPhase].destination
+        if math.abs(x - destination.x) <= destination.radiusX and math.abs(y - destination.y) <= destination.radiusY and
+            math.abs(z - destination.z) <= destination.radiusZ and type(isVehicleOnAllWheels) == "function" then
+            local ok, onAllWheels = pcall(isVehicleOnAllWheels, state.vehicle)
+            if ok and onAllWheels == true then
+                triggerServerEvent("drivethru:returnArrivalReport", resourceRoot, state.returnPhase, true)
+            end
+        end
+        return
+    end
+    if state.stage ~= "drive" then
         return
     end
     local x, y, z = getElementPosition(state.vehicle)

@@ -19,21 +19,22 @@
 class CVehicleSAInterface;
 class CObjectSAInterface;
 
-#define FUNC_CTaskComplexUseMobilePhone__Constructor 0x6348A0
-#define FUNC_CTaskComplexPartnerChat__Constructor    0x684290
-#define FUNC_CTaskSimpleStandStill__Constructor      0x62F310
-#define FUNC_CTaskSimpleRunAnim__Constructor         0x61A900
-#define FUNC_CTaskSimpleRunNamedAnim__Constructor    0x61A990
-#define FUNC_CTaskComplexDie__Constructor            0x630040
-#define FUNC_CTaskSimpleStealthKill__Constructor     0x6225F0
-#define FUNC_CTaskSimpleDead__Constructor            0x630590
-#define FUNC_CTaskSimpleBeHit__Constructor           0x620780
-#define FUNC_CTaskComplexSunbathe__Constructor       0x631F80
-#define FUNC_CTASKSimplePlayerOnFoot__Constructor    0x685750
-#define FUNC_CTASKComplexFacial__Constructor         0x690D20
-#define FUNC_CTASKComplexFacial__SetRequest          0x691230
-#define FUNC_CTASKComplexFacial__StopAll             0x691250
-#define VTBL_CTaskSimpleCarFallOut                   0x86EFD0
+#define FUNC_CTaskComplexUseMobilePhone__Constructor  0x6348A0
+#define FUNC_CTaskComplexPartnerChat__Constructor     0x684290
+#define FUNC_CTaskSimpleStandStill__Constructor       0x62F310
+#define FUNC_CTaskSimpleRunAnim__Constructor          0x61A900
+#define FUNC_CTaskSimpleRunNamedAnim__Constructor     0x61A990
+#define FUNC_CTaskComplexDie__Constructor             0x630040
+#define FUNC_CTaskComplexSmartFleeEntity__Constructor 0x65C430
+#define FUNC_CTaskSimpleStealthKill__Constructor      0x6225F0
+#define FUNC_CTaskSimpleDead__Constructor             0x630590
+#define FUNC_CTaskSimpleBeHit__Constructor            0x620780
+#define FUNC_CTaskComplexSunbathe__Constructor        0x631F80
+#define FUNC_CTASKSimplePlayerOnFoot__Constructor     0x685750
+#define FUNC_CTASKComplexFacial__Constructor          0x690D20
+#define FUNC_CTASKComplexFacial__SetRequest           0x691230
+#define FUNC_CTASKComplexFacial__StopAll              0x691250
+#define VTBL_CTaskSimpleCarFallOut                    0x86EFD0
 
 ///////////////////////
 // Use a mobile phone
@@ -165,7 +166,15 @@ public:
 class CTaskComplexDieSAInterface : public CTaskComplexSAInterface
 {
 public:
+    eWeaponType  m_eMeansOfDeath;
+    AssocGroupId m_animGroup;
+    AnimationId  m_anim;
+    float        m_fBlendDelta;
+    float        m_fAnimSpeed;
+    unsigned int m_flags;
+    int          m_iFallToDeathDirection;
 };
+static_assert(sizeof(CTaskComplexDieSAInterface) == 0x28, "Unexpected CTaskComplexDieSAInterface size");
 
 class CTaskComplexDieSA : public virtual CTaskComplexSA, public virtual CTaskComplexDie
 {
@@ -175,6 +184,31 @@ public:
                       const AnimationId anim = 0 /*ANIM_STD_KO_FRONT*/, const float fBlendDelta = 4.0f, const float fAnimSpeed = 0.0f,
                       const bool bBeingKilledByStealth = false, const bool bFallingToDeath = false, const int iFallToDeathDir = 0,
                       const bool bFallToDeathOverRailing = false);
+};
+
+class CTaskComplexSmartFleeEntitySAInterface : public CTaskComplexSAInterface
+{
+public:
+    CEntitySAInterface* m_pFleeFrom;
+    CVector             m_vecFleeFrom;
+    int                 m_iDuration;
+    float               m_fSafeDistance;
+    bool                m_bScream;
+    unsigned char       m_pad[3];
+    int                 m_iPositionCheckPeriod;
+    float               m_fPositionChangeTolerance;
+    int                 m_iMoveState;
+    CTaskTimer          m_positionCheckTimer;
+};
+static_assert(sizeof(CTaskComplexSmartFleeEntitySAInterface) == 0x40, "Unexpected CTaskComplexSmartFleeEntitySAInterface size");
+static_assert(offsetof(CTaskComplexSmartFleeEntitySAInterface, m_pFleeFrom) == 0x0C, "Invalid smart-flee target offset");
+static_assert(offsetof(CTaskComplexSmartFleeEntitySAInterface, m_iMoveState) == 0x30, "Invalid smart-flee movement offset");
+
+class CTaskComplexSmartFleeEntitySA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexSmartFleeEntitySA() {};
+    CTaskComplexSmartFleeEntitySA(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod, float fPositionChangeTolerance);
 };
 
 class CTaskSimpleStealthKillInterface : public CTaskSimpleSAInterface

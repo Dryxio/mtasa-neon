@@ -3690,6 +3690,8 @@ void CClientPed::_CreateModel()
         ApplyMissionActorState();
         ApplyStoryProtectionState();
         ApplySuffersCriticalHitsState();
+        ApplyStayInSamePlaceState();
+        ApplyNeverTargetedState();
 
         g_pMultiplayer->AddRemoteDataStorage(m_pPlayerPed, m_remoteDataStorage);
 
@@ -4332,6 +4334,11 @@ bool CClientPed::SetStoryProtected(bool enabled)
     if (enabled && m_pPlayerPed)
         ApplyStoryProtectionState();
 
+    // Independent scalar policies must win over the grouped protagonist
+    // policy regardless of the order in which a resource applies them.
+    ApplySuffersCriticalHitsState();
+    ApplyNeverTargetedState();
+
     return true;
 }
 
@@ -4368,6 +4375,58 @@ void CClientPed::ApplySuffersCriticalHitsState()
 
     auto state = m_pPlayerPed->GetStoryProtectionState();
     state.noCriticalHits = !*m_suffersCriticalHits;
+    m_pPlayerPed->SetStoryProtectionState(state);
+}
+
+bool CClientPed::GetStayInSamePlace() const
+{
+    if (m_stayInSamePlace)
+        return *m_stayInSamePlace;
+
+    return m_pPlayerPed && m_pPlayerPed->GetScriptStayInSamePlace();
+}
+
+bool CClientPed::SetStayInSamePlace(bool stayInSamePlace)
+{
+    if (GetType() != CCLIENTPED)
+        return false;
+
+    m_stayInSamePlace = stayInSamePlace;
+    ApplyStayInSamePlaceState();
+    return true;
+}
+
+void CClientPed::ApplyStayInSamePlaceState()
+{
+    if (m_stayInSamePlace && m_pPlayerPed)
+        m_pPlayerPed->SetScriptStayInSamePlace(*m_stayInSamePlace);
+}
+
+bool CClientPed::IsNeverTargeted() const
+{
+    if (m_neverTargeted)
+        return *m_neverTargeted;
+
+    return m_pPlayerPed && m_pPlayerPed->GetStoryProtectionState().neverTargeted;
+}
+
+bool CClientPed::SetNeverTargeted(bool neverTargeted)
+{
+    if (GetType() != CCLIENTPED)
+        return false;
+
+    m_neverTargeted = neverTargeted;
+    ApplyNeverTargetedState();
+    return true;
+}
+
+void CClientPed::ApplyNeverTargetedState()
+{
+    if (!m_neverTargeted || !m_pPlayerPed)
+        return;
+
+    auto state = m_pPlayerPed->GetStoryProtectionState();
+    state.neverTargeted = *m_neverTargeted;
     m_pPlayerPed->SetStoryProtectionState(state);
 }
 

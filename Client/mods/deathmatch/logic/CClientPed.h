@@ -420,6 +420,10 @@ public:
     bool SetStoryProtected(bool enabled);
     bool GetSuffersCriticalHits() const noexcept { return m_suffersCriticalHits.value_or(true); }
     bool SetSuffersCriticalHits(bool suffersCriticalHits);
+    bool GetStayInSamePlace() const;
+    bool SetStayInSamePlace(bool stayInSamePlace);
+    bool IsNeverTargeted() const;
+    bool SetNeverTargeted(bool neverTargeted);
 
     void                                    AddProjectile(CClientProjectile* pProjectile) { m_Projectiles.push_back(pProjectile); }
     void                                    RemoveProjectile(CClientProjectile* pProjectile) { m_Projectiles.remove(pProjectile); }
@@ -610,6 +614,8 @@ protected:
     void ApplyMissionActorState();
     void ApplyStoryProtectionState();
     void ApplySuffersCriticalHitsState();
+    void ApplyStayInSamePlaceState();
+    void ApplyNeverTargetedState();
 
     void ModelRequestCallback(CModelInfo* pModelInfo);
 
@@ -742,6 +748,8 @@ public:
     std::optional<SPedCreatedByState>        m_missionActorNativeState;
     std::optional<SPedStoryProtectionState>  m_storyProtectionNativeState;
     std::optional<bool>                      m_suffersCriticalHits;
+    std::optional<bool>                      m_stayInSamePlace;
+    std::optional<bool>                      m_neverTargeted;
     std::list<CClientProjectile*>            m_Projectiles;
     unsigned char                            m_ucAlpha;
     float                                    m_fTargetRotation;

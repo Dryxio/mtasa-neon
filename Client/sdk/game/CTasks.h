@@ -122,10 +122,10 @@ public:
     virtual CTaskComplexSunbathe*   CreateTaskComplexSunbathe(class CObject* pTowel, const bool bStartStanding) = 0;
 
     // IK
-    virtual CTaskSimpleIKChain*       CreateTaskSimpleIKChain(char* idString, int effectorBoneTag, CVector effectorVec, int pivotBoneTag, CEntity* pEntity,
-                                                              int offsetBoneTag, CVector offsetPos, float speed, int time = 99999999, int blendTime = 1000) = 0;
-    virtual CTaskSimpleIKLookAt*      CreateTaskSimpleIKLookAt(char* idString, CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
-                                                               unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000, int m_priority = 3) = 0;
+    virtual CTaskSimpleIKChain*  CreateTaskSimpleIKChain(char* idString, int effectorBoneTag, CVector effectorVec, int pivotBoneTag, CEntity* pEntity,
+                                                         int offsetBoneTag, CVector offsetPos, float speed, int time = 99999999, int blendTime = 1000) = 0;
+    virtual CTaskSimpleIKLookAt* CreateTaskSimpleIKLookAt(char* idString, CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
+                                                          unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000, int m_priority = 3) = 0;
     virtual CTaskSimpleTriggerLookAt* CreateTaskSimpleTriggerLookAt(CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
                                                                     unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000,
                                                                     int priority = 3) = 0;
@@ -166,4 +166,9 @@ public:
     // Appended after the sequence surface to preserve every established slot.
     virtual CTaskComplexCarDriveToPoint* CreateTaskComplexCarDriveToPoint(CVehicle* pVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
                                                                           int iDesiredVehicleModel, float fRadius, int iDrivingStyle) = 0;
+
+    // Appended for opcode 05DD. GTA owns the flee point updates, safe entity
+    // reference, timeout, and cloned task lifecycle.
+    virtual CTaskComplex* CreateTaskComplexSmartFleeEntity(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod,
+                                                           float fPositionChangeTolerance) = 0;
 };

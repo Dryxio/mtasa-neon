@@ -32,6 +32,9 @@ namespace
         GO_TO,
         SHOOT_AT,
         DRIVE_TO,
+        LEAVE_CAR_IMMEDIATELY,
+        SMART_FLEE,
+        DIE,
     };
 
     struct SPedSequenceTask
@@ -49,6 +52,8 @@ namespace
         int              driveMode{};
         int              desiredVehicleModel{-1};
         int              drivingStyle{DRIVING_STYLE_STOP_FOR_CARS};
+        CClientPed*      pedTarget{};
+        float            safeDistance{100.0f};
     };
 
     bool ParseDrivingStyle(const std::variant<std::string, int>& value, int& style)
@@ -312,6 +317,8 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
+        {"setPedStayInSamePlace", ArgumentParser<SetPedStayInSamePlace>},
+        {"setPedNeverTargeted", ArgumentParser<SetPedNeverTargeted>},
         {"setPedBleeding", ArgumentParser<SetPedBleeding>},
         {"playPedVoiceLine", ArgumentParser<PlayPedVoiceLine>},
 
@@ -341,6 +348,8 @@ void CLuaPedDefs::LoadFunctions()
         {"isPedMissionActor", ArgumentParser<IsPedMissionActor>},
         {"isPedStoryProtected", ArgumentParser<IsPedStoryProtected>},
         {"getPedSuffersCriticalHits", ArgumentParser<GetPedSuffersCriticalHits>},
+        {"getPedStayInSamePlace", ArgumentParser<GetPedStayInSamePlace>},
+        {"isPedNeverTargeted", ArgumentParser<IsPedNeverTargeted>},
 
         {"getPedStat", GetPedStat},
         {"getPedOxygenLevel", GetPedOxygenLevel},
@@ -3220,6 +3229,38 @@ int CLuaPedDefs::SetPedTaskSequence(lua_State* luaVM)
                 }
             }
         }
+        else if (stricmp(taskNameCopy.c_str(), "leave_car_immediately") == 0)
+        {
+            description.type = ePedSequenceTask::LEAVE_CAR_IMMEDIATELY;
+            lua_getfield(luaVM, descriptorIndex, "vehicle");
+            description.vehicle = dynamic_cast<CClientVehicle*>(lua_toelement(luaVM, -1));
+            lua_pop(luaVM, 1);
+            if (!description.vehicle || !description.vehicle->IsStreamedIn() || !description.vehicle->GetGameVehicle())
+                error = "field 'vehicle' must be a streamed vehicle";
+        }
+        else if (stricmp(taskNameCopy.c_str(), "smart_flee") == 0)
+        {
+            description.type = ePedSequenceTask::SMART_FLEE;
+            lua_getfield(luaVM, descriptorIndex, "target");
+            description.pedTarget = dynamic_cast<CClientPed*>(lua_toelement(luaVM, -1));
+            lua_pop(luaVM, 1);
+            if (!description.pedTarget || !description.pedTarget->IsStreamedIn() || !description.pedTarget->GetGamePlayer())
+                error = "field 'target' must be a streamed ped";
+
+            double safeDistance, duration;
+            if (error.empty() && ReadSequenceNumber(luaVM, descriptorIndex, "safeDistance", safeDistance, 100.0, false, error) &&
+                ReadSequenceNumber(luaVM, descriptorIndex, "duration", duration, 1000000.0, false, error))
+            {
+                description.safeDistance = static_cast<float>(safeDistance);
+                description.duration = static_cast<int>(duration);
+                if (description.safeDistance <= 0.0f || duration != std::floor(duration) || description.duration < -1)
+                    error = "smart_flee safeDistance or duration is outside the native range";
+            }
+        }
+        else if (stricmp(taskNameCopy.c_str(), "die") == 0)
+        {
+            description.type = ePedSequenceTask::DIE;
+        }
         else
         {
             error = SString("unsupported task type '%s'", taskNameCopy.c_str());
@@ -3264,6 +3305,18 @@ int CLuaPedDefs::SetPedTaskSequence(lua_State* luaVM)
                 // the ped's current vehicle when this child becomes active.
                 tasks[i] = g_pGame->GetTasks()->CreateTaskComplexCarDriveToPoint(nullptr, description.target, description.speed, description.driveMode,
                                                                                  description.desiredVehicleModel, -1.0f, description.drivingStyle);
+                break;
+            case ePedSequenceTask::LEAVE_CAR_IMMEDIATELY:
+                tasks[i] = g_pGame->GetTasks()->CreateTaskComplexLeaveCar(description.vehicle->GetGameVehicle(), 0, 0, false, false);
+                break;
+            case ePedSequenceTask::SMART_FLEE:
+                tasks[i] = g_pGame->GetTasks()->CreateTaskComplexSmartFleeEntity(description.pedTarget->GetGamePlayer(), true, description.safeDistance,
+                                                                                 description.duration, 1000, 1.0f);
+                break;
+            case ePedSequenceTask::DIE:
+                // Opcode 05BE constructs the unarmed PED/KO_SHOT_FRONT_0 task
+                // with blend 4.0 and zero animation speed.
+                tasks[i] = g_pGame->GetTasks()->CreateTaskComplexDie(WEAPONTYPE_UNARMED, 0, 15, 4.0f, 0.0f, false, false, 0, false);
                 break;
         }
 
@@ -3404,6 +3457,16 @@ bool CLuaPedDefs::GetPedSuffersCriticalHits(CClientPed* ped)
     return ped && ped->GetType() == CCLIENTPED && ped->GetSuffersCriticalHits();
 }
 
+bool CLuaPedDefs::GetPedStayInSamePlace(CClientPed* ped)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->GetStayInSamePlace();
+}
+
+bool CLuaPedDefs::IsPedNeverTargeted(CClientPed* ped)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->IsNeverTargeted();
+}
+
 bool CLuaPedDefs::SetPedMissionActor(CClientPed* ped, bool enabled)
 {
     if (!ped || ped->GetType() != CCLIENTPED)
@@ -3427,6 +3490,16 @@ bool CLuaPedDefs::SetPedStoryProtected(CClientPed* ped, bool enabled)
 bool CLuaPedDefs::SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits)
 {
     return ped && ped->GetType() == CCLIENTPED && ped->SetSuffersCriticalHits(suffersCriticalHits);
+}
+
+bool CLuaPedDefs::SetPedStayInSamePlace(CClientPed* ped, bool stayInSamePlace)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->SetStayInSamePlace(stayInSamePlace);
+}
+
+bool CLuaPedDefs::SetPedNeverTargeted(CClientPed* ped, bool neverTargeted)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->SetNeverTargeted(neverTargeted);
 }
 
 bool CLuaPedDefs::killPedTask(CClientPed* ped, taskType taskType, std::uint8_t taskNumber, std::optional<bool> gracefully)

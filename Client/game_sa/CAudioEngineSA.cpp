@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include <float.h>
+#include <game/CAERadioTrackManager.h>
 #include "CAESoundManagerSA.h"
 #include "CAEAudioHardwareSA.h"
 #include "CAudioEngineSA.h"
@@ -295,6 +296,21 @@ void CAudioEngineSA::PlayBeatTrack(short iTrack)
 {
     if (*(DWORD*)VAR_AudioEventVolumes != 0)  // may prevent a crash
     {
+        // Multiplayer disables GTA's public radio-stop entry at 0x4E9820 so
+        // ordinary game code cannot take ownership away from MTA. GTA's beat
+        // preload calls that entry and then services the radio until it is
+        // stopped; without this bypass the radio stays in PLAYING forever and
+        // the main thread never returns. Put the native manager into STOPPING
+        // first, while preserving MTA's logical radio state so GTA can resume
+        // the station after the mission-complete track.
+        CAERadioTrackManager* pRadioTrackManager = pGame->GetAERadioTrackManager();
+        if (pRadioTrackManager && pRadioTrackManager->IsRadioOn())
+        {
+            const bool bRadioOn = m_bRadioOn;
+            StopRadio();
+            m_bRadioOn = bRadioOn;
+        }
+
         DWORD dwFunc = FUNC_PreloadBeatTrack;
         DWORD dwTrack = iTrack;
         // clang-format off

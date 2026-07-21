@@ -355,4 +355,10 @@ public:
     virtual void                     EnableSpeechForScript() = 0;
     virtual SPedStoryProtectionState GetStoryProtectionState() const = 0;
     virtual void                     SetStoryProtectionState(const SPedStoryProtectionState& state) = 0;
+
+    // The game interface keeps the virtuals private because they were
+    // originally implementation details. Story-script policies need a
+    // stable public bridge without moving those virtuals in the ABI.
+    bool GetScriptStayInSamePlace() const { return GetStayInSamePlace(); }
+    void SetScriptStayInSamePlace(bool stay) { SetStayInSamePlace(stay); }
 };

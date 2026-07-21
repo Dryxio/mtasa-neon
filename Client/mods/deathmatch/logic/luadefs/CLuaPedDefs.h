@@ -87,6 +87,8 @@ public:
     static bool IsPedMissionActor(CClientPed* ped);
     static bool IsPedStoryProtected(CClientPed* ped);
     static bool GetPedSuffersCriticalHits(CClientPed* ped);
+    static bool GetPedStayInSamePlace(CClientPed* ped);
+    static bool IsPedNeverTargeted(CClientPed* ped);
 
     LUA_DECLARE(SetPedRotation);
     LUA_DECLARE(SetPedCanBeKnockedOffBike);
@@ -145,6 +147,8 @@ public:
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);
     static bool SetPedStoryProtected(CClientPed* ped, bool enabled);
     static bool SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits);
+    static bool SetPedStayInSamePlace(CClientPed* ped, bool stayInSamePlace);
+    static bool SetPedNeverTargeted(CClientPed* ped, bool neverTargeted);
     static bool IsPedBleeding(CClientPed* ped);
     static bool SetPedBleeding(CClientPed* ped, bool bleeding);
 

@@ -19,7 +19,48 @@ local mission = {
     chaseLineIndex = 0,
     chaseDamageThreshold = nil,
     footCombat = false,
+    reminderIndex = 1,
+    returnPhase = nil,
+    returnLineIndex = 0,
+    returnSceneSerial = 0,
+    returnScene = nil,
+    vehicleFailure = nil,
+    hoodFailureSerial = 0,
+    hoodFailure = nil,
+    pursuitRouteTask = nil,
+    pursuitRoutePollTimer = nil,
+    pursuitRouteActivated = false,
+    pursuitRouteIndex = nil,
 }
+
+local function nativeTaskRuntimeRunning()
+    local runtime = getResourceFromName("native-task-runtime")
+    return runtime and getResourceState(runtime) == "running"
+end
+
+local function cancelPursuitRoute(reason, retainOwnership)
+    local task = mission.pursuitRouteTask
+    if isTimer(mission.pursuitRoutePollTimer) then
+        killTimer(mission.pursuitRoutePollTimer)
+    end
+    mission.pursuitRouteTask = nil
+    mission.pursuitRoutePollTimer = nil
+    mission.pursuitRouteActivated = false
+    mission.pursuitRouteIndex = nil
+    if isElement(task) and nativeTaskRuntimeRunning() then
+        local cancelled = exports["native-task-runtime"]:cancelNativeDriveRoute(task)
+        outputDebugString(("[drive-thru] Native route handle cancelled=%s reason=%s"):format(tostring(cancelled),
+                                                                                              tostring(reason or "transition")))
+    end
+    if retainOwnership and isElement(mission.leader) then
+        if isElement(mission.entities.ballas_driver) then
+            setElementSyncer(mission.entities.ballas_driver, mission.leader, true)
+        end
+        if isElement(mission.entities.voodoo) then
+            setElementSyncer(mission.entities.voodoo, mission.leader, true)
+        end
+    end
+end
 
 local function rememberTimer(timer)
     table.insert(mission.timers, timer)
@@ -141,6 +182,7 @@ local function restorePlayer(player, snapshot)
 end
 
 local function destroyMissionEntities()
+    cancelPursuitRoute("entity_cleanup", false)
     for _, entity in pairs(mission.entities) do
         if isElement(entity) then
             destroyElement(entity)
@@ -166,6 +208,16 @@ local function resetMissionState()
     mission.chaseLineIndex = 0
     mission.chaseDamageThreshold = nil
     mission.footCombat = false
+    mission.reminderIndex = 1
+    mission.returnPhase = nil
+    mission.returnLineIndex = 0
+    mission.returnScene = nil
+    mission.vehicleFailure = nil
+    mission.hoodFailure = nil
+    mission.pursuitRouteTask = nil
+    mission.pursuitRoutePollTimer = nil
+    mission.pursuitRouteActivated = false
+    mission.pursuitRouteIndex = nil
 end
 
 local function cleanupMission(reason, restore)
@@ -191,6 +243,11 @@ local function failMission(reason, textKey)
     end
     mission.finishing = true
     mission.stage = "failed"
+    cancelPursuitRoute("mission_failed", false)
+    if mission.hoodFailure and isElement(mission.hoodFailure.frozenElement) then
+        setElementFrozen(mission.hoodFailure.frozenElement, false)
+        mission.hoodFailure.frozenElement = nil
+    end
     outputDebugString("[drive-thru] Mission failed: " .. tostring(reason), 1)
     if isElement(mission.leader) then
         triggerClientEvent(mission.leader, "drivethru:failed", resourceRoot, textKey, reason)
@@ -200,24 +257,46 @@ local function failMission(reason, textKey)
     end, 5000, 1))
 end
 
+local greenwoodFailureStages = {
+    actor_entry = {},
+    enter_car = {healthText = "SWE2_KC"},
+    drive = {healthText = "SWE2_KC"},
+    chase = {healthText = "SWE2_KA"},
+    return_grove_drive = {healthText = "SWE2_KB"},
+    return_smoke_drive = {healthText = "SWE2_KB"},
+}
+
+local actorFailureStages = {
+    enter_car = {sweet = true, ryder = true, smoke = true},
+    drive = {sweet = true, ryder = true, smoke = true},
+    chase = {sweet = true, ryder = true, smoke = true},
+    return_grove_drive = {sweet = true, ryder = true, smoke = true},
+    return_smoke_drive = {smoke = true},
+}
+
+local actorFailureText = {sweet = "SWE3_E", ryder = "SWE3_F", smoke = "SWE3_G"}
+
+local beginGreenwoodFailure
+local beginHoodFailure
+local observePursuitRouteState
+
 local function startMissionWatchdog()
     rememberTimer(setTimer(function()
         if not mission.running or mission.finishing then
             return
         end
+        local vehiclePolicy = greenwoodFailureStages[mission.stage]
         local vehicle = mission.entities.vehicle
-        local allowsMissingGreenwood = mission.stage == "cutscene" or mission.stage == "restaurant_teardown" or
-                                           mission.stage == "restaurant_rebuild"
-        if not allowsMissingGreenwood and not isElement(vehicle) then
-            return failMission("The Greenwood element disappeared", "SWE3_D")
+        if vehiclePolicy and not isElement(vehicle) then
+            return failMission("The Greenwood element disappeared during an SCM-monitored stage", "SWE3_D")
         end
-        if isElement(vehicle) and mission.stage ~= "cutscene" and getElementHealth(vehicle) <= 250 then
-            local textKey = mission.stage == "chase" and "SWE2_KA" or "SWE2_KC"
-            return failMission("The Greenwood health reached the vanilla 250 threshold", textKey)
+        if vehiclePolicy and vehiclePolicy.healthText and isElement(vehicle) and getElementHealth(vehicle) <= 250 then
+            return beginGreenwoodFailure(vehiclePolicy)
         end
-        for _, actor in ipairs({"sweet", "ryder", "smoke"}) do
-            if mission.entities[actor] and not isElement(mission.entities[actor]) then
-                return failMission(actor .. " element disappeared")
+        local actorPolicy = actorFailureStages[mission.stage]
+        for actor in pairs(actorPolicy or {}) do
+            if not isElement(mission.entities[actor]) then
+                return failMission(actor .. " element disappeared during an SCM-monitored stage", actorFailureText[actor])
             end
         end
     end, 250, 0))
@@ -291,7 +370,7 @@ local function createRestaurantProtagonist(name, profile, vehicle)
         return false
     end
     setElementData(mission.entities[name], DRIVETHRU.actorRoleData, "protagonist", true)
-    return warpPedIntoVehicle(mission.entities[name], vehicle, profile.seat)
+    return warpPedIntoVehicle(mission.entities[name], vehicle, DRIVETHRU.restaurant.passengerSeats[name])
 end
 
 local function createRestaurantBallasDriver(vehicle)
@@ -444,6 +523,126 @@ local function queueAudio(profile, purpose, index)
     return true
 end
 
+local function interruptDialogueForReminder()
+    local audio = mission.audio
+    if not audio then
+        return
+    end
+    if audio.purpose == "drive" then
+        mission.driveLineIndex = audio.index
+    elseif audio.purpose == "chase" then
+        mission.chaseLineIndex = audio.index
+    elseif audio.purpose == "return_drive" then
+        mission.returnLineIndex = audio.index
+    end
+    -- SWEET3 clears conversation channel 1 before loading the channel 2
+    -- reminder. Treat its interrupted line as consumed so re-entry continues
+    -- at the same next index as the native finished-channel observation.
+    mission.audio = nil
+end
+
+local function finishGreenwoodFailureWhenReady()
+    local failure = mission.vehicleFailure
+    if not failure or mission.stage ~= "greenwood_failure" or not failure.audioFinished or not failure.tasksReady then
+        return
+    end
+    failMission("The Greenwood health reached the vanilla 250 threshold after the crew bailed out", "SWE3_D")
+end
+
+beginGreenwoodFailure = function(vehiclePolicy)
+    if not mission.running or mission.finishing or mission.vehicleFailure or type(vehiclePolicy) ~= "table" then
+        return
+    end
+    local profile = DRIVETHRU.audio.vehicleFailure[vehiclePolicy.healthText]
+    if not profile then
+        return failMission("The Greenwood failure audio profile is missing", "SWE3_D")
+    end
+    local originalStage = mission.stage
+    local actors = originalStage == "return_smoke_drive" and {"smoke"} or {"sweet", "ryder", "smoke"}
+    interruptDialogueForReminder()
+    mission.stage = "greenwood_failure"
+    mission.vehicleFailure = {
+        originalStage = originalStage,
+        actors = actors,
+        profile = profile,
+        tasksReady = false,
+        audioFinished = false,
+    }
+    if not queueAudio(profile, "vehicle_failure") then
+        mission.vehicleFailure = nil
+        return failMission("The Greenwood failure warning could not be queued", "SWE3_D")
+    end
+    outputDebugString(("[drive-thru] VANILLA GREENWOOD FAILURE: stage=%s health=%.1f warning=%s actors=%s"):format(
+                          originalStage, getElementHealth(mission.entities.vehicle), profile.key, table.concat(actors, ",")))
+end
+
+beginHoodFailure = function()
+    if not mission.running or mission.finishing or mission.stage ~= "chase" or mission.hoodFailure then
+        return
+    end
+    interruptDialogueForReminder()
+    mission.hoodFailureSerial = mission.hoodFailureSerial + 1
+    mission.stage = "hood_failure_prepare"
+    mission.hoodFailure = {
+        id = mission.hoodFailureSerial,
+        mate1Dead = false,
+        mate2Dead = false,
+        routeHandoff = false,
+        frozenElement = getPedOccupiedVehicle(mission.leader),
+    }
+    if not isElement(mission.hoodFailure.frozenElement) then
+        mission.hoodFailure.frozenElement = mission.leader
+    end
+    setElementFrozen(mission.hoodFailure.frozenElement, true)
+    triggerClientEvent(mission.leader, "drivethru:hoodFailurePrepare", resourceRoot, mission.hoodFailure.id, mission.entities)
+    outputDebugString("[drive-thru] VANILLA HOOD FAILURE: the Voodoo reached Grove with both Ballas alive")
+    rememberTimer(setTimer(function(expectedId)
+        local failure = mission.hoodFailure
+        if mission.running and not mission.finishing and failure and failure.id == expectedId then
+            failMission("The Grove Street failure scene exceeded its native-task guard", "TW2_Y")
+        end
+    end, DRIVETHRU.chase.hoodFailure.guardTimeout, 1, mission.hoodFailure.id))
+end
+
+local function startHoodFailureEscapeWhenReady()
+    local failure = mission.hoodFailure
+    if not failure or failure.escapeStarted or not failure.mate1Dead or not failure.mate2Dead then
+        return
+    end
+    failure.escapeStarted = true
+    mission.stage = "hood_failure_escape"
+    triggerClientEvent(mission.leader, "drivethru:hoodFailureEscape", resourceRoot, failure.id, mission.entities)
+    outputDebugString("[drive-thru] Both scripted Grove deaths observed; the Voodoo begins its 30.0 escape task")
+end
+
+local function observeHoodFailureDeath(name, proof)
+    local failure = mission.hoodFailure
+    local flag = name == "mate1" and "mate1Dead" or name == "mate2" and "mate2Dead" or nil
+    if not failure or not flag or failure[flag] then
+        return false
+    end
+    failure[flag] = true
+    outputDebugString(("[drive-thru] Native Grove death observed: %s (%s)"):format(name, tostring(proof or "server wasted event")))
+    startHoodFailureEscapeWhenReady()
+    return true
+end
+
+local function queueReturnToCarReminder()
+    local profiles = mission.stage == "return_smoke_drive" and DRIVETHRU.audio.returnToCar.smoke or DRIVETHRU.audio.returnToCar.crew
+    if type(profiles) ~= "table" or #profiles == 0 then
+        return false
+    end
+    interruptDialogueForReminder()
+    local index = (mission.reminderIndex - 1) % #profiles + 1
+    mission.reminderIndex = index % #profiles + 1
+    local queued = queueAudio(profiles[index], "vehicle_reminder", index)
+    if queued then
+        outputDebugString(('[drive-thru] Return-to-car reminder queued: stage=%s index=%d key=%s event=%d'):format(
+                              mission.stage, index, profiles[index].key, profiles[index].event))
+    end
+    return queued
+end
+
 local function queueNextDriveLine()
     if not mission.running or mission.stage ~= "drive" or mission.audio or not mission.leaderInVehicle then
         return
@@ -495,6 +694,7 @@ end
 
 local beginFootCombat
 local completeChase
+local startReturnDrive
 
 local function monitorChase()
     if not mission.running or mission.finishing or mission.stage ~= "chase" then
@@ -528,7 +728,7 @@ local function monitorChase()
         local x, y, z = getElementPosition(voodoo)
         local hub = DRIVETHRU.chase.hub
         if math.abs(x - hub.x) <= hub.radiusX and math.abs(y - hub.y) <= hub.radiusY and math.abs(z - hub.z) <= hub.radiusZ then
-            return failMission("The Ballas reached Grove Street before they were stopped", "TW2_Y")
+            return beginHoodFailure()
         end
     end
 
@@ -548,6 +748,7 @@ beginFootCombat = function(reason)
     if not mission.running or mission.finishing or mission.stage ~= "chase" or mission.footCombat then
         return
     end
+    cancelPursuitRoute("foot_combat_handoff", true)
     mission.footCombat = true
     outputDebugString("[drive-thru] Vehicle-to-foot combat transition: " .. tostring(reason))
     triggerClientEvent(mission.leader, "drivethru:footCombat", resourceRoot, mission.entities, reason)
@@ -557,11 +758,12 @@ completeChase = function()
     if not mission.running or mission.finishing or mission.stage ~= "chase" then
         return
     end
-    mission.stage = "chase_checkpoint"
+    cancelPursuitRoute("chase_complete", true)
     mission.audio = nil
     outputDebugString(("[drive-thru] CHECKPOINT PASSED: both Ballas dead after native route and three drive-bys; footCombat=%s"):format(
                           tostring(mission.footCombat)))
     triggerClientEvent(mission.leader, "drivethru:chaseCheckpoint", resourceRoot, mission.entities)
+    startReturnDrive("grove")
 end
 
 local function beginChase()
@@ -588,6 +790,164 @@ local function beginChase()
         end
     end, DRIVETHRU.chase.helpDelay, 1))
     rememberTimer(setTimer(monitorChase, DRIVETHRU.chase.monitorInterval, 0))
+end
+
+local function getReturnAudioProfiles(phase, scene)
+    if phase == "grove" then
+        return scene and DRIVETHRU.audio.returnGroveScene or DRIVETHRU.audio.returnGroveDrive
+    end
+    return scene and DRIVETHRU.audio.returnSmokeScene or DRIVETHRU.audio.returnSmokeDrive
+end
+
+local function queueNextReturnDriveLine()
+    local phase = mission.returnPhase
+    local profile = phase and DRIVETHRU.returnTrip[phase]
+    if not mission.running or mission.finishing or not profile or mission.stage ~= profile.stage or mission.audio or not mission.leaderInVehicle then
+        return
+    end
+    local nextIndex = mission.returnLineIndex + 1
+    local line = getReturnAudioProfiles(phase, false)[nextIndex]
+    if line then
+        queueAudio(line, "return_drive", nextIndex)
+    end
+end
+
+local requestReturnSceneRelease
+
+local function startReturnSceneDepartures(scene)
+    if mission.returnScene ~= scene or scene.releasing or scene.departuresStartedAt then
+        return
+    end
+    scene.departuresStartedAt = getTickCount()
+    scene.departuresReady = false
+    triggerClientEvent(mission.leader, "drivethru:returnSceneDepartures", resourceRoot, scene.id, scene.phase, mission.entities)
+    local lastDelay = 0
+    for _, departure in ipairs(DRIVETHRU.returnTrip[scene.phase].scene.departures) do
+        lastDelay = math.max(lastDelay, departure.delay)
+    end
+    local timelineDuration = lastDelay + DRIVETHRU.returnTrip[scene.phase].scene.postDepartureDelay
+    rememberTimer(setTimer(function(expectedId)
+        local active = mission.returnScene
+        if not active or active.id ~= expectedId or active.releasing then
+            return
+        end
+        if not active.departuresReady then
+            return failMission("Return-scene native departure tasks were not active before the SCM wait elapsed")
+        end
+        requestReturnSceneRelease(active, false)
+    end, timelineDuration, 1, scene.id))
+end
+
+local function queueNextReturnSceneLine(scene)
+    if mission.returnScene ~= scene or scene.releasing or mission.audio or
+        mission.stage ~= "return_" .. scene.phase .. "_scene" then
+        return
+    end
+    local nextIndex = scene.lineIndex + 1
+    local line = getReturnAudioProfiles(scene.phase, true)[nextIndex]
+    if line then
+        queueAudio(line, "return_scene", nextIndex)
+    else
+        startReturnSceneDepartures(scene)
+    end
+end
+
+local function beginReturnSceneTimeline(scene)
+    if mission.returnScene ~= scene or scene.releasing then
+        return
+    end
+    mission.stage = "return_" .. scene.phase .. "_scene"
+    local sceneProfile = DRIVETHRU.returnTrip[scene.phase].scene
+    local function beginAudio()
+        if mission.returnScene ~= scene or scene.releasing then
+            return
+        end
+        if sceneProfile.lookAt and not sceneProfile.lookAt.afterLine then
+            triggerClientEvent(mission.leader, "drivethru:returnSceneLookAt", resourceRoot, scene.id, sceneProfile.lookAt.actor,
+                               sceneProfile.lookAt.duration)
+        end
+        if sceneProfile.skippableFromStart then
+            scene.skippable = true
+            triggerClientEvent(mission.leader, "drivethru:returnSceneSkippable", resourceRoot, scene.id)
+        end
+        queueNextReturnSceneLine(scene)
+    end
+    if (sceneProfile.cameraLead or 0) > 0 then
+        rememberTimer(setTimer(beginAudio, sceneProfile.cameraLead, 1))
+    else
+        beginAudio()
+    end
+end
+
+local function startReturnScene(phase)
+    if not mission.running or mission.finishing or mission.returnPhase ~= phase then
+        return
+    end
+    mission.audio = nil
+    mission.returnSceneSerial = mission.returnSceneSerial + 1
+    local scene = {
+        id = mission.returnSceneSerial,
+        phase = phase,
+        lineIndex = 0,
+        skippable = false,
+        releasing = false,
+    }
+    mission.returnScene = scene
+    mission.stage = "return_" .. phase .. "_scene_prepare"
+    triggerClientEvent(mission.leader, "drivethru:returnScenePrepare", resourceRoot, scene.id, phase, mission.entities)
+    rememberTimer(setTimer(function(expectedId)
+        local active = mission.returnScene
+        if active and active.id == expectedId and not active.ready then
+            failMission("Return-scene camera preparation timed out: " .. active.phase)
+        end
+    end, DRIVETHRU.returnTrip.sceneGuardTimeout, 1, scene.id))
+end
+
+startReturnDrive = function(phase)
+    if not mission.running or mission.finishing or not DRIVETHRU.returnTrip[phase] then
+        return
+    end
+    mission.returnScene = nil
+    mission.returnPhase = phase
+    mission.returnLineIndex = 0
+    mission.stage = DRIVETHRU.returnTrip[phase].stage
+    mission.leaderInVehicle = isElement(mission.leader) and getPedOccupiedVehicle(mission.leader) == mission.entities.vehicle and
+                                  getPedOccupiedVehicleSeat(mission.leader) == 0
+    triggerClientEvent(mission.leader, "drivethru:returnDriveStarted", resourceRoot, phase, mission.entities)
+    outputDebugString(("[drive-thru] Return drive started: %s; waiting for the exact grounded arrival gate"):format(phase))
+    rememberTimer(setTimer(queueNextReturnDriveLine, DRIVETHRU.returnTrip.dialogueDelay, 1))
+end
+
+requestReturnSceneRelease = function(scene, skipped)
+    if mission.returnScene ~= scene or scene.releasing then
+        return
+    end
+    scene.releasing = true
+    scene.skipped = skipped == true
+    mission.audio = nil
+    mission.stage = "return_" .. scene.phase .. "_scene_release"
+    triggerClientEvent(mission.leader, "drivethru:returnSceneRelease", resourceRoot, scene.id, scene.skipped)
+    rememberTimer(setTimer(function(expectedId)
+        local active = mission.returnScene
+        if active and active.id == expectedId then
+            failMission("Return-scene camera release timed out: " .. active.phase)
+        end
+    end, DRIVETHRU.returnTrip.sceneGuardTimeout, 1, scene.id))
+end
+
+local function finishReturnMission()
+    if not mission.running or mission.finishing then
+        return
+    end
+    mission.finishing = true
+    mission.stage = "complete"
+    givePlayerMoney(mission.leader, DRIVETHRU.returnTrip.reward)
+    triggerClientEvent(mission.leader, "drivethru:passed", resourceRoot, DRIVETHRU.returnTrip.reward, DRIVETHRU.returnTrip.tune)
+    outputDebugString(("[drive-thru] MISSION PASSED: return scenes complete; visible reward=$%d tune=%d"):format(
+                          DRIVETHRU.returnTrip.reward, DRIVETHRU.returnTrip.tune))
+    rememberTimer(setTimer(function()
+        cleanupMission("complete", true)
+    end, DRIVETHRU.returnTrip.completionDisplayDuration, 1))
 end
 
 local function beginDrive()
@@ -693,7 +1053,6 @@ local function startMission(player)
     setElementInterior(player, 0)
     setElementDimension(player, DRIVETHRU.dimension)
     setElementFrozen(player, true)
-    takeAllWeapons(player)
     triggerClientEvent(player, "drivethru:start", resourceRoot)
     outputDebugString(("[drive-thru] Starting SWEET2A for leader %s in dimension %d"):format(getPlayerName(player), DRIVETHRU.dimension))
     startMissionWatchdog()
@@ -807,31 +1166,100 @@ addEventHandler("drivethru:restaurantRebuildReady", resourceRoot, function(resul
     -- vehicle, this ordinary health RPC carries the full SWEET3 value.
     setElementHealth(mission.entities.voodoo, DRIVETHRU.restaurant.voodoo.health)
     mission.stage = "pursuit_route_barrier"
-    outputDebugString("[drive-thru] SWEET2B reconstruction passed; Voodoo health rearmed to 2700 before native route assignment")
+    mission.pursuitRouteActivated = false
+    mission.pursuitRouteIndex = nil
+    if not nativeTaskRuntimeRunning() then
+        return failMission("The native task runtime is not running")
+    end
+
+    local route = {}
+    for index, point in ipairs(DRIVETHRU.chase.route) do
+        route[index] = {
+            x = point.x,
+            y = point.y,
+            z = point.z,
+            speed = point.speed,
+            mode = DRIVETHRU.chase.drivingMode,
+            vehicleModel = DRIVETHRU.chase.vehicleModel,
+            drivingStyle = DRIVETHRU.chase.drivingStyle,
+        }
+    end
+
     triggerClientEvent(mission.leader, "drivethru:pursuitRoute", resourceRoot, mission.entities)
+    local handle, routeError = exports["native-task-runtime"]:createNativeDriveRoute(
+                                    mission.entities.ballas_driver, mission.entities.voodoo, route, mission.leader,
+                                    {loadCollision = false, validZMin = 8, validZMax = 20, fallbackOwners = {mission.leader}})
+    if not handle then
+        return failMission("Ballas managed route creation failed: " .. tostring(routeError))
+    end
+    mission.pursuitRouteTask = handle
+    -- Cross-resource events are an acceleration path, not the only source of
+    -- truth. Polling the owned handle also catches a state transition emitted
+    -- before this mission has associated the fresh custom element locally.
+    mission.pursuitRoutePollTimer = rememberTimer(setTimer(function(expectedHandle)
+        if not mission.running or mission.finishing or mission.pursuitRouteTask ~= expectedHandle or
+            not isElement(expectedHandle) or not nativeTaskRuntimeRunning() then
+            return
+        end
+        local routeState = exports["native-task-runtime"]:getNativeDriveRouteState(expectedHandle)
+        if routeState then
+            observePursuitRouteState(expectedHandle, routeState.state, routeState)
+        end
+    end, 250, 0, handle))
+    outputDebugString("[drive-thru] SWEET2B reconstruction passed; Voodoo health 2700, 0587 FALSE and managed route requested")
+    rememberTimer(setTimer(function(expectedHandle)
+        if mission.running and mission.stage == "pursuit_route_barrier" and mission.pursuitRouteTask == expectedHandle and
+            not mission.pursuitRouteActivated then
+            failMission("The managed Ballas route did not become active before the mission guard")
+        end
+    end, DRIVETHRU.chase.routeActivationTimeout, 1, handle))
 end)
 
-addEvent("drivethru:pursuitRouteReady", true)
-addEventHandler("drivethru:pursuitRouteReady", resourceRoot, function(result, details)
-    if source ~= resourceRoot or client ~= mission.leader or mission.stage ~= "pursuit_route_barrier" then
+observePursuitRouteState = function(handle, routeState, data)
+    if handle ~= mission.pursuitRouteTask or type(data) ~= "table" or not mission.running or mission.finishing then
         return
     end
-    if result ~= "active" then
-        return failMission("Ballas route assignment failed: " .. tostring(result) .. " " .. tostring(details or ""))
+
+    if routeState == "active" then
+        if data.routeIndex ~= mission.pursuitRouteIndex then
+            outputDebugString(("[drive-thru] Managed route epoch=%d logical index=%d state=%s"):format(
+                                  data.epoch, data.routeIndex, mission.stage))
+        end
+        mission.pursuitRouteIndex = data.routeIndex
+        if mission.stage ~= "pursuit_route_barrier" or mission.pursuitRouteActivated then
+            return
+        end
+        local driver, voodoo = mission.entities.ballas_driver, mission.entities.voodoo
+        if data.owner ~= mission.leader or not isElement(driver) or not isElement(voodoo) or
+            getElementSyncer(driver) ~= mission.leader or getElementSyncer(voodoo) ~= mission.leader or
+            getPedOccupiedVehicle(driver) ~= voodoo or getPedOccupiedVehicleSeat(driver) ~= 0 then
+            return failMission("Managed Ballas route became active without authoritative ownership and seat state")
+        end
+        mission.pursuitRouteActivated = true
+        local created, failedActor = createChaseActors()
+        if not created then
+            return failMission("Pursuit actor creation failed: " .. tostring(failedActor))
+        end
+        setElementHealth(mission.entities.vehicle, DRIVETHRU.chase.greenwoodHealth)
+        mission.stage = "pursuit_task_barrier"
+        outputDebugString(("[drive-thru] Managed route active epoch=%d index=%d; pursuit actors created in SCM order"):format(
+                              data.epoch, data.routeIndex))
+        triggerClientEvent(mission.leader, "drivethru:pursuitActorsCreated", resourceRoot, mission.entities)
+    elseif routeState == "failed" or routeState == "orphaned" then
+        if mission.stage == "pursuit_route_barrier" or mission.stage == "pursuit_task_barrier" or mission.stage == "chase" then
+            failMission("Managed Ballas route entered " .. routeState .. ": " .. tostring(data.reason or "no reason"))
+        end
+    elseif routeState == "completed" then
+        if mission.stage == "chase" and not mission.footCombat then
+            beginHoodFailure()
+        elseif mission.stage == "pursuit_route_barrier" or mission.stage == "pursuit_task_barrier" then
+            failMission("Managed Ballas route completed before the pursuit became active")
+        end
     end
-    local driver, voodoo = mission.entities.ballas_driver, mission.entities.voodoo
-    if not isElement(driver) or not isElement(voodoo) or getElementSyncer(driver) ~= client or getElementSyncer(voodoo) ~= client or
-        getPedOccupiedVehicle(driver) ~= voodoo or getPedOccupiedVehicleSeat(driver) ~= 0 then
-        return failMission("Ballas route was reported active without authoritative driver ownership and seat state")
-    end
-    local created, failedActor = createChaseActors()
-    if not created then
-        return failMission("Pursuit actor creation failed: " .. tostring(failedActor))
-    end
-    setElementHealth(mission.entities.vehicle, DRIVETHRU.chase.greenwoodHealth)
-    mission.stage = "pursuit_task_barrier"
-    outputDebugString("[drive-thru] Driver route active; Ballas passenger and two Grove support actors created in SCM order")
-    triggerClientEvent(mission.leader, "drivethru:pursuitActorsCreated", resourceRoot, mission.entities)
+end
+
+addEventHandler("onNativeDriveRouteStateChange", root, function(routeState, data)
+    observePursuitRouteState(source, routeState, data)
 end)
 
 addEvent("drivethru:pursuitTasksReady", true)
@@ -844,8 +1272,8 @@ addEventHandler("drivethru:pursuitTasksReady", resourceRoot, function(result, de
     end
     local expected = {
         ballas_passenger = {vehicle = mission.entities.voodoo, seat = DRIVETHRU.chase.ballasPassenger.seat},
-        ryder = {vehicle = mission.entities.vehicle, seat = DRIVETHRU.actors.ryder.seat},
-        sweet = {vehicle = mission.entities.vehicle, seat = DRIVETHRU.actors.sweet.seat},
+        ryder = {vehicle = mission.entities.vehicle, seat = DRIVETHRU.restaurant.passengerSeats.ryder},
+        sweet = {vehicle = mission.entities.vehicle, seat = DRIVETHRU.restaurant.passengerSeats.sweet},
     }
     for name, profile in pairs(expected) do
         local ped = mission.entities[name]
@@ -910,6 +1338,158 @@ addEventHandler("drivethru:audioReady", resourceRoot, function(audioId, result, 
         return failMission("Mission audio load failed: " .. tostring(result) .. " " .. tostring(details or ""))
     end
     triggerClientEvent(mission.leader, "drivethru:audioStart", resourceRoot, audio.id)
+    if audio.purpose == "vehicle_failure" then
+        local failure = mission.vehicleFailure
+        if not failure or mission.stage ~= "greenwood_failure" then
+            return failMission("The Greenwood warning loaded without an active failure state", "SWE3_D")
+        end
+        triggerClientEvent(mission.leader, "drivethru:greenwoodFailureTasks", resourceRoot, failure.actors, mission.entities)
+    end
+end)
+
+addEvent("drivethru:greenwoodFailureTasksReady", true)
+addEventHandler("drivethru:greenwoodFailureTasksReady", resourceRoot, function(result, details)
+    local failure = mission.vehicleFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or mission.stage ~= "greenwood_failure" or failure.tasksReady then
+        return
+    end
+    if result ~= "active" then
+        return failMission("Greenwood bail-out task assignment failed: " .. tostring(result) .. " " .. tostring(details or ""), "SWE3_D")
+    end
+    for _, name in ipairs(failure.actors) do
+        local ped = mission.entities[name]
+        if not isElement(ped) or getElementSyncer(ped) ~= client then
+            return failMission("Greenwood bail-out task lacked authoritative ownership: " .. name, actorFailureText[name])
+        end
+    end
+    failure.tasksReady = true
+    outputDebugString("[drive-thru] Native immediate-leave and smart-flee sequences active: " .. tostring(details or ""))
+    finishGreenwoodFailureWhenReady()
+end)
+
+addEvent("drivethru:hoodFailureLeasesReady", true)
+addEventHandler("drivethru:hoodFailureLeasesReady", resourceRoot, function(failureId)
+    local failure = mission.hoodFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or failure.id ~= tonumber(failureId) or
+        mission.stage ~= "hood_failure_prepare" then
+        return
+    end
+    if failure.routeHandoff then
+        return triggerClientEvent(mission.leader, "drivethru:hoodFailureLeasesCommitted", resourceRoot, failure.id)
+    end
+
+    -- The client first overlaps the runtime leases. Only then may the route
+    -- release its ownership, otherwise a completed off-stream route can put
+    -- the driver back under automatic sync while the fixed scene is loading.
+    cancelPursuitRoute("grove_failure_handoff", true)
+    for _, name in ipairs({"ballas_driver", "voodoo"}) do
+        local element = mission.entities[name]
+        if not isElement(element) or getElementSyncer(element) ~= mission.leader then
+            return failMission("Grove Street failure route handoff lacked authoritative ownership: " .. name, "TW2_Y")
+        end
+    end
+    failure.routeHandoff = true
+    triggerClientEvent(mission.leader, "drivethru:hoodFailureLeasesCommitted", resourceRoot, failure.id)
+    outputDebugString("[drive-thru] Grove failure route ownership committed before camera preparation")
+end)
+
+addEvent("drivethru:hoodFailureBlack", true)
+addEventHandler("drivethru:hoodFailureBlack", resourceRoot, function(failureId, result, details)
+    local failure = mission.hoodFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or failure.id ~= tonumber(failureId) or
+        mission.stage ~= "hood_failure_prepare" then
+        return
+    end
+    if result ~= "ready" then
+        return failMission("Grove Street failure camera preparation failed: " .. tostring(result) .. " " .. tostring(details or ""), "TW2_Y")
+    end
+    if not failure.routeHandoff then
+        return failMission("Grove Street failure camera preparation completed before route ownership handoff", "TW2_Y")
+    end
+    mission.stage = "hood_failure_setup"
+    triggerClientEvent(mission.leader, "drivethru:hoodFailureFrozen", resourceRoot, failure.id, mission.entities)
+end)
+
+addEvent("drivethru:hoodFailureActive", true)
+addEventHandler("drivethru:hoodFailureActive", resourceRoot, function(failureId, result, details)
+    local failure = mission.hoodFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or failure.id ~= tonumber(failureId) or
+        (mission.stage ~= "hood_failure_setup" and mission.stage ~= "hood_failure_active") then
+        return
+    end
+    if result ~= "active" then
+        return failMission("Grove Street drive-by setup failed: " .. tostring(result) .. " " .. tostring(details or ""), "TW2_Y")
+    end
+    if mission.stage == "hood_failure_active" then
+        return
+    end
+    for _, name in ipairs({"ballas_driver", "ballas_passenger"}) do
+        local ped = mission.entities[name]
+        if not isElement(ped) or getElementSyncer(ped) ~= client then
+            return failMission("Grove Street failure task lacked authoritative ownership: " .. name, "TW2_Y")
+        end
+    end
+    mission.stage = "hood_failure_active"
+    outputDebugString("[drive-thru] Grove Street slow drive and coordinate drive-by active: " .. tostring(details or ""))
+end)
+
+addEvent("drivethru:hoodFailureDeathObserved", true)
+addEventHandler("drivethru:hoodFailureDeathObserved", resourceRoot, function(failureId, name, health, taskEvidence)
+    local failure = mission.hoodFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or failure.id ~= tonumber(failureId) or
+        mission.stage ~= "hood_failure_active" or (name ~= "mate1" and name ~= "mate2") or type(health) ~= "number" or
+        type(taskEvidence) ~= "string" then
+        return
+    end
+    local ped = mission.entities[name]
+    if not isElement(ped) or getElementSyncer(ped) ~= client then
+        return failMission("Grove Street scripted death lacked authoritative ownership: " .. tostring(name), "TW2_Y")
+    end
+    -- TASK_DIE runs inside the primary sequence slot, while GTA's IsDead path
+    -- only inspects its event-response death slot. Native task/progress
+    -- evidence from the authoritative syncer is therefore the correct gate;
+    -- the server then commits health 0 for every client.
+    if getElementHealth(ped) > 0 and not setElementHealth(ped, 0) then
+        return failMission("Grove Street scripted death could not be synchronized: " .. tostring(name), "TW2_Y")
+    end
+    observeHoodFailureDeath(name, ("client health=%.1f task=%s"):format(health, taskEvidence))
+end)
+
+addEvent("drivethru:hoodFailureEscapeBlack", true)
+addEventHandler("drivethru:hoodFailureEscapeBlack", resourceRoot, function(failureId, result, details)
+    local failure = mission.hoodFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or failure.id ~= tonumber(failureId) or
+        mission.stage ~= "hood_failure_escape" then
+        return
+    end
+    if result ~= "black" then
+        return failMission("Grove Street escape fade failed: " .. tostring(result) .. " " .. tostring(details or ""), "TW2_Y")
+    end
+    for _, name in ipairs({"ballas_driver", "ballas_passenger", "voodoo"}) do
+        if isElement(mission.entities[name]) then
+            destroyElement(mission.entities[name])
+        end
+        mission.entities[name] = nil
+    end
+    if isElement(failure.frozenElement) then
+        setElementFrozen(failure.frozenElement, false)
+    end
+    failure.frozenElement = nil
+    mission.stage = "hood_failure_restore"
+    triggerClientEvent(mission.leader, "drivethru:hoodFailureRestore", resourceRoot, failure.id)
+end)
+
+addEvent("drivethru:hoodFailureRestored", true)
+addEventHandler("drivethru:hoodFailureRestored", resourceRoot, function(failureId, result)
+    local failure = mission.hoodFailure
+    if source ~= resourceRoot or client ~= mission.leader or not failure or failure.id ~= tonumber(failureId) or
+        mission.stage ~= "hood_failure_restore" then
+        return
+    end
+    if result ~= "restored" then
+        return failMission("Grove Street failure cleanup was refused: " .. tostring(result), "TW2_Y")
+    end
+    failMission("The Ballas reached Grove Street before they were stopped", "TW2_Y")
 end)
 
 addEvent("drivethru:audioFinished", true)
@@ -933,6 +1513,167 @@ addEventHandler("drivethru:audioFinished", resourceRoot, function(audioId, resul
     elseif audio.purpose == "chase" then
         mission.chaseLineIndex = audio.index
         rememberTimer(setTimer(queueNextChaseLine, DRIVETHRU.audio.gap, 1))
+    elseif audio.purpose == "return_drive" then
+        mission.returnLineIndex = audio.index
+        rememberTimer(setTimer(queueNextReturnDriveLine, DRIVETHRU.audio.gap, 1))
+    elseif audio.purpose == "return_scene" then
+        local scene = mission.returnScene
+        if not scene or scene.releasing then
+            return
+        end
+        scene.lineIndex = audio.index
+        local sceneProfile = DRIVETHRU.returnTrip[scene.phase].scene
+        if sceneProfile.lookAt and sceneProfile.lookAt.afterLine == scene.lineIndex then
+            triggerClientEvent(mission.leader, "drivethru:returnSceneLookAt", resourceRoot, scene.id, sceneProfile.lookAt.actor,
+                               sceneProfile.lookAt.duration)
+        end
+        if sceneProfile.skippableAfterLine == scene.lineIndex then
+            scene.skippable = true
+            triggerClientEvent(mission.leader, "drivethru:returnSceneSkippable", resourceRoot, scene.id)
+        end
+        if sceneProfile.camera.vectorAfterLine == scene.lineIndex then
+            triggerClientEvent(mission.leader, "drivethru:returnSceneVectorCamera", resourceRoot, scene.id)
+        end
+        rememberTimer(setTimer(function()
+            queueNextReturnSceneLine(scene)
+        end, DRIVETHRU.audio.gap, 1))
+    elseif audio.purpose == "vehicle_reminder" then
+        if mission.leaderInVehicle then
+            if mission.stage == "drive" then
+                rememberTimer(setTimer(queueNextDriveLine, DRIVETHRU.audio.gap, 1))
+            elseif mission.stage == "chase" then
+                rememberTimer(setTimer(queueNextChaseLine, DRIVETHRU.audio.gap, 1))
+            elseif mission.returnPhase and mission.stage == DRIVETHRU.returnTrip[mission.returnPhase].stage then
+                rememberTimer(setTimer(queueNextReturnDriveLine, DRIVETHRU.audio.gap, 1))
+            end
+        else
+            triggerClientEvent(mission.leader, "drivethru:vehicleReminderFinished", resourceRoot, mission.stage)
+        end
+    elseif audio.purpose == "vehicle_failure" then
+        local failure = mission.vehicleFailure
+        if not failure or mission.stage ~= "greenwood_failure" then
+            return
+        end
+        failure.audioFinished = true
+        outputDebugString("[drive-thru] Greenwood failure warning finished naturally; waiting for native flee activation")
+        finishGreenwoodFailureWhenReady()
+    end
+end)
+
+addEvent("drivethru:returnArrivalReport", true)
+addEventHandler("drivethru:returnArrivalReport", resourceRoot, function(phase, onAllWheels)
+    local player, vehicle = client, mission.entities.vehicle
+    local profile = type(phase) == "string" and DRIVETHRU.returnTrip[phase] or nil
+    if source ~= resourceRoot or player ~= mission.leader or phase ~= mission.returnPhase or not profile or mission.stage ~= profile.stage or
+        onAllWheels ~= true or not isElement(vehicle) or getPedOccupiedVehicle(player) ~= vehicle or getPedOccupiedVehicleSeat(player) ~= 0 then
+        return
+    end
+    local x, y, z = getElementPosition(vehicle)
+    local destination = profile.destination
+    if math.abs(x - destination.x) > destination.radiusX or math.abs(y - destination.y) > destination.radiusY or
+        math.abs(z - destination.z) > destination.radiusZ then
+        outputDebugString("[drive-thru] Rejected stale return 09D0 arrival report outside the SCM box", 2)
+        return
+    end
+    outputDebugString(("[drive-thru] RETURN GATE PASSED: %s position=(%.2f, %.2f, %.2f) driver=true allWheels=true"):format(
+                          phase, x, y, z))
+    startReturnScene(phase)
+end)
+
+addEvent("drivethru:returnSceneReady", true)
+addEventHandler("drivethru:returnSceneReady", resourceRoot, function(sceneId, result, details)
+    local scene = mission.returnScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or scene.ready or
+        mission.stage ~= "return_" .. scene.phase .. "_scene_prepare" then
+        return
+    end
+    if result ~= "ready" then
+        return failMission("Return-scene preparation failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    local vehicle = mission.entities.vehicle
+    if not isElement(vehicle) or getElementSyncer(vehicle) ~= client or getPedOccupiedVehicle(client) ~= vehicle or
+        getPedOccupiedVehicleSeat(client) ~= 0 then
+        return failMission("Return scene was reported ready without authoritative Greenwood ownership and driver state")
+    end
+    scene.ready = true
+    outputDebugString(("[drive-thru] %s return camera ready: %s"):format(scene.phase, tostring(details or "")))
+    beginReturnSceneTimeline(scene)
+end)
+
+addEvent("drivethru:returnSceneDeparturesReady", true)
+addEventHandler("drivethru:returnSceneDeparturesReady", resourceRoot, function(sceneId, result, details)
+    local scene = mission.returnScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or scene.releasing or
+        not scene.departuresStartedAt or scene.departuresReady then
+        return
+    end
+    if result ~= "active" then
+        return failMission("Return-scene departure task assignment failed: " .. tostring(result) .. " " .. tostring(details or ""))
+    end
+    for _, departure in ipairs(DRIVETHRU.returnTrip[scene.phase].scene.departures) do
+        local ped = mission.entities[departure.actor]
+        if not isElement(ped) or getElementSyncer(ped) ~= client then
+            return failMission("Return-scene departure task lacked authoritative ownership: " .. departure.actor)
+        end
+    end
+    scene.departuresReady = true
+    outputDebugString(("[drive-thru] %s return native leave-and-walk sequences active: %s"):format(scene.phase,
+                                                                                                  tostring(details or "")))
+end)
+
+addEvent("drivethru:returnSceneLeaseLost", true)
+addEventHandler("drivethru:returnSceneLeaseLost", resourceRoot, function(sceneId)
+    local scene = mission.returnScene
+    if source == resourceRoot and client == mission.leader and scene and scene.id == tonumber(sceneId) then
+        failMission("The native camera lease was lost during the " .. scene.phase .. " return scene")
+    end
+end)
+
+addEvent("drivethru:returnSceneSkipRequest", true)
+addEventHandler("drivethru:returnSceneSkipRequest", resourceRoot, function(sceneId)
+    local scene = mission.returnScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or not scene.skippable or scene.releasing then
+        return
+    end
+    outputDebugString(("[drive-thru] %s return scene skip authorized by leader"):format(scene.phase))
+    requestReturnSceneRelease(scene, true)
+end)
+
+addEvent("drivethru:returnSceneReleased", true)
+addEventHandler("drivethru:returnSceneReleased", resourceRoot, function(sceneId, result)
+    local scene = mission.returnScene
+    if source ~= resourceRoot or client ~= mission.leader or not scene or scene.id ~= tonumber(sceneId) or not scene.releasing then
+        return
+    end
+    if result ~= "released" then
+        return failMission("Return-scene camera release failed: " .. tostring(result))
+    end
+    local phase, skipped = scene.phase, scene.skipped
+    mission.returnScene = nil
+    if phase == "grove" then
+        for _, name in ipairs({"sweet", "ryder"}) do
+            if isElement(mission.entities[name]) then
+                destroyElement(mission.entities[name])
+            end
+            mission.entities[name] = nil
+        end
+        if skipped then
+            triggerClientEvent(mission.leader, "drivethru:returnSceneReveal", resourceRoot)
+        end
+        outputDebugString(("[drive-thru] Grove return scene %s; Sweet and Ryder removed in SCM order"):format(
+                              skipped and "skipped" or "completed"))
+        startReturnDrive("smoke")
+    else
+        if isElement(mission.entities.smoke) then
+            destroyElement(mission.entities.smoke)
+        end
+        mission.entities.smoke = nil
+        if skipped then
+            triggerClientEvent(mission.leader, "drivethru:returnSceneReveal", resourceRoot)
+        end
+        outputDebugString(("[drive-thru] Smoke return scene %s; Smoke removed before mission pass"):format(
+                              skipped and "skipped" or "completed"))
+        finishReturnMission()
     end
 end)
 
@@ -969,6 +1710,9 @@ addEventHandler("onVehicleEnter", root, function(ped, seat)
         elseif mission.stage == "chase" then
             triggerClientEvent(ped, "drivethru:chaseNavigation", resourceRoot, "target", mission.entities)
             rememberTimer(setTimer(queueNextChaseLine, DRIVETHRU.audio.gap, 1))
+        elseif mission.returnPhase and mission.stage == DRIVETHRU.returnTrip[mission.returnPhase].stage then
+            triggerClientEvent(ped, "drivethru:returnDriveStarted", resourceRoot, mission.returnPhase, mission.entities)
+            rememberTimer(setTimer(queueNextReturnDriveLine, DRIVETHRU.audio.gap, 1))
         end
     else
         for _, name in ipairs({"smoke", "sweet", "ryder"}) do
@@ -985,18 +1729,25 @@ addEventHandler("onVehicleExit", root, function(ped, seat)
     if mission.running and source == mission.entities.vehicle and ped == mission.leader and seat == 0 then
         mission.leaderInVehicle = false
         if mission.stage == "drive" then
-            triggerClientEvent(ped, "drivethru:stage", resourceRoot, "return_car", mission.entities)
+            local reminderQueued = queueReturnToCarReminder()
+            triggerClientEvent(ped, "drivethru:stage", resourceRoot, "return_car", mission.entities, reminderQueued)
         elseif mission.stage == "chase" then
-            triggerClientEvent(ped, "drivethru:chaseNavigation", resourceRoot, "vehicle", mission.entities)
+            local reminderQueued = queueReturnToCarReminder()
+            triggerClientEvent(ped, "drivethru:chaseNavigation", resourceRoot, "vehicle", mission.entities, reminderQueued)
+        elseif mission.returnPhase and mission.stage == DRIVETHRU.returnTrip[mission.returnPhase].stage then
+            local reminderQueued = queueReturnToCarReminder()
+            triggerClientEvent(ped, "drivethru:returnDriveStarted", resourceRoot, mission.returnPhase, mission.entities, reminderQueued)
         end
     end
 end)
 
 addEventHandler("onVehicleExplode", root, function()
-    if mission.running and source == mission.entities.vehicle then
+    if mission.running and source == mission.entities.vehicle and (greenwoodFailureStages[mission.stage] or mission.stage == "greenwood_failure") then
         failMission("The Greenwood was destroyed", "SWE3_D")
-    elseif mission.running and source == mission.entities.voodoo then
+    elseif mission.running and mission.stage == "chase" and source == mission.entities.voodoo then
         beginFootCombat("Voodoo exploded")
+    elseif mission.running and mission.hoodFailure and source == mission.entities.voodoo then
+        failMission("The Voodoo exploded during the Grove Street failure scene", "TW2_Y")
     end
 end)
 
@@ -1004,15 +1755,18 @@ addEventHandler("onPedWasted", root, function()
     if not mission.running then
         return
     end
+    local actorStage = mission.vehicleFailure and mission.vehicleFailure.originalStage or mission.stage
     if source == mission.leader then
         failMission("CJ died")
-    elseif source == mission.entities.sweet then
+    elseif source == mission.entities.sweet and actorFailureStages[actorStage] and actorFailureStages[actorStage].sweet then
         failMission("Sweet died", "SWE3_E")
-    elseif source == mission.entities.ryder then
+    elseif source == mission.entities.ryder and actorFailureStages[actorStage] and actorFailureStages[actorStage].ryder then
         failMission("Ryder died", "SWE3_F")
-    elseif source == mission.entities.smoke then
+    elseif source == mission.entities.smoke and actorFailureStages[actorStage] and actorFailureStages[actorStage].smoke then
         failMission("Smoke died", "SWE3_G")
-    elseif source == mission.entities.ballas_driver or source == mission.entities.ballas_passenger then
+    elseif mission.hoodFailure and (source == mission.entities.mate1 or source == mission.entities.mate2) then
+        observeHoodFailureDeath(source == mission.entities.mate1 and "mate1" or "mate2")
+    elseif mission.stage == "chase" and (source == mission.entities.ballas_driver or source == mission.entities.ballas_passenger) then
         local driverDead = not isElement(mission.entities.ballas_driver) or isPedDead(mission.entities.ballas_driver)
         local passengerDead = not isElement(mission.entities.ballas_passenger) or isPedDead(mission.entities.ballas_passenger)
         if driverDead and passengerDead then
@@ -1020,7 +1774,7 @@ addEventHandler("onPedWasted", root, function()
         else
             beginFootCombat("one Ballas was killed")
         end
-    elseif source == mission.entities.mate1 or source == mission.entities.mate2 then
+    elseif mission.stage == "chase" and (source == mission.entities.mate1 or source == mission.entities.mate2) then
         failMission("The Grove support actors were killed", "TW2_Y")
     end
 end)
@@ -1049,16 +1803,36 @@ addCommandHandler("drivethruabort", function(player)
     end
 end)
 
+addCommandHandler("drivethrusimfar", function(player)
+    if not mission.running or player ~= mission.leader or mission.stage ~= "chase" or not isElement(mission.entities.vehicle) then
+        outputChatBox("/drivethrusimfar requires the active Ballas chase.", player, 255, 180, 80)
+        return
+    end
+    local vehicle = mission.entities.vehicle
+    setElementPosition(vehicle, 1690.0, 1448.0, 10.8)
+    setElementVelocity(vehicle, 0, 0, 0)
+    local routeState = isElement(mission.pursuitRouteTask) and
+                           exports["native-task-runtime"]:getNativeDriveRouteState(mission.pursuitRouteTask) or false
+    outputChatBox("Drive-Thru simulation owner moved more than 3 km away; wait for the Grove failure scene.", player, 120, 220, 255)
+    outputDebugString(("[drive-thru] OFF-STREAM INTEGRATION TEST: leader moved far; route epoch=%s index=%s state=%s"):format(
+                          tostring(routeState and routeState.epoch or "none"),
+                          tostring(routeState and routeState.routeIndex or "none"),
+                          tostring(routeState and routeState.state or "none")))
+end)
+
 addCommandHandler("drivethruskip", function(player)
     local scene = mission.cutscene
     if mission.running and player == mission.leader and scene and not scene.skipRequested then
         scene.skipRequested = true
         triggerClientEvent(player, "drivethru:cutsceneSkip", resourceRoot, scene.id)
+    elseif mission.running and player == mission.leader and mission.returnScene and mission.returnScene.skippable and
+        not mission.returnScene.releasing then
+        requestReturnSceneRelease(mission.returnScene, true)
     end
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputDebugString("[drive-thru] Resource ready. Use /drivethru to run SWEET2A, SWEET2B and the native Ballas chase checkpoint.")
+    outputDebugString("[drive-thru] Resource ready. Use /drivethru to run the complete multiplayer-visible SWEET3 mission.")
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()

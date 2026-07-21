@@ -169,8 +169,7 @@ CTaskComplexDieSA::CTaskComplexDieSA(const eWeaponType eMeansOfDeath, const Asso
                                      const float fAnimSpeed, const bool bBeingKilledByStealth, const bool bFallingToDeath, const int iFallToDeathDir,
                                      const bool bFallToDeathOverRailing)
 {
-    // TODO: Find out the real size
-    CreateTaskInterface(1024);
+    CreateTaskInterface(sizeof(CTaskComplexDieSAInterface));
     if (!IsValid())
         return;
     DWORD dwFunc = FUNC_CTaskComplexDie__Constructor;
@@ -192,6 +191,20 @@ CTaskComplexDieSA::CTaskComplexDieSA(const eWeaponType eMeansOfDeath, const Asso
         call    dwFunc
     }
     // clang-format on
+}
+
+CTaskComplexSmartFleeEntitySA::CTaskComplexSmartFleeEntitySA(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod,
+                                                             float fPositionChangeTolerance)
+{
+    CreateTaskInterface(sizeof(CTaskComplexSmartFleeEntitySAInterface));
+    if (!IsValid() || !pTarget)
+        return;
+
+    auto* pInterface = static_cast<CTaskComplexSmartFleeEntitySAInterface*>(GetInterface());
+    auto* pTargetInterface = pTarget->GetPedInterface();
+    using Constructor = void(__thiscall*)(CTaskComplexSmartFleeEntitySAInterface*, CEntitySAInterface*, bool, float, int, int, float);
+    reinterpret_cast<Constructor>(FUNC_CTaskComplexSmartFleeEntity__Constructor)(pInterface, pTargetInterface, bScream, fSafeDistance, iDuration,
+                                                                                 iPositionCheckPeriod, fPositionChangeTolerance);
 }
 
 CTaskSimpleStealthKillSA::CTaskSimpleStealthKillSA(bool bKiller, CPed* pPed, const AssocGroupId animGroup)

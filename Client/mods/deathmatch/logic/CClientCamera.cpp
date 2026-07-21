@@ -160,6 +160,18 @@ void CClientCamera::DoPulse()
 {
     InvalidateCachedTransforms();
 
+    // Native script cameras bypass MTA's fixed-camera matrix, but GTA still
+    // streams the scene around the camera rather than the distant player. Keep
+    // MTA's streaming override on the native camera for the full lease so a
+    // one-shot LOAD_SCENE is not immediately displaced by player-centred LODs.
+    if (m_pScriptCameraOwner && !m_bFileCutsceneLease)
+    {
+        const CMatrix& scriptCameraMatrix = AcquirePulseMatrix();
+        UpdateCenterOfWorldFromMatrix(scriptCameraMatrix);
+        m_matFixedMatrix = scriptCameraMatrix;
+        return;
+    }
+
     // If we're fixed, force the target vector
     if (m_bFixed)
     {
@@ -1106,21 +1118,26 @@ void CClientCamera::SetCenterOfWorldCached(const CVector* pPosition, float fRota
     }
 }
 
-void CClientCamera::UpdateCenterOfWorldFromFixedMatrix()
+void CClientCamera::UpdateCenterOfWorldFromMatrix(const CMatrix& matrix)
 {
     if (!g_pMultiplayer)
         return;
 
-    if (!std::isfinite(m_matFixedMatrix.vPos.fX) || !std::isfinite(m_matFixedMatrix.vPos.fY) || !std::isfinite(m_matFixedMatrix.vPos.fZ))
+    if (!std::isfinite(matrix.vPos.fX) || !std::isfinite(matrix.vPos.fY) || !std::isfinite(matrix.vPos.fZ))
         return;
 
-    CMatrix normalized = m_matFixedMatrix;
+    CMatrix normalized = matrix;
     EnsureOrthonormal(normalized);
 
     CVector eulerAngles;
     g_pMultiplayer->ConvertMatrixToEulerAngles(normalized, eulerAngles.fX, eulerAngles.fY, eulerAngles.fZ);
 
-    SetCenterOfWorldCached(&m_matFixedMatrix.vPos, kPi - eulerAngles.fZ);
+    SetCenterOfWorldCached(&matrix.vPos, kPi - eulerAngles.fZ);
+}
+
+void CClientCamera::UpdateCenterOfWorldFromFixedMatrix()
+{
+    UpdateCenterOfWorldFromMatrix(m_matFixedMatrix);
 }
 
 const CMatrix& CClientCamera::AcquirePulseMatrix() const
