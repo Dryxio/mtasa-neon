@@ -14,6 +14,7 @@
 #include <game/CCamera.h>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include "CClientCommon.h"
 #include "CClientEntity.h"
 
@@ -104,7 +105,7 @@ public:
     void          AbortScriptCamera();
     bool          HasScriptCameraLease(const CResource* owner, std::uint32_t token) const;
     bool          IsScriptCameraActive() const { return m_pScriptCameraOwner != nullptr; }
-    bool          BeginFileCutscene(CResource* owner, std::uint32_t token, const char* name);
+    bool          BeginFileCutscene(CResource* owner, std::uint32_t token, const char* name, std::optional<unsigned int> visibleArea = std::nullopt);
     bool          IsFileCutsceneLeaseActive(const CResource* owner, std::uint32_t token) const;
     bool          IsFileCutsceneLoaded(const CResource* owner, std::uint32_t token) const;
     bool          StartFileCutscene(CResource* owner, std::uint32_t token);
@@ -172,4 +173,6 @@ private:
     bool          m_bScriptCameraPreviousWidescreen{};
     bool          m_bFileCutsceneLease{};
     bool          m_bFileCutsceneStarted{};
+    bool          m_bFileCutsceneVisibleAreaSet{};
+    unsigned int  m_uiFileCutscenePreviousVisibleArea{};
 };

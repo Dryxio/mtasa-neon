@@ -64,7 +64,7 @@ public:
     static bool SetScriptCameraWidescreen(lua_State* luaVM, unsigned int token, bool enabled);
     static bool SetScriptCameraNearClip(lua_State* luaVM, unsigned int token, std::variant<bool, float> distance);
 
-    static std::variant<unsigned int, bool> RequestFileCutscene(lua_State* luaVM, std::string name);
+    static std::variant<unsigned int, bool> RequestFileCutscene(lua_State* luaVM, std::string name, std::optional<unsigned int> visibleArea);
     static bool                             IsFileCutsceneLeaseActive(lua_State* luaVM, unsigned int token);
     static bool                             IsFileCutsceneLoaded(lua_State* luaVM, unsigned int token);
     static bool                             StartFileCutscene(lua_State* luaVM, unsigned int token);

@@ -666,13 +666,26 @@ std::uint32_t CClientCamera::AcquireScriptCamera(CResource* owner, bool inhibitC
     m_pScriptCameraOwner = owner;
     m_bFileCutsceneLease = false;
     m_bFileCutsceneStarted = false;
+    m_bFileCutsceneVisibleAreaSet = false;
     return m_uiScriptCameraToken;
 }
 
-bool CClientCamera::BeginFileCutscene(CResource* owner, std::uint32_t token, const char* name)
+bool CClientCamera::BeginFileCutscene(CResource* owner, std::uint32_t token, const char* name, std::optional<unsigned int> visibleArea)
 {
-    if (!HasScriptCameraLease(owner, token) || m_bFileCutsceneLease || !g_pGame || !g_pGame->LoadFileCutscene(name))
+    CWorld* world = g_pGame ? g_pGame->GetWorld() : nullptr;
+    if (!HasScriptCameraLease(owner, token) || m_bFileCutsceneLease || !g_pGame || (visibleArea && (!world || *visibleArea > 255)) ||
+        !g_pGame->LoadFileCutscene(name))
         return false;
+
+    if (visibleArea)
+    {
+        // SET_AREA_VISIBLE is independent of the player's interior in the
+        // mission SCM. Keep that world-only state inside the native cutscene
+        // lease so resource teardown and camera preemption restore it too.
+        m_uiFileCutscenePreviousVisibleArea = world->GetCurrentArea();
+        world->SetCurrentArea(*visibleArea);
+        m_bFileCutsceneVisibleAreaSet = true;
+    }
 
     // The same lease that snapshots camera and controls must also own the
     // CCutsceneMgr teardown. This prevents a server camera takeover or
@@ -756,8 +769,11 @@ void CClientCamera::RestoreScriptCameraLease(bool preserveFade)
 
     if (m_bFileCutsceneLease && g_pGame)
         g_pGame->DeleteFileCutscene();
+    if (m_bFileCutsceneVisibleAreaSet && g_pGame && g_pGame->GetWorld())
+        g_pGame->GetWorld()->SetCurrentArea(m_uiFileCutscenePreviousVisibleArea);
     m_bFileCutsceneLease = false;
     m_bFileCutsceneStarted = false;
+    m_bFileCutsceneVisibleAreaSet = false;
 
     // Clear ownership before restoring legacy MTA camera state so any internal
     // setter reached during restoration cannot observe a stale active lease.

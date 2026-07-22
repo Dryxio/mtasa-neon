@@ -797,7 +797,7 @@ bool CLuaCameraDefs::SetScriptCameraNearClip(lua_State* luaVM, unsigned int toke
     return true;
 }
 
-std::variant<unsigned int, bool> CLuaCameraDefs::RequestFileCutscene(lua_State* luaVM, std::string name)
+std::variant<unsigned int, bool> CLuaCameraDefs::RequestFileCutscene(lua_State* luaVM, std::string name, std::optional<unsigned int> visibleArea)
 {
     CResource*     owner = GetCallingResource(luaVM);
     CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
@@ -808,7 +808,7 @@ std::variant<unsigned int, bool> CLuaCameraDefs::RequestFileCutscene(lua_State* 
     if (!token)
         return false;
 
-    if (!camera->BeginFileCutscene(owner, token, name.c_str()))
+    if (!camera->BeginFileCutscene(owner, token, name.c_str(), visibleArea))
     {
         camera->ReleaseScriptCamera(owner, token);
         return false;

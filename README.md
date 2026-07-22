@@ -243,7 +243,7 @@ The token prevents delayed callbacks from an older run in the same resource from
 
 | Function | Side | Description |
 | --- | --- | --- |
-| `requestFileCutscene(name)` | Client | Acquires the exclusive camera lease, validates a stock cutscene name, and starts GTA's asynchronous DAT/CUT/IFP load. Returns a generation token. |
+| `requestFileCutscene(name [, visibleArea])` | Client | Acquires the exclusive camera lease, optionally applies the SCM-style world area for the scene, validates a stock cutscene name, and starts GTA's asynchronous DAT/CUT/IFP load. Returns a generation token. |
 | `isFileCutsceneLeaseActive(token)` | Client | Reports whether the calling resource still owns the native cutscene and camera generation. |
 | `isFileCutsceneLoaded(token)` | Client | Reports GTA's native loaded status. |
 | `startFileCutscene(token)` | Client | Starts the loaded native cutscene once. |
@@ -255,7 +255,7 @@ The token prevents delayed callbacks from an older run in the same resource from
 | `skipFileCutscene(token)` | Client | Applies GTA's native skip to the owned playback. Cooperative resources should call it only after a server-authorized broadcast. |
 | `releaseFileCutscene(token [, preserveFade])` | Client | Deletes native cutscene data and restores the captured camera and controls. Resource shutdown performs the same cleanup automatically. |
 
-File cutscenes are global GTA state and therefore share the exclusive script-camera lease. Ordinary script-camera setters cannot mutate a file-cutscene lease, and camera takeover deletes native cutscene data before restoring gameplay. Neon suppresses only the original local skip call inside `CCutsceneMgr::Update`; the resource can still query the same keyboard, mouse, and gamepad edge and synchronize one leader's decision across all participants. Names are limited to GTA's stock cutscene-audio table and seven characters so an invalid public request cannot partially mutate streaming, player-safe, or hidden-world state.
+File cutscenes are global GTA state and therefore share the exclusive script-camera lease. Ordinary script-camera setters cannot mutate a file-cutscene lease, and camera takeover deletes native cutscene data before restoring gameplay. When supplied, `visibleArea` changes only GTA's current rendered world area, matching `SET_AREA_VISIBLE` rather than moving the player to another interior; the lease restores the previous area after native cutscene deletion on every cleanup path. Once native loading completes, Neon restores GTA's universal area `13` on the manager-owned cutscene actors and props. This narrowly compensates for MTA's global pickup compatibility patch, which otherwise makes every `CObject`, including `CCutsceneObject`, start in area `0` and disappear in an interior cutscene. Neon suppresses only the original local skip call inside `CCutsceneMgr::Update`; the resource can still query the same keyboard, mouse, and gamepad edge and synchronize one leader's decision across all participants. Names are limited to GTA's stock cutscene-audio table and seven characters so an invalid public request cannot partially mutate streaming, player-safe, or hidden-world state.
 
 ### Native directional scene loading
 

@@ -28,6 +28,7 @@
 #include "CControllerConfigManagerSA.h"
 #include "CCoronasSA.h"
 #include "CEventListSA.h"
+#include "CEntitySA.h"
 #include "CExplosionManagerSA.h"
 #include "CFileLoaderSA.h"
 #include "CFireManagerSA.h"
@@ -114,7 +115,11 @@ namespace
     constexpr std::uintptr_t VAR_FileCutsceneRunning = 0xB5F851;
     constexpr std::uintptr_t VAR_FileCutsceneProcessing = 0xB5F852;
     constexpr std::uintptr_t VAR_FileCutsceneSkipped = 0xB5F854;
+    constexpr std::uintptr_t VAR_FileCutsceneObjects = 0xBC3F18;
+    constexpr std::uintptr_t VAR_FileCutsceneObjectCount = 0xBC3FE4;
     constexpr std::uintptr_t VAR_DisableStreaming = 0x9654B0;
+    constexpr std::size_t    MAX_FILE_CUTSCENE_OBJECTS = 50;
+    constexpr unsigned char  FILE_CUTSCENE_GLOBAL_AREA = 13;
     constexpr unsigned int   MODEL_CSPLAY = 1;
     constexpr unsigned int   MODEL_CUTOBJ01 = 300;
     constexpr unsigned int   MODEL_CUTOBJ13 = 312;
@@ -138,6 +143,35 @@ namespace
     CBaseModelInfoSAInterface* g_mtaCutsceneObjectModelInfos[MTA_CUTSCENE_OBJECT_SLOT_COUNT]{};
     CStreamingInfo             g_stockCutsceneObjectStreamingInfos[MTA_CUTSCENE_OBJECT_SLOT_COUNT]{};
     bool                       g_cutsceneObjectMappingsCaptured{};
+    bool                       g_managedFileCutsceneObjectAreasRestored{};
+
+    bool RestoreManagedFileCutsceneObjectAreas()
+    {
+        if (g_managedFileCutsceneObjectAreasRestored)
+            return true;
+
+        const int objectCount = *reinterpret_cast<const int*>(VAR_FileCutsceneObjectCount);
+        if (objectCount < 0 || static_cast<std::size_t>(objectCount) > MAX_FILE_CUTSCENE_OBJECTS)
+            return false;
+
+        auto* objects = reinterpret_cast<CEntitySAInterface**>(VAR_FileCutsceneObjects);
+        for (int index = 0; index < objectCount; ++index)
+        {
+            if (!objects[index])
+                return false;
+        }
+
+        // MTA patches CObject::Init so ordinary pickup objects are created in
+        // area 0 instead of GTA's global area 13. CCutsceneObject inherits that
+        // constructor, but file cutscenes rely on their actors and props being
+        // visible across SET_AREA_VISIBLE transitions. Repair only the native
+        // manager-owned objects after loading, leaving the pickup patch intact.
+        for (int index = 0; index < objectCount; ++index)
+            objects[index]->m_areaCode = FILE_CUTSCENE_GLOBAL_AREA;
+
+        g_managedFileCutsceneObjectAreasRestored = true;
+        return true;
+    }
 
     bool InstallManagedFileCutsceneModelMappings(CStreaming* streaming)
     {
@@ -188,6 +222,7 @@ namespace
             CModelInfoSAInterface::ms_modelInfoPtrs[modelId] = g_stockCutsceneObjectModelInfos[index];
             *objectStreamingInfo = g_stockCutsceneObjectStreamingInfos[index];
         }
+        g_managedFileCutsceneObjectAreasRestored = false;
         return true;
     }
 
@@ -206,6 +241,7 @@ namespace
 
     void RestoreManagedFileCutsceneModelMappings(CStreaming* streaming)
     {
+        g_managedFileCutsceneObjectAreasRestored = false;
         if (!g_restoreManagedFileCutsceneModelMappings)
             return;
 
@@ -219,6 +255,15 @@ namespace
                     continue;
 
                 streaming->RemoveModel(modelId);
+                // RemoveModel unloads the CUTOBJ clump but deliberately keeps
+                // its CUTS.IMG directory range. Once the MTA ped model-info is
+                // restored, RequestSpecialModel would mistake that stale range
+                // for the already-resolved RYDER2..PSYCHO entry and request it
+                // directly. An unskinned cutscene prop would then enter
+                // CPedModelInfo and crash while building its bone collisions.
+                // Clear the unlinked streaming record so GTA must resolve the
+                // special character from extra.img again.
+                *streamingInfo = CStreamingInfo{};
                 CModelInfoSAInterface::ms_modelInfoPtrs[modelId] = g_mtaCutsceneObjectModelInfos[index];
 
                 // RequestSpecialModel rebuilds the extra.img directory entry
@@ -1765,7 +1810,7 @@ bool CGameSA::IsFileCutsceneLoaded() const
         }
     }
 
-    return *reinterpret_cast<const int*>(VAR_FileCutsceneLoadStatus) == 2;
+    return *reinterpret_cast<const int*>(VAR_FileCutsceneLoadStatus) == 2 && RestoreManagedFileCutsceneObjectAreas();
 }
 
 bool CGameSA::StartFileCutscene()
