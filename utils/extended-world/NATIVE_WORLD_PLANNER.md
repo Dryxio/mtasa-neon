@@ -153,12 +153,13 @@ and COL duplication, COL2 header growth and exact IPL sizes, but does not claim
 to replace canonical TXD duplicate removal or the pinned librw serialization.
 Emitted v3 manifests remain the disk and archive authority for activation.
 
-The activation work raises only the v3 cache object limit from four to eight,
+The activation work raises only the v3 child-cache object limit from four to eight,
 providing an active four-city bank plus a four-city replacement bank. The
-independent 32 GiB byte cap is unchanged. An aggregate manifest, if stored as
-metadata, must not silently consume a payload-object slot. Eight objects allow
-one complete rollover only: safe reclamation of an older, unlocked generation
-is still a blocker before continuous pack rotation can be claimed.
+independent 32 GiB byte cap is unchanged. Aggregate set envelopes use a
+separate eight-object metadata bank and never consume a payload-object slot.
+Eight child objects allow one complete rollover only: safe reclamation of an
+older, unlocked generation is still a blocker before continuous pack rotation
+can be claimed.
 
 ## Reproduction
 
@@ -190,4 +191,6 @@ Run the offline tests with:
 python3 -m unittest utils/extended-world/tests/test_plan_native_world_v3.py
 ```
 
-No VM synchronization, C++ build or game launch is part of this checkpoint.
+No VM synchronization, C++ build or game launch is part of this planner
+checkpoint. Its exact logic is now rerun against locked child cache bytes by
+the later `static-world-v3-set` authorization dry-run before GTA stock starts.

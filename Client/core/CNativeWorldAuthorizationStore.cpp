@@ -303,9 +303,10 @@ namespace
 
     bool ValidateAuthorization(const SNativeWorldStartupAuthorization& authorization, std::string& error)
     {
-        const unsigned short minimumBitstreamVersion =
-            static_cast<unsigned short>(authorization.packFormat == 1 ? eBitStreamVersion::NativeWorldStartupAuthorization
-                                                                      : eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization);
+        const unsigned short minimumBitstreamVersion = static_cast<unsigned short>(
+            authorization.packFormat == NATIVE_WORLD_BULLWORTH_FORMAT   ? eBitStreamVersion::NativeWorldStartupAuthorization
+            : authorization.packFormat == NATIVE_WORLD_STATIC_V1_FORMAT ? eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization
+                                                                        : eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization);
         if (!authorization.present ||
             !IsClosedNativeWorldStartupAuthorization(authorization.wireVersion, authorization.startupMode, authorization.policy, authorization.packFormat) ||
             authorization.serverPort == 0 || authorization.connectionGeneration == 0 || authorization.authorizationEpoch == 0 ||

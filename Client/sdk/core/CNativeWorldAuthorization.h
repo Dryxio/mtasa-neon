@@ -20,6 +20,9 @@ constexpr unsigned char NATIVE_WORLD_BULLWORTH_POLICY = 1;
 constexpr unsigned char NATIVE_WORLD_STATIC_V1_FORMAT = 2;
 constexpr unsigned char NATIVE_WORLD_STATIC_V1_AUTHORIZATION_VERSION = 2;
 constexpr unsigned char NATIVE_WORLD_STATIC_V1_POLICY = 2;
+constexpr unsigned char NATIVE_WORLD_STATIC_V3_SET_FORMAT = 3;
+constexpr unsigned char NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION = 3;
+constexpr unsigned char NATIVE_WORLD_STATIC_V3_SET_POLICY = 3;
 constexpr unsigned char NATIVE_WORLD_ONE_SHOT_STARTUP_MODE = 1;
 
 inline bool IsClosedNativeWorldStartupAuthorization(unsigned char wireVersion, unsigned char startupMode, unsigned char policy, unsigned char packFormat)
@@ -27,12 +30,17 @@ inline bool IsClosedNativeWorldStartupAuthorization(unsigned char wireVersion, u
     return (packFormat == NATIVE_WORLD_BULLWORTH_FORMAT && wireVersion == NATIVE_WORLD_BULLWORTH_AUTHORIZATION_VERSION &&
             startupMode == NATIVE_WORLD_ONE_SHOT_STARTUP_MODE && policy == NATIVE_WORLD_BULLWORTH_POLICY) ||
            (packFormat == NATIVE_WORLD_STATIC_V1_FORMAT && wireVersion == NATIVE_WORLD_STATIC_V1_AUTHORIZATION_VERSION &&
-            startupMode == NATIVE_WORLD_ONE_SHOT_STARTUP_MODE && policy == NATIVE_WORLD_STATIC_V1_POLICY);
+            startupMode == NATIVE_WORLD_ONE_SHOT_STARTUP_MODE && policy == NATIVE_WORLD_STATIC_V1_POLICY) ||
+           (packFormat == NATIVE_WORLD_STATIC_V3_SET_FORMAT && wireVersion == NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION &&
+            startupMode == NATIVE_WORLD_ONE_SHOT_STARTUP_MODE && policy == NATIVE_WORLD_STATIC_V3_SET_POLICY);
 }
 
 inline const char* GetNativeWorldStartupPolicyName(unsigned char packFormat)
 {
-    return packFormat == NATIVE_WORLD_BULLWORTH_FORMAT ? "bullworth" : packFormat == NATIVE_WORLD_STATIC_V1_FORMAT ? "static-world-v1" : "invalid";
+    return packFormat == NATIVE_WORLD_BULLWORTH_FORMAT       ? "bullworth"
+           : packFormat == NATIVE_WORLD_STATIC_V1_FORMAT     ? "static-world-v1"
+           : packFormat == NATIVE_WORLD_STATIC_V3_SET_FORMAT ? "static-world-v3-set"
+                                                             : "invalid";
 }
 
 struct SNativeWorldStartupAuthorization

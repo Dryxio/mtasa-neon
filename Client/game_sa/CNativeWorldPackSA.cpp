@@ -73,6 +73,7 @@ namespace
     constexpr const char*  STATIC_WORLD_V3_MANIFEST = "native-world.json";
     constexpr unsigned int STATIC_WORLD_V3_MAX_MANIFEST_BYTES = 64 * 1024;
     constexpr unsigned int STATIC_WORLD_V3_MAX_IDE_BYTES = 8 * 1024 * 1024;
+    constexpr unsigned int STATIC_WORLD_V3_MAX_LOD_BYTES = 256 * 1024;
     constexpr uint64_t     STATIC_WORLD_V3_MAX_IMG_BYTES = 256ULL * 1024ULL * 1024ULL;
     constexpr unsigned int STATIC_WORLD_V3_MAX_IMAGES = 32;
     constexpr uint64_t     STATIC_WORLD_V3_MAX_TOTAL_BYTES = 8ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -85,6 +86,10 @@ namespace
     constexpr unsigned int STATIC_WORLD_V3_LAST_MODEL = 31999;
     constexpr unsigned int STATIC_WORLD_V3_LAST_STOCK_MODEL = 19999;
     constexpr DWORD        STATIC_WORLD_V3_RW_LIBRARY_ID = 0x1803FFFF;
+    constexpr const char*  STATIC_WORLD_V3_SET_POLICY = "static-world-v3-set";
+    constexpr const char*  STATIC_WORLD_V3_SET_AUDIT = "static-world-v3-set-dry-run-v1";
+    constexpr const char*  STATIC_WORLD_V3_SET_MANIFEST = "static-world-v3-set.json";
+    constexpr unsigned int STATIC_WORLD_V3_SET_MAX_MANIFEST_BYTES = 16 * 1024;
 
 #pragma pack(push, 1)
     struct SImgHeader
@@ -116,9 +121,27 @@ namespace
         DWORD instanceType;
         int   lodIndex;
     };
+
+    struct SStaticWorldV3LodHeader
+    {
+        char  magic[8];
+        DWORD version;
+        DWORD placementCount;
+        DWORD groupCount;
+        DWORD anchorCount;
+        DWORD linkCount;
+        DWORD reserved;
+    };
+
+    struct SStaticWorldV3LodLink
+    {
+        DWORD childOrdinal;
+        DWORD anchorIndex;
+    };
 #pragma pack(pop)
     static_assert(sizeof(SBinaryIplHeader) == 0x4C, "Unexpected binary IPL header size");
     static_assert(sizeof(SBinaryIplInstance) == 0x28, "Unexpected binary IPL instance size");
+    static_assert(sizeof(SStaticWorldV3LodHeader) == 0x20, "Unexpected static-world-v3 LOD header size");
 
     struct SBoundaryIplPayload
     {
@@ -140,7 +163,16 @@ namespace
         std::string                     manifestSha256;
         unsigned int                    manifestBytes{};
         SStaticWorldV3File              ide;
+        SStaticWorldV3File              lod;
         std::vector<SStaticWorldV3File> images;
+    };
+
+    struct SStaticWorldV3SetManifest
+    {
+        std::string                            setId;
+        std::string                            manifestSha256;
+        unsigned int                           manifestBytes{};
+        std::array<SNativeWorldV3SetPackSA, 4> packs;
     };
 
     struct SStaticWorldV3Ide
@@ -152,6 +184,9 @@ namespace
         std::string                         nameSpace;
         unsigned int                        firstModel{};
         unsigned int                        lastModel{};
+        unsigned int                        ordinaryModels{};
+        unsigned int                        damageModels{};
+        unsigned int                        timedModels{};
     };
 
     struct SStaticWorldV3ImgEntry
@@ -167,7 +202,18 @@ namespace
         std::set<std::string>                         iplStems;
         std::map<std::string, std::set<unsigned int>> colModelIds;
         std::map<std::string, std::set<unsigned int>> iplModelIds;
+        std::vector<unsigned int>                     iplPlacementCounts;
         unsigned int                                  placements{};
+        unsigned int                                  modelCount{};
+        unsigned int                                  ordinaryModels{};
+        unsigned int                                  damageModels{};
+        unsigned int                                  timedModels{};
+        unsigned int                                  txdCount{};
+        unsigned int                                  imageCount{};
+        std::string                                   nameSpace;
+        std::set<unsigned int>                        modelIds;
+        unsigned int                                  firstModel{};
+        unsigned int                                  lastModel{};
     };
 
     struct SColDef
@@ -713,15 +759,17 @@ namespace
         const SJsonValue* packId = Member(root, "pack_id", SJsonValue::EType::String);
         const SJsonValue* files = Member(root, "files", SJsonValue::EType::Object);
         if (!format || format->number != STATIC_WORLD_V3_FORMAT || !policy || policy->string != STATIC_WORLD_V3_POLICY || !packId ||
-            !IsSafePackId(packId->string) || !files || !HasExactKeys(*files, {"ide", "images"}))
+            !IsSafePackId(packId->string) || !files || !HasExactKeys(*files, {"ide", "lod", "images"}))
         {
             error = "static-world-v3 format, policy, pack ID, or file schema is invalid";
             return false;
         }
 
         const SJsonValue* ide = Member(*files, "ide", SJsonValue::EType::Object);
+        const SJsonValue* lod = Member(*files, "lod", SJsonValue::EType::Object);
         const SJsonValue* images = Member(*files, "images", SJsonValue::EType::Array);
-        if (!ide || !HasExactKeys(*ide, {"name", "bytes", "sha256"}) || !images || images->array.empty() || images->array.size() > STATIC_WORLD_V3_MAX_IMAGES)
+        if (!ide || !HasExactKeys(*ide, {"name", "bytes", "sha256"}) || !lod || !HasExactKeys(*lod, {"name", "bytes", "sha256"}) || !images ||
+            images->array.empty() || images->array.size() > STATIC_WORLD_V3_MAX_IMAGES)
         {
             error = "static-world-v3 IDE or IMG descriptor count is invalid";
             return false;
@@ -741,12 +789,13 @@ namespace
         };
 
         SStaticWorldV3Manifest parsed;
-        if (!parseFile(*ide, "world.ide", STATIC_WORLD_V3_MAX_IDE_BYTES, parsed.ide))
+        if (!parseFile(*ide, "world.ide", STATIC_WORLD_V3_MAX_IDE_BYTES, parsed.ide) ||
+            !parseFile(*lod, "world.lod", STATIC_WORLD_V3_MAX_LOD_BYTES, parsed.lod))
         {
-            error = "static-world-v3 IDE descriptor is outside its closed policy";
+            error = "static-world-v3 IDE or LOD descriptor is outside its closed policy";
             return false;
         }
-        uint64_t totalBytes = parsed.ide.bytes;
+        uint64_t totalBytes = static_cast<uint64_t>(parsed.ide.bytes) + parsed.lod.bytes;
         for (size_t index = 0; index < images->array.size(); ++index)
         {
             char expectedName[16]{};
@@ -764,6 +813,76 @@ namespace
         parsed.packId = packId->string;
         parsed.manifestSha256 = SharedUtil::GenerateSha256HexString(bytes).ToLower();
         parsed.manifestBytes = static_cast<unsigned int>(bytes.size());
+        manifest = std::move(parsed);
+        return true;
+    }
+
+    bool LoadStaticWorldV3SetManifest(const SString& path, SStaticWorldV3SetManifest& manifest, std::string& error)
+    {
+        std::ifstream file(SharedUtil::FromUTF8(path), std::ios::binary);
+        if (!file)
+        {
+            error = "static-world-v3-set envelope cannot be opened";
+            return false;
+        }
+        file.seekg(0, std::ios::end);
+        const std::streamoff length = file.tellg();
+        if (length <= 0 || length > STATIC_WORLD_V3_SET_MAX_MANIFEST_BYTES)
+        {
+            error = "static-world-v3-set envelope exceeds its 16 KiB policy";
+            return false;
+        }
+        file.seekg(0, std::ios::beg);
+        std::string bytes(static_cast<size_t>(length), '\0');
+        if (!file.read(bytes.data(), length))
+        {
+            error = "static-world-v3-set envelope is truncated";
+            return false;
+        }
+
+        SJsonValue root;
+        if (!CStrictJsonParser(bytes).Parse(root, error) || !HasExactKeys(root, {"format", "policy", "set_id", "packs"}))
+        {
+            if (error.empty())
+                error = "static-world-v3-set root schema is not exact";
+            return false;
+        }
+        const SJsonValue*         format = Member(root, "format", SJsonValue::EType::Unsigned);
+        const SJsonValue*         policy = Member(root, "policy", SJsonValue::EType::String);
+        const SJsonValue*         setId = Member(root, "set_id", SJsonValue::EType::String);
+        const SJsonValue*         packs = Member(root, "packs", SJsonValue::EType::Array);
+        constexpr const char*     expectedPackIds[] = {"bullworth", "vice-city", "liberty-city", "carcer-city"};
+        SStaticWorldV3SetManifest parsed;
+        if (!format || format->number != 3 || !policy || policy->string != STATIC_WORLD_V3_SET_POLICY || !setId || !IsLowerSha256(setId->string) || !packs ||
+            packs->array.size() != parsed.packs.size())
+        {
+            error = "static-world-v3-set format, policy, set ID, or pack count is invalid";
+            return false;
+        }
+        for (size_t index = 0; index < parsed.packs.size(); ++index)
+        {
+            const SJsonValue& value = packs->array[index];
+            const SJsonValue* packId = Member(value, "pack_id", SJsonValue::EType::String);
+            const SJsonValue* contentId = Member(value, "content_id", SJsonValue::EType::String);
+            if (!HasExactKeys(value, {"pack_id", "content_id"}) || !packId || packId->string != expectedPackIds[index] || !contentId ||
+                !IsLowerSha256(contentId->string))
+            {
+                error = "static-world-v3-set pack identities are not exact or canonically ordered";
+                return false;
+            }
+            parsed.packs[index] = {packId->string, contentId->string};
+        }
+        parsed.setId = setId->string;
+        parsed.manifestSha256 = SharedUtil::GenerateSha256HexString(bytes).ToLower();
+        parsed.manifestBytes = static_cast<unsigned int>(bytes.size());
+        SNativeWorldV3SetRequestSA identity;
+        identity.setId = parsed.setId;
+        identity.packs = parsed.packs;
+        if (GenerateNativeWorldV3SetId(identity) != parsed.setId)
+        {
+            error = "static-world-v3-set set ID differs from its ordered pack identities";
+            return false;
+        }
         manifest = std::move(parsed);
         return true;
     }
@@ -870,7 +989,7 @@ namespace
                                                                           timeOn <= 23 && timeOff <= 23 && timeOn != timeOff);
             if (!ParseUnsigned(fields[0], id) || id < STATIC_WORLD_V3_FIRST_CUSTOM_MODEL || id > STATIC_WORLD_V3_LAST_MODEL ||
                 !ParseUnsigned(fields[3], meshCount) || meshCount != 1 || !ParseFinitePositiveFloat(fields[4]) || !ParseUnsigned(fields[5], flags) ||
-                flags > 0x00FFFFFF || !timedValid || !plan.modelIds.insert(id).second)
+                flags > 0x007FFFFF || !timedValid || !plan.modelIds.insert(id).second)
             {
                 error = "static-world-v3 IDE contains an invalid or duplicate model";
                 return false;
@@ -896,6 +1015,12 @@ namespace
                 error = "static-world-v3 IDE model or TXD name is not canonical";
                 return false;
             }
+            if (section == ESection::TimedObjects)
+                ++plan.timedModels;
+            else if (flags & 0x1000)
+                ++plan.damageModels;
+            else
+                ++plan.ordinaryModels;
             plan.txdStems.insert(fields[2]);
         }
 
@@ -1222,7 +1347,7 @@ namespace
             const bool   timedFieldsValid = section != ESection::TimedObjects || (ParseUnsigned(fields[6], timeOn) && ParseUnsigned(fields[7], timeOff) &&
                                                                                 timeOn <= 23 && timeOff <= 23 && timeOn != timeOff);
             if (!ParseUnsigned(fields[0], id) || !ParseUnsigned(fields[3], meshCount) || meshCount != 1 || !ParseFinitePositiveFloat(fields[4]) ||
-                !ParseUnsigned(fields[5], flags) || flags > 0x00FFFFFF || !timedFieldsValid || id > g_policy->maximumModelId ||
+                !ParseUnsigned(fields[5], flags) || flags > 0x007FFFFF || !timedFieldsValid || id > g_policy->maximumModelId ||
                 !plan.modelIds.insert(id).second || !IsSafeIdeStem(fields[1]) || !IsSafeIdeStem(fields[2]))
             {
                 error = SString("%s contains an invalid or duplicate model", Pack().ideFileName);
@@ -1383,7 +1508,13 @@ namespace
             }
             else if (extension == ".col")
             {
-                if (memcmp(prefix, "COL3", 4) != 0 || !IsStaticWorldV3GeneratedStem(stem, ide.nameSpace, 'c', 2) || !inventory.colStems.insert(stem).second)
+                // GTA's native COL1 records remain canonical COLL records.
+                // The offline admission pass validates their sequential layout
+                // just as strictly as COL3 instead of performing a lossy
+                // geometry conversion solely to normalize the magic.
+                const bool coll = memcmp(prefix, "COLL", 4) == 0;
+                const bool col3 = memcmp(prefix, "COL3", 4) == 0;
+                if ((!coll && !col3) || !IsStaticWorldV3GeneratedStem(stem, ide.nameSpace, 'c', 2) || !inventory.colStems.insert(stem).second)
                 {
                     CloseHandle(file);
                     error = "static-world-v3 COL member is not canonical";
@@ -1438,9 +1569,11 @@ namespace
             unsigned int recordCount = 0;
             while (offset < data.size() && data[offset] != 0)
             {
-                if (data.size() - offset < 32 || memcmp(data.data() + offset, "COL3", 4) != 0)
+                const bool coll = data.size() - offset >= 4 && memcmp(data.data() + offset, "COLL", 4) == 0;
+                const bool col3 = data.size() - offset >= 4 && memcmp(data.data() + offset, "COL3", 4) == 0;
+                if (data.size() - offset < 32 || (!coll && !col3))
                 {
-                    error = "static-world-v3 COL archive contains a non-COL3 record";
+                    error = "static-world-v3 COL archive contains a non-canonical record";
                     return false;
                 }
                 unsigned int payloadBytes = 0;
@@ -1556,8 +1689,91 @@ namespace
                 return false;
             }
             totalInstances += count;
+            inventory.iplPlacementCounts.push_back(count);
         }
         inventory.placements = totalInstances;
+        return true;
+    }
+
+    bool ValidateStaticWorldV3LodMap(const std::filesystem::path& path, const SStaticWorldV3Inventory& inventory, std::string& error)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            error = "static-world-v3 LOD map cannot be opened";
+            return false;
+        }
+        file.seekg(0, std::ios::end);
+        const std::streamoff length = file.tellg();
+        if (length < static_cast<std::streamoff>(sizeof(SStaticWorldV3LodHeader)) || length > STATIC_WORLD_V3_MAX_LOD_BYTES)
+        {
+            error = "static-world-v3 LOD map length is outside its closed policy";
+            return false;
+        }
+        file.seekg(0, std::ios::beg);
+        std::vector<BYTE> bytes(static_cast<size_t>(length));
+        if (!file.read(reinterpret_cast<char*>(bytes.data()), length))
+        {
+            error = "static-world-v3 LOD map is truncated";
+            return false;
+        }
+        const auto*    header = reinterpret_cast<const SStaticWorldV3LodHeader*>(bytes.data());
+        const uint64_t expectedBytes = sizeof(*header) + static_cast<uint64_t>(header->groupCount + header->anchorCount) * sizeof(DWORD) +
+                                       static_cast<uint64_t>(header->linkCount) * sizeof(SStaticWorldV3LodLink);
+        if (memcmp(header->magic, "NWL3LOD\0", 8) != 0 || header->version != 1 || header->reserved != 0 ||
+            header->groupCount != inventory.iplPlacementCounts.size() || !header->groupCount || header->groupCount > STATIC_WORLD_V3_MAX_SPATIAL_GROUPS ||
+            header->placementCount != inventory.placements || !header->placementCount || header->placementCount > STATIC_WORLD_V3_MAX_PLACEMENTS ||
+            header->anchorCount > 4096 || header->linkCount > 4096 || header->anchorCount + header->linkCount > 4096 ||
+            header->anchorCount != header->linkCount || expectedBytes != bytes.size())
+        {
+            error = "static-world-v3 LOD header, length, or scratch budget is invalid";
+            return false;
+        }
+
+        const DWORD* groupCounts = reinterpret_cast<const DWORD*>(bytes.data() + sizeof(*header));
+        for (size_t index = 0; index < inventory.iplPlacementCounts.size(); ++index)
+        {
+            if (!groupCounts[index] || groupCounts[index] != inventory.iplPlacementCounts[index])
+            {
+                error = "static-world-v3 LOD group counts differ from the canonical IPL sequence";
+                return false;
+            }
+        }
+        const DWORD*    anchors = groupCounts + header->groupCount;
+        const auto*     links = reinterpret_cast<const SStaticWorldV3LodLink*>(anchors + header->anchorCount);
+        std::set<DWORD> anchorOrdinals;
+        std::set<DWORD> childOrdinals;
+        std::set<DWORD> anchorIndices;
+        DWORD           previousAnchor = 0;
+        DWORD           previousChild = 0;
+        for (DWORD index = 0; index < header->anchorCount; ++index)
+        {
+            if (anchors[index] >= header->placementCount || (index && anchors[index] <= previousAnchor) || !anchorOrdinals.insert(anchors[index]).second)
+            {
+                error = "static-world-v3 LOD anchors are not strictly ordered unique ordinals";
+                return false;
+            }
+            previousAnchor = anchors[index];
+        }
+        for (DWORD index = 0; index < header->linkCount; ++index)
+        {
+            if (links[index].childOrdinal >= header->placementCount || links[index].anchorIndex >= header->anchorCount ||
+                (index && links[index].childOrdinal <= previousChild) || !childOrdinals.insert(links[index].childOrdinal).second ||
+                !anchorIndices.insert(links[index].anchorIndex).second)
+            {
+                error = "static-world-v3 LOD links are not a strict one-to-one mapping";
+                return false;
+            }
+            previousChild = links[index].childOrdinal;
+        }
+        for (DWORD index = 0; index < header->anchorCount; ++index)
+        {
+            if (anchorIndices.find(index) == anchorIndices.end() || childOrdinals.find(anchors[index]) != childOrdinals.end())
+            {
+                error = "static-world-v3 LOD children and anchors overlap or omit a reference";
+                return false;
+            }
+        }
         return true;
     }
 
@@ -2941,10 +3157,28 @@ namespace
             error = "static-world-v3 publication was cancelled";
             return false;
         }
+        const std::filesystem::path lodPath = directory / manifest.lod.name;
+        const SString               nativeLodPath = lodPath.string().c_str();
+        if (!IsNativePathSafe(nativeLodPath) || !IsSafeRegularFile(nativeLodPath) || !HasExactFileSize64(nativeLodPath, manifest.lod.bytes) ||
+            SharedUtil::GenerateSha256HexStringFromFile(nativeLodPath).ToLower() != manifest.lod.sha256.c_str())
+        {
+            error = "static-world-v3 LOD identity differs from its manifest";
+            return false;
+        }
 
         SStaticWorldV3Ide ide;
         if (!ParseStaticWorldV3Ide(nativeIdePath, ide, error))
             return false;
+        inventory.modelCount = static_cast<unsigned int>(ide.modelIds.size());
+        inventory.ordinaryModels = ide.ordinaryModels;
+        inventory.damageModels = ide.damageModels;
+        inventory.timedModels = ide.timedModels;
+        inventory.txdCount = static_cast<unsigned int>(ide.txdStems.size());
+        inventory.imageCount = static_cast<unsigned int>(manifest.images.size());
+        inventory.nameSpace = ide.nameSpace;
+        inventory.modelIds = ide.modelIds;
+        inventory.firstModel = ide.firstModel;
+        inventory.lastModel = ide.lastModel;
         for (const SStaticWorldV3File& image : manifest.images)
         {
             const std::filesystem::path imagePath = directory / image.name;
@@ -2963,7 +3197,203 @@ namespace
                 return false;
             }
         }
-        return ValidateStaticWorldV3Inventory(ide, inventory, error);
+        return ValidateStaticWorldV3Inventory(ide, inventory, error) && ValidateStaticWorldV3LodMap(lodPath, inventory, error);
+    }
+
+    bool BuildStaticWorldV3CachedRequest(const SNativeWorldV3SetPackSA& identity, SNativeWorldCacheRequestSA& request, SStaticWorldV3Manifest& manifest,
+                                         std::string& directory, std::string& error)
+    {
+        directory = SString("%s\\native-world-cache\\v3\\%s\\%s", SharedUtil::GetMTADataPath().c_str(), STATIC_WORLD_V3_POLICY, identity.contentId.c_str());
+        const SString manifestPath = SString("%s\\%s", directory.c_str(), STATIC_WORLD_V3_MANIFEST);
+        if (!IsNativePathSafe(manifestPath) || !IsSafeRegularFile(manifestPath) || !LoadStaticWorldV3Manifest(manifestPath, manifest, error) ||
+            manifest.packId != identity.packId)
+        {
+            if (error.empty())
+                error = "static-world-v3-set child manifest is missing, unsafe, or has the wrong pack ID";
+            return false;
+        }
+        request.format = 3;
+        request.policyKey = STATIC_WORLD_V3_POLICY;
+        request.packId = manifest.packId;
+        request.manifestFileName = STATIC_WORLD_V3_MANIFEST;
+        request.sourceManifestSha256 = manifest.manifestSha256;
+        request.sourceManifestBytes = manifest.manifestBytes;
+        request.maximumManifestBytes = STATIC_WORLD_V3_MAX_MANIFEST_BYTES;
+        request.ide = {manifest.ide.name, manifest.ide.sha256, manifest.ide.bytes};
+        request.lod = {manifest.lod.name, manifest.lod.sha256, manifest.lod.bytes};
+        for (const SStaticWorldV3File& image : manifest.images)
+            request.images.push_back({image.name, image.sha256, image.bytes});
+        request.contentId = GenerateNativeWorldContentId(request);
+        if (request.contentId != identity.contentId)
+        {
+            error = "static-world-v3-set child content ID does not recompute from its locked manifest";
+            return false;
+        }
+        return true;
+    }
+
+    bool ValidateStaticWorldV3Aggregate(const std::array<SNativeWorldV3SetPackSA, 4>& packs, const std::array<SStaticWorldV3Inventory, 4>& inventories,
+                                        std::string& error)
+    {
+        constexpr const char*               expectedNamespaces[] = {"bw", "vc", "lc", "cc"};
+        constexpr unsigned int              expectedFirstModels[] = {20000, 21054, 24856, 28344};
+        constexpr unsigned int              expectedLastModels[] = {21053, 24855, 28343, 31836};
+        std::set<std::string>               globalMembers;
+        std::set<unsigned int>              globalModelIds;
+        std::map<unsigned int, std::string> globalModelKeys;
+        std::map<unsigned int, std::string> globalTxdKeys;
+        unsigned int                        ordinary = 13984;
+        unsigned int                        damage = 69;
+        unsigned int                        timed = 160;
+        unsigned int                        txds = 3608;
+        unsigned int                        colSlots = 252;
+        unsigned int                        iplSlots = 191;
+        unsigned int                        archives = 6;
+        unsigned int                        handles = 10;
+        unsigned int                        totalModels = 0;
+        unsigned int                        totalPlacements = 0;
+        unsigned int                        maximumCityPlacements = 0;
+        unsigned int                        maximumCityColModels = 0;
+        for (size_t index = 0; index < inventories.size(); ++index)
+        {
+            const SStaticWorldV3Inventory& inventory = inventories[index];
+            if (inventory.nameSpace != expectedNamespaces[index] || inventory.firstModel != expectedFirstModels[index] ||
+                inventory.lastModel != expectedLastModels[index])
+            {
+                error = SString("static-world-v3-set pack %s namespace/range differs actual=%s:%u..%u expected=%s:%u..%u", packs[index].packId.c_str(),
+                                inventory.nameSpace.c_str(), inventory.firstModel, inventory.lastModel, expectedNamespaces[index], expectedFirstModels[index],
+                                expectedLastModels[index]);
+                return false;
+            }
+            for (unsigned int modelId : inventory.modelIds)
+            {
+                if (!globalModelIds.emplace(modelId).second)
+                {
+                    error = SString("static-world-v3-set cross-pack model ID collision: %u", modelId);
+                    return false;
+                }
+            }
+            for (const auto& [name, ignored] : inventory.entries)
+            {
+                if (!globalMembers.emplace(name).second)
+                {
+                    error = SString("static-world-v3-set cross-pack member collision: %s", name.c_str());
+                    return false;
+                }
+                const size_t dot = name.rfind('.');
+                if (dot != std::string::npos && (name.compare(dot, 4, ".dff") == 0 || name.compare(dot, 4, ".txd") == 0))
+                {
+                    const unsigned int key = StaticWorldV3UppercaseKey(name.substr(0, dot));
+                    auto&              keys = name.compare(dot, 4, ".dff") == 0 ? globalModelKeys : globalTxdKeys;
+                    const auto [owner, inserted] = keys.emplace(key, name);
+                    if (!inserted && owner->second != name)
+                    {
+                        error = SString("static-world-v3-set GTA uppercase-key collision: %s / %s", owner->second.c_str(), name.c_str());
+                        return false;
+                    }
+                }
+            }
+            ordinary += inventory.ordinaryModels;
+            damage += inventory.damageModels;
+            timed += inventory.timedModels;
+            txds += inventory.txdCount;
+            colSlots += static_cast<unsigned int>(inventory.colStems.size());
+            iplSlots += static_cast<unsigned int>(inventory.iplStems.size());
+            archives += inventory.imageCount;
+            handles += inventory.imageCount;
+            totalModels += inventory.modelCount;
+            totalPlacements += inventory.placements;
+            maximumCityPlacements = std::max(maximumCityPlacements, inventory.placements);
+            unsigned int cityColModels = 0;
+            for (const auto& [ordinal, ids] : inventory.colModelIds)
+                cityColModels += static_cast<unsigned int>(ids.size());
+            maximumCityColModels = std::max(maximumCityColModels, cityColModels);
+        }
+        if (ordinary > 32000 || damage > 512 || timed > 1024 || txds > 8000 || colSlots > 512 || iplSlots > 1024 || archives > 245 || handles > 255 ||
+            totalModels > 12000 || 9980 + maximumCityColModels > 30000 || 9166 + maximumCityPlacements > 32000)
+        {
+            error = SString(
+                "static-world-v3-set capacity proof failed atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 col=%u/512 ipl=%u/1024 "
+                "archives=%u/245 handles=%u/255 models=%u/12000 colModel=%u/30000 buildings=%u/32000",
+                ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, totalModels, 9980 + maximumCityColModels, 9166 + maximumCityPlacements);
+            return false;
+        }
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldAggregatePlanner] state=proved packs=4 models=%u placements=%u atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 "
+                    "col=%u/512 ipl=%u/1024 archives=%u/245 handles=%u/255 maxCityBuildings=%u/32000 maxCityColModels=%u/30000 nativeWrites=0",
+                    totalModels, totalPlacements, ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, 9166 + maximumCityPlacements,
+                    9980 + maximumCityColModels));
+        return true;
+    }
+
+    bool AcquireStaticWorldV3SetChildren(const SStaticWorldV3SetManifest& setManifest, const std::string& ticketId, const std::function<bool()>& isCancelled,
+                                         std::array<CNativeWorldCacheLeaseSA, 4>& leases, std::array<SStaticWorldV3Inventory, 4>& inventories,
+                                         std::string& error)
+    {
+        for (size_t index = 0; index < setManifest.packs.size(); ++index)
+        {
+            SNativeWorldCacheRequestSA request;
+            SStaticWorldV3Manifest     manifest;
+            std::string                directory;
+            if (!BuildStaticWorldV3CachedRequest(setManifest.packs[index], request, manifest, directory, error))
+                return false;
+            request.cancellation = nullptr;
+            const auto audit = [&manifest, &inventories, index, &isCancelled](const std::string& lockedDirectory, std::string& auditError)
+            { return AuditStaticWorldV3Directory(lockedDirectory, manifest, isCancelled, inventories[index], auditError); };
+            std::string leasedDirectory;
+            if (!AcquireExistingNativeWorldCacheLease(request, ticketId, audit, leases[index], leasedDirectory, error))
+                return false;
+        }
+        return ValidateStaticWorldV3Aggregate(setManifest.packs, inventories, error);
+    }
+
+    SNativeWorldTransportPublishResult PublishStaticWorldV3SetOffer(const SNativeWorldTransportOffer& offer, const std::function<bool()>& isCancelled)
+    {
+        SNativeWorldTransportPublishResult result;
+        result.auditProfile = STATIC_WORLD_V3_SET_AUDIT;
+        if (!offer.startupAuthorization || offer.files.size() != 1 || offer.manifestRelativePath.empty() || offer.startupAuthorization->packFormat != 3 ||
+            offer.startupAuthorization->wireVersion != 3 || offer.startupAuthorization->startupMode != 1 || offer.startupAuthorization->policy != 3)
+        {
+            result.error = "static-world-v3-set requires its exact format-3 startup authorization tuple";
+            return result;
+        }
+        const SNativeWorldTransportFile& manifestOffer = offer.files.front();
+        const std::filesystem::path      absolute = std::filesystem::path(manifestOffer.absolutePath).lexically_normal();
+        if (manifestOffer.relativePath != offer.manifestRelativePath || absolute.filename().generic_string() != STATIC_WORLD_V3_SET_MANIFEST ||
+            manifestOffer.declaredBytes > STATIC_WORLD_V3_SET_MAX_MANIFEST_BYTES)
+        {
+            result.error = "static-world-v3-set transport envelope path or byte declaration is invalid";
+            return result;
+        }
+        SStaticWorldV3SetManifest manifest;
+        const SString             manifestPath = absolute.string().c_str();
+        if (!IsNativePathSafe(manifestPath) || !IsSafeRegularFile(manifestPath) || !LoadStaticWorldV3SetManifest(manifestPath, manifest, result.error) ||
+            manifestOffer.declaredBytes != manifest.manifestBytes)
+            return result;
+
+        SNativeWorldV3SetRequestSA request;
+        request.sourceAbsoluteDirectory = absolute.parent_path().string();
+        request.manifestFileName = STATIC_WORLD_V3_SET_MANIFEST;
+        request.sourceManifestSha256 = manifest.manifestSha256;
+        request.sourceManifestBytes = manifest.manifestBytes;
+        request.setId = manifest.setId;
+        request.packs = manifest.packs;
+        request.cancellation = offer.cancelled;
+        result.contentId = manifest.setId;
+        std::ostringstream offerIdentity;
+        offerIdentity << "mta-native-world-transport-offer-v3-set\nresource=" << offer.resourceName << "\nformat=3\nmanifest=" << offer.manifestRelativePath
+                      << "\nmanifest.bytes=" << manifest.manifestBytes << "\nmanifest.sha256=" << manifest.manifestSha256 << "\nset_id=" << manifest.setId
+                      << '\n';
+        result.offerId = SharedUtil::GenerateSha256HexString(offerIdentity.str()).ToLower();
+        const auto audit = [&manifest, &isCancelled](const std::string&, std::string& auditError)
+        {
+            std::array<CNativeWorldCacheLeaseSA, 4> leases;
+            std::array<SStaticWorldV3Inventory, 4>  inventories;
+            const std::string                       syntheticTicket = manifest.setId.substr(0, 32);
+            return AcquireStaticWorldV3SetChildren(manifest, syntheticTicket, isCancelled, leases, inventories, auditError);
+        };
+        result.success = PublishNativeWorldV3Set(request, audit, result.publishedDirectory, result.cacheHit, result.error);
+        return result;
     }
 
     SNativeWorldTransportPublishResult PublishStaticWorldV3TransportOffer(const SNativeWorldTransportOffer& offer, const std::function<bool()>& isCancelled)
@@ -3015,9 +3445,9 @@ namespace
         const std::string relativeDirectory = std::filesystem::path(offer.manifestRelativePath).parent_path().generic_string();
         const auto        composeRelative = [&relativeDirectory](const std::string& leaf)
         { return relativeDirectory.empty() ? leaf : relativeDirectory + "/" + leaf; };
-        if (offeredFiles.size() != manifest.images.size() + 2)
+        if (offeredFiles.size() != manifest.images.size() + 3)
         {
-            result.error = "static-world-v3 transport offer does not contain the exact manifest, IDE, and ordered IMG set";
+            result.error = "static-world-v3 transport offer does not contain the exact manifest, IDE, LOD, and ordered IMG set";
             return result;
         }
         const auto bindFile = [&](const SStaticWorldV3File& identity)
@@ -3029,9 +3459,9 @@ namespace
                 return false;
             return true;
         };
-        if (!bindFile(manifest.ide))
+        if (!bindFile(manifest.ide) || !bindFile(manifest.lod))
         {
-            result.error = "static-world-v3 IDE does not bind its exact transport file";
+            result.error = "static-world-v3 IDE or LOD does not bind its exact transport file";
             return result;
         }
         for (const SStaticWorldV3File& image : manifest.images)
@@ -3055,7 +3485,8 @@ namespace
         std::ostringstream offerIdentity;
         offerIdentity << "mta-native-world-transport-offer-v3\nresource=" << offer.resourceName << "\nformat=3\nmanifest=" << offer.manifestRelativePath
                       << "\nmanifest.bytes=" << manifest.manifestBytes << "\nmanifest.sha256=" << manifest.manifestSha256 << "\nide.name=" << manifest.ide.name
-                      << "\nide.bytes=" << manifest.ide.bytes << "\nide.sha256=" << manifest.ide.sha256 << '\n';
+                      << "\nide.bytes=" << manifest.ide.bytes << "\nide.sha256=" << manifest.ide.sha256 << "\nlod.name=" << manifest.lod.name
+                      << "\nlod.bytes=" << manifest.lod.bytes << "\nlod.sha256=" << manifest.lod.sha256 << '\n';
         for (const SStaticWorldV3File& image : manifest.images)
             offerIdentity << "img.name=" << image.name << "\nimg.bytes=" << image.bytes << "\nimg.sha256=" << image.sha256 << '\n';
         result.offerId = SharedUtil::GenerateSha256HexString(offerIdentity.str()).ToLower();
@@ -3070,6 +3501,7 @@ namespace
         request.sourceManifestBytes = manifest.manifestBytes;
         request.maximumManifestBytes = STATIC_WORLD_V3_MAX_MANIFEST_BYTES;
         request.ide = {manifest.ide.name, manifest.ide.sha256, manifest.ide.bytes};
+        request.lod = {manifest.lod.name, manifest.lod.sha256, manifest.lod.bytes};
         for (const SStaticWorldV3File& image : manifest.images)
             request.images.push_back({image.name, image.sha256, image.bytes});
         request.cancellation = offer.cancelled;
@@ -3098,6 +3530,7 @@ namespace
             lockedIdentity.sourceManifestSha256 = lockedManifest.manifestSha256;
             lockedIdentity.sourceManifestBytes = lockedManifest.manifestBytes;
             lockedIdentity.ide = {lockedManifest.ide.name, lockedManifest.ide.sha256, lockedManifest.ide.bytes};
+            lockedIdentity.lod = {lockedManifest.lod.name, lockedManifest.lod.sha256, lockedManifest.lod.bytes};
             lockedIdentity.images.clear();
             for (const SStaticWorldV3File& image : lockedManifest.images)
                 lockedIdentity.images.push_back({image.name, image.sha256, image.bytes});
@@ -3146,6 +3579,88 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         SharedUtil::WriteDebugEvent(SString("[NativeWorldAuthorization] state=refused reason=%s detail=%s activation=no lease=no", reason, detail.c_str()));
         resetAuditState();
     };
+
+    if (selection.packFormat == NATIVE_WORLD_STATIC_V3_SET_FORMAT)
+    {
+        if (!selection.ready ||
+            !IsClosedNativeWorldStartupAuthorization(selection.wireVersion, selection.startupMode, selection.policy, selection.packFormat) ||
+            selection.policy != NATIVE_WORLD_STATIC_V3_SET_POLICY || g_state != EState::Off)
+        {
+            refuse("selection-invalid", "static-world-v3-set startup selection is not a closed idle transaction");
+            return;
+        }
+        const std::string setDirectory =
+            SString("%s\\native-world-cache\\v3\\%s\\%s", SharedUtil::GetMTADataPath().c_str(), STATIC_WORLD_V3_SET_POLICY, selection.contentId.c_str());
+        const SString             setManifestPath = SString("%s\\%s", setDirectory.c_str(), STATIC_WORLD_V3_SET_MANIFEST);
+        SStaticWorldV3SetManifest setManifest;
+        std::string               error;
+        if (!IsNativePathSafe(setManifestPath) || !IsSafeRegularFile(setManifestPath) || !LoadStaticWorldV3SetManifest(setManifestPath, setManifest, error) ||
+            setManifest.setId != selection.contentId)
+        {
+            if (error.empty())
+                error = "authorized static-world-v3-set envelope is unavailable or has the wrong set ID";
+            refuse("cache-invalid", error);
+            return;
+        }
+        SNativeWorldV3SetRequestSA request;
+        request.manifestFileName = STATIC_WORLD_V3_SET_MANIFEST;
+        request.sourceManifestSha256 = setManifest.manifestSha256;
+        request.sourceManifestBytes = setManifest.manifestBytes;
+        request.setId = setManifest.setId;
+        request.packs = setManifest.packs;
+        const auto auditSet = [&setManifest, &isCancelled](const std::string& lockedDirectory, std::string& auditError)
+        {
+            const SString             lockedManifestPath = SString("%s\\%s", lockedDirectory.c_str(), STATIC_WORLD_V3_SET_MANIFEST);
+            SStaticWorldV3SetManifest lockedManifest;
+            bool                      samePacks = true;
+            if (!isCancelled() && LoadStaticWorldV3SetManifest(lockedManifestPath, lockedManifest, auditError))
+            {
+                for (size_t index = 0; index < lockedManifest.packs.size(); ++index)
+                    samePacks = samePacks && lockedManifest.packs[index].packId == setManifest.packs[index].packId &&
+                                lockedManifest.packs[index].contentId == setManifest.packs[index].contentId;
+            }
+            else
+                samePacks = false;
+            if (!samePacks || lockedManifest.setId != setManifest.setId)
+            {
+                if (auditError.empty())
+                    auditError = isCancelled() ? "static-world-v3-set dry-run was cancelled" : "locked set envelope identity changed";
+                return false;
+            }
+            std::array<CNativeWorldCacheLeaseSA, 4> childLeases;
+            std::array<SStaticWorldV3Inventory, 4>  childInventories;
+            return AcquireStaticWorldV3SetChildren(lockedManifest, setManifest.setId.substr(0, 32), isCancelled, childLeases, childInventories, auditError);
+        };
+        CNativeWorldCacheLeaseSA setLease;
+        std::string              leasedDirectory;
+        if (!AcquireExistingNativeWorldV3SetLease(request, selection.ticketId, auditSet, setLease, leasedDirectory, error))
+        {
+            refuse(isCancelled() ? "startup-cancelled" : "aggregate-dry-run-failed", error);
+            return;
+        }
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldAuthorization] state=aggregate-cache-audited format=3 policy=%s setId=%s ticket=%s activation=no "
+                    "leasesLockedDuringPlan=5 childLeases=released:4 setLease=pending nativeWrites=0 allocations=0 hooks=0 archives=0",
+                    STATIC_WORLD_V3_SET_POLICY, setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str()));
+        if (!CNativeModelStoreSA::ValidateExecutableAndPatchManifestReadOnly(gameVersion, error) || isCancelled() || !setLease.RevalidateClosedObject(error))
+        {
+            setLease.Release();
+            refuse(isCancelled() ? "startup-cancelled" : "executable-invalid", error);
+            return;
+        }
+        setLease.Release();
+        if (!finish(false, "aggregate-dry-run"))
+        {
+            resetAuditState();
+            return;
+        }
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldAuthorization] state=aggregate-dry-run-complete setId=%s ticket=%s activation=no leases=released:5 "
+                    "nativeWrites=0 allocations=0 hooks=0 archives=0 stock-behavior=preserved",
+                    setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str()));
+        resetAuditState();
+        return;
+    }
 
     const SNativeWorldPackPolicySA* selectedPolicy = SelectAuthorizedPolicy(selection);
     if (!selection.ready || !selectedPolicy || g_state != EState::Off)
@@ -3487,7 +4002,9 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
     // g_policy/g_pack state makes an accepted cache object incapable of
     // becoming native GTA input through the format-1/2 startup route.
     if (offer.format == STATIC_WORLD_V3_FORMAT)
-        return PublishStaticWorldV3TransportOffer(offer, isCancelled);
+        return offer.startupAuthorization && offer.startupAuthorization->policy == NATIVE_WORLD_STATIC_V3_SET_POLICY
+                   ? PublishStaticWorldV3SetOffer(offer, isCancelled)
+                   : PublishStaticWorldV3TransportOffer(offer, isCancelled);
 
     const auto resetTransportAuditState = [&]()
     {

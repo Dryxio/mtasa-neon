@@ -28,6 +28,17 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
     if (m_strResourceName.empty())
         return false;
 
+    const SNativeWorldPackTransport& nativeWorldPack = m_pResource->GetNativeWorldPackTransport();
+    if (nativeWorldPack.present && !m_pResource->IsClientFilesOn())
+        return false;
+    if (m_pResource->RequiresNativeWorldV3SetStartupCapability() && !BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization))
+    {
+        // This tuple is a closed gate, not an optional transport hint. Omitting
+        // it would let an old client start the coordinator as an ordinary
+        // resource after the server had authorized an aggregate launch.
+        return false;
+    }
+
     // Write the resource name
     unsigned char sizeResourceName = static_cast<unsigned char>(m_strResourceName.size());
     BitStream.Write(sizeResourceName);
@@ -69,8 +80,7 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
     BitStream.WriteBit(m_pResource->IsOOPEnabledInMetaXml());
     BitStream.Write(m_pResource->GetDownloadPriorityGroup());
 
-    const SNativeWorldPackTransport& nativeWorldPack = m_pResource->GetNativeWorldPackTransport();
-    const auto                       isNativeWorldFile = [&nativeWorldPack](const CResourceFile* resourceFile)
+    const auto isNativeWorldFile = [&nativeWorldPack](const CResourceFile* resourceFile)
     { return nativeWorldPack.present && std::find(nativeWorldPack.files.begin(), nativeWorldPack.files.end(), resourceFile) != nativeWorldPack.files.end(); };
 
     const auto writeResourceFile = [this, &BitStream](CResourceFile* resourceFile)
@@ -126,18 +136,16 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
     const bool canWriteNativeWorldPack = nativeWorldPack.format == 1 ? BitStream.Can(eBitStreamVersion::NativeWorldPackTransport)
                                          : nativeWorldPack.format == 2
                                              ? BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV2Transport)
-                                             : nativeWorldPack.format == 3 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3Transport);
+                                             : nativeWorldPack.format == 3 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3LodTransport);
     if (nativeWorldPack.present && m_pResource->IsClientFilesOn() && canWriteNativeWorldPack)
     {
-        // A transport client can predate the authorization capability paired
-        // with its format. Format 3 is intentionally publish-only and never
-        // writes an authorization tuple.
-        // Degrade its opted-in descriptor to the same inert N group instead of
-        // exposing an A tuple that the older parser cannot safely interpret.
+        // Legacy formats retain their publish-only downgrade. The format 3 set
+        // was rejected above unless its exact authorization tuple is writable.
         const bool writeStartupAuthorization =
             nativeWorldPack.startupAuthorization &&
             ((nativeWorldPack.format == 1 && BitStream.Can(eBitStreamVersion::NativeWorldStartupAuthorization)) ||
-             (nativeWorldPack.format == 2 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization)));
+             (nativeWorldPack.format == 2 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization)) ||
+             (nativeWorldPack.format == 3 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization)));
         BitStream.Write(static_cast<unsigned char>(writeStartupAuthorization ? 'A' : 'N'));
         BitStream.Write(nativeWorldPack.format);
         BitStream.Write(static_cast<unsigned char>(nativeWorldPack.files.size()));

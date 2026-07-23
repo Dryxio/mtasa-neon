@@ -10,6 +10,7 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -37,10 +38,28 @@ struct SNativeWorldCacheRequestSA
     std::string                       contentId;
     std::shared_ptr<std::atomic_bool> cancellation;
     SNativeWorldCacheFileSA           ide;
+    SNativeWorldCacheFileSA           lod;
     // Formats 1 and 2 use img. Format 3 uses images and leaves img empty,
     // keeping the legacy request layout source-compatible for its callers.
     SNativeWorldCacheFileSA              img;
     std::vector<SNativeWorldCacheFileSA> images;
+};
+
+struct SNativeWorldV3SetPackSA
+{
+    std::string packId;
+    std::string contentId;
+};
+
+struct SNativeWorldV3SetRequestSA
+{
+    std::string                            sourceAbsoluteDirectory;
+    std::string                            manifestFileName;
+    std::string                            sourceManifestSha256;
+    std::uint64_t                          sourceManifestBytes{};
+    std::string                            setId;
+    std::array<SNativeWorldV3SetPackSA, 4> packs;
+    std::shared_ptr<std::atomic_bool>      cancellation;
 };
 
 using NativeWorldCacheAuditSA = std::function<bool(const std::string& quarantineDirectory, std::string& error)>;
@@ -67,6 +86,8 @@ private:
 
     friend bool AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA&, const std::string&, const NativeWorldCacheAuditSA&,
                                                      CNativeWorldCacheLeaseSA&, std::string&, std::string&);
+    friend bool AcquireExistingNativeWorldV3SetLease(const SNativeWorldV3SetRequestSA&, const std::string&, const NativeWorldCacheAuditSA&,
+                                                     CNativeWorldCacheLeaseSA&, std::string&, std::string&);
 };
 
 std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& request);
@@ -82,7 +103,12 @@ bool PublishNativeWorldCache(const SNativeWorldCacheRequestSA& request, const Na
 // Opens only the exact already-published semantic object. It never creates,
 // repairs, quarantines, or scans, and runs the closed audit while every exact
 // handle is held by a transaction-typed lease.
-bool AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA& request, const std::string& ticketId, const NativeWorldCacheAuditSA& audit,
+bool        AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA& request, const std::string& ticketId, const NativeWorldCacheAuditSA& audit,
+                                                 CNativeWorldCacheLeaseSA& lease, std::string& publishedDirectory, std::string& error);
+std::string GenerateNativeWorldV3SetId(const SNativeWorldV3SetRequestSA& request);
+bool PublishNativeWorldV3Set(const SNativeWorldV3SetRequestSA& request, const NativeWorldCacheAuditSA& audit, std::string& publishedDirectory, bool& cacheHit,
+                             std::string& error);
+bool AcquireExistingNativeWorldV3SetLease(const SNativeWorldV3SetRequestSA& request, const std::string& ticketId, const NativeWorldCacheAuditSA& audit,
                                           CNativeWorldCacheLeaseSA& lease, std::string& publishedDirectory, std::string& error);
 void CommitNativeWorldCacheLease();
 void ReleaseNativeWorldCacheLease();

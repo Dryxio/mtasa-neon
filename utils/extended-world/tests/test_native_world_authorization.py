@@ -21,6 +21,10 @@ from native_world_authorization import (  # noqa: E402
     STATIC_WORLD_PACK_FORMAT,
     STATIC_WORLD_TRANSPORT_BITSTREAM_VERSION,
     STATIC_WORLD_V3_PACK_FORMAT,
+    STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION,
+    STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION,
+    STATIC_WORLD_V3_SET_WIRE_VERSION,
+    POLICY_STATIC_WORLD_V3_SET,
     STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION,
     STATIC_WORLD_WIRE_VERSION,
     POLICY_STATIC_WORLD_V1,
@@ -114,10 +118,11 @@ class NativeWorldAuthorizationCodecTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(RecordError):
                 encode_record(changed)
 
-    def test_only_the_two_closed_startup_tuples_are_encodable(self) -> None:
+    def test_only_the_three_closed_startup_tuples_are_encodable(self) -> None:
         accepted = {
             (PACK_FORMAT, WIRE_VERSION, STARTUP_MODE, POLICY_BULLWORTH),
             (STATIC_WORLD_PACK_FORMAT, STATIC_WORLD_WIRE_VERSION, STARTUP_MODE, POLICY_STATIC_WORLD_V1),
+            (STATIC_WORLD_V3_PACK_FORMAT, STATIC_WORLD_V3_SET_WIRE_VERSION, STARTUP_MODE, POLICY_STATIC_WORLD_V3_SET),
         }
         for pack_format in (PACK_FORMAT, STATIC_WORLD_PACK_FORMAT, 3):
             for wire_version in (WIRE_VERSION, STATIC_WORLD_WIRE_VERSION, 3):
@@ -130,7 +135,7 @@ class NativeWorldAuthorizationCodecTests(unittest.TestCase):
                             wire_version=wire_version,
                             startup_mode=startup_mode,
                             policy=policy,
-                            bitstream_version=STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION,
+                            bitstream_version=STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION,
                         )
                         with self.subTest(startup_tuple=startup_tuple):
                             if startup_tuple in accepted:
@@ -207,23 +212,32 @@ class NativeWorldAuthorizationWireAndLifecycleTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(RecordError):
                 encode_descriptor(changed, STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION)
 
-    def test_format_3_descriptor_is_bounded_multi_img_and_publish_only(self) -> None:
+    def test_format_3_child_and_authorized_set_are_distinct_closed_shapes(self) -> None:
         descriptor = TransportDescriptor(
             "native/native-world.json",
             authorization_requested=False,
             format=STATIC_WORLD_V3_PACK_FORMAT,
             file_count=6,
         )
-        self.assertEqual(encode_descriptor(descriptor, STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION)[:4], b"N\x03\x06\x18")
+        self.assertEqual(encode_descriptor(descriptor, STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION)[:4], b"N\x03\x06\x18")
         self.assertEqual(
-            decode_descriptor(encode_descriptor(descriptor, STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION), STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION),
+            decode_descriptor(encode_descriptor(descriptor, STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION), STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION),
             descriptor,
         )
-        self.assertEqual(encode_descriptor(descriptor, STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION - 1), b"")
-        with self.assertRaisesRegex(RecordError, "publish-only"):
-            encode_descriptor(replace(descriptor, authorization_requested=True), STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION)
+        self.assertEqual(encode_descriptor(descriptor, STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION - 1), b"")
+        authorized_set = TransportDescriptor(
+            "native/static-world-v3-set.json",
+            authorization_requested=True,
+            format=STATIC_WORLD_V3_PACK_FORMAT,
+            file_count=1,
+            wire_version=STATIC_WORLD_V3_SET_WIRE_VERSION,
+            policy=POLICY_STATIC_WORLD_V3_SET,
+        )
+        encoded_set = encode_descriptor(authorized_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION)
+        self.assertEqual(encoded_set[:4], b"A\x03\x01\x1f")
+        self.assertEqual(decode_descriptor(encoded_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION), authorized_set)
         with self.assertRaises(RecordError):
-            decode_descriptor(b"A\x03\x06\x18native/native-world.json\x03\x01\x03", STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION)
+            decode_descriptor(encoded_set, STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION)
         validate_descriptor_placement(("N",) + ("F",) * 6 + ("E",), file_count=6)
 
     def test_descriptor_group_is_unique_first_and_uninterrupted(self) -> None:
@@ -304,7 +318,7 @@ class NativeWorldAuthorizationSourceContractTests(unittest.TestCase):
         self.assertIn("IsClosedNativeWorldStartupAuthorization", client_resource)
         self.assertIn("result.auditProfile.c_str()", client_resource)
 
-    def test_static_world_v3_transport_is_multi_img_and_publish_only(self) -> None:
+    def test_static_world_v3_child_transport_and_set_startup_are_separately_gated(self) -> None:
         bitstream = (REPO / "Shared/sdk/net/bitstream.h").read_text()
         server_header = (REPO / "Server/mods/deathmatch/logic/CResource.h").read_text()
         server_resource = (REPO / "Server/mods/deathmatch/logic/CResource.cpp").read_text()
@@ -319,13 +333,13 @@ class NativeWorldAuthorizationSourceContractTests(unittest.TestCase):
         self.assertIn('formatAttribute->GetValue() == "3"', server_resource)
         self.assertIn('policyAttribute->GetValue() == "static-world-v3"', server_resource)
         self.assertIn("!startupAttribute", server_resource)
-        self.assertIn("NativeWorldStaticWorldV3Transport", writer)
-        self.assertIn("NativeWorldStaticWorldV3Transport", reader)
-        self.assertIn("fileCount >= 3 && fileCount <= 34", reader)
+        self.assertIn("NativeWorldStaticWorldV3LodTransport", writer)
+        self.assertIn("NativeWorldStaticWorldV3LodTransport", reader)
+        self.assertIn("fileCount >= 4 && fileCount <= 35", reader)
         self.assertIn("std::vector<CDownloadableResource*>", client_header)
         self.assertIn("std::vector<SNativeWorldTransportFile>", game_interface)
         self.assertIn("unsigned int declaredBytes", game_interface)
-        self.assertNotIn("NATIVE_WORLD_STATIC_V3_AUTHORIZATION", authorization)
+        self.assertIn("NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION", authorization)
 
     def test_store_is_dpapi_atomic_unicode_and_inert(self) -> None:
         store = (REPO / "Client/core/CNativeWorldAuthorizationStore.cpp").read_text()

@@ -9,8 +9,9 @@ under the runtime resource's `native` directory:
 
 - `native-world.json`
 - `world.ide`
+- `world.lod`
 - `w000.img` through `w003.img`
 
-Format 3 has no `startup` attribute. A successful test downloads, audits, and
+Child-pack format 3 has no `startup` attribute. A successful test downloads, audits, and
 atomically publishes the multi-IMG object while preserving stock GTA behavior:
 `activation=no`, `lease=no`, and no client restart request.

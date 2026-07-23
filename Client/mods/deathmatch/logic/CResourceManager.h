@@ -14,6 +14,7 @@ class CResourceManager;
 #pragma once
 
 #include <game/CGame.h>
+#include <chrono>
 #include <future>
 #include <list>
 #include <vector>
@@ -53,6 +54,8 @@ public:
     void OnDownloadGroupFinished();
     void PulseNativeWorldTransportPublications();
     void RetireNativeWorldTransportPublication(std::future<SNativeWorldTransportPublishResult>&& publication);
+    void RetireNativeWorldAuthorizationRevocation(const SNativeWorldStartupAuthorization& authorization, const std::string& contentId,
+                                                  const SString& resourceName);
 
     void                   OnAddResourceFile(CDownloadableResource* pResourceFile);
     void                   OnRemoveResourceFile(CDownloadableResource* pResourceFile);
@@ -66,8 +69,19 @@ public:
                                        bool bPassSize = false);
 
 private:
+    struct SRetiredNativeWorldAuthorizationRevocation
+    {
+        SNativeWorldStartupAuthorization      authorization;
+        std::string                           contentId;
+        SString                               resourceName;
+        std::chrono::steady_clock::time_point nextAttempt{};
+    };
+
+    void PulseNativeWorldAuthorizationRevocations(bool force);
+
     CMappedList<CResource*>                                      m_resources;
     std::map<ushort, CResource*>                                 m_NetIdResourceMap;
     std::map<SString, CDownloadableResource*>                    m_ResourceFileMap;
     std::vector<std::future<SNativeWorldTransportPublishResult>> m_retiredNativeWorldPublications;
+    std::vector<SRetiredNativeWorldAuthorizationRevocation>      m_retiredNativeWorldAuthorizationRevocations;
 };

@@ -92,7 +92,9 @@ namespace
 {
     eBitStreamVersion RequiredNativeWorldAuthorizationCapability(unsigned char packFormat)
     {
-        return packFormat == 1 ? eBitStreamVersion::NativeWorldStartupAuthorization : eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization;
+        return packFormat == NATIVE_WORLD_BULLWORTH_FORMAT   ? eBitStreamVersion::NativeWorldStartupAuthorization
+               : packFormat == NATIVE_WORLD_STATIC_V1_FORMAT ? eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization
+                                                             : eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization;
     }
 
     bool ParseClosedNativeWorldEndpoint(const char* arguments, std::array<unsigned char, 4>& ipv4, unsigned short& port)
@@ -653,6 +655,16 @@ SNativeWorldAuthorizationRecordResult CCore::RevokeNativeWorldStartupAuthorizati
         result.error = "native-world authorization session changed before revocation";
         return result;
     }
+    return NativeWorldAuthorizationStore::Revoke(authorization, contentId);
+}
+
+SNativeWorldAuthorizationRecordResult CCore::RevokeDetachedNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
+                                                                                           const std::string&                      contentId)
+{
+    // Resource teardown may outlive the network connection that captured the
+    // snapshot. The store still proves exact ownership against the pending
+    // record, so a manager-owned retry must not depend on mutable connection
+    // state that has already been destroyed.
     return NativeWorldAuthorizationStore::Revoke(authorization, contentId);
 }
 

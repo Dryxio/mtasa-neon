@@ -1955,6 +1955,12 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
         // Set the bitstream version number for this connection
         pPlayer->SetBitStreamVersion(Packet.GetBitStreamVersion());
         g_pNetServer->SetClientBitStreamVersion(Packet.GetSourceSocket(), Packet.GetBitStreamVersion());
+        if (m_pResourceManager->RequiresNativeWorldV3SetStartupCapability() &&
+            !pPlayer->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization))
+        {
+            CLogger::LogPrintf("CONNECT: %s refused (client lacks static-world-v3-set startup capability)\n", szNick);
+            return DisconnectPlayer(this, *pPlayer, "This server requires native static-world-v3-set startup support.");
+        }
 
         // Get the serial number from the packet source
         NetServerPlayerID p = Packet.GetSourceSocket();

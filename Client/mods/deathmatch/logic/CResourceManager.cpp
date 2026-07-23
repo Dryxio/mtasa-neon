@@ -30,6 +30,15 @@ CResourceManager::~CResourceManager()
         // Force delete all objects in cache (see https://github.com/multitheftauto/mtasa-blue/issues/1840).
         g_pClientGame->GetElementDeleter()->DoDeleteAll();
     }
+    PulseNativeWorldAuthorizationRevocations(true);
+    if (!m_retiredNativeWorldAuthorizationRevocations.empty())
+    {
+        const SString message(
+            "[NativeWorldAuthorization] state=revocation-abandoned pending=%u activation=no lease=no restart-required=no manual-clear-required=yes",
+            static_cast<unsigned int>(m_retiredNativeWorldAuthorizationRevocations.size()));
+        AddReportLog(7474, message);
+        WriteDebugEvent(message);
+    }
 }
 
 CResource* CResourceManager::Add(unsigned short usNetID, const char* szResourceName, CClientEntity* pResourceEntity, CClientEntity* pResourceDynamicEntity,
@@ -129,6 +138,8 @@ void CResourceManager::OnDownloadGroupFinished()
 
 void CResourceManager::PulseNativeWorldTransportPublications()
 {
+    PulseNativeWorldAuthorizationRevocations(false);
+
     for (auto iter = m_retiredNativeWorldPublications.begin(); iter != m_retiredNativeWorldPublications.end();)
     {
         if (iter->wait_for(std::chrono::seconds(0)) != std::future_status::ready)
@@ -159,6 +170,48 @@ void CResourceManager::RetireNativeWorldTransportPublication(std::future<SNative
 {
     if (publication.valid())
         m_retiredNativeWorldPublications.emplace_back(std::move(publication));
+}
+
+void CResourceManager::RetireNativeWorldAuthorizationRevocation(const SNativeWorldStartupAuthorization& authorization, const std::string& contentId,
+                                                                const SString& resourceName)
+{
+    const auto duplicate = std::find_if(m_retiredNativeWorldAuthorizationRevocations.begin(), m_retiredNativeWorldAuthorizationRevocations.end(),
+                                        [&authorization, &contentId](const SRetiredNativeWorldAuthorizationRevocation& retired)
+                                        {
+                                            return retired.contentId == contentId && retired.authorization.serverIdDigest == authorization.serverIdDigest &&
+                                                   retired.authorization.resourceNetId == authorization.resourceNetId &&
+                                                   retired.authorization.resourceStartCounter == authorization.resourceStartCounter &&
+                                                   retired.authorization.connectionGeneration == authorization.connectionGeneration;
+                                        });
+    if (duplicate != m_retiredNativeWorldAuthorizationRevocations.end())
+        return;
+    m_retiredNativeWorldAuthorizationRevocations.push_back({authorization, contentId, resourceName});
+}
+
+void CResourceManager::PulseNativeWorldAuthorizationRevocations(bool force)
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (auto iter = m_retiredNativeWorldAuthorizationRevocations.begin(); iter != m_retiredNativeWorldAuthorizationRevocations.end();)
+    {
+        if (!force && now < iter->nextAttempt)
+        {
+            ++iter;
+            continue;
+        }
+        const SNativeWorldAuthorizationRecordResult result = g_pCore->RevokeDetachedNativeWorldStartupAuthorization(iter->authorization, iter->contentId);
+        if (!result.success)
+        {
+            iter->nextAttempt = now + std::chrono::seconds(1);
+            ++iter;
+            continue;
+        }
+        const SString message("[NativeWorldAuthorization] state=revoked-detached resource=%s ticket=%s activation=no lease=no restart-required=no",
+                              iter->resourceName.c_str(), result.ticketId.substr(0, 8).c_str());
+        AddReportLog(7475, message);
+        WriteDebugEvent(message);
+        g_pCore->GetConsole()->Printf("%s", *message);
+        iter = m_retiredNativeWorldAuthorizationRevocations.erase(iter);
+    }
 }
 
 bool CResourceManager::RemoveResource(unsigned short usNetID)

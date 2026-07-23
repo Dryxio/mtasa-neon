@@ -11,7 +11,7 @@
     "model_store_damage_atomic": 136,
     "model_store_timed": 484,
     "model_variants": 11837,
-    "payload_bytes": 1373481382,
+    "payload_bytes": 1373481359,
     "placements": 33849,
     "positive_lod_links": 3038,
     "source_models": 10918,
@@ -31,12 +31,12 @@
   ],
   "cities": [
     {
+      "archive_assignment_sha256": "4fc602a22e998fd0ff175ff61c48238f082a3f410845afe93da994fdd4fafe8d",
       "asset_fingerprint": {
         "bytes": 169381156,
         "files": 2070,
         "sha256": "f830f5fa5713ab375d011f71df96e893e95f70fc26ec73707c2f85336f9821ba"
       },
-      "archive_assignment_sha256": "4fc602a22e998fd0ff175ff61c48238f082a3f410845afe93da994fdd4fafe8d",
       "bounds": {
         "x": [
           -9040.3,
@@ -55,6 +55,7 @@
         "col_groups": 7,
         "col_models": 1054,
         "cross_spatial_variants": 102,
+        "ide_flag_repairs": 0,
         "model_types": {
           "object": 927,
           "object-damageable": 112,
@@ -92,12 +93,12 @@
       "spatial_group_bounds_sha256": "8a5f06dd1040acd219dbe9663bc98b912c26e9acb784143ba61f91332bfd519e"
     },
     {
+      "archive_assignment_sha256": "13c46288ee28ba264c785358c8010adef67ce4424a3b33b3c7891963eb8f7fbb",
       "asset_fingerprint": {
         "bytes": 238625320,
         "files": 7646,
         "sha256": "99a3c7654c7739f34f2ff8201036ed53cbdb266383e518c7addd1b86fe0d384e"
       },
-      "archive_assignment_sha256": "13c46288ee28ba264c785358c8010adef67ce4424a3b33b3c7891963eb8f7fbb",
       "bounds": {
         "x": [
           5671.47021,
@@ -116,6 +117,7 @@
         "col_groups": 56,
         "col_models": 3800,
         "cross_spatial_variants": 305,
+        "ide_flag_repairs": 0,
         "model_types": {
           "object": 3405,
           "object-damageable": 2,
@@ -153,12 +155,12 @@
       "spatial_group_bounds_sha256": "777b7cdf31362983fd7aaccbdae8ccecdd813b90acdc8681992a49cd94768bad"
     },
     {
+      "archive_assignment_sha256": "e1ca15474ab9454a984533f870eb942e95821ae046a764060548fc85b5310842",
       "asset_fingerprint": {
         "bytes": 124593269,
         "files": 6436,
         "sha256": "b3af590cd1253c3536ae5dd26633ed1056bd3c3637bb3429252a0893a55b8e03"
       },
-      "archive_assignment_sha256": "e1ca15474ab9454a984533f870eb942e95821ae046a764060548fc85b5310842",
       "bounds": {
         "x": [
           5975.04004,
@@ -177,6 +179,7 @@
         "col_groups": 46,
         "col_models": 3488,
         "cross_spatial_variants": 469,
+        "ide_flag_repairs": 15,
         "model_types": {
           "object": 3444,
           "object-damageable": 18,
@@ -214,12 +217,12 @@
       "spatial_group_bounds_sha256": "5ce64aa072dd28a461de373baee93730a018b8dd8cf10bd7b7ee144d2ed982f8"
     },
     {
+      "archive_assignment_sha256": "723a68d671c44c2a08ed9a02c32812e58c3c186282b446ae59fd158a40381662",
       "asset_fingerprint": {
         "bytes": 823626638,
         "files": 7006,
         "sha256": "ab1ee6b0a8e9bcc92fa1c1911d2878cf67a537a7fbb46ca00f63d5b1c6ed968b"
       },
-      "archive_assignment_sha256": "723a68d671c44c2a08ed9a02c32812e58c3c186282b446ae59fd158a40381662",
       "bounds": {
         "x": [
           4022.67456,
@@ -238,6 +241,7 @@
         "col_groups": 12,
         "col_models": 3493,
         "cross_spatial_variants": 43,
+        "ide_flag_repairs": 0,
         "model_types": {
           "object": 3441,
           "object-damageable": 4,
@@ -407,6 +411,7 @@
       "liberty-city": 3488,
       "vice-city": 3802
     },
+    "concurrency_rule": "city-transition XOR generation-rollover; a third working set is refused",
     "current_transition_pairs": [
       {
         "cities": [
@@ -451,7 +456,6 @@
         "required_slots": 6981
       }
     ],
-    "concurrency_rule": "city-transition XOR generation-rollover; a third working set is refused",
     "future_city_working_set": 4096,
     "generation_fence_required": true,
     "identity": "content-id + pack-id + pack-local-model-id",
@@ -470,11 +474,11 @@
       "required_additional_arrays": 2,
       "scratch_entity_capacity": 4096
     },
+    "maximum_concurrent_working_sets": 2,
     "mta_dynamic_allocator_range": [
       0,
       19999
     ],
-    "maximum_concurrent_working_sets": 2,
     "observed_ide_free_slots_below_arena": 5168,
     "permanent_global_assignment": false,
     "physical_arena": [
@@ -493,7 +497,7 @@
     },
     "worst_current_transition_remaining": 2705
   },
-  "reviewed_plan_sha256": "eeb6ee5f52b2b13fd668f1d5b3a857f1fcc6b6f6e89bfd6fcc162ce45b111d65",
+  "reviewed_plan_sha256": "f873f49bb39002b4369a6f7d5905ef067f2b9521ec631f7561d0669877bbc16d",
   "schema": 1,
   "source_order": [
     "bullworth",

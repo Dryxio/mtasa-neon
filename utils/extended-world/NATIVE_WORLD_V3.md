@@ -1,14 +1,15 @@
 # Canonical static-world v3 packs
 
 Static-world v3 is the deterministic multi-IMG transport and admission format
-for large native-world payloads. This checkpoint deliberately stops before GTA
-registration: an accepted v3 resource is audited and published into the
-content-addressed cache with `activation=no` and `lease=no`. It cannot request
-a startup ticket, select a native registrar policy, or mutate GTA stores.
+for large native-world payloads. A child-pack resource is audited and published
+into the content-addressed cache with `activation=no` and `lease=no`. It cannot
+request a startup ticket or select a native registrar policy.
 
-That separation proves the expensive byte pipeline and Carcer City corpus
-before the later aggregate planner and multi-city registrar introduce
-irreversible native mutations.
+The separate `static-world-v3-set` coordinator may request a one-shot startup
+ticket for exactly four immutable child identities. Its startup route locks and
+re-audits all five cache objects, reruns the aggregate planner, releases every
+lease and deliberately continues with stock GTA. It still cannot register an
+IMG or mutate a GTA store.
 
 ## Closed transport format
 
@@ -24,17 +25,18 @@ The exact tagged group is:
 
 - `native-world.json`;
 - `world.ide`;
+- `world.lod`;
 - one through 32 contiguous archives named `w000.img`, `w001.img`, and so on.
 
 The manifest has an exact schema and ordered `files.images` array. Every file
 name, byte length, and lowercase SHA-256 is bound before publication. The
-content ID additionally binds the format, policy, pack ID, IDE identity, and
-the ordered name/length/hash tuple of every IMG. Reordering archives therefore
-creates a different semantic object.
+content ID additionally binds the format, policy, pack ID, IDE and LOD
+identities, and the ordered name/length/hash tuple of every IMG. Reordering
+archives therefore creates a different semantic object.
 
 Each IMG is a standard `VER2` archive capped at 131,072 sectors (256 MiB). The
 payload cap is 8 GiB, with all aggregate arithmetic performed as checked
-64-bit values. The transport cache retains at most four v3 objects under a
+64-bit values. The transport cache retains at most eight v3 child objects under a
 32 GiB cap and requires free space for the new object plus the greater of
 512 MiB or 12.5 percent of that object.
 
@@ -73,10 +75,11 @@ payload grammar, stock-key collision, pool, and native-state preflight under
 an activation lease.
 
 Standalone streamed IPLs have no entry in GTA's static IPL entity-index array,
-so v3 currently requires `lodIndex = -1`. A non-negative LOD link is rejected
-instead of risking an access through static index `-1`. Native LOD linkage
-requires a later registrar-owned entity-index bootstrap; the transport format
-does not pretend that larger limits solve it.
+so every emitted binary IPL still carries `lodIndex = -1`. The exact
+`world.lod` sidecar preserves the original cross-group child/anchor graph as
+checked unsigned ordinals. It proves that VC needs 1,081 links/anchors and LC
+needs 1,957, without asking GTA to resolve them yet. Native LOD linkage still
+requires a later registrar-owned entity-index bootstrap.
 
 Models explicitly lacking source collision keep no collision record; no
 synthetic geometry is created. Models explicitly lacking a source TXD use one
@@ -94,12 +97,20 @@ conversions:
 - two pinned malformed Carcer 2DFX extensions are reduced to empty extensions
   because their claimed 12 effects have no bytes before the next clump child;
 - all 57 COL2 records are validated, converted to COL3, and revalidated;
+- native COL1 records remain canonical `COLL` records: both the builder and the
+  runtime dry-run validate their sequential counts, arrays, indices, finite
+  bounds, record boundaries, model identity, and padding without a lossy
+  geometry rewrite;
 - TXD native-texture tuples, mip chains, anisotropy plugins, dimensions, and
   64-bit GPU/decoded budgets are checked;
 - case-insensitive TXD duplicates use a deterministic first-wins policy and
   later unreachable entries are removed;
 - known extractor defects in timed-object fields are repaired only by exact
   source fingerprint, prefix, source ID, and raw value tuples.
+- 15 Liberty City definitions with source-specific high IDE metadata are
+  projected onto GTA SA's observable `0x007fffff` flag domain only for the
+  frozen source fingerprint and exact source-ID/raw-value tuples; the report
+  retains raw, canonical and removed values.
 
 COL admission validates complete record boundaries, counts, offsets, primitive
 arrays, face groups, core and shadow indices, finite bounds, flags, and zero
@@ -152,7 +163,7 @@ The deterministic proof is valid only when every digest matches.
 The reviewed Carcer input produces:
 
 - 3,450 source models and 3,493 spatial model variants;
-- model IDs 26,099 through 29,591;
+- model IDs 28,344 through 31,836 in the aggregate proof build;
 - 106 TXDs;
 - 12 COL/IPL spatial pairs;
 - 12,475 placements, including 56 stock-model placements;
@@ -161,19 +172,20 @@ The reviewed Carcer input produces:
 - four COL2-to-COL3 conversions;
 - 70 removed later TXD duplicates.
 
-The generated payload is approximately 789 MiB. Its first three archives are
-exactly 256 MiB and the fourth is 21,321,728 bytes. Two clean builds from the
-frozen local inputs produced byte-identical outputs on 2026-07-23:
+The generated payload is 826,749,754 bytes including `world.ide` and
+`world.lod`. Its first three archives are exactly 256 MiB and the fourth is
+21,321,728 bytes. The current aggregate proof build produced:
 
 | File | SHA-256 |
 | --- | --- |
-| `native-world.json` | `3468a1995adb549144f5f37dc3cd46e7e88040ab84b4df2dc2ce1a4207554b17` |
-| `world.ide` | `25581a22aadcc445a8351c7a534713bbc4ec3fefd6f6d23193166085970ffdb5` |
-| `w000.img` | `0bfda1c9e27bec8c3269fe3aca449f1b56d454407a50a7e7ff81cdecf923f71a` |
-| `w001.img` | `6f089020124fa76b62e0d42731fe7c883ea1994a06268bc0e37b6e0eeaeecd0f` |
-| `w002.img` | `a2ac3414b836fcd18297b7f129b3227e7778cb71cbd1e4aa9fd152145b7d6f52` |
-| `w003.img` | `25fac738e7888b5e98dda330631f754df6f1a5a3b759ac661b40b7bedc9678c2` |
-| `validation.json` | `74b2870c2720fb966a9ce9d85c8ac9dc7e4142f89102abddf35aec9b842c2708` |
+| `native-world.json` | `4632b31bf876d07987fe8fe310abf0e69744f52a4a484b3a2b3280c44b1618db` |
+| `world.ide` | `4aa9a965d7b8835b41d4985c13da35bd9b11c4c737f046ded9d41c58d7fce181` |
+| `world.lod` | `d67b97b52b5def0dfea6d41b628aed72c081c18229e88b8c9627fef20ff06fca` |
+| `w000.img` | `5fa35e9cd436ba7abbb43095989b2f405aa35ad248b0748266d6b924fe77db7c` |
+| `w001.img` | `a24248ce539348d8885fe25a83068dbd1f31e73fbd4ccaef125ee62fdda9bd05` |
+| `w002.img` | `28dad0ea60acb9874594a17cc03230850e9fbb52bc2bb49df73b61a120d834b4` |
+| `w003.img` | `6121af6fcffcf3d460dfcd9f9792ed910875805c94b34088d8bdef37f79c969a` |
+| `validation.json` | `fa0cbcfd622e5aae47b7049360721951c6b913666dd43a6cf06d340b64d238b6` |
 
 The exact hashes are also bound by the generated manifest and must be
 reproduced from the current source fingerprints before each deployment.
@@ -182,15 +194,48 @@ reproduced from the current source fingerprints before each deployment.
 descriptor. Deploy the generated payload separately into its runtime `native`
 directory. A successful client gate must report:
 
-- `format=3`, six files for the Carcer proof;
+- `format=3`, seven files for the Carcer proof;
 - `audit=static-world-v3-transport-envelope-v1`;
 - `publish=atomic`;
 - first run `disposition=published`, second run `disposition=hit`;
 - `activation=no`, `lease=no`, and no restart request.
 
-The game must remain stock because v3 activation is intentionally unavailable
-at this checkpoint. Seeing Carcer in GTA would indicate an architectural
+The game must remain stock. Seeing Carcer in GTA during either the child
+transport gate or the aggregate dry-run would indicate an architectural
 violation, not success.
+
+## Closed aggregate startup dry-run
+
+`native_world_v3_set.py` emits one canonical ASCII
+`static-world-v3-set.json`. It contains exactly Bullworth, Vice City, Liberty
+City and Carcer City in that order, each as an exact `(pack_id, content_id)`
+pair. The domain-separated set ID covers the format, policy, order and all
+eight identity strings. The frozen checkpoint-8 envelope has set ID
+`04547ff361e98e97b42badfde3a85c58f6c7a8cbb1eb83e2dbcdec69247b3afb`.
+
+Child packs use the format-3 LOD transport capability and remain publish-only.
+The coordinator uses a later, independent format-3 startup-authorization
+capability; a server refuses to start it while an incapable client is joined
+and refuses a newly joining incapable client while it is running. There is no
+silent downgrade to an ordinary resource.
+
+On publication and again at authorized startup, the coordinator locks its
+envelope plus all four exact child cache objects. Every child manifest,
+IDE/LOD file and IMG is rehashed and semantically audited while locked. The
+planner then proves the canonical namespaces and ID ranges, cross-pack member,
+model and GTA uppercase-key uniqueness, and every compiled
+store/pool/archive/handle capacity. All child leases and then the set lease are
+released before startup returns `aggregate-dry-run` and starts stock GTA.
+
+The set cache uses the same closed-directory security boundary as child packs:
+all ancestors remain locked for the lease lifetime, interrupted private
+siblings are collected only through verified no-reparse handles, and an exact
+one-file canonical object with a corrupt hash is removed safely so a later
+publication can recover. An explicit ResourceStop revocation that cannot be
+terminalized immediately is retained as a value-only manager job and retried
+against the exact durable identity. Generic client teardown deliberately does
+not revoke, because `nativeworldauth restart` must preserve the pending ticket
+for the next process.
 
 ## Aggregate planning handoff
 

@@ -574,6 +574,12 @@ void CResourceManager::OnPlayerQuit(CPlayer& Player)
     }
 }
 
+bool CResourceManager::RequiresNativeWorldV3SetStartupCapability() const
+{
+    return std::any_of(CResource::m_StartedResources.begin(), CResource::m_StartedResources.end(),
+                       [](const CResource* resource) { return resource && resource->RequiresNativeWorldV3SetStartupCapability(); });
+}
+
 //
 // Add resource <-> luaVM lookup mapping
 //

@@ -390,6 +390,14 @@ def partition_sizes(members: list[SizedMember]) -> list[dict[str, int | str]]:
     return reports
 
 
+def iter_loose_stock_files(gta_root: Path):
+    """Yield loose files only from directories owned by the stock install."""
+
+    for stock_root in (gta_root / "models", gta_root / "data"):
+        if stock_root.is_dir():
+            yield from stock_root.rglob("*")
+
+
 def stock_identity(gta_root: Path | None) -> dict[str, object]:
     if gta_root is None:
         return {
@@ -440,9 +448,12 @@ def stock_identity(gta_root: Path | None) -> dict[str, object]:
             elif suffix == ".ipl":
                 ipl_names.add(Path(entry.name).stem.casefold())
     loose_destinations = {".dff": model_names, ".txd": txd_names, ".col": col_names, ".ipl": ipl_names}
-    for path in gta_root.rglob("*"):
+    # Only models/ and data/ belong to the installed GTA corpus. Scanning the
+    # entire installation would let unrelated backup or tool-output folders
+    # silently change the supposedly frozen stock identity.
+    for path in iter_loose_stock_files(gta_root):
         destination = loose_destinations.get(path.suffix.casefold())
-        if destination is not None and path.is_file() and "modloader" not in {part.casefold() for part in path.parts}:
+        if destination is not None and path.is_file():
             destination.add(path.stem.casefold())
     directive_name = re.compile(r"([^,\s\\/]+)\.(col|ipl)\b", re.IGNORECASE)
     for relative in ("data/default.dat", "data/gta.dat"):
@@ -660,7 +671,8 @@ def plan(repository: Path, gta_root: Path | None = None) -> dict[str, object]:
                 "placements": len(placements),
                 "native_placements": sum(placement.native for placement in placements),
                 "positive_lod_links": positive_lods,
-                "timed_model_repairs": len(repairs),
+                "timed_model_repairs": sum("raw_time_on" in repair for repair in repairs),
+                "ide_flag_repairs": sum("raw_flags" in repair for repair in repairs),
             },
             "largest_spatial_group": {"name": largest_group[1], "placements": largest_group[0]},
             "bounds": placement_bounds(placements),

@@ -112,6 +112,10 @@ class NativeWorldCacheTest(unittest.TestCase):
     def test_format_3_multi_img_identity_and_transactional_layout(self) -> None:
         first = b"A" * 2048
         second = b"B" * 4096
+        lod = b"NWL3LOD\0" + b"\0" * 24
+        ide = b"objs\nend\n"
+        (self.seed / "world.ide").write_bytes(ide)
+        (self.seed / "world.lod").write_bytes(lod)
         (self.seed / "w000.img").write_bytes(first)
         (self.seed / "w001.img").write_bytes(second)
         manifest = {
@@ -119,7 +123,8 @@ class NativeWorldCacheTest(unittest.TestCase):
             "policy": STATIC_WORLD_V3_POLICY,
             "pack_id": "carcer-city",
             "files": {
-                "ide": self.manifest["files"]["ide"],
+                "ide": {"name": "world.ide", "bytes": len(ide), "sha256": hashlib.sha256(ide).hexdigest()},
+                "lod": {"name": "world.lod", "bytes": len(lod), "sha256": hashlib.sha256(lod).hexdigest()},
                 "images": [
                     {"name": "w000.img", "bytes": len(first), "sha256": hashlib.sha256(first).hexdigest()},
                     {"name": "w001.img", "bytes": len(second), "sha256": hashlib.sha256(second).hexdigest()},
@@ -131,12 +136,16 @@ class NativeWorldCacheTest(unittest.TestCase):
         identity = content_id(manifest, STATIC_WORLD_V3_POLICY)
         reordered = copy.deepcopy(manifest)
         reordered["files"]["images"].reverse()
-        self.assertNotEqual(identity, content_id(reordered, STATIC_WORLD_V3_POLICY))
+        with self.assertRaisesRegex(ValueError, "contiguous canonical"):
+            content_id(reordered, STATIC_WORLD_V3_POLICY)
 
         final, disposition = publish_local_seed(self.seed, self.cache, STATIC_WORLD_V3_POLICY)
         self.assertEqual("published", disposition)
         self.assertEqual(self.cache / "v3" / STATIC_WORLD_V3_POLICY / identity, final)
-        self.assertEqual({"native-world.json", "world.ide", "w000.img", "w001.img"}, {path.name for path in final.iterdir()})
+        self.assertEqual(
+            {"native-world.json", "world.ide", "world.lod", "w000.img", "w001.img"},
+            {path.name for path in final.iterdir()},
+        )
         self.assertEqual(final, open_existing_cache(self.cache, manifest, STATIC_WORLD_V3_POLICY, identity))
         self.assertEqual(["w000.img", "w001.img"], [item["name"] for item in json.loads(canonical_manifest_bytes(manifest, STATIC_WORLD_V3_POLICY))["files"]["images"]])
 
@@ -202,6 +211,24 @@ class NativeWorldCacheTest(unittest.TestCase):
         self.assertIn("request.format == 3", source)
         acquire = source[source.index("bool AcquireExistingNativeWorldCacheLease") :]
         self.assertIn("request.format == 3", acquire)
+
+    def test_cpp_transport_publication_repairs_but_startup_acquisition_is_read_only(self) -> None:
+        source = (GAME_SA / "CNativeWorldCacheSA.cpp").read_text(encoding="utf-8")
+        publication = source[
+            source.index("bool PublishNativeWorldCache(") : source.index("void CommitNativeWorldCacheLease")
+        ]
+        acquisition = source[
+            source.index("bool AcquireExistingNativeWorldCacheLease(") : source.index("std::string GenerateNativeWorldV3SetId")
+        ]
+        self.assertIn(
+            "PrepareNativeWorldCacheImpl(request, publishedDirectory, cacheHit, error, false, true, &audit)",
+            publication,
+        )
+        self.assertNotIn("PrepareNativeWorldCacheImpl", acquisition)
+        recovery = source[source.index("if (!recoverInvalid)") : source.index("SString sourceDirectory")]
+        quota = recovery.index("CheckTransportCacheQuota(paths, request, error)")
+        rename = recovery.index("MoveFileExW(")
+        self.assertLess(quota, rename)
 
 
 if __name__ == "__main__":

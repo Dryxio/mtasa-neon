@@ -33,18 +33,22 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("generated model names collide in GTA uppercase key space", source)
         self.assertIn("generated TXD names collide in GTA uppercase key space", source)
         self.assertIn("ValidateStaticWorldV3Cols(const SStaticWorldV3Ide& ide, SStaticWorldV3Inventory& inventory", source)
+        self.assertIn('memcmp(data.data() + offset, "COLL", 4) == 0', source)
+        self.assertIn('memcmp(prefix, "COLL", 4) == 0', source)
+        self.assertNotIn("COL archive contains a non-COL3 record", source)
 
-    def test_v3_is_protocol_capability_gated_and_has_no_startup_form(self) -> None:
+    def test_v3_child_lod_transport_and_set_startup_are_independently_gated(self) -> None:
         bitstream = (REPOSITORY / "Shared/sdk/net/bitstream.h").read_text(encoding="utf-8")
         server = (REPOSITORY / "Server/mods/deathmatch/logic/CResource.cpp").read_text(encoding="utf-8")
         packet = (REPOSITORY / "Server/mods/deathmatch/logic/packets/CResourceStartPacket.cpp").read_text(encoding="utf-8")
         authorization = (REPOSITORY / "Client/sdk/core/CNativeWorldAuthorization.h").read_text(encoding="utf-8")
         meta = (REPOSITORY / "test-resources/native-world-v3-transport-test/meta.xml").read_text(encoding="utf-8")
-        self.assertIn("NativeWorldStaticWorldV3Transport", bitstream)
+        self.assertIn("NativeWorldStaticWorldV3LodTransport", bitstream)
+        self.assertIn("NativeWorldStaticWorldV3StartupAuthorization", bitstream)
         self.assertIn("staticWorldV3PublishOnly", server)
         self.assertIn("!startupAttribute", server)
-        self.assertIn("NativeWorldStaticWorldV3Transport", packet)
-        self.assertNotIn("NATIVE_WORLD_STATIC_V3", authorization)
+        self.assertIn("NativeWorldStaticWorldV3LodTransport", packet)
+        self.assertIn("NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION", authorization)
         self.assertNotIn("startup=", meta)
 
     def test_v3_payload_and_disk_accounting_use_separate_u64_budgets(self) -> None:
@@ -70,6 +74,31 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("const bool isV3 = request.format == 3", acquire)
         self.assertNotIn("request.format == 3 ||", acquire)
         self.assertIn("(!isV3 && request.img.name != CACHED_IMG_FILE)", acquire)
+
+    def test_v3_set_cache_keeps_closed_lease_and_verified_cleanup_boundaries(self) -> None:
+        cache = (REPOSITORY / "Client/game_sa/CNativeWorldCacheSA.cpp").read_text(encoding="utf-8")
+        set_publication = cache[cache.index("bool PublishNativeWorldV3Set") : cache.index("bool AcquireExistingNativeWorldV3SetLease")]
+        set_lease = cache[cache.index("bool AcquireExistingNativeWorldV3SetLease") : cache.index("bool PrepareAndLockNativeWorldCache")]
+        self.assertIn("RemoveVerifiedNativeWorldV3SetDirectory", set_publication)
+        self.assertNotIn("DeleteFileW(SharedUtil::FromUTF8(quarantineManifest)", set_publication)
+        self.assertIn("IsPrivateCacheSibling(name)", set_publication)
+        for ancestor in ("dataRoot", "root", "format", "policy"):
+            self.assertIn(f"LockDirectory({ancestor}, handles, error)", set_lease)
+
+    def test_native_world_authorization_teardown_has_manager_owned_retry(self) -> None:
+        resource = (REPOSITORY / "Client/mods/deathmatch/logic/CResource.cpp").read_text(encoding="utf-8")
+        manager = (REPOSITORY / "Client/mods/deathmatch/logic/CResourceManager.cpp").read_text(encoding="utf-8")
+        core = (REPOSITORY / "Client/core/CCore.cpp").read_text(encoding="utf-8")
+        self.assertIn("RetireNativeWorldAuthorizationRevocation", resource)
+        self.assertIn("PulseNativeWorldAuthorizationRevocations(false)", manager)
+        self.assertIn("RevokeDetachedNativeWorldStartupAuthorization", manager)
+        self.assertIn("NativeWorldAuthorizationStore::Revoke(authorization, contentId)", core)
+
+    def test_server_cannot_start_native_world_transport_without_client_files(self) -> None:
+        resource = (REPOSITORY / "Server/mods/deathmatch/logic/CResource.cpp").read_text(encoding="utf-8")
+        packet = (REPOSITORY / "Server/mods/deathmatch/logic/packets/CResourceStartPacket.cpp").read_text(encoding="utf-8")
+        self.assertIn("m_nativeWorldPackTransport.present && !StartOptions.bClientFiles", resource)
+        self.assertIn("nativeWorldPack.present && !m_pResource->IsClientFilesOn()", packet)
 
     def test_native_pack_streaming_floor_covers_both_channel_halves(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")

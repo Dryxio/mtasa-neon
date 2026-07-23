@@ -1,13 +1,10 @@
 <meta>
-    <info author="MTA Neon" name="Native world v3 Carcer transport test" type="script" version="1.0.0" />
+    <info author="MTA Neon" name="Native world v3 Bullworth transport test" type="script" version="1.0.0" />
 
     <file src="native/native-world.json" download="true" native_world="true" />
     <file src="native/world.ide" download="true" native_world="true" />
     <file src="native/world.lod" download="true" native_world="true" />
     <file src="native/w000.img" download="true" native_world="true" />
-    <file src="native/w001.img" download="true" native_world="true" />
-    <file src="native/w002.img" download="true" native_world="true" />
-    <file src="native/w003.img" download="true" native_world="true" />
 
     <!-- Child packs stay publish-only. The separate set resource owns startup authorization. -->
     <native_world format="3" policy="static-world-v3" manifest="native/native-world.json" />

@@ -207,6 +207,8 @@ public:
     virtual SNativeWorldAuthorizationRecordResult ClearNativeWorldStartupAuthorization() = 0;
     virtual SNativeWorldAuthorizationRecordResult RevokeNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
                                                                                         const std::string&                      contentId) = 0;
+    virtual SNativeWorldAuthorizationRecordResult RevokeDetachedNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,
+                                                                                                const std::string&                      contentId) = 0;
     virtual SNativeWorldStartupSelection          BeginNativeWorldStartupSelection(bool legacySelectorEnabled) = 0;
     virtual SNativeWorldAuthorizationRecordResult FinishNativeWorldStartupSelection(const std::string& ticketId, bool claim,
                                                                                     const std::string& refusalReason) = 0;

@@ -22,6 +22,7 @@ CACHE_FORMAT_DIRECTORY_V2 = "v2"
 CACHE_FORMAT_DIRECTORY_V3 = "v3"
 CACHED_MANIFEST_FILE = "native-world.json"
 CACHED_IDE_FILE = "world.ide"
+CACHED_LOD_FILE = "world.lod"
 CACHED_IMG_FILE = "world.img"
 
 
@@ -40,6 +41,11 @@ def canonical_manifest_bytes(manifest: dict[str, Any], policy_key: str) -> bytes
         }
     }
     if manifest["format"] == 3:
+        files["lod"] = {
+            "name": CACHED_LOD_FILE,
+            "bytes": manifest["files"]["lod"]["bytes"],
+            "sha256": manifest["files"]["lod"]["sha256"],
+        }
         files["images"] = [
             {
                 "name": image["name"],
@@ -91,6 +97,8 @@ def content_id(manifest: dict[str, Any], policy_key: str) -> str:
         f"ide.sha256={ide['sha256']}\n"
     )
     if manifest["format"] == 3:
+        lod = manifest["files"]["lod"]
+        identity += f"lod.bytes={lod['bytes']}\nlod.sha256={lod['sha256']}\n"
         for image in manifest["files"]["images"]:
             identity += f"img.name={image['name']}\nimg.bytes={image['bytes']}\nimg.sha256={image['sha256']}\n"
     else:
@@ -123,6 +131,7 @@ def validate_cache_object(directory: Path, manifest: dict[str, Any], policy_key:
     canonical = canonical_manifest_bytes(manifest, policy_key)
     expected_files = {CACHED_MANIFEST_FILE, CACHED_IDE_FILE}
     if manifest["format"] == 3:
+        expected_files.add(CACHED_LOD_FILE)
         expected_files.update(image["name"] for image in manifest["files"]["images"])
     else:
         expected_files.add(CACHED_IMG_FILE)
@@ -134,6 +143,8 @@ def validate_cache_object(directory: Path, manifest: dict[str, Any], policy_key:
     cached_ide = dict(manifest["files"]["ide"], name=CACHED_IDE_FILE)
     _validate_file(directory / CACHED_IDE_FILE, cached_ide)
     if manifest["format"] == 3:
+        cached_lod = dict(manifest["files"]["lod"], name=CACHED_LOD_FILE)
+        _validate_file(directory / CACHED_LOD_FILE, cached_lod)
         for image in manifest["files"]["images"]:
             _validate_file(directory / image["name"], image)
     else:
@@ -180,6 +191,7 @@ def publish_local_seed(seed_directory: Path, cache_root: Path, policy_key: str) 
         manifest_path.write_bytes(canonical_manifest_bytes(manifest, policy_key))
         shutil.copyfile(seed_directory / manifest["files"]["ide"]["name"], quarantine / CACHED_IDE_FILE)
         if manifest["format"] == 3:
+            shutil.copyfile(seed_directory / manifest["files"]["lod"]["name"], quarantine / CACHED_LOD_FILE)
             for image in manifest["files"]["images"]:
                 shutil.copyfile(seed_directory / image["name"], quarantine / image["name"])
         else:

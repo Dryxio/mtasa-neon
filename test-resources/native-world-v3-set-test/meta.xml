@@ -1,0 +1,7 @@
+<meta>
+    <info author="MTA Neon" name="Native world v3 aggregate dry-run test" type="script" version="1.0.0" />
+
+    <file src="native/static-world-v3-set.json" download="true" native_world="true" />
+
+    <native_world format="3" policy="static-world-v3-set" manifest="native/static-world-v3-set.json" startup="true" />
+</meta>

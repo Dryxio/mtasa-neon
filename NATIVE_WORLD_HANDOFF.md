@@ -933,7 +933,7 @@ The updated checkpoint sequence is:
    two-character namespaces, contiguous source-first model remaps, spatial
    COL/IPL pairs and one through 32 canonical VER2 archives. All file sizes,
    hashes and content identities use checked 64-bit accounting; the client
-   cache admits up to 8 GiB payload objects, retains at most four v3 objects
+   cache admits up to 8 GiB payload objects, retains at most eight v3 objects
    under its aggregate cap, reserves explicit transaction headroom, and
    re-audits the locked quarantine before atomic publication. The reviewed
    admission path converts the pinned VC RenderWare 3.4 DFF through local
@@ -975,7 +975,43 @@ The updated checkpoint sequence is:
    both channel halves in source, pending build/runtime validation. The 5,168 observed
    IDE-free IDs below 20,000 are the remaining MTA dynamic-allocation
    headroom, not proof of safe capacity.
-7. **Transactional multi-city activation.** Register all four imported cities
+7. **Closed format-3 authorization and aggregate dry-run — complete; live
+   lifecycle and hostile-cache gates validated 2026-07-23.** Every child pack
+   now binds the mandatory `world.lod` sidecar and remains publish-only. A
+   separate immutable
+   `static-world-v3-set` envelope references exactly Bullworth, VC, LC and
+   Carcer in canonical order by `(pack ID, content ID)` and derives a
+   domain-separated set ID. Its independent protocol capability has no
+   downgrade: incapable joined clients block resource start and incapable new
+   clients are refused while the coordinator runs. Publication and authorized
+   startup lock the envelope and all four cache objects simultaneously,
+   re-audit the locked files, rerun the cross-pack namespace/ID/hash/capacity
+   planner, release all five leases and terminalize the one-shot ticket as
+   `aggregate-dry-run`. The route returns to stock GTA before any pack
+   registration, IMG install, model-store write or hook. The frozen proof set
+   ID is
+   `04547ff361e98e97b42badfde3a85c58f6c7a8cbb1eb83e2dbcdec69247b3afb`.
+   Set-cache cleanup retains verified no-reparse handles through child
+   deletion, collects interrupted private siblings, locks the entire ancestor
+   chain into the lease and can recover a canonical child object whose hash is
+   corrupt. Repair is publication-only: startup acquisition remains read-only,
+   while the trusted transport seed quarantines the invalid object, rechecks
+   object/byte/free-space policy, rebuilds through a separately audited
+   quarantine and atomically replaces the semantic address. Explicit
+   ResourceStop revocation failures transfer
+   their value-only identity to a manager-owned exact-store retry; intentional
+   restart teardown does not revoke the ticket. All four canonical packs
+   reverify. `Game SA`, `Client Core` and
+   `Client Deathmatch` pass `Release|Win32`, and server `Deathmatch` passes
+   `Release|x64`. The final offline suite passes 146 tests. Live gates proved
+   normal publication and cache hits, explicit cancellation, missing-child
+   refusal at startup followed by transport recovery, corrupt-child refusal at
+   startup, repeated corrupt `world.lod` recovery, prior-remnant collection,
+   exact hash restoration, restart/reconnect and the five-lease aggregate
+   proof. Every authorized dry-run ended with all leases released and
+   `nativeWrites=0 allocations=0 hooks=0 archives=0`; stock GTA then started,
+   and no new crash dump was produced.
+8. **Transactional multi-city activation.** Register all four imported cities
    as one authorized content set. Complete every cache, archive, TXD, pool,
    entity-array, scratch-buffer and model plan before the first irreversible
    native bind; before that barrier, roll back globally, and after it, fail
@@ -985,20 +1021,20 @@ The updated checkpoint sequence is:
    channels and entity/model references cross the generation fence. Then test
    repeated cross-city streaming, collisions, LODs, D3D reset/minimize, memory
    pressure, death/respawn, reconnect and resource restart.
-8. **MTA/API/network completion.** Audit logical model-ID width, remaining
+9. **MTA/API/network completion.** Audit logical model-ID width, remaining
    coordinate/streamer bounds, `IsOutOfBounds`, script APIs, serialization,
    protocol capabilities and legacy-client refusal. Build every affected
    client/server producer and consumer when protocol or ABI changes.
-9. **Streaming/render/memory tuning.** Measure and tune streaming memory,
+10. **Streaming/render/memory tuning.** Measure and tune streaming memory,
    buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
    LOD/prefetch behavior using high-water and multi-hour traces rather than
    larger constants alone.
-10. **Optional environment follow-ups.** Add radar, water, zones,
+11. **Optional environment follow-ups.** Add radar, water, zones,
     CULL/occlusion, audio, timecycle and interiors as separately validated pack
     components. Paths/nodes, DAT expansion, streamed SCM, new IFP/RRR,
     missions/savegames and ambient population remain outside the static MTA
     multi-city target.
-11. **Production gate.** Add hostile-input/cache recovery tests, long
+12. **Production gate.** Add hostile-input/cache recovery tests, long
     reconnect/restart and several-hour city-tour endurance runs, freeze pack and
     protocol versions, document deployment/rollback, add CI fixtures, and
     retire or isolate obsolete custom-streaming workarounds.

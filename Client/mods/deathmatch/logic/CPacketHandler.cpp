@@ -5319,11 +5319,12 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
                     const bool supportedTransport = format == 1 ? g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldPackTransport)
                                                     : format == 2
                                                         ? g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV2Transport)
-                                                        : format == 3 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV3Transport);
+                                                        : format == 3 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV3LodTransport);
                     const bool supportedAuthorization =
                         !startupAuthorization || (format == 1 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStartupAuthorization)) ||
-                        (format == 2 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization));
-                    const bool supportedFileCount = format == 3 ? fileCount >= 3 && fileCount <= 34 : fileCount == 3;
+                        (format == 2 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization)) ||
+                        (format == 3 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization));
+                    const bool supportedFileCount = format == 3 ? (startupAuthorization ? fileCount == 1 : fileCount >= 4 && fileCount <= 35) : fileCount == 3;
                     if (!supportedTransport || !supportedAuthorization || !supportedFileCount || manifestLength == 0)
                     {
                         bFatalError = true;

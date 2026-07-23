@@ -439,7 +439,7 @@ bool CResource::CanBeLoaded()
 
 bool CResource::SetNativeWorldTransport(unsigned char format, const SString& manifestPath, unsigned char expectedFileCount)
 {
-    const bool validFileCount = format == 3 ? expectedFileCount >= 3 && expectedFileCount <= 34 : expectedFileCount == 3;
+    const bool validFileCount = format == 3 ? expectedFileCount == 1 || (expectedFileCount >= 4 && expectedFileCount <= 35) : expectedFileCount == 3;
     if (m_nativeWorldTransport.present || (format != 1 && format != 2 && format != 3) || !validFileCount)
         return false;
 
@@ -489,18 +489,25 @@ bool CResource::IsNativeWorldTransportDescriptorValid() const
     constexpr uint64_t LEGACY_MAXIMUM_MANIFEST_BYTES = 4096;
     constexpr uint64_t LEGACY_MAXIMUM_IDE_BYTES = 1024 * 1024;
     constexpr uint64_t V3_MAXIMUM_MANIFEST_BYTES = 64 * 1024;
+    constexpr uint64_t V3_SET_MAXIMUM_MANIFEST_BYTES = 16 * 1024;
     constexpr uint64_t V3_MAXIMUM_IDE_BYTES = 8 * 1024 * 1024;
+    constexpr uint64_t V3_MAXIMUM_LOD_BYTES = 256 * 1024;
     constexpr uint64_t MAXIMUM_IMG_BYTES = 256ULL * 1024 * 1024;
     constexpr uint64_t V3_MAXIMUM_TOTAL_BYTES = 8ULL * 1024 * 1024 * 1024;
     const bool         isV3 = m_nativeWorldTransport.format == 3;
-    const uint64_t     maximumManifestBytes = isV3 ? V3_MAXIMUM_MANIFEST_BYTES : LEGACY_MAXIMUM_MANIFEST_BYTES;
-    const uint64_t     maximumIdeBytes = isV3 ? V3_MAXIMUM_IDE_BYTES : LEGACY_MAXIMUM_IDE_BYTES;
-    const uint64_t     maximumTotalBytes =
+    const bool         isV3Set =
+        isV3 && m_nativeWorldTransport.authorizationRequested && m_nativeWorldTransport.authorizationPolicy == NATIVE_WORLD_STATIC_V3_SET_POLICY;
+    if (isV3Set != (m_nativeWorldTransport.expectedFileCount == 1))
+        return false;
+    const uint64_t maximumManifestBytes = isV3Set ? V3_SET_MAXIMUM_MANIFEST_BYTES : isV3 ? V3_MAXIMUM_MANIFEST_BYTES : LEGACY_MAXIMUM_MANIFEST_BYTES;
+    const uint64_t maximumIdeBytes = isV3 ? V3_MAXIMUM_IDE_BYTES : LEGACY_MAXIMUM_IDE_BYTES;
+    const uint64_t maximumTotalBytes =
         isV3 ? V3_MAXIMUM_MANIFEST_BYTES + V3_MAXIMUM_TOTAL_BYTES : LEGACY_MAXIMUM_MANIFEST_BYTES + LEGACY_MAXIMUM_IDE_BYTES + MAXIMUM_IMG_BYTES;
     uint64_t      totalBytes = 0;
     uint64_t      v3PayloadBytes = 0;
     unsigned int  manifestCount = 0;
     unsigned int  ideCount = 0;
+    unsigned int  lodCount = 0;
     unsigned int  imgCount = 0;
     std::uint64_t v3ImageIndexMask = 0;
 
@@ -517,7 +524,7 @@ bool CResource::IsNativeWorldTransportDescriptorValid() const
         totalBytes += bytes;
         if (m_nativeWorldTransport.manifestPath == file->GetShortName())
         {
-            if (leaf != "native-world.json" || bytes > maximumManifestBytes)
+            if (leaf != (isV3Set ? "static-world-v3-set.json" : "native-world.json") || bytes > maximumManifestBytes)
                 return false;
             ++manifestCount;
         }
@@ -529,6 +536,13 @@ bool CResource::IsNativeWorldTransportDescriptorValid() const
                 return false;
             v3PayloadBytes += bytes;
             ++ideCount;
+        }
+        else if (relativePath.extension() == ".lod")
+        {
+            if (!isV3 || isV3Set || leaf != "world.lod" || bytes > V3_MAXIMUM_LOD_BYTES || bytes > V3_MAXIMUM_TOTAL_BYTES - v3PayloadBytes)
+                return false;
+            v3PayloadBytes += bytes;
+            ++lodCount;
         }
         else if (relativePath.extension() == ".img")
         {
@@ -554,8 +568,8 @@ bool CResource::IsNativeWorldTransportDescriptorValid() const
     }
 
     const bool validV3Images = imgCount >= 1 && imgCount <= 32 && v3ImageIndexMask == ((1ULL << imgCount) - 1);
-    return manifestCount == 1 && ideCount == 1 && (isV3 ? validV3Images : imgCount == 1) && totalBytes <= maximumTotalBytes &&
-           (!isV3 || v3PayloadBytes <= V3_MAXIMUM_TOTAL_BYTES);
+    return manifestCount == 1 && (isV3Set || (ideCount == 1 && lodCount == static_cast<unsigned int>(isV3) && (isV3 ? validV3Images : imgCount == 1))) &&
+           totalBytes <= maximumTotalBytes && (!isV3 || v3PayloadBytes <= V3_MAXIMUM_TOTAL_BYTES);
 }
 
 bool CResource::VerifyNativeWorldTransportReady()
@@ -755,6 +769,18 @@ void CResource::RevokeNativeWorldStartupAuthorization()
     {
         m_nativeWorldTransport.authorizationRecordPublished = false;
         m_nativeWorldTransport.authorizationPublicationAmbiguous = false;
+    }
+    else
+    {
+        // Keep retry ownership outside the resource: Packet_ResourceStop
+        // destroys this object immediately after this call. Generic teardown
+        // must not invoke revocation because an intentional restart destroys
+        // resources while preserving the pending launch ticket.
+        g_pClientGame->GetResourceManager()->RetireNativeWorldAuthorizationRevocation(m_nativeWorldTransport.authorizationSnapshot,
+                                                                                      m_nativeWorldTransport.authorizationContentId, m_strResourceName);
+        m_nativeWorldTransport.authorizationRecordPublished = false;
+        m_nativeWorldTransport.authorizationPublicationAmbiguous = false;
+        m_nativeWorldTransport.authorizationContentId.clear();
     }
 }
 

@@ -778,12 +778,16 @@ bool CResource::GetCompatibilityStatus(SString& strOutStatus)
     {
         uint uiNumIncompatiblePlayers = 0;
         for (std::list<CPlayer*>::const_iterator iter = g_pGame->GetPlayerManager()->IterBegin(); iter != g_pGame->GetPlayerManager()->IterEnd(); iter++)
-            if ((*iter)->IsJoined() && m_strMinClientRequirement > (*iter)->GetPlayerVersion() && !(*iter)->ShouldIgnoreMinClientVersionChecks())
+            if ((*iter)->IsJoined() &&
+                ((m_strMinClientRequirement > (*iter)->GetPlayerVersion() && !(*iter)->ShouldIgnoreMinClientVersionChecks()) ||
+                 (RequiresNativeWorldV3SetStartupCapability() && !(*iter)->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization))))
                 uiNumIncompatiblePlayers++;
 
         if (uiNumIncompatiblePlayers > 0)
         {
-            strOutStatus = SString("%d connected player(s) below required client version %s", uiNumIncompatiblePlayers, *m_strMinClientRequirement);
+            strOutStatus = RequiresNativeWorldV3SetStartupCapability()
+                               ? SString("%d connected player(s) lack the static-world-v3-set startup capability", uiNumIncompatiblePlayers)
+                               : SString("%d connected player(s) below required client version %s", uiNumIncompatiblePlayers, *m_strMinClientRequirement);
             return false;
         }
     }
@@ -801,6 +805,16 @@ bool CResource::Start(std::list<CResource*>* pDependents, bool bManualStart, con
 
     if (m_bDestroyed)
         return false;
+
+    if (m_nativeWorldPackTransport.present && !StartOptions.bClientFiles)
+    {
+        // A native-world descriptor is an indivisible transport transaction.
+        // Starting it without client files would omit the engine-owned group
+        // while still making the resource appear running on the server.
+        m_strFailureReason = SString("Not starting native-world resource %s with client files disabled\n", m_strResourceName.c_str());
+        CLogger::LogPrint(m_strFailureReason);
+        return false;
+    }
 
     OnResourceStateChange("starting");
 
@@ -1798,7 +1812,7 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
         return false;
     }
 
-    constexpr size_t            MAX_NATIVE_WORLD_V3_FILES = 34;  // manifest, IDE, and at most 32 IMG archives
+    constexpr size_t            MAX_NATIVE_WORLD_V3_FILES = 35;  // manifest, IDE, LOD map, and at most 32 IMG archives
     std::vector<CResourceFile*> taggedFiles;
     std::set<std::string>       taggedNames;
     for (CResourceFile* resourceFile : m_ResourceFiles)
@@ -1843,11 +1857,13 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
                                           policyAttribute && policyAttribute->GetValue() == "static-world-v1";
     const bool staticWorldV2Authorized = formatAttribute && formatAttribute->GetValue() == "2" && attributes.Count() == 4 && startupAttribute &&
                                          startupAttribute->GetValue() == "true" && policyAttribute && policyAttribute->GetValue() == "static-world-v1";
-    // Format 3 deliberately has no startup form. It can publish an audited
-    // multi-IMG cache object, but cannot request an activation ticket.
     const bool staticWorldV3PublishOnly = formatAttribute && formatAttribute->GetValue() == "3" && attributes.Count() == 3 && !startupAttribute &&
                                           policyAttribute && policyAttribute->GetValue() == "static-world-v3";
-    if ((!legacyPublishOnly && !legacyAuthorized && !staticWorldV2PublishOnly && !staticWorldV2Authorized && !staticWorldV3PublishOnly) || !manifestAttribute)
+    const bool staticWorldV3SetAuthorized = formatAttribute && formatAttribute->GetValue() == "3" && attributes.Count() == 4 && startupAttribute &&
+                                            startupAttribute->GetValue() == "true" && policyAttribute && policyAttribute->GetValue() == "static-world-v3-set";
+    if ((!legacyPublishOnly && !legacyAuthorized && !staticWorldV2PublishOnly && !staticWorldV2Authorized && !staticWorldV3PublishOnly &&
+         !staticWorldV3SetAuthorized) ||
+        !manifestAttribute)
     {
         m_strFailureReason = SString("Resource '%s' has an invalid native_world descriptor\n", m_strResourceName.c_str());
         CLogger::ErrorPrintf(m_strFailureReason);
@@ -1857,11 +1873,16 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
     const std::string manifestPath = manifestAttribute->GetValue();
     const bool        manifestIsTagged =
         std::any_of(taggedFiles.begin(), taggedFiles.end(), [&manifestPath](CResourceFile* file) { return file->GetName() == manifestPath; });
-    const bool validFileCount = staticWorldV3PublishOnly ? taggedFiles.size() >= 3 && taggedFiles.size() <= MAX_NATIVE_WORLD_V3_FILES : taggedFiles.size() == 3;
+    const bool validFileCount = staticWorldV3PublishOnly     ? taggedFiles.size() >= 4 && taggedFiles.size() <= MAX_NATIVE_WORLD_V3_FILES
+                                : staticWorldV3SetAuthorized ? taggedFiles.size() == 1
+                                                             : taggedFiles.size() == 3;
     if (!validFileCount || !IsCanonicalNativeWorldPath(manifestPath) || !manifestIsTagged)
     {
         m_strFailureReason = staticWorldV3PublishOnly
-                                 ? SString("Resource '%s' native_world format 3 transport must reference 3..34 canonical auto-download files including '%s'\n",
+                                 ? SString("Resource '%s' native_world format 3 transport must reference 4..35 canonical auto-download files including '%s'\n",
+                                           m_strResourceName.c_str(), manifestPath.c_str())
+                             : staticWorldV3SetAuthorized
+                                 ? SString("Resource '%s' native_world format 3 set must reference exactly one canonical auto-download file including '%s'\n",
                                            m_strResourceName.c_str(), manifestPath.c_str())
                                  : SString("Resource '%s' native_world transport must reference exactly three canonical auto-download files including '%s'\n",
                                            m_strResourceName.c_str(), manifestPath.c_str());
@@ -1871,10 +1892,12 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
 
     // The descriptor is engine-owned: scripts cannot mutate this immutable snapshot after the resource has loaded.
     m_nativeWorldPackTransport.present = true;
-    m_nativeWorldPackTransport.startupAuthorization = legacyAuthorized || staticWorldV2Authorized;
-    m_nativeWorldPackTransport.format = staticWorldV3PublishOnly ? 3 : staticWorldV2PublishOnly || staticWorldV2Authorized ? 2 : 1;
-    m_nativeWorldPackTransport.authorizationVersion = legacyAuthorized ? 1 : staticWorldV2Authorized ? 2 : 0;
-    m_nativeWorldPackTransport.authorizationPolicy = legacyAuthorized ? 1 : staticWorldV2Authorized ? 2 : 0;
+    m_nativeWorldPackTransport.startupAuthorization = legacyAuthorized || staticWorldV2Authorized || staticWorldV3SetAuthorized;
+    m_nativeWorldPackTransport.format = staticWorldV3PublishOnly || staticWorldV3SetAuthorized ? 3
+                                        : staticWorldV2PublishOnly || staticWorldV2Authorized  ? 2
+                                                                                               : 1;
+    m_nativeWorldPackTransport.authorizationVersion = legacyAuthorized ? 1 : staticWorldV2Authorized ? 2 : staticWorldV3SetAuthorized ? 3 : 0;
+    m_nativeWorldPackTransport.authorizationPolicy = legacyAuthorized ? 1 : staticWorldV2Authorized ? 2 : staticWorldV3SetAuthorized ? 3 : 0;
     m_nativeWorldPackTransport.manifestPath = manifestPath;
     m_nativeWorldPackTransport.files = taggedFiles;
     return true;

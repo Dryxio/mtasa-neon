@@ -53,10 +53,18 @@ from pack_img import DIRECTORY_ENTRY, HEADER, SECTOR_SIZE, sectors_for
 FORMAT = 3
 MAX_IMG_SECTORS = 131_072
 MODEL_ID_LIMIT = 31_999
+FIRST_CUSTOM_ID = 20_000
 MAX_MODELS = 4_096
 MAX_TXDS = 1_024
 MAX_SPATIAL_GROUPS = 64
 MAX_PLACEMENTS = 20_000
+LOD_MAP_HEADER = struct.Struct("<8sIIIIII")
+LOD_MAP_LINK = struct.Struct("<II")
+LOD_MAP_MAGIC = b"NWL3LOD\0"
+LOD_MAP_VERSION = 1
+MAX_LOD_ANCHORS = 4_096
+MAX_LOD_LINKS = 4_096
+MAX_LOD_SCRATCH_ENTRIES = 4_096
 MAX_COL_RECORD_BYTES = 327_680
 UINT64_MAX = (1 << 64) - 1
 MAX_TEXTURE_GPU_BYTES = 64 * 1024 * 1024
@@ -174,6 +182,59 @@ MALFORMED_TIMED_MODEL_REPAIRS = {
         5,
     ): (0, 5),
 }
+IDE_FLAG_REPAIRS = {
+    # UG LC carries source-specific metadata in bits that stock GTA SA never
+    # stores or consumes. Keep this a fingerprinted catalog conversion:
+    # silently masking an unknown source would hide a future semantic change.
+    (
+        "UG_LC",
+        "map_data.lua",
+        "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab",
+        31057,
+        0x20200000,
+    ): 0x200000,
+    (
+        "UG_LC",
+        "map_data.lua",
+        "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab",
+        31058,
+        0x10200000,
+    ): 0x200000,
+    (
+        "UG_LC",
+        "map_data.lua",
+        "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab",
+        32443,
+        0x01400002,
+    ): 0x400002,
+    (
+        "UG_LC",
+        "map_data.lua",
+        "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab",
+        32557,
+        0x0820000C,
+    ): 0x20000C,
+    **{
+        (
+            "UG_LC",
+            "map_data.lua",
+            "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab",
+            source_id,
+            0x01200000,
+        ): 0x200000
+        for source_id in (32723, 32724, 32749, 32764, 32765, 32766, 32767, 32780)
+    },
+    **{
+        (
+            "UG_LC",
+            "map_data.lua",
+            "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab",
+            source_id,
+            0x0120000C,
+        ): 0x20000C
+        for source_id in (32742, 32743, 32747)
+    },
+}
 ZERO_TRIANGLE_DFFS = {
     "assets/models/23345.dff": (
         "59543cafefb5149127f27cc033a8d36408c3f9b0faec8d1ce839756d172a3528",
@@ -264,6 +325,32 @@ def canonicalize_timed_model(
         "time_on": repaired_time_on,
         "time_off": repaired_time_off,
     }
+
+
+def canonicalize_ide_flags(
+    prefix: str,
+    source_name: str,
+    source_fingerprint: str,
+    source_id: int,
+    raw_flags: int,
+) -> tuple[int, dict[str, object] | None]:
+    if not 0 <= raw_flags <= 0xFFFFFFFF:
+        raise ValueError(f"model {source_id} has IDE flags outside uint32")
+    repair_key = (prefix, source_name, source_fingerprint, source_id, raw_flags)
+    repaired = IDE_FLAG_REPAIRS.get(repair_key)
+    if repaired is not None:
+        return repaired, {
+            "source": source_name,
+            "source_sha256": source_fingerprint,
+            "source_id": source_id,
+            "raw_flags": raw_flags,
+            "ide_flags": repaired,
+            "removed_flags": raw_flags ^ repaired,
+            "reason": "source metadata bits have no GTA SA model-info consumer",
+        }
+    if raw_flags & ~0x007FFFFF:
+        raise ValueError(f"model {source_id} has unreviewed IDE flags 0x{raw_flags:08x}")
+    return raw_flags, None
 
 
 def upgrade_legacy_dff(path: Path, upgrader: Path | None) -> tuple[bytes, dict[str, str] | None]:
@@ -359,6 +446,15 @@ def parse_generated_map(
                 time_on is None or time_off is None or not 0 <= time_on <= 23 or not 0 <= time_off <= 23 or time_on == time_off
             ):
                 raise ValueError(f"timed model {source_id} has an invalid time range")
+            ide_flags, ide_flag_repair = canonicalize_ide_flags(
+                prefix,
+                path.name,
+                source_fingerprint,
+                source_id,
+                int(values["ideFlags"]),
+            )
+            if ide_flag_repair:
+                repairs.append(ide_flag_repair)
             models[source_id] = GeneratedModel(
                 source_id=source_id,
                 source_name=str(values["name"]),
@@ -367,7 +463,7 @@ def parse_generated_map(
                 dff_path=str(values["dff"]),
                 col_path=None if values["col"] is False else str(values["col"]),
                 draw_distance=float(values["lodDistance"]),
-                ide_flags=int(values["ideFlags"]),
+                ide_flags=ide_flags,
                 time_on=time_on,
                 time_off=time_off,
             )
@@ -1302,19 +1398,12 @@ def binary_ipl(
     group: list[GeneratedPlacement],
     variants: dict[tuple[int, str], ModelVariant],
 ) -> bytes:
-    local_indices = {placement.global_index: index for index, placement in enumerate(group)}
     header = bytearray(BINARY_IPL_HEADER_SIZE)
     header[:4] = b"bnry"
     struct.pack_into("<I", header, 4, len(group))
     struct.pack_into("<I", header, 28, BINARY_IPL_HEADER_SIZE)
     output = bytearray(header)
     for placement in group:
-        lod_index = -1
-        if placement.lod_global_index is not None:
-            # Standalone streamed IPLs have no entry in GTA's static IPL entity
-            # index array. Resolving a non-negative LOD index would therefore
-            # dereference that array through the IPL's -1 static index.
-            raise ValueError(f"placement {placement.global_index} has a non-negative LOD link unsupported by static-world-v3")
         model_id = placement.source_id if placement.native else variants[(placement.source_id, placement.source)].native_id
         output.extend(
             BINARY_IPL_INSTANCE.pack(
@@ -1322,10 +1411,154 @@ def binary_ipl(
                 *placement.quaternion,
                 model_id,
                 0,
-                lod_index,
+                -1,
             )
         )
     return bytes(output)
+
+
+def build_lod_map(groups: dict[str, list[GeneratedPlacement]]) -> tuple[bytes, dict[str, int]]:
+    """Encode pack-global LOD intent without exposing positive indices to GTA."""
+
+    group_counts = [len(rows) for rows in groups.values()]
+    if not 1 <= len(group_counts) <= MAX_SPATIAL_GROUPS or any(count == 0 for count in group_counts):
+        raise ValueError("v3 LOD map requires bounded non-empty spatial groups")
+    if not 1 <= sum(group_counts) <= MAX_PLACEMENTS:
+        raise ValueError("v3 LOD map placement count exceeds the closed policy")
+    canonical_by_global: dict[int, int] = {}
+    placements_by_ordinal: list[GeneratedPlacement] = []
+    for rows in groups.values():
+        for placement in rows:
+            canonical_by_global[placement.global_index] = len(placements_by_ordinal)
+            placements_by_ordinal.append(placement)
+
+    anchor_globals = sorted(
+        {
+            placement.lod_global_index
+            for placement in placements_by_ordinal
+            if placement.lod_global_index is not None
+        }
+    )
+    anchor_ordinals = sorted(canonical_by_global[int(global_index)] for global_index in anchor_globals)
+    anchor_index_by_ordinal = {ordinal: index for index, ordinal in enumerate(anchor_ordinals)}
+    links = sorted(
+        (
+            canonical_by_global[placement.global_index],
+            anchor_index_by_ordinal[canonical_by_global[int(placement.lod_global_index)]],
+        )
+        for placement in placements_by_ordinal
+        if placement.lod_global_index is not None
+    )
+    if (
+        len(anchor_ordinals) > MAX_LOD_ANCHORS
+        or len(links) > MAX_LOD_LINKS
+        or len(anchor_ordinals) + len(links) > MAX_LOD_SCRATCH_ENTRIES
+    ):
+        raise ValueError("v3 LOD map exceeds the registrar scratch contract")
+    children = [child for child, _ in links]
+    if (
+        len(set(children)) != len(children)
+        or set(children).intersection(anchor_ordinals)
+        or sorted(anchor_index for _, anchor_index in links) != list(range(len(anchor_ordinals)))
+        or len(links) != len(anchor_ordinals)
+    ):
+        raise ValueError("v3 LOD map is not one-to-one, acyclic, and child/anchor-disjoint")
+
+    output = bytearray(
+        LOD_MAP_HEADER.pack(
+            LOD_MAP_MAGIC,
+            LOD_MAP_VERSION,
+            len(placements_by_ordinal),
+            len(group_counts),
+            len(anchor_ordinals),
+            len(links),
+            0,
+        )
+    )
+    output.extend(struct.pack(f"<{len(group_counts)}I", *group_counts))
+    output.extend(struct.pack(f"<{len(anchor_ordinals)}I", *anchor_ordinals))
+    for child_ordinal, anchor_index in links:
+        output.extend(LOD_MAP_LINK.pack(child_ordinal, anchor_index))
+
+    boundaries: list[int] = []
+    running = 0
+    for count in group_counts:
+        boundaries.append(running)
+        running += count
+    cross_group = 0
+    for child, anchor_index in links:
+        anchor = anchor_ordinals[anchor_index]
+        child_group = max(index for index, start in enumerate(boundaries) if start <= child)
+        anchor_group = max(index for index, start in enumerate(boundaries) if start <= anchor)
+        cross_group += child_group != anchor_group
+    return bytes(output), {
+        "anchors": len(anchor_ordinals),
+        "links": len(links),
+        "cross_group_links": cross_group,
+        "same_group_links": len(links) - cross_group,
+        "scratch_entries": len(anchor_ordinals) + len(links),
+    }
+
+
+def validate_lod_map_v3(data: bytes, group_counts: list[int], name: str = "world.lod") -> dict[str, int]:
+    if len(data) < LOD_MAP_HEADER.size:
+        raise ValueError(f"{name}: truncated LOD map")
+    magic, version, placement_count, group_count, anchor_count, link_count, reserved = LOD_MAP_HEADER.unpack_from(data)
+    expected_bytes = LOD_MAP_HEADER.size + group_count * 4 + anchor_count * 4 + link_count * LOD_MAP_LINK.size
+    if (
+        magic != LOD_MAP_MAGIC
+        or version != LOD_MAP_VERSION
+        or reserved != 0
+        or not 1 <= group_count <= MAX_SPATIAL_GROUPS
+        or group_count != len(group_counts)
+        or any(count == 0 for count in group_counts)
+        or not 1 <= placement_count <= MAX_PLACEMENTS
+        or placement_count != sum(group_counts)
+        or anchor_count > MAX_LOD_ANCHORS
+        or link_count > MAX_LOD_LINKS
+        or anchor_count + link_count > MAX_LOD_SCRATCH_ENTRIES
+        or len(data) != expected_bytes
+    ):
+        raise ValueError(f"{name}: LOD header, length, or budget is invalid")
+    offset = LOD_MAP_HEADER.size
+    encoded_group_counts = list(struct.unpack_from(f"<{group_count}I", data, offset))
+    offset += group_count * 4
+    anchors = list(struct.unpack_from(f"<{anchor_count}I", data, offset))
+    offset += anchor_count * 4
+    links = [LOD_MAP_LINK.unpack_from(data, offset + index * LOD_MAP_LINK.size) for index in range(link_count)]
+    children = [child for child, _ in links]
+    anchor_indices = [anchor_index for _, anchor_index in links]
+    if (
+        encoded_group_counts != group_counts
+        or anchors != sorted(set(anchors))
+        or any(anchor >= placement_count for anchor in anchors)
+        or children != sorted(set(children))
+        or any(child >= placement_count for child in children)
+        or set(children).intersection(anchors)
+        or any(anchor_index >= anchor_count for anchor_index in anchor_indices)
+        or sorted(anchor_indices) != list(range(anchor_count))
+        or anchor_count != link_count
+    ):
+        raise ValueError(f"{name}: LOD groups, ordinals, or one-to-one links are invalid")
+
+    boundaries: list[int] = []
+    running = 0
+    for count in group_counts:
+        boundaries.append(running)
+        running += count
+    cross_group = 0
+    for child, anchor_index in links:
+        anchor = anchors[anchor_index]
+        child_group = max(index for index, start in enumerate(boundaries) if start <= child)
+        anchor_group = max(index for index, start in enumerate(boundaries) if start <= anchor)
+        cross_group += child_group != anchor_group
+    return {
+        "anchors": anchor_count,
+        "links": link_count,
+        "cross_group_links": cross_group,
+        "same_group_links": link_count - cross_group,
+        "scratch_entries": anchor_count + link_count,
+    }
 
 
 def partition_inputs(inputs: list[ArchiveInput]) -> list[list[ArchiveInput]]:
@@ -1352,14 +1585,20 @@ def _parse_v3_ide(path: Path) -> tuple[dict[int, str], set[str]]:
     models: dict[int, str] = {}
     txds: set[str] = set()
     section = ""
+    seen_sections: set[str] = set()
     for raw_line in path.read_text(encoding="ascii").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if line in ("objs", "tobj"):
+            if section or line in seen_sections:
+                raise ValueError("v3 IDE contains a duplicate or nested section")
             section = line
+            seen_sections.add(line)
             continue
         if line == "end":
+            if not section:
+                raise ValueError("v3 IDE contains an unmatched end")
             section = ""
             continue
         if not section:
@@ -1369,18 +1608,40 @@ def _parse_v3_ide(path: Path) -> tuple[dict[int, str], set[str]]:
             raise ValueError("v3 IDE row has an invalid field count")
         model_id = int(fields[0], 10)
         model_name, txd_name = fields[1].casefold(), fields[2].casefold()
+        mesh_count = int(fields[3], 10)
+        draw_distance = float(fields[4])
+        flags = int(fields[5], 10)
+        timed_valid = section != "tobj" or (
+            0 <= int(fields[6], 10) <= 23
+            and 0 <= int(fields[7], 10) <= 23
+            and int(fields[6], 10) != int(fields[7], 10)
+        )
         if (
-            model_id < 0
+            model_id < FIRST_CUSTOM_ID
             or model_id > MODEL_ID_LIMIT
             or model_id in models
+            or mesh_count != 1
+            or not math.isfinite(draw_distance)
+            or not 0 < draw_distance <= 1_000_000
+            or not 0 <= flags <= 0x007FFFFF
+            or not timed_valid
             or not re.fullmatch(r"[a-z0-9_]{1,15}", model_name)
             or not re.fullmatch(r"[a-z0-9_]{1,15}", txd_name)
         ):
             raise ValueError("v3 IDE contains a duplicate or unsafe identity")
         models[model_id] = model_name
         txds.add(txd_name)
-    if not models or not txds:
-        raise ValueError("v3 IDE contains no models or TXDs")
+    if section or seen_sections != {"objs", "tobj"} or not models or not txds:
+        raise ValueError("v3 IDE sections or counts are incomplete")
+    first_model = min(models)
+    if sorted(models) != list(range(first_model, first_model + len(models))):
+        raise ValueError("v3 IDE model IDs are not contiguous")
+    namespace = models[first_model][:2]
+    for ordinal, model_id in enumerate(range(first_model, first_model + len(models))):
+        if models[model_id] != f"{namespace}m{base36(ordinal, 4)}":
+            raise ValueError("v3 IDE model ID/name remap is not contiguous")
+    if txds != {f"{namespace}t{base36(ordinal, 3)}" for ordinal in range(len(txds))}:
+        raise ValueError("v3 IDE TXD names are not contiguous")
     return models, txds
 
 
@@ -1438,6 +1699,19 @@ def verify_pack(output: Path) -> dict[str, object]:
     ):
         raise ValueError("IDE hash differs from the runtime manifest")
     ide_models, ide_txds = _parse_v3_ide(ide_path)
+    namespace = next(iter(ide_models.values()))[:2]
+    if (
+        not re.fullmatch(r"[a-z][a-z0-9]", namespace)
+        or any(not re.fullmatch(re.escape(namespace) + r"m[a-z0-9]{4}", name) for name in ide_models.values())
+        or any(not re.fullmatch(re.escape(namespace) + r"t[a-z0-9]{3}", name) for name in ide_txds)
+    ):
+        raise ValueError("v3 IDE model or TXD namespace is not canonical")
+    lod_path = output / manifest["files"]["lod"]["name"]
+    if (
+        lod_path.stat().st_size != manifest["files"]["lod"]["bytes"]
+        or sha256_file(lod_path) != manifest["files"]["lod"]["sha256"]
+    ):
+        raise ValueError("LOD map identity differs from the runtime manifest")
     all_entries: dict[str, tuple[str, object]] = {}
     archive_reports = []
     semantic_profile: dict[str, Counter[str]] = {
@@ -1447,6 +1721,7 @@ def verify_pack(output: Path) -> dict[str, object]:
         "ipl": Counter(),
     }
     col_models: dict[int, str] = {}
+    ipl_counts: dict[str, int] = {}
     for image in manifest["files"]["images"]:
         path = output / image["name"]
         if path.stat().st_size != image["bytes"] or sha256_file(path) != image["sha256"]:
@@ -1491,11 +1766,9 @@ def verify_pack(output: Path) -> dict[str, object]:
                         raise ValueError(f"{entry.name}: duplicate cross-IMG COL model ID")
                     col_models[model_id] = model_name
             elif extension == ".ipl":
-                merge_profile(
-                    semantic_profile["ipl"],
-                    validate_binary_ipl_v3(payload, entry.name),
-                    context="generated IPL profile",
-                )
+                member_ipl = validate_binary_ipl_v3(payload, entry.name)
+                merge_profile(semantic_profile["ipl"], member_ipl, context="generated IPL profile")
+                ipl_counts[entry.name] = member_ipl["placements"]
             else:
                 raise ValueError(f"{entry.name}: unsupported v3 IMG member type")
         archive_reports.append(
@@ -1518,6 +1791,12 @@ def verify_pack(output: Path) -> dict[str, object]:
         or any(ide_models.get(model_id) != model_name for model_id, model_name in col_models.items())
     ):
         raise ValueError("v3 IDE/DFF/TXD/COL identities do not form a closed set")
+    if not ide_models:
+        raise ValueError("v3 IDE has no model namespace")
+    expected_ipl_names = [f"{namespace}i{base36(index, 2)}.ipl" for index in range(len(ipl_counts))]
+    if sorted(ipl_counts, key=str.casefold) != expected_ipl_names:
+        raise ValueError("v3 IPL members are not the exact contiguous namespace sequence")
+    lod_profile = validate_lod_map_v3(lod_path.read_bytes(), [ipl_counts[name] for name in expected_ipl_names])
     return {
         "status": "ok",
         "format": FORMAT,
@@ -1529,11 +1808,14 @@ def verify_pack(output: Path) -> dict[str, object]:
         "semantic_profile": {
             kind: dict(sorted(profile.items())) for kind, profile in semantic_profile.items()
         },
+        "lod_profile": lod_profile,
         "models_without_col": [
             {"native_id": model_id, "name": ide_models[model_id]}
             for model_id in sorted(set(ide_models) - set(col_models))
         ],
-        "total_payload_bytes": manifest["files"]["ide"]["bytes"] + sum(image["bytes"] for image in manifest["files"]["images"]),
+        "total_payload_bytes": manifest["files"]["ide"]["bytes"]
+        + manifest["files"]["lod"]["bytes"]
+        + sum(image["bytes"] for image in manifest["files"]["images"]),
     }
 
 
@@ -1552,7 +1834,7 @@ def build_pack(
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"output directory must be empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
-    models, placements, timed_model_repairs = parse_generated_map(resource / "map_data.lua", prefix)
+    models, placements, source_definition_repairs = parse_generated_map(resource / "map_data.lua", prefix)
     if len(placements) > MAX_PLACEMENTS:
         raise ValueError("placement count exceeds the compiled v3 policy")
     groups = {name: rows for name, rows in sorted(_group_placements(placements).items())}
@@ -1560,6 +1842,8 @@ def build_pack(
         raise ValueError("spatial IPL group count exceeds the compiled v3 policy")
     variants, variants_by_key, txd_names = make_variants(models, placements, namespace, model_id_start)
     write_ide(output / "world.ide", variants)
+    lod_data, lod_profile = build_lod_map(groups)
+    (output / "world.lod").write_bytes(lod_data)
 
     inputs: list[ArchiveInput] = []
     texture_profile: Counter[str] = Counter()
@@ -1572,7 +1856,12 @@ def build_pack(
         "dff_zero_triangle_exceptions": {},
         "txd_first_wins_duplicates": {},
         "col2_to_col3": [],
-        "timed_model_repairs": timed_model_repairs,
+        "timed_model_repairs": [
+            repair for repair in source_definition_repairs if "raw_time_on" in repair
+        ],
+        "ide_flag_repairs": [
+            repair for repair in source_definition_repairs if "raw_flags" in repair
+        ],
         "generated_empty_txd": None,
         "models_without_col": [],
     }
@@ -1712,6 +2001,8 @@ def build_pack(
     )
     dump_runtime_manifest(output / "native-world.json", runtime_manifest)
     verification = verify_pack(output)
+    if verification["lod_profile"] != lod_profile:
+        raise ValueError("generated LOD map profile differs from its independent verification")
     declared_without_col = [
         {"native_id": record["native_id"], "name": record["name"]}
         for record in conversions["models_without_col"]

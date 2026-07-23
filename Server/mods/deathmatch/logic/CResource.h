@@ -349,6 +349,10 @@ public:
     int GetDownloadPriorityGroup() const noexcept { return m_iDownloadPriorityGroup; }
 
     const SNativeWorldPackTransport& GetNativeWorldPackTransport() const noexcept { return m_nativeWorldPackTransport; }
+    bool                             RequiresNativeWorldV3SetStartupCapability() const noexcept
+    {
+        return m_nativeWorldPackTransport.present && m_nativeWorldPackTransport.startupAuthorization && m_nativeWorldPackTransport.format == 3;
+    }
 
     void SetUsingDbConnectMysql(bool bUsingDbConnectMysql) { m_bUsingDbConnectMysql = bUsingDbConnectMysql; }
     bool IsUsingDbConnectMysql();

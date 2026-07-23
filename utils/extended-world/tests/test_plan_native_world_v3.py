@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from plan_native_world_v3 import (  # noqa: E402
     checked_sum,
     collisions,
     full_layout_proof,
+    iter_loose_stock_files,
     partition_sizes,
     plan,
     usage,
@@ -66,6 +68,23 @@ class IdentityAndBoundaryTest(unittest.TestCase):
         self.assertTrue(layout["valid"])
         self.assertEqual(42_340, layout["terminal_file_id"])
         self.assertEqual(42_341, layout["exclusive_end"])
+
+    def test_stock_file_scan_ignores_unrelated_install_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "models").mkdir()
+            (root / "data").mkdir()
+            (root / "ariane-backups").mkdir()
+            (root / "models" / "stock.dff").touch()
+            (root / "data" / "stock.ipl").touch()
+            (root / "ariane-backups" / "tool-output.dff").touch()
+
+            relative = {
+                path.relative_to(root).as_posix()
+                for path in iter_loose_stock_files(root)
+                if path.is_file()
+            }
+            self.assertEqual({"models/stock.dff", "data/stock.ipl"}, relative)
 
 
 class FrozenCorpusPlannerTest(unittest.TestCase):

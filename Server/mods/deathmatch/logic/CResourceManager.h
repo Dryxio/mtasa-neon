@@ -85,6 +85,7 @@ public:
 
     unsigned short GenerateID();
     CResource*     GetResourceFromNetID(unsigned short usNetID);
+    bool           RequiresNativeWorldV3SetStartupCapability() const;
 
     CResource* GetResourceFromLuaState(struct lua_State* luaVM);
     SString    GetResourceName(struct lua_State* luaVM);

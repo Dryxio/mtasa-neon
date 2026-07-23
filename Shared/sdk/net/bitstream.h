@@ -76,6 +76,14 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-23
     NativeWorldStaticWorldV3Transport,
 
+    // Requires the canonical world.lod sidecar in every format 3 pack.
+    // 2026-07-23
+    NativeWorldStaticWorldV3LodTransport,
+
+    // Adds one-shot startup authorization for an exact four-pack static-world-v3 set.
+    // 2026-07-23
+    NativeWorldStaticWorldV3StartupAuthorization,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

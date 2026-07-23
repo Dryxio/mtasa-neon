@@ -20,7 +20,12 @@ from build_native_world_v3 import (  # noqa: E402
     BINARY_IPL_INSTANCE,
     GeneratedModel,
     GeneratedPlacement,
+    LOD_MAP_HEADER,
+    LOD_MAP_MAGIC,
+    LOD_MAP_VERSION,
+    LOD_MAP_LINK,
     MAX_TEXTURE_GPU_BYTES,
+    canonicalize_ide_flags,
     canonicalize_rw_version,
     canonicalize_timed_model,
     canonicalize_txd_duplicates,
@@ -30,6 +35,7 @@ from build_native_world_v3 import (  # noqa: E402
     make_variants,
     normalize_dff_uvs,
     validate_binary_ipl_v3,
+    validate_lod_map_v3,
     validate_static_col_record_v3,
     validate_static_txd_v3_grammar,
     verify_pack,
@@ -131,6 +137,37 @@ def binary_ipl(model_id: int = 20_000) -> bytes:
 
 
 class NativeWorldV3GrammarTest(unittest.TestCase):
+    def test_lod_sidecar_is_closed_and_rejects_structural_corruption(self) -> None:
+        empty_links = LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, LOD_MAP_VERSION, 1, 1, 0, 0, 0) + struct.pack("<I", 1)
+        self.assertEqual(0, validate_lod_map_v3(empty_links, [1])["links"])
+
+        linked = (
+            LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, LOD_MAP_VERSION, 2, 1, 1, 1, 0)
+            + struct.pack("<II", 2, 1)
+            + LOD_MAP_LINK.pack(0, 0)
+        )
+        self.assertEqual({"anchors": 1, "links": 1}, {key: validate_lod_map_v3(linked, [2])[key] for key in ("anchors", "links")})
+
+        mutations = [
+            b"BADLOD!!" + linked[8:],
+            linked[:8] + struct.pack("<I", 2) + linked[12:],
+            linked[:28] + struct.pack("<I", 1) + linked[32:],
+            linked + b"\0",
+            LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, 1, 0, 1, 0, 0, 0) + struct.pack("<I", 0),
+            LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, 1, 2, 1, 1, 1, 0)
+            + struct.pack("<II", 2, 0)
+            + LOD_MAP_LINK.pack(0, 0),
+            LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, 1, 2, 1, 1, 1, 0)
+            + struct.pack("<II", 2, 1)
+            + LOD_MAP_LINK.pack(0, 1),
+            LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, 1, 4097, 1, 2049, 2048, 0)
+            + struct.pack("<I", 4097)
+            + b"\0" * (2049 * 4 + 2048 * LOD_MAP_LINK.size),
+        ]
+        for mutation in mutations:
+            with self.subTest(bytes=len(mutation)), self.assertRaises(ValueError):
+                validate_lod_map_v3(mutation, [2] if len(mutation) != 32 + 4 + 2049 * 4 + 2048 * 8 else [4097])
+
     def test_txd_header_tuple_and_legacy_empty_tail_are_closed(self) -> None:
         valid = txd(native_texture("valid"))
         self.assertEqual(8, validate_static_txd_v3_grammar(valid, "valid.txd")["serialized_gpu_bytes"])
@@ -201,6 +238,24 @@ class NativeWorldV3GrammarTest(unittest.TestCase):
             unchanged_on, unchanged_off, rejected_record = canonicalize_timed_model(*values)
             self.assertEqual(values[-2:], (unchanged_on, unchanged_off))
             self.assertIsNone(rejected_record)
+
+    def test_lc_ide_flag_repairs_are_exactly_identity_pinned(self) -> None:
+        fingerprint = "1597f9c3026fc8641202b03ccb03f019292e29a270d0c00052ac2c81c684feab"
+        canonical, record = canonicalize_ide_flags(
+            "UG_LC", "map_data.lua", fingerprint, 31057, 0x20200000
+        )
+        self.assertEqual(0x200000, canonical)
+        self.assertEqual(0x20000000, record["removed_flags"])
+        self.assertEqual(0x200000, canonicalize_ide_flags("FIXTURE", "map_data.lua", fingerprint, 1, 0x200000)[0])
+        for values in (
+            ("UG_VC", "map_data.lua", fingerprint, 31057, 0x20200000),
+            ("UG_LC", "other.lua", fingerprint, 31057, 0x20200000),
+            ("UG_LC", "map_data.lua", "0" * 64, 31057, 0x20200000),
+            ("UG_LC", "map_data.lua", fingerprint, 31056, 0x20200000),
+            ("UG_LC", "map_data.lua", fingerprint, 31057, 0x20200001),
+        ):
+            with self.assertRaisesRegex(ValueError, "unreviewed IDE flags"):
+                canonicalize_ide_flags(*values)
 
     def test_generated_empty_txd_is_the_only_zero_texture_dictionary(self) -> None:
         empty = empty_txd_v3()
@@ -277,6 +332,9 @@ class NativeWorldV3GrammarTest(unittest.TestCase):
                     ArchiveInput(name="a0c00.col", data=col3_record()),
                     ArchiveInput(name="a0i00.ipl", data=binary_ipl()),
                 ],
+            )
+            (output / "world.lod").write_bytes(
+                LOD_MAP_HEADER.pack(LOD_MAP_MAGIC, LOD_MAP_VERSION, 1, 1, 0, 0, 0) + struct.pack("<I", 1)
             )
             manifest = build_runtime_manifest(
                 {},

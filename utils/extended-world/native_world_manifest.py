@@ -21,6 +21,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_IDE_BYTES = 1_048_576
 MAX_IMG_BYTES = 131_072 * 2048
 MAX_V3_IDE_BYTES = 8 * 1024 * 1024
+MAX_V3_LOD_BYTES = 256 * 1024
 MAX_V3_IMG_BYTES = 256 * 1024 * 1024
 MAX_V3_IMAGES = 32
 MAX_V3_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
@@ -71,15 +72,20 @@ def validate_runtime_manifest(value: Any) -> dict[str, Any]:
     if value["format"] == 1 and root["pack_id"] != "bullworth":
         raise ValueError("format 1 pack_id must be bullworth")
     if value["format"] == 3:
-        files = _exact(root["files"], {"ide", "images"}, "files")
+        files = _exact(root["files"], {"ide", "lod", "images"}, "files")
         ide = _file(files["ide"], "files.ide", MAX_V3_IDE_BYTES)
+        lod = _file(files["lod"], "files.lod", MAX_V3_LOD_BYTES)
+        if ide["name"] != "world.ide" or lod["name"] != "world.lod":
+            raise ValueError("format 3 IDE/LOD filenames are not canonical")
         images = files["images"]
         if not isinstance(images, list) or not 1 <= len(images) <= MAX_V3_IMAGES:
             raise ValueError("files.images must be a bounded non-empty array")
-        names: set[str] = {ide["name"]}
-        total_bytes = ide["bytes"]
+        names: set[str] = {ide["name"], lod["name"]}
+        total_bytes = ide["bytes"] + lod["bytes"]
         for index, image_value in enumerate(images):
             image = _file(image_value, f"files.images[{index}]", MAX_V3_IMG_BYTES)
+            if image["name"] != f"w{index:03d}.img":
+                raise ValueError("files.images must use contiguous canonical wNNN.img names")
             if image["bytes"] % 2048:
                 raise ValueError(f"files.images[{index}].bytes must be sector aligned")
             if image["name"] in names:
@@ -141,8 +147,16 @@ def build_runtime_manifest(
     if format_version == 3:
         if img_path is not None or not img_paths:
             raise ValueError("format 3 requires img_paths and no single img_path")
+        lod_path = ide_path.with_name("world.lod")
+        if not lod_path.is_file():
+            raise ValueError("format 3 requires a world.lod sidecar beside world.ide")
         files = {
             "ide": ide,
+            "lod": {
+                "name": lod_path.name,
+                "bytes": lod_path.stat().st_size,
+                "sha256": _sha256(lod_path),
+            },
             "images": [
                 {
                     "name": path.name,
