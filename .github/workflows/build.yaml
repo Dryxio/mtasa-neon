@@ -215,12 +215,16 @@ jobs:
       - name: Run Build
         run: /docker-entrypoint.sh --arch=${{ matrix.architecture }}
 
-      - name: Prepare TLS certificates
+      - name: Prepare Linux packaging dependencies
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y --no-install-recommends ca-certificates
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates unzip
           update-ca-certificates
           test -r /etc/ssl/certs/ca-certificates.crt
+          command -v unzip
+          command -v readelf
+          command -v tar
+          command -v sha256sum
 
       - name: Install server data and resources
         run: |
