@@ -13,6 +13,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Public player builds must use MTA's anti-cheat and service checks. The
+      # checked-in default remains CUSTOM so a local clone can run without an
+      # installer-created HKLM registry layout.
+      - name: Configure public Neon build
+        shell: powershell
+        run: |
+          @'
+          #pragma once
+
+          #undef MTASA_VERSION_TYPE
+          #define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE
+          '@ | Set-Content -LiteralPath 'Shared\build_overrides.h' -Encoding ascii
+
       - uses: actions/cache@v5
         id: cache-dxfiles
         with:

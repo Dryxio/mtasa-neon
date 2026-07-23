@@ -45,7 +45,9 @@
 #define MTASA_VERSION_MAJOR       1
 #define MTASA_VERSION_MINOR       7
 #define MTASA_VERSION_MAINTENANCE 0
-#define MTASA_VERSION_TYPE        VERSION_TYPE_UNSTABLE
+// Keep clone-and-build development usable without an installed MTA registry layout.
+// The public Windows artifact workflow overrides this through build_overrides.h.
+#define MTASA_VERSION_TYPE        VERSION_TYPE_CUSTOM
 #define MTASA_VERSION_BUILD       0
 
 #include "../build_overrides.h"
