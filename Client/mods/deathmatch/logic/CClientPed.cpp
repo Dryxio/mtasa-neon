@@ -953,12 +953,121 @@ void CClientPed::SetControllerState(const CControllerState& ControllerState)
     }
     else
     {
+        // A fresh network/resource controller state supersedes the base that
+        // was captured before the presentation overlay was applied.
+        m_nativeTaskLocomotionPresentationApplied = false;
+
         // Put the current into the old keystates
         memcpy(m_lastControllerState, m_currentControllerState, sizeof(CControllerState));
 
         // Set the new current keystate
         memcpy(m_currentControllerState, &ControllerState, sizeof(CControllerState));
     }
+}
+
+SNativeTaskLocomotionSync CClientPed::GetNativeTaskLocomotion()
+{
+    SNativeTaskLocomotionSync locomotion;
+    if (!m_pPlayerPed || GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDucked() || IsDead() || HasSyncedAnim())
+        return locomotion;
+
+    CControllerState controllerState;
+    GetControllerState(controllerState);
+    if (controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0)
+        return locomotion;
+
+    CTask* pTask = m_pTaskManager->GetSimplestActiveTask();
+    if (!pTask || (pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT && pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT_FINE))
+        return locomotion;
+
+    CVector velocity;
+    GetMoveSpeed(velocity);
+    if (velocity.fX * velocity.fX + velocity.fY * velocity.fY < 0.0001f)
+        return locomotion;
+
+    switch (m_pPlayerPed->GetMoveState())
+    {
+        case PedMoveState::PEDMOVE_WALK:
+            locomotion.data.uiMode = SNativeTaskLocomotionSync::WALK;
+            break;
+        case PedMoveState::PEDMOVE_JOG:
+        case PedMoveState::PEDMOVE_RUN:
+            locomotion.data.uiMode = SNativeTaskLocomotionSync::RUN;
+            break;
+        case PedMoveState::PEDMOVE_SPRINT:
+            locomotion.data.uiMode = SNativeTaskLocomotionSync::SPRINT;
+            break;
+        default:
+            return locomotion;
+    }
+
+    // GTA rotates on-foot pad input by the camera orientation. Encode the
+    // authoritative velocity in that same input space so remote actors can
+    // strafe or backpedal without fighting their synchronized world heading.
+    const float desiredHeading = atan2(-velocity.fX, velocity.fY);
+    const float inputHeading = desiredHeading + GetCameraRotation();
+    locomotion.data.sLeftStickX = static_cast<short>(std::lround(std::clamp(-sin(inputHeading) * 128.0f, -128.0f, 128.0f)));
+    locomotion.data.sLeftStickY = static_cast<short>(std::lround(std::clamp(-cos(inputHeading) * 128.0f, -128.0f, 128.0f)));
+    return locomotion;
+}
+
+void CClientPed::ApplyNativeTaskLocomotion(CControllerState& controllerState, const SNativeTaskLocomotionSync& locomotion)
+{
+    controllerState.LeftStickX = locomotion.data.sLeftStickX;
+    controllerState.LeftStickY = locomotion.data.sLeftStickY;
+    controllerState.m_bPedWalk = locomotion.data.uiMode == SNativeTaskLocomotionSync::WALK ? 255 : 0;
+    controllerState.ButtonCross = locomotion.data.uiMode == SNativeTaskLocomotionSync::SPRINT ? 255 : 0;
+}
+
+void CClientPed::SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion)
+{
+    m_nativeTaskLocomotionPresentation = locomotion;
+    m_nativeTaskLocomotionPresentationReceivedAt = CClientTime::GetTime();
+}
+
+void CClientPed::RemoveNativeTaskLocomotionPresentation(CControllerState& controllerState)
+{
+    if (!m_nativeTaskLocomotionPresentationApplied)
+        return;
+
+    controllerState.LeftStickX = m_nativeTaskLocomotionBaseControllerState.LeftStickX;
+    controllerState.LeftStickY = m_nativeTaskLocomotionBaseControllerState.LeftStickY;
+    controllerState.m_bPedWalk = m_nativeTaskLocomotionBaseControllerState.m_bPedWalk;
+    controllerState.ButtonCross = m_nativeTaskLocomotionBaseControllerState.ButtonCross;
+    m_nativeTaskLocomotionPresentationApplied = false;
+}
+
+void CClientPed::ApplyNativeTaskLocomotionPresentation(CControllerState& controllerState)
+{
+    // Ped and player sync intervals are server-configurable up to four
+    // seconds. Keep the presentation through two missed unreliable updates,
+    // while retaining a short floor for the default player sync rate.
+    const unsigned long syncInterval = static_cast<unsigned long>(GetType() == CCLIENTPED ? g_TickRateSettings.iPedSync : g_TickRateSettings.iPureSync);
+    const unsigned long presentationLease = std::max(500UL, syncInterval * 3);
+
+    if (m_bIsLocalPlayer || m_bIsSyncing || m_nativeTaskLocomotionPresentation.data.uiMode == SNativeTaskLocomotionSync::NONE)
+    {
+        return;
+    }
+
+    // Never let a delayed on-foot presentation sample leak into a different
+    // gameplay state. Clearing it here also prevents a quick transition back
+    // to on foot from reviving the stale input for the remainder of its lease.
+    if (GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDucked() || IsDead() || HasSyncedAnim())
+    {
+        m_nativeTaskLocomotionPresentation = {};
+        return;
+    }
+
+    if (CClientTime::GetTime() - m_nativeTaskLocomotionPresentationReceivedAt > presentationLease)
+        return;
+
+    m_nativeTaskLocomotionBaseControllerState.LeftStickX = controllerState.LeftStickX;
+    m_nativeTaskLocomotionBaseControllerState.LeftStickY = controllerState.LeftStickY;
+    m_nativeTaskLocomotionBaseControllerState.m_bPedWalk = controllerState.m_bPedWalk;
+    m_nativeTaskLocomotionBaseControllerState.ButtonCross = controllerState.ButtonCross;
+    ApplyNativeTaskLocomotion(controllerState, m_nativeTaskLocomotionPresentation);
+    m_nativeTaskLocomotionPresentationApplied = true;
 }
 
 void CClientPed::AddKeysync(unsigned long ulDelay, const CControllerState& ControllerState, bool bDucking)
@@ -2757,9 +2866,12 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
             // ControllerState checks and fixes only
             CControllerState Current;
             GetControllerState(Current);
+            RemoveNativeTaskLocomotionPresentation(Current);
             m_rawControllerState = Current;
 
             ApplyControllerStateFixes(Current);
+            if (GetType() != CCLIENTPED)
+                ApplyNativeTaskLocomotionPresentation(Current);
 
             if (m_bIsLocalPlayer)
                 m_pPad->SetCurrentControllerState(&Current);
@@ -2809,10 +2921,13 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
 
         CControllerState Current;
         GetControllerState(Current);
+        RemoveNativeTaskLocomotionPresentation(Current);
         m_rawControllerState = Current;
 
         if (bDoControllerStateFixPulse)
             ApplyControllerStateFixes(Current);
+        if (GetType() != CCLIENTPED)
+            ApplyNativeTaskLocomotionPresentation(Current);
 
         // Set the controller state we might've changed something in
         // We can't use SetControllerState as it will update the previous
@@ -2940,6 +3055,16 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
         {
             // Update our controller state to match our scripted pad
             m_Pad.DoPulse(this);
+
+            // Scripted peds rebuild their controller state above, after the
+            // common controller-state pulse. Apply remote native-task
+            // locomotion last so the scripted pad cannot erase this
+            // presentation-only input before GTA processes the ped.
+            CControllerState Current;
+            GetControllerState(Current);
+            m_rawControllerState = Current;
+            ApplyNativeTaskLocomotionPresentation(Current);
+            memcpy(m_currentControllerState, &Current, sizeof(CControllerState));
         }
 
         // Are we waiting on an unloaded anim-block?
@@ -4247,6 +4372,8 @@ void CClientPed::StreamOut()
     // the local player
     if (m_pPlayerPed && !m_bIsLocalPlayer)
     {
+        SetNativeTaskLocomotionPresentation({});
+
         // Destroy us
         _DestroyModel();
 
@@ -7526,6 +7653,8 @@ void CClientPed::UpdateVehicleInOut()
 // Called from CPedSync
 void CClientPed::SetSyncing(bool bIsSyncing)
 {
+    if (m_bIsSyncing != bIsSyncing)
+        SetNativeTaskLocomotionPresentation({});
     m_bIsSyncing = bIsSyncing;
     ApplyNativeMissionEventProfileState();
     if (!bIsSyncing)

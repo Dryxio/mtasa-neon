@@ -25,6 +25,7 @@ class CClientPed;
 #include <game/CPad.h>
 #include <game/CPed.h>
 #include <game/TaskTypes.h>
+#include <net/SyncStructures.h>
 
 class CAnimBlock;
 class CClientCamera;
@@ -111,15 +112,17 @@ struct SDelayedSyncData
 
 struct SLastSyncedPedData
 {
-    float   fHealth;
-    float   fArmour;
-    CVector vPosition;
-    CVector vVelocity;
-    float   fRotation;
-    float   cameraRotation{};
-    bool    bOnFire;
-    bool    bIsInWater;
-    bool    isReloadingWeapon;
+    float                     fHealth;
+    float                     fArmour;
+    CVector                   vPosition;
+    CVector                   vVelocity;
+    float                     fRotation;
+    float                     cameraRotation{};
+    bool                      bOnFire;
+    bool                      bIsInWater;
+    bool                      isReloadingWeapon;
+    SNativeTaskLocomotionSync nativeTaskLocomotion;
+    bool                      nativeTaskLocomotionResetPending{true};
 };
 
 struct SRestoreWeaponItem
@@ -228,9 +231,12 @@ public:
     void GetTurnSpeed(CVector& vecTurnSpeed) const;
     void SetTurnSpeed(const CVector& vecTurnSpeed);
 
-    void GetControllerState(CControllerState& ControllerState);
-    void GetLastControllerState(CControllerState& ControllerState);
-    void SetControllerState(const CControllerState& ControllerState);
+    void                      GetControllerState(CControllerState& ControllerState);
+    void                      GetLastControllerState(CControllerState& ControllerState);
+    void                      SetControllerState(const CControllerState& ControllerState);
+    SNativeTaskLocomotionSync GetNativeTaskLocomotion();
+    static void               ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
+    void                      SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion);
 
     void AddKeysync(unsigned long ulDelay, const CControllerState& ControllerState, bool bDucking);
     void AddChangeWeapon(unsigned long ulDelay, eWeaponSlot slot, unsigned short usWeaponAmmo);
@@ -602,6 +608,8 @@ protected:
 
     void StreamedInPulse(bool bDoStandardPulses);
     void ApplyControllerStateFixes(CControllerState& Current);
+    void RemoveNativeTaskLocomotionPresentation(CControllerState& ControllerState);
+    void ApplyNativeTaskLocomotionPresentation(CControllerState& ControllerState);
 
     void Interpolate();
     void UpdateKeysync(bool bCleanup = false);
@@ -789,6 +797,10 @@ public:
     bool                                     m_bPendingRebuildPlayer;
     uint                                     m_uiFrameLastRebuildPlayer;
     bool                                     m_bIsSyncing;
+    SNativeTaskLocomotionSync                m_nativeTaskLocomotionPresentation;
+    CControllerState                         m_nativeTaskLocomotionBaseControllerState;
+    unsigned long                            m_nativeTaskLocomotionPresentationReceivedAt{};
+    bool                                     m_nativeTaskLocomotionPresentationApplied{false};
     bool                                     m_shouldRecreate{false};
 
     bool             m_bBulletImpactData;

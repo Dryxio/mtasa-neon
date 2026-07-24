@@ -47,6 +47,11 @@ bool CPlayerPuresyncPacket::Read(NetBitStreamInterface& BitStream)
         ReadFullKeysync(ControllerState, BitStream);
         pSourcePlayer->GetPad()->NewControllerState(ControllerState);
 
+        SNativeTaskLocomotionSync nativeTaskLocomotion;
+        if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation) && !BitStream.Read(&nativeTaskLocomotion))
+            return false;
+        pSourcePlayer->SetNativeTaskLocomotion(nativeTaskLocomotion);
+
         // Read the flags
         SPlayerPuresyncFlags flags;
         if (!BitStream.Read(&flags))
@@ -398,6 +403,9 @@ bool CPlayerPuresyncPacket::Write(NetBitStreamInterface& BitStream) const
 
         BitStream.WriteCompressed(usLatency);
         WriteFullKeysync(ControllerState, BitStream);
+
+        if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+            BitStream.Write(&pSourcePlayer->GetNativeTaskLocomotion());
 
         BitStream.Write(&flags);
 

@@ -47,6 +47,10 @@ bool CSimPlayerPuresyncPacket::Read(NetBitStreamInterface& BitStream)
     // Read out keys
     ReadFullKeysync(m_sharedControllerState, BitStream);
 
+    m_Cache.nativeTaskLocomotion = {};
+    if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation) && !BitStream.Read(&m_Cache.nativeTaskLocomotion))
+        return false;
+
     // Read the flags
     if (!BitStream.Read(&m_Cache.flags))
         return false;
@@ -195,6 +199,9 @@ bool CSimPlayerPuresyncPacket::Write(NetBitStreamInterface& BitStream) const
 
     BitStream.WriteCompressed(m_PlayerLatency);
     WriteFullKeysync(m_sharedControllerState, BitStream);
+
+    if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+        BitStream.Write(&m_Cache.nativeTaskLocomotion);
 
     BitStream.Write(&m_Cache.flags);
 

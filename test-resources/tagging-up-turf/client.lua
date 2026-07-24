@@ -46,6 +46,7 @@ local state = {
     storyProtectionLogged = false,
     missionTextReady = false,
     missionTextTimers = {},
+    taggingObjectiveShown = false,
     nativeTagHelpPhase = 0,
     nativeTagHelpStarted = 0,
     nativeHelpFlags = {},
@@ -137,14 +138,18 @@ local function beginMissionStageText(stage, failureTextKey)
         printMissionText("HOOD3_B", 5000)
     elseif stage == "tags_ballas" then
         scheduleMissionText(stage, 2500, function()
-            printMissionText("SWE1_M", 6000)
+            state.taggingObjectiveShown = printMissionText("SWE1_M", 6000) or state.taggingObjectiveShown
             startBallasEncounterAudioPreload()
         end)
     elseif stage == "rooftop" then
         printMissionText("SWE1_Z", 5000)
-        scheduleMissionText(stage, 2500, function()
-            printMissionText("SWE1_M", 6000)
-        end)
+        -- The original SCM keeps help_for_tagging set after the Ballas tags.
+        -- Only a checkpoint that skipped that prompt should show it here.
+        if not state.taggingObjectiveShown then
+            scheduleMissionText(stage, 2500, function()
+                state.taggingObjectiveShown = printMissionText("SWE1_M", 6000) or state.taggingObjectiveShown
+            end)
+        end
     elseif stage == "drive_home" then
         -- SWEX_AH and its follow-up are owned by transition mission audio.
     elseif stage == "failed" then
@@ -1744,6 +1749,36 @@ local function releaseFinalSceneCamera(scene, preserveFade)
     return ok and result ~= false
 end
 
+local function acquireFinalSceneStreamingLeases(scene)
+    scene.streamingLeases = {}
+    for _, actor in ipairs({
+        {name = "leader", element = state.leader},
+        {name = "sweet", element = scene.sweet},
+    }) do
+        if not isElement(actor.element) then
+            return false, actor.name .. "_unavailable"
+        end
+        local ok, token = pcall(acquireElementStreamingLease, actor.element)
+        if not ok or not token then
+            return false, actor.name .. "_lease_refused"
+        end
+        scene.streamingLeases[#scene.streamingLeases + 1] = token
+    end
+    return true, "leader_and_sweet"
+end
+
+local function releaseFinalSceneStreamingLeases(scene)
+    local released = true
+    for _, token in ipairs(scene and scene.streamingLeases or {}) do
+        local ok, result = pcall(releaseElementStreamingLease, token)
+        released = ok and result == true and released
+    end
+    if scene then
+        scene.streamingLeases = {}
+    end
+    return released
+end
+
 local function clearFinalScene(reason, preserveFade)
     local scene = state.finalScene
     if not scene then
@@ -1767,11 +1802,13 @@ local function clearFinalScene(reason, preserveFade)
     local facialStopped = stopFinalSceneFacialTalk(scene, reason or "cleanup")
     local audioReleased = releaseFinalSceneAudio(scene)
     local cameraReleased = releaseFinalSceneCamera(scene, preserveFade)
-    outputDebugString(("[tagging-up-turf] Final Grove scene #%d cleanup camera=%s audio=%s facial=%s reason=%s"):format(
+    local streamingReleased = releaseFinalSceneStreamingLeases(scene)
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d cleanup camera=%s audio=%s facial=%s streaming=%s reason=%s"):format(
                           scene.id, tostring(cameraReleased), tostring(audioReleased), tostring(facialStopped),
-                          tostring(reason or "cleanup")), cameraReleased and audioReleased and facialStopped and 3 or 2)
+                          tostring(streamingReleased), tostring(reason or "cleanup")),
+                      cameraReleased and audioReleased and facialStopped and streamingReleased and 3 or 2)
     state.finalScene = nil
-    return cameraReleased and audioReleased and facialStopped
+    return cameraReleased and audioReleased and facialStopped and streamingReleased
 end
 
 local function reportFinalSceneReady(scene, result, details)
@@ -1865,7 +1902,8 @@ addEventHandler("tagup:finalScenePrepare", resourceRoot, function(sceneId, sweet
                       "setScriptCameraWidescreen", "setScriptCameraNearClip", "setScriptCameraFixed", "setScriptCameraPersist",
                       "moveScriptCamera", "trackScriptCamera", "fadeScriptCamera", "isScriptCameraFading", "setPedLookAt", "setPedGoTo",
                       "getElementBonePosition", "requestMissionAudio", "isMissionAudioLoaded", "playMissionAudio", "isMissionAudioFinished",
-                      "releaseMissionAudio", "setPedFacialTalk", "stopPedFacialTalk", "setPedScriptedSpeechMuted"}
+                      "releaseMissionAudio", "setPedFacialTalk", "stopPedFacialTalk", "setPedScriptedSpeechMuted",
+                      "acquireElementStreamingLease", "releaseElementStreamingLease"}
     for _, name in ipairs(required) do
         if type(_G[name]) ~= "function" then
             state.finalScene = {id = sceneId}
@@ -1880,9 +1918,25 @@ addEventHandler("tagup:finalScenePrepare", resourceRoot, function(sceneId, sweet
         leaderCanSkip = leaderCanSkip == true,
     }
     state.finalScene = scene
+    -- Removing synchronized actors from the Greenwood and staging them can
+    -- recreate their GTA entities. On a co-op companion, both CJ and Sweet are
+    -- remote elements; without explicit references the streamer may discard
+    -- them after the first valid frame and the black-screen render barrier can
+    -- never recover. Hold both actors for the complete scene, then release the
+    -- resource-owned tokens through every cleanup path.
+    local leased, leaseDetails = acquireFinalSceneStreamingLeases(scene)
+    if not leased then
+        reportFinalSceneReady(scene, "streaming_lease_refused", leaseDetails)
+        clearFinalScene("streaming_lease_refused", false)
+        return
+    end
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d streaming leases acquired: %s"):format(
+                          scene.id, tostring(leaseDetails)))
     local acquired, token = pcall(acquireScriptCamera, true)
     if not acquired or not token then
-        return reportFinalSceneReady(scene, "camera_acquire_refused", tostring(token))
+        reportFinalSceneReady(scene, "camera_acquire_refused", tostring(token))
+        clearFinalScene("camera_acquire_refused", false)
+        return
     end
     scene.cameraToken = token
     local faded, fadeResult = pcall(fadeScriptCamera, token, false, TAGUP.finalScene.camera.fadeOutDuration, 0, 0, 0)
@@ -4055,6 +4109,7 @@ end
 
 local BALLAS_TASK_OBSERVATION_INTERVAL = 50
 local BALLAS_TASK_STABLE_SAMPLES = 3
+local BALLAS_ATTACK_RECOVERY_STABLE_SAMPLES = 3
 local BALLAS_COMBAT_OBSERVATION_INTERVAL = 250
 
 local function getBallasTaskHierarchy(ped, taskType, slot)
@@ -4071,6 +4126,10 @@ end
 
 local function getBallasPrimaryTaskHierarchy(ped, slot)
     return getBallasTaskHierarchy(ped, "primary", slot)
+end
+
+local function isBallasPhysicalChoking(ped)
+    return getBallasPrimaryTaskHierarchy(ped, 0)[1] == "TASK_SIMPLE_CHOKING"
 end
 
 local function describeBallasTaskSlots(ped, taskType, firstSlot, lastSlot)
@@ -4217,7 +4276,10 @@ local function beginBallasEncounterTaskBarrier(encounter, phase, taskName, dispa
     local timerField = phase .. "ObservationTimer"
     local reportedField = phase .. "Reported"
     local requestedAt = getTickCount()
+    local activationWindowStartedAt = {}
     local stableSamples = 0
+    local recoverFromChoking = phase == "attack" and taskName == "TASK_COMPLEX_KILL_PED_ON_FOOT"
+    local recovery = {}
 
     local function stopObservation()
         if isTimer(encounter[timerField]) then
@@ -4226,15 +4288,41 @@ local function beginBallasEncounterTaskBarrier(encounter, phase, taskName, dispa
         encounter[timerField] = nil
     end
 
+    local function deferAttackUntilChokingEnds(index, ped, now)
+        local actorRecovery = recovery[index] or {redispatchCount = 0}
+        recovery[index] = actorRecovery
+        if not actorRecovery.waiting then
+            actorRecovery.waiting = true
+            actorRecovery.startedAt = now
+            actorRecovery.clearSamples = 0
+            outputDebugString(
+                ("[tagging-up-turf] Ballas encounter #%d attack deferred for Flat%d while native choking is active; lastDamageAgo=%sms"):format(
+                    encounter.id, index,
+                    encounter.lastChokingDamageAt[ped] and tostring(now - encounter.lastChokingDamageAt[ped]) or "unknown"))
+        end
+        -- Spray-can choking is a legal physical response which temporarily
+        -- prevents 05E2's primary task from being installed. Its duration must
+        -- not consume the task-refusal window.
+        activationWindowStartedAt[index] = now
+        actorRecovery.clearSamples = 0
+    end
+
     for index, ped in ipairs(encounter.enemies) do
+        activationWindowStartedAt[index] = requestedAt
         if not isElement(ped) then
             return reportBallasEncounterTask(encounter, phase, "actor_unavailable", ("Flat %d absent avant la task native"):format(index))
         end
         -- SWEET1 only dispatches these commands while the corresponding Flat
         -- is alive. A dead actor is deliberately exempt from this barrier.
-        if not isPedDead(ped) and
-            (not isElementStreamedIn(ped) or not isElementSyncer(ped) or not dispatch(index, ped)) then
-            return reportBallasEncounterTask(encounter, phase, "refused", ("task native refusee pour Flat %d"):format(index))
+        if not isPedDead(ped) then
+            if not isElementStreamedIn(ped) or not isElementSyncer(ped) then
+                return reportBallasEncounterTask(encounter, phase, "refused", ("Flat %d non streame ou sans syncer"):format(index))
+            end
+            if recoverFromChoking and isBallasPhysicalChoking(ped) then
+                deferAttackUntilChokingEnds(index, ped, requestedAt)
+            elseif not dispatch(index, ped) then
+                return reportBallasEncounterTask(encounter, phase, "refused", ("task native refusee pour Flat %d"):format(index))
+            end
         end
     end
 
@@ -4245,12 +4333,50 @@ local function beginBallasEncounterTaskBarrier(encounter, phase, taskName, dispa
 
         local now = getTickCount()
         local allActive = true
-        for _, ped in ipairs(encounter.enemies) do
+        local timedOutIndex
+        for index, ped in ipairs(encounter.enemies) do
             if not isElement(ped) then
-                allActive = false
+                stopObservation()
+                return reportBallasEncounterTask(encounter, phase, "actor_unavailable",
+                                                 ("Flat %d absent pendant la task native"):format(index))
             elseif not isPedDead(ped) then
                 local primary = getBallasPrimaryTaskHierarchy(ped, 3)
-                allActive = allActive and isElementStreamedIn(ped) and isElementSyncer(ped) and primary[1] == taskName
+                local available = isElementStreamedIn(ped) and isElementSyncer(ped)
+                local active = available and primary[1] == taskName
+                local actorRecovery = recovery[index]
+                local choking = recoverFromChoking and isBallasPhysicalChoking(ped)
+                if available and recoverFromChoking and not active and (choking or actorRecovery and actorRecovery.waiting) then
+                    if choking then
+                        deferAttackUntilChokingEnds(index, ped, now)
+                    else
+                        actorRecovery.clearSamples = actorRecovery.clearSamples + 1
+                        activationWindowStartedAt[index] = now
+                        if actorRecovery.clearSamples >= BALLAS_ATTACK_RECOVERY_STABLE_SAMPLES then
+                            if not isElementStreamedIn(ped) or not isElementSyncer(ped) or not dispatch(index, ped) then
+                                stopObservation()
+                                return reportBallasEncounterTask(
+                                    encounter, phase, "refused",
+                                    ("task native refusee pour Flat %d apres recuperation de la toux"):format(index))
+                            end
+                            actorRecovery.waiting = false
+                            actorRecovery.redispatchCount = actorRecovery.redispatchCount + 1
+                            activationWindowStartedAt[index] = now
+                            outputDebugString(
+                                ("[tagging-up-turf] Ballas encounter #%d attack redispatched for Flat%d after %dms and %d clear samples; retry=%d"):format(
+                                    encounter.id, index, now - actorRecovery.startedAt, actorRecovery.clearSamples,
+                                    actorRecovery.redispatchCount))
+                        end
+                    end
+                elseif active and actorRecovery and actorRecovery.waiting then
+                    actorRecovery.waiting = false
+                    outputDebugString(
+                        ("[tagging-up-turf] Ballas encounter #%d Flat%d retained attack task through choking after %dms"):format(
+                            encounter.id, index, now - actorRecovery.startedAt))
+                end
+                allActive = allActive and active
+                if not active and now - activationWindowStartedAt[index] >= TAGUP.ballasGangScene.readyTimeout then
+                    timedOutIndex = timedOutIndex or index
+                end
             end
         end
 
@@ -4264,12 +4390,12 @@ local function beginBallasEncounterTaskBarrier(encounter, phase, taskName, dispa
                                                                                                                 now - requestedAt))
         end
 
-        if now - requestedAt >= TAGUP.ballasGangScene.readyTimeout then
+        if timedOutIndex then
             stopObservation()
             traceBallasEncounterTaskState(encounter, phase .. "_activation_timeout", taskName)
             return reportBallasEncounterTask(
                 encounter, phase, "timeout",
-                ("les tasks %s ne sont pas restees installees ensemble"):format(taskName))
+                ("la task %s de Flat %d ne s'est pas installee; elapsed=%dms"):format(taskName, timedOutIndex, now - requestedAt))
         end
     end, BALLAS_TASK_OBSERVATION_INTERVAL, 0)
 end
@@ -4291,7 +4417,7 @@ local function beginBallasChokeObservation(encounter)
             if isElement(ped) then
                 local physical = getBallasPrimaryTaskHierarchy(ped, 0)
                 local primary = getBallasPrimaryTaskHierarchy(ped, 3)
-                local choking = physical[1] == "TASK_SIMPLE_CHOKING"
+                local choking = isBallasPhysicalChoking(ped)
                 local observed = encounter.chokeObservations[ped]
                 if choking and not observed then
                     observed = {startedAt = now, warned = false}
@@ -5232,6 +5358,9 @@ end)
 addEvent("tagup:state", true)
 addEventHandler("tagup:state", resourceRoot, function(payload)
     local previousStage = state.stage
+    if not state.active then
+        state.taggingObjectiveShown = false
+    end
     state.active = true
     state.stage = payload.stage
     state.vehicle = payload.vehicle
@@ -5387,6 +5516,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.greenwoodNativeLogMode = nil
     state.storyProtectionLogged = false
     state.missionPassedTunePlayed = false
+    state.taggingObjectiveShown = false
     if state.missionTextReady then
         callMissionTextApi("releaseMissionText")
     end

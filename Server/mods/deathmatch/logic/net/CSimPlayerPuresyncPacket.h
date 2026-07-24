@@ -60,17 +60,18 @@ public:
     // Set in Read ()
     struct
     {
-        uchar                ucTimeContext;
-        SPlayerPuresyncFlags flags;
-        ElementID            ContactElementID;
-        CVector              Position;
-        float                fRotation;
-        CVector              Velocity;
-        float                fHealth;
-        float                fArmor;
-        float                fCameraRotation;
-        CVector              vecCamPosition;
-        CVector              vecCamFwd;
+        uchar                     ucTimeContext;
+        SNativeTaskLocomotionSync nativeTaskLocomotion;
+        SPlayerPuresyncFlags      flags;
+        ElementID                 ContactElementID;
+        CVector                   Position;
+        float                     fRotation;
+        CVector                   Velocity;
+        float                     fHealth;
+        float                     fArmor;
+        float                     fCameraRotation;
+        CVector                   vecCamPosition;
+        CVector                   vecCamFwd;
 
         bool   bWeaponCorrect;
         uchar  ucWeaponSlot;  // Only valid if bWeaponCorrect

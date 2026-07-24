@@ -18,6 +18,69 @@
 #include <net/SyncStructures.h>
 
 // ============================================================================
+// Native task locomotion presentation
+// ============================================================================
+
+TEST(SNativeTaskLocomotionSync, RoundTripsEveryMode)
+{
+    for (unsigned int mode = SNativeTaskLocomotionSync::NONE; mode <= SNativeTaskLocomotionSync::SPRINT; ++mode)
+    {
+        MockBitStream             bitStream;
+        SNativeTaskLocomotionSync source;
+        SNativeTaskLocomotionSync decoded;
+        source.data.uiMode = mode;
+        source.data.sLeftStickX = -64;
+        source.data.sLeftStickY = 96;
+
+        bitStream.Write(&source);
+        const int expectedBits = SNativeTaskLocomotionSync::BITCOUNT + (mode == SNativeTaskLocomotionSync::NONE ? 0 : 16);
+        EXPECT_EQ(expectedBits, bitStream.GetNumberOfBitsUsed());
+
+        bitStream.ResetReadPointer();
+        ASSERT_TRUE(bitStream.Read(&decoded));
+        EXPECT_EQ(mode, decoded.data.uiMode);
+        if (mode == SNativeTaskLocomotionSync::NONE)
+        {
+            EXPECT_EQ(0, decoded.data.sLeftStickX);
+            EXPECT_EQ(0, decoded.data.sLeftStickY);
+        }
+        else
+        {
+            EXPECT_NEAR(source.data.sLeftStickX, decoded.data.sLeftStickX, 1);
+            EXPECT_NEAR(source.data.sLeftStickY, decoded.data.sLeftStickY, 1);
+        }
+    }
+}
+
+TEST(SNativeTaskLocomotionSync, VersionGatePreservesFollowingFields)
+{
+    constexpr unsigned char sentinel = 0xA5;
+
+    for (const auto version : {eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization, eBitStreamVersion::Latest})
+    {
+        MockBitStream             bitStream(static_cast<unsigned short>(version));
+        SNativeTaskLocomotionSync source;
+        source.data.uiMode = SNativeTaskLocomotionSync::RUN;
+        source.data.sLeftStickX = -128;
+        source.data.sLeftStickY = 64;
+
+        if (bitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+            bitStream.Write(&source);
+        bitStream.Write(sentinel);
+
+        bitStream.ResetReadPointer();
+        SNativeTaskLocomotionSync decoded;
+        if (bitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+            ASSERT_TRUE(bitStream.Read(&decoded));
+
+        unsigned char decodedSentinel = 0;
+        ASSERT_TRUE(bitStream.Read(decodedSentinel));
+        EXPECT_EQ(sentinel, decodedSentinel);
+        EXPECT_EQ(version == eBitStreamVersion::Latest ? SNativeTaskLocomotionSync::RUN : SNativeTaskLocomotionSync::NONE, decoded.data.uiMode);
+    }
+}
+
+// ============================================================================
 // Position syncs
 // ============================================================================
 

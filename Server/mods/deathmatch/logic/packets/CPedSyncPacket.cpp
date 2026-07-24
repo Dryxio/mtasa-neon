@@ -24,7 +24,7 @@ bool CPedSyncPacket::Read(NetBitStreamInterface& BitStream)
     while (BitStream.GetNumberOfUnreadBits() > 32)
     {
         // Read out the sync data
-        SyncData Data;
+        SyncData Data{};
 
         if (!BitStream.Read(Data.ID))
             return false;
@@ -40,6 +40,14 @@ bool CPedSyncPacket::Read(NetBitStreamInterface& BitStream)
 
         if (!BitStream.Read(Data.flags2))
             return false;
+
+        if (Data.flags2 & 0x02)
+        {
+            if (!BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+                Data.flags2 &= ~0x02;
+            else if (!BitStream.Read(&Data.nativeTaskLocomotion))
+                return false;
+        }
 
         // Did we recieve position?
         if (ucFlags & 0x01)
@@ -109,8 +117,15 @@ bool CPedSyncPacket::Write(NetBitStreamInterface& BitStream) const
     // Write the sync time context
     BitStream.Write(Data.ucSyncTimeContext);
 
+    std::uint8_t flags2 = Data.flags2;
+    if (!BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+        flags2 &= ~0x02;
+
     BitStream.Write(Data.ucFlags);
-    BitStream.Write(Data.flags2);
+    BitStream.Write(flags2);
+
+    if (flags2 & 0x02)
+        BitStream.Write(&Data.nativeTaskLocomotion);
 
     // Position and rotation
     if (Data.ucFlags & 0x01)

@@ -24,6 +24,7 @@ class CPlayer;
 #include "packets/CPacket.h"
 #include "packets/CPlayerStatsPacket.h"
 #include "CStringName.h"
+#include <net/SyncStructures.h>
 class CKeyBinds;
 class CPlayerCamera;
 enum class eVehicleAimDirection : unsigned char;
@@ -179,7 +180,9 @@ public:
     CTeam* GetTeam() { return m_pTeam; }
     void   SetTeam(CTeam* pTeam, bool bChangeTeam = false);
 
-    CPad* GetPad() { return m_pPad; }
+    CPad*                            GetPad() { return m_pPad; }
+    const SNativeTaskLocomotionSync& GetNativeTaskLocomotion() const { return m_nativeTaskLocomotion; }
+    void                             SetNativeTaskLocomotion(const SNativeTaskLocomotionSync& locomotion) { m_nativeTaskLocomotion = locomotion; }
 
     bool IsDebuggerVisible() { return m_bDebuggerVisible; }
     void SetDebuggerVisible(bool bVisible) { m_bDebuggerVisible = bVisible; }
@@ -392,8 +395,9 @@ private:
     unsigned char m_ucAttackBodyPart;
     long long     m_llSetDamageInfoTime;
 
-    CTeam* m_pTeam;
-    CPad*  m_pPad;
+    CTeam*                    m_pTeam;
+    CPad*                     m_pPad;
+    SNativeTaskLocomotionSync m_nativeTaskLocomotion;
 
     bool m_bDebuggerVisible;
 

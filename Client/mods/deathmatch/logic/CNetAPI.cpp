@@ -849,6 +849,11 @@ void CNetAPI::ReadPlayerPuresync(CClientPlayer* pPlayer, NetBitStreamInterface& 
     CControllerState ControllerState;
     ReadFullKeysync(ControllerState, BitStream);
 
+    SNativeTaskLocomotionSync nativeTaskLocomotion;
+    if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation) && !BitStream.Read(&nativeTaskLocomotion))
+        return;
+    pPlayer->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion);
+
     // Read out puresync flags
     SPlayerPuresyncFlags flags;
     BitStream.Read(&flags);
@@ -1131,6 +1136,12 @@ void CNetAPI::WritePlayerPuresync(CClientPlayer* pPlayerModel, NetBitStreamInter
     }
 
     WriteFullKeysync(ControllerState, BitStream);
+
+    if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+    {
+        const SNativeTaskLocomotionSync nativeTaskLocomotion = pPlayerModel->GetNativeTaskLocomotion();
+        BitStream.Write(&nativeTaskLocomotion);
+    }
 
     // Get the contact entity
     CClientEntity* pContactEntity = pPlayerModel->GetContactEntity();

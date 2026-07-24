@@ -84,6 +84,10 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-23
     NativeWorldStaticWorldV3StartupAuthorization,
 
+    // Relays presentation-only locomotion for client-authoritative native actor tasks.
+    // 2026-07-25
+    NativeTaskLocomotionPresentation,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

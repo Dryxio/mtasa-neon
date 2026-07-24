@@ -1008,6 +1008,62 @@ struct SFullKeysyncSync : public ISyncStructure
     } data;
 };
 
+// Native AI tasks only run on the authoritative client. This compact state lets
+// remote clients animate the resulting movement without running the AI task.
+struct SNativeTaskLocomotionSync : public ISyncStructure
+{
+    enum
+    {
+        BITCOUNT = 2
+    };
+
+    enum eMode : unsigned int
+    {
+        NONE = 0,
+        WALK,
+        RUN,
+        SPRINT,
+    };
+
+    bool Read(NetBitStreamInterface& bitStream)
+    {
+        data = {};
+        if (!bitStream.ReadBits(reinterpret_cast<char*>(&data.uiMode), BITCOUNT))
+            return false;
+
+        if (data.uiMode == NONE)
+            return true;
+
+        char leftStickX;
+        char leftStickY;
+        if (!bitStream.Read(leftStickX) || !bitStream.Read(leftStickY))
+            return false;
+
+        data.sLeftStickX = static_cast<short>(static_cast<float>(leftStickX) * 128.0f / 127.0f);
+        data.sLeftStickY = static_cast<short>(static_cast<float>(leftStickY) * 128.0f / 127.0f);
+        return true;
+    }
+
+    void Write(NetBitStreamInterface& bitStream) const
+    {
+        bitStream.WriteBits(reinterpret_cast<const char*>(&data.uiMode), BITCOUNT);
+        if (data.uiMode == NONE)
+            return;
+
+        const char leftStickX = static_cast<char>(static_cast<float>(data.sLeftStickX) * 127.0f / 128.0f);
+        const char leftStickY = static_cast<char>(static_cast<float>(data.sLeftStickY) * 127.0f / 128.0f);
+        bitStream.Write(leftStickX);
+        bitStream.Write(leftStickY);
+    }
+
+    struct
+    {
+        unsigned int uiMode{};
+        short        sLeftStickX{};
+        short        sLeftStickY{};
+    } data{};
+};
+
 // TODO: SSmallKeysyncSync is now the same as SFullKeysyncSync ?
 struct SSmallKeysyncSync : public ISyncStructure
 {

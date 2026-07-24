@@ -78,6 +78,11 @@ void CPedSync::DoPulse()
 void CPedSync::AddPed(CClientPed* pPed)
 {
     m_List.push_front(pPed);
+    // The previous syncer may have left an active presentation sample on
+    // viewers. Make the new owner publish its current state even when that
+    // state is NONE, so ownership migration clears the old locomotion without
+    // waiting for the receiver lease.
+    pPed->m_LastSyncedData->nativeTaskLocomotionResetPending = true;
     pPed->SetSyncing(true);
 }
 
@@ -186,6 +191,10 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             std::uint8_t flags2{};
             BitStream.Read(flags2);
 
+            SNativeTaskLocomotionSync nativeTaskLocomotion;
+            if ((flags2 & 0x02) && BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation) && !BitStream.Read(&nativeTaskLocomotion))
+                return;
+
             CVector vecPosition{CVector::NoInit{}}, vecMoveSpeed{CVector::NoInit{}};
             float   fRotation, fHealth, fArmor;
             bool    bOnFire;
@@ -248,6 +257,8 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
                     pPed->LockArmor(fArmor);
                 if (flags2 & 0x01)
                     pPed->SetTargetRotation(PED_SYNC_RATE, std::nullopt, cameraRotation);
+                if ((flags2 & 0x02) && BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
+                    pPed->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion);
                 if (ucFlags & 0x20)
                     pPed->SetOnFire(bOnFire);
                 if (ucFlags & 0x40)
@@ -311,6 +322,18 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
     if (!IsNearlyEqual(pPed->GetCameraRotation(), pPed->m_LastSyncedData->cameraRotation))
         flags2 |= 0x01;
 
+    const SNativeTaskLocomotionSync  nativeTaskLocomotion = pPed->GetNativeTaskLocomotion();
+    const SNativeTaskLocomotionSync& lastNativeTaskLocomotion = pPed->m_LastSyncedData->nativeTaskLocomotion;
+    const bool                       nativeTaskLocomotionChanged = nativeTaskLocomotion.data.uiMode != lastNativeTaskLocomotion.data.uiMode ||
+                                             nativeTaskLocomotion.data.sLeftStickX != lastNativeTaskLocomotion.data.sLeftStickX ||
+                                             nativeTaskLocomotion.data.sLeftStickY != lastNativeTaskLocomotion.data.sLeftStickY;
+    if (pBitStream->Can(eBitStreamVersion::NativeTaskLocomotionPresentation) &&
+        (nativeTaskLocomotion.data.uiMode != SNativeTaskLocomotionSync::NONE || nativeTaskLocomotionChanged ||
+         pPed->m_LastSyncedData->nativeTaskLocomotionResetPending))
+    {
+        flags2 |= 0x02;
+    }
+
     // Do we really have to sync this ped?
     if (ucFlags == 0 && flags2 == 0)
         return;
@@ -326,6 +349,13 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
 
     // Write flags 2
     pBitStream->Write(flags2);
+
+    if (flags2 & 0x02)
+    {
+        pBitStream->Write(&nativeTaskLocomotion);
+        pPed->m_LastSyncedData->nativeTaskLocomotion = nativeTaskLocomotion;
+        pPed->m_LastSyncedData->nativeTaskLocomotionResetPending = false;
+    }
 
     // Write position if needed
     if (ucFlags & 0x01)
