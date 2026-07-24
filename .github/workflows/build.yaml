@@ -203,6 +203,17 @@ jobs:
 
       # Keep local clones CUSTOM, but enable the MTA network/service behavior
       # required by the Neon server distributed to players.
+      #
+      # Raising the version type to UNSTABLE also switches on the core-vs-module
+      # version check in CDynamicLibrary::CheckMtaVersion, which local CUSTOM
+      # builds compile out. That check compares exact build tags, and it can
+      # never pass here: net.so is a prebuilt nightly downloaded from MTA's CDN
+      # (currently 1.7.0-7.26726.0) while this fork builds as 1.7.0-5.00000.0,
+      # so the server aborts with "Loading network library (net.so) failed".
+      # Claiming the nightly's type and build number instead would make Neon
+      # impersonate an official build and diverge from the client artifact, so
+      # skip the check - the escape hatch documented in CDynamicLibrary.cpp -
+      # and keep client and server reporting the same fork version.
       - name: Configure public Neon server build
         run: |
           printf '%s\n' \
@@ -210,6 +221,7 @@ jobs:
             '' \
             '#undef MTASA_VERSION_TYPE' \
             '#define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE' \
+            '#define MTASA_SKIP_VERSION_CHECKS' \
             > Shared/build_overrides.h
 
       - name: Run Build
