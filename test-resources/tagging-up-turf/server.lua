@@ -980,10 +980,9 @@ startIntroScene = function()
         return failMission("Sweet ou le leader est indisponible pour la scene d'intro.")
     end
     local profile = TAGUP.introScene
-    setElementPosition(leader, profile.leaderStart.x, profile.leaderStart.y, profile.leaderStart.z)
+    setElementPosition(leader, profile.leaderStart.x, profile.leaderStart.y, tagupScmCharacterPlacementZ(profile.leaderStart.z))
     setElementRotation(leader, 0, 0, profile.leaderStart.heading)
-    -- CREATE_CHAR adds 1.0 to the script Z before native placement.
-    setElementPosition(sweet, profile.sweetStart.x, profile.sweetStart.y, profile.sweetStart.z + 1.0)
+    setElementPosition(sweet, profile.sweetStart.x, profile.sweetStart.y, tagupScmCharacterPlacementZ(profile.sweetStart.z))
     setElementRotation(sweet, 0, 0, profile.sweetStart.heading)
     setElementSyncer(sweet, leader, true, true)
 
@@ -1160,7 +1159,7 @@ addEventHandler("tagup:introSceneAudioFinished", resourceRoot, function(sceneId,
                 return failIntroScene(active, "Sweet a disparu avant le placement final de la scene d'intro.")
             end
             local final = TAGUP.introScene.sweetFinal
-            setElementPosition(sweet, final.x, final.y, final.z)
+            setElementPosition(sweet, final.x, final.y, tagupScmCharacterPlacementZ(final.z))
             setElementRotation(sweet, 0, 0, final.heading)
             active.finalWaitElapsed = true
             if active.entryAccepted then
@@ -1272,6 +1271,7 @@ local function cancelFinalScene(reason, notifyClients)
     end
     if isElement(mission.entities.sweet) then
         setPedAnimation(mission.entities.sweet, false)
+        setElementFrozen(mission.entities.sweet, false)
     end
     if isElement(mission.entities.vehicle) then
         setElementFrozen(mission.entities.vehicle, false)
@@ -1303,7 +1303,7 @@ end
 local prepareFinalSceneLine
 local requestFinalSceneRelease
 
-local function stageFinalSceneActors(scene, reason)
+local function stageFinalSceneActors(scene)
     if mission.finalScene ~= scene or not isElement(mission.leader) or not isElement(mission.entities.sweet) then
         return false
     end
@@ -1312,25 +1312,23 @@ local function stageFinalSceneActors(scene, reason)
     local leaderX, leaderY, leaderZ = getElementPosition(leader)
     local sweetX, sweetY, sweetZ = getElementPosition(sweet)
     local distanceBefore = tagupDistance3D(leaderX, leaderY, leaderZ, sweetX, sweetY, sweetZ)
-    local placementZOffset = profile.placementZOffset
-
-    -- Both actors remain live synchronized peds during the dialogue. Reapply
-    -- the SCM pair immediately before the handshake so collision or residual
-    -- velocity cannot open a visible gap between the paired animations.
-    setElementPosition(leader, profile.leader.x, profile.leader.y, profile.leader.z + placementZOffset)
+    -- The original script places this pair once. Keep that exact transform
+    -- stable while controls are inhibited so multiplayer sync and collision
+    -- cannot introduce a visible correction before the handshake.
+    setElementPosition(leader, profile.leader.x, profile.leader.y, tagupScmCharacterPlacementZ(profile.leader.z))
     setElementRotation(leader, 0, 0, profile.leader.heading)
     setElementVelocity(leader, 0, 0, 0)
-    setElementFrozen(leader, false)
-    setElementPosition(sweet, profile.sweet.x, profile.sweet.y, profile.sweet.z + placementZOffset)
+    setElementFrozen(leader, true)
+    setElementPosition(sweet, profile.sweet.x, profile.sweet.y, tagupScmCharacterPlacementZ(profile.sweet.z))
     setElementRotation(sweet, 0, 0, profile.sweet.heading)
     setElementVelocity(sweet, 0, 0, 0)
-    setElementFrozen(sweet, false)
+    setElementFrozen(sweet, true)
 
     local stagedLeaderX, stagedLeaderY, stagedLeaderZ = getElementPosition(leader)
     local stagedSweetX, stagedSweetY, stagedSweetZ = getElementPosition(sweet)
     local distanceAfter = tagupDistance3D(stagedLeaderX, stagedLeaderY, stagedLeaderZ, stagedSweetX, stagedSweetY, stagedSweetZ)
-    outputDebugString(("[tagging-up-turf] Final Grove scene #%d actor stage %s: distance %.3f -> %.3f m"):format(
-                          scene.id, tostring(reason), distanceBefore, distanceAfter))
+    outputDebugString(("[tagging-up-turf] Final Grove scene #%d initial actor stage: distance %.3f -> %.3f m"):format(
+                          scene.id, distanceBefore, distanceAfter))
     return true
 end
 
@@ -1370,7 +1368,7 @@ local function playFinalSceneLine(scene, lineIndex)
         end
     elseif lineIndex == profile.handshakeLine then
         local sweet = mission.entities.sweet
-        if not stageFinalSceneActors(scene, "handshake") or not isElement(mission.leader) or not isElement(sweet) or
+        if not isElement(mission.leader) or not isElement(sweet) or
             not setPedAnimation(sweet, profile.handshake.block, profile.handshake.name, -1, false, false, false, false, 250, false) or
             not setPedAnimation(mission.leader, profile.handshake.block, profile.handshake.name, -1, false, false, false, false, 250, false) then
             return failFinalScene(scene, "La poignee de main GANGS a ete refusee pendant la scene finale.")
@@ -1382,6 +1380,10 @@ local function playFinalSceneLine(scene, lineIndex)
             end
         end, profile.handshake.guardTimeout, 1, scene.id))
         triggerClientEvent(mission.leader, "tagup:finalSceneObserveHandshake", resourceRoot, scene.id, sweet)
+    elseif lineIndex == profile.walkLine and isElement(mission.entities.sweet) then
+        -- TASK_GO_STRAIGHT_TO_COORD needs ownership of Sweet's transform after
+        -- the paired animation has ended. CJ stays anchored until camera release.
+        setElementFrozen(mission.entities.sweet, false)
     end
 
     for _, player in ipairs(scene.players) do
@@ -1518,7 +1520,7 @@ addEventHandler("tagup:finalSceneReady", resourceRoot, function(sceneId, result,
     takeWeapon(mission.entities.sweet, TAGUP.sprayWeapon)
     setPedWeaponSlot(mission.entities.sweet, 0)
     setPedAnimation(mission.entities.sweet, false)
-    if not stageFinalSceneActors(scene, "initial") then
+    if not stageFinalSceneActors(scene) then
         return failFinalScene(scene, "Les acteurs de la scene finale n'ont pas pu etre places.")
     end
     setElementFrozen(mission.entities.vehicle, true)
@@ -1735,10 +1737,7 @@ addEventHandler("tagup:finalSceneReleased", resourceRoot, function(sceneId, resu
 end)
 
 createScmChar = function(model, x, y, scriptZ, heading)
-    -- GTA's CREATE_CHAR adds 1.0 to the script Z before placing the ped.
-    -- MTA's createPed consumes the element Z directly, so this conversion
-    -- belongs to the SCM opcode adapter rather than to createPed itself.
-    return createPed(model, x, y, scriptZ + 1.0, heading)
+    return createPed(model, x, y, tagupScmCharacterPlacementZ(scriptZ), heading)
 end
 
 local function spawnBallas()
@@ -3608,7 +3607,7 @@ local function stageDemoActors(scene)
             end
             local offset = profile.partyOffsets[index - 1]
             setElementPosition(player, profile.leaderStage.x + (offset and offset.x or 0), profile.leaderStage.y + (offset and offset.y or 0),
-                               profile.leaderStage.z)
+                               tagupScmCharacterPlacementZ(profile.leaderStage.z))
             setElementRotation(player, 0, 0, profile.leaderStage.heading)
         end
     end
@@ -3616,7 +3615,7 @@ local function stageDemoActors(scene)
     if getPedOccupiedVehicle(sweet) then
         removePedFromVehicle(sweet)
     end
-    setElementPosition(sweet, profile.sweetStage.x, profile.sweetStage.y, profile.sweetStage.z)
+    setElementPosition(sweet, profile.sweetStage.x, profile.sweetStage.y, tagupScmCharacterPlacementZ(profile.sweetStage.z))
     setElementRotation(sweet, 0, 0, profile.sweetStage.heading)
     setElementSyncer(sweet, mission.leader)
     scene.actorsStaged = true
@@ -3795,7 +3794,8 @@ addEventHandler("tagup:sweetDemoSceneAudioFinished", resourceRoot, function(scen
             if isElement(member) then
                 local offset = profile.partyOffsets[index - 1]
                 setElementPosition(member, profile.leaderFinal.x + (offset and offset.x or 0),
-                                   profile.leaderFinal.y + (offset and offset.y or 0), profile.leaderFinal.z)
+                                   profile.leaderFinal.y + (offset and offset.y or 0),
+                                   tagupScmCharacterPlacementZ(profile.leaderFinal.z))
                 setElementRotation(member, 0, 0, profile.leaderFinal.heading)
             end
         end
@@ -3874,11 +3874,12 @@ addEventHandler("tagup:sweetDemoSceneSkipRequest", resourceRoot, function(sceneI
         if isElement(player) then
             local offset = profile.partyOffsets[index - 1]
             setElementPosition(player, profile.leaderFinal.x + (offset and offset.x or 0), profile.leaderFinal.y + (offset and offset.y or 0),
-                               profile.leaderFinal.z)
+                               tagupScmCharacterPlacementZ(profile.leaderFinal.z))
             setElementRotation(player, 0, 0, profile.leaderFinal.heading)
         end
     end
-    setElementPosition(mission.entities.sweet, profile.sweetFinal.x, profile.sweetFinal.y, profile.sweetFinal.z)
+    setElementPosition(mission.entities.sweet, profile.sweetFinal.x, profile.sweetFinal.y,
+                       tagupScmCharacterPlacementZ(profile.sweetFinal.z))
     setElementRotation(mission.entities.sweet, 0, 0, profile.sweetFinal.heading)
     releaseDemoScene(scene, true)
 end)

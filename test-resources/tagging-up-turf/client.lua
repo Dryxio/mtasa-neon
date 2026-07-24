@@ -61,6 +61,10 @@ local getActiveTags
 local nearestActiveTag
 local startBallasEncounterAudioPreload
 
+local function headingDifference(a, b)
+    return math.abs((a - b + 180) % 360 - 180)
+end
+
 local function killMissionTextTimers()
     for _, timer in ipairs(state.missionTextTimers) do
         if isTimer(timer) then
@@ -1933,8 +1937,6 @@ addEventHandler("tagup:finalSceneStart", resourceRoot, function(sceneId)
     -- Clothing RPC readback can become correct before GTA has rebuilt CJ's
     -- render clump. Keep the fade black until the staged camera has observed
     -- the complete actor for several consecutive frames.
-    scene.actorsCollidable = isElementCollidableWith(scene.leader, scene.sweet)
-    setElementCollidableWith(scene.leader, scene.sweet, false)
     scene.visualStableSamples = 0
     scene.visualReadyHandler = function()
         local active = state.finalScene
@@ -1972,15 +1974,18 @@ addEventHandler("tagup:finalSceneStart", resourceRoot, function(sceneId)
             end
         end
 
-        local leaderDistance, sweetDistance = math.huge, math.huge
-        local placementZOffset = profile.placementZOffset
+        local leaderDistance, sweetDistance, leaderHeadingError = math.huge, math.huge, math.huge
         if isElement(leader) then
             local x, y, z = getElementPosition(leader)
-            leaderDistance = tagupDistance3D(x, y, z, profile.leader.x, profile.leader.y, profile.leader.z + placementZOffset)
+            local _, _, heading = getElementRotation(leader)
+            leaderDistance = tagupDistance3D(x, y, z, profile.leader.x, profile.leader.y,
+                                             tagupScmCharacterPlacementZ(profile.leader.z))
+            leaderHeadingError = headingDifference(heading, profile.leader.heading)
         end
         if isElement(active.sweet) then
             local x, y, z = getElementPosition(active.sweet)
-            sweetDistance = tagupDistance3D(x, y, z, profile.sweet.x, profile.sweet.y, profile.sweet.z + placementZOffset)
+            sweetDistance = tagupDistance3D(x, y, z, profile.sweet.x, profile.sweet.y,
+                                            tagupScmCharacterPlacementZ(profile.sweet.z))
         end
 
         -- On-screen and position flags describe camera/frustum and physics,
@@ -1989,13 +1994,14 @@ addEventHandler("tagup:finalSceneStart", resourceRoot, function(sceneId)
         -- This barrier exists to wait for CJ's deferred clothing clump rebuild.
         -- Sweet can briefly leave the client streamer when the server warps both
         -- actors out of their vehicle, even though the scene remains valid.
-        local ready = streamed and model == TAGUP.cj.model and alpha == 255 and clothesReady and boneReady
+        local ready = streamed and model == TAGUP.cj.model and alpha == 255 and clothesReady and boneReady and
+                          leaderDistance <= profile.actorPositionTolerance and leaderHeadingError <= profile.actorHeadingTolerance
         active.visualStableSamples = ready and active.visualStableSamples + 1 or 0
         local details = ("model=%d alpha=%d streamed=%s bone=%s sweetStreamed=%s sweetBone=%s onScreen=%s clothes=%s " ..
-                            "leaderError=%.3f sweetError=%.3f stable=%d/%d"):format(
+                            "leaderError=%.3f headingError=%.2f sweetError=%.3f stable=%d/%d"):format(
                             model, alpha, tostring(streamed), tostring(boneReady), tostring(sweetStreamed), tostring(sweetBoneReady),
-                            tostring(onScreen), table.concat(clothes, ","), leaderDistance, sweetDistance, active.visualStableSamples,
-                            profile.visualStableSamples)
+                            tostring(onScreen), table.concat(clothes, ","), leaderDistance, leaderHeadingError, sweetDistance,
+                            active.visualStableSamples, profile.visualStableSamples)
         if details ~= active.lastVisualDetails and
             (not active.lastVisualLogAt or getTickCount() - active.lastVisualLogAt >= 500) then
             active.lastVisualDetails = details
@@ -2107,6 +2113,8 @@ addEventHandler("tagup:finalSceneObserveHandshake", resourceRoot, function(scene
     if source ~= resourceRoot or not scene or scene.id ~= sceneId or localPlayer ~= state.leader or sweet ~= scene.sweet then
         return
     end
+    scene.actorsCollidable = isElementCollidableWith(scene.leader, scene.sweet)
+    setElementCollidableWith(scene.leader, scene.sweet, false)
     scene.handshakeLeaderSeen = false
     scene.handshakeSweetSeen = false
     traceCurrent("final_handshake", "SYNCED ANIMATION TASK · observing both actors")
@@ -2127,6 +2135,8 @@ addEventHandler("tagup:finalSceneObserveHandshake", resourceRoot, function(scene
         if active.handshakeLeaderSeen and active.handshakeSweetSeen and not leaderRunning and not sweetRunning then
             killTimer(active.handshakeTimer)
             active.handshakeTimer = nil
+            setElementCollidableWith(active.leader, active.sweet, active.actorsCollidable)
+            active.actorsCollidable = nil
             traceProgress("final_handshake", 1, "NATIVE VERIFIED · both GANGS animations finished")
             triggerServerEvent("tagup:finalSceneHandshakeResult", resourceRoot, active.id, sweet, "finished", "both animations ended")
         end
