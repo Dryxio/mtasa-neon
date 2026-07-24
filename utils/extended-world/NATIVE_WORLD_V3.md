@@ -7,9 +7,11 @@ request a startup ticket or select a native registrar policy.
 
 The separate `static-world-v3-set` coordinator may request a one-shot startup
 ticket for exactly four immutable child identities. Its startup route locks and
-re-audits all five cache objects, reruns the aggregate planner, releases every
-lease and deliberately continues with stock GTA. It still cannot register an
-IMG or mutate a GTA store.
+re-audits all five cache objects and reruns the aggregate planner before any
+native mutation. The authorized generation-1 registrar then keeps all five
+leases for the process lifetime and activates the reviewed Bullworth and Carcer
+working set. Vice City and Liberty City remain admitted logical packs, but are
+not resident until their LOD entity-index bootstrap exists.
 
 ## Closed transport format
 
@@ -69,10 +71,10 @@ Generated models may belong to only one spatial IPL, and a supplied COL record
 must belong to the paired IPL ordinal.
 
 This transport envelope does not replace the full DFF/TXD/COL semantic audit
-performed by the offline builder. In particular, a cached v3 object is not
-directly activable by a future registrar. Activation must repeat the complete
-payload grammar, stock-key collision, pool, and native-state preflight under
-an activation lease.
+performed by the offline builder. A cached v3 child object is never directly
+activable by itself. The exact four-pack set route repeats the complete payload
+grammar, stock-key collision, aggregate capacity, pool, executable, and
+native-state preflight while all five cache objects are locked.
 
 Standalone streamed IPLs have no entry in GTA's static IPL entity-index array,
 so every emitted binary IPL still carries `lodIndex = -1`. The exact
@@ -200,11 +202,11 @@ directory. A successful client gate must report:
 - first run `disposition=published`, second run `disposition=hit`;
 - `activation=no`, `lease=no`, and no restart request.
 
-The game must remain stock. Seeing Carcer in GTA during either the child
-transport gate or the aggregate dry-run would indicate an architectural
-violation, not success.
+The game must remain stock during the child transport gate. Seeing Carcer
+before a closed set authorization has been selected and committed would
+indicate an architectural violation, not success.
 
-## Closed aggregate startup dry-run
+## Closed aggregate startup and generation-1 registrar
 
 `native_world_v3_set.py` emits one canonical ASCII
 `static-world-v3-set.json`. It contains exactly Bullworth, Vice City, Liberty
@@ -224,8 +226,26 @@ envelope plus all four exact child cache objects. Every child manifest,
 IDE/LOD file and IMG is rehashed and semantically audited while locked. The
 planner then proves the canonical namespaces and ID ranges, cross-pack member,
 model and GTA uppercase-key uniqueness, and every compiled
-store/pool/archive/handle capacity. All child leases and then the set lease are
-released before startup returns `aggregate-dry-run` and starts stock GTA.
+store/pool/archive/handle capacity without native writes.
+
+After that read-only boundary passes, generation 1 prepares a single global
+transaction. It admits all four logical pack identities, but makes only
+Bullworth and Carcer resident because neither requires the deferred LOD
+bootstrap. It plans every physical model ID, TXD/COL/IPL slot, IMG handle and
+streaming binding before mutation; opens seven IMG archives; allocates 1,325
+TXD, 19 COL and 19 IPL slots; creates 4,547 ModelInfos; and installs 5,910
+direct streaming bindings. COL and binary IPL model IDs are remapped in their
+owned buffers immediately before the native loaders consume them, then
+restored in the cache buffer. The streaming-buffer floor is derived from the
+largest entry across the locked set and covers both GTA channel halves.
+
+Pool and archive changes before the first ModelInfo are journaled and rolled
+back globally on failure. The first ModelInfo is the explicit irreversible
+barrier: failures after it terminate the process rather than expose a partial
+world. A successful commit marks all five leases as the exact authorized
+ticket and keeps them locked for the process lifetime. Generation 1 is
+deliberately logged as `recyclable=no`; runtime pack replacement and physical
+slot reuse remain out of scope until a generation fence exists.
 
 The set cache uses the same closed-directory security boundary as child packs:
 all ancestors remain locked for the lease lifetime, interrupted private
@@ -253,12 +273,34 @@ identities and a generation-fenced physical arena at 20,000..29,999. The worst
 current two-city transition leaves 2,705 physical slots; the largest current
 city plus a 4,096-variant future working set leaves 2,102.
 
-The remaining activation blockers are concrete runtime mechanisms: exclude
-the arena from every MTA allocator and script mutation, remap IPL/COL buffers
-before GTA consumes them, own two reusable VC/LC LOD entity-index arrays,
-prove building/QuadTree overlap high-water, and measure RenderWare residency.
+The first two activation blockers are now implemented: the physical arena is
+excluded from MTA model allocation/script mutation, and owned IPL/COL buffers
+are remapped before GTA consumes them. The remaining mechanisms are two
+reusable VC/LC LOD entity-index arrays, generation-fenced recycling, broader
+building/QuadTree overlap high-water, and RenderWare residency measurement.
 The v3 cache now has an eight-object double bank for one complete rollover;
 safe reclamation of later inactive generations remains to implement. The
-native streaming floor covers both channel halves in source, pending build and
-runtime validation. These are activation requirements, not reasons to inflate
+native streaming floor covers both channel halves and was live validated at
+50,120 blocks. These are activation requirements, not reasons to inflate
 constants inside the planner.
+
+## Generation-1 live gate
+
+The 2026-07-25 gate used the frozen set ID above after a complete server and
+`native-bw-test` resource restart. Startup re-proved 11,837 logical models and
+33,849 placements with `nativeWrites=0`, then committed ticket `09478331` with
+`activation=yes lease=process`. The registrar reported:
+
+- four logical packs, with Bullworth and Carcer resident;
+- 4,547 physical models, seven archives and 5,910 streaming bindings;
+- 1,325 TXDs, 19 COLs and 19 IPLs;
+- `barrier=first-ModelInfo`, `commit=global`, `generation=1 recyclable=no`.
+
+Repeated San Andreas/Bullworth/Carcer transitions, minimize/restore,
+death/respawn, disconnect/reconnect in one process, a resource restart and a
+full server restart remained stable. After the final cross-city pass, peak
+buildings were `18,352/32,000`; ColModels reached `14,522/30,000`; TXD, COL,
+IPL and QuadTreeNode occupancy stayed at `4,933/8,000`, `271/512`,
+`210/1,024` and `238/2,048`. No streaming, RenderWare, allocation or crash
+diagnostic appeared. Transport republication refusals after activation are
+expected: they preserve the already committed process-global generation.

@@ -104,12 +104,51 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         function = source[source.index("unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks") :]
         function = function[: function.index("void CNativeWorldPackManagerSA::LogStreamingBufferClamp")]
-        self.assertIn("static_cast<uint64_t>(Pack().largestImgEntryBlocks) + 1", function)
+        self.assertIn("g_staticWorldV3Route ? g_staticWorldV3LargestEntryBlocks : Pack().largestImgEntryBlocks", function)
+        self.assertIn("perChannelBlocks = (largestEntryBlocks + 1) & ~uint64_t{1}", function)
         self.assertIn("totalBlocks = perChannelBlocks * 2", function)
         self.assertIn("totalBlocks > std::numeric_limits<unsigned int>::max()", function)
         for largest, expected in ((1, 4), (2, 4), (3, 8), (65_535, 131_072)):
             per_channel = (largest + 1) & ~1
             self.assertEqual(expected, per_channel * 2)
+
+    def test_v3_registrar_has_explicit_generation_one_safety_boundary(self) -> None:
+        source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
+        self.assertIn("resident = index == 0 || index == 3", source)
+        self.assertIn("lodLinkCount != 0 || pack.inventory.lodAnchorCount != 0", source)
+        self.assertIn("HookInstallCall(LOAD_COL_BUFFER_CALL", register)
+        self.assertIn("HookInstallCall(LOAD_IPL_BUFFER_CALL", register)
+        self.assertIn("barrier=first-ModelInfo", register)
+        self.assertIn("generation=1 recyclable=no", register)
+        self.assertIn("g_staticWorldV3Generation.store(1", register)
+        self.assertIn("ENABLE_IPL_DYNAMIC_STREAMING", register)
+
+    def test_v3_registrar_pins_all_caches_and_commits_the_exact_ticket(self) -> None:
+        source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        startup = source[source.index("void CNativeWorldPackManagerSA::HandleStartupSelection") :
+                         source.index("void CNativeWorldPackManagerSA::AttachAuthorizedStreaming")]
+        self.assertIn("AcquireStaticWorldV3SetChildren(lockedManifest, selection.ticketId", startup)
+        self.assertIn("g_staticWorldV3ChildLeases = std::move(childLeases)", startup)
+        register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
+        self.assertIn("lease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_POLICY", register)
+        self.assertIn("g_authorizedSelection.ticketId", register)
+        self.assertIn("g_authorizedLease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_SET_POLICY", register)
+
+    def test_v3_registrar_uses_direct_multi_img_streaming_and_buffer_remap(self) -> None:
+        source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        prepare = source[source.index("bool PrepareStaticWorldV3Transaction") : source.index("void RegisterStaticWorldV3Set()")]
+        self.assertIn("pack.manifest.images", prepare)
+        self.assertIn("g_streaming->AddArchive", prepare)
+        self.assertGreaterEqual(prepare.count("PredictNextPoolSlot("), 3)
+        self.assertNotIn("GetFreeSlot()", prepare)
+        self.assertIn("perArchive[archive->second]", prepare)
+        self.assertIn("nextInImg", prepare)
+        self.assertNotIn("LOAD_NAMED_CD_DIRECTORY", prepare)
+        self.assertIn("LoadStaticWorldV3ColBuffer", source)
+        self.assertIn("LoadStaticWorldV3IplBuffer", source)
+        self.assertIn("data + offset + 30", source)
+        self.assertIn("instances[index].modelId", source)
 
     def test_native_physical_model_slots_are_hidden_from_mta_model_apis(self) -> None:
         game_api = (REPOSITORY / "Client/sdk/game/CGame.h").read_text(encoding="utf-8")
@@ -122,7 +161,8 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("CNativeWorldPackManagerSA::IsModelIdReserved(modelId)", game_sa)
         self.assertIn("modelId >= NATIVE_WORLD_MODEL_ARENA_FIRST", pack)
         self.assertIn("modelId <= NATIVE_WORLD_MODEL_ARENA_LAST", pack)
-        self.assertIn("std::atomic_bool                    g_nativeModelSlotsReserved", pack)
+        self.assertIn("std::atomic_bool", pack)
+        self.assertIn("g_nativeModelSlotsReserved{false}", pack)
         self.assertIn("g_nativeModelSlotsReserved.load(std::memory_order_acquire)", pack)
         self.assertNotIn("if (!g_pack || g_state", pack[pack.index("bool CNativeWorldPackManagerSA::IsModelIdReserved") :])
         self.assertGreaterEqual(manager.count("IsNativeWorldModelIdReserved"), 3)

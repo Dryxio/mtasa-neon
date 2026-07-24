@@ -1011,33 +1011,50 @@ The updated checkpoint sequence is:
    proof. Every authorized dry-run ended with all leases released and
    `nativeWrites=0 allocations=0 hooks=0 archives=0`; stock GTA then started,
    and no new crash dump was produced.
-8. **Transactional multi-city activation.** Register all four imported cities
-   as one authorized content set. Complete every cache, archive, TXD, pool,
-   entity-array, scratch-buffer and model plan before the first irreversible
-   native bind; before that barrier, roll back globally, and after it, fail
-   stop rather than continue a partial world. Remap IPL/COL model IDs before
-   their native loaders, allocate reusable VC/LC LOD entity arrays, unload
-   children before anchors, and recycle physical slots only after streaming
-   channels and entity/model references cross the generation fence. Then test
-   repeated cross-city streaming, collisions, LODs, D3D reset/minimize, memory
-   pressure, death/respawn, reconnect and resource restart.
-9. **MTA/API/network completion.** Audit logical model-ID width, remaining
+8. **Transactional registrar generation 1 — complete; live validated
+   2026-07-25.** The closed set route now keeps the envelope and four child
+   caches locked for the process, re-proves the aggregate plan without native
+   writes, then prepares one journaled transaction. All four pack identities
+   are admitted; Bullworth and Carcer are the initial resident pair because
+   they have no deferred LOD links. The registrar opens seven IMG archives,
+   allocates 1,325 TXDs plus 19 COL/IPL pairs, constructs 4,547 ModelInfos,
+   installs 5,910 direct streaming bindings, and remaps owned COL/IPL buffers
+   immediately before their native loaders. Pool/archive failure rolls back
+   before the explicit first-ModelInfo barrier; later failure is fail-stop.
+   Generation 1 is intentionally non-recyclable. The final server/resource
+   restart gate committed all five process leases and passed repeated
+   SA/Bullworth/Carcer transitions, minimize/restore, death/respawn and
+   reconnect. Peak buildings were `18,352/32,000`, with ColModels
+   `14,522/30,000`, TXD `4,933/8,000`, COL `271/512`, IPL `210/1,024` and
+   QuadTreeNodes `238/2,048`; no streaming, RenderWare, allocation or crash
+   diagnostic appeared.
+9. **VC/LC LOD bootstrap.** Allocate two reusable entity-index arrays sized
+   for the proved VC and LC graphs, construct anchors before children, remove
+   children before anchors, and preserve all 3,038 links. Keep this mechanism
+   outside the generation-1 resident set until hostile ordering, rollback and
+   scratch-capacity tests pass.
+10. **Simultaneous activation and transitions.** Make VC and LC resident with
+   Bullworth and Carcer beside San Andreas, then add a generation fence before
+   recycling physical slots or old cache generations. Test repeated
+   cross-city streaming, collisions, LODs, D3D reset/minimize, memory
+   pressure, death/respawn, reconnect and resource/server restart.
+11. **MTA/API/network completion.** Audit logical model-ID width, remaining
    coordinate/streamer bounds, `IsOutOfBounds`, script APIs, serialization,
    protocol capabilities and legacy-client refusal. Build every affected
    client/server producer and consumer when protocol or ABI changes.
-10. **Streaming/render/memory tuning.** Measure and tune streaming memory,
+12. **Streaming/render/memory tuning.** Measure and tune streaming memory,
    buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
    LOD/prefetch behavior using high-water and multi-hour traces rather than
    larger constants alone.
-11. **Optional environment follow-ups.** Add radar, water, zones,
-    CULL/occlusion, audio, timecycle and interiors as separately validated pack
-    components. Paths/nodes, DAT expansion, streamed SCM, new IFP/RRR,
-    missions/savegames and ambient population remain outside the static MTA
-    multi-city target.
-12. **Production gate.** Add hostile-input/cache recovery tests, long
-    reconnect/restart and several-hour city-tour endurance runs, freeze pack and
-    protocol versions, document deployment/rollback, add CI fixtures, and
-    retire or isolate obsolete custom-streaming workarounds.
+13. **Optional environment follow-ups.** Add radar, water, zones,
+   CULL/occlusion, audio, timecycle and interiors as separately validated pack
+   components. Paths/nodes, DAT expansion, streamed SCM, new IFP/RRR,
+   missions/savegames and ambient population remain outside the static MTA
+   multi-city target.
+14. **Production gate.** Add hostile-input/cache recovery tests, long
+   reconnect/restart and several-hour city-tour endurance runs, freeze pack and
+   protocol versions, document deployment/rollback, add CI fixtures, and
+   retire or isolate obsolete custom-streaming workarounds.
 
 Practical milestones are now: enlarged stores/pools; Carcer through pack v3;
 aggregate dry-run of every city; all four imported cities active beside San

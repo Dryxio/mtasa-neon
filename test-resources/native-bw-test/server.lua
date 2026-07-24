@@ -3,6 +3,7 @@
 -- native streaming registrar owns the city lifecycle.
 
 local bullworthSpawn = {x = -8150, y = 7650, z = 25}
+local carcerSpawn = {x = 6900, y = -700, z = 80}
 local sanAndreasSpawn = {x = 1481, y = -1771, z = 19}
 local testVehicles = {}
 
@@ -42,6 +43,11 @@ end
 addCommandHandler("nativebw", function(player)
     teleportWithVehicle(player, bullworthSpawn, 90)
     outputChatBox("[Native BW] Bullworth. Explore les 7 quartiers puis /nativeback.", player, 80, 255, 160)
+end)
+
+addCommandHandler("nativecc", function(player)
+    teleportWithVehicle(player, carcerSpawn, 90)
+    outputChatBox("[Native World] Carcer City. Explore puis /nativeback.", player, 255, 140, 80)
 end)
 
 addCommandHandler("nativeback", function(player)
