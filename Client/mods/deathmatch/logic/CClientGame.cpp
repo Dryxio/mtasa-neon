@@ -3729,9 +3729,9 @@ void CClientGame::StaticRenderEverythingBarRoadsHandler()
 {
 }
 
-bool CClientGame::StaticChokingHandler(unsigned char ucWeaponType)
+bool CClientGame::StaticChokingHandler(CPedSAInterface* pVictim, unsigned char ucWeaponType)
 {
-    return g_pClientGame->ChokingHandler(ucWeaponType);
+    return g_pClientGame->ChokingHandler(pVictim, ucWeaponType);
 }
 
 void CClientGame::StaticCAnimBlendAssocDestructorHandler(CAnimBlendAssociationSAInterface* pThis)
@@ -4140,9 +4140,12 @@ void CClientGame::IdleHandler()
     g_pCore->SetDummyProgressUpdateAlways(false);
 }
 
-bool CClientGame::ChokingHandler(unsigned char ucWeaponType)
+bool CClientGame::ChokingHandler(CPedSAInterface* pVictim, unsigned char ucWeaponType)
 {
-    if (!m_pLocalPlayer)
+    // This event belongs only to the local player. Script peds may retain
+    // GTA's native choke response, but must not emit a player event merely
+    // because the hook is global to CEventHandler::ComputeDamageResponse.
+    if (!m_pLocalPlayer || !m_pLocalPlayer->GetGamePlayer() || m_pLocalPlayer->GetGamePlayer()->GetPedInterface() != pVictim)
         return true;
     CLuaArguments Arguments;
     Arguments.PushNumber(ucWeaponType);
@@ -4639,14 +4642,11 @@ bool CClientGame::ApplyPedDamageFromGame(eWeaponType weaponUsed, float fDamage, 
         bool bIsBeingShotWhilstAiming = (weaponUsed >= WEAPONTYPE_PISTOL && weaponUsed <= WEAPONTYPE_MINIGUN && pDamagedPed->IsUsingGun());
         bool bOldBehaviour = !IsGlitchEnabled(GLITCH_HITANIM);
 
-        bool bAllowChoke = true;
-        // Is this is a remote player?
-        if (!pDamagedPed->IsLocalPlayer())
-        {
-            // Don't allow GTA to start the choking task
-            if (weaponUsed == WEAPONTYPE_TEARGAS || weaponUsed == WEAPONTYPE_SPRAYCAN || weaponUsed == WEAPONTYPE_EXTINGUISHER)
-                bAllowChoke = false;
-        }
+        const bool bChokingWeapon = weaponUsed == WEAPONTYPE_TEARGAS || weaponUsed == WEAPONTYPE_SPRAYCAN || weaponUsed == WEAPONTYPE_EXTINGUISHER;
+        // Remote players own their physical tasks through player sync. Script
+        // peds and the local player instead keep GTA's event-driven choking
+        // response, including its real attacker and native animation timer.
+        const bool bAllowChoke = !bChokingWeapon || pDamagedPed->GetType() != CCLIENTPLAYER || pDamagedPed->IsLocalPlayer();
 
         // Check if their health or armor is locked, and if so prevent applying the damage locally
         if (pDamagedPed->IsHealthLocked() || pDamagedPed->IsArmorLocked())

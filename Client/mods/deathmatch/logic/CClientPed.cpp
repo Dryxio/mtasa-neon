@@ -3684,6 +3684,11 @@ void CClientPed::_CreateModel()
         // Put our pointer in the stored data and update the remote data with the new model pointer
         m_pPlayerPed->SetStoredPointer(this);
 
+        // MTA constructs both players and script peds as CPlayerPed. Remember
+        // the element identity separately so the one IsPlayer check inside
+        // GTA's choking task can retain ordinary CPed behaviour for NPCs.
+        m_pPlayerPed->SetNativeChokingUsesNonPlayerBehavior(GetType() == CCLIENTPED);
+
         // Script peds are reconstructed as CPlayerPed instances whenever they
         // stream in. Reapply their persisted actor classification before GTA
         // starts evaluating ambient task transitions on the new instance.
@@ -4292,7 +4297,7 @@ bool CClientPed::SetMissionActor(bool enabled)
     m_bMissionActor = enabled;
     m_missionActorNativeState.reset();
 
-    if (enabled && m_pPlayerPed)
+    if (m_pPlayerPed)
         ApplyMissionActorState();
     ApplyNativeMissionEventProfileState();
 
@@ -4302,7 +4307,16 @@ bool CClientPed::SetMissionActor(bool enabled)
 void CClientPed::ApplyMissionActorState()
 {
     m_missionActorNativeState.reset();
-    if (!m_bMissionActor || !m_pPlayerPed)
+    if (!m_pPlayerPed)
+        return;
+
+    // Script peds are CPlayerPed instances, so CPed::IsPlayer normally sends
+    // their melee task through player-input attack selection. Keep a separate
+    // policy bit rather than changing bPedType globally: only the audited
+    // CTaskSimpleFight call sites should observe native CPed behaviour.
+    m_pPlayerPed->SetNativeFightUsesNonPlayerBehavior(GetType() == CCLIENTPED && m_bMissionActor);
+
+    if (!m_bMissionActor)
         return;
 
     // SetCharCreatedBy changes perception and decision-maker state in addition

@@ -1754,7 +1754,11 @@ local function spawnBallas()
     local enemies = {}
     for index, data in ipairs(positions) do
         local ped = createScmChar(data[5], data[1], data[2], data[3], data[4])
-        if ped then
+        -- CREATE_CHAR produces an ordinary CPed whose constructor selects
+        -- STYLE_STANDARD. MTA script peds are CPlayerPed instances and default
+        -- to CJ's STYLE_GRAB_KICK, so persist the SCM actor's real melee style
+        -- before any client can dispatch PartnerChat or KillPedOnFoot.
+        if ped and setPedFightingStyle(ped, 4) then
             setElementDimension(ped, TAGUP.dimension)
             setElementData(ped, "tagup.enemy", true, true)
             setElementData(ped, TAGUP.missionActorData, true, true)
@@ -1763,6 +1767,10 @@ local function spawnBallas()
             end
             mission.entities["enemy" .. index] = ped
             table.insert(enemies, ped)
+            outputDebugString(("[tagging-up-turf] Ballas Flat%d model=%d native fighting style persisted: STYLE_STANDARD (4)"):format(
+                                  index, data[5]))
+        elseif ped then
+            destroyElement(ped)
         end
     end
     if #enemies ~= 2 then

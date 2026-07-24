@@ -529,6 +529,10 @@ public:
     }
     void SetNativeMissionEventProfileActive(bool active) override { m_bNativeMissionEventProfileActive = active; }
     bool IsNativeMissionEventProfileActive() const override { return m_bNativeMissionEventProfileActive; }
+    void SetNativeChokingUsesNonPlayerBehavior(bool enabled) override { m_bNativeChokingUsesNonPlayerBehavior = enabled; }
+    bool NativeChokingUsesNonPlayerBehavior() const override { return m_bNativeChokingUsesNonPlayerBehavior; }
+    void SetNativeFightUsesNonPlayerBehavior(bool enabled) override { m_bNativeFightUsesNonPlayerBehavior = enabled; }
+    bool NativeFightUsesNonPlayerBehavior() const override { return m_bNativeFightUsesNonPlayerBehavior; }
 
     static void __fastcall RemoveWeaponWhenEnteringVehicle(CPedSAInterface* pedInterface, void*, int jetpack);
     static void            StaticSetHooks();
@@ -551,4 +555,6 @@ private:
     std::uint32_t m_type{PLAYER_PED};
     std::uint8_t  m_occupiedSeat;
     bool          m_bNativeMissionEventProfileActive{false};
+    bool          m_bNativeChokingUsesNonPlayerBehavior{false};
+    bool          m_bNativeFightUsesNonPlayerBehavior{false};
 };

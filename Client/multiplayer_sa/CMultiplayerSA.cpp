@@ -18,6 +18,7 @@
 #include <game/CEventDamage.h>
 
 class CEventDamageSAInterface;
+static CEventDamageSAInterface* __fastcall CopyDamageEvent(CEventDamageSAInterface* pDestination, void* pUnused, CEventDamageSAInterface* pSource);
 
 extern CCoreInterface* g_pCore;
 extern CMultiplayerSA* pMultiplayer;
@@ -46,6 +47,9 @@ extern CGame* pGameInterface;
 #define HOOKPOS_EndWorldColors                           0x561795
 #define HOOKPOS_CWorld_ProcessVerticalLineSectorList     0x563357
 #define HOOKPOS_ComputeDamageResponse_StartChoking       0x4C05B9
+#define HOOKPOS_ChokingGateFallback                      0x4C042B
+#define CALL_CEventDamage_CloneEditable_CopyConstructor  0x4B5D77
+#define HOOKPOS_CEventDamage_Destructor                  0x4AD960
 #define HOOKPOS_CAutomobile__ProcessSwingingDoor         0x6A9DAF
 
 #define FUNC_CStreaming_Update                     0x40E670
@@ -62,12 +66,26 @@ extern CGame* pGameInterface;
 DWORD RETURN_FxManager_CreateFxSystem = 0x4A9BE8;
 DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 
-#define HOOKPOS_CCam_ProcessFixed                           0x51D470
-#define HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon 0x6859a0
-#define HOOKPOS_CPed_IsPlayer                               0x5DF8F0
-#define CALL_CEventGroup_Add_ComputeResponseTaskType        0x4AB491
-#define FUNC_CEventEditableResponse_ComputeResponseTaskType 0x4B56C0
-#define RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer      0x4B5005
+#define HOOKPOS_CCam_ProcessFixed                              0x51D470
+#define HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon    0x6859a0
+#define HOOKPOS_CPed_IsPlayer                                  0x5DF8F0
+#define CALL_CEventGroup_Add_ComputeResponseTaskType           0x4AB491
+#define FUNC_CEventEditableResponse_ComputeResponseTaskType    0x4B56C0
+#define RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer         0x4B5005
+#define RETURN_CTaskSimpleChoking_ProcessPed_IsPlayer          0x6204B4
+#define RETURN_CTaskSimpleFight_GetStrikeDamage_IsPlayer       0x61C772
+#define RETURN_CTaskSimpleFight_FightHitPed_Victim_IsPlayer    0x61CBC7
+#define RETURN_CTaskSimpleFight_FightHitPed_Attacker_IsPlayer  0x61CEAB
+#define RETURN_CTaskSimpleFight_FindTargetOnGround_IsPlayer    0x61D8D2
+#define RETURN_CTaskSimpleFight_MakeAbortable_IsPlayer         0x623ADE
+#define RETURN_CTaskSimpleFight_ProcessPed_Init_IsPlayer       0x629A34
+#define RETURN_CTaskSimpleFight_ProcessPed_Idle_IsPlayer       0x629BC2
+#define RETURN_CTaskSimpleFight_ProcessPed_Attack_IsPlayer     0x629C11
+#define RETURN_CTaskSimpleFight_ProcessPed_Move3_IsPlayer      0x629F3C
+#define RETURN_CTaskSimpleFight_ProcessPed_Transition_IsPlayer 0x629F73
+#define RETURN_CTaskSimpleFight_ProcessPed_ChainA_IsPlayer     0x629FAB
+#define RETURN_CTaskSimpleFight_ProcessPed_ChainB_IsPlayer     0x629FD7
+#define RETURN_CTaskSimpleFight_ProcessPed_Heading_IsPlayer    0x62A035
 constexpr int EVENT_TYPE_VEHICLE_ON_FIRE = 79;
 
 DWORD RETURN_CCam_ProcessFixed = 0x51D475;
@@ -533,6 +551,8 @@ void            HOOK_CObject_Render();
 void            HOOK_EndWorldColors();
 void            HOOK_CWorld_ProcessVerticalLineSectorList();
 void            HOOK_ComputeDamageResponse_StartChoking();
+void            HOOK_ComputeDamageResponse_ChokingGateFallback();
+void            HOOK_CEventDamage_Destructor();
 void            HOOK_CollisionStreamRead();
 void            HOOK_CVehicle_ApplyBoatWaterResistance();
 void            HOOK_CPhysical_ApplyGravity();
@@ -743,6 +763,9 @@ void CMultiplayerSA::InitHooks()
     HookInstall(HOOKPOS_EndWorldColors, (DWORD)HOOK_EndWorldColors, 5);
     HookInstall(HOOKPOS_CWorld_ProcessVerticalLineSectorList, (DWORD)HOOK_CWorld_ProcessVerticalLineSectorList, 8);
     HookInstall(HOOKPOS_ComputeDamageResponse_StartChoking, (DWORD)HOOK_ComputeDamageResponse_StartChoking, 7);
+    HookInstall(HOOKPOS_ChokingGateFallback, (DWORD)HOOK_ComputeDamageResponse_ChokingGateFallback, 6);
+    HookInstallCall(CALL_CEventDamage_CloneEditable_CopyConstructor, (DWORD)CopyDamageEvent);
+    HookInstall(HOOKPOS_CEventDamage_Destructor, (DWORD)HOOK_CEventDamage_Destructor, 7);
     HookInstall(HOOKPOS_CollisionStreamRead, (DWORD)HOOK_CollisionStreamRead, 6);
     HookInstall(HOOKPOS_VehicleCamStart, (DWORD)HOOK_VehicleCamStart, 6);
     HookInstall(HOOKPOS_VehicleCamTargetZTweak, (DWORD)HOOK_VehicleCamTargetZTweak, 8);
@@ -3745,11 +3768,51 @@ static bool HasNativeMissionEventProfile(CPedSAInterface* pedInterface)
     return pPed && pPed->IsNativeMissionEventProfileActive();
 }
 
+static bool NativeChokingUsesNonPlayerBehavior(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    return pPed && pPed->NativeChokingUsesNonPlayerBehavior();
+}
+
+static bool NativeFightUsesNonPlayerBehavior(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    return pPed && pPed->NativeFightUsesNonPlayerBehavior();
+}
+
+static bool IsTaskSimpleFightIsPlayerCallSite(DWORD returnAddress)
+{
+    switch (returnAddress)
+    {
+        case RETURN_CTaskSimpleFight_GetStrikeDamage_IsPlayer:
+        case RETURN_CTaskSimpleFight_FightHitPed_Victim_IsPlayer:
+        case RETURN_CTaskSimpleFight_FightHitPed_Attacker_IsPlayer:
+        case RETURN_CTaskSimpleFight_FindTargetOnGround_IsPlayer:
+        case RETURN_CTaskSimpleFight_MakeAbortable_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_Init_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_Idle_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_Attack_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_Move3_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_Transition_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_ChainA_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_ChainB_IsPlayer:
+        case RETURN_CTaskSimpleFight_ProcessPed_Heading_IsPlayer:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool IsPlayer()
 {
-    // Only CEventVehicleOnFire::AffectsPed may observe a leased mission ped as
-    // non-player. Normal tasks still see MTA's CPlayerPed identity unchanged.
+    // These audited call sites need the behaviour of the CPed represented by
+    // MTA's CPlayerPed wrapper. Every other task retains the real runtime
+    // identity so movement, vehicle entry and player input remain untouched.
     if (dwIsPlayerReturnAddress == RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer && HasNativeMissionEventProfile(pIsPlayerPed))
+        return false;
+    if (dwIsPlayerReturnAddress == RETURN_CTaskSimpleChoking_ProcessPed_IsPlayer && NativeChokingUsesNonPlayerBehavior(pIsPlayerPed))
+        return false;
+    if (IsTaskSimpleFightIsPlayerCallSite(dwIsPlayerReturnAddress) && NativeFightUsesNonPlayerBehavior(pIsPlayerPed))
         return false;
     return true;
 }
@@ -4361,7 +4424,84 @@ stop_looping:
     // clang-format on
 }
 
-// Hook to detect when a player is choking
+static DWORD                               dwCEventDamageCopyConstructor = 0x4B33B0;
+static CEventDamageSAInterface* __fastcall CopyDamageEvent(CEventDamageSAInterface* pDestination, void*, CEventDamageSAInterface* pSource)
+{
+    CEventDamageSAInterface* pResult = nullptr;
+    // clang-format off
+    __asm
+    {
+        mov     ecx, pDestination
+        push    pSource
+        call    dwCEventDamageCopyConstructor
+        mov     pResult, eax
+    }
+    // clang-format on
+
+    CloneScriptPedChokeEvent(pResult, pSource);
+    return pResult;
+}
+
+static DWORD                  dwCEventDamageDestructorReturn = 0x4AD967;
+static void __declspec(naked) HOOK_CEventDamage_Destructor()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // clang-format off
+    __asm
+    {
+        pushad
+        push    ecx
+        call    RemoveScriptPedChokeEvent
+        add     esp, 4
+        popad
+
+        push    -1
+        push    0x839AE8
+        jmp     dwCEventDamageDestructorReturn
+    }
+    // clang-format on
+}
+
+// MTA script peds are backed by CPlayerPed. Its gun command can still read as
+// PISTOLWHIP when an accepted area-effect event reaches the response handler,
+// which makes GTA fall through to BeHit. Resume the native choking branch only
+// for the exact non-pistol-whip event approved by the damage hook.
+static DWORD                  dwChokingGateContinueBeHit = 0x4C0431;
+static DWORD                  dwChokingGateNoFallDown = 0x4C0488;
+static DWORD                  dwChokingGateStartChoking = HOOKPOS_ComputeDamageResponse_StartChoking;
+static void __declspec(naked) HOOK_ComputeDamageResponse_ChokingGateFallback()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // clang-format off
+    __asm
+    {
+        pushad
+        mov     eax, [edi]
+        push    eax
+        push    esi
+        call    ConsumeScriptPedChokeEvent
+        add     esp, 8
+        test    al, al
+        jz      continueWithOriginalCode
+
+        popad
+        jmp     dwChokingGateStartChoking
+
+continueWithOriginalCode:
+        popad
+        test    byte ptr [esi+0x25], 2
+        jz      noFallDown
+        jmp     dwChokingGateContinueBeHit
+
+noFallDown:
+        jmp     dwChokingGateNoFallDown
+    }
+    // clang-format on
+}
+
+// Hook to decide whether a ped or player may enter GTA's choking response
 static DWORD                  dwChokingChoke = 0x4C05C1;
 static DWORD                  dwChokingDontchoke = 0x4C0620;
 static unsigned char          ucChokingWeaponType = 0;
@@ -4372,11 +4512,20 @@ static void __declspec(naked) HOOK_ComputeDamageResponse_StartChoking()
     // clang-format off
     __asm
     {
-        // Get weapon type before pushad to avoid stack offset corruption
-        mov     al, [esp+0x8]
+        // ESI is the active CEventDamage. Reading its weapon field is stable
+        // here; the old [esp+8] lookup addressed an unrelated stack local.
+        mov     al, [esi+0x1C]
         mov     ucChokingWeaponType, al
 
         pushad
+
+        // Natural and forced entries both consume their persisted event
+        // classification here; the forced path may already have consumed it.
+        mov     eax, [edi]
+        push    eax
+        push    esi
+        call    ConsumeScriptPedChokeEvent
+        add     esp, 8
 
         mov     ebx, [m_pChokingHandler]
         test    ebx, ebx
@@ -4385,8 +4534,11 @@ static void __declspec(naked) HOOK_ComputeDamageResponse_StartChoking()
         // Push weapon type as parameter
         movzx   eax, ucChokingWeaponType
         push    eax
+        // EDI is CEventHandler; its first field is the victim CPed.
+        mov     ecx, [edi]
+        push    ecx
         call    ebx
-        add     esp, 4
+        add     esp, 8
         test    al, al
 
         jnz     continueWithOriginalCode

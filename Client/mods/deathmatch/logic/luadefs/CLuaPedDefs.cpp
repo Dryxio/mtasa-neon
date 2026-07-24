@@ -367,6 +367,7 @@ void CLuaPedDefs::LoadFunctions()
         {"getPedTargetEnd", GetPedTargetEnd},
         {"getPedTargetCollision", GetPedTargetCollision},
         {"getPedWeapon", GetPedWeapon},
+        {"getPedWeaponShootingRate", ArgumentParser<GetPedWeaponShootingRate>},
         {"getPedAmmoInClip", GetPedAmmoInClip},
         {"getPedTotalAmmo", GetPedTotalAmmo},
         {"getPedOccupiedVehicle", GetPedOccupiedVehicle},
@@ -482,6 +483,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "isReloadingWeapon", "isPedReloadingWeapon");
     lua_classfunction(luaVM, "setEnterVehicle", "setPedEnterVehicle");
     lua_classfunction(luaVM, "setExitVehicle", "setPedExitVehicle");
+    lua_classfunction(luaVM, "getWeaponShootingRate", "getPedWeaponShootingRate");
     lua_classfunction(luaVM, "setWeaponShootingRate", "setPedWeaponShootingRate");
     lua_classfunction(luaVM, "setWeaponAccuracy", "setPedWeaponAccuracy");
     lua_classfunction(luaVM, "setGoTo", "setPedGoTo");
@@ -511,6 +513,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classvariable(luaVM, "jetpack", NULL, "isPedWearingJetpack");  // introduced in 1.5.5-9.13846
     lua_classvariable(luaVM, "armor", "setPedArmor", "getPedArmor");
     lua_classvariable(luaVM, "fightingStyle", "setPedFightingStyle", "getPedFightingStyle");
+    lua_classvariable(luaVM, "weaponShootingRate", "setPedWeaponShootingRate", "getPedWeaponShootingRate");
     lua_classvariable(luaVM, "cameraRotation", "setPedCameraRotation", "getPedCameraRotation");
     lua_classvariable(luaVM, "contactElement", NULL, "getPedContactElement");
     lua_classvariable(luaVM, "moveState", NULL, "getPedMoveState");
@@ -2888,6 +2891,21 @@ bool CLuaPedDefs::SetPedEnterVehicle(CClientPed* pPed, std::optional<CClientVehi
 bool CLuaPedDefs::SetPedExitVehicle(CClientPed* pPed)
 {
     return pPed->ExitVehicle();
+}
+
+int CLuaPedDefs::GetPedWeaponShootingRate(CClientPed* ped)
+{
+    if (!ped || !ped->IsStreamedIn())
+        return -1;
+
+    CPlayerPed* gamePed = ped->GetGamePlayer();
+    if (!gamePed)
+        return -1;
+
+    // Native fight and gun-control tasks consume this byte when scheduling
+    // their next attack. Exposing the paired getter makes the persistent value
+    // observable instead of forcing mission diagnostics to assume a default.
+    return gamePed->GetWeaponShootingRate();
 }
 
 bool CLuaPedDefs::SetPedWeaponShootingRate(CClientPed* ped, int rate)

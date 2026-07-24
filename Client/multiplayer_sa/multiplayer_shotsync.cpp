@@ -18,6 +18,8 @@
 #include "../game_sa/CEventDamageSA.h"
 #include <net/SyncStructures.h>
 
+#include <unordered_map>
+
 extern CMultiplayerSA* pMultiplayer;
 
 std::list<CShotSyncData*> ShotSyncData;
@@ -55,6 +57,20 @@ DWORD             vecTargetPosition;
 DWORD             vecAltPos;
 CPedSAInterface*  pShootingPed;
 EDamageReasonType g_GenerateDamageEventReason = EDamageReason::OTHER;
+
+struct SScriptPedChokeEvent
+{
+    bool             bAllowed{};
+    CPedSAInterface* pVictim{};
+};
+
+static std::unordered_map<CEventDamageSAInterface*, SScriptPedChokeEvent>& GetScriptPedChokeEvents()
+{
+    // The hooks remain callable until the multiplayer module is detached.
+    // Keep this tiny registry alive for that full lifetime.
+    static auto* events = new std::unordered_map<CEventDamageSAInterface*, SScriptPedChokeEvent>;
+    return *events;
+}
 
 CPedSAInterface*    pBulletImpactInitiator;
 CEntitySAInterface* pBulletImpactVictim;
@@ -1015,10 +1031,33 @@ bool ProcessDamageEvent(CEventDamageSAInterface* event, CPedSAInterface* affects
             CEntitySAInterface* pSavedCollidedEntity = affectsPed->m_pCollidedEntity;
 
             // This creates a CEventDamageSA for us
-            CEventDamage* pEvent = pGameInterface->GetEventList()->GetEventDamage(event);
-            pEvent->SetDamageReason(g_GenerateDamageEventReason);
+            CEventDamage*           pEvent = pGameInterface->GetEventList()->GetEventDamage(event);
+            const EDamageReasonType damageReason = g_GenerateDamageEventReason;
+            pEvent->SetDamageReason(damageReason);
             // Call the event
-            bool bReturn = m_pDamageHandler(pPed, pEvent);
+            bool       bReturn = m_pDamageHandler(pPed, pEvent);
+            const bool bChokingWeapon =
+                event->weaponUsed == WEAPONTYPE_TEARGAS || event->weaponUsed == WEAPONTYPE_SPRAYCAN || event->weaponUsed == WEAPONTYPE_EXTINGUISHER;
+            if (bChokingWeapon && pPed->NativeChokingUsesNonPlayerBehavior())
+            {
+                auto& events = GetScriptPedChokeEvents();
+                auto  it = events.find(event);
+                if (!bReturn)
+                {
+                    if (it != events.end())
+                        events.erase(it);
+                }
+                else if (it == events.end())
+                {
+                    // Capture the synchronous generation reason once for this
+                    // exact event instance. GTA's copy-constructor hook below
+                    // propagates it to each independently owned clone.
+                    events.emplace(event, SScriptPedChokeEvent{
+                                              damageReason != EDamageReason::PISTOL_WHIP,
+                                              affectsPed,
+                                          });
+                }
+            }
             // Destroy the CEventDamageSA (so we dont get a leak)
             pEvent->Destroy();
 
@@ -1029,6 +1068,35 @@ bool ProcessDamageEvent(CEventDamageSAInterface* event, CPedSAInterface* affects
         }
     }
     return true;
+}
+
+bool ConsumeScriptPedChokeEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim)
+{
+    if (!pEvent || !pVictim)
+        return false;
+
+    auto& events = GetScriptPedChokeEvents();
+    auto  it = events.find(pEvent);
+    if (it == events.end() || it->second.pVictim != pVictim)
+        return false;
+
+    const bool bAllowed = it->second.bAllowed;
+    events.erase(it);
+    return bAllowed;
+}
+
+void CloneScriptPedChokeEvent(CEventDamageSAInterface* pDestination, CEventDamageSAInterface* pSource)
+{
+    auto& events = GetScriptPedChokeEvents();
+    auto  it = events.find(pSource);
+    if (pDestination && it != events.end())
+        events[pDestination] = it->second;
+}
+
+void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent)
+{
+    if (pEvent)
+        GetScriptPedChokeEvents().erase(pEvent);
 }
 
 CPedSAInterface*              affectsPed = 0;

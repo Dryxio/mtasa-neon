@@ -325,7 +325,9 @@ local function applyStoryActorProtection(ped)
     if not isElement(ped) or getElementType(ped) ~= "ped" or type(setPedStoryProtected) ~= "function" then
         return false
     end
-    local enabled = getElementData(ped, TAGUP.missionActorData) == true
+    -- SWEET1 applies these five protagonist flags only to Sweet. Smoke and the
+    -- Ballas are mission peds too, but must retain their normal damage policy.
+    local enabled = getElementData(ped, "tagup.sweet") == true
     local applied = setPedStoryProtected(ped, enabled)
     if applied == true and enabled and not state.storyProtectionLogged then
         state.storyProtectionLogged = true
@@ -736,6 +738,8 @@ end)
 addEventHandler("onClientElementDataChange", root, function(dataName)
     if dataName == TAGUP.missionActorData then
         applyMissionActor(source)
+        applyStoryActorProtection(source)
+    elseif dataName == "tagup.sweet" then
         applyStoryActorProtection(source)
     elseif dataName == TAG_PAINT_ALPHA_DATA then
         applyGangTagState(source)
@@ -3967,6 +3971,18 @@ local function clearBallasEncounter(reason, stopNative)
     if isTimer(encounter.chatObservationTimer) then
         killTimer(encounter.chatObservationTimer)
     end
+    if isTimer(encounter.followObservationTimer) then
+        killTimer(encounter.followObservationTimer)
+    end
+    if isTimer(encounter.attackObservationTimer) then
+        killTimer(encounter.attackObservationTimer)
+    end
+    if isTimer(encounter.chokeObservationTimer) then
+        killTimer(encounter.chokeObservationTimer)
+    end
+    if isTimer(encounter.combatObservationTimer) then
+        killTimer(encounter.combatObservationTimer)
+    end
     for _, timer in pairs(encounter.audioFinishTimers or {}) do
         if isTimer(timer) then
             killTimer(timer)
@@ -4035,6 +4051,273 @@ local function traceBallasPartnerState(encounter, phase)
     end
     outputDebugString(("[tagging-up-turf] Ballas PartnerChat #%d %s separation=%.3f m; %s; %s"):format(
                           encounter.id, tostring(phase), separation, parts[1] or "Flat1=?", parts[2] or "Flat2=?"))
+end
+
+local BALLAS_TASK_OBSERVATION_INTERVAL = 50
+local BALLAS_TASK_STABLE_SAMPLES = 3
+local BALLAS_COMBAT_OBSERVATION_INTERVAL = 250
+
+local function getBallasTaskHierarchy(ped, taskType, slot)
+    if type(getPedTask) ~= "function" then
+        return {}
+    end
+
+    local hierarchy = {getPedTask(ped, taskType, slot)}
+    if hierarchy[1] == false then
+        return {}
+    end
+    return hierarchy
+end
+
+local function getBallasPrimaryTaskHierarchy(ped, slot)
+    return getBallasTaskHierarchy(ped, "primary", slot)
+end
+
+local function describeBallasTaskSlots(ped, taskType, firstSlot, lastSlot)
+    local parts = {}
+    for slot = firstSlot, lastSlot do
+        local hierarchy = getBallasTaskHierarchy(ped, taskType, slot)
+        if #hierarchy > 0 then
+            parts[#parts + 1] = ("%s%d=%s"):format(taskType == "primary" and "P" or "S", slot, table.concat(hierarchy, ">"))
+        end
+    end
+    return #parts > 0 and table.concat(parts, "|") or "nil"
+end
+
+local function signedHeadingDifference(target, current)
+    return (target - current + 180) % 360 - 180
+end
+
+local function getHeadingTowards(fromX, fromY, toX, toY)
+    return (math.deg(math.atan2(fromX - toX, toY - fromY)) + 360) % 360
+end
+
+local function describeBallasTarget(element)
+    if not isElement(element) then
+        return "nil"
+    end
+    local elementType = getElementType(element)
+    if elementType == "player" then
+        return ("player:%s"):format(getPlayerName(element))
+    end
+    if elementType == "ped" then
+        return ("ped:model%d"):format(getElementModel(element))
+    end
+    return elementType
+end
+
+local function traceBallasCombatState(encounter, phase)
+    if not encounter or localPlayer ~= state.leader or not isElement(localPlayer) then
+        return
+    end
+
+    encounter.combatTraceSerial = (encounter.combatTraceSerial or 0) + 1
+    local traceSerial = encounter.combatTraceSerial
+    local now = getTickCount()
+    local targetX, targetY, targetZ = getElementPosition(localPlayer)
+    local targetVx, targetVy, targetVz = getElementVelocity(localPlayer)
+    local targetHeading = getPedRotation(localPlayer)
+    outputDebugString(
+        ("[tagging-up-turf] Ballas combat #%d.%d phase=%s elapsed=%dms CJ pos=(%.3f,%.3f,%.3f) heading=%.2f vel=(%.4f,%.4f,%.4f) health=%.2f move=%s"):format(
+            encounter.id, traceSerial, tostring(phase), now - (encounter.attackStartedAt or now), targetX, targetY, targetZ, targetHeading,
+            targetVx, targetVy, targetVz, getElementHealth(localPlayer),
+            type(getPedMoveState) == "function" and tostring(getPedMoveState(localPlayer)) or "api_unavailable"))
+
+    for index, ped in ipairs(encounter.enemies) do
+        if not isElement(ped) then
+            outputDebugString(("[tagging-up-turf] Ballas combat #%d.%d Flat%d missing"):format(encounter.id, traceSerial, index), 2)
+        else
+            local x, y, z = getElementPosition(ped)
+            local vx, vy, vz = getElementVelocity(ped)
+            local speed2D = math.sqrt(vx * vx + vy * vy)
+            local distance2D = getDistanceBetweenPoints2D(x, y, targetX, targetY)
+            local distance3D = getDistanceBetweenPoints3D(x, y, z, targetX, targetY, targetZ)
+            local nativeHeading = getPedRotation(ped)
+            local _, _, matrixHeading = getElementRotation(ped)
+            local targetBearing = getHeadingTowards(x, y, targetX, targetY)
+            local headingError = signedHeadingDifference(targetBearing, nativeHeading)
+            local expectedCommand
+            if distance3D >= 8.0 then
+                expectedCommand = "seek"
+            elseif math.abs(headingError) >= 15 then
+                expectedCommand = "turn_gate"
+            elseif distance3D > 1.7 then
+                expectedCommand = "advance"
+            elseif distance3D > 1.5 then
+                expectedCommand = "native_deadband"
+            else
+                expectedCommand = "strike_range"
+            end
+
+            local animationBlock, animationName = getPedAnimation(ped)
+            local target = type(getPedTarget) == "function" and getPedTarget(ped) or false
+            local contact = type(getPedContactElement) == "function" and getPedContactElement(ped) or false
+            local shootingRate = type(getPedWeaponShootingRate) == "function" and getPedWeaponShootingRate(ped) or -1
+            local simplestTask = type(getPedSimplestTask) == "function" and getPedSimplestTask(ped) or false
+            local style = type(getPedFightingStyle) == "function" and getPedFightingStyle(ped) or -1
+            local moveState = type(getPedMoveState) == "function" and getPedMoveState(ped) or false
+            outputDebugString(
+                ("[tagging-up-turf] Ballas combat #%d.%d Flat%d model=%d health=%.2f dead=%s streamed=%s syncer=%s missionActor=%s "
+                    .. "pos=(%.3f,%.3f,%.3f) dist2D=%.3f dist3D=%.3f dz=%.3f heading=%.2f matrixHeading=%.2f "
+                    .. "bearing=%.2f headingError=%+.2f expected=%s vel=(%.4f,%.4f,%.4f) speed2D=%.4f move=%s onGround=%s "
+                    .. "frozen=%s choking=%s style=%s shootRate=%s anim=%s/%s target=%s leaderTarget=%s contact=%s simplest=%s "
+                    .. "primarySlots={%s} secondarySlots={%s}"):format(
+                    encounter.id, traceSerial, index, getElementModel(ped), getElementHealth(ped), tostring(isPedDead(ped)),
+                    tostring(isElementStreamedIn(ped)), tostring(isElementSyncer(ped)),
+                    tostring(type(isPedMissionActor) == "function" and isPedMissionActor(ped) or "api_unavailable"), x, y, z, distance2D,
+                    distance3D, targetZ - z, nativeHeading, matrixHeading, targetBearing, headingError, expectedCommand, vx, vy, vz, speed2D,
+                    tostring(moveState), tostring(isPedOnGround(ped)), tostring(isPedFrozen(ped)), tostring(isPedChoking(ped)), tostring(style),
+                    tostring(shootingRate), tostring(animationBlock), tostring(animationName), describeBallasTarget(target),
+                    tostring(target == localPlayer), describeBallasTarget(contact), tostring(simplestTask),
+                    describeBallasTaskSlots(ped, "primary", 0, 4), describeBallasTaskSlots(ped, "secondary", 0, 5)))
+        end
+    end
+end
+
+local function beginBallasCombatObservation(encounter, reason)
+    if isTimer(encounter.combatObservationTimer) then
+        killTimer(encounter.combatObservationTimer)
+    end
+    encounter.attackStartedAt = getTickCount()
+    encounter.combatTraceSerial = 0
+    traceBallasCombatState(encounter, "attack_dispatch:" .. tostring(reason))
+    encounter.combatObservationTimer = setTimer(function()
+        if state.ballasEncounter ~= encounter or encounter.phase ~= "attacking" or localPlayer ~= state.leader then
+            if isTimer(encounter.combatObservationTimer) then
+                killTimer(encounter.combatObservationTimer)
+            end
+            encounter.combatObservationTimer = nil
+            return
+        end
+        traceBallasCombatState(encounter, "attacking")
+    end, BALLAS_COMBAT_OBSERVATION_INTERVAL, 0)
+end
+
+local function traceBallasEncounterTaskState(encounter, phase, taskName)
+    local parts = {}
+    for index, ped in ipairs(encounter.enemies) do
+        if not isElement(ped) then
+            parts[index] = ("Flat%d=missing"):format(index)
+        elseif isPedDead(ped) then
+            parts[index] = ("Flat%d=dead"):format(index)
+        else
+            local physical = getBallasPrimaryTaskHierarchy(ped, 0)
+            local primary = getBallasPrimaryTaskHierarchy(ped, 3)
+            parts[index] = ("Flat%d installed=%s streamed=%s syncer=%s physical=%s primary=%s"):format(
+                               index, tostring(primary[1] == taskName), tostring(isElementStreamedIn(ped)), tostring(isElementSyncer(ped)),
+                               #physical > 0 and table.concat(physical, ">") or "nil",
+                               #primary > 0 and table.concat(primary, ">") or "nil")
+        end
+    end
+    outputDebugString(("[tagging-up-turf] Ballas encounter #%d %s task=%s; %s; %s"):format(
+                          encounter.id, phase, taskName, parts[1] or "Flat1=?", parts[2] or "Flat2=?"))
+end
+
+local function beginBallasEncounterTaskBarrier(encounter, phase, taskName, dispatch)
+    local timerField = phase .. "ObservationTimer"
+    local reportedField = phase .. "Reported"
+    local requestedAt = getTickCount()
+    local stableSamples = 0
+
+    local function stopObservation()
+        if isTimer(encounter[timerField]) then
+            killTimer(encounter[timerField])
+        end
+        encounter[timerField] = nil
+    end
+
+    for index, ped in ipairs(encounter.enemies) do
+        if not isElement(ped) then
+            return reportBallasEncounterTask(encounter, phase, "actor_unavailable", ("Flat %d absent avant la task native"):format(index))
+        end
+        -- SWEET1 only dispatches these commands while the corresponding Flat
+        -- is alive. A dead actor is deliberately exempt from this barrier.
+        if not isPedDead(ped) and
+            (not isElementStreamedIn(ped) or not isElementSyncer(ped) or not dispatch(index, ped)) then
+            return reportBallasEncounterTask(encounter, phase, "refused", ("task native refusee pour Flat %d"):format(index))
+        end
+    end
+
+    encounter[timerField] = setTimer(function()
+        if state.ballasEncounter ~= encounter or encounter[reportedField] or encounter.phase ~= (phase == "follow" and "following" or "attacking") then
+            return stopObservation()
+        end
+
+        local now = getTickCount()
+        local allActive = true
+        for _, ped in ipairs(encounter.enemies) do
+            if not isElement(ped) then
+                allActive = false
+            elseif not isPedDead(ped) then
+                local primary = getBallasPrimaryTaskHierarchy(ped, 3)
+                allActive = allActive and isElementStreamedIn(ped) and isElementSyncer(ped) and primary[1] == taskName
+            end
+        end
+
+        stableSamples = allActive and stableSamples + 1 or 0
+        if stableSamples >= BALLAS_TASK_STABLE_SAMPLES then
+            stopObservation()
+            traceBallasEncounterTaskState(encounter, phase .. "_active_barrier", taskName)
+            return reportBallasEncounterTask(
+                encounter, phase, "ready",
+                ("tasks natives installees dans le slot primaire pendant %d observations; elapsed=%dms"):format(stableSamples,
+                                                                                                                now - requestedAt))
+        end
+
+        if now - requestedAt >= TAGUP.ballasGangScene.readyTimeout then
+            stopObservation()
+            traceBallasEncounterTaskState(encounter, phase .. "_activation_timeout", taskName)
+            return reportBallasEncounterTask(
+                encounter, phase, "timeout",
+                ("les tasks %s ne sont pas restees installees ensemble"):format(taskName))
+        end
+    end, BALLAS_TASK_OBSERVATION_INTERVAL, 0)
+end
+
+local function beginBallasChokeObservation(encounter)
+    encounter.chokeObservations = {}
+    encounter.lastChokingDamageAt = {}
+    encounter.chokeObservationTimer = setTimer(function()
+        if state.ballasEncounter ~= encounter then
+            if isTimer(encounter.chokeObservationTimer) then
+                killTimer(encounter.chokeObservationTimer)
+            end
+            encounter.chokeObservationTimer = nil
+            return
+        end
+
+        local now = getTickCount()
+        for index, ped in ipairs(encounter.enemies) do
+            if isElement(ped) then
+                local physical = getBallasPrimaryTaskHierarchy(ped, 0)
+                local primary = getBallasPrimaryTaskHierarchy(ped, 3)
+                local choking = physical[1] == "TASK_SIMPLE_CHOKING"
+                local observed = encounter.chokeObservations[ped]
+                if choking and not observed then
+                    observed = {startedAt = now, warned = false}
+                    encounter.chokeObservations[ped] = observed
+                    outputDebugString(("[tagging-up-turf] Ballas Flat%d choking observed; primary=%s"):format(
+                                          index, #primary > 0 and table.concat(primary, ">") or "nil"))
+                elseif not choking and observed then
+                    outputDebugString(("[tagging-up-turf] Ballas Flat%d choking ended after %dms; sinceLastDamage=%sms; primary=%s"):format(
+                                          index, now - observed.startedAt,
+                                          encounter.lastChokingDamageAt[ped] and tostring(now - encounter.lastChokingDamageAt[ped]) or "unknown",
+                                          #primary > 0 and table.concat(primary, ">") or "nil"))
+                    encounter.chokeObservations[ped] = nil
+                elseif choking and observed then
+                    local lastDamageAt = encounter.lastChokingDamageAt[ped]
+                    local referenceAt = lastDamageAt or observed.startedAt
+                    if not observed.warned and now - referenceAt > 15000 then
+                        observed.warned = true
+                        outputDebugString(("[tagging-up-turf] Ballas Flat%d choking exceeded native tail: %dms since %s; physical=%s primary=%s"):format(
+                                              index, now - referenceAt, lastDamageAt and "last damage" or "first observation",
+                                              table.concat(physical, ">"),
+                                              #primary > 0 and table.concat(primary, ">") or "nil"), 2)
+                    end
+                end
+            end
+        end
+    end, 250, 0)
 end
 
 local function beginBallasEncounterChat(encounter)
@@ -4142,7 +4425,48 @@ addEventHandler("tagup:ballasEncounterPrepare", resourceRoot, function(encounter
         audioHandles = preload and preload.audioHandles or {},
     }
     state.ballasEncounter = encounter
+    beginBallasChokeObservation(encounter)
     beginBallasEncounterChat(encounter)
+end)
+
+addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart, loss)
+    local encounter = state.ballasEncounter
+    if not encounter then
+        return
+    end
+    for index, ped in ipairs(encounter.enemies) do
+        if source == ped then
+            outputDebugString(
+                ("[tagging-up-turf] Ballas Flat%d damage attacker=%s weapon=%s bodypart=%s loss=%s health=%.2f choking=%s"):format(
+                    index, describeBallasTarget(attacker), tostring(weapon), tostring(bodypart), tostring(loss), getElementHealth(ped),
+                    tostring(isPedChoking(ped))))
+            if weapon == 17 or weapon == 41 or weapon == 42 then
+                encounter.lastChokingDamageAt[ped] = getTickCount()
+                local observed = encounter.chokeObservations[ped]
+                if observed then
+                    observed.warned = false
+                end
+            end
+            traceBallasCombatState(encounter, "flat_damage")
+            return
+        end
+    end
+end)
+
+addEventHandler("onClientPlayerDamage", localPlayer, function(attacker, weapon, bodypart, loss)
+    local encounter = state.ballasEncounter
+    if not encounter then
+        return
+    end
+    for index, ped in ipairs(encounter.enemies) do
+        if attacker == ped then
+            outputDebugString(
+                ("[tagging-up-turf] CJ damage from Flat%d weapon=%s bodypart=%s loss=%s health=%.2f"):format(
+                    index, tostring(weapon), tostring(bodypart), tostring(loss), getElementHealth(localPlayer)))
+            traceBallasCombatState(encounter, "cj_damage")
+            return
+        end
+    end
 end)
 
 addEvent("tagup:ballasEncounterApproachEnabled", true)
@@ -4174,17 +4498,19 @@ addEventHandler("tagup:ballasEncounterFollow", resourceRoot, function(encounterI
     local profile = TAGUP.ballasGangScene.follow
     encounter.speechMuted = true
     traceCurrent("ballas_follow", "NATIVE VERIFIED · 0A09 + 05BA + repeated 06A8 for both Flats")
-    for index, ped in ipairs(encounter.enemies) do
-        if isElement(ped) and not isPedDead(ped) then
-            if not isElementStreamedIn(ped) or not isElementSyncer(ped) or type(setPedScriptedSpeechMuted) ~= "function" or
-                type(setPedStandStill) ~= "function" or type(setPedGoToOffset) ~= "function" or not setPedScriptedSpeechMuted(ped, true) or
-                not setPedStandStill(ped, 0) or
-                not setPedGoToOffset(ped, localPlayer, profile.timeout, profile.radius, profile.angles[index], true) then
-                return reportBallasEncounterTask(encounter, "follow", "refused", "05BA ou sequence 06A8 refusee pour Flat " .. index)
-            end
-        end
+    if type(getPedTask) ~= "function" or type(setPedScriptedSpeechMuted) ~= "function" or type(setPedStandStill) ~= "function" or
+        type(setPedGoToOffset) ~= "function" then
+        return reportBallasEncounterTask(encounter, "follow", "api_unavailable", "API native 0A09/05BA/06A8 ou observation absente")
     end
-    reportBallasEncounterTask(encounter, "follow", "ready", "speech mutee, StandStill puis UseSequence 06A8 repetee")
+
+    beginBallasEncounterTaskBarrier(encounter, "follow", "TASK_COMPLEX_USE_SEQUENCE", function(index, ped)
+        -- SCM issues StandStill(0) immediately before the repeating sequence.
+        -- Dispatch the pair once: GTA retains a script-command event itself
+        -- while PartnerChat finishes aborting, so external retries would only
+        -- add competing StandStill and UseSequence events.
+        return setPedScriptedSpeechMuted(ped, true) and setPedStandStill(ped, 0) and
+                   setPedGoToOffset(ped, localPlayer, profile.timeout, profile.radius, profile.angles[index], true)
+    end)
 end)
 
 addEvent("tagup:ballasEncounterAttack", true)
@@ -4196,14 +4522,14 @@ addEventHandler("tagup:ballasEncounterAttack", resourceRoot, function(encounterI
     encounter.phase = "attacking"
     if localPlayer == state.leader then
         traceCurrent("ballas_attack", "NATIVE VERIFIED · assigning 05E2 against the leader to both Flats")
-        for index, ped in ipairs(encounter.enemies) do
-            if isElement(ped) and not isPedDead(ped) and
-                (not isElementStreamedIn(ped) or not isElementSyncer(ped) or type(setPedKillOnFoot) ~= "function" or
-                 not setPedKillOnFoot(ped, localPlayer)) then
-                return reportBallasEncounterTask(encounter, "attack", "refused", "TASK_COMPLEX_KILL_PED_ON_FOOT refusee pour Flat " .. index)
-            end
+        if type(getPedTask) ~= "function" or type(setPedKillOnFoot) ~= "function" then
+            return reportBallasEncounterTask(encounter, "attack", "api_unavailable", "API native 05E2 ou observation absente")
         end
-        reportBallasEncounterTask(encounter, "attack", "ready", "deux 05E2 ciblent le leader; trigger=" .. tostring(reason))
+
+        beginBallasCombatObservation(encounter, reason)
+        beginBallasEncounterTaskBarrier(encounter, "attack", "TASK_COMPLEX_KILL_PED_ON_FOOT", function(_, ped)
+            return setPedKillOnFoot(ped, localPlayer)
+        end)
     end
 end)
 

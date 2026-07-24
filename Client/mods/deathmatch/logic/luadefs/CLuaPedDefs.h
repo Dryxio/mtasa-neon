@@ -121,6 +121,7 @@ public:
     static bool SetPedEnterVehicle(CClientPed* pPed, std::optional<CClientVehicle*> pOptVehicle,
                                    std::optional<std::variant<bool, unsigned int>> seatOrPassenger);
     static bool SetPedExitVehicle(CClientPed* pPed);
+    static int  GetPedWeaponShootingRate(CClientPed* ped);
     static bool SetPedWeaponShootingRate(CClientPed* ped, int rate);
     static bool SetPedWeaponAccuracy(CClientPed* ped, int accuracy);
     static bool SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,

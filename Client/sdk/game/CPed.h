@@ -357,6 +357,10 @@ public:
     virtual void                     SetStoryProtectionState(const SPedStoryProtectionState& state) = 0;
     virtual void                     SetNativeMissionEventProfileActive(bool active) = 0;
     virtual bool                     IsNativeMissionEventProfileActive() const = 0;
+    virtual void                     SetNativeChokingUsesNonPlayerBehavior(bool enabled) = 0;
+    virtual bool                     NativeChokingUsesNonPlayerBehavior() const = 0;
+    virtual void                     SetNativeFightUsesNonPlayerBehavior(bool enabled) = 0;
+    virtual bool                     NativeFightUsesNonPlayerBehavior() const = 0;
 
     // The game interface keeps the virtuals private because they were
     // originally implementation details. Story-script policies need a

@@ -586,7 +586,7 @@ private:
     static void                              StaticPreRenderSkyHandler();
     static void                              StaticRenderHeliLightHandler();
     static void                              StaticRenderEverythingBarRoadsHandler();
-    static bool                              StaticChokingHandler(unsigned char ucWeaponType);
+    static bool                              StaticChokingHandler(CPedSAInterface* pVictim, unsigned char ucWeaponType);
     static void                              StaticPreWeatherUpdateHandler();
     static void                              StaticPreWorldProcessHandler();
     static void                              StaticPostWorldProcessHandler();
@@ -638,7 +638,7 @@ private:
     void                              DrawRadarAreasHandler();
     void                              Render3DStuffHandler();
     void                              PreRenderSkyHandler();
-    bool                              ChokingHandler(unsigned char ucWeaponType);
+    bool                              ChokingHandler(CPedSAInterface* pVictim, unsigned char ucWeaponType);
     void                              PreWeatherUpdateHandler();
     void                              PreWorldProcessHandler();
     void                              PostWorldProcessHandler();

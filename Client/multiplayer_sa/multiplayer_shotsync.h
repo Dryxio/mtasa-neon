@@ -16,6 +16,8 @@
 
 #include <game/CPlayerPed.h>
 
+class CEventDamageSAInterface;
+
 // #include "../game_sa/CPedIKSA.h"
 
 #define HOOKPOS_CWeapon__Fire                        0x742300
@@ -53,6 +55,9 @@ VOID           InitShotsyncHooks();
 CShotSyncData* GetLocalPedShotSyncData();
 VOID WriteGunDirectionDataForPed(class CPedSAInterface* pPedInterface, float* fGunDirectionX, float* fGunDirectionY, eVehicleAimDirection* cGunDirection);
 bool IsLocalPlayer(CPedSAInterface* pPedInterface);
+bool ConsumeScriptPedChokeEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim);
+void CloneScriptPedChokeEvent(CEventDamageSAInterface* pDestination, CEventDamageSAInterface* pSource);
+void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent);
 
 // hooks
 VOID HOOK_CWeapon__Fire();

@@ -96,7 +96,7 @@ typedef void(DrawRadarAreasHandler)();
 typedef void(Render3DStuffHandler)();
 typedef void(PreRenderSkyHandler)();
 typedef void(RenderHeliLightHandler)();
-typedef bool(ChokingHandler)(unsigned char ucWeaponType);
+typedef bool(ChokingHandler)(class CPedSAInterface* pVictim, unsigned char ucWeaponType);
 typedef void(PreWeatherUpdateHandler)();
 typedef void(PreWorldProcessHandler)();
 typedef void(PostWorldProcessHandler)();
