@@ -273,11 +273,12 @@ identities and a generation-fenced physical arena at 20,000..29,999. The worst
 current two-city transition leaves 2,705 physical slots; the largest current
 city plus a 4,096-variant future working set leaves 2,102.
 
-The first two activation blockers are now implemented: the physical arena is
-excluded from MTA model allocation/script mutation, and owned IPL/COL buffers
-are remapped before GTA consumes them. The remaining mechanisms are two
-reusable VC/LC LOD entity-index arrays, generation-fenced recycling, broader
-building/QuadTree overlap high-water, and RenderWare residency measurement.
+The first three activation blockers are now implemented in source: the
+physical arena is excluded from MTA model allocation/script mutation, owned
+IPL/COL buffers are remapped before GTA consumes them, and the VC/LC working
+set owns two native LOD entity-index arrays. The remaining mechanisms are
+generation-fenced recycling, broader building/QuadTree overlap high-water, and
+RenderWare residency measurement.
 The v3 cache now has an eight-object double bank for one complete rollover;
 safe reclamation of later inactive generations remains to implement. The
 native streaming floor covers both channel halves and was live validated at
@@ -304,3 +305,75 @@ IPL and QuadTreeNode occupancy stayed at `4,933/8,000`, `271/512`,
 `210/1,024` and `238/2,048`. No streaming, RenderWare, allocation or crash
 diagnostic appeared. Transport republication refusals after activation are
 expected: they preserve the already committed process-global generation.
+
+## VC/LC LOD bootstrap candidate
+
+The next generation-1 working set switches residency from Bullworth/Carcer to
+Vice City/Liberty City while retaining all four exact logical packs and cache
+leases. Its Win32 `Game SA` build and user-run live gate are complete.
+
+Before stock `LoadScene` allocates its 30 arrays, the registrar reserves GTA
+IPL entity-index arrays 0 and 1 through native `0x404780`. The first owned IPL
+callback after stock scene loading requires the native table to contain exactly
+32 non-null entries at `0x8E3F08` with a count of 32 at `0x8E3F00`. It then
+constructs 1,081 VC and 1,957 LC permanent anchors from the locked audited IPL
+instances. Each anchor follows GTA's native transition from the temporary
+`lod=-1` union value to a null pointer, runs `SetupBigBuilding` before `Add`,
+and belongs to one disabled hidden IPL owner. Retail `0x533150` clears
+collision and sets the entity `BIGBuilding` and `DontCastShadowsOn` flags plus
+the model-info collision-ownership flag. It deliberately does not set
+`StreamingDontDelete`; anchor lifetime is owned by the hidden IPL instead.
+Both hidden owners are allocated after all 102 spatial IPL slots so GTA's
+ascending shutdown order deletes every child before either owner.
+
+The frozen sidecars require exact scratch profiles `2162/4096` for VC and
+`3914/4096` for LC. Their 3,038 one-to-one links occupy 9 VC and 12 LC child
+groups. During the initial flipped-rectangle pass, the loader keeps temporary
+anchor records so native spatial bounds remain complete; normal streaming
+compacts those duplicates and remaps each child `lodIndex` to the permanent
+city array. Exact source bytes are restored after every synchronous native
+load. Counter gates require zero before load, exactly one after load and zero
+again after the bounding-pass child IPL is removed.
+
+The canonical VC inventory has exactly two visual-only LOD anchors with no
+direct COL record; LC has none. GTA permits those entities to be constructed,
+but `SetupMapEntityVisibility` unconditionally reads their ModelInfo
+`pColModel`, so leaving either pointer null crashes at retail `0x553F71`.
+Admission therefore proves that every missing-COL placement is a unique
+one-to-one anchor whose child has collision. Before constructing those two
+anchors, generation 1 applies the narrow native `_LinkLods` rule through
+`CBaseModelInfo::SetColModel`: the anchor borrows its child's stable ColModel
+and clears bit `0x80` (`bIsColLoaded` in MTA, the native allocation/deletion
+ownership bit) while the child remains the sole owner. `SetupBigBuilding` keeps
+the separate bit `0x20` set on the anchor. COL unload preserves the shared
+bounds and pointer and removes only collision volumes; reload updates the same
+child object in place.
+
+The general `_LinkLods` ColModel-pointer transfer remains omitted. Nearly every
+other link crosses independently streamed COL groups and anchor model variants
+are reused, so transferring all child pointers into LOD ModelInfos would make
+COL load/unload ownership asymmetric. The runtime first proves that every
+supplied placement COL materialized, freezes the exception profile at VC
+`2` / LC `0`, and reports
+`collisionTransfer=missing-anchor-only:2`. A future canonical-pack revision
+should synthesize bounds-only COL records for visual-only models, after which
+even this narrow runtime exception can disappear. The live gate must verify
+child collision and line-of-sight behavior as well as visual LOD transitions.
+
+The candidate plans 7,290 physical models, 1,325 TXDs, 102 COLs, 104 total IPL
+slots including the two hidden owners, seven archives and 8,819 direct
+streaming bindings. The conservative startup building budget is
+`9,166 + 18,412 + 3,038 = 30,616/32,000`. Generation 1 remains
+`recyclable=no`: final owner deletion/reuse belongs to the later generation
+fence even though process shutdown is structurally child-first.
+
+The 2026-07-25 gate validated the exact transfer count `2`, cleanup of all 21
+child groups, repeated VC/LC/SA transitions, collisions and visible LOD
+changes, minimize/restore, death/respawn, same-process reconnect, hot resource
+restart and full server restart. Ticket `b7bef51c` and all process leases
+survived the lifecycle tests without re-registering the physical arena.
+High-water was Atomic `20,833/32,000`, DamageAtomic `89/512`, Time
+`581/1,024`, TXD `4,933/8,000`, COL `354/512`, IPL `295/1,024`, buildings
+`16,577/32,000`, ColModels `17,273/30,000` and QuadTreeNodes `264/2,048`.
+No crash, streaming, RenderWare or allocation diagnostic appeared after the
+missing-anchor fix.

@@ -1028,11 +1028,46 @@ The updated checkpoint sequence is:
    `14,522/30,000`, TXD `4,933/8,000`, COL `271/512`, IPL `210/1,024` and
    QuadTreeNodes `238/2,048`; no streaming, RenderWare, allocation or crash
    diagnostic appeared.
-9. **VC/LC LOD bootstrap.** Allocate two reusable entity-index arrays sized
-   for the proved VC and LC graphs, construct anchors before children, remove
-   children before anchors, and preserve all 3,038 links. Keep this mechanism
-   outside the generation-1 resident set until hostile ordering, rollback and
-   scratch-capacity tests pass.
+9. **VC/LC LOD bootstrap — complete and live-validated.**
+   The generation-1 working set now changes to VC/LC while all four pack/cache
+   identities remain locked. GTA arrays 0 and 1 hold 1,081 VC and 1,957 LC
+   permanent anchors; stock scene arrays then occupy 2..31. The exact scratch
+   profiles are `2162/4096` and `3914/4096`, covering 9 and 12 child groups.
+   Anchors run `SetupBigBuilding` before world insertion and live in two hidden
+   IPL owners allocated after all 102 child IPLs. Retail `0x533150` sets the
+   big-building/no-shadow state, but not `StreamingDontDelete`; the hidden IPL
+   provides their process lifetime. The initial bounding pass
+   retains temporary anchor records; normal streaming removes those duplicates
+   and remaps every child to its permanent anchor. Counter gates prove
+   anchors-before-children and bounding cleanup, while shutdown allocation
+   order is child-before-owner. The general cross-COL collision-pointer
+   transfer is intentionally omitted because the linked groups stream
+   independently. The only admitted exception is frozen at two VC anchors
+   (`vcm02a1` and `vcm02nz`) that have no direct COL record. GTA's renderer
+   otherwise crashes at `0x553F71` while reading a null `pColModel`. Each
+   missing-COL anchor now borrows its unique child's stable ColModel through
+   the native `0x4C4BC0` setter before entity construction. The anchor clears
+   native allocation/deletion bit `0x80`, keeps the separate big-building bit
+   `0x20`, and leaves the child as sole ColModel owner. Runtime admission
+   rejects any non-anchor omission,
+   missing child collision, direct COL that failed to materialize, or exception
+   count other than VC `2` / LC `0`. A future canonical pack should replace
+   this narrow compatibility rule with synthetic bounds-only COL records.
+   Child collision/LOS is a required live test. The candidate plans 7,290
+   models, 1,325 TXDs, 102 COLs, 104 IPL slots, seven archives and 8,819
+   bindings, with a conservative building budget of `30,616/32,000`.
+   Generation reuse and explicit runtime owner teardown remain checkpoint 10
+   work; generation 1 is still non-recyclable. The 2026-07-25 live gate proved
+   `collisionTransfer=missing-anchor-only:2`, cleanup of all 21 child groups,
+   VC/LC/SA transitions, collision and visible LOD behavior, D3D
+   minimize/restore, death/respawn, same-process reconnect, hot resource
+   restart and full server restart. The registrar retained ticket `b7bef51c`
+   and its process lease throughout both reconnects and the server restart.
+   Observed peaks were Atomic `20,833/32,000`, DamageAtomic `89/512`, Time
+   `581/1,024`, TXD `4,933/8,000`, COL `354/512`, IPL `295/1,024`, buildings
+   `16,577/32,000`, ColModels `17,273/30,000` and QuadTreeNodes `264/2,048`;
+   no crash, streaming, RenderWare or allocation diagnostic followed the
+   corrected two-anchor COL transfer.
 10. **Simultaneous activation and transitions.** Make VC and LC resident with
    Bullworth and Carcer beside San Andreas, then add a generation fence before
    recycling physical slots or old cache generations. Test repeated

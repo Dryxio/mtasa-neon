@@ -2,8 +2,8 @@
 -- It only provides repeatable travel commands while GTA's process-global
 -- native streaming registrar owns the city lifecycle.
 
-local bullworthSpawn = {x = -8150, y = 7650, z = 25}
-local carcerSpawn = {x = 6900, y = -700, z = 80}
+local viceCitySpawn = {x = 7343.25, y = -8416.45, z = 35}
+local libertyCitySpawn = {x = 8377, y = 7882, z = 35}
 local sanAndreasSpawn = {x = 1481, y = -1771, z = 19}
 local testVehicles = {}
 
@@ -41,18 +41,26 @@ local function teleportWithVehicle(player, position, rotation)
 end
 
 addCommandHandler("nativebw", function(player)
-    teleportWithVehicle(player, bullworthSpawn, 90)
-    outputChatBox("[Native BW] Bullworth. Explore les 7 quartiers puis /nativeback.", player, 80, 255, 160)
+    outputChatBox("[Native World] Bullworth n'est pas resident dans le checkpoint LOD VC/LC.", player, 255, 180, 80)
 end)
 
 addCommandHandler("nativecc", function(player)
-    teleportWithVehicle(player, carcerSpawn, 90)
-    outputChatBox("[Native World] Carcer City. Explore puis /nativeback.", player, 255, 140, 80)
+    outputChatBox("[Native World] Carcer City n'est pas resident dans le checkpoint LOD VC/LC.", player, 255, 180, 80)
+end)
+
+addCommandHandler("nativevc", function(player)
+    teleportWithVehicle(player, viceCitySpawn, 90)
+    outputChatBox("[Native World] Vice City. Teste distance LOD, collisions et /nativeback.", player, 80, 255, 160)
+end)
+
+addCommandHandler("nativelc", function(player)
+    teleportWithVehicle(player, libertyCitySpawn, 90)
+    outputChatBox("[Native World] Liberty City. Teste distance LOD, collisions et /nativeback.", player, 80, 255, 160)
 end)
 
 addCommandHandler("nativeback", function(player)
     teleportWithVehicle(player, sanAndreasSpawn, 0)
-    outputChatBox("[Native BW] Retour San Andreas. Reviens avec /nativebw pour tester le reload.", player, 80, 200, 255)
+    outputChatBox("[Native World] Retour San Andreas. Reviens avec /nativevc ou /nativelc pour tester le reload.", player, 80, 200, 255)
 end)
 
 addEventHandler("onPlayerQuit", root, function()
