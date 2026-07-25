@@ -15,7 +15,10 @@ jobs:
 
       # Public player builds must use MTA's anti-cheat and service checks. The
       # checked-in default remains CUSTOM so a local clone can run without an
-      # installer-created HKLM registry layout.
+      # installer-created HKLM registry layout. MTA's CDN network modules carry
+      # an independently published official build tag, so server builds must
+      # skip the exact tag comparison. CServerImpl still enforces the network
+      # module ABI through CheckCompatibility before using the module.
       - name: Configure public Neon build
         shell: powershell
         run: |
@@ -24,6 +27,7 @@ jobs:
 
           #undef MTASA_VERSION_TYPE
           #define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE
+          #define MTASA_SKIP_VERSION_CHECKS
           '@ | Set-Content -LiteralPath 'Shared\build_overrides.h' -Encoding ascii
 
       - uses: actions/cache@v5
@@ -54,6 +58,71 @@ jobs:
         env:
           DXSDK_DIR: './utils/DXFiles/'
           CI: 'true'
+
+      - name: Install Windows server resources
+        if: matrix.platform == 'x64'
+        run: utils\premake5 install_resources
+
+      - name: Smoke test Neon Windows server
+        if: matrix.platform == 'x64'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $serverRoot = (Resolve-Path 'Bin\server').Path
+          $stdoutPath = Join-Path $env:RUNNER_TEMP 'neon-server-smoke.stdout.log'
+          $stderrPath = Join-Path $env:RUNNER_TEMP 'neon-server-smoke.stderr.log'
+          $process = Start-Process `
+            -FilePath (Join-Path $serverRoot 'MTA Server64.exe') `
+            -ArgumentList @('-u', '--port', '22103', '--httpport', '22105') `
+            -WorkingDirectory $serverRoot `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -NoNewWindow `
+            -PassThru
+
+          $ready = $false
+          $failure = $null
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            while ([DateTime]::UtcNow -lt $deadline) {
+              Start-Sleep -Seconds 1
+              $output = @(
+                Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
+                Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+              ) -join "`n"
+
+              if ($output -match 'Server started and is ready to accept connections!') {
+                $ready = $true
+                break
+              }
+              if ($output -match "library version is|Network module not compatible|Loading network library .* failed") {
+                $failure = 'The Windows server rejected its packaged network module.'
+                break
+              }
+              if ($process.HasExited) {
+                $failure = "The Windows server exited before becoming ready (exit code $($process.ExitCode))."
+                break
+              }
+            }
+            if (-not $ready -and -not $failure) {
+              $failure = 'The Windows server did not become ready within 45 seconds.'
+            }
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+            $process.WaitForExit()
+            Write-Host '--- server stdout ---'
+            Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+            Write-Host '--- server stderr ---'
+            Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+          }
+
+          if ($failure) {
+            throw $failure
+          }
 
       - name: Create build artifacts
         run: utils\premake5 compose_files
@@ -206,14 +275,11 @@ jobs:
       #
       # Raising the version type to UNSTABLE also switches on the core-vs-module
       # version check in CDynamicLibrary::CheckMtaVersion, which local CUSTOM
-      # builds compile out. That check compares exact build tags, and it can
-      # never pass here: net.so is a prebuilt nightly downloaded from MTA's CDN
-      # (currently 1.7.0-7.26726.0) while this fork builds as 1.7.0-5.00000.0,
-      # so the server aborts with "Loading network library (net.so) failed".
-      # Claiming the nightly's type and build number instead would make Neon
-      # impersonate an official build and diverge from the client artifact, so
-      # skip the check - the escape hatch documented in CDynamicLibrary.cpp -
-      # and keep client and server reporting the same fork version.
+      # builds compile out. That exact tag comparison cannot pass here because
+      # net.so is independently published by MTA's CDN with an official build
+      # tag while this fork deliberately keeps its Neon build identity. Skip
+      # that comparison through the documented escape hatch; CServerImpl still
+      # enforces the network module ABI through CheckCompatibility.
       - name: Configure public Neon server build
         run: |
           printf '%s\n' \
@@ -242,6 +308,47 @@ jobs:
         run: |
           utils/premake5 install_data
           utils/premake5 install_resources
+
+      - name: Smoke test Neon Linux server
+        if: matrix.architecture == 'x64'
+        run: |
+          set -eu
+
+          log_path="$RUNNER_TEMP/neon-server-smoke.log"
+          cd Bin/server
+          ./mta-server64 -n -u --port 22103 --httpport 22105 >"$log_path" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            if kill -0 "$server_pid" 2>/dev/null; then
+              kill "$server_pid" 2>/dev/null || true
+              sleep 1
+              kill -9 "$server_pid" 2>/dev/null || true
+            fi
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 45); do
+            if grep -Fq 'Server started and is ready to accept connections!' "$log_path"; then
+              ready=1
+              break
+            fi
+            if grep -Eq "library version is|Network module not compatible|Loading network library .* failed" "$log_path"; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          cat "$log_path"
+          if [ "$ready" -ne 1 ]; then
+            echo 'The Linux server did not become ready with its packaged network module.' >&2
+            exit 1
+          fi
 
       - name: Package Neon Linux server
         run: |
