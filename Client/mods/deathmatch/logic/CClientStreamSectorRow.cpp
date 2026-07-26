@@ -78,9 +78,7 @@ CClientStreamSector* CClientStreamSectorRow::FindOrCreateSector(CVector& vecPosi
     }
 
     // We need a new row, align it with the others
-    float fLeft = float((int)(vecPosition.fX / m_fSectorSize)) * m_fSectorSize;
-    if (vecPosition.fX < 0.0f)
-        fLeft -= m_fSectorSize;
+    const float fLeft = AlignStreamSectorCoordinate(vecPosition.fX, m_fSectorSize);
     CVector2D vecBottomLeft(fLeft, m_fBottom);
     CVector2D vecTopRight(vecBottomLeft.fX + m_fSectorSize, vecBottomLeft.fY + m_fRowSize);
     pSector = new CClientStreamSector(this, vecBottomLeft, vecTopRight);

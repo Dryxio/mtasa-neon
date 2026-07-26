@@ -102,8 +102,6 @@ namespace
     constexpr unsigned int STATIC_WORLD_V3_MODEL_BANK_SIZE = 4096;
     constexpr unsigned int STATIC_WORLD_V3_MODEL_BANK_COUNT = 2;
     constexpr unsigned int STATIC_WORLD_V3_MODEL_BANK_FIRST[] = {20000, 24096};
-    constexpr size_t       STATIC_WORLD_V3_VICE_CITY_INDEX = 1;
-    constexpr size_t       STATIC_WORLD_V3_LIBERTY_CITY_INDEX = 2;
     constexpr unsigned int STATIC_WORLD_V3_VICE_CITY_LOD_LINKS = 1081;
     constexpr unsigned int STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS = 1957;
     constexpr unsigned int STATIC_WORLD_V3_VICE_CITY_LOD_CHILD_GROUPS = 9;
@@ -201,10 +199,10 @@ namespace
 
     struct SStaticWorldV3SetManifest
     {
-        std::string                            setId;
-        std::string                            manifestSha256;
-        unsigned int                           manifestBytes{};
-        std::array<SNativeWorldV3SetPackSA, 4> packs;
+        std::string                          setId;
+        std::string                          manifestSha256;
+        unsigned int                         manifestBytes{};
+        std::vector<SNativeWorldV3SetPackSA> packs;
     };
 
     struct SStaticWorldV3Ide
@@ -388,8 +386,8 @@ namespace
     CNativeWorldCacheLeaseSA                               g_authorizedLease;
     bool                                                   g_staticWorldV3Route = false;
     SStaticWorldV3SetManifest                              g_staticWorldV3Set;
-    std::array<SStaticWorldV3RuntimePack, 4>               g_staticWorldV3Packs;
-    std::array<CNativeWorldCacheLeaseSA, 4>                g_staticWorldV3ChildLeases;
+    std::vector<SStaticWorldV3RuntimePack>                 g_staticWorldV3Packs;
+    std::vector<CNativeWorldCacheLeaseSA>                  g_staticWorldV3ChildLeases;
     std::map<unsigned int, size_t>                         g_staticWorldV3ColOwners;
     std::map<unsigned int, size_t>                         g_staticWorldV3IplOwners;
     std::atomic_uint                                       g_staticWorldV3Generation{0};
@@ -399,7 +397,7 @@ namespace
     unsigned int                                           g_staticWorldV3NextBank = 0;
     bool                                                   g_staticWorldV3BootstrapBoundsComplete = false;
     std::vector<SStaticWorldV3StreamingBinding>            g_staticWorldV3PermanentBindings;
-    std::array<std::vector<SStaticWorldV3ModelBinding>, 4> g_staticWorldV3ModelBindings;
+    std::vector<std::vector<SStaticWorldV3ModelBinding>>   g_staticWorldV3ModelBindings;
     std::vector<CEntitySAInterface*>                       g_staticWorldV3PendingBoundingAnchors;
     unsigned int                                           g_staticWorldV3BoundingCleanupGroups = 0;
     unsigned int                                           g_staticWorldV3LargestEntryBlocks = 0;
@@ -965,26 +963,29 @@ namespace
         const SJsonValue*         policy = Member(root, "policy", SJsonValue::EType::String);
         const SJsonValue*         setId = Member(root, "set_id", SJsonValue::EType::String);
         const SJsonValue*         packs = Member(root, "packs", SJsonValue::EType::Array);
-        constexpr const char*     expectedPackIds[] = {"bullworth", "vice-city", "liberty-city", "carcer-city"};
+        constexpr const char*     canonicalPackIds[] = {"bullworth", "vice-city", "liberty-city", "carcer-city"};
         SStaticWorldV3SetManifest parsed;
         if (!format || format->number != 3 || !policy || policy->string != STATIC_WORLD_V3_SET_POLICY || !setId || !IsLowerSha256(setId->string) || !packs ||
-            packs->array.size() != parsed.packs.size())
+            packs->array.empty() || packs->array.size() > std::size(canonicalPackIds))
         {
             error = "static-world-v3-set format, policy, set ID, or pack count is invalid";
             return false;
         }
-        for (size_t index = 0; index < parsed.packs.size(); ++index)
+        size_t nextCanonicalIndex = 0;
+        for (const SJsonValue& value : packs->array)
         {
-            const SJsonValue& value = packs->array[index];
             const SJsonValue* packId = Member(value, "pack_id", SJsonValue::EType::String);
             const SJsonValue* contentId = Member(value, "content_id", SJsonValue::EType::String);
-            if (!HasExactKeys(value, {"pack_id", "content_id"}) || !packId || packId->string != expectedPackIds[index] || !contentId ||
+            while (packId && nextCanonicalIndex < std::size(canonicalPackIds) && packId->string != canonicalPackIds[nextCanonicalIndex])
+                ++nextCanonicalIndex;
+            if (!HasExactKeys(value, {"pack_id", "content_id"}) || !packId || nextCanonicalIndex == std::size(canonicalPackIds) || !contentId ||
                 !IsLowerSha256(contentId->string))
             {
-                error = "static-world-v3-set pack identities are not exact or canonically ordered";
+                error = "static-world-v3-set pack identities are not unique or canonically ordered";
                 return false;
             }
-            parsed.packs[index] = {packId->string, contentId->string};
+            parsed.packs.push_back({packId->string, contentId->string});
+            ++nextCanonicalIndex;
         }
         parsed.setId = setId->string;
         parsed.manifestSha256 = SharedUtil::GenerateSha256HexString(bytes).ToLower();
@@ -3272,20 +3273,26 @@ namespace
             return true;
         };
 
-        if (!validatePack(g_staticWorldV3Packs[STATIC_WORLD_V3_VICE_CITY_INDEX], "vice-city", STATIC_WORLD_V3_VICE_CITY_LOD_LINKS,
-                          STATIC_WORLD_V3_VICE_CITY_LOD_SCRATCH, STATIC_WORLD_V3_VICE_CITY_LOD_CHILD_GROUPS, STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS) ||
-            !validatePack(g_staticWorldV3Packs[STATIC_WORLD_V3_LIBERTY_CITY_INDEX], "liberty-city", STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS,
-                          STATIC_WORLD_V3_LIBERTY_CITY_LOD_SCRATCH, STATIC_WORLD_V3_LIBERTY_CITY_LOD_CHILD_GROUPS,
-                          STATIC_WORLD_V3_LIBERTY_CITY_MISSING_ANCHOR_COLS))
-            return false;
-
-        for (size_t index = 0; index < g_staticWorldV3Packs.size(); ++index)
-            if (index != STATIC_WORLD_V3_VICE_CITY_INDEX && index != STATIC_WORLD_V3_LIBERTY_CITY_INDEX &&
-                (g_staticWorldV3Packs[index].inventory.lodAnchorCount || g_staticWorldV3Packs[index].inventory.lodLinkCount))
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+        {
+            if (pack.identity.packId == "vice-city")
+            {
+                if (!validatePack(pack, "vice-city", STATIC_WORLD_V3_VICE_CITY_LOD_LINKS, STATIC_WORLD_V3_VICE_CITY_LOD_SCRATCH,
+                                  STATIC_WORLD_V3_VICE_CITY_LOD_CHILD_GROUPS, STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS))
+                    return false;
+            }
+            else if (pack.identity.packId == "liberty-city")
+            {
+                if (!validatePack(pack, "liberty-city", STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS, STATIC_WORLD_V3_LIBERTY_CITY_LOD_SCRATCH,
+                                  STATIC_WORLD_V3_LIBERTY_CITY_LOD_CHILD_GROUPS, STATIC_WORLD_V3_LIBERTY_CITY_MISSING_ANCHOR_COLS))
+                    return false;
+            }
+            else if (pack.inventory.lodAnchorCount || pack.inventory.lodLinkCount)
             {
                 error = "static-world-v3 non-VC/LC pack unexpectedly requires an LOD entity array";
                 return false;
             }
+        }
         return true;
     }
 
@@ -3462,10 +3469,9 @@ namespace
         // record before any IPL entity can reach the renderer. Prove that
         // runtime postcondition here; the two admitted VC anchor omissions
         // are handled explicitly below.
-        for (size_t packIndex : {STATIC_WORLD_V3_VICE_CITY_INDEX, STATIC_WORLD_V3_LIBERTY_CITY_INDEX})
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
         {
-            const SStaticWorldV3RuntimePack& pack = g_staticWorldV3Packs[packIndex];
-            if (pack.activeBank < 0)
+            if (pack.activeBank < 0 || !pack.inventory.lodAnchorCount)
                 continue;
             std::set<unsigned int> colModels;
             for (const auto& [ordinal, ids] : pack.inventory.colModelIds)
@@ -3484,10 +3490,9 @@ namespace
         }
         missingAnchorColTransfers = EnsureStaticWorldV3MissingAnchorCollision(activePack);
 
-        for (size_t packIndex : {STATIC_WORLD_V3_VICE_CITY_INDEX, STATIC_WORLD_V3_LIBERTY_CITY_INDEX})
+        for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
         {
-            SStaticWorldV3RuntimePack& pack = g_staticWorldV3Packs[packIndex];
-            if (pack.activeBank < 0)
+            if (pack.activeBank < 0 || !pack.inventory.lodAnchorCount)
                 continue;
             if (pack.lodEntityArrayIndex < 0 || !pack.lodEntityArray || pack.lodOwnerIplSlot >= static_cast<unsigned int>(iplPool->m_nSize) ||
                 !iplPool->IsContains(pack.lodOwnerIplSlot))
@@ -3575,7 +3580,7 @@ namespace
             owner->bDisabledStreaming = 1;
         }
         const unsigned int expectedMissingAnchorCols =
-            g_staticWorldV3ActivePack == static_cast<int>(STATIC_WORLD_V3_VICE_CITY_INDEX) ? STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS : 0;
+            activePack.identity.packId == "vice-city" ? STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS : 0;
         if (missingAnchorColTransfers != expectedMissingAnchorCols)
             Fatal("static-world-v3 missing-anchor collision transfer count drifted after admission");
         g_staticWorldV3LodState = EStaticWorldV3LodState::Ready;
@@ -3658,7 +3663,7 @@ namespace
         const std::vector<char> originalBytes(data, data + size);
         if (boundingPass)
         {
-            const unsigned int expectedTransfers = owner->second == STATIC_WORLD_V3_VICE_CITY_INDEX ? STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS : 0;
+            const unsigned int expectedTransfers = pack.identity.packId == "vice-city" ? STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS : 0;
             if (EnsureStaticWorldV3MissingAnchorCollision(pack) != expectedTransfers)
                 Fatal("static-world-v3 bounding bootstrap missing-anchor transfer count drifted");
             for (size_t index = 0; index < sourceInstances.size(); ++index)
@@ -4220,12 +4225,13 @@ namespace
             catalogLodAnchors += pack.inventory.lodAnchorCount;
             catalogLodLinks += pack.inventory.lodLinkCount;
         }
-        Log("registrar=active format=3 setId=%s generation=1 recyclable=after-fence logicalPacks=4 physicalResident=none catalogModels=%u archives=%u "
+        Log("registrar=active format=3 setId=%s generation=1 recyclable=after-fence logicalPacks=%u physicalResident=none catalogModels=%u archives=%u "
             "txds=%u cols=%u iplSlotsTotal=%u hiddenLodIpls=%u bindings=%u lodArrays=2 lodAnchors=%u lodLinks=%u bufferBlocks=%u "
             "modelStoresBefore=%u,%u,%u barrier=first-ModelInfo startupMapping=canonical-until-bounds commit=global",
-            g_staticWorldV3Set.setId.c_str(), catalogModels, static_cast<unsigned int>(journal.archives.size()), static_cast<unsigned int>(journal.txds.size()),
-            static_cast<unsigned int>(journal.cols.size()), static_cast<unsigned int>(journal.ipls.size()), hiddenLodOwners,
-            static_cast<unsigned int>(bindings.size()), catalogLodAnchors, catalogLodLinks, requiredTotalBlocks, atomicBefore, damageBefore, timedBefore);
+            g_staticWorldV3Set.setId.c_str(), static_cast<unsigned int>(g_staticWorldV3Packs.size()), catalogModels,
+            static_cast<unsigned int>(journal.archives.size()), static_cast<unsigned int>(journal.txds.size()), static_cast<unsigned int>(journal.cols.size()),
+            static_cast<unsigned int>(journal.ipls.size()), hiddenLodOwners, static_cast<unsigned int>(bindings.size()), catalogLodAnchors, catalogLodLinks,
+            requiredTotalBlocks, atomicBefore, damageBefore, timedBefore);
     }
 
     void RebuildStaticWorldV3ArchiveChains()
@@ -4719,12 +4725,27 @@ namespace
         return true;
     }
 
-    bool ValidateStaticWorldV3Aggregate(const std::array<SNativeWorldV3SetPackSA, 4>& packs, const std::array<SStaticWorldV3Inventory, 4>& inventories,
+    bool ValidateStaticWorldV3Aggregate(const std::vector<SNativeWorldV3SetPackSA>& packs, const std::vector<SStaticWorldV3Inventory>& inventories,
                                         std::string& error)
     {
-        constexpr const char*               expectedNamespaces[] = {"bw", "vc", "lc", "cc"};
-        constexpr unsigned int              expectedFirstModels[] = {20000, 21054, 24856, 28344};
-        constexpr unsigned int              expectedLastModels[] = {21053, 24855, 28343, 31836};
+        struct SReviewedPackProfile
+        {
+            const char*  packId;
+            const char*  nameSpace;
+            unsigned int firstModel;
+            unsigned int lastModel;
+        };
+        constexpr SReviewedPackProfile reviewedProfiles[] = {
+            {"bullworth", "bw", 20000, 21053},
+            {"vice-city", "vc", 21054, 24855},
+            {"liberty-city", "lc", 24856, 28343},
+            {"carcer-city", "cc", 28344, 31836},
+        };
+        if (packs.empty() || packs.size() != inventories.size())
+        {
+            error = "static-world-v3-set aggregate inputs are empty or misaligned";
+            return false;
+        }
         std::set<std::string>               globalMembers;
         std::set<unsigned int>              globalModelIds;
         std::map<unsigned int, std::string> globalModelKeys;
@@ -4744,12 +4765,12 @@ namespace
         for (size_t index = 0; index < inventories.size(); ++index)
         {
             const SStaticWorldV3Inventory& inventory = inventories[index];
-            if (inventory.nameSpace != expectedNamespaces[index] || inventory.firstModel != expectedFirstModels[index] ||
-                inventory.lastModel != expectedLastModels[index])
+            const auto profile = std::find_if(std::begin(reviewedProfiles), std::end(reviewedProfiles),
+                                              [&packs, index](const SReviewedPackProfile& candidate) { return packs[index].packId == candidate.packId; });
+            if (profile == std::end(reviewedProfiles) || inventory.nameSpace != profile->nameSpace || inventory.firstModel != profile->firstModel ||
+                inventory.lastModel != profile->lastModel)
             {
-                error = SString("static-world-v3-set pack %s namespace/range differs actual=%s:%u..%u expected=%s:%u..%u", packs[index].packId.c_str(),
-                                inventory.nameSpace.c_str(), inventory.firstModel, inventory.lastModel, expectedNamespaces[index], expectedFirstModels[index],
-                                expectedLastModels[index]);
+                error = SString("static-world-v3-set pack %s namespace/range differs from its reviewed profile", packs[index].packId.c_str());
                 return false;
             }
             for (unsigned int modelId : inventory.modelIds)
@@ -4806,17 +4827,21 @@ namespace
             return false;
         }
         SharedUtil::WriteDebugEvent(
-            SString("[NativeWorldAggregatePlanner] state=proved packs=4 models=%u placements=%u atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 "
+            SString("[NativeWorldAggregatePlanner] state=proved packs=%u models=%u placements=%u atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 "
                     "col=%u/512 ipl=%u/1024 archives=%u/245 handles=%u/255 maxCityBuildings=%u/32000 maxCityColModels=%u/30000 nativeWrites=0",
-                    totalModels, totalPlacements, ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, 9166 + maximumCityPlacements,
-                    9980 + maximumCityColModels));
+                    static_cast<unsigned int>(packs.size()), totalModels, totalPlacements, ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles,
+                    9166 + maximumCityPlacements, 9980 + maximumCityColModels));
         return true;
     }
 
     bool AcquireStaticWorldV3SetChildren(const SStaticWorldV3SetManifest& setManifest, const std::string& ticketId, const std::function<bool()>& isCancelled,
-                                         std::array<CNativeWorldCacheLeaseSA, 4>& leases, std::array<SStaticWorldV3Inventory, 4>& inventories,
-                                         std::array<SStaticWorldV3Manifest, 4>& manifests, std::array<std::string, 4>& directories, std::string& error)
+                                         std::vector<CNativeWorldCacheLeaseSA>& leases, std::vector<SStaticWorldV3Inventory>& inventories,
+                                         std::vector<SStaticWorldV3Manifest>& manifests, std::vector<std::string>& directories, std::string& error)
     {
+        leases.resize(setManifest.packs.size());
+        inventories.resize(setManifest.packs.size());
+        manifests.resize(setManifest.packs.size());
+        directories.resize(setManifest.packs.size());
         for (size_t index = 0; index < setManifest.packs.size(); ++index)
         {
             SNativeWorldCacheRequestSA request;
@@ -4873,11 +4898,11 @@ namespace
         result.offerId = SharedUtil::GenerateSha256HexString(offerIdentity.str()).ToLower();
         const auto audit = [&manifest, &isCancelled](const std::string&, std::string& auditError)
         {
-            std::array<CNativeWorldCacheLeaseSA, 4> leases;
-            std::array<SStaticWorldV3Inventory, 4>  inventories;
-            std::array<SStaticWorldV3Manifest, 4>   manifests;
-            std::array<std::string, 4>              directories;
-            const std::string                       syntheticTicket = manifest.setId.substr(0, 32);
+            std::vector<CNativeWorldCacheLeaseSA> leases;
+            std::vector<SStaticWorldV3Inventory>  inventories;
+            std::vector<SStaticWorldV3Manifest>   manifests;
+            std::vector<std::string>              directories;
+            const std::string                     syntheticTicket = manifest.setId.substr(0, 32);
             return AcquireStaticWorldV3SetChildren(manifest, syntheticTicket, isCancelled, leases, inventories, manifests, directories, auditError);
         };
         result.success = PublishNativeWorldV3Set(request, audit, result.publishedDirectory, result.cacheHit, result.error);
@@ -5051,7 +5076,9 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         {
             g_staticWorldV3Route = false;
             g_staticWorldV3Set = {};
-            g_staticWorldV3Packs = {};
+            g_staticWorldV3Packs.clear();
+            g_staticWorldV3ChildLeases.clear();
+            g_staticWorldV3ModelBindings.clear();
             g_staticWorldV3LargestEntryBlocks = 0;
         }
     };
@@ -5103,20 +5130,21 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         request.sourceManifestBytes = setManifest.manifestBytes;
         request.setId = setManifest.setId;
         request.packs = setManifest.packs;
-        std::array<CNativeWorldCacheLeaseSA, 4> childLeases;
-        std::array<SStaticWorldV3Inventory, 4>  childInventories;
-        std::array<SStaticWorldV3Manifest, 4>   childManifests;
-        std::array<std::string, 4>              childDirectories;
-        SStaticWorldV3SetManifest               lockedSetManifest;
+        std::vector<CNativeWorldCacheLeaseSA> childLeases;
+        std::vector<SStaticWorldV3Inventory>  childInventories;
+        std::vector<SStaticWorldV3Manifest>   childManifests;
+        std::vector<std::string>              childDirectories;
+        SStaticWorldV3SetManifest             lockedSetManifest;
         const auto auditSet = [&setManifest, &lockedSetManifest, &childLeases, &childInventories, &childManifests, &childDirectories, &selection, &isCancelled](
                                   const std::string& lockedDirectory, std::string& auditError)
         {
             const SString             lockedManifestPath = SString("%s\\%s", lockedDirectory.c_str(), STATIC_WORLD_V3_SET_MANIFEST);
             SStaticWorldV3SetManifest lockedManifest;
-            bool                      samePacks = true;
+            bool                      samePacks = false;
             if (!isCancelled() && LoadStaticWorldV3SetManifest(lockedManifestPath, lockedManifest, auditError))
             {
-                for (size_t index = 0; index < lockedManifest.packs.size(); ++index)
+                samePacks = lockedManifest.packs.size() == setManifest.packs.size();
+                for (size_t index = 0; samePacks && index < lockedManifest.packs.size(); ++index)
                     samePacks = samePacks && lockedManifest.packs[index].packId == setManifest.packs[index].packId &&
                                 lockedManifest.packs[index].contentId == setManifest.packs[index].contentId;
             }
@@ -5141,8 +5169,9 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         }
         SharedUtil::WriteDebugEvent(
             SString("[NativeWorldAuthorization] state=aggregate-cache-audited format=3 policy=%s setId=%s ticket=%s activation=no "
-                    "leases=pending:5 nativeWrites=0 allocations=0 hooks=0 archives=0",
-                    STATIC_WORLD_V3_SET_POLICY, setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str()));
+                    "leases=pending:%u nativeWrites=0 allocations=0 hooks=0 archives=0",
+                    STATIC_WORLD_V3_SET_POLICY, setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str(),
+                    static_cast<unsigned int>(setManifest.packs.size() + 1)));
         unsigned int catalogModels = 0;
         unsigned int largestCityPlacements = 0;
         unsigned int largestCityAnchors = 0;
@@ -5154,6 +5183,10 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         g_staticWorldV3ActivePack = -1;
         g_staticWorldV3NextBank = 0;
         g_staticWorldV3BootstrapBoundsComplete = false;
+        g_staticWorldV3Packs.clear();
+        g_staticWorldV3Packs.resize(childInventories.size());
+        g_staticWorldV3ModelBindings.clear();
+        g_staticWorldV3ModelBindings.resize(childInventories.size());
         for (size_t index = 0; index < childInventories.size() && error.empty(); ++index)
         {
             SStaticWorldV3RuntimePack& pack = g_staticWorldV3Packs[index];
@@ -5178,7 +5211,7 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         if (error.empty() && !CNativeModelStoreSA::ValidateExecutableAndPatchManifestReadOnly(gameVersion, error))
             error = error.empty() ? "static-world-v3 executable validation failed" : error;
         if (error.empty() &&
-            (catalogModels != 11837U || 9166U + largestCityPlacements + largestCityAnchors > 32000U ||
+            (catalogModels == 0 || catalogModels > 12000U || 9166U + largestCityPlacements + largestCityAnchors > 32000U ||
              memcmp(reinterpret_cast<const void*>(LOAD_COL_BUFFER_CALL), LOAD_COL_BUFFER_CALL_BYTES, sizeof(LOAD_COL_BUFFER_CALL_BYTES)) != 0 ||
              memcmp(reinterpret_cast<const void*>(LOAD_IPL_BUFFER_CALL), LOAD_IPL_BUFFER_CALL_BYTES, sizeof(LOAD_IPL_BUFFER_CALL_BYTES)) != 0 ||
              memcmp(reinterpret_cast<const void*>(REMOVE_ALL_COLLISION_TAIL), REMOVE_ALL_COLLISION_TAIL_BYTES, sizeof(REMOVE_ALL_COLLISION_TAIL_BYTES)) != 0))
@@ -5220,11 +5253,15 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         g_reservedPackModelLast.store(NATIVE_WORLD_MODEL_ARENA_LAST, std::memory_order_relaxed);
         g_nativeModelSlotsReserved.store(true, std::memory_order_release);
         g_state = EState::Prepared;
+        std::ostringstream catalog;
+        for (size_t index = 0; index < lockedSetManifest.packs.size(); ++index)
+            catalog << (index ? "," : "") << lockedSetManifest.packs[index].packId;
         SharedUtil::WriteDebugEvent(
-            SString("[NativeWorldAuthorization] state=aggregate-registrar-prepared setId=%s ticket=%s activation=prepared leases=pending:5 "
-                    "catalog=bullworth,vice-city,liberty-city,carcer-city logicalPacks=4 catalogModels=%u banks=2x4096 "
+            SString("[NativeWorldAuthorization] state=aggregate-registrar-prepared setId=%s ticket=%s activation=prepared leases=pending:%u "
+                    "catalog=%s logicalPacks=%u catalogModels=%u banks=2x4096 "
                     "buildingPolicy=one-city-spatial-exclusion nativeWrites=yes hooks=0 archives=0",
-                    setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str(), catalogModels));
+                    setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str(), static_cast<unsigned int>(lockedSetManifest.packs.size() + 1),
+                    catalog.str().c_str(), static_cast<unsigned int>(lockedSetManifest.packs.size()), catalogModels));
         return;
     }
 

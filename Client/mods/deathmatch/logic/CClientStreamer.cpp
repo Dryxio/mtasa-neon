@@ -28,8 +28,8 @@ CClientStreamer::CClientStreamer(StreamerLimitReachedFunction* pLimitReachedFunc
 
     // Create our main world sectors covering the mainland
     CVector2D size(m_fSectorSize, m_fRowSize);
-    CVector2D bottomLeft(-WORLD_SIZE, -WORLD_SIZE);
-    CVector2D topRight(WORLD_SIZE, WORLD_SIZE);
+    CVector2D bottomLeft(-STREAMER_MAIN_GRID_HALF_SIZE, -STREAMER_MAIN_GRID_HALF_SIZE);
+    CVector2D topRight(STREAMER_MAIN_GRID_HALF_SIZE, STREAMER_MAIN_GRID_HALF_SIZE);
     CreateSectors(&m_WorldRows, size, bottomLeft, topRight);
 
     // Find our row and sector
@@ -245,9 +245,7 @@ CClientStreamSectorRow* CClientStreamer::FindOrCreateRow(CVector& vecPosition, C
     }
 
     // Search through our extra rows using map lookup
-    float fBottom = float((int)(vecPosition.fY / m_fRowSize)) * m_fRowSize;
-    if (vecPosition.fY < 0.0f)
-        fBottom -= m_fRowSize;
+    const float fBottom = AlignStreamSectorCoordinate(vecPosition.fY, m_fRowSize);
     int iRowIndex = (int)(fBottom / m_fRowSize);
 
     auto it = m_ExtraRows.find(iRowIndex);
@@ -277,9 +275,7 @@ CClientStreamSectorRow* CClientStreamer::FindRow(float fY)
     }
 
     // Search through our extra rows using map lookup
-    float fBottom = float((int)(fY / m_fRowSize)) * m_fRowSize;
-    if (fY < 0.0f)
-        fBottom -= m_fRowSize;
+    const float fBottom = AlignStreamSectorCoordinate(fY, m_fRowSize);
     int iRowIndex = (int)(fBottom / m_fRowSize);
 
     auto it = m_ExtraRows.find(iRowIndex);

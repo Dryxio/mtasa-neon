@@ -34,7 +34,9 @@ STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION = 0x38
 STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION = 0x39
 STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION = 0x3A
 STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION = 0x3B
-LATEST_BITSTREAM_VERSION = STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION
+NATIVE_TASK_LOCOMOTION_PRESENTATION_BITSTREAM_VERSION = 0x3C
+STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION = 0x3D
+LATEST_BITSTREAM_VERSION = STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
 
 
 class RecordError(ValueError):
@@ -90,9 +92,14 @@ def encode_descriptor(descriptor: TransportDescriptor, client_bitstream_version:
         AUTHORIZATION_BITSTREAM_VERSION
         if descriptor.format == PACK_FORMAT
         else STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION if descriptor.format == STATIC_WORLD_PACK_FORMAT
-        else STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION
+        else STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
     )
     if client_bitstream_version < transport_capability:
+        return b""
+    # A set is a closed startup transaction, never a publish-only descriptor.
+    # The server refuses the resource start entirely when the exact capability
+    # is absent because N + fileCount=1 has no valid format-3 meaning.
+    if is_v3_set and client_bitstream_version < authorization_capability:
         return b""
     authorized = descriptor.authorization_requested and client_bitstream_version >= authorization_capability
     fields = bytearray(b"A" if authorized else b"N")
@@ -137,7 +144,7 @@ def decode_descriptor(data: bytes, client_bitstream_version: int) -> TransportDe
         AUTHORIZATION_BITSTREAM_VERSION
         if format_value == PACK_FORMAT
         else STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION if format_value == STATIC_WORLD_PACK_FORMAT
-        else STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION
+        else STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
     )
     if client_bitstream_version < transport_capability:
         raise RecordError("transport descriptor exceeds negotiated capability")
@@ -286,7 +293,7 @@ def _validate(record: AuthorizationRecord) -> bytes:
         AUTHORIZATION_BITSTREAM_VERSION
         if closed_bullworth
         else STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION if closed_static_world
-        else STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION
+        else STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
     )
     if not minimum_bitstream_version <= record.bitstream_version <= LATEST_BITSTREAM_VERSION:
         raise RecordError("bitstream version is outside the startup capability window")

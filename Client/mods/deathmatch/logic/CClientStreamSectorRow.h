@@ -10,10 +10,19 @@
 
 #pragma once
 
-#define WORLD_SIZE 6000.0f  // was 3000.0f
-
 #include "CClientCommon.h"
+#include <cmath>
 #include <list>
+
+// This is only the eagerly allocated central grid. The streamer creates extra
+// rows and sectors outside it, so it must never be used as a world boundary.
+constexpr float STREAMER_MAIN_GRID_HALF_SIZE = 6000.0f;
+
+inline float AlignStreamSectorCoordinate(float coordinate, float sectorSize)
+{
+    return std::floor(coordinate / sectorSize) * sectorSize;
+}
+
 class CClientStreamSector;
 class CClientStreamer;
 

@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from native_world_authorization import (  # noqa: E402
     AUTHORIZATION_BITSTREAM_VERSION,
+    NATIVE_TASK_LOCOMOTION_PRESENTATION_BITSTREAM_VERSION,
     AuthorizationRecord,
     PACK_FORMAT,
     POLICY_BULLWORTH,
@@ -23,6 +24,7 @@ from native_world_authorization import (  # noqa: E402
     STATIC_WORLD_V3_PACK_FORMAT,
     STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION,
     STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION,
+    STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION,
     STATIC_WORLD_V3_SET_WIRE_VERSION,
     POLICY_STATIC_WORLD_V3_SET,
     STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION,
@@ -135,7 +137,7 @@ class NativeWorldAuthorizationCodecTests(unittest.TestCase):
                             wire_version=wire_version,
                             startup_mode=startup_mode,
                             policy=policy,
-                            bitstream_version=STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION,
+                            bitstream_version=STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION,
                         )
                         with self.subTest(startup_tuple=startup_tuple):
                             if startup_tuple in accepted:
@@ -233,9 +235,13 @@ class NativeWorldAuthorizationWireAndLifecycleTests(unittest.TestCase):
             wire_version=STATIC_WORLD_V3_SET_WIRE_VERSION,
             policy=POLICY_STATIC_WORLD_V3_SET,
         )
-        encoded_set = encode_descriptor(authorized_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION)
+        self.assertEqual(encode_descriptor(authorized_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION), b"")
+        self.assertEqual(encode_descriptor(authorized_set, NATIVE_TASK_LOCOMOTION_PRESENTATION_BITSTREAM_VERSION), b"")
+        encoded_set = encode_descriptor(authorized_set, STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION)
         self.assertEqual(encoded_set[:4], b"A\x03\x01\x1f")
-        self.assertEqual(decode_descriptor(encoded_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION), authorized_set)
+        self.assertEqual(decode_descriptor(encoded_set, STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION), authorized_set)
+        with self.assertRaises(RecordError):
+            decode_descriptor(encoded_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION)
         with self.assertRaises(RecordError):
             decode_descriptor(encoded_set, STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION)
         validate_descriptor_placement(("N",) + ("F",) * 6 + ("E",), file_count=6)

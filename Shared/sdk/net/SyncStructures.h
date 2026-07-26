@@ -16,6 +16,7 @@
 #include "SharedUtil.Game.h"
 #include "SharedUtil.Misc.h"
 #include "CVector2D.h"
+#include "WorldLimits.h"
 
 #ifndef MTA_CLIENT
     #include "CVehicle.h"
@@ -31,7 +32,7 @@
 // wire boundary. This changes the packet format, so both ends must use Neon.
 constexpr unsigned int POSITION_SYNC_INTEGER_BITS = 15;
 constexpr unsigned int POSITION_SYNC_FRACTIONAL_BITS = 10;
-constexpr float        LOW_PRECISION_POSITION_BOUND = 10000.0f;
+constexpr float        LOW_PRECISION_POSITION_BOUND = EXTENDED_WORLD_MAX_COORD;
 constexpr float        LEGACY_LOW_PRECISION_POSITION_BOUND = 8192.0f;
 
 #pragma pack(push)

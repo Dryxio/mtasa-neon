@@ -9,9 +9,8 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <WorldLimits.h>
 
-constexpr float  EXTENDED_WORLD_MIN_COORD = -10000.0f;
-constexpr float  EXTENDED_WORLD_MAX_ENTITY_COORD = 9999.0f;
 constexpr size_t PRESERVED_POOL_SIZE = 2000;
 constexpr size_t RESIZE_POOL_STEP = 5000;
 

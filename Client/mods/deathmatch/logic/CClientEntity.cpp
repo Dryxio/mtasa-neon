@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <WorldLimits.h>
 
 using std::list;
 
@@ -623,8 +624,9 @@ bool CClientEntity::IsOutOfBounds()
     CVector vecPosition;
     GetPosition(vecPosition);
 
-    return (vecPosition.fX < -3000.0f || vecPosition.fX > 3000.0f || vecPosition.fY < -3000.0f || vecPosition.fY > 3000.0f || vecPosition.fZ < -3000.0f ||
-            vecPosition.fZ > 3000.0f);
+    return !std::isfinite(vecPosition.fX) || !std::isfinite(vecPosition.fY) || !std::isfinite(vecPosition.fZ) ||
+           vecPosition.fX < EXTENDED_WORLD_MIN_COORD || vecPosition.fX > EXTENDED_WORLD_MAX_ENTITY_COORD || vecPosition.fY < EXTENDED_WORLD_MIN_COORD ||
+           vecPosition.fY > EXTENDED_WORLD_MAX_ENTITY_COORD || vecPosition.fZ < EXTENDED_WORLD_MIN_COORD || vecPosition.fZ > EXTENDED_WORLD_MAX_ENTITY_COORD;
 }
 
 void CClientEntity::AttachTo(CClientEntity* pEntity)

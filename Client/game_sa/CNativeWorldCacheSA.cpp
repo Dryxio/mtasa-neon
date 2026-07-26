@@ -1339,6 +1339,23 @@ namespace
     constexpr const char* STATIC_WORLD_V3_SET_ID_DOMAIN = "mta-native-world-static-world-v3-set-v1";
     constexpr const char* STATIC_WORLD_V3_SET_PACKS[] = {"bullworth", "vice-city", "liberty-city", "carcer-city"};
 
+    bool IsCanonicalNativeWorldV3SetSelection(const std::vector<SNativeWorldV3SetPackSA>& packs)
+    {
+        if (packs.empty() || packs.size() > std::size(STATIC_WORLD_V3_SET_PACKS))
+            return false;
+
+        size_t nextCanonicalIndex = 0;
+        for (const SNativeWorldV3SetPackSA& pack : packs)
+        {
+            while (nextCanonicalIndex < std::size(STATIC_WORLD_V3_SET_PACKS) && pack.packId != STATIC_WORLD_V3_SET_PACKS[nextCanonicalIndex])
+                ++nextCanonicalIndex;
+            if (nextCanonicalIndex == std::size(STATIC_WORLD_V3_SET_PACKS) || !IsLowerSha256(pack.contentId))
+                return false;
+            ++nextCanonicalIndex;
+        }
+        return true;
+    }
+
     std::string BuildCanonicalNativeWorldV3Set(const SNativeWorldV3SetRequestSA& request)
     {
         std::ostringstream output;
@@ -1357,9 +1374,8 @@ namespace
         if (request.manifestFileName != STATIC_WORLD_V3_SET_MANIFEST || !IsLowerSha256(request.sourceManifestSha256) || !IsLowerSha256(request.setId) ||
             !request.sourceManifestBytes || request.sourceManifestBytes > 16 * 1024)
             return false;
-        for (size_t index = 0; index < request.packs.size(); ++index)
-            if (request.packs[index].packId != STATIC_WORLD_V3_SET_PACKS[index] || !IsLowerSha256(request.packs[index].contentId))
-                return false;
+        if (!IsCanonicalNativeWorldV3SetSelection(request.packs))
+            return false;
         return GenerateNativeWorldV3SetId(request) == request.setId;
     }
 

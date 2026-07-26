@@ -71,7 +71,7 @@ class NativeWorldV3SetTest(unittest.TestCase):
     def test_set_id_mismatch_and_pack_count_fail_closed(self) -> None:
         for changed in (
             {**self.envelope, "set_id": "0" * 64},
-            {**self.envelope, "packs": self.packs[:-1]},
+            {**self.envelope, "packs": []},
             {**self.envelope, "policy": "static-world-v3"},
         ):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
@@ -111,6 +111,22 @@ class NativeWorldV3SetTest(unittest.TestCase):
             envelope = build_set_envelope(directories)
             self.assertEqual([pack["pack_id"] for pack in envelope["packs"]], list(CANONICAL_PACK_ORDER))
             self.assertEqual(envelope["set_id"], calculate_set_id(envelope["packs"]))
+
+    def test_server_can_select_a_canonical_subset(self) -> None:
+        for selected in ([pack] for pack in self.packs):
+            envelope = {
+                "format": 3,
+                "policy": POLICY,
+                "set_id": calculate_set_id(selected),
+                "packs": selected,
+            }
+            self.assertEqual(parse_set_envelope(canonical_set_envelope_bytes(envelope).decode("ascii")), envelope)
+        selected = [self.packs[0], self.packs[2], self.packs[3]]
+        envelope = {"format": 3, "policy": POLICY, "set_id": calculate_set_id(selected), "packs": selected}
+        self.assertEqual(parse_set_envelope(canonical_set_envelope_bytes(envelope).decode("ascii")), envelope)
+        for invalid in ([self.packs[2], self.packs[0]], [self.packs[0], self.packs[0]], self.packs + [self.packs[0]]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                calculate_set_id(invalid)
 
 
 if __name__ == "__main__":

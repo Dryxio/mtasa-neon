@@ -45,6 +45,7 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         meta = (REPOSITORY / "test-resources/native-world-v3-transport-test/meta.xml").read_text(encoding="utf-8")
         self.assertIn("NativeWorldStaticWorldV3LodTransport", bitstream)
         self.assertIn("NativeWorldStaticWorldV3StartupAuthorization", bitstream)
+        self.assertIn("NativeWorldStaticWorldV3ServerSelectedSet", bitstream)
         self.assertIn("staticWorldV3PublishOnly", server)
         self.assertIn("!startupAttribute", server)
         self.assertIn("NativeWorldStaticWorldV3LodTransport", packet)
@@ -115,7 +116,9 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
     def test_v3_registrar_catalogues_all_packs_then_collapses_startup_ids(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
-        self.assertIn("catalogModels != 11837U", source)
+        self.assertIn("catalogModels == 0 || catalogModels > 12000U", source)
+        self.assertIn("std::vector<SStaticWorldV3RuntimePack>", source)
+        self.assertIn('pack.identity.packId == "vice-city"', source)
         self.assertIn("ValidateStaticWorldV3LodProfile(error)", source)
         self.assertIn("HookInstallCall(LOAD_COL_BUFFER_CALL", register)
         self.assertIn("HookInstallCall(LOAD_IPL_BUFFER_CALL", register)
@@ -246,6 +249,36 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         ]
         self.assertIn("continue;", allocator)
         self.assertIn("return false;", resolver)
+
+    def test_v3_server_selected_set_has_an_append_only_closed_capability_gate(self) -> None:
+        capability = "NativeWorldStaticWorldV3ServerSelectedSet"
+        server_game = (REPOSITORY / "Server/mods/deathmatch/logic/CGame.cpp").read_text(encoding="utf-8")
+        server_packet = (REPOSITORY / "Server/mods/deathmatch/logic/packets/CResourceStartPacket.cpp").read_text(encoding="utf-8")
+        client_packet = (REPOSITORY / "Client/mods/deathmatch/logic/CPacketHandler.cpp").read_text(encoding="utf-8")
+        core = (REPOSITORY / "Client/core/CCore.cpp").read_text(encoding="utf-8")
+        store = (REPOSITORY / "Client/core/CNativeWorldAuthorizationStore.cpp").read_text(encoding="utf-8")
+        for source in (server_game, server_packet, client_packet, core, store):
+            self.assertIn(capability, source)
+
+    def test_streamer_extra_sector_alignment_uses_floor_at_negative_boundaries(self) -> None:
+        header = (REPOSITORY / "Client/mods/deathmatch/logic/CClientStreamSectorRow.h").read_text(encoding="utf-8")
+        streamer = (REPOSITORY / "Client/mods/deathmatch/logic/CClientStreamer.cpp").read_text(encoding="utf-8")
+        row = (REPOSITORY / "Client/mods/deathmatch/logic/CClientStreamSectorRow.cpp").read_text(encoding="utf-8")
+        self.assertIn("std::floor(coordinate / sectorSize) * sectorSize", header)
+        self.assertEqual(streamer.count("AlignStreamSectorCoordinate"), 2)
+        self.assertEqual(row.count("AlignStreamSectorCoordinate"), 1)
+        self.assertNotIn("if (vecPosition.fY < 0.0f)", streamer)
+        self.assertNotIn("if (vecPosition.fX < 0.0f)", row)
+
+    def test_mta_consumers_share_the_extended_world_coordinate_contract(self) -> None:
+        limits = (REPOSITORY / "Shared/sdk/WorldLimits.h").read_text(encoding="utf-8")
+        entity = (REPOSITORY / "Client/mods/deathmatch/logic/CClientEntity.cpp").read_text(encoding="utf-8")
+        sync = (REPOSITORY / "Shared/sdk/net/SyncStructures.h").read_text(encoding="utf-8")
+        self.assertIn("EXTENDED_WORLD_MIN_COORD = -10000.0f", limits)
+        self.assertIn("EXTENDED_WORLD_MAX_ENTITY_COORD", limits)
+        self.assertIn("!std::isfinite(vecPosition.fX)", entity)
+        self.assertIn("vecPosition.fX < EXTENDED_WORLD_MIN_COORD", entity)
+        self.assertIn("LOW_PRECISION_POSITION_BOUND = EXTENDED_WORLD_MAX_COORD", sync)
 
 
 if __name__ == "__main__":

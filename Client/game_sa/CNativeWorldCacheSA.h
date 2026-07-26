@@ -10,7 +10,6 @@
 #pragma once
 
 #include <atomic>
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -58,7 +57,7 @@ struct SNativeWorldV3SetRequestSA
     std::string                            sourceManifestSha256;
     std::uint64_t                          sourceManifestBytes{};
     std::string                            setId;
-    std::array<SNativeWorldV3SetPackSA, 4> packs;
+    std::vector<SNativeWorldV3SetPackSA> packs;
     std::shared_ptr<std::atomic_bool>      cancellation;
 };
 

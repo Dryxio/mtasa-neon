@@ -780,13 +780,13 @@ bool CResource::GetCompatibilityStatus(SString& strOutStatus)
         for (std::list<CPlayer*>::const_iterator iter = g_pGame->GetPlayerManager()->IterBegin(); iter != g_pGame->GetPlayerManager()->IterEnd(); iter++)
             if ((*iter)->IsJoined() &&
                 ((m_strMinClientRequirement > (*iter)->GetPlayerVersion() && !(*iter)->ShouldIgnoreMinClientVersionChecks()) ||
-                 (RequiresNativeWorldV3SetStartupCapability() && !(*iter)->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3StartupAuthorization))))
+                 (RequiresNativeWorldV3SetStartupCapability() && !(*iter)->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet))))
                 uiNumIncompatiblePlayers++;
 
         if (uiNumIncompatiblePlayers > 0)
         {
             strOutStatus = RequiresNativeWorldV3SetStartupCapability()
-                               ? SString("%d connected player(s) lack the static-world-v3-set startup capability", uiNumIncompatiblePlayers)
+                               ? SString("%d connected player(s) lack the server-selected static-world-v3-set capability", uiNumIncompatiblePlayers)
                                : SString("%d connected player(s) below required client version %s", uiNumIncompatiblePlayers, *m_strMinClientRequirement);
             return false;
         }

@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <WorldLimits.h>
 #include "CCullZonesSA.h"
 #include <numbers>
 #include <multiplayer/CMultiplayer.h>
@@ -30,10 +31,6 @@ extern CGameSA*        pGame;
 namespace
 {
     extern const unsigned char aOriginalSurfaceInfo[2292];
-
-    constexpr float EXTENDED_WORLD_MIN_COORD = -10000.0f;
-    constexpr float EXTENDED_WORLD_MAX_COORD = 10000.0f;
-    constexpr float EXTENDED_WORLD_MAX_ENTITY_COORD = EXTENDED_WORLD_MAX_COORD - 1.0f;
 
     void PatchEntityWorldBounds()
     {

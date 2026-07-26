@@ -1112,10 +1112,45 @@ The updated checkpoint sequence is:
    streaming, RenderWare, allocation or crash diagnostic followed the fix.
    Borderless Alt-Tab did not issue a device reset; a real runtime D3D reset
    remains an explicit streaming/render/memory checkpoint test.
-11. **MTA/API/network completion.** Audit logical model-ID width, remaining
-   coordinate/streamer bounds, `IsOutOfBounds`, script APIs, serialization,
-   protocol capabilities and legacy-client refusal. Build every affected
-   client/server producer and consumer when protocol or ABI changes.
+11. **MTA/API/network completion — first implementation slice, live
+   validated.** The format-3 set is now a bounded server-selected canonical
+   subset of one through four reviewed packs instead of a compiled exact-four
+   tuple. `setId`, cache publication, simultaneous leases, aggregate admission,
+   registrar vectors, LOD profiles, logs, and rollback counts all derive from
+   the selected entries. Unknown IDs, duplicates, reordered entries, empty
+   sets, and more than four entries fail closed. Capability `0x3D` is required
+   consistently by join admission, resource start, client parsing, startup
+   selection and the durable authorization store; `0x3B`/`0x3C` clients and
+   authorization remnants are intentionally refused.
+
+   The historical ±6,000 streamer value is only the eagerly allocated central
+   grid; extra rows/sectors already extend beyond it. Its actual negative-edge
+   defect was truncation plus an unconditional extra subtraction, which put
+   exact negative boundaries in the preceding cell. Extra row and sector
+   alignment now uses `floor`. MTA/GTA building validation, low-precision wire
+   positions and `IsOutOfBounds` share the `[-10,000, 9,999]` entity contract,
+   with non-finite positions rejected. The current native logical maximum
+   `31,836`, physical banks `20,000..28,191`, and server-model namespace through
+   `65,534` remain representable by the existing `uint16` wire/runtime fields;
+   widening them would change protocol without fixing a truncation. The
+   separate `CModelNames::INVALID_MODEL_ID == 32,000` overlap with valid server
+   logical IDs remains an API/named-model follow-up and native canonical city
+   IDs are not exposed to Lua. This does not yet generalize beyond the four
+   reviewed pack profiles or close the exhaustive Lua/C++/RPC audit. The
+   low-precision Z codec also remains at its historical approximately
+   `[-110, 1,938]` range. Those items keep checkpoint 11 open after this slice.
+
+   The 2026-07-26 live gate first revalidated the exact-four set, then deployed
+   the non-contiguous server selection Bullworth + Liberty City + Carcer City.
+   Its independently derived set ID admitted 8,035 models and 25,261
+   placements, held four leases (one envelope plus three children), and
+   committed a three-pack registrar catalog. Liberty City and Carcer City
+   activated and retired through reusable generation fences; the omitted Vice
+   City command left San Andreas active. Extended-world checks at X=-9,990 and
+   X=+9,500 remained stable. The final process was responsive and produced no
+   new dump; observed peaks were buildings `18,352/32,000` and ColModels
+   `18,010/30,000`. This proves server-side selection within the reviewed
+   catalog, not yet arbitrary unreviewed pack identities.
 12. **Streaming/render/memory tuning.** Measure and tune streaming memory,
    buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
    LOD/prefetch behavior using high-water and multi-hour traces rather than

@@ -88,6 +88,11 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-25
     NativeTaskLocomotionPresentation,
 
+    // Allows the server to select a non-empty canonical subset of the reviewed
+    // static-world-v3 pack catalog instead of requiring all four packs.
+    // 2026-07-26
+    NativeWorldStaticWorldV3ServerSelectedSet,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,

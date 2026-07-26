@@ -12,9 +12,7 @@
 #include "StdInc.h"
 #include "CBuildingManager.h"
 #include "Utils.h"
-
-constexpr float EXTENDED_WORLD_MIN_COORD = -10000.0f;
-constexpr float EXTENDED_WORLD_MAX_ENTITY_COORD = 9999.0f;
+#include <WorldLimits.h>
 
 CBuildingManager::CBuildingManager()
 {

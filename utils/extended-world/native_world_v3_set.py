@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and validate the immutable four-pack static-world-v3 set envelope."""
+"""Build and validate an immutable server-selected static-world-v3 set envelope."""
 
 from __future__ import annotations
 
@@ -34,16 +34,20 @@ def _object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def calculate_set_id(packs: list[dict[str, str]]) -> str:
-    if not isinstance(packs, list) or len(packs) != len(CANONICAL_PACK_ORDER):
-        raise ValueError("static-world-v3-set must contain exactly four packs")
+    if not isinstance(packs, list) or not 1 <= len(packs) <= len(CANONICAL_PACK_ORDER):
+        raise ValueError("static-world-v3-set must contain one to four packs")
+    canonical_index = {pack_id: index for index, pack_id in enumerate(CANONICAL_PACK_ORDER)}
+    previous_index = -1
     identity = [SET_ID_DOMAIN, f"format={FORMAT}", f"policy={POLICY}"]
-    for index, (expected_pack_id, pack) in enumerate(zip(CANONICAL_PACK_ORDER, packs, strict=True)):
+    for index, pack in enumerate(packs):
         if not isinstance(pack, dict) or set(pack) != PACK_KEYS:
             raise ValueError(f"packs[{index}] has a non-exact schema")
         pack_id = pack.get("pack_id")
         content_id_value = pack.get("content_id")
-        if pack_id != expected_pack_id or not isinstance(content_id_value, str) or not SHA256.fullmatch(content_id_value):
+        pack_index = canonical_index.get(pack_id) if isinstance(pack_id, str) else None
+        if pack_index is None or pack_index <= previous_index or not isinstance(content_id_value, str) or not SHA256.fullmatch(content_id_value):
             raise ValueError(f"packs[{index}] is outside the canonical identity order")
+        previous_index = pack_index
         identity.extend(
             (
                 f"pack[{index}].pack_id={pack_id}",
@@ -91,17 +95,18 @@ def canonical_set_envelope_bytes(value: dict[str, Any]) -> bytes:
 
 
 def build_set_envelope(pack_directories: list[Path]) -> dict[str, Any]:
-    if len(pack_directories) != len(CANONICAL_PACK_ORDER):
-        raise ValueError("exactly four canonical v3 pack directories are required")
+    if not 1 <= len(pack_directories) <= len(CANONICAL_PACK_ORDER):
+        raise ValueError("one to four canonical v3 pack directories are required")
     packs: list[dict[str, str]] = []
-    for expected_pack_id, directory in zip(CANONICAL_PACK_ORDER, pack_directories, strict=True):
+    for directory in pack_directories:
         manifest_path = directory / "native-world.json"
         manifest = parse_runtime_manifest(manifest_path.read_text(encoding="ascii"))
-        if manifest["format"] != FORMAT or manifest["policy"] != STATIC_WORLD_V3_POLICY or manifest["pack_id"] != expected_pack_id:
-            raise ValueError(f"{directory} is not the canonical {expected_pack_id} v3 pack")
+        pack_id = manifest["pack_id"]
+        if manifest["format"] != FORMAT or manifest["policy"] != STATIC_WORLD_V3_POLICY or pack_id not in CANONICAL_PACK_ORDER:
+            raise ValueError(f"{directory} is not a reviewed canonical v3 pack")
         packs.append(
             {
-                "pack_id": expected_pack_id,
+                "pack_id": pack_id,
                 "content_id": content_id(manifest, STATIC_WORLD_V3_POLICY),
             }
         )
@@ -121,7 +126,7 @@ def main() -> None:
         type=Path,
         action="append",
         required=True,
-        help="v3 pack directory, repeated in bullworth/vice-city/liberty-city/carcer-city order",
+        help="v3 pack directory, repeated in canonical bullworth/vice-city/liberty-city/carcer-city subsequence order",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--verify", type=Path)
