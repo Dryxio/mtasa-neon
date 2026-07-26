@@ -860,6 +860,11 @@ bool CGameSA::IsNativeWorldModelIdReserved(uint32_t modelId) const
     return CNativeWorldPackManagerSA::IsModelIdReserved(modelId);
 }
 
+void CGameSA::PrepareNativeWorldStreaming(const CVector& position)
+{
+    CNativeWorldPackManagerSA::PrepareStreamingAtPosition(position);
+}
+
 eGameVersion CGameSA::FindGameVersion()
 {
     unsigned char ucA = *reinterpret_cast<unsigned char*>(0x748ADD);

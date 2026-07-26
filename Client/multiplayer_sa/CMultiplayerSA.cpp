@@ -3001,6 +3001,21 @@ static void __declspec(naked) HOOK_FindPlayerCoors()
     // clang-format on
 }
 
+static void PrepareNativeWorldStreamingForUpdate()
+{
+    // Native static-world model slots are generation-owned. Select and fence
+    // the city bank against the same position that GTA is about to use, before
+    // CStreaming can enqueue any IPL, COL, or DFF from the new district.
+    CVector* nativeWorldStreamingPosition = bSetCenterOfWorld ? &vecCenterOfWorld : nullptr;
+    if (!nativeWorldStreamingPosition)
+    {
+        if (CPed* localPed = pGameInterface->GetPedContext())
+            nativeWorldStreamingPosition = localPed->GetPosition();
+    }
+    if (nativeWorldStreamingPosition)
+        pGameInterface->PrepareNativeWorldStreaming(*nativeWorldStreamingPosition);
+}
+
 static void __declspec(naked) HOOK_CStreaming_Update_Caller()
 {
     MTA_VERIFY_HOOK_LOCAL_SIZE;
@@ -3036,6 +3051,8 @@ static void __declspec(naked) HOOK_CStreaming_Update_Caller()
         }
         // clang-format on
     }
+
+    PrepareNativeWorldStreamingForUpdate();
 
     // clang-format off
     __asm

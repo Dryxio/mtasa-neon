@@ -112,19 +112,23 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
             per_channel = (largest + 1) & ~1
             self.assertEqual(expected, per_channel * 2)
 
-    def test_v3_registrar_has_explicit_generation_one_safety_boundary(self) -> None:
+    def test_v3_registrar_catalogues_all_packs_then_collapses_startup_ids(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
-        self.assertIn("index == STATIC_WORLD_V3_VICE_CITY_INDEX || index == STATIC_WORLD_V3_LIBERTY_CITY_INDEX", source)
+        self.assertIn("catalogModels != 11837U", source)
         self.assertIn("ValidateStaticWorldV3LodProfile(error)", source)
         self.assertIn("HookInstallCall(LOAD_COL_BUFFER_CALL", register)
         self.assertIn("HookInstallCall(LOAD_IPL_BUFFER_CALL", register)
+        self.assertIn("HookInstall(REMOVE_ALL_COLLISION_TAIL", register)
         self.assertIn("barrier=first-ModelInfo", register)
-        self.assertIn("generation=1 recyclable=no", register)
+        self.assertIn("startupMapping=canonical-until-bounds", register)
         self.assertIn("g_staticWorldV3Generation.store(1", register)
-        self.assertIn("ENABLE_IPL_DYNAMIC_STREAMING", register)
+        collapse = source[source.index("void __cdecl CompleteStaticWorldV3BoundingBootstrap") : source.index("void RegisterPack()")]
+        self.assertIn("REMOVE_ALL_COLLISION", collapse)
+        self.assertIn("canonicalPointersCleared", collapse)
+        self.assertIn("clothesNamespaceOverlap=cleared-before-gameplay", collapse)
 
-    def test_v3_vc_lc_lod_bootstrap_preserves_native_array_and_teardown_contracts(self) -> None:
+    def test_v3_lod_bootstrap_uses_reusable_banks_and_child_first_teardown(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         self.assertIn("STATIC_WORLD_V3_VICE_CITY_LOD_LINKS = 1081", source)
         self.assertIn("STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS = 1957", source)
@@ -139,24 +143,56 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("ValidateStaticWorldV3LodArrayGlobals(32", source)
         self.assertIn("GET_NEW_IPL_ENTITY_INDEX_ARRAY = 0x404780", source)
         self.assertIn("IPL_ENTITY_INDEX_ARRAYS = 0x8E3F08", source)
+        self.assertIn("allocate(IPL_ENTITY_SCRATCH_CAPACITY)", source)
         self.assertIn("SetupBigBuilding before CWorld::Add", source)
         self.assertIn("!entity->bDontCastShadowsOn", source)
         self.assertNotIn("!entity->bStreamingDontDelete", source)
         self.assertIn("entity->bStreamingDontDelete", source)
         self.assertIn("!modelInfo->bDoWeOwnTheColModel", source)
+        self.assertNotIn("modelInfo->bDoWeOwnTheColModel == borrowedChildCol", source)
+        self.assertIn("modelInfo->bIsColLoaded == borrowedChildCol", source)
         self.assertIn("SET_COL_MODEL = 0x4C4BC0", source)
         self.assertIn("!borrowedFrom->bIsColLoaded", source)
         self.assertIn("modelInfo->bIsColLoaded", source)
         self.assertIn("supplied placement COL did not materialize before IPL bootstrap", source)
         self.assertIn("entity->m_pLod = nullptr", source)
         self.assertIn("owner->relatedIpl = -1", source)
-        self.assertIn("def->relatedIpl = static_cast<int16_t>(pack.lodEntityArrayIndex)", source)
-        self.assertIn("if (isAnchor && !boundingPass)", source)
+        self.assertIn("def->relatedIpl = pack.inventory.lodAnchorCount ? static_cast<int16_t>(bank) : -1", source)
+        self.assertIn("if (boundingPass)", source)
+        self.assertIn("instances[index].lodIndex = -1", source)
+        self.assertIn("if (isAnchor)", source)
         self.assertIn("instance.lodIndex = static_cast<int>(link->anchorIndex)", source)
-        self.assertIn("prior bounding-pass children were not removed", source)
         self.assertIn("hidden owners after every spatial child IPL", source)
         self.assertIn("collisionTransfer=missing-anchor-only:%u", source)
         self.assertIn("missing-anchor collision transfer count drifted after admission", source)
+        self.assertIn("DestroyStaticWorldV3LodAnchors", source)
+        self.assertIn("generation fence reached a live or missing LOD anchor", source)
+
+    def test_v3_runtime_coordinator_owns_two_banks_and_all_transition_fences(self) -> None:
+        source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        multiplayer = (REPOSITORY / "Client/multiplayer_sa/CMultiplayerSA.cpp").read_text(encoding="utf-8")
+        streaming = (REPOSITORY / "Client/game_sa/CStreamingSA.cpp").read_text(encoding="utf-8")
+        resource = (REPOSITORY / "test-resources/native-bw-test/server.lua").read_text(encoding="utf-8")
+        self.assertIn("STATIC_WORLD_V3_MODEL_BANK_SIZE = 4096", source)
+        self.assertIn("STATIC_WORLD_V3_MODEL_BANK_FIRST[] = {20000, 24096}", source)
+        self.assertIn("BindStaticWorldV3PackToBank", source)
+        self.assertIn("PatchStaticWorldV3ColRanges", source)
+        self.assertIn("RebuildStaticWorldV3ArchiveChains", source)
+        self.assertIn("FLUSH_STREAMING_CHANNELS", source)
+        self.assertIn("COVER_INIT = 0x698710", source)
+        retirement = source[source.index("void DeactivateStaticWorldV3Pack()") : source.index("void ActivateStaticWorldV3Pack(")]
+        self.assertLess(
+            retirement.index("reinterpret_cast<void(__cdecl*)()>(COVER_INIT)()"),
+            retirement.index("g_streaming->RemoveModel(pGame->GetBaseIDforIPL() + slot)"),
+        )
+        self.assertIn("fence=cover-ipl-anchors-channels-col-dff", source)
+        self.assertIn("transition=retired", source)
+        self.assertIn("transition=active", source)
+        self.assertIn("exclusion=one-city", source)
+        self.assertIn("PrepareNativeWorldStreaming", multiplayer)
+        self.assertGreaterEqual(streaming.count("PrepareStreamingAtPosition"), 2)
+        for command in ("nativebw", "nativevc", "nativelc", "nativecc", "nativeback"):
+            self.assertIn(f'addCommandHandler("{command}"', resource)
 
     def test_v3_registrar_pins_all_caches_and_commits_the_exact_ticket(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")

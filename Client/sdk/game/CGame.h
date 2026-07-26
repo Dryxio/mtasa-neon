@@ -400,4 +400,9 @@ public:
     // MTA logical-model registry or script replacement APIs. Keep this query
     // behind Game SA so client.dll never duplicates activation state.
     virtual bool IsNativeWorldModelIdReserved(uint32_t modelId) const = 0;
+
+    // Position-driven native-city residency must run immediately before GTA's
+    // streamer. Keep the generation fence in Game SA while Multiplayer SA and
+    // blocking scene loaders provide the exact position.
+    virtual void PrepareNativeWorldStreaming(const CVector& position) = 0;
 };

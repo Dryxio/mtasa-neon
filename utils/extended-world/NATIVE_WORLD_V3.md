@@ -377,3 +377,69 @@ High-water was Atomic `20,833/32,000`, DamageAtomic `89/512`, Time
 `16,577/32,000`, ColModels `17,273/30,000` and QuadTreeNodes `264/2,048`.
 No crash, streaming, RenderWare or allocation diagnostic appeared after the
 missing-anchor fix.
+
+## Four-city generation-fenced candidate
+
+The next candidate keeps all four immutable pack identities, seven archives,
+1,325 TXD slots, all COL/IPL definitions, and all 11,837 append-only
+ModelInfos in one process generation. It deliberately does **not** bind all
+11,837 models at once: the protected physical arena contains 10,000 slots, and
+the canonical Carcer tail overlaps MTA's logical/clothes namespace above
+30,000.
+
+During the startup-only `CFileLoader::LoadLevel` boundary, the catalog is
+temporarily addressable at its canonical IDs so GTA can compute every COL/IPL
+bounding box. The owned IPL hook flattens only that temporary pass to
+`lod=-1`; no persistent anchor exists yet. The validated tail jump at
+`0x5B9321` calls `CColStore::RemoveAllCollision`, proves every catalog
+ColModel was removed, clears all 11,837 canonical model pointers, and only then
+publishes `bootstrap=spatial-ready`. Thus the temporary 30,000..31,836 overlap
+cannot escape into gameplay or MTA APIs.
+
+Runtime residency uses two alternating 4,096-slot banks,
+`20,000..24,095` and `24,096..28,191`. All four cities are available, but a
+strict spatial-exclusion coordinator materializes one city's child IPLs at a
+time. A transition disables outgoing child IPLs, clears retail `CCover`'s
+processed-building cache while its raw entity pointers are still valid, then
+removes those IPLs, proves every LOD counter is zero, removes the hidden anchor
+owner, flushes both streaming channels, unloads collision while the old
+pointers still exist, removes every DFF/request binding, clears the old bank,
+rebuilds all IMG chains, and advances the generation before the new bank is
+published. Timed-model peer IDs and COL first/last model ranges are repatched
+for every bank assignment. VC/LC anchors are rebuilt only for the active city
+in the corresponding reusable 4,096-entry array.
+
+The cover purge is a required generation sub-fence, not optional cleanup.
+Retail `CCover::m_ListOfProcessedBuildings` stores raw building pointers and
+can revisit them from `CCover::Update` after an IPL deletes the entities. The
+first Bullworth-to-SA live retirement demonstrated that failure at
+`CEntity::GetBoundCentre` (`0x53425B`) with bank model ID `20043`. Native
+`CCover::Init` (`0x698710`) now runs after dynamic streaming is disabled and
+before the first outgoing IPL is removed.
+
+The all-city building sum remains invalid (`43,015/32,000`). The coordinator's
+hard rule is therefore one materialized city. The true maximum is stock
+`9,166` plus Carcer's `12,475` placements, or `21,641/32,000`; LC's own
+placements plus its `1,957` anchors remain lower at `20,947/32,000`. Anchors
+from one city are never counted beside another city's child set because the
+generation fence removes them first. The five cache leases stay
+process-lifetime, so no old cache object is reclaimed merely because a
+physical bank became reusable.
+
+The 2026-07-26 live gate completed generations 2..29 across all four imported
+cities and San Andreas. Both banks were repeatedly reused; direct Carcer-to-VC
+and VC-to-LC transitions, death/respawn, same-process reconnect, hot resource
+restart and full server restart remained stable. VC rebuilt all `1,081` links
+with its exact two borrowed-COL exceptions, and LC rebuilt all `1,957` links
+with none. An initial VC fail-stop exposed an inverted validation predicate:
+retail `SetupBigBuilding` always sets ModelInfo bit `0x20`, while
+`SetColModel(..., false)` changes only bit `0x80` for borrowed collision. The
+runtime now proves those independent postconditions instead of coupling bit
+`0x20` to the exception state.
+
+Observed peaks were buildings `21,500/32,000`, ColModels `21,819/30,000`, TXD
+`4,933/8,000`, COL `373/512`, IPL `314/1,024` and QuadTreeNodes `280/2,048`.
+No fatal, streaming, RenderWare, allocation or crash diagnostic appeared after
+the fix. Borderless Alt-Tab did not cause `OnInvalidate`/`OnRestore`; a true
+device reset remains deliberately pending for the streaming/render/memory
+gate rather than being reported as tested here.

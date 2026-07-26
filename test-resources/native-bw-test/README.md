@@ -6,46 +6,61 @@ testing the process-global native registrar:
 
 - `/nativevc` moves the player to Vice City in a test vehicle.
 - `/nativelc` moves the player to Liberty City in a test vehicle.
+- `/nativebw` moves the player to Bullworth.
+- `/nativecc` moves the player to Carcer City.
 - `/nativeback` returns the player to San Andreas.
-- `/nativebw` and `/nativecc` report that those cities are deliberately
-  non-resident during the VC/LC LOD checkpoint.
 
 Do not run `ug-bw`, `carcer-city-test`, or `city-residency-coordinator` during
 this test. Those resources own Lua-driven copies of the same cities and would
 invalidate the native registrar result.
 
-## VC/LC LOD bootstrap test order
+## Simultaneous-catalog transition test order
 
 Use a clean client process after the closed format-3 set has published its
 startup ticket. Restart MTA, confirm the native-world log reports
-`activation=yes lease=process`, `resident=vice-city,liberty-city`,
-`lodArrays=2`, `lodAnchors=3038`, `lodLinks=3038`, and
-`generation=1 recyclable=no`. The bootstrap line must include
-`collisionTransfer=missing-anchor-only:2`; any other count means the frozen
-VC/LC collision profile drifted. Then run:
+`activation=yes lease=process`, `catalogModels=11837`, `lodArrays=2`, and
+`startupMapping=canonical-until-bounds`. Before gameplay it must also report
+`bootstrap=spatial-ready`, `canonicalPointersCleared=11837`,
+`banks=2x4096`, and `active=none`. Then run:
 
-1. `/nativevc`
+1. `/nativebw`
 2. `/nativeback`
-3. `/nativelc`
+3. `/nativevc`
 4. `/nativeback`
+5. `/nativelc`
+6. `/nativeback`
+7. `/nativecc`
+8. `/nativeback`
 
-At each city, drive toward and away from dense blocks so HD children unload and
-the permanent distant anchors become visible. Check road/building collision and
-one line-of-sight/model-ID query against a child if possible. The first city
-load must also emit `lodBootstrap boundingCleanup=all-confirmed groups=21
-counters=zero`, proving the final startup bounding-pass children were removed.
+Every city entry must emit `transition=active`; every return or direct
+city-to-city jump must first emit `transition=retired` with
+`fence=cover-ipl-anchors-channels-col-dff reusable=yes`. Banks must alternate
+without an inactive city reaching the IPL/COL loaders. At VC and LC, drive
+toward and away from dense blocks so HD children unload and distant anchors
+become visible. VC must report `collisionTransfer=missing-anchor-only:2`, LC
+`0`. Check road/building collision in all four cities.
 
-Repeat the sequence after disconnect/reconnect and a restart of this resource.
-Minimize/restore once and include death/respawn before calling the checkpoint
-complete. A full server restart remains a final lifecycle gate. Transport
-publication is expected to be refused after activation because the
-process-global registrar already owns the mutable descriptor;
+Repeat direct hostile jumps (`/nativecc`, `/nativelc`, `/nativebw`,
+`/nativevc`) without intermediate SA returns, then repeat after
+disconnect/reconnect and a restart of this resource. Minimize/restore in Carcer
+and VC, include death/respawn, and finish with a full server restart. Transport
+publication is expected to be refused after activation because the process
+global registrar already owns the immutable catalog and five cache leases;
 `existing-native-world=preserved` is the required result.
 
-The 2026-07-25 VC/LC gate completed without streaming, RenderWare, allocation
-or crash diagnostics. It covered all 21 bounding-cleanup groups, both cities,
-SA returns, minimize/restore, death/respawn, same-process reconnect, hot
-resource restart and full server restart. Peak buildings were
-`16,577/32,000`; ColModels reached `17,273/30,000`; TXD, COL, IPL and
-QuadTreeNode occupancy remained `4,933/8,000`, `354/512`, `295/1,024` and
-`264/2,048`.
+The previous 2026-07-25 VC/LC checkpoint remains the baseline: peak buildings
+were `16,577/32,000`, ColModels `17,273/30,000`, TXD `4,933/8,000`, COL
+`354/512`, IPL `295/1,024`, and QuadTreeNodes `264/2,048`. Record new
+high-water values for the four-city transition gate rather than carrying
+those numbers forward.
+
+The 2026-07-26 four-city gate completed generations 2..29, including direct
+Carcer-to-VC and VC-to-LC transitions, repeated reuse of both banks,
+death/respawn, same-process reconnect, resource restart and full server
+restart. Peak buildings were `21,500/32,000`; ColModels reached
+`21,819/30,000`; TXD, COL, IPL and QuadTreeNodes reached `4,933/8,000`,
+`373/512`, `314/1,024` and `280/2,048`. The enabled Superman test resource
+briefly rewrote the player position during two teleports and therefore caused
+extra, fully fenced generations; disable position-owning gameplay resources
+when measuring transition count or latency. Borderless Alt-Tab did not produce
+a D3D device reset, so that case remains part of the later render/memory gate.

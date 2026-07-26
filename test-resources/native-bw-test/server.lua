@@ -4,6 +4,8 @@
 
 local viceCitySpawn = {x = 7343.25, y = -8416.45, z = 35}
 local libertyCitySpawn = {x = 8377, y = 7882, z = 35}
+local bullworthSpawn = {x = -8150, y = 7650, z = 25}
+local carcerSpawn = {x = 6900, y = -700, z = 80}
 local sanAndreasSpawn = {x = 1481, y = -1771, z = 19}
 local testVehicles = {}
 
@@ -41,11 +43,13 @@ local function teleportWithVehicle(player, position, rotation)
 end
 
 addCommandHandler("nativebw", function(player)
-    outputChatBox("[Native World] Bullworth n'est pas resident dans le checkpoint LOD VC/LC.", player, 255, 180, 80)
+    teleportWithVehicle(player, bullworthSpawn, 90)
+    outputChatBox("[Native World] Bullworth. Teste collisions, districts et /nativeback.", player, 80, 255, 160)
 end)
 
 addCommandHandler("nativecc", function(player)
-    outputChatBox("[Native World] Carcer City n'est pas resident dans le checkpoint LOD VC/LC.", player, 255, 180, 80)
+    teleportWithVehicle(player, carcerSpawn, 90)
+    outputChatBox("[Native World] Carcer City. Teste pression streaming et /nativeback.", player, 255, 140, 80)
 end)
 
 addCommandHandler("nativevc", function(player)
@@ -60,7 +64,7 @@ end)
 
 addCommandHandler("nativeback", function(player)
     teleportWithVehicle(player, sanAndreasSpawn, 0)
-    outputChatBox("[Native World] Retour San Andreas. Reviens avec /nativevc ou /nativelc pour tester le reload.", player, 80, 200, 255)
+    outputChatBox("[Native World] Retour San Andreas. Alterne /nativebw, /nativevc, /nativelc et /nativecc.", player, 80, 200, 255)
 end)
 
 addEventHandler("onPlayerQuit", root, function()

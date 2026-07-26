@@ -547,12 +547,16 @@ void CStreamingSA::RemoveBigBuildings()
 
 void CStreamingSA::LoadScene(const CVector* position)
 {
+    if (position)
+        CNativeWorldPackManagerSA::PrepareStreamingAtPosition(*position);
     auto CStreaming_LoadScene = (void(__cdecl*)(const CVector*))FUNC_CStreaming_LoadScene;
     CStreaming_LoadScene(position);
 }
 
 void CStreamingSA::LoadSceneCollision(const CVector* position)
 {
+    if (position)
+        CNativeWorldPackManagerSA::PrepareStreamingAtPosition(*position);
     auto CStreaming_LoadSceneCollision = (void(__cdecl*)(const CVector*))FUNC_CStreaming_LoadSceneCollision;
     CStreaming_LoadSceneCollision(position);
 }
@@ -566,6 +570,8 @@ void CStreamingSA::LoadSceneInDirection(const CVector* position, float headingDe
     // radians heading into CRenderer's directional frustum request first.
     // Keeping those calls together prevents Lua consumers from accidentally
     // reproducing only the ordinary, non-directional LoadScene half.
+    if (position)
+        CNativeWorldPackManagerSA::PrepareStreamingAtPosition(*position);
     (reinterpret_cast<void(__cdecl*)()>(FUNC_CTimer_Stop))();
     (reinterpret_cast<void(__cdecl*)(const CVector*, float, int)>(FUNC_CRenderer_RequestObjectsInDirection))(position, headingDegrees * DEGREES_TO_RADIANS,
                                                                                                              STREAMING_LOADING_SCENE);

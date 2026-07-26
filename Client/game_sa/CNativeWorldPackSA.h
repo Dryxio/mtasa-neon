@@ -20,6 +20,7 @@ struct SNativeWorldTransportPublishResult;
 struct SNativeWorldStartupSelection;
 
 class CStreamingSA;
+class CVector;
 
 struct SNativeTxdSlotFingerprintSA
 {
@@ -187,6 +188,11 @@ public:
     // or active generation owns them. A reversible refusal may release them
     // only after proving that no native mutation survived its rollback.
     static bool IsModelIdReserved(unsigned int modelId);
+
+    // Runs on GTA's streaming thread immediately before a position-driven
+    // update or blocking scene load. It owns the city working-set transition;
+    // callers must not mutate model/FileID tables themselves.
+    static void PrepareStreamingAtPosition(const CVector& position);
 
     // Keeps lifecycle-sensitive diagnostics in one place and prefixes them
     // with the active descriptor's stable log tag.

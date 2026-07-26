@@ -1068,11 +1068,50 @@ The updated checkpoint sequence is:
    `16,577/32,000`, ColModels `17,273/30,000` and QuadTreeNodes `264/2,048`;
    no crash, streaming, RenderWare or allocation diagnostic followed the
    corrected two-anchor COL transfer.
-10. **Simultaneous activation and transitions.** Make VC and LC resident with
-   Bullworth and Carcer beside San Andreas, then add a generation fence before
-   recycling physical slots or old cache generations. Test repeated
-   cross-city streaming, collisions, LODs, D3D reset/minimize, memory
-   pressure, death/respawn, reconnect and resource/server restart.
+10. **Simultaneous activation and transitions — complete and live-validated.**
+   All four immutable packs and 11,837 append-only
+   ModelInfos now belong to one process catalog. GTA temporarily sees their
+   canonical 20,000..31,836 IDs only while `LoadLevel` computes aggregate
+   COL/IPL bounds; the validated `0x5B9321` tail fence removes collision and
+   clears every canonical pointer before gameplay, including the
+   30,000..31,836 clothes/API overlap. Runtime uses alternating 4,096-slot
+   banks at 20,000 and 24,096. One city is physically materialized at a time,
+   because the aggregate building demand is `43,015/32,000`; the strict
+   exclusion bound is `21,641/32,000`. Every transition removes child IPLs
+   before city-scoped LOD anchors, flushes channels, unloads COL and DFF while
+   the old mapping is valid, clears the bank, rebuilds IMG chains, repatches
+   timed peers and COL ranges, and advances the generation. Blocking scene
+   loads and the Multiplayer pre-stream hook both run the coordinator. The
+   five cache leases remain process-lifetime. The first Bullworth-to-SA
+   retirement exposed one
+   additional retail hidden owner: `CCover::m_ListOfProcessedBuildings`
+   retained a building with bank model ID 20,043 after the IPL had been
+   destroyed and the ModelInfo pointer cleared, then crashed in
+   `CEntity::GetBoundCentre` at `0x53425B`. The fence now disables every
+   outgoing spatial IPL, calls native `CCover::Init` at `0x698710` while all
+   entity and ModelInfo pointers are still valid, and only then begins IPL
+   removal. Retirement diagnostics therefore require
+   `fence=cover-ipl-anchors-channels-col-dff`.
+   The first simultaneous VC entry then correctly reached a fail-stop rather
+   than mutating further: the validator expected the ModelInfo `0x20` bit to
+   vary with borrowed collision, although retail `SetupBigBuilding` sets it
+   on every anchor and `SetColModel(..., false)` changes only the independent
+   `0x80` bit. The corrected postcondition requires `0x20` for all anchors and
+   the borrowed-COL state only from `0x80`.
+
+   The 2026-07-26 live gate exercised Bullworth, Vice City, Liberty City,
+   Carcer City and San Andreas through generations 2..29, including direct
+   non-LOD-to-LOD and VC-to-LC transitions, repeated reuse of both banks,
+   death/respawn, same-process reconnect, hot resource restart and full server
+   restart. Ticket `30ff7844` remained `activation=active lease=process`, and
+   every retirement reported the complete reusable fence. VC repeatedly
+   proved `1081` links with `collisionTransfer=missing-anchor-only:2`; LC
+   proved `1957` links with transfer count `0`. Observed peaks were buildings
+   `21,500/32,000`, ColModels `21,819/30,000`, TXD `4,933/8,000`, COL
+   `373/512`, IPL `314/1,024` and QuadTreeNodes `280/2,048`. No fatal,
+   streaming, RenderWare, allocation or crash diagnostic followed the fix.
+   Borderless Alt-Tab did not issue a device reset; a real runtime D3D reset
+   remains an explicit streaming/render/memory checkpoint test.
 11. **MTA/API/network completion.** Audit logical model-ID width, remaining
    coordinate/streamer bounds, `IsOutOfBounds`, script APIs, serialization,
    protocol capabilities and legacy-client refusal. Build every affected
