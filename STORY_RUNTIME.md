@@ -106,6 +106,14 @@ The server owns mission progress. A client completing a GTA task is an observati
 
 Tasks must not store unsafe raw references across entity destruction. Task handles must be generation-safe or tied to MTA element lifetimes, and resource shutdown must cancel all tasks owned by that resource.
 
+### Simulation and remote presentation
+
+Only one client should execute a native GTA task. Running the same AI task on every participant would let pathfinding, collision, timing, randomness, and combat side effects diverge. The syncer owns the real `CTask`; the server owns mission progress and validates its world-state evidence.
+
+Non-syncers should not reconstruct the AI task. They should apply a generation-scoped, presentation-only snapshot produced by the syncer: locomotion, active animation and phase, blend, action, look/aim target, vehicle transition, and other final visual state. Ordinary MTA synchronization remains authoritative for transforms, occupants, weapons, health, damage, and death. Remote presentation must never create AI decisions, projectiles, damage, seat changes, or completion reports.
+
+This presentation layer should describe reusable visual channels rather than individual missions or opcodes. Reliable ordered baselines must cover start, stop, stream-in, join-in-progress, and syncer migration; sequenced snapshots may carry continuous pose and animation progress. A new syncer reconstructs the semantic task from the server-owned descriptor and last accepted checkpoint instead of copying raw GTA task memory.
+
 ## SCM runtime responsibilities
 
 The story runtime should provide the parts that are actually script semantics:
@@ -578,6 +586,8 @@ Validation should proceed at three levels:
 1. Native task tests exercise each API independently and expose detailed diagnostics.
 2. Opcode conformance tests compare handler inputs and observable results with original GTA behavior.
 3. Mission tests cover one-player and co-op flows, including reconnect, resource restart, death, task interruption, actor streaming, vehicle destruction, and mission cleanup.
+
+Single-client tests can prove native task behavior, server authority, cleanup, packet encoding, and local reconstruction. Non-syncer presentation, live syncer handoff, join-in-progress, and cross-client animation agreement require at least two connected GTA clients. They do not require two human testers: an automated observer client and comparison harness may remain passive, with human visual review reserved for multiplayer checkpoints.
 
 The Windows VM remains the runtime target: source changes are made in the canonical macOS tree, synchronized into the VM-local build copy, built as `Release|Win32` for the client and `Release|x64` for the server where applicable, then exercised against the local server.
 
