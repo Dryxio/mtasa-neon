@@ -50,7 +50,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Custom-water block grid | 12 x 12 (144 blocks) | 40 x 40 (1,600 blocks) |
 | Custom-water XY | Approximately -3,000 to +3,000 | -10,000 to +9,999 |
 | Procedural seabed boundary | Unlimited | Server-configurable from 3,000 to 10,000, or unlimited |
-| Project2DFX distant static lights | Not integrated | Native, player- and resource-controlled implementation with a 300-5,000 draw-distance range |
+| Project2DFX distant static lights | Not integrated | Native, player- and resource-controlled implementation with a 25,000-light buffered renderer and 300-5,000 draw-distance range |
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
@@ -79,8 +79,9 @@ Both features remain off on a clean installation. Resource or server overrides
 take priority while connected; the player's saved baseline is restored when
 those runtime overrides are reset or the mod unloads. The corona-radius control
 scales every Neon Project2DFX distant corona, but does not resize GTA's ordinary
-nearby coronas. It is a tuning control for the current native GTA sprite path,
-not a claim of renderer-level visual parity with Project2DFX.
+nearby coronas. It tunes Neon's private renderer, which follows Project2DFX's
+square, buffered sprite projection without consuming GTA/MTA's shared corona
+pool.
 
 ### Extended-world validation examples
 

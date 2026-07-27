@@ -256,15 +256,19 @@ command.
 Neon integrates the distant static-corona part of
 `ThirteenAG/III.VC.SA.IV.Project2DFX` directly into the MTA client. It does not
 load an ASI plugin or Project2DFX's bundled limit adjuster. The implementation
-uses MTA's relocated 4096-entry corona pool and the renderer capacities above,
-so corona ownership and lifetime remain under MTA.
+uses a private 25000-entry selection and render queue modeled after
+Project2DFX's own pool. GTA's relocated 4096-entry corona pool remains reserved
+for vanilla effects and MTA markers, so distant lights cannot starve scripted
+coronas. Eligible sprites are submitted through GTA's buffered sprite path in
+batches instead of consuming one shared corona slot and immediate draw path per
+light.
 
 The feature is disabled by default. A player can enable it from the Neon
 settings tab, select a draw distance from 300 to 5000 units, tune the global
 distant-corona radius from 10% to 100%, and rebuild the world-light cache. The
 saved radius defaults to 25%; 50% is Project2DFX current master's scalar, but
-Neon's native GTA sprite projection still differs and therefore does not
-guarantee pixel-identical output.
+the user-facing control remains useful for tuning and does not by itself
+guarantee pixel-identical output across every Project2DFX release.
 
 A client resource can independently enable the feature, select its draw
 distance, rebuild the cache, and read current counts through these client Lua
@@ -303,8 +307,12 @@ IPL and collision stores cannot consume GTA's fixed-size cache, so that native
 pass visits every binary IPL sequentially before distant sectors are streamed
 out. Text IPL instances and the current building and dummy pools supplement the
 same deduplicated catalogue. MTA transforms local light offsets into world
-coordinates and registers the closest eligible coronas every frame. The data
-and the adapted behavior retain Project2DFX's MIT license in
+coordinates, selects the closest 25000 eligible coronas every frame, and
+renders them through a preallocated private queue. Because the stock San
+Andreas catalogue contains 20363 accepted definitions, the entire catalogue
+can now remain eligible simultaneously; the nearest-light selection is kept
+for future maps that exceed 25000 entries. The data and the adapted behavior
+retain Project2DFX's MIT license in
 `MTA/data/Project2DFX-LICENSE.txt`. If the DAT is absent, the code falls back to
 GTA's embedded model 2DFX effects so the feature fails soft.
 
@@ -315,6 +323,12 @@ are not silently enabled here. DAT rows marked as traffic lights use
 Project2DFX's directional red/yellow/green clock phases so opposing colors do
 not render together. The DAT's corona rows are retained when a row also asks
 for a searchlight, but the cone itself is omitted.
+
+Project2DFX amortizes registration work for lights beyond 260 units across four
+frames. Neon currently recomputes the eligible queue and its visual parameters
+every frame. The stock 20363-light workload remained smooth in the runtime test
+below, so frame slicing is a future optimization for larger custom catalogues
+rather than a correctness requirement for the San Andreas map.
 
 The same Neon settings tab also exposes an independent extended-world draw
 distance preference. It raises GTA's far clip and stock-world model LOD
@@ -341,6 +355,11 @@ confirmed the additional distant lamp coronas. Visual testing also caught
 simultaneous red and green distant traffic lights; applying Project2DFX's
 directional clock phases corrected the intersections while preserving the
 intended corona size, intensity, and color falloff.
+
+The subsequent private-renderer checkpoint exposed the full stock catalogue to
+a 25000-entry budget without consuming GTA's shared corona pool. An in-game
+flight test confirmed the buffered sprites remained stable and produced no
+perceptible slowdown with the expanded budget active.
 
 The settings checkpoint was also exercised in game with extended world draw
 distance disabled while distant lights remained enabled, confirming that the

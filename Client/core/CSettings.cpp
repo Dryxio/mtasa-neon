@@ -1621,7 +1621,7 @@ void CSettings::CreateGUI()
     neonPosition.fY += 42.0f;
     m_pDistantLightsDescriptionLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(
         pTabNeon, _("Adds Project2DFX static coronas and timed traffic lights at night. 50% uses its current radius scale; lower values shrink Neon's "
-                    "native corona sprites.")));
+                    "buffered corona sprites.")));
     m_pDistantLightsDescriptionLabel->SetPosition(neonPosition);
     m_pDistantLightsDescriptionLabel->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 32.0f), 48.0f));
     m_pDistantLightsDescriptionLabel->SetHorizontalAlign(CGUI_ALIGN_LEFT_WORDWRAP);

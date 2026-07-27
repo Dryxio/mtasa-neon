@@ -4034,6 +4034,10 @@ void CClientGame::ProjectileInitiateHandler(CClientProjectile* pProjectile)
 
 void CClientGame::Render3DStuffHandler()
 {
+    // Project2DFX distant lights use a private buffered renderer so their
+    // 25,000-entry budget does not consume GTA's shared corona pool.
+    g_pGame->GetCoronas()->RenderDistantLights();
+
     // Render models enqueued by scripts during the previous frame's
     // onClientRender. This hook fires after GTA's Render3DStuff pass
     // (sun/moon flare, coronas), so those don't bleed through our models.

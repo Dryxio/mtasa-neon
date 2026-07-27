@@ -46,4 +46,5 @@ public:
     virtual void               RebuildDistantLights() = 0;
     virtual void               DoPulseDistantLights() = 0;
     virtual SDistantLightStats GetDistantLightStats() const = 0;
+    virtual void               RenderDistantLights() = 0;
 };

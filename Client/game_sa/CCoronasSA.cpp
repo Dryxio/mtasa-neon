@@ -22,6 +22,8 @@
 #include <core/CCoreInterface.h>
 #include <game/CCamera.h>
 #include <game/CWorld.h>
+#include <game/RenderWare.h>
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -49,13 +51,42 @@ namespace
 
     // Project2DFX source reference: ThirteenAG/III.VC.SA.IV.Project2DFX,
     // source/LODLights.ixx and SALodLights/dllmain.cpp (MIT license).
-    // MTA consumes Project2DFX's light data through its own loader and GTA's
-    // corona renderer rather than importing the ASI or its limit adjuster.
-    constexpr DWORD MAX_DISTANT_LIGHT_CORONAS = 3000;
-    constexpr DWORD DISTANT_LIGHT_IDENTIFIER_BASE = 0x2DF00000;
+    // MTA consumes Project2DFX's light data through its own loader and a
+    // private buffered sprite queue rather than importing the ASI or consuming
+    // GTA/MTA's shared corona pool.
+    constexpr DWORD MAX_DISTANT_LIGHT_CORONAS = 25000;
     constexpr DWORD EFFECT_LIGHT = 0;
     constexpr WORD  LIGHT_FLAG_WITHOUT_CORONA = 1 << 3;
     constexpr WORD  LIGHT_FLAG_AT_NIGHT = 1 << 6;
+
+    constexpr DWORD FUNC_CSPRITE_FLUSH_BUFFER = 0x70CF20;
+    constexpr DWORD FUNC_CSPRITE_RENDER_BUFFERED_XLU = 0x70E780;
+    constexpr DWORD VAR_SCENE = 0xC17038;
+    constexpr DWORD VAR_RW_ENGINE_INSTANCE = 0xC97B24;
+    constexpr DWORD VAR_WEATHER_FOGGINESS = 0xC81300;
+
+    constexpr DWORD RW_RENDER_STATE_TEXTURE_RASTER = 1;
+    constexpr DWORD RW_RENDER_STATE_Z_TEST_ENABLE = 6;
+    constexpr DWORD RW_RENDER_STATE_Z_WRITE_ENABLE = 8;
+    constexpr DWORD RW_RENDER_STATE_SOURCE_BLEND = 10;
+    constexpr DWORD RW_RENDER_STATE_DESTINATION_BLEND = 11;
+    constexpr DWORD RW_RENDER_STATE_VERTEX_ALPHA_ENABLE = 12;
+    constexpr DWORD RW_BLEND_ONE = 2;
+
+    struct SGtaScene
+    {
+        RpWorld*  world;
+        RwCamera* camera;
+    };
+
+    using RwRenderStateFunction = int(__cdecl*)(DWORD, void*);
+    using FlushSpriteBufferFunction = void(__cdecl*)();
+    using RenderBufferedSpriteFunction = void(__cdecl*)(float, float, float, float, float, BYTE, BYTE, BYTE, short, float, float, BYTE);
+
+    void* RwStateValue(DWORD value)
+    {
+        return reinterpret_cast<void*>(static_cast<std::uintptr_t>(value));
+    }
 
     struct S2dEffectLightData
     {
@@ -152,12 +183,25 @@ namespace
         std::size_t index;
     };
 
+    struct SDistantLightRenderInstance
+    {
+        CVector    position;
+        RwTexture* texture;
+        float      size;
+        float      range;
+        BYTE       red;
+        BYTE       green;
+        BYTE       blue;
+        BYTE       alpha;
+    };
+
     bool                                                       g_bDistantLightsEnabled = false;
     bool                                                       g_bDistantLightsNeedRebuild = true;
     float                                                      g_fDistantLightsDrawDistance = 2000.0f;
     float                                                      g_fDistantLightsCoronaRadiusMultiplier = 0.25f;
     std::vector<SDistantLight>                                 g_DistantLights;
-    std::unordered_map<std::size_t, CRegisteredCorona*>        g_ActiveDistantLightCoronas;
+    std::vector<SDistantLightCandidate>                        g_DistantLightCandidates;
+    std::vector<SDistantLightRenderInstance>                   g_DistantLightRenderQueue;
     std::unordered_set<SDistantLightKey, SDistantLightKeyHash> g_DistantLightKeys;
     DWORD                                                      g_dwDistantLightEntitiesScanned = 0;
     DWORD                                                      g_dwDistantLightEffectsScanned = 0;
@@ -291,12 +335,7 @@ namespace
 
     void ClearActiveDistantLights()
     {
-        for (const auto& [index, corona] : g_ActiveDistantLightCoronas)
-        {
-            if (corona)
-                corona->Disable();
-        }
-        g_ActiveDistantLightCoronas.clear();
+        g_DistantLightRenderQueue.clear();
     }
 
     float SolveLinear(float a, float b, float c, float d, float value)
@@ -629,6 +668,8 @@ CCoronasSA::CCoronasSA()
 {
     RelocateCoronaArray();
     g_DistantLightKeys.reserve(24000);
+    g_DistantLightCandidates.reserve(MAX_DISTANT_LIGHT_CORONAS);
+    g_DistantLightRenderQueue.reserve(MAX_DISTANT_LIGHT_CORONAS);
 
     for (int i = 0; i < MAX_CORONAS; i++)
     {
@@ -642,6 +683,7 @@ CCoronasSA::~CCoronasSA()
     // before deleting them so reconnecting cannot retain dangling wrappers.
     ClearActiveDistantLights();
     g_DistantLights.clear();
+    g_DistantLightCandidates.clear();
     g_DistantLightKeys.clear();
     g_DistantLightDefinitions.clear();
     g_AdditionalDistantLightDefinitions.clear();
@@ -877,7 +919,8 @@ void CCoronasSA::DoPulseDistantLights()
     const CVector& cameraPosition = cameraMatrix.vPos;
     const float    farDistanceSquared = g_fDistantLightsDrawDistance * g_fDistantLightsDrawDistance;
 
-    std::vector<SDistantLightCandidate> candidates;
+    std::vector<SDistantLightCandidate>& candidates = g_DistantLightCandidates;
+    candidates.clear();
     candidates.reserve(std::min<std::size_t>(g_DistantLights.size(), MAX_DISTANT_LIGHT_CORONAS));
     for (std::size_t i = 0; i < g_DistantLights.size(); ++i)
     {
@@ -901,22 +944,7 @@ void CCoronasSA::DoPulseDistantLights()
         candidates.resize(MAX_DISTANT_LIGHT_CORONAS);
     }
 
-    std::unordered_set<std::size_t> selected;
-    selected.reserve(candidates.size());
-    for (const SDistantLightCandidate& candidate : candidates)
-        selected.insert(candidate.index);
-
-    for (auto iter = g_ActiveDistantLightCoronas.begin(); iter != g_ActiveDistantLightCoronas.end();)
-    {
-        if (!selected.contains(iter->first))
-        {
-            iter->second->Disable();
-            iter = g_ActiveDistantLightCoronas.erase(iter);
-        }
-        else
-            ++iter;
-    }
-
+    g_DistantLightRenderQueue.clear();
     const BYTE  nightAlpha = GetNightAlpha(hour, minute);
     const DWORD timeMs = *reinterpret_cast<DWORD*>(0xB7CB7C);
     for (const SDistantLightCandidate& candidate : candidates)
@@ -945,31 +973,121 @@ void CCoronasSA::DoPulseDistantLights()
         if (!IsDistantLightOn(light.flashType, index, timeMs))
             alpha = 0;
 
-        CRegisteredCorona* corona = nullptr;
-        auto               active = g_ActiveDistantLightCoronas.find(index);
-        if (active != g_ActiveDistantLightCoronas.end())
-            corona = active->second;
-        else
+        g_DistantLightRenderQueue.push_back({
+            light.position,
+            light.texture,
+            finalRadius,
+            g_fDistantLightsDrawDistance,
+            light.red,
+            light.green,
+            light.blue,
+            alpha,
+        });
+    }
+}
+
+void CCoronasSA::RenderDistantLights()
+{
+    if (g_DistantLightRenderQueue.empty())
+        return;
+
+    const auto* scene = reinterpret_cast<const SGtaScene*>(VAR_SCENE);
+    RwCamera*   camera = scene ? scene->camera : nullptr;
+    if (!camera || !camera->bufferColor || camera->bufferColor->width <= 0 || camera->bufferColor->height <= 0)
+        return;
+
+    const DWORD rwEngine = *reinterpret_cast<const DWORD*>(VAR_RW_ENGINE_INSTANCE);
+    if (!rwEngine)
+        return;
+
+    const auto renderStateSet = reinterpret_cast<RwRenderStateFunction>(*reinterpret_cast<const DWORD*>(rwEngine + 0x20));
+    const auto renderStateGet = reinterpret_cast<RwRenderStateFunction>(*reinterpret_cast<const DWORD*>(rwEngine + 0x24));
+    const auto flushSpriteBuffer = reinterpret_cast<FlushSpriteBufferFunction>(FUNC_CSPRITE_FLUSH_BUFFER);
+    const auto renderBufferedSprite = reinterpret_cast<RenderBufferedSpriteFunction>(FUNC_CSPRITE_RENDER_BUFFERED_XLU);
+    if (!renderStateSet || !renderStateGet || !flushSpriteBuffer || !renderBufferedSprite)
+        return;
+
+    void* oldTextureRaster = nullptr;
+    void* oldZTest = nullptr;
+    void* oldZWrite = nullptr;
+    void* oldSourceBlend = nullptr;
+    void* oldDestinationBlend = nullptr;
+    void* oldVertexAlpha = nullptr;
+    if (!renderStateGet(RW_RENDER_STATE_TEXTURE_RASTER, &oldTextureRaster) || !renderStateGet(RW_RENDER_STATE_Z_TEST_ENABLE, &oldZTest) ||
+        !renderStateGet(RW_RENDER_STATE_Z_WRITE_ENABLE, &oldZWrite) || !renderStateGet(RW_RENDER_STATE_SOURCE_BLEND, &oldSourceBlend) ||
+        !renderStateGet(RW_RENDER_STATE_DESTINATION_BLEND, &oldDestinationBlend) || !renderStateGet(RW_RENDER_STATE_VERTEX_ALPHA_ENABLE, &oldVertexAlpha))
+        return;
+
+    // The sprite buffer is global to GTA. Flush anything left by the native
+    // pass before changing its render states, then restore every state so MTA
+    // renderers that follow this hook inherit exactly what GTA left behind.
+    flushSpriteBuffer();
+
+    renderStateSet(RW_RENDER_STATE_Z_WRITE_ENABLE, RwStateValue(FALSE));
+    renderStateSet(RW_RENDER_STATE_VERTEX_ALPHA_ENABLE, RwStateValue(TRUE));
+    renderStateSet(RW_RENDER_STATE_SOURCE_BLEND, RwStateValue(RW_BLEND_ONE));
+    renderStateSet(RW_RENDER_STATE_DESTINATION_BLEND, RwStateValue(RW_BLEND_ONE));
+    renderStateSet(RW_RENDER_STATE_Z_TEST_ENABLE, RwStateValue(TRUE));
+
+    const float     screenWidth = static_cast<float>(camera->bufferColor->width);
+    const float     screenHeight = static_cast<float>(camera->bufferColor->height);
+    const float     fogginess = *reinterpret_cast<const float*>(VAR_WEATHER_FOGGINESS);
+    const RwMatrix& viewMatrix = camera->matrix;
+    // Project2DFX registers DAT lights as HEADLIGHT coronas. GTA's stock slots
+    // currently share coronastar, but retaining that semantic lets texture
+    // replacements distinguish distant lights in the future.
+    RwTexture* defaultTexture = GetTexture(CoronaType::CORONATYPE_HEADLIGHT);
+    RwRaster*  lastRaster = nullptr;
+
+    for (const SDistantLightRenderInstance& light : g_DistantLightRenderQueue)
+    {
+        const float viewX =
+            light.position.fX * viewMatrix.right.x + light.position.fY * viewMatrix.up.x + light.position.fZ * viewMatrix.at.x + viewMatrix.pos.x;
+        const float viewY =
+            light.position.fX * viewMatrix.right.y + light.position.fY * viewMatrix.up.y + light.position.fZ * viewMatrix.at.y + viewMatrix.pos.y;
+        const float viewZ =
+            light.position.fX * viewMatrix.right.z + light.position.fY * viewMatrix.up.z + light.position.fZ * viewMatrix.at.z + viewMatrix.pos.z;
+        if (viewZ <= 1.0f || viewZ > light.range)
+            continue;
+
+        const float inverseViewZ = 1.0f / viewZ;
+        const float screenX = viewX * screenWidth * inverseViewZ;
+        const float screenY = viewY * screenHeight * inverseViewZ;
+        const float renderHeight = light.size * screenHeight * inverseViewZ;
+        if (renderHeight < 0.35f)
+            continue;
+
+        const float halfRange = light.range * 0.5f;
+        const float rangeFade = viewZ > halfRange ? 1.0f - (viewZ - halfRange) / halfRange : 1.0f;
+        const short intensity = static_cast<short>(light.alpha * std::clamp(rangeFade, 0.0f, 1.0f));
+        if (intensity <= 0)
+            continue;
+
+        RwTexture* texture = light.texture ? light.texture : defaultTexture;
+        RwRaster*  raster = texture ? texture->raster : nullptr;
+        if (!raster)
+            continue;
+        if (lastRaster != raster)
         {
-            CVector position = light.position;
-            corona = CreateCorona(DISTANT_LIGHT_IDENTIFIER_BASE + static_cast<DWORD>(index + 1), &position);
-            if (!corona)
-                continue;
-            g_ActiveDistantLightCoronas.emplace(index, corona);
+            flushSpriteBuffer();
+            lastRaster = raster;
+            renderStateSet(RW_RENDER_STATE_TEXTURE_RASTER, raster);
         }
 
-        CVector position = light.position;
-        corona->SetPosition(&position);
-        if (light.texture)
-            corona->SetTexture(light.texture);
-        corona->SetSize(finalRadius);
-        corona->SetRange(g_fDistantLightsDrawDistance);
-        corona->SetPullTowardsCamera(0.0f);
-        corona->SetColor(light.red, light.green, light.blue, alpha);
-        corona->SetFlareType(light.flareType);
-        corona->SetReflectionType(0);
-        corona->Refresh();
+        const float colorFogMultiplier = std::min(40.0f, viewZ) * fogginess * 0.025f + 1.0f;
+        renderBufferedSprite(screenX, screenY, viewZ, renderHeight, renderHeight * colorFogMultiplier,
+                             static_cast<BYTE>(static_cast<float>(light.red) / colorFogMultiplier),
+                             static_cast<BYTE>(static_cast<float>(light.green) / colorFogMultiplier),
+                             static_cast<BYTE>(static_cast<float>(light.blue) / colorFogMultiplier), intensity, inverseViewZ * 20.0f, 0.0f, 0xFF);
     }
+
+    flushSpriteBuffer();
+    renderStateSet(RW_RENDER_STATE_TEXTURE_RASTER, oldTextureRaster);
+    renderStateSet(RW_RENDER_STATE_Z_TEST_ENABLE, oldZTest);
+    renderStateSet(RW_RENDER_STATE_DESTINATION_BLEND, oldDestinationBlend);
+    renderStateSet(RW_RENDER_STATE_SOURCE_BLEND, oldSourceBlend);
+    renderStateSet(RW_RENDER_STATE_VERTEX_ALPHA_ENABLE, oldVertexAlpha);
+    renderStateSet(RW_RENDER_STATE_Z_WRITE_ENABLE, oldZWrite);
 }
 
 SDistantLightStats CCoronasSA::GetDistantLightStats() const
@@ -977,7 +1095,7 @@ SDistantLightStats CCoronasSA::GetDistantLightStats() const
     return {
         g_bDistantLightsEnabled,
         static_cast<DWORD>(g_DistantLights.size()),
-        static_cast<DWORD>(g_ActiveDistantLightCoronas.size()),
+        static_cast<DWORD>(g_DistantLightRenderQueue.size()),
         MAX_DISTANT_LIGHT_CORONAS,
         g_fDistantLightsDrawDistance,
     };
