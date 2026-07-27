@@ -61,9 +61,31 @@ avoid churn at tile boundaries.
 Radar registration is independent from 3D map residency. A city resource that
 must stay visible beside other cities in F11 should register its radar tiles in
 `onClientResourceStart`, keep them registered while its models are released,
-and reset them only in `onClientResourceStop`. The bundled VC, LC, Bullworth,
-and Carcer resources follow this lifecycle, so their catalogs coexist without
-keeping all four 3D worlds resident.
+and reset them only in `onClientResourceStop`.
+
+Neon keeps that lifecycle separate from the legacy Lua 3D map loaders through
+four client-only resources:
+
+```text
+native-world-radar-bullworth      15 tiles  columns 1..5   rows 3..5
+native-world-radar-vice-city      80 tiles  columns 30..37 rows 30..39
+native-world-radar-liberty-city   81 tiles  columns 31..39 rows 0..8
+native-world-radar-carcer-city    63 tiles  columns 28..34 rows 15..23
+```
+
+A server starts only the radar resources matching its selected native-world
+packs. The four reviewed catalogs contain 239 distinct cells, do not overlap
+one another, and do not touch the protected San Andreas block. Their loader
+validates the complete catalog and loads every TXD before registering the first
+cell; a missing/corrupt TXD or ownership conflict therefore rolls back that
+resource instead of leaving a partial city. Resource stop removes only cells
+owned by that resource.
+
+The generated TXDs remain local/copyrighted assets and are not tracked by Git.
+`utils/extended-world/build_native_world_radar_resources.py` assembles and
+verifies the four radar-only resources from the reviewed local city catalogs.
+The per-city diagnostic commands are `/nwradarbw`, `/nwradarvc`, `/nwradarlc`
+and `/nwradarcc`.
 
 ## F11 map
 

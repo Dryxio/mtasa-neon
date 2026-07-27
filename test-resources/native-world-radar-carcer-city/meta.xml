@@ -1,0 +1,70 @@
+<meta>
+    <info author="MTA Neon" name="Native world radar: Carcer City" type="script" version="1.0.0" />
+    <script src="catalog.lua" type="client" cache="false" />
+    <script src="client.lua" type="client" cache="false" />
+    <export function="getNativeWorldRadarStatus" type="client" />
+    <export function="reloadNativeWorldRadar" type="client" />
+    <file src="assets/radar/tile_28_15.txd" />
+    <file src="assets/radar/tile_29_15.txd" />
+    <file src="assets/radar/tile_30_15.txd" />
+    <file src="assets/radar/tile_31_15.txd" />
+    <file src="assets/radar/tile_32_15.txd" />
+    <file src="assets/radar/tile_33_15.txd" />
+    <file src="assets/radar/tile_34_15.txd" />
+    <file src="assets/radar/tile_28_16.txd" />
+    <file src="assets/radar/tile_29_16.txd" />
+    <file src="assets/radar/tile_30_16.txd" />
+    <file src="assets/radar/tile_31_16.txd" />
+    <file src="assets/radar/tile_32_16.txd" />
+    <file src="assets/radar/tile_33_16.txd" />
+    <file src="assets/radar/tile_34_16.txd" />
+    <file src="assets/radar/tile_28_17.txd" />
+    <file src="assets/radar/tile_29_17.txd" />
+    <file src="assets/radar/tile_30_17.txd" />
+    <file src="assets/radar/tile_31_17.txd" />
+    <file src="assets/radar/tile_32_17.txd" />
+    <file src="assets/radar/tile_33_17.txd" />
+    <file src="assets/radar/tile_34_17.txd" />
+    <file src="assets/radar/tile_28_18.txd" />
+    <file src="assets/radar/tile_29_18.txd" />
+    <file src="assets/radar/tile_30_18.txd" />
+    <file src="assets/radar/tile_31_18.txd" />
+    <file src="assets/radar/tile_32_18.txd" />
+    <file src="assets/radar/tile_33_18.txd" />
+    <file src="assets/radar/tile_34_18.txd" />
+    <file src="assets/radar/tile_28_19.txd" />
+    <file src="assets/radar/tile_29_19.txd" />
+    <file src="assets/radar/tile_30_19.txd" />
+    <file src="assets/radar/tile_31_19.txd" />
+    <file src="assets/radar/tile_32_19.txd" />
+    <file src="assets/radar/tile_33_19.txd" />
+    <file src="assets/radar/tile_34_19.txd" />
+    <file src="assets/radar/tile_28_20.txd" />
+    <file src="assets/radar/tile_29_20.txd" />
+    <file src="assets/radar/tile_30_20.txd" />
+    <file src="assets/radar/tile_31_20.txd" />
+    <file src="assets/radar/tile_32_20.txd" />
+    <file src="assets/radar/tile_33_20.txd" />
+    <file src="assets/radar/tile_34_20.txd" />
+    <file src="assets/radar/tile_28_21.txd" />
+    <file src="assets/radar/tile_29_21.txd" />
+    <file src="assets/radar/tile_30_21.txd" />
+    <file src="assets/radar/tile_31_21.txd" />
+    <file src="assets/radar/tile_32_21.txd" />
+    <file src="assets/radar/tile_33_21.txd" />
+    <file src="assets/radar/tile_34_21.txd" />
+    <file src="assets/radar/tile_28_22.txd" />
+    <file src="assets/radar/tile_29_22.txd" />
+    <file src="assets/radar/tile_30_22.txd" />
+    <file src="assets/radar/tile_31_22.txd" />
+    <file src="assets/radar/tile_32_22.txd" />
+    <file src="assets/radar/tile_33_22.txd" />
+    <file src="assets/radar/tile_34_22.txd" />
+    <file src="assets/radar/tile_28_23.txd" />
+    <file src="assets/radar/tile_29_23.txd" />
+    <file src="assets/radar/tile_30_23.txd" />
+    <file src="assets/radar/tile_31_23.txd" />
+    <file src="assets/radar/tile_32_23.txd" />
+    <file src="assets/radar/tile_33_23.txd" />
+    <file src="assets/radar/tile_34_23.txd" />
+</meta>

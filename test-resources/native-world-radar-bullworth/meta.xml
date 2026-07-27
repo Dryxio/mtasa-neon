@@ -1,0 +1,22 @@
+<meta>
+    <info author="MTA Neon" name="Native world radar: Bullworth" type="script" version="1.0.0" />
+    <script src="catalog.lua" type="client" cache="false" />
+    <script src="client.lua" type="client" cache="false" />
+    <export function="getNativeWorldRadarStatus" type="client" />
+    <export function="reloadNativeWorldRadar" type="client" />
+    <file src="assets/radar/tile_01_03.txd" />
+    <file src="assets/radar/tile_02_03.txd" />
+    <file src="assets/radar/tile_03_03.txd" />
+    <file src="assets/radar/tile_04_03.txd" />
+    <file src="assets/radar/tile_05_03.txd" />
+    <file src="assets/radar/tile_01_04.txd" />
+    <file src="assets/radar/tile_02_04.txd" />
+    <file src="assets/radar/tile_03_04.txd" />
+    <file src="assets/radar/tile_04_04.txd" />
+    <file src="assets/radar/tile_05_04.txd" />
+    <file src="assets/radar/tile_01_05.txd" />
+    <file src="assets/radar/tile_02_05.txd" />
+    <file src="assets/radar/tile_03_05.txd" />
+    <file src="assets/radar/tile_04_05.txd" />
+    <file src="assets/radar/tile_05_05.txd" />
+</meta>

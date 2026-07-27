@@ -1193,11 +1193,21 @@ The updated checkpoint sequence is:
    buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
    LOD/prefetch behavior using high-water and multi-hour traces rather than
    larger constants alone.
-13. **Optional environment follow-ups.** Add radar, water, zones,
-   CULL/occlusion, audio, timecycle and interiors as separately validated pack
-   components. Paths/nodes, DAT expansion, streamed SCM, new IFP/RRR,
-   missions/savegames and ambient population remain outside the static MTA
-   multi-city target.
+13. **Optional environment follow-ups — radar tranche implemented.** Four
+   client-only resources now register the reviewed Bullworth, Vice City,
+   Liberty City and Carcer City radar catalogs independently from both native
+   model residency and the obsolete Lua 3D loaders. Their reproducible
+   assembler validates 239 unique non-stock cells and all local RenderWare TXD
+   headers before producing per-city resources with transactional Lua cleanup.
+   The 2026-07-27 live gate used the current Bullworth + Liberty City + Carcer
+   City server selection: three repeated load cycles reported `15`, `81` and
+   `63` owned tiles, `159` global tiles and `7,054,632` compressed source bytes;
+   the user confirmed the minimap/F11 result. Vice City's 80-tile resource is
+   structurally verified and deployed but remains stopped until a selected set
+   includes Vice City. Water, zones, CULL/occlusion, audio, timecycle and
+   interiors remain separate follow-ups. Paths/nodes, DAT expansion, streamed
+   SCM, new IFP/RRR, missions/savegames and ambient population remain outside
+   the static MTA multi-city target.
 14. **Production gate.** Add hostile-input/cache recovery tests, long
    reconnect/restart and several-hour city-tour endurance runs, freeze pack and
    protocol versions, document deployment/rollback, add CI fixtures, and
