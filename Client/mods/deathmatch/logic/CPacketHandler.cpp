@@ -5323,7 +5323,7 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
                     const bool supportedAuthorization =
                         !startupAuthorization || (format == 1 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStartupAuthorization)) ||
                         (format == 2 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization)) ||
-                        (format == 3 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet));
+                        (format == 3 && g_pNet->CanServerBitStream(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet));
                     const bool supportedFileCount = format == 3 ? (startupAuthorization ? fileCount == 1 : fileCount >= 4 && fileCount <= 35) : fileCount == 3;
                     if (!supportedTransport || !supportedAuthorization || !supportedFileCount || manifestLength == 0)
                     {

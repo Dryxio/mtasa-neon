@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CServerModelManager.h"
 #include "CLuaPedDefs.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
@@ -209,7 +210,7 @@ int CLuaPedDefs::CreatePed(lua_State* luaVM)
     bool           bSynced;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, CServerModelManager::LAST_MODEL_ID);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadNumber(fRotation, 0.0f);
     argStream.ReadBool(bSynced, true);

@@ -2821,7 +2821,7 @@ int CLuaPedDefs::CreatePed(lua_State* luaVM)
     CVector          vecPosition;
     float            fRotation = 0.0f;
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(ulModel);
+    argStream.ReadNumberBounded(ulModel, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadNumber(fRotation, 0.0f);
 

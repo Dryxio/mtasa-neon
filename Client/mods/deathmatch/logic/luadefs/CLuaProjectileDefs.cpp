@@ -54,7 +54,8 @@ int CLuaProjectileDefs::CreateProjectile(lua_State* luaVM)
     float            fForce = 1.0f;
     CClientEntity*   pTarget = NULL;
     CVector          vecRotation, vecMoveSpeed;
-    unsigned short   usModel = 0;
+    std::uint32_t    suppliedModel = 0;
+    std::uint16_t    runtimeModel = 0;
     argStream.ReadUserData(pCreator);
     if (pCreator)
         pCreator->GetPosition(vecOrigin);
@@ -65,7 +66,10 @@ int CLuaProjectileDefs::CreateProjectile(lua_State* luaVM)
     argStream.ReadUserData(pTarget, NULL);
     argStream.ReadVector3D(vecRotation, vecRotation);
     argStream.ReadVector3D(vecMoveSpeed, vecMoveSpeed);
-    argStream.ReadNumber(usModel, 0);
+    argStream.ReadNumberBounded(suppliedModel, 0, 0, SERVER_MODEL_ID_MAX);
+    if (!argStream.HasErrors() && suppliedModel != 0 &&
+        !m_pManager->GetModelManager()->ResolveModelID(suppliedModel, runtimeModel, nullptr, false))
+        argStream.SetCustomError("invalid projectile model ID");
 
     if (!argStream.HasErrors())
     {
@@ -76,7 +80,7 @@ int CLuaProjectileDefs::CreateProjectile(lua_State* luaVM)
             if (pResource)
             {
                 CClientProjectile* pProjectile = CStaticFunctionDefinitions::CreateProjectile(*pResource, *pCreator, ucWeaponType, vecOrigin, fForce, pTarget,
-                                                                                              vecRotation, vecMoveSpeed, usModel);
+                                                                                              vecRotation, vecMoveSpeed, runtimeModel);
                 if (pProjectile)
                 {
                     CElementGroup* pGroup = pResource->GetElementGroup();

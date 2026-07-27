@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include <charconv>
 
 struct
 {
@@ -29308,23 +29309,34 @@ const char* CModelNames::GetModelName(uint32 usModelID)
 // Get a model ID from a string which could be a name or a number.
 // If the name starts with "txd", assume it's refering to a global txd
 //
+namespace
+{
+    bool ParseDecimalID(const SString& text, std::uint32_t& value)
+    {
+        if (text.empty())
+            return false;
+
+        const char* begin = text.data();
+        const char* end = begin + text.size();
+        const auto  result = std::from_chars(begin, end, value, 10);
+        return result.ec == std::errc{} && result.ptr == end;
+    }
+}
+
 uint32 CModelNames::ResolveModelID(const SString& strModelName)
 {
-    // Check if it's a number
-    bool bIsNumber = true;
-    for (int i = strModelName.length() - 1; i >= 0 && bIsNumber; i--)
-        if (!isdigit((uchar)strModelName[i]))
-            bIsNumber = false;
-
-    if (bIsNumber)
-        return atoi(strModelName);
+    std::uint32_t modelId = 0;
+    if (ParseDecimalID(strModelName, modelId))
+        return modelId;
 
     // Check if it starts with "txd"
     if (strModelName.BeginsWithI("txd"))
     {
-        uint32 usModelID = atoi(strModelName.SubStr(3));
-        if (usModelID)
-            return g_pGame->GetBaseIDforTXD() + usModelID;  // Encode global txd as model id 20000+
+        std::uint32_t txdId = 0;
+        const auto    baseTxdId = g_pGame->GetBaseIDforTXD();
+        const auto    txdCount = g_pGame->GetBaseIDforCOL() - baseTxdId;
+        if (ParseDecimalID(strModelName.SubStr(3), txdId) && txdId != 0 && txdId < txdCount)
+            return baseTxdId + txdId;  // Encode a global TXD as a model ID.
     }
 
     // Now search for the name
@@ -29336,10 +29348,9 @@ uint32 CModelNames::ResolveModelID(const SString& strModelName)
 //
 uint32 CModelNames::ResolveClothesTexID(const SString& strTexNameOrNumber)
 {
-    // Check if it's a number
-    uint bHasOnlyDigits = (!strTexNameOrNumber.empty() && strTexNameOrNumber.find_first_not_of("0123456789") == SString::npos);
-    if (bHasOnlyDigits)
-        return atoi(strTexNameOrNumber);
+    std::uint32_t textureId = 0;
+    if (ParseDecimalID(strTexNameOrNumber, textureId))
+        return textureId;
 
     // Now search for the name
     return GetClothesTexID(strTexNameOrNumber);

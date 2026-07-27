@@ -1124,7 +1124,9 @@ int CLuaWorldDefs::RemoveWorldBuilding(lua_State* luaVM)
     float            fRadius = 0;
     char             cInterior = -1;
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(iModelToRemove);
+    // Native-world arena slots are generation-local implementation details,
+    // so the legacy removal API remains restricted to stable GTA model IDs.
+    argStream.ReadNumberBounded(iModelToRemove, 0, 19999);
     argStream.ReadNumber(fRadius);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadNumber(cInterior, -1);
@@ -1181,7 +1183,7 @@ int CLuaWorldDefs::RestoreWorldBuilding(lua_State* luaVM)
     float            fRadius = 0;
     char             cInterior = -1;
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(iModelToRestore);
+    argStream.ReadNumberBounded(iModelToRestore, 0, 19999);
     argStream.ReadNumber(fRadius);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadNumber(cInterior, -1);

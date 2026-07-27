@@ -12,6 +12,8 @@
 #include "StdInc.h"
 #include <lua/CLuaFunctionParser.h>
 
+#include <limits>
+
 void CLuaObjectDefs::LoadFunctions()
 {
     constexpr static const std::pair<const char*, lua_CFunction> functions[]{
@@ -100,7 +102,7 @@ int CLuaObjectDefs::CreateObject(lua_State* luaVM)
     bool    bLowLod;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModelID);
+    argStream.ReadNumberBounded(usModelID, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadVector3D(vecRotation, vecRotation);
     argStream.ReadBool(bLowLod, false);
@@ -202,10 +204,27 @@ int CLuaObjectDefs::IsObjectBreakable(lua_State* luaVM)
 
     if (argStream.NextIsNumber())
     {
-        unsigned short usModel;
-        argStream.ReadNumber(usModel);
+        std::uint32_t suppliedModel;
+        std::uint16_t runtimeModel = 0;
+        argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+        if (!argStream.HasErrors() && !m_pManager->GetModelManager()->ResolveModelID(suppliedModel, runtimeModel))
+            argStream.SetCustomError("invalid model ID");
 
-        lua_pushboolean(luaVM, CClientObjectManager::IsBreakableModel(usModel));
+        if (argStream.HasErrors())
+        {
+            m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+            lua_pushboolean(luaVM, false);
+            return 1;
+        }
+
+        CModelInfo* modelInfo = g_pGame->GetModelInfo(runtimeModel);
+        if (modelInfo)
+        {
+            const unsigned int parentModel = modelInfo->GetParentID();
+            if (parentModel != 0 && parentModel <= std::numeric_limits<std::uint16_t>::max())
+                runtimeModel = static_cast<std::uint16_t>(parentModel);
+        }
+        lua_pushboolean(luaVM, CClientObjectManager::IsBreakableModel(runtimeModel));
         return 1;
     }
 

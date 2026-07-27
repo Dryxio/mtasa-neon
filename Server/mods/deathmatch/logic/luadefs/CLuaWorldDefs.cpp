@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CServerModelManager.h"
 #include "CLuaWorldDefs.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
@@ -1069,7 +1070,10 @@ int CLuaWorldDefs::RemoveWorldModel(lua_State* luaVM)
     float          fRadius = 0.0f;
     char           cInterior = -1;
     CVector        vecPosition;
-    argStream.ReadNumber(usModel);
+    // The RPC carries a physical building model and has no generation token.
+    // Do not let scripts address recycled native-world arena slots or logical
+    // server-model IDs through this legacy API.
+    argStream.ReadNumberBounded(usModel, 0, 19999);
     argStream.ReadNumber(fRadius);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadNumber(cInterior, -1);
@@ -1096,7 +1100,7 @@ int CLuaWorldDefs::RestoreWorldModel(lua_State* luaVM)
     float          fRadius = 0.0f;
     char           cInterior = -1;
     CVector        vecPosition;
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, 19999);
     argStream.ReadNumber(fRadius);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadNumber(cInterior, -1);

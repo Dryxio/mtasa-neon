@@ -218,7 +218,7 @@ int CLuaHandlingDefs::SetModelHandling(lua_State* luaVM)
     std::uint16_t model;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(model);
+    argStream.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {
@@ -621,7 +621,7 @@ int CLuaHandlingDefs::GetModelHandling(lua_State* luaVM)
     std::uint32_t model;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(model);
+    argStream.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {
@@ -792,7 +792,7 @@ int CLuaHandlingDefs::GetOriginalHandling(lua_State* luaVM)
     std::uint32_t model;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(model);
+    argStream.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {

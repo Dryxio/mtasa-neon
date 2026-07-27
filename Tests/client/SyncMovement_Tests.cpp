@@ -335,23 +335,44 @@ TEST(VersionedPositionWireInvariant, ObjectRawCopyFromLegacyIntoLatestCannotPres
     EXPECT_FALSE(decodedCompletePacket);
 }
 
-// Low-precision position: X/Y use 16-bit over [-10000, 10000] (step ~0.31),
-// Z uses an 11-bit integer offset by -110 (step = 1). Used for lightweight
-// sync where exact position is less critical.
-TEST(SLowPrecisionPositionSync, RoundTrip)
+// The previous DM netcode epoch is rejected before sync. Its last effective
+// pre-epoch capability still models the exact 43-bit legacy layout: 16-bit X/Y
+// and the historical 11-bit -110..1938 Z interval.
+TEST(SLowPrecisionPositionSync, LegacyWireWidthAndZLimit)
 {
-    MockBitStream             bs;
+    MockBitStream             bs(static_cast<unsigned short>(eBitStreamVersion::NativeTaskLocomotionPresentation));
     SLowPrecisionPositionSync sync;
     sync.data.vecPosition.fX = 9500.0f;
     sync.data.vecPosition.fY = -9500.0f;
-    sync.data.vecPosition.fZ = 50.0f;
+    sync.data.vecPosition.fZ = 9500.0f;
     sync.Write(bs);
+    EXPECT_EQ(43, bs.GetNumberOfBitsUsed());
     bs.ResetReadPointer();
     SLowPrecisionPositionSync out;
     EXPECT_TRUE(out.Read(bs));
     EXPECT_NEAR(9500.0f, out.data.vecPosition.fX, 0.4f);
     EXPECT_NEAR(-9500.0f, out.data.vecPosition.fY, 0.4f);
-    EXPECT_NEAR(50.0f, out.data.vecPosition.fZ, 1.1f);
+    EXPECT_NEAR(1938.0f, out.data.vecPosition.fZ, 1.1f);
+}
+
+// Peers in the exact new DM netcode epoch use 16 bits for every component, so
+// low-precision Z covers the complete extended world with the same ~0.31-unit
+// error as X/Y while staying within the net module's 0x3D effective cap.
+TEST(SLowPrecisionPositionSync, ExtendedWireWidthAndWorldBoundary)
+{
+    MockBitStream             bs(static_cast<unsigned short>(eBitStreamVersion::ExtendedWorldLowPrecisionZ));
+    SLowPrecisionPositionSync sync;
+    sync.data.vecPosition.fX = 9500.0f;
+    sync.data.vecPosition.fY = -9500.0f;
+    sync.data.vecPosition.fZ = -9500.0f;
+    sync.Write(bs);
+    EXPECT_EQ(48, bs.GetNumberOfBitsUsed());
+    bs.ResetReadPointer();
+    SLowPrecisionPositionSync out;
+    EXPECT_TRUE(out.Read(bs));
+    EXPECT_NEAR(9500.0f, out.data.vecPosition.fX, 0.4f);
+    EXPECT_NEAR(-9500.0f, out.data.vecPosition.fY, 0.4f);
+    EXPECT_NEAR(-9500.0f, out.data.vecPosition.fZ, 0.4f);
 }
 
 // ============================================================================

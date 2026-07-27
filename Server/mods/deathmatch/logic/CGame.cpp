@@ -1952,14 +1952,23 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
             return DisconnectPlayer(this, *pPlayer, CPlayerDisconnectedPacket::ELEMENT_FAILURE);
         }
 
+        // The distributed net modules cap their effective bitstream at 0x3D,
+        // so the exact DM netcode epoch is the compatibility boundary for the
+        // generic-set and 48-bit low-precision-position wire changes. Reject a
+        // previous-epoch peer before its bitstream version reaches net.dll.
+        if (Packet.GetNetVersion() != MTA_DM_NETCODE_VERSION)
+        {
+            CLogger::LogPrintf("CONNECT: %s failed to connect (Bad version; client: %X, server: %X)\n", szNick, Packet.GetNetVersion(), MTA_DM_NETCODE_VERSION);
+            return DisconnectPlayer(this, *pPlayer, "This server requires the current Neon network protocol.");
+        }
+
         // Set the bitstream version number for this connection
         pPlayer->SetBitStreamVersion(Packet.GetBitStreamVersion());
         g_pNetServer->SetClientBitStreamVersion(Packet.GetSourceSocket(), Packet.GetBitStreamVersion());
-        if (m_pResourceManager->RequiresNativeWorldV3SetStartupCapability() &&
-            !pPlayer->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet))
+        if (m_pResourceManager->RequiresNativeWorldV3SetStartupCapability() && !pPlayer->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet))
         {
-            CLogger::LogPrintf("CONNECT: %s refused (client lacks server-selected static-world-v3-set capability)\n", szNick);
-            return DisconnectPlayer(this, *pPlayer, "This server requires server-selected native static-world-v3-set support.");
+            CLogger::LogPrintf("CONNECT: %s refused (client lacks generic static-world-v3-set capability)\n", szNick);
+            return DisconnectPlayer(this, *pPlayer, "This server requires generic native static-world-v3-set support.");
         }
 
         // Get the serial number from the packet source

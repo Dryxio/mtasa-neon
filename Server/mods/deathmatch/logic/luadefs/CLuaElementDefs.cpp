@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CServerModelManager.h"
 #include "CLuaElementDefs.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
@@ -2224,7 +2225,7 @@ int CLuaElementDefs::setElementModel(lua_State* luaVM)
 
     CScriptArgReader argStream(luaVM);
     argStream.ReadUserData(pElement);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {

@@ -22,8 +22,10 @@ STATIC_WORLD_WIRE_VERSION = 2
 STATIC_WORLD_PACK_FORMAT = 2
 POLICY_STATIC_WORLD_V1 = 2
 STATIC_WORLD_V3_PACK_FORMAT = 3
-STATIC_WORLD_V3_SET_WIRE_VERSION = 3
-POLICY_STATIC_WORLD_V3_SET = 3
+STATIC_WORLD_V3_SET_WIRE_VERSION = 4
+POLICY_STATIC_WORLD_V3_SET = 4
+RETIRED_STATIC_WORLD_V3_SET_WIRE_VERSION = 3
+RETIRED_POLICY_STATIC_WORLD_V3_SET = 3
 RECORD_LIFETIME_SECONDS = 900
 CLOCK_ROLLBACK_TOLERANCE_SECONDS = 120
 RESTART_MINIMUM_REMAINING_SECONDS = 60
@@ -36,7 +38,12 @@ STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION = 0x3A
 STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION = 0x3B
 NATIVE_TASK_LOCOMOTION_PRESENTATION_BITSTREAM_VERSION = 0x3C
 STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION = 0x3D
-LATEST_BITSTREAM_VERSION = STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
+# The shipped net modules cap the effective bitstream at 0x3D. The exact
+# 0x1DF DM netcode epoch rejects older peers before these aliased wire changes
+# can be used.
+EXTENDED_WORLD_LOW_PRECISION_Z_BITSTREAM_VERSION = STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
+STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION = STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
+LATEST_BITSTREAM_VERSION = STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION
 
 
 class RecordError(ValueError):
@@ -92,7 +99,7 @@ def encode_descriptor(descriptor: TransportDescriptor, client_bitstream_version:
         AUTHORIZATION_BITSTREAM_VERSION
         if descriptor.format == PACK_FORMAT
         else STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION if descriptor.format == STATIC_WORLD_PACK_FORMAT
-        else STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
+        else STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION
     )
     if client_bitstream_version < transport_capability:
         return b""
@@ -144,7 +151,7 @@ def decode_descriptor(data: bytes, client_bitstream_version: int) -> TransportDe
         AUTHORIZATION_BITSTREAM_VERSION
         if format_value == PACK_FORMAT
         else STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION if format_value == STATIC_WORLD_PACK_FORMAT
-        else STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
+        else STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION
     )
     if client_bitstream_version < transport_capability:
         raise RecordError("transport descriptor exceeds negotiated capability")
@@ -237,7 +244,7 @@ def _require_bytes(value: bytes, size: int, field: str) -> None:
         raise RecordError(f"{field} must be exactly {size} bytes")
 
 
-def _validate(record: AuthorizationRecord) -> bytes:
+def _validate(record: AuthorizationRecord, *, allow_retired_durable_record: bool = False) -> bytes:
     for value, size, field in (
         (record.content_id, 32, "content_id"),
         (record.offer_id, 32, "offer_id"),
@@ -275,7 +282,18 @@ def _validate(record: AuthorizationRecord) -> bytes:
         record.startup_mode,
         record.policy,
     ) == (STATIC_WORLD_V3_PACK_FORMAT, STATIC_WORLD_V3_SET_WIRE_VERSION, STARTUP_MODE, POLICY_STATIC_WORLD_V3_SET)
-    if not closed_bullworth and not closed_static_world and not closed_static_world_v3_set:
+    retired_static_world_v3_set = allow_retired_durable_record and (
+        record.pack_format,
+        record.wire_version,
+        record.startup_mode,
+        record.policy,
+    ) == (
+        STATIC_WORLD_V3_PACK_FORMAT,
+        RETIRED_STATIC_WORLD_V3_SET_WIRE_VERSION,
+        STARTUP_MODE,
+        RETIRED_POLICY_STATIC_WORLD_V3_SET,
+    )
+    if not closed_bullworth and not closed_static_world and not closed_static_world_v3_set and not retired_static_world_v3_set:
         raise RecordError("unsupported closed authorization version or policy")
     if not record.server_port or record.resource_net_id == 0xFFFF or not record.resource_start_counter:
         raise RecordError("invalid endpoint or resource identity")
@@ -293,7 +311,7 @@ def _validate(record: AuthorizationRecord) -> bytes:
         AUTHORIZATION_BITSTREAM_VERSION
         if closed_bullworth
         else STATIC_WORLD_AUTHORIZATION_BITSTREAM_VERSION if closed_static_world
-        else STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION
+        else STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION
     )
     if not minimum_bitstream_version <= record.bitstream_version <= LATEST_BITSTREAM_VERSION:
         raise RecordError("bitstream version is outside the startup capability window")
@@ -411,12 +429,12 @@ def decode_record(data: bytes) -> AuthorizationRecord:
         pack_format=pack_format,
         policy=policy,
     )
-    _validate(record)
+    _validate(record, allow_retired_durable_record=True)
     return record
 
 
 def freshness(record: AuthorizationRecord, now: int) -> str:
-    _validate(record)
+    _validate(record, allow_retired_durable_record=True)
     _require_uint(now, 64, "now")
     if now > record.expires_at:
         return "expired"
@@ -426,7 +444,7 @@ def freshness(record: AuthorizationRecord, now: int) -> str:
 
 
 def semantic_identity(record: AuthorizationRecord) -> tuple[object, ...]:
-    _validate(record)
+    _validate(record, allow_retired_durable_record=True)
     return (
         record.wire_version,
         record.startup_mode,
@@ -485,6 +503,7 @@ def parse_closed_startup_uri(uri: str | None) -> tuple[bytes, int] | None:
 
 def restart_uri(record: AuthorizationRecord, now: int) -> str:
     """Produce the only launch-2 target permitted for a fresh record."""
+    _validate(record)
     if freshness(record, now) != "fresh":
         raise RecordError("restart requires a fresh native-world authorization")
     if record.expires_at - now < RESTART_MINIMUM_REMAINING_SECONDS:

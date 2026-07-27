@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <cmath>
+
 #include "CVector2D.h"
 #include <limits>
 #include <type_traits>
@@ -139,6 +141,40 @@ public:
         outValue = 0;
         SetTypeError("number");
         m_iIndex++;
+    }
+
+    // Read an externally supplied integer-like value without narrowing it
+    // before the API-specific range contract has been checked. This is opt-in
+    // because a few legacy bit APIs intentionally preserve modulo conversion.
+    template <typename T>
+    void ReadNumberBounded(T& outValue, lua_Number minimum, lua_Number maximum)
+    {
+        lua_Number value = 0;
+        ReadNumber(value);
+        if (HasErrors())
+        {
+            outValue = 0;
+            return;
+        }
+        if (!std::isfinite(value) || value < minimum || value > maximum)
+        {
+            outValue = 0;
+            SetCustomError("Expected number within the supported range", "Bad argument");
+            return;
+        }
+        outValue = static_cast<T>(value);
+    }
+
+    template <typename T, typename U>
+    void ReadNumberBounded(T& outValue, const U& defaultValue, lua_Number minimum, lua_Number maximum)
+    {
+        if (NextIsNone() || NextIsNil())
+        {
+            outValue = static_cast<T>(defaultValue);
+            m_iIndex++;
+            return;
+        }
+        ReadNumberBounded(outValue, minimum, maximum);
     }
 
     //

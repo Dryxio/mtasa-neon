@@ -3,7 +3,7 @@
  *  PROJECT:     Multi Theft Auto
  *  LICENSE:     See LICENSE in the top level directory
  *  FILE:        game_sa/CNativeWorldPackSA.cpp
- *  PURPOSE:     Native GTA streaming registration for reviewed world packs
+ *  PURPOSE:     Native GTA streaming registration for admitted world packs
  *
  *****************************************************************************/
 
@@ -102,19 +102,12 @@ namespace
     constexpr unsigned int STATIC_WORLD_V3_MODEL_BANK_SIZE = 4096;
     constexpr unsigned int STATIC_WORLD_V3_MODEL_BANK_COUNT = 2;
     constexpr unsigned int STATIC_WORLD_V3_MODEL_BANK_FIRST[] = {20000, 24096};
-    constexpr unsigned int STATIC_WORLD_V3_VICE_CITY_LOD_LINKS = 1081;
-    constexpr unsigned int STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS = 1957;
-    constexpr unsigned int STATIC_WORLD_V3_VICE_CITY_LOD_CHILD_GROUPS = 9;
-    constexpr unsigned int STATIC_WORLD_V3_LIBERTY_CITY_LOD_CHILD_GROUPS = 12;
-    constexpr unsigned int STATIC_WORLD_V3_VICE_CITY_LOD_SCRATCH = 2162;
-    constexpr unsigned int STATIC_WORLD_V3_LIBERTY_CITY_LOD_SCRATCH = 3914;
-    constexpr unsigned int STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS = 2;
-    constexpr unsigned int STATIC_WORLD_V3_LIBERTY_CITY_MISSING_ANCHOR_COLS = 0;
     constexpr DWORD        STATIC_WORLD_V3_RW_LIBRARY_ID = 0x1803FFFF;
     constexpr const char*  STATIC_WORLD_V3_SET_POLICY = "static-world-v3-set";
     constexpr const char*  STATIC_WORLD_V3_SET_AUDIT = "static-world-v3-set-dry-run-v1";
     constexpr const char*  STATIC_WORLD_V3_SET_MANIFEST = "static-world-v3-set.json";
     constexpr unsigned int STATIC_WORLD_V3_SET_MAX_MANIFEST_BYTES = 16 * 1024;
+    constexpr unsigned int STATIC_WORLD_V3_SET_MAX_PACKS = 8;
     constexpr DWORD        FLUSH_STREAMING_CHANNELS = 0x40E460;
     constexpr DWORD        COVER_INIT = 0x698710;
     constexpr DWORD        REMOVE_ALL_COLLISION_TAIL = 0x5B9321;
@@ -279,6 +272,7 @@ namespace
         CEntitySAInterface**                               lodEntityArray{};
         unsigned int                                       lodOwnerIplSlot{std::numeric_limits<unsigned int>::max()};
         std::vector<CEntitySAInterface*>                   lodAnchors;
+        unsigned int                                       lodMissingAnchorColCount{};
         int                                                activeBank{-1};
         bool                                               spatialReady{};
     };
@@ -372,38 +366,38 @@ namespace
         unsigned int  nextInImg{0xFFFF};
     };
 
-    CStreamingSA*                                          g_streaming = nullptr;
-    const SNativeWorldPackPolicySA*                        g_policy = nullptr;
-    SNativeWorldPackRuntimeDataSA                          g_manifest;
-    std::string                                            g_activeDirectory;
-    std::vector<const char*>                               g_iplNamePointers;
-    SNativeWorldPackDescriptorSA                           g_runtimeDescriptor{};
-    const SNativeWorldPackDescriptorSA*                    g_pack = nullptr;
-    EState                                                 g_state = EState::Off;
-    std::mutex                                             g_transportPublisherMutex;
-    bool                                                   g_authorizedRoute = false;
-    SNativeWorldStartupSelection                           g_authorizedSelection{};
-    CNativeWorldCacheLeaseSA                               g_authorizedLease;
-    bool                                                   g_staticWorldV3Route = false;
-    SStaticWorldV3SetManifest                              g_staticWorldV3Set;
-    std::vector<SStaticWorldV3RuntimePack>                 g_staticWorldV3Packs;
-    std::vector<CNativeWorldCacheLeaseSA>                  g_staticWorldV3ChildLeases;
-    std::map<unsigned int, size_t>                         g_staticWorldV3ColOwners;
-    std::map<unsigned int, size_t>                         g_staticWorldV3IplOwners;
-    std::atomic_uint                                       g_staticWorldV3Generation{0};
-    EStaticWorldV3LodState                                 g_staticWorldV3LodState = EStaticWorldV3LodState::Off;
-    std::array<int, STATIC_WORLD_V3_MODEL_BANK_COUNT>      g_staticWorldV3BankOwners = {-1, -1};
-    int                                                    g_staticWorldV3ActivePack = -1;
-    unsigned int                                           g_staticWorldV3NextBank = 0;
-    bool                                                   g_staticWorldV3BootstrapBoundsComplete = false;
-    std::vector<SStaticWorldV3StreamingBinding>            g_staticWorldV3PermanentBindings;
-    std::vector<std::vector<SStaticWorldV3ModelBinding>>   g_staticWorldV3ModelBindings;
-    std::vector<CEntitySAInterface*>                       g_staticWorldV3PendingBoundingAnchors;
-    unsigned int                                           g_staticWorldV3BoundingCleanupGroups = 0;
-    unsigned int                                           g_staticWorldV3LargestEntryBlocks = 0;
-    std::atomic_bool                                       g_nativeModelSlotsReserved{false};
-    std::atomic_uint                                       g_reservedPackModelFirst{0};
-    std::atomic_uint                                       g_reservedPackModelLast{0};
+    CStreamingSA*                                        g_streaming = nullptr;
+    const SNativeWorldPackPolicySA*                      g_policy = nullptr;
+    SNativeWorldPackRuntimeDataSA                        g_manifest;
+    std::string                                          g_activeDirectory;
+    std::vector<const char*>                             g_iplNamePointers;
+    SNativeWorldPackDescriptorSA                         g_runtimeDescriptor{};
+    const SNativeWorldPackDescriptorSA*                  g_pack = nullptr;
+    EState                                               g_state = EState::Off;
+    std::mutex                                           g_transportPublisherMutex;
+    bool                                                 g_authorizedRoute = false;
+    SNativeWorldStartupSelection                         g_authorizedSelection{};
+    CNativeWorldCacheLeaseSA                             g_authorizedLease;
+    bool                                                 g_staticWorldV3Route = false;
+    SStaticWorldV3SetManifest                            g_staticWorldV3Set;
+    std::vector<SStaticWorldV3RuntimePack>               g_staticWorldV3Packs;
+    std::vector<CNativeWorldCacheLeaseSA>                g_staticWorldV3ChildLeases;
+    std::map<unsigned int, size_t>                       g_staticWorldV3ColOwners;
+    std::map<unsigned int, size_t>                       g_staticWorldV3IplOwners;
+    std::atomic_uint                                     g_staticWorldV3Generation{0};
+    EStaticWorldV3LodState                               g_staticWorldV3LodState = EStaticWorldV3LodState::Off;
+    std::array<int, STATIC_WORLD_V3_MODEL_BANK_COUNT>    g_staticWorldV3BankOwners = {-1, -1};
+    int                                                  g_staticWorldV3ActivePack = -1;
+    unsigned int                                         g_staticWorldV3NextBank = 0;
+    bool                                                 g_staticWorldV3BootstrapBoundsComplete = false;
+    std::vector<SStaticWorldV3StreamingBinding>          g_staticWorldV3PermanentBindings;
+    std::vector<std::vector<SStaticWorldV3ModelBinding>> g_staticWorldV3ModelBindings;
+    std::vector<CEntitySAInterface*>                     g_staticWorldV3PendingBoundingAnchors;
+    unsigned int                                         g_staticWorldV3BoundingCleanupGroups = 0;
+    unsigned int                                         g_staticWorldV3LargestEntryBlocks = 0;
+    std::atomic_bool                                     g_nativeModelSlotsReserved{false};
+    std::atomic_uint                                     g_reservedPackModelFirst{0};
+    std::atomic_uint                                     g_reservedPackModelLast{0};
 
     const SNativeWorldPackDescriptorSA& Pack()
     {
@@ -963,29 +957,25 @@ namespace
         const SJsonValue*         policy = Member(root, "policy", SJsonValue::EType::String);
         const SJsonValue*         setId = Member(root, "set_id", SJsonValue::EType::String);
         const SJsonValue*         packs = Member(root, "packs", SJsonValue::EType::Array);
-        constexpr const char*     canonicalPackIds[] = {"bullworth", "vice-city", "liberty-city", "carcer-city"};
         SStaticWorldV3SetManifest parsed;
         if (!format || format->number != 3 || !policy || policy->string != STATIC_WORLD_V3_SET_POLICY || !setId || !IsLowerSha256(setId->string) || !packs ||
-            packs->array.empty() || packs->array.size() > std::size(canonicalPackIds))
+            packs->array.empty() || packs->array.size() > STATIC_WORLD_V3_SET_MAX_PACKS)
         {
             error = "static-world-v3-set format, policy, set ID, or pack count is invalid";
             return false;
         }
-        size_t nextCanonicalIndex = 0;
+        std::set<std::string> packIds;
         for (const SJsonValue& value : packs->array)
         {
             const SJsonValue* packId = Member(value, "pack_id", SJsonValue::EType::String);
             const SJsonValue* contentId = Member(value, "content_id", SJsonValue::EType::String);
-            while (packId && nextCanonicalIndex < std::size(canonicalPackIds) && packId->string != canonicalPackIds[nextCanonicalIndex])
-                ++nextCanonicalIndex;
-            if (!HasExactKeys(value, {"pack_id", "content_id"}) || !packId || nextCanonicalIndex == std::size(canonicalPackIds) || !contentId ||
-                !IsLowerSha256(contentId->string))
+            if (!HasExactKeys(value, {"pack_id", "content_id"}) || !packId || !IsSafePackId(packId->string) || !packIds.emplace(packId->string).second ||
+                !contentId || !IsLowerSha256(contentId->string))
             {
-                error = "static-world-v3-set pack identities are not unique or canonically ordered";
+                error = "static-world-v3-set pack identities are unsafe or duplicated";
                 return false;
             }
             parsed.packs.push_back({packId->string, contentId->string});
-            ++nextCanonicalIndex;
         }
         parsed.setId = setId->string;
         parsed.manifestSha256 = SharedUtil::GenerateSha256HexString(bytes).ToLower();
@@ -3149,41 +3139,20 @@ namespace
     };
 
     const SBinaryIplInstance& GetStaticWorldV3Instance(const SStaticWorldV3RuntimePack& pack, unsigned int ordinal);
-    void __cdecl CompleteStaticWorldV3BoundingBootstrap();
-
-    unsigned int CountStaticWorldV3LodChildGroups(const SStaticWorldV3Inventory& inventory)
-    {
-        unsigned int groups = 0;
-        unsigned int groupBegin = 0;
-        auto         link = inventory.lodLinks.begin();
-        for (unsigned int groupCount : inventory.lodGroupCounts)
-        {
-            const unsigned int groupEnd = groupBegin + groupCount;
-            if (link != inventory.lodLinks.end() && link->childOrdinal < groupEnd)
-            {
-                ++groups;
-                do
-                    ++link;
-                while (link != inventory.lodLinks.end() && link->childOrdinal < groupEnd);
-            }
-            groupBegin = groupEnd;
-        }
-        return groups;
-    }
+    void __cdecl              CompleteStaticWorldV3BoundingBootstrap();
 
     bool ValidateStaticWorldV3LodProfile(std::string& error)
     {
-        const auto validatePack = [&error](const SStaticWorldV3RuntimePack& pack, const char* expectedPackId, unsigned int expectedLinks,
-                                           unsigned int expectedScratch, unsigned int expectedChildGroups, unsigned int expectedMissingAnchorCols)
+        const auto validatePack = [&error](SStaticWorldV3RuntimePack& pack)
         {
             const SStaticWorldV3Inventory& inventory = pack.inventory;
-            if (pack.identity.packId != expectedPackId || inventory.lodAnchorCount != expectedLinks || inventory.lodLinkCount != expectedLinks ||
-                inventory.lodAnchorCount + inventory.lodLinkCount != expectedScratch || expectedScratch > IPL_ENTITY_SCRATCH_CAPACITY ||
+            const uint64_t                 scratch = static_cast<uint64_t>(inventory.lodAnchorCount) + inventory.lodLinkCount;
+            if (inventory.lodAnchorCount != inventory.lodLinkCount || scratch > IPL_ENTITY_SCRATCH_CAPACITY ||
                 inventory.iplInstances.size() != inventory.iplPlacementCounts.size() || inventory.lodGroupCounts != inventory.iplPlacementCounts ||
-                inventory.lodAnchorOrdinals.size() != expectedLinks || inventory.lodLinks.size() != expectedLinks ||
-                CountStaticWorldV3LodChildGroups(inventory) != expectedChildGroups)
+                inventory.lodAnchorOrdinals.size() != inventory.lodAnchorCount || inventory.lodLinks.size() != inventory.lodLinkCount)
             {
-                error = SString("static-world-v3 %s LOD profile differs from the frozen %u/%u graph", expectedPackId, expectedLinks, expectedScratch);
+                error = SString("static-world-v3 %s LOD graph exceeds the generic one-to-one scratch policy actual=%u/%u", pack.identity.packId.c_str(),
+                                static_cast<unsigned int>(scratch), IPL_ENTITY_SCRATCH_CAPACITY);
                 return false;
             }
 
@@ -3191,38 +3160,39 @@ namespace
             // own any entity: anchors precede children, an anchor with a live
             // child cannot be removed, and reverse child-first teardown closes
             // every one-to-one edge.
-            std::vector<bool>         anchors(expectedLinks);
-            std::vector<unsigned int> children(expectedLinks);
-            for (unsigned int index = 0; index < expectedLinks; ++index)
+            std::vector<bool>         anchors(inventory.lodAnchorCount);
+            std::vector<unsigned int> children(inventory.lodAnchorCount);
+            for (unsigned int index = 0; index < inventory.lodAnchorCount; ++index)
                 anchors[index] = true;
             for (const SStaticWorldV3LodLink& link : inventory.lodLinks)
             {
                 if (!anchors[link.anchorIndex] || children[link.anchorIndex] != 0)
                 {
-                    error = SString("static-world-v3 %s LOD hostile-order simulation found a child-before-anchor or duplicate edge", expectedPackId);
+                    error =
+                        SString("static-world-v3 %s LOD hostile-order simulation found a child-before-anchor or duplicate edge", pack.identity.packId.c_str());
                     return false;
                 }
                 ++children[link.anchorIndex];
             }
             if (std::any_of(children.begin(), children.end(), [](unsigned int count) { return count != 1; }))
             {
-                error = SString("static-world-v3 %s LOD hostile-order simulation found a removable live anchor", expectedPackId);
+                error = SString("static-world-v3 %s LOD hostile-order simulation found a removable live anchor", pack.identity.packId.c_str());
                 return false;
             }
             for (auto link = inventory.lodLinks.rbegin(); link != inventory.lodLinks.rend(); ++link)
                 --children[link->anchorIndex];
             if (std::any_of(children.begin(), children.end(), [](unsigned int count) { return count != 0; }))
             {
-                error = SString("static-world-v3 %s LOD child-first teardown did not close every edge", expectedPackId);
+                error = SString("static-world-v3 %s LOD child-first teardown did not close every edge", pack.identity.packId.c_str());
                 return false;
             }
 
             // GTA's renderer assumes every map entity has a ColModel even
-            // when entity collision is disabled. The canonical VC source has
-            // two visual-only LOD anchors without direct COL records. Admit
-            // only that narrow shape: a missing-COL placement must be a
+            // when entity collision is disabled. Admit only the shape already
+            // required by the reviewed VC source: a missing-COL placement must be a
             // unique anchor whose unique child has collision to lend. The
             // later runtime transfer then mirrors the native _LinkLods rule.
+            pack.lodMissingAnchorColCount = 0;
             std::set<unsigned int> colModels;
             for (const auto& [ordinal, ids] : inventory.colModelIds)
                 colModels.insert(ids.begin(), ids.end());
@@ -3246,53 +3216,30 @@ namespace
                         const auto child = anchor == anchorByOrdinal.end() ? childByAnchor.end() : childByAnchor.find(anchor->second);
                         if (child == childByAnchor.end())
                         {
-                            error = SString("static-world-v3 %s placement without COL is not a one-to-one LOD anchor", expectedPackId);
+                            error = SString("static-world-v3 %s placement without COL is not a one-to-one LOD anchor", pack.identity.packId.c_str());
                             return false;
                         }
                         const SBinaryIplInstance& childInstance = GetStaticWorldV3Instance(pack, child->second);
                         if (childInstance.modelId < 0 || colModels.find(static_cast<unsigned int>(childInstance.modelId)) == colModels.end())
                         {
-                            error = SString("static-world-v3 %s missing-COL LOD anchor has no collision-bearing child", expectedPackId);
+                            error = SString("static-world-v3 %s missing-COL LOD anchor has no collision-bearing child", pack.identity.packId.c_str());
                             return false;
                         }
                         if (!missingAnchorColModels.insert(static_cast<unsigned int>(instance.modelId)).second)
                         {
-                            error = SString("static-world-v3 %s missing-COL LOD anchor model is reused by another placement", expectedPackId);
+                            error = SString("static-world-v3 %s missing-COL LOD anchor model is reused by another placement", pack.identity.packId.c_str());
                             return false;
                         }
                     }
                     ++ordinal;
                 }
-            const unsigned int missingAnchorCols = static_cast<unsigned int>(missingAnchorColModels.size());
-            if (missingAnchorCols != expectedMissingAnchorCols)
-            {
-                error = SString("static-world-v3 %s missing-anchor COL profile differs actual=%u expected=%u", expectedPackId, missingAnchorCols,
-                                expectedMissingAnchorCols);
-                return false;
-            }
+            pack.lodMissingAnchorColCount = static_cast<unsigned int>(missingAnchorColModels.size());
             return true;
         };
 
-        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
-        {
-            if (pack.identity.packId == "vice-city")
-            {
-                if (!validatePack(pack, "vice-city", STATIC_WORLD_V3_VICE_CITY_LOD_LINKS, STATIC_WORLD_V3_VICE_CITY_LOD_SCRATCH,
-                                  STATIC_WORLD_V3_VICE_CITY_LOD_CHILD_GROUPS, STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS))
-                    return false;
-            }
-            else if (pack.identity.packId == "liberty-city")
-            {
-                if (!validatePack(pack, "liberty-city", STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS, STATIC_WORLD_V3_LIBERTY_CITY_LOD_SCRATCH,
-                                  STATIC_WORLD_V3_LIBERTY_CITY_LOD_CHILD_GROUPS, STATIC_WORLD_V3_LIBERTY_CITY_MISSING_ANCHOR_COLS))
-                    return false;
-            }
-            else if (pack.inventory.lodAnchorCount || pack.inventory.lodLinkCount)
-            {
-                error = "static-world-v3 non-VC/LC pack unexpectedly requires an LOD entity array";
+        for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+            if (!validatePack(pack))
                 return false;
-            }
-        }
         return true;
     }
 
@@ -3467,7 +3414,7 @@ namespace
 
         // LoadAllBoundingBoxes must have materialized every supplied COL
         // record before any IPL entity can reach the renderer. Prove that
-        // runtime postcondition here; the two admitted VC anchor omissions
+        // runtime postcondition here; admitted LOD-anchor omissions
         // are handled explicitly below.
         for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
         {
@@ -3554,7 +3501,7 @@ namespace
                 {
                     // Native _LinkLods replaces a one-child LOD's collision
                     // pointer with the child's and marks the LOD as a
-                    // non-owner. These two admitted VC anchors have no COL
+                    // non-owner. An admitted anchor in this branch has no COL
                     // records of their own, so no independent COL streamer
                     // can later overwrite the borrowed pointer.
                     setColModel(modelInfo, borrowedFrom->pColModel, false);
@@ -3579,8 +3526,7 @@ namespace
             owner->unk2 = 1;
             owner->bDisabledStreaming = 1;
         }
-        const unsigned int expectedMissingAnchorCols =
-            activePack.identity.packId == "vice-city" ? STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS : 0;
+        const unsigned int expectedMissingAnchorCols = activePack.lodMissingAnchorColCount;
         if (missingAnchorColTransfers != expectedMissingAnchorCols)
             Fatal("static-world-v3 missing-anchor collision transfer count drifted after admission");
         g_staticWorldV3LodState = EStaticWorldV3LodState::Ready;
@@ -3663,7 +3609,7 @@ namespace
         const std::vector<char> originalBytes(data, data + size);
         if (boundingPass)
         {
-            const unsigned int expectedTransfers = pack.identity.packId == "vice-city" ? STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS : 0;
+            const unsigned int expectedTransfers = pack.lodMissingAnchorColCount;
             if (EnsureStaticWorldV3MissingAnchorCollision(pack) != expectedTransfers)
                 Fatal("static-world-v3 bounding bootstrap missing-anchor transfer count drifted");
             for (size_t index = 0; index < sourceInstances.size(); ++index)
@@ -4728,20 +4674,7 @@ namespace
     bool ValidateStaticWorldV3Aggregate(const std::vector<SNativeWorldV3SetPackSA>& packs, const std::vector<SStaticWorldV3Inventory>& inventories,
                                         std::string& error)
     {
-        struct SReviewedPackProfile
-        {
-            const char*  packId;
-            const char*  nameSpace;
-            unsigned int firstModel;
-            unsigned int lastModel;
-        };
-        constexpr SReviewedPackProfile reviewedProfiles[] = {
-            {"bullworth", "bw", 20000, 21053},
-            {"vice-city", "vc", 21054, 24855},
-            {"liberty-city", "lc", 24856, 28343},
-            {"carcer-city", "cc", 28344, 31836},
-        };
-        if (packs.empty() || packs.size() != inventories.size())
+        if (packs.empty() || packs.size() > STATIC_WORLD_V3_SET_MAX_PACKS || packs.size() != inventories.size())
         {
             error = "static-world-v3-set aggregate inputs are empty or misaligned";
             return false;
@@ -4760,17 +4693,16 @@ namespace
         unsigned int                        handles = 10;
         unsigned int                        totalModels = 0;
         unsigned int                        totalPlacements = 0;
-        unsigned int                        maximumCityPlacements = 0;
+        unsigned int                        maximumCityEntities = 0;
         unsigned int                        maximumCityColModels = 0;
         for (size_t index = 0; index < inventories.size(); ++index)
         {
             const SStaticWorldV3Inventory& inventory = inventories[index];
-            const auto profile = std::find_if(std::begin(reviewedProfiles), std::end(reviewedProfiles),
-                                              [&packs, index](const SReviewedPackProfile& candidate) { return packs[index].packId == candidate.packId; });
-            if (profile == std::end(reviewedProfiles) || inventory.nameSpace != profile->nameSpace || inventory.firstModel != profile->firstModel ||
-                inventory.lastModel != profile->lastModel)
+            if (inventory.modelCount == 0 || inventory.modelCount > STATIC_WORLD_V3_MODEL_BANK_SIZE ||
+                inventory.firstModel < STATIC_WORLD_V3_FIRST_CUSTOM_MODEL || inventory.lastModel > STATIC_WORLD_V3_LAST_MODEL ||
+                inventory.lastModel - inventory.firstModel + 1 != inventory.modelCount)
             {
-                error = SString("static-world-v3-set pack %s namespace/range differs from its reviewed profile", packs[index].packId.c_str());
+                error = SString("static-world-v3-set pack %s model range is outside the generic physical-bank policy", packs[index].packId.c_str());
                 return false;
             }
             for (unsigned int modelId : inventory.modelIds)
@@ -4811,26 +4743,26 @@ namespace
             handles += inventory.imageCount;
             totalModels += inventory.modelCount;
             totalPlacements += inventory.placements;
-            maximumCityPlacements = std::max(maximumCityPlacements, inventory.placements);
+            maximumCityEntities = std::max(maximumCityEntities, inventory.placements + inventory.lodAnchorCount);
             unsigned int cityColModels = 0;
             for (const auto& [ordinal, ids] : inventory.colModelIds)
                 cityColModels += static_cast<unsigned int>(ids.size());
             maximumCityColModels = std::max(maximumCityColModels, cityColModels);
         }
         if (ordinary > 32000 || damage > 512 || timed > 1024 || txds > 8000 || colSlots > 512 || iplSlots > 1024 || archives > 245 || handles > 255 ||
-            totalModels > 12000 || 9980 + maximumCityColModels > 30000 || 9166 + maximumCityPlacements > 32000)
+            totalModels > 12000 || 9980 + maximumCityColModels > 30000 || 9166 + maximumCityEntities > 32000)
         {
             error = SString(
                 "static-world-v3-set capacity proof failed atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 col=%u/512 ipl=%u/1024 "
                 "archives=%u/245 handles=%u/255 models=%u/12000 colModel=%u/30000 buildings=%u/32000",
-                ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, totalModels, 9980 + maximumCityColModels, 9166 + maximumCityPlacements);
+                ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, totalModels, 9980 + maximumCityColModels, 9166 + maximumCityEntities);
             return false;
         }
         SharedUtil::WriteDebugEvent(
             SString("[NativeWorldAggregatePlanner] state=proved packs=%u models=%u placements=%u atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 "
                     "col=%u/512 ipl=%u/1024 archives=%u/245 handles=%u/255 maxCityBuildings=%u/32000 maxCityColModels=%u/30000 nativeWrites=0",
                     static_cast<unsigned int>(packs.size()), totalModels, totalPlacements, ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles,
-                    9166 + maximumCityPlacements, 9980 + maximumCityColModels));
+                    9166 + maximumCityEntities, 9980 + maximumCityColModels));
         return true;
     }
 
@@ -4863,7 +4795,9 @@ namespace
         SNativeWorldTransportPublishResult result;
         result.auditProfile = STATIC_WORLD_V3_SET_AUDIT;
         if (!offer.startupAuthorization || offer.files.size() != 1 || offer.manifestRelativePath.empty() || offer.startupAuthorization->packFormat != 3 ||
-            offer.startupAuthorization->wireVersion != 3 || offer.startupAuthorization->startupMode != 1 || offer.startupAuthorization->policy != 3)
+            offer.startupAuthorization->wireVersion != NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION ||
+            offer.startupAuthorization->startupMode != NATIVE_WORLD_ONE_SHOT_STARTUP_MODE ||
+            offer.startupAuthorization->policy != NATIVE_WORLD_STATIC_V3_SET_POLICY)
         {
             result.error = "static-world-v3-set requires its exact format-3 startup authorization tuple";
             return result;
@@ -5173,8 +5107,7 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
                     STATIC_WORLD_V3_SET_POLICY, setManifest.setId.c_str(), selection.ticketId.substr(0, 8).c_str(),
                     static_cast<unsigned int>(setManifest.packs.size() + 1)));
         unsigned int catalogModels = 0;
-        unsigned int largestCityPlacements = 0;
-        unsigned int largestCityAnchors = 0;
+        unsigned int largestCityEntities = 0;
         g_staticWorldV3LargestEntryBlocks = 0;
         g_staticWorldV3LodState = EStaticWorldV3LodState::Off;
         g_staticWorldV3PendingBoundingAnchors.clear();
@@ -5201,17 +5134,16 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
             if (!ParseStaticWorldV3Ide(idePath, pack.ide, error))
                 break;
             catalogModels += static_cast<unsigned int>(pack.ide.modelIds.size());
-            largestCityPlacements = std::max(largestCityPlacements, pack.inventory.placements);
-            largestCityAnchors = std::max(largestCityAnchors, pack.inventory.lodAnchorCount);
+            largestCityEntities = std::max(largestCityEntities, pack.inventory.placements + pack.inventory.lodAnchorCount);
             for (unsigned int logicalId : pack.ide.modelIds)
                 pack.logicalToPhysical.emplace(logicalId, logicalId);
         }
         if (error.empty() && !ValidateStaticWorldV3LodProfile(error))
-            error = error.empty() ? "static-world-v3 VC/LC LOD profile validation failed" : error;
+            error = error.empty() ? "static-world-v3 generic LOD profile validation failed" : error;
         if (error.empty() && !CNativeModelStoreSA::ValidateExecutableAndPatchManifestReadOnly(gameVersion, error))
             error = error.empty() ? "static-world-v3 executable validation failed" : error;
         if (error.empty() &&
-            (catalogModels == 0 || catalogModels > 12000U || 9166U + largestCityPlacements + largestCityAnchors > 32000U ||
+            (catalogModels == 0 || catalogModels > 12000U || 9166U + largestCityEntities > 32000U ||
              memcmp(reinterpret_cast<const void*>(LOAD_COL_BUFFER_CALL), LOAD_COL_BUFFER_CALL_BYTES, sizeof(LOAD_COL_BUFFER_CALL_BYTES)) != 0 ||
              memcmp(reinterpret_cast<const void*>(LOAD_IPL_BUFFER_CALL), LOAD_IPL_BUFFER_CALL_BYTES, sizeof(LOAD_IPL_BUFFER_CALL_BYTES)) != 0 ||
              memcmp(reinterpret_cast<const void*>(REMOVE_ALL_COLLISION_TAIL), REMOVE_ALL_COLLISION_TAIL_BYTES, sizeof(REMOVE_ALL_COLLISION_TAIL_BYTES)) != 0))
@@ -5844,13 +5776,13 @@ unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()
 
     // SetStreamingBufferSize interprets this value as the total allocation and
     // then splits it into two equal channel buffers. Each half must hold the
-    // reviewed largest entry, so returning only one rounded entry here would
+    // admitted largest entry, so returning only one rounded entry here would
     // silently halve the usable per-channel capacity.
     const uint64_t largestEntryBlocks = g_staticWorldV3Route ? g_staticWorldV3LargestEntryBlocks : Pack().largestImgEntryBlocks;
     const uint64_t perChannelBlocks = (largestEntryBlocks + 1) & ~uint64_t{1};
     const uint64_t totalBlocks = perChannelBlocks * 2;
     if (totalBlocks > std::numeric_limits<unsigned int>::max())
-        Fatal("reviewed streaming-buffer floor exceeds the native block-count width");
+        Fatal("admitted streaming-buffer floor exceeds the native block-count width");
     return static_cast<unsigned int>(totalBlocks);
 }
 

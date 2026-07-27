@@ -31,7 +31,7 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
     const SNativeWorldPackTransport& nativeWorldPack = m_pResource->GetNativeWorldPackTransport();
     if (nativeWorldPack.present && !m_pResource->IsClientFilesOn())
         return false;
-    if (m_pResource->RequiresNativeWorldV3SetStartupCapability() && !BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet))
+    if (m_pResource->RequiresNativeWorldV3SetStartupCapability() && !BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet))
     {
         // This tuple is a closed gate, not an optional transport hint. Omitting
         // it would let an old client start the coordinator as an ordinary
@@ -145,7 +145,7 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
             nativeWorldPack.startupAuthorization &&
             ((nativeWorldPack.format == 1 && BitStream.Can(eBitStreamVersion::NativeWorldStartupAuthorization)) ||
              (nativeWorldPack.format == 2 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization)) ||
-             (nativeWorldPack.format == 3 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet)));
+             (nativeWorldPack.format == 3 && BitStream.Can(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet)));
         BitStream.Write(static_cast<unsigned char>(writeStartupAuthorization ? 'A' : 'N'));
         BitStream.Write(nativeWorldPack.format);
         BitStream.Write(static_cast<unsigned char>(nativeWorldPack.files.size()));

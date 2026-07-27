@@ -780,13 +780,13 @@ bool CResource::GetCompatibilityStatus(SString& strOutStatus)
         for (std::list<CPlayer*>::const_iterator iter = g_pGame->GetPlayerManager()->IterBegin(); iter != g_pGame->GetPlayerManager()->IterEnd(); iter++)
             if ((*iter)->IsJoined() &&
                 ((m_strMinClientRequirement > (*iter)->GetPlayerVersion() && !(*iter)->ShouldIgnoreMinClientVersionChecks()) ||
-                 (RequiresNativeWorldV3SetStartupCapability() && !(*iter)->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet))))
+                 (RequiresNativeWorldV3SetStartupCapability() && !(*iter)->CanBitStream(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet))))
                 uiNumIncompatiblePlayers++;
 
         if (uiNumIncompatiblePlayers > 0)
         {
             strOutStatus = RequiresNativeWorldV3SetStartupCapability()
-                               ? SString("%d connected player(s) lack the server-selected static-world-v3-set capability", uiNumIncompatiblePlayers)
+                               ? SString("%d connected player(s) lack the generic static-world-v3-set capability", uiNumIncompatiblePlayers)
                                : SString("%d connected player(s) below required client version %s", uiNumIncompatiblePlayers, *m_strMinClientRequirement);
             return false;
         }
@@ -1893,11 +1893,17 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
     // The descriptor is engine-owned: scripts cannot mutate this immutable snapshot after the resource has loaded.
     m_nativeWorldPackTransport.present = true;
     m_nativeWorldPackTransport.startupAuthorization = legacyAuthorized || staticWorldV2Authorized || staticWorldV3SetAuthorized;
-    m_nativeWorldPackTransport.format = staticWorldV3PublishOnly || staticWorldV3SetAuthorized ? 3
-                                        : staticWorldV2PublishOnly || staticWorldV2Authorized  ? 2
-                                                                                               : 1;
-    m_nativeWorldPackTransport.authorizationVersion = legacyAuthorized ? 1 : staticWorldV2Authorized ? 2 : staticWorldV3SetAuthorized ? 3 : 0;
-    m_nativeWorldPackTransport.authorizationPolicy = legacyAuthorized ? 1 : staticWorldV2Authorized ? 2 : staticWorldV3SetAuthorized ? 3 : 0;
+    m_nativeWorldPackTransport.format = staticWorldV3PublishOnly || staticWorldV3SetAuthorized ? NATIVE_WORLD_STATIC_V3_SET_FORMAT
+                                        : staticWorldV2PublishOnly || staticWorldV2Authorized  ? NATIVE_WORLD_STATIC_V1_FORMAT
+                                                                                               : NATIVE_WORLD_BULLWORTH_FORMAT;
+    m_nativeWorldPackTransport.authorizationVersion = legacyAuthorized             ? NATIVE_WORLD_BULLWORTH_AUTHORIZATION_VERSION
+                                                      : staticWorldV2Authorized    ? NATIVE_WORLD_STATIC_V1_AUTHORIZATION_VERSION
+                                                      : staticWorldV3SetAuthorized ? NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION
+                                                                                   : 0;
+    m_nativeWorldPackTransport.authorizationPolicy = legacyAuthorized             ? NATIVE_WORLD_BULLWORTH_POLICY
+                                                     : staticWorldV2Authorized    ? NATIVE_WORLD_STATIC_V1_POLICY
+                                                     : staticWorldV3SetAuthorized ? NATIVE_WORLD_STATIC_V3_SET_POLICY
+                                                                                  : 0;
     m_nativeWorldPackTransport.manifestPath = manifestPath;
     m_nativeWorldPackTransport.files = taggedFiles;
     return true;

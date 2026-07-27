@@ -69,7 +69,7 @@ int CLuaModelDefs::EngineRequestModel(lua_State* luaVM)
 
     CScriptArgReader arguments(luaVM);
     arguments.ReadString(typeName);
-    arguments.ReadNumber(parent);
+    arguments.ReadNumberBounded(parent, 0, CServerModelManager::LAST_MODEL_ID);
     arguments.ReadString(name, "");
 
     const std::optional<eServerModelType> type = ParseServerModelType(typeName);
@@ -105,7 +105,7 @@ int CLuaModelDefs::EngineFreeModel(lua_State* luaVM)
     std::uint16_t model{};
 
     CScriptArgReader arguments(luaVM);
-    arguments.ReadNumber(model);
+    arguments.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!arguments.HasErrors())
     {
@@ -129,7 +129,7 @@ int CLuaModelDefs::EngineGetModelParent(lua_State* luaVM)
     std::uint16_t model{};
 
     CScriptArgReader arguments(luaVM);
-    arguments.ReadNumber(model);
+    arguments.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!arguments.HasErrors())
     {
@@ -156,7 +156,7 @@ int CLuaModelDefs::EngineGetModelName(lua_State* luaVM)
     std::uint16_t model{};
 
     CScriptArgReader arguments(luaVM);
-    arguments.ReadNumber(model);
+    arguments.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!arguments.HasErrors())
     {
@@ -183,7 +183,7 @@ int CLuaModelDefs::EngineGetModelType(lua_State* luaVM)
     std::uint16_t model{};
 
     CScriptArgReader arguments(luaVM);
-    arguments.ReadNumber(model);
+    arguments.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!arguments.HasErrors())
     {
@@ -269,7 +269,7 @@ int CLuaModelDefs::EngineIsModelAllocated(lua_State* luaVM)
     std::uint16_t model{};
 
     CScriptArgReader arguments(luaVM);
-    arguments.ReadNumber(model);
+    arguments.ReadNumberBounded(model, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (arguments.HasErrors())
     {

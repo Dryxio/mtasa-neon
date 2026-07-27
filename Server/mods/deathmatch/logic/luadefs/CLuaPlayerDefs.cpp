@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CServerModelManager.h"
 #include "CLuaPlayerDefs.h"
 #include "CLuaGenericDefs.h"
 #include "CStaticFunctionDefinitions.h"
@@ -852,7 +853,7 @@ int CLuaPlayerDefs::SpawnPlayer(lua_State* luaVM)
     else
         argStream.ReadNumber(fRotation, 0.0f);
 
-    argStream.ReadNumber(ulModel, 0);
+    argStream.ReadNumberBounded(ulModel, 0, 0, CServerModelManager::LAST_MODEL_ID);
     argStream.ReadNumber(ucInterior, 0);
     argStream.ReadNumber(usDimension, 0);
     argStream.ReadUserData(pTeam, NULL);

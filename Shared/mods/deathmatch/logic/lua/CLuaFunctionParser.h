@@ -10,6 +10,8 @@
 
 class CLuaArgument;
 
+#include <cmath>
+#include <limits>
 #include <optional>
 #include <variant>
 #include <SharedUtil.Template.h>
@@ -422,23 +424,26 @@ struct CLuaFunctionParserBase
             if (std::isnan(number))
             {
                 SetError("number", "NaN");
-                return static_cast<T>(number);
+                return T{};
             }
 
             if (std::isinf(number))
             {
                 SetError("number", "inf");
-                return static_cast<T>(number);
+                return T{};
             }
 
-            // NOTE/TODO: Use C++20 `std::in_range` here instead
-            // For now this doesn't do all the safety checks, but this should be "good enough" [until we switch to C++20]
-            if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>)
+            if constexpr (std::is_integral_v<T>)
             {
-                if (number < 0)
+                // Compare against the first value outside the destination
+                // range. This remains exact for 64-bit integers even when
+                // lua_Number cannot represent UINT64_MAX or INT64_MAX.
+                const lua_Number exclusiveUpperBound = std::ldexp(lua_Number{1}, std::numeric_limits<T>::digits);
+                const lua_Number inclusiveLowerBound = std::is_unsigned_v<T> ? lua_Number{0} : -exclusiveUpperBound;
+                if (number < inclusiveLowerBound || number >= exclusiveUpperBound)
                 {
-                    SetError("positive number", "negative");
-                    return static_cast<T>(number);
+                    SetError("number within the destination type range", "out-of-range number");
+                    return T{};
                 }
             }
 

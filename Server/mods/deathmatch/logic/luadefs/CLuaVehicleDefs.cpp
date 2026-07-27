@@ -314,7 +314,7 @@ int CLuaVehicleDefs::CreateVehicle(lua_State* luaVM)
     bool    bSynced;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, CServerModelManager::LAST_MODEL_ID);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadVector3D(vecRotation, CVector());
     argStream.ReadString(strNumberPlate, "");
@@ -380,7 +380,7 @@ int CLuaVehicleDefs::GetVehicleType(lua_State* luaVM)
         }
     }
     else
-        argStream.ReadNumber(ulModel);
+        argStream.ReadNumberBounded(ulModel, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {
@@ -804,7 +804,7 @@ int CLuaVehicleDefs::GetVehicleMaxPassengers(lua_State* luaVM)
             uiModel = pVehicle->GetModel();
     }
     else
-        argStream.ReadNumber(uiModel);
+        argStream.ReadNumberBounded(uiModel, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {
@@ -858,11 +858,12 @@ int CLuaVehicleDefs::GetVehicleNameFromModel(lua_State* luaVM)
     unsigned short usModel;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {
         SString strVehicleName;
+        usModel = g_pGame->GetServerModelManager()->ResolveParent(usModel);
 
         if (CStaticFunctionDefinitions::GetVehicleNameFromModel(usModel, strVehicleName))
         {
@@ -1115,7 +1116,7 @@ int CLuaVehicleDefs::GetVehiclesOfType(lua_State* luaVM)
     unsigned int uiModel;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(uiModel);
+    argStream.ReadNumberBounded(uiModel, 0, CServerModelManager::LAST_MODEL_ID);
 
     if (!argStream.HasErrors())
     {

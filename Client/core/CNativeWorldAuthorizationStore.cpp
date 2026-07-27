@@ -301,24 +301,64 @@ namespace
                            });
     }
 
-    bool ValidateAuthorization(const SNativeWorldStartupAuthorization& authorization, std::string& error)
+    bool IsRetiredDurableAuthorization(const SNativeWorldStartupAuthorization& authorization)
     {
+        // Epoch 3 records can remain in the spent ledger for the fixed
+        // anti-replay window after the live format-3 contract advances to
+        // epoch 4. They are readable only as durable history: capture and
+        // publication continue to require IsClosedNativeWorldStartupAuthorization.
+        return authorization.packFormat == NATIVE_WORLD_STATIC_V3_SET_FORMAT && authorization.wireVersion == 3 &&
+               authorization.startupMode == NATIVE_WORLD_ONE_SHOT_STARTUP_MODE && authorization.policy == 3;
+    }
+
+    bool ValidateAuthorizationImpl(const SNativeWorldStartupAuthorization& authorization, bool allowRetiredDurableRecord, std::string& error)
+    {
+        error.clear();
         const unsigned short minimumBitstreamVersion = static_cast<unsigned short>(
             authorization.packFormat == NATIVE_WORLD_BULLWORTH_FORMAT   ? eBitStreamVersion::NativeWorldStartupAuthorization
             : authorization.packFormat == NATIVE_WORLD_STATIC_V1_FORMAT ? eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization
-                                                                        : eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
-        if (!authorization.present ||
-            !IsClosedNativeWorldStartupAuthorization(authorization.wireVersion, authorization.startupMode, authorization.policy, authorization.packFormat) ||
-            authorization.serverPort == 0 || authorization.connectionGeneration == 0 || authorization.authorizationEpoch == 0 ||
-            authorization.resourceNetId == 0xFFFF || authorization.resourceStartCounter == 0 || authorization.bitstreamVersion < minimumBitstreamVersion ||
-            authorization.bitstreamVersion > static_cast<unsigned short>(eBitStreamVersion::Latest) || !IsCanonicalResourceName(authorization.resourceName) ||
-            std::all_of(authorization.serverIdDigest.begin(), authorization.serverIdDigest.end(), [](unsigned char byte) { return byte == 0; }) ||
-            std::all_of(authorization.serverIpv4.begin(), authorization.serverIpv4.end(), [](unsigned char byte) { return byte == 0; }))
-        {
-            error = "authorization snapshot is outside the closed v1 contract";
+                                                                        : eBitStreamVersion::NativeWorldStaticWorldV3GenericSet);
+        if (!authorization.present)
+            error = "authorization snapshot is not present";
+        else if (!IsClosedNativeWorldStartupAuthorization(authorization.wireVersion, authorization.startupMode, authorization.policy,
+                                                          authorization.packFormat) &&
+                 !(allowRetiredDurableRecord && IsRetiredDurableAuthorization(authorization)))
+            error = SString("authorization tuple is outside the closed contract wire=%u startup=%u policy=%u format=%u", authorization.wireVersion,
+                            authorization.startupMode, authorization.policy, authorization.packFormat);
+        else if (authorization.serverPort == 0)
+            error = "authorization snapshot has no server port";
+        else if (authorization.connectionGeneration == 0)
+            error = "authorization snapshot has no connection generation";
+        else if (authorization.authorizationEpoch == 0)
+            error = "authorization snapshot has no authorization epoch";
+        else if (authorization.resourceNetId == 0xFFFF)
+            error = "authorization snapshot has an invalid resource net ID";
+        else if (authorization.resourceStartCounter == 0)
+            error = "authorization snapshot has no resource start counter";
+        else if (authorization.bitstreamVersion < minimumBitstreamVersion ||
+                 authorization.bitstreamVersion > static_cast<unsigned short>(eBitStreamVersion::Latest))
+            error = SString("authorization bitstream is outside the closed contract actual=%u minimum=%u latest=%u", authorization.bitstreamVersion,
+                            minimumBitstreamVersion, static_cast<unsigned short>(eBitStreamVersion::Latest));
+        else if (!IsCanonicalResourceName(authorization.resourceName))
+            error = "authorization snapshot has a non-canonical resource name";
+        else if (std::all_of(authorization.serverIdDigest.begin(), authorization.serverIdDigest.end(), [](unsigned char byte) { return byte == 0; }))
+            error = "authorization snapshot has no server identity";
+        else if (std::all_of(authorization.serverIpv4.begin(), authorization.serverIpv4.end(), [](unsigned char byte) { return byte == 0; }))
+            error = "authorization snapshot has no server IPv4 address";
+
+        if (!error.empty())
             return false;
-        }
         return true;
+    }
+
+    bool ValidateAuthorization(const SNativeWorldStartupAuthorization& authorization, std::string& error)
+    {
+        return ValidateAuthorizationImpl(authorization, false, error);
+    }
+
+    bool ValidateDurableAuthorization(const SNativeWorldStartupAuthorization& authorization, std::string& error)
+    {
+        return ValidateAuthorizationImpl(authorization, true, error);
     }
 
     std::vector<unsigned char> EncodeRecord(const SRecord& record)
@@ -349,7 +389,7 @@ namespace
         return output;
     }
 
-    bool DecodeRecord(const std::vector<unsigned char>& bytes, SRecord& record, std::string& error)
+    bool DecodeRecord(const std::vector<unsigned char>& bytes, SRecord& record, bool allowRetiredDurableRecord, std::string& error)
     {
         CReader        reader(bytes);
         unsigned short format = 0;
@@ -367,8 +407,9 @@ namespace
             return false;
         }
         record.authorization.present = true;
-        if (!ValidateAuthorization(record.authorization, error) || record.expiresAt < record.issuedAt ||
-            record.expiresAt - record.issuedAt != RECORD_LIFETIME_SECONDS)
+        const bool validAuthorization =
+            allowRetiredDurableRecord ? ValidateDurableAuthorization(record.authorization, error) : ValidateAuthorization(record.authorization, error);
+        if (!validAuthorization || record.expiresAt < record.issuedAt || record.expiresAt - record.issuedAt != RECORD_LIFETIME_SECONDS)
         {
             if (error.empty())
                 error = "authorization record lifetime is invalid";
@@ -738,7 +779,7 @@ namespace
         return true;
     }
 
-    bool UnprotectRecord(const std::vector<unsigned char>& envelope, SRecord& record, std::string& error)
+    bool UnprotectRecord(const std::vector<unsigned char>& envelope, SRecord& record, bool allowRetiredDurableRecord, std::string& error)
     {
         CReader        reader(envelope);
         unsigned short format = 0;
@@ -764,7 +805,7 @@ namespace
         std::vector<unsigned char> plaintextBytes(plaintext.pbData, plaintext.pbData + plaintext.cbData);
         if (plaintext.pbData)
             LocalFree(plaintext.pbData);
-        return DecodeRecord(plaintextBytes, record, error);
+        return DecodeRecord(plaintextBytes, record, allowRetiredDurableRecord, error);
     }
 
     enum class EReadResult
@@ -774,7 +815,7 @@ namespace
         Failure,
     };
 
-    EReadResult ReadRecord(const std::wstring& path, SRecord& record, std::string& error)
+    EReadResult ReadRecord(const std::wstring& path, SRecord& record, std::string& error, bool allowRetiredDurableRecord = false)
     {
         const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
@@ -804,7 +845,7 @@ namespace
             error = SString("authorization record read failed win32=%u", readError);
             return EReadResult::Failure;
         }
-        return UnprotectRecord(bytes, record, error) ? EReadResult::Success : EReadResult::Failure;
+        return UnprotectRecord(bytes, record, allowRetiredDurableRecord, error) ? EReadResult::Success : EReadResult::Failure;
     }
 
     bool DeleteExactFile(const std::wstring& path, bool allowMissing, std::string& error)
@@ -971,7 +1012,7 @@ namespace
         for (const std::wstring& path : transaction.revokedFiles)
         {
             SRecord record;
-            if (ReadRecord(path, record, error) != EReadResult::Success)
+            if (ReadRecord(path, record, error, true) != EReadResult::Success)
                 return false;
             const std::string  ticket = EncodeHex(record.ticketId);
             const std::wstring expectedSuffix = SharedUtil::FromUTF8(ticket).c_str();

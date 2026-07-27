@@ -120,7 +120,7 @@ namespace
     {
         return packFormat == NATIVE_WORLD_BULLWORTH_FORMAT   ? eBitStreamVersion::NativeWorldStartupAuthorization
                : packFormat == NATIVE_WORLD_STATIC_V1_FORMAT ? eBitStreamVersion::NativeWorldStaticWorldV2StartupAuthorization
-                                                             : eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet;
+                                                             : eBitStreamVersion::NativeWorldStaticWorldV3GenericSet;
     }
 
     bool ParseClosedNativeWorldEndpoint(const char* arguments, std::array<unsigned char, 4>& ipv4, unsigned short& port)

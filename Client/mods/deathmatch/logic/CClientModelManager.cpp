@@ -83,7 +83,10 @@ int CClientModelManager::GetFirstFreeModelID(void)
     const unsigned int uiMaxModelID = g_pGame->GetBaseIDforTXD();
     for (unsigned int i = 0; i < uiMaxModelID; i++)
     {
-        if (g_pGame->IsNativeWorldModelIdReserved(i))
+        // The clothes subsystem exposes 30000..30541 as stable pseudo IDs.
+        // Never allocate a runtime DFF slot with the same numeric identity,
+        // even when no native-world generation is active.
+        if ((i >= CLOTHES_MODEL_ID_FIRST && i <= CLOTHES_TEX_ID_LAST) || g_pGame->IsNativeWorldModelIdReserved(i))
             continue;
 
         CModelInfo* pModelInfo = g_pGame->GetModelInfo(i, true);
@@ -109,7 +112,7 @@ std::shared_ptr<CClientModel> CClientModelManager::FindModelByID(int iModelID)
 {
     int32_t iMaxModelId = g_pGame->GetBaseIDforCOL();
 
-    if (iModelID < iMaxModelId)
+    if (iModelID >= 0 && iModelID < iMaxModelId)
         return m_Models[iModelID];
 
     return nullptr;
@@ -348,8 +351,9 @@ bool CClientModelManager::ResolveModelID(std::uint32_t modelId, std::uint16_t& r
         return true;
     }
 
-    // GTA model/file IDs stop below the server registry range. Rejecting an
-    // unknown registry ID here prevents an out-of-bounds native lookup.
+    // Every compact-layout GTA FileID stops below the server registry range.
+    // Rejecting an unknown registry ID here prevents an out-of-bounds native
+    // lookup without stealing clothes or non-model FileID namespaces.
     if (suppliedModelId >= SERVER_MODEL_ID_MIN)
         return false;
 

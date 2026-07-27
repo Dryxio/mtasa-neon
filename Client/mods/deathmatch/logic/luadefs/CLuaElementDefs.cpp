@@ -2422,7 +2422,7 @@ int CLuaElementDefs::SetElementModel(lua_State* luaVM)
     unsigned short   usModel = 0;
     CScriptArgReader argStream(luaVM);
     argStream.ReadUserData(pEntity);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, SERVER_MODEL_ID_MAX);
 
     // Verify the arguments
     if (!argStream.HasErrors())

@@ -38,7 +38,7 @@ public:
     using BeforeFreeCallback = std::function<void(const Definition&)>;
 
     static constexpr ModelId     FIRST_MODEL_ID = SERVER_MODEL_ID_MIN;
-    static constexpr ModelId     LAST_MODEL_ID = 65534;
+    static constexpr ModelId     LAST_MODEL_ID = SERVER_MODEL_ID_MAX;
     static constexpr ModelId     INVALID_MODEL_ID = 65535;
     static constexpr std::size_t MAX_ALLOCATIONS_PER_RESOURCE = 4096;
 

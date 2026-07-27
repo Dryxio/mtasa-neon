@@ -27,6 +27,12 @@ namespace
     std::unordered_map<int, std::unordered_set<CResource*>> g_vehicleRecordingOwners;
     std::unordered_map<CClientVehicle*, CResource*>         g_vehiclePlaybackOwners;
 
+    bool ResolveVehicleModelID(std::uint32_t suppliedModelId, std::uint16_t& runtimeModelId, bool allowParentFallback)
+    {
+        return suppliedModelId <= SERVER_MODEL_ID_MAX &&
+               g_pClientGame->GetManager()->GetModelManager()->ResolveModelID(suppliedModelId, runtimeModelId, nullptr, allowParentFallback);
+    }
+
     CResource* GetCallingResource(lua_State* luaVM)
     {
         return luaVM ? g_pClientGame->GetResourceManager()->GetResourceFromLuaState(luaVM) : nullptr;
@@ -441,23 +447,26 @@ int CLuaVehicleDefs::GetVehicleType(lua_State* luaVM)
     CClientVehicle*  pVehicle = NULL;
     CScriptArgReader argStream(luaVM);
 
-    unsigned long ucModel = 0;
+    std::uint32_t suppliedModel = 0;
+    std::uint16_t runtimeModel = 0;
 
     if (argStream.NextIsUserData())
     {
         argStream.ReadUserData(pVehicle);
 
         if (!argStream.HasErrors())
-            ucModel = pVehicle->GetModel();
+            runtimeModel = pVehicle->GetModel();
     }
     else
     {
-        argStream.ReadNumber(ucModel);
+        argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+        if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+            argStream.SetCustomError("invalid model ID");
     }
 
     if (!argStream.HasErrors())
     {
-        lua_pushstring(luaVM, CVehicleNames::GetVehicleTypeName(ucModel));  // Range check will be done by GetVehicleTypeName
+        lua_pushstring(luaVM, CVehicleNames::GetVehicleTypeName(runtimeModel));  // Range check will be done by GetVehicleTypeName
         return 1;
     }
     else
@@ -633,7 +642,8 @@ int CLuaVehicleDefs::GetVehicleLandingGearDown(lua_State* luaVM)
 int CLuaVehicleDefs::GetVehicleMaxPassengers(lua_State* luaVM)
 {
     CClientVehicle*  pVehicle = NULL;
-    unsigned short   usModel = 0;
+    std::uint32_t    suppliedModel = 0;
+    std::uint16_t    runtimeModel = 0;
     CScriptArgReader argStream(luaVM);
 
     if (argStream.NextIsUserData())
@@ -641,18 +651,20 @@ int CLuaVehicleDefs::GetVehicleMaxPassengers(lua_State* luaVM)
         argStream.ReadUserData(pVehicle);
 
         if (!argStream.HasErrors())
-            usModel = pVehicle->GetModel();
+            runtimeModel = pVehicle->GetModel();
     }
     else
     {
-        argStream.ReadNumber(usModel);
+        argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+        if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+            argStream.SetCustomError("invalid model ID");
     }
 
     if (!argStream.HasErrors())
     {
-        if (CClientVehicleManager::IsValidModel(usModel))
+        if (CClientVehicleManager::IsValidModel(runtimeModel))
         {
-            unsigned int uiMaxPassengers = CClientVehicleManager::GetMaxPassengerCount(usModel);
+            unsigned int uiMaxPassengers = CClientVehicleManager::GetMaxPassengerCount(runtimeModel);
             if (uiMaxPassengers != 0xFF)
             {
                 lua_pushnumber(luaVM, uiMaxPassengers);
@@ -1578,15 +1590,29 @@ int CLuaVehicleDefs::GetVehicleEngineState(lua_State* luaVM)
 
 int CLuaVehicleDefs::GetVehicleNameFromModel(lua_State* luaVM)
 {
-    unsigned short   usModel = 0;
+    std::uint32_t    suppliedModel = 0;
+    std::uint16_t    runtimeModel = 0;
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
         SString strVehicleName;
 
-        if (CStaticFunctionDefinitions::GetVehicleNameFromModel(usModel, strVehicleName))
+        if (!CClientVehicleManager::IsStandardModel(runtimeModel))
+        {
+            CModelInfo* modelInfo = g_pGame->GetModelInfo(runtimeModel);
+            if (modelInfo && modelInfo->GetModelType() == eModelInfoType::VEHICLE)
+            {
+                const unsigned int parentModel = modelInfo->GetParentID();
+                if (parentModel <= std::numeric_limits<std::uint16_t>::max())
+                    runtimeModel = static_cast<std::uint16_t>(parentModel);
+            }
+        }
+
+        if (CStaticFunctionDefinitions::GetVehicleNameFromModel(runtimeModel, strVehicleName))
         {
             lua_pushstring(luaVM, strVehicleName);
             return 1;
@@ -1609,7 +1635,7 @@ int CLuaVehicleDefs::CreateVehicle(lua_State* luaVM)
     unsigned char    ucVariant2 = 255;
     SString          strRegPlate = "";
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(usModel, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadVector3D(vecRotation, vecRotation);
     argStream.ReadString(strRegPlate, "");
@@ -3009,16 +3035,19 @@ int CLuaVehicleDefs::GetVehicleHandling(lua_State* luaVM)
 
 int CLuaVehicleDefs::GetOriginalHandling(lua_State* luaVM)
 {
-    std::uint32_t model;
+    std::uint32_t suppliedModel;
+    std::uint16_t runtimeModel = 0;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(model);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
-        if (CClientVehicleManager::IsValidModel(model))
+        if (CClientVehicleManager::IsValidModel(runtimeModel))
         {
-            if (const auto* const entry = g_pGame->GetHandlingManager()->GetOriginalHandlingData(model))
+            if (const auto* const entry = g_pGame->GetHandlingManager()->GetOriginalHandlingData(runtimeModel))
             {
                 lua_newtable(luaVM);
                 lua_pushnumber(luaVM, entry->GetMass());
@@ -4084,18 +4113,21 @@ int CLuaVehicleDefs::IsVehicleWindowOpen(lua_State* luaVM)
 int CLuaVehicleDefs::SetVehicleModelDummyPosition(lua_State* luaVM)
 {
     // bool setVehicleModelDummyPosition ( int modelID, vehicle-dummy dummy, float x, float y, float z )
-    unsigned short usModel;
+    std::uint32_t  suppliedModel;
+    std::uint16_t  runtimeModel = 0;
     VehicleDummies eDummy;
     CVector        vecPosition;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadEnumString(eDummy);
     argStream.ReadVector3D(vecPosition);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, false))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
-        if (CStaticFunctionDefinitions::SetVehicleModelDummyPosition(usModel, eDummy, vecPosition))
+        if (CStaticFunctionDefinitions::SetVehicleModelDummyPosition(runtimeModel, eDummy, vecPosition))
         {
             lua_pushboolean(luaVM, true);
             return 1;
@@ -4111,18 +4143,21 @@ int CLuaVehicleDefs::SetVehicleModelDummyPosition(lua_State* luaVM)
 int CLuaVehicleDefs::GetVehicleModelDummyPosition(lua_State* luaVM)
 {
     // float, float, float getVehicleModelDummyPosition ( int modelID, vehicle-dummy dummy )
-    unsigned short usModel;
+    std::uint32_t  suppliedModel;
+    std::uint16_t  runtimeModel = 0;
     VehicleDummies eDummy;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadEnumString(eDummy);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
         CVector vecPosition;
 
-        if (CStaticFunctionDefinitions::GetVehicleModelDummyPosition(usModel, eDummy, vecPosition))
+        if (CStaticFunctionDefinitions::GetVehicleModelDummyPosition(runtimeModel, eDummy, vecPosition))
         {
             lua_pushnumber(luaVM, vecPosition.fX);
             lua_pushnumber(luaVM, vecPosition.fY);
@@ -4140,21 +4175,24 @@ int CLuaVehicleDefs::GetVehicleModelDummyPosition(lua_State* luaVM)
 int CLuaVehicleDefs::OOP_GetVehicleModelDummyPosition(lua_State* luaVM)
 {
     // float, float, float getVehicleModelDummyPosition ( int modelID, vehicle-dummy dummy )
-    unsigned short usModel;
+    std::uint32_t  suppliedModel;
+    std::uint16_t  runtimeModel = 0;
     VehicleDummies eDummy;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadEnumString(eDummy);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
         CVector vecPosition;
 
-        if (CStaticFunctionDefinitions::GetVehicleModelDummyPosition(usModel, eDummy, vecPosition))
+        if (CStaticFunctionDefinitions::GetVehicleModelDummyPosition(runtimeModel, eDummy, vecPosition))
         {
             lua_pushvector(luaVM, vecPosition);
-            return 3;
+            return 1;
         }
     }
     else
@@ -4167,16 +4205,19 @@ int CLuaVehicleDefs::OOP_GetVehicleModelDummyPosition(lua_State* luaVM)
 int CLuaVehicleDefs::SetVehicleModelExhaustFumesPosition(lua_State* luaVM)
 {
     // bool setVehicleModelExhaustPosition ( int modelID, float x, float y, float z )
-    unsigned short usModel;
-    CVector        vecPosition;
+    std::uint32_t suppliedModel;
+    std::uint16_t runtimeModel = 0;
+    CVector       vecPosition;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
     argStream.ReadVector3D(vecPosition);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, false))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
-        if (CStaticFunctionDefinitions::SetVehicleModelExhaustFumesPosition(usModel, vecPosition))
+        if (CStaticFunctionDefinitions::SetVehicleModelExhaustFumesPosition(runtimeModel, vecPosition))
         {
             lua_pushboolean(luaVM, true);
             return 1;
@@ -4192,16 +4233,19 @@ int CLuaVehicleDefs::SetVehicleModelExhaustFumesPosition(lua_State* luaVM)
 int CLuaVehicleDefs::GetVehicleModelExhaustFumesPosition(lua_State* luaVM)
 {
     // float, float, float getVehicleModelExhaustPosition ( int modelID )
-    unsigned short usModel;
+    std::uint32_t suppliedModel;
+    std::uint16_t runtimeModel = 0;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
         CVector vecPosition;
 
-        if (CStaticFunctionDefinitions::GetVehicleModelExhaustFumesPosition(usModel, vecPosition))
+        if (CStaticFunctionDefinitions::GetVehicleModelExhaustFumesPosition(runtimeModel, vecPosition))
         {
             lua_pushnumber(luaVM, vecPosition.fX);
             lua_pushnumber(luaVM, vecPosition.fY);
@@ -4219,16 +4263,19 @@ int CLuaVehicleDefs::GetVehicleModelExhaustFumesPosition(lua_State* luaVM)
 int CLuaVehicleDefs::OOP_GetVehicleModelExhaustFumesPosition(lua_State* luaVM)
 {
     // float, float, float getVehicleModelExhaustPosition ( int modelID )
-    unsigned short usModel;
+    std::uint32_t suppliedModel;
+    std::uint16_t runtimeModel = 0;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModel);
+    argStream.ReadNumberBounded(suppliedModel, 0, SERVER_MODEL_ID_MAX);
+    if (!argStream.HasErrors() && !ResolveVehicleModelID(suppliedModel, runtimeModel, true))
+        argStream.SetCustomError("invalid model ID");
 
     if (!argStream.HasErrors())
     {
         CVector vecPosition;
 
-        if (CStaticFunctionDefinitions::GetVehicleModelExhaustFumesPosition(usModel, vecPosition))
+        if (CStaticFunctionDefinitions::GetVehicleModelExhaustFumesPosition(runtimeModel, vecPosition))
         {
             lua_pushvector(luaVM, vecPosition);
             return 1;
@@ -4269,11 +4316,13 @@ bool CLuaVehicleDefs::SetVehicleWheelScale(CClientVehicle* const pVehicle, const
 }
 
 std::variant<float, std::unordered_map<std::string, float>> CLuaVehicleDefs::GetVehicleModelWheelSize(
-    const unsigned short usModel, const std::optional<ResizableVehicleWheelGroup> eWheelGroup)
+    const std::uint32_t modelId, const std::optional<ResizableVehicleWheelGroup> eWheelGroup)
 {
-    CModelInfo* pModelInfo = nullptr;
-    if (CClientVehicleManager::IsValidModel(usModel))
-        pModelInfo = g_pGame->GetModelInfo(usModel);
+    std::uint16_t runtimeModelId = 0;
+    CModelInfo*   pModelInfo = nullptr;
+    if (modelId <= SERVER_MODEL_ID_MAX && m_pManager->GetModelManager()->ResolveModelID(modelId, runtimeModelId, nullptr, false) &&
+        CClientVehicleManager::IsValidModel(runtimeModelId))
+        pModelInfo = g_pGame->GetModelInfo(runtimeModelId);
 
     if (!pModelInfo)
         throw std::invalid_argument("Invalid model ID");
@@ -4290,22 +4339,24 @@ std::variant<float, std::unordered_map<std::string, float>> CLuaVehicleDefs::Get
     return pModelInfo->GetVehicleWheelSize(eActualWheelGroup);
 }
 
-bool CLuaVehicleDefs::SetVehicleModelWheelSize(const unsigned short usModel, const ResizableVehicleWheelGroup eWheelGroup, const float fWheelSize)
+bool CLuaVehicleDefs::SetVehicleModelWheelSize(const std::uint32_t modelId, const ResizableVehicleWheelGroup eWheelGroup, const float fWheelSize)
 {
-    CModelInfo* pModelInfo = nullptr;
+    std::uint16_t runtimeModelId = 0;
+    CModelInfo*   pModelInfo = nullptr;
 
     if (fWheelSize <= 0)
         throw std::invalid_argument("Invalid wheel size");
 
-    if (CClientVehicleManager::IsValidModel(usModel))
-        pModelInfo = g_pGame->GetModelInfo(usModel);
+    if (modelId <= SERVER_MODEL_ID_MAX && m_pManager->GetModelManager()->ResolveModelID(modelId, runtimeModelId, nullptr, false) &&
+        CClientVehicleManager::IsValidModel(runtimeModelId))
+        pModelInfo = g_pGame->GetModelInfo(runtimeModelId);
 
     if (!pModelInfo)
         throw std::invalid_argument("Invalid model ID");
 
     pModelInfo->SetVehicleWheelSize(eWheelGroup, fWheelSize);
     // Restream needed to update ride height
-    m_pVehicleManager->RestreamVehicles(usModel);
+    m_pVehicleManager->RestreamVehicles(runtimeModelId);
 
     return true;
 }
@@ -4326,21 +4377,23 @@ int CLuaVehicleDefs::GetVehicleWheelFrictionState(CClientVehicle* pVehicle, unsi
     throw std::invalid_argument("Invalid vehicle type");
 }
 
-std::variant<bool, CLuaMultiReturn<float, float, float>> CLuaVehicleDefs::GetVehicleModelDummyDefaultPosition(unsigned short vehicleModel, VehicleDummies dummy)
+std::variant<bool, CLuaMultiReturn<float, float, float>> CLuaVehicleDefs::GetVehicleModelDummyDefaultPosition(std::uint32_t modelId, VehicleDummies dummy)
 {
-    CVector position;
+    std::uint16_t runtimeModel = 0;
+    CVector       position;
 
-    if (!CStaticFunctionDefinitions::GetVehicleModelDummyDefaultPosition(vehicleModel, dummy, position))
+    if (!ResolveVehicleModelID(modelId, runtimeModel, true) || !CStaticFunctionDefinitions::GetVehicleModelDummyDefaultPosition(runtimeModel, dummy, position))
         return false;
 
     return std::tuple(position.fX, position.fY, position.fZ);
 }
 
-std::variant<bool, CVector> CLuaVehicleDefs::OOP_GetVehicleModelDummyDefaultPosition(unsigned short vehicleModel, VehicleDummies dummy)
+std::variant<bool, CVector> CLuaVehicleDefs::OOP_GetVehicleModelDummyDefaultPosition(std::uint32_t modelId, VehicleDummies dummy)
 {
-    CVector position;
+    std::uint16_t runtimeModel = 0;
+    CVector       position;
 
-    if (!CStaticFunctionDefinitions::GetVehicleModelDummyDefaultPosition(vehicleModel, dummy, position))
+    if (!ResolveVehicleModelID(modelId, runtimeModel, true) || !CStaticFunctionDefinitions::GetVehicleModelDummyDefaultPosition(runtimeModel, dummy, position))
         return false;
 
     return position;
@@ -4811,6 +4864,11 @@ bool CLuaVehicleDefs::ResetVehicleAudioSettings(CClientVehicle* pVehicle)
 
 std::unordered_map<std::string, float> CLuaVehicleDefs::GetVehicleModelAudioSettings(uint32_t uiModel)
 {
+    std::uint16_t runtimeModel = 0;
+    if (!ResolveVehicleModelID(uiModel, runtimeModel, true))
+        throw std::invalid_argument("Invalid model id");
+    uiModel = runtimeModel;
+
     if (!CClientVehicleManager::IsStandardModel(uiModel))
     {
         auto* modelInfo = g_pGame->GetModelInfo(uiModel);

@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <net/NativeWorldProtocol.h>
+
 #include "packets/CResourceStartPacket.h"
 #include "packets/CResourceStopPacket.h"
 #include "packets/CEntityRemovePacket.h"

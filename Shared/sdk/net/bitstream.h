@@ -93,11 +93,25 @@ enum class eBitStreamVersion : unsigned short
     // 2026-07-26
     NativeWorldStaticWorldV3ServerSelectedSet,
 
+    // The distributed netc/net modules currently cap their effective bitstream
+    // version at 0x3D. These wire changes are therefore carried by the new,
+    // incompatible DM netcode epoch rather than pretending 0x3E/0x3F can be
+    // negotiated. Peers from the previous epoch are rejected before sync or
+    // resource start, so sharing the effective capability is unambiguous.
+    // 2026-07-26
+    ExtendedWorldLowPrecisionZ = NativeWorldStaticWorldV3ServerSelectedSet,
+    NativeWorldStaticWorldV3GenericSet = NativeWorldStaticWorldV3ServerSelectedSet,
+
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
     Next,
     Latest = Next - 1,
 };
+
+static_assert(static_cast<unsigned short>(eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet) == 0x3D);
+static_assert(eBitStreamVersion::ExtendedWorldLowPrecisionZ == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
+static_assert(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
+static_assert(eBitStreamVersion::Latest == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
 
 class NetBitStreamInterface : public CRefCountable
 {

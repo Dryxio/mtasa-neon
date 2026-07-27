@@ -658,12 +658,11 @@ namespace
     bool CheckTransportCacheQuota(const SCachePaths& paths, const SNativeWorldCacheRequestSA& request, std::string& error)
     {
         constexpr size_t        LEGACY_MAX_OBJECTS = 4;
-        constexpr size_t        V3_MAX_OBJECTS = 8;
+        constexpr size_t        V3_MAX_OBJECTS = 16;
         constexpr std::uint64_t LEGACY_MAX_TOTAL_BYTES = 1024ULL * 1024ULL * 1024ULL;
-        // Eight objects provide an active and replacement bank for four city
-        // packs. Keep the independent 32 GiB aggregate byte ceiling: the
-        // object count permits transactional rollover but does not authorize
-        // eight worst-case 8 GiB payloads.
+        // Keep one active and one replacement object for every member of the
+        // maximum eight-pack set. The independent 32 GiB byte ceiling still
+        // prevents sixteen worst-case 8 GiB payloads from being admitted.
         constexpr std::uint64_t V3_MAX_CACHE_BYTES = 32ULL * 1024ULL * 1024ULL * 1024ULL;
         constexpr std::uint64_t LEGACY_MAX_IDE_BYTES = 1024ULL * 1024ULL;
         constexpr std::uint64_t V3_MAX_IDE_BYTES = 8ULL * 1024ULL * 1024ULL;
@@ -1337,21 +1336,19 @@ namespace
     constexpr const char* STATIC_WORLD_V3_SET_POLICY = "static-world-v3-set";
     constexpr const char* STATIC_WORLD_V3_SET_MANIFEST = "static-world-v3-set.json";
     constexpr const char* STATIC_WORLD_V3_SET_ID_DOMAIN = "mta-native-world-static-world-v3-set-v1";
-    constexpr const char* STATIC_WORLD_V3_SET_PACKS[] = {"bullworth", "vice-city", "liberty-city", "carcer-city"};
+    constexpr size_t      STATIC_WORLD_V3_SET_MAX_PACKS = 8;
 
-    bool IsCanonicalNativeWorldV3SetSelection(const std::vector<SNativeWorldV3SetPackSA>& packs)
+    bool IsValidNativeWorldV3SetSelection(const std::vector<SNativeWorldV3SetPackSA>& packs)
     {
-        if (packs.empty() || packs.size() > std::size(STATIC_WORLD_V3_SET_PACKS))
+        if (packs.empty() || packs.size() > STATIC_WORLD_V3_SET_MAX_PACKS)
             return false;
 
-        size_t nextCanonicalIndex = 0;
+        std::set<std::string> packIds;
         for (const SNativeWorldV3SetPackSA& pack : packs)
         {
-            while (nextCanonicalIndex < std::size(STATIC_WORLD_V3_SET_PACKS) && pack.packId != STATIC_WORLD_V3_SET_PACKS[nextCanonicalIndex])
-                ++nextCanonicalIndex;
-            if (nextCanonicalIndex == std::size(STATIC_WORLD_V3_SET_PACKS) || !IsLowerSha256(pack.contentId))
+            if (!IsSafeLeafName(pack.packId, 15) || pack.packId.find('.') != std::string::npos || !packIds.emplace(pack.packId).second ||
+                !IsLowerSha256(pack.contentId))
                 return false;
-            ++nextCanonicalIndex;
         }
         return true;
     }
@@ -1374,7 +1371,7 @@ namespace
         if (request.manifestFileName != STATIC_WORLD_V3_SET_MANIFEST || !IsLowerSha256(request.sourceManifestSha256) || !IsLowerSha256(request.setId) ||
             !request.sourceManifestBytes || request.sourceManifestBytes > 16 * 1024)
             return false;
-        if (!IsCanonicalNativeWorldV3SetSelection(request.packs))
+        if (!IsValidNativeWorldV3SetSelection(request.packs))
             return false;
         return GenerateNativeWorldV3SetId(request) == request.setId;
     }

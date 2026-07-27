@@ -377,9 +377,9 @@ private:
     bool m_bUseFloats;
 };
 
-// Low precision positions:
-// - Write X and Y components bound to [-10000, 10000], with a max error of 0.31 units.
-// - Write Z bound to [-110, 1938], with a max error of 1 unit.
+// Low precision positions use 16-bit quantization for the complete extended
+// world under the new capability. The legacy 11-bit Z path must remain exact
+// because this structure appears inline in several existing packet layouts.
 struct SLowPrecisionPositionSync : public ISyncStructure
 {
     bool Read(NetBitStreamInterface& bitStream)
@@ -388,13 +388,17 @@ struct SLowPrecisionPositionSync : public ISyncStructure
         unsigned short usY;
         unsigned short usZ;
 
-        if (!bitStream.Read(usX) || !bitStream.Read(usY) || !bitStream.ReadBits(reinterpret_cast<char*>(&usZ), 11))
+        if (!bitStream.Read(usX) || !bitStream.Read(usY) ||
+            (bitStream.Can(eBitStreamVersion::ExtendedWorldLowPrecisionZ) ? !bitStream.Read(usZ)
+                                                                          : !bitStream.ReadBits(reinterpret_cast<char*>(&usZ), 11)))
             return false;
         const float positionBound =
             bitStream.Can(eBitStreamVersion::ExtendedWorldPositions) ? LOW_PRECISION_POSITION_BOUND : LEGACY_LOW_PRECISION_POSITION_BOUND;
         data.vecPosition.fX = (positionBound * 2.0f) * (usX / 65535.0f) - positionBound;
         data.vecPosition.fY = (positionBound * 2.0f) * (usY / 65535.0f) - positionBound;
-        data.vecPosition.fZ = static_cast<float>(usZ) - 110.0f;
+        data.vecPosition.fZ = bitStream.Can(eBitStreamVersion::ExtendedWorldLowPrecisionZ)
+                                  ? (LOW_PRECISION_POSITION_BOUND * 2.0f) * (usZ / 65535.0f) - LOW_PRECISION_POSITION_BOUND
+                                  : static_cast<float>(usZ) - 110.0f;
         return true;
     }
 
@@ -404,15 +408,23 @@ struct SLowPrecisionPositionSync : public ISyncStructure
             bitStream.Can(eBitStreamVersion::ExtendedWorldPositions) ? LOW_PRECISION_POSITION_BOUND : LEGACY_LOW_PRECISION_POSITION_BOUND;
         float fX = SharedUtil::Clamp(-positionBound, data.vecPosition.fX, positionBound);
         float fY = SharedUtil::Clamp(-positionBound, data.vecPosition.fY, positionBound);
-        float fZ = SharedUtil::Clamp(-110.0f, data.vecPosition.fZ, 2048.0f - 110.0f);
+        const bool extendedZ = bitStream.Can(eBitStreamVersion::ExtendedWorldLowPrecisionZ);
+        float      fZ = extendedZ ? SharedUtil::Clamp(-LOW_PRECISION_POSITION_BOUND, data.vecPosition.fZ, LOW_PRECISION_POSITION_BOUND)
+                                  : SharedUtil::Clamp(-110.0f, data.vecPosition.fZ, 2048.0f - 110.0f);
 
         unsigned short usX = static_cast<unsigned short>(((fX + positionBound) / (positionBound * 2.0f)) * 65535.0f);
         unsigned short usY = static_cast<unsigned short>(((fY + positionBound) / (positionBound * 2.0f)) * 65535.0f);
-        unsigned short usZ = static_cast<unsigned short>(fZ + 110.0f);
+        unsigned short usZ = extendedZ ? static_cast<unsigned short>(((fZ + LOW_PRECISION_POSITION_BOUND) /
+                                                                       (LOW_PRECISION_POSITION_BOUND * 2.0f)) *
+                                                                      65535.0f)
+                                      : static_cast<unsigned short>(fZ + 110.0f);
 
         bitStream.Write(usX);
         bitStream.Write(usY);
-        bitStream.WriteBits(reinterpret_cast<const char*>(&usZ), 11);
+        if (extendedZ)
+            bitStream.Write(usZ);
+        else
+            bitStream.WriteBits(reinterpret_cast<const char*>(&usZ), 11);
     }
 
     struct

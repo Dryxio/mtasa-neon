@@ -933,8 +933,8 @@ The updated checkpoint sequence is:
    two-character namespaces, contiguous source-first model remaps, spatial
    COL/IPL pairs and one through 32 canonical VER2 archives. All file sizes,
    hashes and content identities use checked 64-bit accounting; the client
-   cache admits up to 8 GiB payload objects, retains at most eight v3 objects
-   under its aggregate cap, reserves explicit transaction headroom, and
+   cache admits up to 8 GiB payload objects, retains at most sixteen v3 objects
+   under its aggregate cap for one eight-pack rollover, reserves explicit transaction headroom, and
    re-audits the locked quarantine before atomic publication. The reviewed
    admission path converts the pinned VC RenderWare 3.4 DFF through local
    librw, validates and converts all 57 COL2 records, parses Carcer's complete
@@ -969,8 +969,8 @@ The updated checkpoint sequence is:
    working sets may coexist. VC/LC still need 3,038
    registrar-owned LOD links, all-city building residency projects to
    43,015/32,000 unless spatial exclusion is proved, and QuadTreeNode and
-   RenderWare concurrency need runtime high-water. The v3 cache now has an
-   eight-object double bank for one rollover; safe reclamation of later
+   RenderWare concurrency need runtime high-water. The v3 cache now has a
+   sixteen-object active/replacement bank for one eight-pack rollover; safe reclamation of later
    inactive generations is still required. The streaming-buffer floor covers
    both channel halves in source, pending build/runtime validation. The 5,168 observed
    IDE-free IDs below 20,000 are the remaining MTA dynamic-allocation
@@ -1112,16 +1112,19 @@ The updated checkpoint sequence is:
    streaming, RenderWare, allocation or crash diagnostic followed the fix.
    Borderless Alt-Tab did not issue a device reset; a real runtime D3D reset
    remains an explicit streaming/render/memory checkpoint test.
-11. **MTA/API/network completion — first implementation slice, live
-   validated.** The format-3 set is now a bounded server-selected canonical
-   subset of one through four reviewed packs instead of a compiled exact-four
-   tuple. `setId`, cache publication, simultaneous leases, aggregate admission,
-   registrar vectors, LOD profiles, logs, and rollback counts all derive from
-   the selected entries. Unknown IDs, duplicates, reordered entries, empty
-   sets, and more than four entries fail closed. Capability `0x3D` is required
-   consistently by join admission, resource start, client parsing, startup
-   selection and the durable authorization store; `0x3B`/`0x3C` clients and
-   authorization remnants are intentionally refused.
+11. **MTA/API/network completion — live validated.** The format-3 set accepts
+   one through eight unique
+   pack IDs in the closed lowercase identifier alphabet. Server order is
+   preserved and bound into `setId`; cache publication, simultaneous leases,
+   aggregate admission, registrar vectors, generic LOD proofs, logs, and
+   rollback counts all derive from those entries. Empty, duplicate, unsafe, or
+   over-eight selections fail closed. Runtime testing exposed a prebuilt
+   `netc`/`net` ceiling: although Deathmatch wrote `0x3F`, Core observed the
+   effective bitstream as `0x3D`. Generic sets and extended Z therefore share
+   effective capability `0x3D` under incompatible DM netcode epoch `0x1DF`.
+   Peers from epoch `0x1DE` are refused before sync or resource start, and the
+   closed format-3 authorization tuple advances from `3/1/3` to `4/1/4` so an
+   old pending ticket cannot cross the protocol epoch.
 
    The historical ±6,000 streamer value is only the eagerly allocated central
    grid; extra rows/sectors already extend beyond it. Its actual negative-edge
@@ -1130,15 +1133,35 @@ The updated checkpoint sequence is:
    alignment now uses `floor`. MTA/GTA building validation, low-precision wire
    positions and `IsOutOfBounds` share the `[-10,000, 9,999]` entity contract,
    with non-finite positions rejected. The current native logical maximum
-   `31,836`, physical banks `20,000..28,191`, and server-model namespace through
-   `65,534` remain representable by the existing `uint16` wire/runtime fields;
-   widening them would change protocol without fixing a truncation. The
-   separate `CModelNames::INVALID_MODEL_ID == 32,000` overlap with valid server
-   logical IDs remains an API/named-model follow-up and native canonical city
-   IDs are not exposed to Lua. This does not yet generalize beyond the four
-   reviewed pack profiles or close the exhaustive Lua/C++/RPC audit. The
-   low-precision Z codec also remains at its historical approximately
-   `[-110, 1,938]` range. Those items keep checkpoint 11 open after this slice.
+   `31,836`, compact FileIDs through `42,340`, physical banks `20,000..28,191`,
+   and server-model namespace `42,341..65,534` remain representable by the
+   existing `uint16` wire/runtime fields;
+   widening them would change protocol without fixing a truncation. The name
+   resolver sentinel is now the unallocatable `65,535`, so model `32,000` is no
+   longer misclassified. Moving the server registry above every FileID also
+   removes its former ambiguity with clothes aliases and TXD/COL/IPL IDs;
+   clothing replacement APIs retain their typed `30,000..30,541` aliases
+   explicitly, and the runtime DFF allocator always skips that pseudo-ID range.
+   Legacy and typed Lua model entry points validate their
+   wide numeric input before narrowing, including building, entity, model,
+   streaming, handling, wheel, projectile, spawn and world-removal APIs. RPCs
+   keep their sufficient 16-bit logical width. The legacy world-removal RPC has
+   no generation token and is therefore intentionally restricted to stable GTA
+   model IDs `0..19,999`; native-world arena slots cannot be removed by number.
+   TXD indices are checked against the live 8,000-slot partition before any
+   pool access. Netcode epoch `0x1DF` extends the low-precision Z codec to the
+   same `[-10,000, 10,000]` 16-bit range as X/Y. The preceding incompatible
+   epoch retains the exact 11-bit `[-110, 1,938]` layout and is rejected before
+   gameplay packets can mix the two encodings.
+
+   Generic admission still requires each pack to provide a contiguous,
+   non-overlapping logical model range within `20,000..31,999`, at most 4,096
+   models per pack and 12,000 across the selected set, a unique two-character
+   asset namespace, valid multi-IMG/COL/IPL payloads, and all aggregate pool and
+   hash proofs. Runtime city choice is spatial and scans set order with a
+   350-unit activation margin. Pack activation regions should therefore be
+   disjoint; intentional overlap gives deterministic priority to the earlier
+   set entry, and a pack placed over San Andreas overlays the stock world.
 
    The 2026-07-26 live gate first revalidated the exact-four set, then deployed
    the non-contiguous server selection Bullworth + Liberty City + Carcer City.
@@ -1151,6 +1174,21 @@ The updated checkpoint sequence is:
    new dump; observed peaks were buildings `18,352/32,000` and ColModels
    `18,010/30,000`. This proves server-side selection within the reviewed
    catalog, not yet arbitrary unreviewed pack identities.
+
+   The 2026-07-27 continuation closed the protocol-epoch gate. A durable
+   `3/1/3` receipt left by the preceding build initially blocked publication
+   because the spent-ledger decoder reused live authorization validation. The
+   corrected store permits that exact retired tuple only at the single
+   `ValidateSpentLedger` read site; pending, temporary, publication, restart
+   and startup paths remain strict `4/1/4`. The three-pack set then published
+   ticket `d366f75a`, restarted, locked the envelope plus three child caches,
+   committed generation 1 and exercised Bullworth, Liberty City and Carcer
+   City through generation 10. Same-process reconnect, full server restart and
+   coordinator-resource restart all preserved the process lease and active
+   catalog. Finally, a real previous Neon client containing netcode `0x41DE`
+   was refused before join with the user-visible current-protocol diagnostic;
+   the server recorded `Bad version; client: 41DE, server: 41DF`. The current
+   `0x41DF` client module was restored by its original SHA-256 after the test.
 12. **Streaming/render/memory tuning.** Measure and tune streaming memory,
    buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
    LOD/prefetch behavior using high-water and multi-hour traces rather than

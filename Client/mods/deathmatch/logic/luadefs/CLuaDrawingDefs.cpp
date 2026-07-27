@@ -2151,7 +2151,12 @@ bool CLuaDrawingDefs::DxDrawWiredSphere(lua_State* const luaVM, const CVector po
 bool CLuaDrawingDefs::DxDrawModel3D(std::uint32_t modelID, CVector position, CVector rotation, const std::optional<CVector> scale,
                                     const std::optional<float> lighting)
 {
-    CModelInfo* pModelInfo = g_pGame->GetModelInfo(modelID);
+    std::uint16_t runtimeModelID = 0;
+    if (modelID > SERVER_MODEL_ID_MAX ||
+        !g_pClientGame->GetManager()->GetModelManager()->ResolveModelID(modelID, runtimeModelID, nullptr, false))
+        throw std::invalid_argument("Invalid model ID");
+
+    CModelInfo* pModelInfo = g_pGame->GetModelInfo(runtimeModelID);
     if (!pModelInfo)
         throw std::invalid_argument("Invalid model ID");
 

@@ -8,11 +8,16 @@
  *
  *****************************************************************************/
 
+#include <cstdint>
+
 #define CLOTHES_MODEL_ID_FIRST 30000
 #define CLOTHES_MODEL_ID_LAST  30151
 #define CLOTHES_TEX_ID_FIRST   30152
 #define CLOTHES_TEX_ID_LAST    30541
-#define INVALID_MODEL_ID       32000
+
+// FileIDs and server model identities together occupy every uint16 value below
+// 65535. Keep the shared name resolver sentinel at the sole unallocatable value.
+constexpr std::uint32_t INVALID_MODEL_ID = 0xFFFFU;
 
 class CModelNames
 {

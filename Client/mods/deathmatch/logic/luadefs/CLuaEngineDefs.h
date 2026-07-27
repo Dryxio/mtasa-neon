@@ -110,13 +110,13 @@ public:
     static uint EngineRequestTXD(lua_State* const luaVM, std::string strTxdName);
     static bool EngineFreeTXD(uint txdID);
 
-    static bool EngineStreamingRequestModel(lua_State* const luaVM, std::uint16_t modelId, std::optional<bool> addReference, std::optional<bool> blocking);
-    static bool EngineStreamingReleaseModel(lua_State* const luaVM, std::uint16_t modelId, std::optional<bool> removeReference);
-    static eModelLoadState EngineStreamingGetModelLoadState(std::uint16_t modelId);
+    static bool EngineStreamingRequestModel(lua_State* const luaVM, std::uint32_t modelId, std::optional<bool> addReference, std::optional<bool> blocking);
+    static bool EngineStreamingReleaseModel(lua_State* const luaVM, std::uint32_t modelId, std::optional<bool> removeReference);
+    static eModelLoadState EngineStreamingGetModelLoadState(std::uint32_t modelId);
 
     static void EnginePreloadWorldArea(CVector position, std::optional<PreloadAreaOption> option);
     static bool EnginePreloadWorldAreaInDirection(CVector position, float headingDegrees);
-    static bool EngineRestreamModel(std::uint16_t modelId);
+    static bool EngineRestreamModel(std::uint32_t modelId);
     static void EngineRestream(std::optional<RestreamOption> option);
 
 private:

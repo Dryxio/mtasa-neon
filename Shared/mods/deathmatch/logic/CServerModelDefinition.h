@@ -12,7 +12,12 @@
 #include <cstdint>
 #include <string>
 
-constexpr std::uint16_t SERVER_MODEL_ID_MIN = 30000;
+// FileID 42340 is the final native slot in the compact extended layout.
+// Logical server model IDs must live above that complete public namespace so
+// clothes aliases, model slots, TXD/COL/IPL IDs, and server models can never
+// reinterpret the same uint16 value differently at an API boundary.
+constexpr std::uint16_t SERVER_MODEL_ID_MIN = 42341;
+constexpr std::uint16_t SERVER_MODEL_ID_MAX = 65534;
 
 enum class eServerModelType : std::uint8_t
 {

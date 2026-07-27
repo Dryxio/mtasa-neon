@@ -15,8 +15,8 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 
 from native_world_v3_set import (  # noqa: E402
-    CANONICAL_PACK_ORDER,
     MAX_ENVELOPE_BYTES,
+    MAX_SET_PACKS,
     POLICY,
     build_set_envelope,
     calculate_set_id,
@@ -24,12 +24,14 @@ from native_world_v3_set import (  # noqa: E402
     parse_set_envelope,
 )
 
+REVIEWED_PACK_ORDER = ("bullworth", "vice-city", "liberty-city", "carcer-city")
+
 
 class NativeWorldV3SetTest(unittest.TestCase):
     def setUp(self) -> None:
         self.packs = [
             {"pack_id": pack_id, "content_id": hashlib.sha256(pack_id.encode("ascii")).hexdigest()}
-            for pack_id in CANONICAL_PACK_ORDER
+            for pack_id in REVIEWED_PACK_ORDER
         ]
         self.envelope = {
             "format": 3,
@@ -47,8 +49,7 @@ class NativeWorldV3SetTest(unittest.TestCase):
             changed = copy.deepcopy(self.packs)
             changed[index]["content_id"] = "0" * 64
             self.assertNotEqual(self.envelope["set_id"], calculate_set_id(changed))
-        with self.assertRaises(ValueError):
-            calculate_set_id(list(reversed(self.packs)))
+        self.assertNotEqual(self.envelope["set_id"], calculate_set_id(list(reversed(self.packs))))
 
     def test_parser_is_closed_and_canonical(self) -> None:
         encoded = canonical_set_envelope_bytes(self.envelope)
@@ -77,11 +78,11 @@ class NativeWorldV3SetTest(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 parse_set_envelope(json.dumps(changed))
 
-    def test_builder_derives_pack_content_ids_in_canonical_order(self) -> None:
+    def test_builder_derives_pack_content_ids_in_server_order(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             directories = []
-            for index, pack_id in enumerate(CANONICAL_PACK_ORDER):
+            for index, pack_id in enumerate(REVIEWED_PACK_ORDER):
                 directory = root / pack_id
                 directory.mkdir()
                 ide = b"objs\nend\n"
@@ -109,10 +110,10 @@ class NativeWorldV3SetTest(unittest.TestCase):
                 (directory / "native-world.json").write_text(json.dumps(manifest), encoding="ascii")
                 directories.append(directory)
             envelope = build_set_envelope(directories)
-            self.assertEqual([pack["pack_id"] for pack in envelope["packs"]], list(CANONICAL_PACK_ORDER))
+            self.assertEqual([pack["pack_id"] for pack in envelope["packs"]], list(REVIEWED_PACK_ORDER))
             self.assertEqual(envelope["set_id"], calculate_set_id(envelope["packs"]))
 
-    def test_server_can_select_a_canonical_subset(self) -> None:
+    def test_server_can_select_any_bounded_ordered_unique_set(self) -> None:
         for selected in ([pack] for pack in self.packs):
             envelope = {
                 "format": 3,
@@ -124,7 +125,19 @@ class NativeWorldV3SetTest(unittest.TestCase):
         selected = [self.packs[0], self.packs[2], self.packs[3]]
         envelope = {"format": 3, "policy": POLICY, "set_id": calculate_set_id(selected), "packs": selected}
         self.assertEqual(parse_set_envelope(canonical_set_envelope_bytes(envelope).decode("ascii")), envelope)
-        for invalid in ([self.packs[2], self.packs[0]], [self.packs[0], self.packs[0]], self.packs + [self.packs[0]]):
+        arbitrary = [
+            {"pack_id": f"world-{index}", "content_id": hashlib.sha256(f"world-{index}".encode("ascii")).hexdigest()}
+            for index in range(MAX_SET_PACKS)
+        ]
+        self.assertEqual(len(arbitrary), MAX_SET_PACKS)
+        self.assertRegex(calculate_set_id(arbitrary), r"^[0-9a-f]{64}$")
+        for invalid in (
+            [self.packs[0], self.packs[0]],
+            arbitrary + [{"pack_id": "world-extra", "content_id": "0" * 64}],
+            [{"pack_id": "unsafe.pack", "content_id": "0" * 64}],
+            [{"pack_id": "UPPER", "content_id": "0" * 64}],
+            [{"pack_id": "pack-id-is-too-long", "content_id": "0" * 64}],
+        ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 calculate_set_id(invalid)
 

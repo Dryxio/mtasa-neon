@@ -46,6 +46,7 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("NativeWorldStaticWorldV3LodTransport", bitstream)
         self.assertIn("NativeWorldStaticWorldV3StartupAuthorization", bitstream)
         self.assertIn("NativeWorldStaticWorldV3ServerSelectedSet", bitstream)
+        self.assertIn("NativeWorldStaticWorldV3GenericSet", bitstream)
         self.assertIn("staticWorldV3PublishOnly", server)
         self.assertIn("!startupAttribute", server)
         self.assertIn("NativeWorldStaticWorldV3LodTransport", packet)
@@ -64,7 +65,7 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
 
     def test_v3_cache_has_transactional_object_bank_without_widening_byte_cap(self) -> None:
         cache = (REPOSITORY / "Client/game_sa/CNativeWorldCacheSA.cpp").read_text(encoding="utf-8")
-        self.assertIn("V3_MAX_OBJECTS = 8", cache)
+        self.assertIn("V3_MAX_OBJECTS = 16", cache)
         self.assertIn("V3_MAX_CACHE_BYTES = 32ULL * 1024ULL * 1024ULL * 1024ULL", cache)
         self.assertIn("maximumObjects = isV3 ? V3_MAX_OBJECTS : LEGACY_MAX_OBJECTS", cache)
         self.assertNotIn("4ULL * (MAX_V3_TOTAL_BYTES", cache)
@@ -118,7 +119,6 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
         self.assertIn("catalogModels == 0 || catalogModels > 12000U", source)
         self.assertIn("std::vector<SStaticWorldV3RuntimePack>", source)
-        self.assertIn('pack.identity.packId == "vice-city"', source)
         self.assertIn("ValidateStaticWorldV3LodProfile(error)", source)
         self.assertIn("HookInstallCall(LOAD_COL_BUFFER_CALL", register)
         self.assertIn("HookInstallCall(LOAD_IPL_BUFFER_CALL", register)
@@ -131,17 +131,16 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("canonicalPointersCleared", collapse)
         self.assertIn("clothesNamespaceOverlap=cleared-before-gameplay", collapse)
 
-    def test_v3_lod_bootstrap_uses_reusable_banks_and_child_first_teardown(self) -> None:
+    def test_v3_lod_bootstrap_uses_generic_reusable_banks_and_child_first_teardown(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
-        self.assertIn("STATIC_WORLD_V3_VICE_CITY_LOD_LINKS = 1081", source)
-        self.assertIn("STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS = 1957", source)
-        self.assertIn("STATIC_WORLD_V3_VICE_CITY_LOD_CHILD_GROUPS = 9", source)
-        self.assertIn("STATIC_WORLD_V3_LIBERTY_CITY_LOD_CHILD_GROUPS = 12", source)
-        self.assertIn("STATIC_WORLD_V3_VICE_CITY_LOD_SCRATCH = 2162", source)
-        self.assertIn("STATIC_WORLD_V3_LIBERTY_CITY_LOD_SCRATCH = 3914", source)
-        self.assertIn("STATIC_WORLD_V3_VICE_CITY_MISSING_ANCHOR_COLS = 2", source)
-        self.assertIn("STATIC_WORLD_V3_LIBERTY_CITY_MISSING_ANCHOR_COLS = 0", source)
         self.assertIn("IPL_ENTITY_SCRATCH_CAPACITY = 4096", source)
+        self.assertIn("inventory.lodAnchorCount != inventory.lodLinkCount", source)
+        self.assertIn("scratch > IPL_ENTITY_SCRATCH_CAPACITY", source)
+        self.assertIn("lodMissingAnchorColCount", source)
+        self.assertNotIn("if (!inventory.lodAnchorCount)\n                return true;", source)
+        self.assertIn("placement without COL is not a one-to-one LOD anchor", source)
+        self.assertNotIn("STATIC_WORLD_V3_VICE_CITY_LOD_LINKS", source)
+        self.assertNotIn("STATIC_WORLD_V3_LIBERTY_CITY_LOD_LINKS", source)
         self.assertIn("ValidateStaticWorldV3LodArrayGlobals(0", source)
         self.assertIn("ValidateStaticWorldV3LodArrayGlobals(32", source)
         self.assertIn("GET_NEW_IPL_ENTITY_INDEX_ARRAY = 0x404780", source)
@@ -250,15 +249,38 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("continue;", allocator)
         self.assertIn("return false;", resolver)
 
-    def test_v3_server_selected_set_has_an_append_only_closed_capability_gate(self) -> None:
-        capability = "NativeWorldStaticWorldV3ServerSelectedSet"
+    def test_v3_generic_set_uses_the_closed_netcode_epoch_within_the_net_module_cap(self) -> None:
+        capability = "NativeWorldStaticWorldV3GenericSet"
+        bitstream = (REPOSITORY / "Shared/sdk/net/bitstream.h").read_text(encoding="utf-8")
         server_game = (REPOSITORY / "Server/mods/deathmatch/logic/CGame.cpp").read_text(encoding="utf-8")
+        server_resource = (REPOSITORY / "Server/mods/deathmatch/logic/CResource.cpp").read_text(encoding="utf-8")
         server_packet = (REPOSITORY / "Server/mods/deathmatch/logic/packets/CResourceStartPacket.cpp").read_text(encoding="utf-8")
         client_packet = (REPOSITORY / "Client/mods/deathmatch/logic/CPacketHandler.cpp").read_text(encoding="utf-8")
         core = (REPOSITORY / "Client/core/CCore.cpp").read_text(encoding="utf-8")
         store = (REPOSITORY / "Client/core/CNativeWorldAuthorizationStore.cpp").read_text(encoding="utf-8")
-        for source in (server_game, server_packet, client_packet, core, store):
+        version = (REPOSITORY / "Shared/sdk/version.h").read_text(encoding="utf-8")
+        for source in (server_game, server_resource, server_packet, client_packet, core, store):
             self.assertIn(capability, source)
+        self.assertIn("ExtendedWorldLowPrecisionZ = NativeWorldStaticWorldV3ServerSelectedSet", bitstream)
+        self.assertIn("NativeWorldStaticWorldV3GenericSet = NativeWorldStaticWorldV3ServerSelectedSet", bitstream)
+        self.assertIn("eBitStreamVersion::Latest == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet", bitstream)
+        self.assertIn("#define _NETCODE_VERSION           0x1DF", version)
+        self.assertLess(server_game.index("Packet.GetNetVersion() != MTA_DM_NETCODE_VERSION"), server_game.index("SetClientBitStreamVersion"))
+        self.assertIn("NATIVE_WORLD_STATIC_V3_SET_AUTHORIZATION_VERSION", server_resource)
+        self.assertIn("NATIVE_WORLD_STATIC_V3_SET_POLICY", server_resource)
+
+    def test_retired_v3_authorization_is_readable_only_as_anti_replay_history(self) -> None:
+        store = (REPOSITORY / "Client/core/CNativeWorldAuthorizationStore.cpp").read_text(encoding="utf-8")
+        retired = store[store.index("bool IsRetiredDurableAuthorization") : store.index("bool ValidateAuthorizationImpl")]
+        decode = store[store.index("bool DecodeRecord") : store.index("bool RecordsEqual")]
+        persist = store[store.index("SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::Persist") :]
+        self.assertIn("authorization.wireVersion == 3", retired)
+        self.assertIn("authorization.policy == 3", retired)
+        self.assertIn("allowRetiredDurableRecord ? ValidateDurableAuthorization", decode)
+        ledger = store[store.index("bool ValidateSpentLedger") : store.index("SNativeWorldStartupSelection MakeStartupSelection")]
+        self.assertIn("ReadRecord(path, record, error, true)", ledger)
+        self.assertEqual(store.count("ReadRecord(path, record, error, true)"), 1)
+        self.assertIn("ValidateAuthorization(authorization", persist)
 
     def test_streamer_extra_sector_alignment_uses_floor_at_negative_boundaries(self) -> None:
         header = (REPOSITORY / "Client/mods/deathmatch/logic/CClientStreamSectorRow.h").read_text(encoding="utf-8")
@@ -279,6 +301,84 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("!std::isfinite(vecPosition.fX)", entity)
         self.assertIn("vecPosition.fX < EXTENDED_WORLD_MIN_COORD", entity)
         self.assertIn("LOW_PRECISION_POSITION_BOUND = EXTENDED_WORLD_MAX_COORD", sync)
+        self.assertIn("ExtendedWorldLowPrecisionZ", sync)
+        self.assertIn("bitStream.ReadBits(reinterpret_cast<char*>(&usZ), 11)", sync)
+        self.assertIn("bitStream.WriteBits(reinterpret_cast<const char*>(&usZ), 11)", sync)
+        self.assertIn("bitStream.Read(usZ)", sync)
+        self.assertIn("bitStream.Write(usZ)", sync)
+
+        for z in (-10000.0, -5000.0, 0.0, 5000.0, 10000.0):
+            encoded = int(((z + 10000.0) / 20000.0) * 65535.0)
+            decoded = 20000.0 * (encoded / 65535.0) - 10000.0
+            self.assertLessEqual(abs(decoded - z), 20000.0 / 65535.0)
+
+    def test_model_id_boundaries_do_not_alias_valid_server_ids(self) -> None:
+        names = (REPOSITORY / "Client/mods/deathmatch/logic/CModelNames.h").read_text(encoding="utf-8")
+        definition = (REPOSITORY / "Shared/mods/deathmatch/logic/CServerModelDefinition.h").read_text(encoding="utf-8")
+        manager = (REPOSITORY / "Client/mods/deathmatch/logic/CClientModelManager.cpp").read_text(encoding="utf-8")
+        reader = (REPOSITORY / "Shared/sdk/CScriptArgReader.h").read_text(encoding="utf-8")
+        self.assertIn("INVALID_MODEL_ID = 0xFFFFU", names)
+        self.assertIn("SERVER_MODEL_ID_MIN = 42341", definition)
+        self.assertIn("SERVER_MODEL_ID_MAX = 65534", definition)
+        self.assertIn("iModelID >= 0 && iModelID < iMaxModelId", manager)
+        self.assertIn("ReadNumberBounded", reader)
+        self.assertIn("!std::isfinite(value)", reader)
+
+        parser = (REPOSITORY / "Shared/mods/deathmatch/logic/lua/CLuaFunctionParser.h").read_text(encoding="utf-8")
+        names_source = (REPOSITORY / "Client/mods/deathmatch/logic/CModelNames.cpp").read_text(encoding="utf-8")
+        engine = (REPOSITORY / "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp").read_text(encoding="utf-8")
+        self.assertIn("exclusiveUpperBound", parser)
+        self.assertIn("return T{};", parser)
+        self.assertIn("std::from_chars", names_source)
+        self.assertIn("txdId < txdCount", names_source)
+        self.assertIn("ResolveEngineOrClothesID", engine)
+        self.assertIn("usTxdId >= txdCount", engine)
+        self.assertIn("txdID >= txdCount", engine)
+        self.assertIn("i >= CLOTHES_MODEL_ID_FIRST && i <= CLOTHES_TEX_ID_LAST", manager)
+
+        projectile = (REPOSITORY / "Client/mods/deathmatch/logic/luadefs/CLuaProjectileDefs.cpp").read_text(encoding="utf-8")
+        client_world = (REPOSITORY / "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp").read_text(encoding="utf-8")
+        server_world = (REPOSITORY / "Server/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp").read_text(encoding="utf-8")
+        self.assertIn("ResolveModelID(suppliedModel, runtimeModel", projectile)
+        self.assertIn("ReadNumberBounded(iModelToRemove, 0, 19999)", client_world)
+        self.assertIn("ReadNumberBounded(iModelToRestore, 0, 19999)", client_world)
+        self.assertEqual(server_world.count("ReadNumberBounded(usModel, 0, 19999)"), 2)
+
+        cache = (REPOSITORY / "Client/game_sa/CNativeWorldCacheSA.cpp").read_text(encoding="utf-8")
+        self.assertIn("V3_MAX_OBJECTS = 16", cache)
+
+        lua_sources = (
+            "Server/mods/deathmatch/logic/luadefs/CLuaModelDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaObjectDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaPlayerDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaElementDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaVehicleDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaHandlingDefs.cpp",
+            "Server/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaObjectDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaElementDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaVehicleDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaProjectileDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
+            "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
+        )
+        for relative in lua_sources:
+            with self.subTest(source=relative):
+                self.assertIn("ReadNumberBounded", (REPOSITORY / relative).read_text(encoding="utf-8"))
+
+        for relative in (
+            "Client/mods/deathmatch/logic/luadefs/CLuaBuildingDefs.h",
+            "Server/mods/deathmatch/logic/luadefs/CLuaBuildingDefs.h",
+            "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.h",
+            "Client/mods/deathmatch/logic/luadefs/CLuaVehicleDefs.h",
+        ):
+            with self.subTest(typed_source=relative):
+                source = (REPOSITORY / relative).read_text(encoding="utf-8")
+                self.assertNotIn("CreateBuilding(lua_State* const luaVM, std::uint16_t", source)
+                self.assertNotIn("EngineStreamingRequestModel(lua_State* const luaVM, std::uint16_t", source)
+                self.assertNotIn("GetVehicleModelWheelSize(const unsigned short", source)
 
 
 if __name__ == "__main__":

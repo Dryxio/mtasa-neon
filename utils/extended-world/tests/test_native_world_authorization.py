@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from native_world_authorization import (  # noqa: E402
     AUTHORIZATION_BITSTREAM_VERSION,
+    EXTENDED_WORLD_LOW_PRECISION_Z_BITSTREAM_VERSION,
     NATIVE_TASK_LOCOMOTION_PRESENTATION_BITSTREAM_VERSION,
     AuthorizationRecord,
     PACK_FORMAT,
@@ -25,8 +26,11 @@ from native_world_authorization import (  # noqa: E402
     STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION,
     STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION,
     STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION,
+    STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION,
     STATIC_WORLD_V3_SET_WIRE_VERSION,
     POLICY_STATIC_WORLD_V3_SET,
+    RETIRED_POLICY_STATIC_WORLD_V3_SET,
+    RETIRED_STATIC_WORLD_V3_SET_WIRE_VERSION,
     STATIC_WORLD_V3_TRANSPORT_BITSTREAM_VERSION,
     STATIC_WORLD_WIRE_VERSION,
     POLICY_STATIC_WORLD_V1,
@@ -40,6 +44,7 @@ from native_world_authorization import (  # noqa: E402
     durable_identity,
     freshness,
     publication_allowed,
+    restart_uri,
     resolve_existing,
     semantic_identity,
     teardown_action,
@@ -126,10 +131,10 @@ class NativeWorldAuthorizationCodecTests(unittest.TestCase):
             (STATIC_WORLD_PACK_FORMAT, STATIC_WORLD_WIRE_VERSION, STARTUP_MODE, POLICY_STATIC_WORLD_V1),
             (STATIC_WORLD_V3_PACK_FORMAT, STATIC_WORLD_V3_SET_WIRE_VERSION, STARTUP_MODE, POLICY_STATIC_WORLD_V3_SET),
         }
-        for pack_format in (PACK_FORMAT, STATIC_WORLD_PACK_FORMAT, 3):
-            for wire_version in (WIRE_VERSION, STATIC_WORLD_WIRE_VERSION, 3):
+        for pack_format in (PACK_FORMAT, STATIC_WORLD_PACK_FORMAT, STATIC_WORLD_V3_PACK_FORMAT):
+            for wire_version in (WIRE_VERSION, STATIC_WORLD_WIRE_VERSION, 3, STATIC_WORLD_V3_SET_WIRE_VERSION):
                 for startup_mode in (0, STARTUP_MODE, 2):
-                    for policy in (POLICY_BULLWORTH, POLICY_STATIC_WORLD_V1, 3):
+                    for policy in (POLICY_BULLWORTH, POLICY_STATIC_WORLD_V1, 3, POLICY_STATIC_WORLD_V3_SET):
                         startup_tuple = (pack_format, wire_version, startup_mode, policy)
                         record = replace(
                             sample_record(),
@@ -137,7 +142,7 @@ class NativeWorldAuthorizationCodecTests(unittest.TestCase):
                             wire_version=wire_version,
                             startup_mode=startup_mode,
                             policy=policy,
-                            bitstream_version=STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION,
+                            bitstream_version=STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION,
                         )
                         with self.subTest(startup_tuple=startup_tuple):
                             if startup_tuple in accepted:
@@ -145,6 +150,31 @@ class NativeWorldAuthorizationCodecTests(unittest.TestCase):
                             else:
                                 with self.assertRaises(RecordError):
                                     encode_record(record)
+
+    def test_retired_v3_ticket_is_decode_only_durable_history(self) -> None:
+        current = replace(
+            sample_record(),
+            pack_format=STATIC_WORLD_V3_PACK_FORMAT,
+            wire_version=STATIC_WORLD_V3_SET_WIRE_VERSION,
+            policy=POLICY_STATIC_WORLD_V3_SET,
+            bitstream_version=STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION,
+        )
+        encoded = bytearray(encode_record(current))
+        tuple_offset = len(b"MTANWAR1") + 2
+        encoded[tuple_offset] = RETIRED_STATIC_WORLD_V3_SET_WIRE_VERSION
+        encoded[tuple_offset + 3] = RETIRED_POLICY_STATIC_WORLD_V3_SET
+        retired = replace(
+            current,
+            wire_version=RETIRED_STATIC_WORLD_V3_SET_WIRE_VERSION,
+            policy=RETIRED_POLICY_STATIC_WORLD_V3_SET,
+        )
+
+        self.assertEqual(decode_record(bytes(encoded)), retired)
+        self.assertEqual(freshness(retired, retired.issued_at), "fresh")
+        with self.assertRaises(RecordError):
+            encode_record(retired)
+        with self.assertRaises(RecordError):
+            restart_uri(retired, retired.issued_at)
 
     def test_freshness_boundaries_are_exact(self) -> None:
         record = sample_record()
@@ -237,11 +267,11 @@ class NativeWorldAuthorizationWireAndLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(encode_descriptor(authorized_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION), b"")
         self.assertEqual(encode_descriptor(authorized_set, NATIVE_TASK_LOCOMOTION_PRESENTATION_BITSTREAM_VERSION), b"")
-        encoded_set = encode_descriptor(authorized_set, STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION)
+        encoded_set = encode_descriptor(authorized_set, STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION)
         self.assertEqual(encoded_set[:4], b"A\x03\x01\x1f")
-        self.assertEqual(decode_descriptor(encoded_set, STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION), authorized_set)
-        with self.assertRaises(RecordError):
-            decode_descriptor(encoded_set, STATIC_WORLD_V3_SET_AUTHORIZATION_BITSTREAM_VERSION)
+        self.assertEqual(STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION, STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION)
+        self.assertEqual(EXTENDED_WORLD_LOW_PRECISION_Z_BITSTREAM_VERSION, STATIC_WORLD_V3_SERVER_SELECTED_SET_BITSTREAM_VERSION)
+        self.assertEqual(decode_descriptor(encoded_set, STATIC_WORLD_V3_GENERIC_SET_BITSTREAM_VERSION), authorized_set)
         with self.assertRaises(RecordError):
             decode_descriptor(encoded_set, STATIC_WORLD_V3_LOD_TRANSPORT_BITSTREAM_VERSION)
         validate_descriptor_placement(("N",) + ("F",) * 6 + ("E",), file_count=6)

@@ -153,8 +153,8 @@ public:
     LUA_DECLARE(SetVehicleModelDummyPosition);
     LUA_DECLARE_OOP(GetVehicleModelDummyPosition)
 
-    static std::variant<bool, CLuaMultiReturn<float, float, float>> GetVehicleModelDummyDefaultPosition(unsigned short vehicleModel, VehicleDummies dummy);
-    static std::variant<bool, CVector>                              OOP_GetVehicleModelDummyDefaultPosition(unsigned short vehicleModel, VehicleDummies dummy);
+    static std::variant<bool, CLuaMultiReturn<float, float, float>> GetVehicleModelDummyDefaultPosition(std::uint32_t modelId, VehicleDummies dummy);
+    static std::variant<bool, CVector>                              OOP_GetVehicleModelDummyDefaultPosition(std::uint32_t modelId, VehicleDummies dummy);
 
     static bool                                                     SetVehicleDummyPosition(CClientVehicle* vehicle, VehicleDummies dummy, CVector position);
     static std::variant<bool, CLuaMultiReturn<float, float, float>> GetVehicleDummyPosition(CClientVehicle* vehicle, VehicleDummies dummy);
@@ -170,9 +170,9 @@ public:
     static bool  SetVehicleVariant(CClientVehicle* pVehicle, std::optional<unsigned char> optVariant1, std::optional<unsigned char> optVariant2);
     static float GetVehicleWheelScale(CClientVehicle* const pVehicle);
     static bool  SetVehicleWheelScale(CClientVehicle* const pVehicle, const float fWheelScale);
-    static std::variant<float, std::unordered_map<std::string, float>> GetVehicleModelWheelSize(const unsigned short                            usModel,
+    static std::variant<float, std::unordered_map<std::string, float>> GetVehicleModelWheelSize(const std::uint32_t                             modelId,
                                                                                                 const std::optional<ResizableVehicleWheelGroup> eWheelGroup);
-    static bool SetVehicleModelWheelSize(const unsigned short usModel, const ResizableVehicleWheelGroup eWheelGroup, const float fWheelSize);
+    static bool SetVehicleModelWheelSize(const std::uint32_t modelId, const ResizableVehicleWheelGroup eWheelGroup, const float fWheelSize);
     static int  GetVehicleWheelFrictionState(CClientVehicle* pVehicle, unsigned char wheel);
 
     static bool SetVehicleRotorState(CClientVehicle* const vehicle, bool state, std::optional<bool> stopRotor) noexcept;

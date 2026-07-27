@@ -78,7 +78,7 @@ int CLuaObjectDefs::CreateObject(lua_State* luaVM)
     bool    bIsLowLod;
 
     CScriptArgReader argStream(luaVM);
-    argStream.ReadNumber(usModelID);
+    argStream.ReadNumberBounded(usModelID, 0, CServerModelManager::LAST_MODEL_ID);
     argStream.ReadVector3D(vecPosition);
     argStream.ReadVector3D(vecRotation, CVector());
     argStream.ReadBool(bIsLowLod, false);
