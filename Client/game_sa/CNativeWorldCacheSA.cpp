@@ -1304,6 +1304,40 @@ void CNativeWorldCacheCommittedLeaseSA::Release()
     m_impl.reset();
 }
 
+bool CNativeWorldCacheCommittedLeaseSA::ReleaseChecked(std::string& error)
+{
+    if (!m_impl || !m_impl->registered || m_impl->handles.empty() ||
+        std::any_of(m_impl->handles.begin(), m_impl->handles.end(), [](HANDLE handle) { return !handle || handle == INVALID_HANDLE_VALUE; }))
+    {
+        error = "committed native-world cache lease is not valid for checked release";
+        return false;
+    }
+
+    const size_t handleCount = m_impl->handles.size();
+    for (size_t index = 0; index < m_impl->handles.size(); ++index)
+    {
+        if (!CloseHandle(m_impl->handles[index]))
+        {
+            error = SString("fatal partial native-world cache lease release failed at handle %u", static_cast<unsigned int>(index));
+            return false;
+        }
+        m_impl->handles[index] = nullptr;
+    }
+    m_impl->handles.clear();
+
+    SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
+    if (!telemetry.groups || telemetry.handles < handleCount)
+    {
+        error = "fatal partial native-world cache lease telemetry underflow";
+        return false;
+    }
+    --telemetry.groups;
+    telemetry.handles -= handleCount;
+    m_impl->registered = false;
+    m_impl.reset();
+    return true;
+}
+
 struct CNativeWorldCacheLeaseSA::SImpl
 {
     ~SImpl()

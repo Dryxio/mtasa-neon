@@ -55,7 +55,7 @@ class NativeWorldRuntimeDrainTests(unittest.TestCase):
         command = COMMANDS[COMMANDS.index("void CCommandFuncs::NativeWorldDrain") : COMMANDS.index("// this fails randomly")]
         self.assertIn("game->BeginNativeWorldDrain()", command)
         self.assertIn("game->IsNativeWorldDrainQuiescent()", command)
-        self.assertIn('[status|begin]', command)
+        self.assertIn('[status|begin|teardown]', command)
 
     def test_draining_is_a_committed_non_releasable_state(self) -> None:
         helper = PACK[PACK.index("bool HasCommittedActivation") : PACK.index("const char* LodStateName")]

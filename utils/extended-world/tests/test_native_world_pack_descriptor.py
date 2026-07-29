@@ -118,7 +118,8 @@ class NativeWorldPackDescriptorTest(unittest.TestCase):
     def test_runtime_reparses_payload_and_derives_buffer_floor(self) -> None:
         for token in ("ParseIde(idePath", "ValidateImg(imgPath", "ValidateBinaryIpls(imgPath"):
             self.assertIn(token, self.manager)
-        self.assertIn("g_staticWorldV3Route ? g_staticWorldV3LargestEntryBlocks : Pack().largestImgEntryBlocks", self.manager)
+        self.assertIn("unsigned int largestEntryBlocks = g_staticWorldV3LargestEntryBlocks", self.manager)
+        self.assertIn("largestEntryBlocks = Pack().largestImgEntryBlocks", self.manager)
         self.assertIn("perChannelBlocks = (largestEntryBlocks + 1) & ~uint64_t{1}", self.manager)
         self.assertIn("totalBlocks = perChannelBlocks * 2", self.manager)
         self.assertNotIn("requiredStreamingBufferBlocks", self.header)

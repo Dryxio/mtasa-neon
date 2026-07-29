@@ -213,9 +213,15 @@ void CCommandFuncs::NativeWorldDrain(const char* szParameters)
         g_pCore->GetConsole()->Printf("[NativeWorldDrain] state=%s mutation=no", quiescent ? "quiescent" : "not-quiescent");
         return;
     }
+    if (operation == "teardown")
+    {
+        const bool success = game && game->TeardownNativeWorldContent();
+        g_pCore->GetConsole()->Printf("[NativeWorldDrain] state=%s mutation=teardown", success ? "detached" : "refused");
+        return;
+    }
     if (operation != "begin")
     {
-        g_pCore->GetConsole()->Print("nativeworlddrain: syntax: nativeworlddrain [status|begin]");
+        g_pCore->GetConsole()->Print("nativeworlddrain: syntax: nativeworlddrain [status|begin|teardown]");
         return;
     }
 

@@ -23,6 +23,8 @@ namespace
     constexpr const char* FEATURE_ENVIRONMENT = "MTA_NATIVE_BW_MODEL_STORES";
     constexpr DWORD       EXPECTED_IMAGE_BASE = 0x00400000;
     constexpr DWORD       OVERFLOW_EXIT_CODE = 0x4D54414E;  // "MTAN"
+    constexpr DWORD       TEARDOWN_EXIT_CODE = 0x4D544154;  // "MTAT"
+    constexpr DWORD       MODEL_INFO_SHUTDOWN = 0x004C4D50;
 
     struct SExecutableIdentity
     {
@@ -618,6 +620,14 @@ namespace
             Sleep(INFINITE);
     }
 
+    __declspec(noreturn) void FailOwnedTailTeardown(const char* reason)
+    {
+        DebugLog("[NativeWorld] FATAL: model-store owned-tail teardown failed after its irreversible boundary detail=%s", reason);
+        TerminateProcess(GetCurrentProcess(), TEARDOWN_EXIT_CODE);
+        for (;;)
+            Sleep(INFINITE);
+    }
+
     void* AddModelChecked(EStoreKind kind, int modelId, DWORD originalFunction)
     {
         using AddModel = void*(__cdecl*)(int);
@@ -919,6 +929,53 @@ bool CNativeModelStoreSA::ValidateOwnedTail(const SNativeModelStoreTailSnapshotS
     {
         error = "native model-store ownership does not cover every recorded store tail";
         return false;
+    }
+    return true;
+}
+
+bool CNativeModelStoreSA::ShutdownAndRewindOwnedTail(const SNativeModelStoreTailSnapshotSA& snapshot, std::string& error)
+{
+    if (!ValidateOwnedTail(snapshot, error))
+        return false;
+
+    // A referenced or resident model must be detached by the generation drain
+    // before this API is called. Check every object up front so all ordinary
+    // failures remain on the reversible side of the first virtual Shutdown.
+    for (const SNativeModelStoreOwnedEntrySA& entry : snapshot.entries)
+    {
+        if (entry.model->usNumberOfRefs != 0 || entry.model->pRwObject != nullptr)
+        {
+            error = SString("native model-store owned tail is not quiescent kind=%u index=%u refs=%u rw=%p", static_cast<unsigned int>(entry.kind), entry.index,
+                            entry.model->usNumberOfRefs, entry.model->pRwObject);
+            return false;
+        }
+        if (entry.model->VFTBL->Shutdown != MODEL_INFO_SHUTDOWN)
+        {
+            error = SString("native model-store owned tail has an unexpected Shutdown routine kind=%u index=%u actual=0x%08X expected=0x%08X",
+                            static_cast<unsigned int>(entry.kind), entry.index, entry.model->VFTBL->Shutdown, MODEL_INFO_SHUTDOWN);
+            return false;
+        }
+    }
+
+    using Shutdown = void(__thiscall*)(CBaseModelInfoSAInterface*);
+    for (auto entry = snapshot.entries.rbegin(); entry != snapshot.entries.rend(); ++entry)
+    {
+        // Do not call a C++ destructor or delete here. The objects are inline in
+        // process-lifetime CStore storage and GTA reinitialises them when their
+        // rewound slots are appended by a later generation.
+        reinterpret_cast<Shutdown>(entry->model->VFTBL->Shutdown)(entry->model);
+        if (entry->model->usNumberOfRefs != 0 || entry->model->pRwObject != nullptr || entry->model->pColModel != nullptr ||
+            entry->model->usTextureDictionary != 0xFFFF)
+            FailOwnedTailTeardown("ModelInfo Shutdown left a reference, TXD, COL, or RenderWare object");
+    }
+
+    for (const SStoreDefinition& definition : STORE_DEFINITIONS)
+        GetState(definition.kind).store->count = GetCount(snapshot.before, definition.kind);
+
+    for (const SStoreDefinition& definition : STORE_DEFINITIONS)
+    {
+        if (GetState(definition.kind).store->count != GetCount(snapshot.before, definition.kind))
+            FailOwnedTailTeardown("relocated CStore count rewind did not persist");
     }
     return true;
 }

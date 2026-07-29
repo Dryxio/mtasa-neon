@@ -203,6 +203,10 @@ public:
     // GTA. Status probes must not turn into hidden teardown work.
     static bool IsRuntimeDrainQuiescent();
 
+    // Destroys only the committed format-3 content generation after the
+    // quiescence preflight. Process-wide relocated stores and buffers remain.
+    static bool TeardownRuntimeContent();
+
     // Samples the process-wide substrate and generation-owned native state.
     // This is intentionally read-only: later hot-unload checkpoints will use
     // the same contract as their commit fence instead of inventing new checks.

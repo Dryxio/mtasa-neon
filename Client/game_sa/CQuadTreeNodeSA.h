@@ -18,8 +18,9 @@ template <class T>
 class CQuadTreeNodesSAInterface
 {
 public:
-    void RemoveAllItems();
-    char AddItem(T* item, CRect* boudingBox);
+    void   RemoveAllItems();
+    char   AddItem(T* item, CRect* boudingBox);
+    size_t CountItemOccurrences(const T* item) const;
 
 private:
     float                            m_fX;
@@ -58,3 +59,18 @@ char CQuadTreeNodesSAInterface<T>::AddItem(T* item, CRect* boudingBox)
     typedef char(__thiscall * CQuadTreeNode_AddItem_t)(CQuadTreeNodesSAInterface*, void*, CRect*);
     return ((CQuadTreeNode_AddItem_t)(0x552CD0))(this, item, boudingBox);
 };
+
+template <class T>
+size_t CQuadTreeNodesSAInterface<T>::CountItemOccurrences(const T* item) const
+{
+    size_t occurrences = m_pItemList.CountItemOccurrences(item);
+    if (m_level)
+    {
+        for (const CQuadTreeNodesSAInterface<T>* child : m_childrens)
+        {
+            if (child)
+                occurrences += child->CountItemOccurrences(item);
+        }
+    }
+    return occurrences;
+}

@@ -878,6 +878,11 @@ bool CGameSA::IsNativeWorldDrainQuiescent() const
     return CNativeWorldPackManagerSA::IsRuntimeDrainQuiescent();
 }
 
+bool CGameSA::TeardownNativeWorldContent()
+{
+    return CNativeWorldPackManagerSA::TeardownRuntimeContent();
+}
+
 eGameVersion CGameSA::FindGameVersion()
 {
     unsigned char ucA = *reinterpret_cast<unsigned char*>(0x748ADD);

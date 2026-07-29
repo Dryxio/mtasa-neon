@@ -96,6 +96,27 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("RevokeDetachedNativeWorldStartupAuthorization", manager)
         self.assertIn("NativeWorldAuthorizationStore::Revoke(authorization, contentId)", core)
 
+    def test_v3_teardown_normalizes_only_proved_streaming_lifecycle_flags(self) -> None:
+        source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        validation = source[
+            source.index("bool ValidateStaticWorldV3StreamingOwnership")
+            : source.index("bool RestoreStaticWorldV3StreamingBindings")
+        ]
+        normalization = validation[validation.index("bool NormalizeStaticWorldV3StreamingLifecycle") :]
+        self.assertIn("STREAMING_LIFECYCLE_FLAG_MASK = 0x3F", validation)
+        self.assertIn("ValidateStaticWorldV3StreamingOwnership(error, true)", normalization)
+        self.assertIn("GetStreamingInfo(binding.fileId)->flg = 0", normalization)
+        self.assertIn("ValidateStaticWorldV3StreamingOwnership(error, false)", normalization)
+        self.assertLess(
+            normalization.index("ValidateStaticWorldV3StreamingOwnership(error, true)"),
+            normalization.index("GetStreamingInfo(binding.fileId)->flg = 0"),
+        )
+        for immutable_write in ("->archiveId =", "->offsetInBlocks =", "->sizeInBlocks =", "->nextInImg ="):
+            self.assertNotIn(immutable_write, normalization)
+        self.assertIn("actualOffset=%u", validation)
+        teardown = source[source.index("bool CNativeWorldPackManagerSA::TeardownRuntimeContent()") :]
+        self.assertIn("NormalizeStaticWorldV3StreamingLifecycle(error)", teardown)
+
     def test_server_cannot_start_native_world_transport_without_client_files(self) -> None:
         resource = (REPOSITORY / "Server/mods/deathmatch/logic/CResource.cpp").read_text(encoding="utf-8")
         packet = (REPOSITORY / "Server/mods/deathmatch/logic/packets/CResourceStartPacket.cpp").read_text(encoding="utf-8")
@@ -106,7 +127,8 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         function = source[source.index("unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks") :]
         function = function[: function.index("void CNativeWorldPackManagerSA::LogStreamingBufferClamp")]
-        self.assertIn("g_staticWorldV3Route ? g_staticWorldV3LargestEntryBlocks : Pack().largestImgEntryBlocks", function)
+        self.assertIn("unsigned int largestEntryBlocks = g_staticWorldV3LargestEntryBlocks", function)
+        self.assertIn("largestEntryBlocks = Pack().largestImgEntryBlocks", function)
         self.assertIn("perChannelBlocks = (largestEntryBlocks + 1) & ~uint64_t{1}", function)
         self.assertIn("totalBlocks = perChannelBlocks * 2", function)
         self.assertIn("totalBlocks > std::numeric_limits<unsigned int>::max()", function)

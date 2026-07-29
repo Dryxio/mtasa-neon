@@ -33,6 +33,7 @@ struct CArchiveInfo
     BYTE  bUnused[3];
     DWORD uiStreamHandleId{};
 };
+static_assert(sizeof(CArchiveInfo) == 0x30, "Invalid CArchiveInfo size");
 
 struct SGtaStream
 {
@@ -54,6 +55,7 @@ struct SStreamName
 {
     char szName[64];
 };
+static_assert(sizeof(SStreamName) == 0x40, "Invalid SStreamName size");
 
 struct SStreamingLifecycleTelemetrySA
 {
@@ -92,6 +94,41 @@ struct SStreamingArchiveAllocationSA
     unsigned char streamHandleId{};
 };
 
+struct SStreamingArchiveCapacitySA
+{
+    size_t archiveCapacity{};
+    size_t streamHandleCapacity{};
+    size_t streamNameCapacity{};
+};
+
+struct SStreamingArchiveFileIdentitySA
+{
+    DWORD volumeSerialNumber{};
+    DWORD fileIndexHigh{};
+    DWORD fileIndexLow{};
+    DWORD fileSizeHigh{};
+    DWORD fileSizeLow{};
+};
+
+// An archive allocation crosses two independently relocated GTA tables. Keep
+// both sides of that mutation so runtime teardown never has to infer which OS
+// handle is owned from a descriptor that may have drifted since registration.
+struct SStreamingArchiveOwnershipSA
+{
+    SStreamingArchiveAllocationSA   allocation{};
+    SStreamingArchiveCapacitySA     capacityBefore{};
+    SStreamingArchiveCapacitySA     capacitySealed{};
+    CArchiveInfo                    archiveBefore{};
+    CArchiveInfo                    archiveSealed{};
+    SStreamName                     streamNameBefore{};
+    SStreamName                     streamNameSealed{};
+    HANDLE                          streamHandleBefore{};
+    HANDLE                          streamHandleSealed{};
+    SStreamingArchiveFileIdentitySA fileIdentity{};
+    std::uint64_t                   sealHash{};
+    bool                            sealed{};
+};
+
 class CStreamingSA final : public CStreaming
 {
 public:
@@ -116,8 +153,13 @@ public:
     SStreamingLifecycleTelemetrySA GetLifecycleTelemetry() const;
     bool                           PlanArchiveAllocations(size_t count, std::vector<SStreamingArchiveAllocationSA>& plan, std::string& error) const;
     bool                           ArchiveMatchesAllocation(const SStreamingArchiveAllocationSA& allocation) const;
-    bool                           SetStreamingBufferSize(uint32 uiSize);
-    uint32                         GetStreamingBufferSize() { return ms_streamingHalfOfBufferSizeBlocks * 2048 * 2; };  // In bytes
+    bool CaptureArchiveAllocationOwnership(const SStreamingArchiveAllocationSA& allocation, SStreamingArchiveOwnershipSA& ownership, std::string& error) const;
+    bool SealArchiveAllocationOwnership(SStreamingArchiveOwnershipSA& ownership, std::string& error) const;
+    bool ValidateArchiveAllocationOwnership(const SStreamingArchiveOwnershipSA& ownership, std::string& error) const;
+    bool ValidateArchiveAllocationOwnershipBatch(const std::vector<SStreamingArchiveOwnershipSA>& ownerships, std::string& error) const;
+    bool RemoveArchiveAllocationsCheckedReverse(const std::vector<SStreamingArchiveOwnershipSA>& ownerships, std::string& error);
+    bool SetStreamingBufferSize(uint32 uiSize);
+    uint32 GetStreamingBufferSize() { return ms_streamingHalfOfBufferSizeBlocks * 2048 * 2; };  // In bytes
 
     void          MakeSpaceFor(std::uint32_t memoryToCleanInBytes) override;
     std::uint32_t GetMemoryUsed() const override;

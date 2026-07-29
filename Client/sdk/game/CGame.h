@@ -411,4 +411,9 @@ public:
     // downloaded Lua resources.
     virtual bool BeginNativeWorldDrain() = 0;
     virtual bool IsNativeWorldDrainQuiescent() const = 0;
+
+    // Removes the generation-owned native catalog only after the drain fence
+    // has proved that no streamer, entity, or RenderWare object can retain it.
+    // This remains a local lifecycle primitive and is not exposed to Lua.
+    virtual bool TeardownNativeWorldContent() = 0;
 };

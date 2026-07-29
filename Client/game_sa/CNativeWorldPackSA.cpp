@@ -25,8 +25,10 @@
 #include "CObjectSA.h"
 #include "CPtrNodeSingleLinkPoolSA.h"
 #include "CPoolSAInterface.h"
+#include "CQuadTreeNodeSA.h"
 #include "CStreamingSA.h"
 #include "CTextureDictonarySA.h"
+#include "gamesa_renderware.h"
 #include "SharedUtil.File.h"
 #include "SharedUtil.Hash.h"
 #include "SharedUtil.Misc.h"
@@ -39,6 +41,7 @@
 #include <limits>
 #include <mutex>
 #include <sstream>
+#include <tuple>
 #include <unordered_set>
 
 extern CGameSA*        pGame;
@@ -68,8 +71,11 @@ namespace
     constexpr DWORD        ADD_IPL_SLOT = 0x405AC0;
     constexpr DWORD        LOAD_COL_BUFFER = 0x4106D0;
     constexpr DWORD        REMOVE_COL = 0x410730;
+    constexpr DWORD        REMOVE_COL_SLOT = 0x411330;
     constexpr DWORD        LOAD_IPL_BUFFER = 0x406080;
     constexpr DWORD        REMOVE_IPL = 0x404B20;
+    constexpr DWORD        REMOVE_IPL_SLOT = 0x405B60;
+    constexpr DWORD        REMOVE_TXD_SLOT = 0x731CD0;
     constexpr DWORD        LOAD_COL_BUFFER_CALL = 0x40C989;
     constexpr DWORD        LOAD_IPL_BUFFER_CALL = 0x40C9DA;
     constexpr BYTE         LOAD_COL_BUFFER_CALL_BYTES[] = {0xE8, 0x42, 0x3D, 0x00, 0x00};
@@ -299,8 +305,9 @@ namespace
     struct SColDef
     {
         CRect rect;
-        // CColStore::AddColSlot does not initialize these bytes. They are not
-        // a name and must never be inspected as a C string.
+        // The retail AddColSlot path does not give these bytes a stable
+        // identity. They can contain pre-existing pool storage and must never
+        // be read as a C string when proving generation ownership.
         char           reserved[18];
         short          firstModel;
         short          lastModel;
@@ -360,6 +367,8 @@ namespace
         Registering,
         Active,
         Draining,
+        TearingDown,
+        Detached,
         Refused,
     };
 
@@ -380,10 +389,11 @@ namespace
 
     struct SStaticWorldV3StreamingBinding
     {
-        unsigned int  fileId{};
-        unsigned char archiveId{};
-        SImgEntry     entry{};
-        unsigned int  nextInImg{0xFFFF};
+        unsigned int   fileId{};
+        unsigned char  archiveId{};
+        SImgEntry      entry{};
+        unsigned int   nextInImg{0xFFFF};
+        CStreamingInfo original{};
     };
 
     CStreamingSA*                                        g_streaming = nullptr;
@@ -531,6 +541,10 @@ namespace
                 return "active";
             case EState::Draining:
                 return "draining";
+            case EState::TearingDown:
+                return "tearing-down";
+            case EState::Detached:
+                return "detached";
             case EState::Refused:
                 return "refused";
         }
@@ -542,7 +556,7 @@ namespace
         // Draining is already past the registrar's commit barrier. Treating it
         // like a reversible startup state could release leases underneath the
         // generation whose catalog and physical slots are still installed.
-        return state == EState::Active || state == EState::Draining;
+        return state == EState::Active || state == EState::Draining || state == EState::TearingDown || state == EState::Detached;
     }
 
     const char* LodStateName(EStaticWorldV3LodState state)
@@ -1530,7 +1544,7 @@ namespace
             }
             unsigned int id = 0, meshCount = 0, flags = 0, timeOn = 0, timeOff = 0;
             const bool   timedValid = section != ESection::TimedObjects || (ParseUnsigned(fields[6], timeOn) && ParseUnsigned(fields[7], timeOff) &&
-                                                                          timeOn <= 23 && timeOff <= 23 && timeOn != timeOff);
+                                                                            timeOn <= 23 && timeOff <= 23 && timeOn != timeOff);
             if (!ParseUnsigned(fields[0], id) || id < STATIC_WORLD_V3_FIRST_CUSTOM_MODEL || id > STATIC_WORLD_V3_LAST_MODEL ||
                 !ParseUnsigned(fields[3], meshCount) || meshCount != 1 || !ParseFinitePositiveFloat(fields[4]) || !ParseUnsigned(fields[5], flags) ||
                 flags > 0x007FFFFF || !timedValid || !plan.modelIds.insert(id).second)
@@ -1890,7 +1904,7 @@ namespace
             unsigned int timeOn = 0;
             unsigned int timeOff = 0;
             const bool   timedFieldsValid = section != ESection::TimedObjects || (ParseUnsigned(fields[6], timeOn) && ParseUnsigned(fields[7], timeOff) &&
-                                                                                timeOn <= 23 && timeOff <= 23 && timeOn != timeOff);
+                                                                                  timeOn <= 23 && timeOff <= 23 && timeOn != timeOff);
             if (!ParseUnsigned(fields[0], id) || !ParseUnsigned(fields[3], meshCount) || meshCount != 1 || !ParseFinitePositiveFloat(fields[4]) ||
                 !ParseUnsigned(fields[5], flags) || flags > 0x007FFFFF || !timedFieldsValid || id > g_policy->maximumModelId ||
                 !plan.modelIds.insert(id).second || !IsSafeIdeStem(fields[1]) || !IsSafeIdeStem(fields[2]))
@@ -2385,8 +2399,8 @@ namespace
         SImgHeader    header{};
         DWORD         read = 0;
         const bool    validHeader = GetFileSizeEx(file, &fileSize) && ReadFile(file, &header, sizeof(header), &read, nullptr) && read == sizeof(header) &&
-                                 memcmp(header.magic, "VER2", 4) == 0 && header.count > 0 && header.count <= g_policy->maximumImgEntries &&
-                                 fileSize.QuadPart == g_manifest.imgBytes && fileSize.QuadPart % 2048 == 0;
+                                    memcmp(header.magic, "VER2", 4) == 0 && header.count > 0 && header.count <= g_policy->maximumImgEntries &&
+                                    fileSize.QuadPart == g_manifest.imgBytes && fileSize.QuadPart % 2048 == 0;
         if (!validHeader)
         {
             CloseHandle(file);
@@ -3544,6 +3558,7 @@ namespace
     {
         unsigned int               physicalId{};
         CBaseModelInfoSAInterface* model{};
+        unsigned short             txdSlot{};
     };
 
     struct SStaticWorldV3PoolAllocationJournal
@@ -3553,37 +3568,43 @@ namespace
             unsigned int                 slot{};
             CTextureDictonarySAInterface object{};
             unsigned char                flag{};
+            unsigned char                installedFlag{};
+            unsigned int                 installedHash{};
         };
         struct SCol
         {
             unsigned int  slot{};
             SColDef       object{};
             unsigned char flag{};
+            unsigned char installedFlag{};
         };
         struct SIpl
         {
             unsigned int    slot{};
             CIplSAInterface object{};
             unsigned char   flag{};
+            unsigned char   installedFlag{};
+            std::string     installedName;
+            bool            hiddenLodOwner{};
         };
 
-        int                        txdFirstFree{};
-        int                        colFirstFree{};
-        int                        iplFirstFree{};
-        int                        txdFindCache{};
-        unsigned int               atomicUsed{};
-        unsigned int               damageUsed{};
-        unsigned int               timedUsed{};
-        std::vector<BYTE>          txdObjects;
-        std::vector<BYTE>          txdFlags;
-        std::vector<BYTE>          colObjects;
-        std::vector<BYTE>          colFlags;
-        std::vector<BYTE>          iplObjects;
-        std::vector<BYTE>          iplFlags;
-        std::vector<STxd>          txds;
-        std::vector<SCol>          cols;
-        std::vector<SIpl>          ipls;
-        std::vector<unsigned char> archives;
+        int                                       txdFirstFree{};
+        int                                       colFirstFree{};
+        int                                       iplFirstFree{};
+        int                                       txdFindCache{};
+        unsigned int                              atomicUsed{};
+        unsigned int                              damageUsed{};
+        unsigned int                              timedUsed{};
+        std::vector<BYTE>                         txdObjects;
+        std::vector<BYTE>                         txdFlags;
+        std::vector<BYTE>                         colObjects;
+        std::vector<BYTE>                         colFlags;
+        std::vector<BYTE>                         iplObjects;
+        std::vector<BYTE>                         iplFlags;
+        std::vector<STxd>                         txds;
+        std::vector<SCol>                         cols;
+        std::vector<SIpl>                         ipls;
+        std::vector<SStreamingArchiveOwnershipSA> archives;
         // Model stores append objects contiguously. Preserve their exact
         // construction order so a later teardown checkpoint can validate and
         // unwind only the generation-owned tail in reverse.
@@ -3601,10 +3622,11 @@ namespace
         std::vector<SStaticWorldV3PoolAllocationJournal::STxd> txds;
         std::vector<SStaticWorldV3PoolAllocationJournal::SCol> cols;
         std::vector<SStaticWorldV3PoolAllocationJournal::SIpl> ipls;
-        std::vector<unsigned char>                             archives;
+        std::vector<SStreamingArchiveOwnershipSA>              archives;
         std::vector<SStaticWorldV3StreamingBinding>            bindings;
         std::vector<SStaticWorldV3ModelOwnership>              models;
         std::vector<CNativeWorldCacheCommittedLeaseSA>         cacheLeases;
+        std::vector<RwTexDictionary*>                          loadedTxdDictionaries;
     };
 
     // This object is intentionally retained after registration. The
@@ -3615,6 +3637,7 @@ namespace
 
     const SBinaryIplInstance& GetStaticWorldV3Instance(const SStaticWorldV3RuntimePack& pack, unsigned int ordinal);
     void __cdecl              CompleteStaticWorldV3BoundingBootstrap();
+    bool                      NormalizeStaticWorldV3RenderWareTxdGlobals(std::string& error);
 
     bool ValidateStaticWorldV3LodProfile(std::string& error)
     {
@@ -4176,8 +4199,9 @@ namespace
         colPool->m_nFirstFree = journal.colFirstFree;
         iplPool->m_nFirstFree = journal.iplFirstFree;
         *reinterpret_cast<int*>(TXD_FIND_CACHE) = journal.txdFindCache;
-        for (auto archive = journal.archives.rbegin(); archive != journal.archives.rend(); ++archive)
-            g_streaming->RemoveArchive(*archive);
+        std::string archiveError;
+        if (!journal.archives.empty() && !g_streaming->RemoveArchiveAllocationsCheckedReverse(journal.archives, archiveError))
+            Fatal(archiveError.c_str());
     }
 
     SStaticWorldV3RuntimeDemand CalculateStaticWorldV3RuntimeDemand()
@@ -4437,18 +4461,23 @@ namespace
                 }
                 const SStreamingArchiveAllocationSA& plannedArchive = archiveAllocationPlan[archivePlanIndex++];
                 const std::filesystem::path          imagePath = std::filesystem::path(pack.directory) / image.name;
-                const unsigned char                  archiveId = g_streaming->AddArchive(SharedUtil::FromUTF8(imagePath.string()).c_str());
+                SStreamingArchiveOwnershipSA         archiveOwnership;
+                if (!g_streaming->CaptureArchiveAllocationOwnership(plannedArchive, archiveOwnership, error))
+                    return false;
+                const unsigned char archiveId = g_streaming->AddArchive(SharedUtil::FromUTF8(imagePath.string()).c_str());
                 if (archiveId == INVALID_ARCHIVE_ID)
                 {
                     error = SString("static-world-v3 AddArchive failed for %s", image.name.c_str());
                     return false;
                 }
-                journal.archives.push_back(archiveId);
-                if (archiveId != plannedArchive.archiveId || !g_streaming->ArchiveMatchesAllocation(plannedArchive))
+                if (archiveId != plannedArchive.archiveId || !g_streaming->ArchiveMatchesAllocation(plannedArchive) ||
+                    !g_streaming->SealArchiveAllocationOwnership(archiveOwnership, error))
                 {
+                    g_streaming->RemoveArchive(archiveId);
                     error = SString("static-world-v3 AddArchive drifted from its runtime plan for %s", image.name.c_str());
                     return false;
                 }
+                journal.archives.push_back(std::move(archiveOwnership));
                 pack.archiveIds.emplace(imagePath, archiveId);
             }
         if (archivePlanIndex != archiveAllocationPlan.size())
@@ -4489,6 +4518,8 @@ namespace
                     error = SString("static-world-v3 TXD allocation drifted name=%s expected=%d actual=%d", txd.c_str(), predicted, slot);
                     return false;
                 }
+                journal.txds.back().installedFlag = reinterpret_cast<unsigned char*>(txdPool->m_byteMap)[slot];
+                journal.txds.back().installedHash = txdPool->GetObject(slot)->hash;
                 pack.txdSlots.emplace(txd, static_cast<unsigned int>(slot));
             }
             for (const std::string& col : pack.inventory.colStems)
@@ -4512,6 +4543,7 @@ namespace
                     error = SString("static-world-v3 COL allocation drifted name=%s expected=%d actual=%d", col.c_str(), predicted, slot);
                     return false;
                 }
+                journal.cols.back().installedFlag = reinterpret_cast<unsigned char*>(colPool->m_byteMap)[slot];
                 pack.colSlots.emplace(col, static_cast<unsigned int>(slot));
                 g_staticWorldV3ColOwners.emplace(static_cast<unsigned int>(slot), &pack - g_staticWorldV3Packs.data());
             }
@@ -4537,6 +4569,8 @@ namespace
                     error = SString("static-world-v3 IPL allocation drifted name=%s expected=%d actual=%d", ipl.c_str(), predicted, slot);
                     return false;
                 }
+                journal.ipls.back().installedFlag = reinterpret_cast<unsigned char*>(iplPool->m_byteMap)[slot];
+                journal.ipls.back().installedName = ipl;
                 pack.iplSlots.emplace(ipl, static_cast<unsigned int>(slot));
                 pack.iplGroups.emplace(static_cast<unsigned int>(slot), groupIndex++);
                 g_staticWorldV3IplOwners.emplace(static_cast<unsigned int>(slot), &pack - g_staticWorldV3Packs.data());
@@ -4570,6 +4604,9 @@ namespace
                 error = SString("static-world-v3 hidden LOD owner allocation drifted name=%s expected=%d actual=%d", lodOwnerName.c_str(), predicted, slot);
                 return false;
             }
+            journal.ipls.back().installedFlag = reinterpret_cast<unsigned char*>(iplPool->m_byteMap)[slot];
+            journal.ipls.back().installedName = lodOwnerName;
+            journal.ipls.back().hiddenLodOwner = true;
             pack.lodOwnerIplSlot = static_cast<unsigned int>(slot);
             CIplSAInterface* owner = iplPool->GetObject(slot);
             owner->rect.Reset();
@@ -4597,7 +4634,7 @@ namespace
                 return false;
             }
             largestEntry = std::max(largestEntry, static_cast<unsigned int>(entry->second.entry.size));
-            perArchive[archive->second].push_back({fileId, archive->second, entry->second.entry});
+            perArchive[archive->second].push_back({fileId, archive->second, entry->second.entry, 0xFFFF, *g_streaming->GetStreamingInfo(fileId)});
             return true;
         };
         for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
@@ -4714,7 +4751,7 @@ namespace
                 if (loadedId != static_cast<int>(physicalId) || !model)
                     Fatal("static-world-v3 ModelInfo construction failed after the irreversible barrier");
 
-                journal.models.push_back({physicalId, model});
+                journal.models.push_back({physicalId, model, model->usTextureDictionary});
             }
         }
         if (!crossedBarrier)
@@ -5039,6 +5076,9 @@ namespace
     {
         if (g_staticWorldV3ActivePack < 0)
             return;
+        std::string txdError;
+        if (!NormalizeStaticWorldV3RenderWareTxdGlobals(txdError))
+            Fatal(txdError.c_str());
         const size_t               packIndex = static_cast<size_t>(g_staticWorldV3ActivePack);
         SStaticWorldV3RuntimePack& pack = g_staticWorldV3Packs[packIndex];
         const int                  retiredBank = pack.activeBank;
@@ -5075,6 +5115,8 @@ namespace
         }
         ClearStaticWorldV3ModelBindings(packIndex);
         reinterpret_cast<void(__cdecl*)()>(FLUSH_STREAMING_CHANNELS)();
+        if (!NormalizeStaticWorldV3RenderWareTxdGlobals(txdError))
+            Fatal(txdError.c_str());
         UnbindStaticWorldV3Pack(packIndex);
         g_staticWorldV3ActivePack = -1;
         g_staticWorldV3LodState = EStaticWorldV3LodState::Reserved;
@@ -5193,6 +5235,413 @@ namespace
                 const CIplSAInterface* owner = iplPool->GetObject(pack.lodOwnerIplSlot);
                 if (!owner || !owner->bDisabledStreaming || owner->unk2 || owner->relatedIpl != -1)
                     return false;
+            }
+        }
+        return true;
+    }
+
+    int CountOccupiedColModels()
+    {
+        auto* pool = *reinterpret_cast<CPoolSAInterface<CColModelSAInterface>**>(0xB744A4);
+        if (!pool)
+            return -1;
+        int occupied = 0;
+        for (int index = 0; index < pool->m_nSize; ++index)
+            occupied += pool->IsContains(index);
+        return occupied;
+    }
+
+    bool NormalizeStaticWorldV3RenderWareTxdGlobals(std::string& error)
+    {
+        auto* txdPool = *reinterpret_cast<CPoolSAInterface<CTextureDictonarySAInterface>**>(0xC8800C);
+        if (!txdPool || !g_staticWorldV3CommittedGeneration)
+        {
+            error = "static-world-v3 RenderWare TXD ownership foundation is unavailable";
+            return false;
+        }
+
+        std::unordered_set<RwTexDictionary*> ownedDictionaries(g_staticWorldV3CommittedGeneration->loadedTxdDictionaries.begin(),
+                                                               g_staticWorldV3CommittedGeneration->loadedTxdDictionaries.end());
+        for (const auto& record : g_staticWorldV3CommittedGeneration->txds)
+        {
+            if (RwTexDictionary* dictionary = txdPool->GetObject(record.slot)->rwTexDictonary; dictionary && ownedDictionaries.emplace(dictionary).second)
+            {
+                g_staticWorldV3CommittedGeneration->loadedTxdDictionaries.push_back(dictionary);
+            }
+        }
+
+        // ms_pStoredTxd is CTxdStore's transient push/pop scratch. An owned
+        // value proves an unbalanced native scope, while RenderWare's current
+        // pointer may legitimately retain the last streamed TXD and can be
+        // normalized to a proved occupied foreign dictionary.
+        RwTexDictionary* const storedTxd = *reinterpret_cast<RwTexDictionary**>(0xC88010);
+        if (storedTxd && ownedDictionaries.count(storedTxd))
+        {
+            error = "stored-current-TXD-retains-generation-ownership";
+            return false;
+        }
+        if (RwTexDictionary* currentTxd = RwTexDictionaryGetCurrent(); currentTxd && ownedDictionaries.count(currentTxd))
+        {
+            RwTexDictionary* neutralTxd = nullptr;
+            for (int slot = 0; slot < txdPool->m_nSize && !neutralTxd; ++slot)
+            {
+                if (!txdPool->IsContains(slot))
+                    continue;
+                RwTexDictionary* candidate = txdPool->GetObject(slot)->rwTexDictonary;
+                if (candidate && !ownedDictionaries.count(candidate))
+                    neutralTxd = candidate;
+            }
+            if (!neutralTxd)
+            {
+                error = "no-live-neutral-current-TXD";
+                return false;
+            }
+            RwTexDictionarySetCurrent(neutralTxd);
+            if (RwTexDictionaryGetCurrent() != neutralTxd)
+            {
+                error = "neutral-current-TXD-switch-failed";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ValidateStaticWorldV3PoolOwnership(std::string& error)
+    {
+        auto* txdPool = *reinterpret_cast<CPoolSAInterface<CTextureDictonarySAInterface>**>(0xC8800C);
+        auto* colPool = *reinterpret_cast<CPoolSAInterface<SColDef>**>(0x965560);
+        auto* iplPool = *reinterpret_cast<CPoolSAInterface<CIplSAInterface>**>(0x8E3FB0);
+        if (!txdPool || !colPool || !iplPool || !g_staticWorldV3CommittedGeneration)
+        {
+            error = "static-world-v3 pool ownership foundation is unavailable";
+            return false;
+        }
+
+        std::map<unsigned int, const SStaticWorldV3PoolAllocationJournal::STxd*> txds;
+        std::map<unsigned int, const SStaticWorldV3PoolAllocationJournal::SCol*> cols;
+        std::map<unsigned int, const SStaticWorldV3PoolAllocationJournal::SIpl*> ipls;
+        for (const auto& record : g_staticWorldV3CommittedGeneration->txds)
+            if (!txds.emplace(record.slot, &record).second)
+            {
+                error = "static-world-v3 TXD journal contains a duplicate slot";
+                return false;
+            }
+        for (const auto& record : g_staticWorldV3CommittedGeneration->cols)
+            if (!cols.emplace(record.slot, &record).second)
+            {
+                error = "static-world-v3 COL journal contains a duplicate slot";
+                return false;
+            }
+        for (const auto& record : g_staticWorldV3CommittedGeneration->ipls)
+            if (!ipls.emplace(record.slot, &record).second)
+            {
+                error = "static-world-v3 IPL journal contains a duplicate slot";
+                return false;
+            }
+
+        // A pool flag contains the allocation generation and therefore proves
+        // that a slot was not released and replaced. Tie that native identity
+        // to both registrar-owned catalogs; the opaque bytes in SColDef are
+        // deliberately excluded because retail AddColSlot does not initialize
+        // them as a stable name.
+        std::map<unsigned int, size_t> catalogColOwners;
+        for (size_t packIndex = 0; packIndex < g_staticWorldV3Packs.size(); ++packIndex)
+        {
+            for (const auto& catalogEntry : g_staticWorldV3Packs[packIndex].colSlots)
+            {
+                const unsigned int slot = catalogEntry.second;
+                if (!catalogColOwners.emplace(slot, packIndex).second)
+                {
+                    error = SString("static-world-v3 COL catalog contains a duplicate slot=%u", slot);
+                    return false;
+                }
+            }
+        }
+        if (catalogColOwners.size() != cols.size() || g_staticWorldV3ColOwners.size() != cols.size())
+        {
+            error = "static-world-v3 COL ownership catalogs differ from the committed journal";
+            return false;
+        }
+        for (const auto& owned : cols)
+        {
+            const unsigned int slot = owned.first;
+            const auto         runtimeOwner = g_staticWorldV3ColOwners.find(slot);
+            const auto         catalogOwner = catalogColOwners.find(slot);
+            if (runtimeOwner == g_staticWorldV3ColOwners.end() || catalogOwner == catalogColOwners.end() ||
+                runtimeOwner->second >= g_staticWorldV3Packs.size() || runtimeOwner->second != catalogOwner->second)
+            {
+                error = SString("static-world-v3 COL slot ownership catalog changed slot=%u", slot);
+                return false;
+            }
+        }
+
+        for (int slot = 0; slot < txdPool->m_nSize; ++slot)
+        {
+            const unsigned char flag = reinterpret_cast<const unsigned char*>(txdPool->m_byteMap)[slot];
+            const auto          owned = txds.find(slot);
+            if (owned != txds.end() &&
+                (!txdPool->IsContains(slot) || flag != owned->second->installedFlag || txdPool->GetObject(slot)->hash != owned->second->installedHash ||
+                 txdPool->GetObject(slot)->usUsagesCount != 0 || txdPool->GetObject(slot)->usParentIndex != 0xFFFF))
+            {
+                error = SString("static-world-v3 TXD owned slot identity changed slot=%d", slot);
+                return false;
+            }
+        }
+        for (int slot = 0; slot < colPool->m_nSize; ++slot)
+        {
+            const unsigned char flag = reinterpret_cast<const unsigned char*>(colPool->m_byteMap)[slot];
+            const auto          owned = cols.find(slot);
+            if (owned != cols.end() && (!colPool->IsContains(slot) || flag != owned->second->installedFlag))
+            {
+                error = SString("static-world-v3 COL owned slot identity changed slot=%d", slot);
+                return false;
+            }
+        }
+        for (int slot = 0; slot < iplPool->m_nSize; ++slot)
+        {
+            const unsigned char flag = reinterpret_cast<const unsigned char*>(iplPool->m_byteMap)[slot];
+            const auto          owned = ipls.find(slot);
+            if (owned != ipls.end() && (!iplPool->IsContains(slot) || flag != owned->second->installedFlag ||
+                                        !FixedNameEquals(iplPool->GetObject(slot)->name, owned->second->installedName.c_str())))
+            {
+                error = SString("static-world-v3 IPL owned slot identity changed slot=%d", slot);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ValidateStaticWorldV3ModelOwnership(std::unordered_set<CColModelSAInterface*>& ownedColModels, std::string& error)
+    {
+        if (!g_staticWorldV3CommittedGeneration)
+        {
+            error = "static-world-v3 model ownership journal is unavailable";
+            return false;
+        }
+        std::unordered_set<CBaseModelInfoSAInterface*> ownedModels;
+        for (const SNativeModelStoreOwnedEntrySA& entry : g_staticWorldV3CommittedGeneration->modelStoreTail.entries)
+            ownedModels.emplace(entry.model);
+        if (ownedModels.size() != g_staticWorldV3CommittedGeneration->modelStoreTail.entries.size() ||
+            ownedModels.size() != g_staticWorldV3CommittedGeneration->models.size())
+        {
+            error = "static-world-v3 ModelInfo journals do not describe the same unique owned tail";
+            return false;
+        }
+        std::unordered_set<CBaseModelInfoSAInterface*> recordedModels;
+        std::set<unsigned short>                       ownedTxdSlots;
+        std::set<unsigned int>                         ownedColSlots;
+        for (const auto& txd : g_staticWorldV3CommittedGeneration->txds)
+        {
+            if (txd.slot > std::numeric_limits<unsigned short>::max())
+            {
+                error = "static-world-v3 TXD slot exceeds the ModelInfo field width";
+                return false;
+            }
+            ownedTxdSlots.emplace(static_cast<unsigned short>(txd.slot));
+        }
+        for (const auto& col : g_staticWorldV3CommittedGeneration->cols)
+        {
+            ownedColSlots.emplace(col.slot);
+        }
+        for (const SStaticWorldV3ModelOwnership& record : g_staticWorldV3CommittedGeneration->models)
+        {
+            if (!record.model || !recordedModels.emplace(record.model).second || !ownedModels.count(record.model) || record.model->usNumberOfRefs != 0 ||
+                record.model->pRwObject || record.model->usTextureDictionary != record.txdSlot || !ownedTxdSlots.count(record.txdSlot) ||
+                (record.model->pColModel && !ownedColSlots.count(static_cast<unsigned int>(CFileIDRuntimeSA::GetColModelSlot(record.model->pColModel)))))
+            {
+                error = SString("static-world-v3 ModelInfo ownership or quiescence changed physicalId=%u", record.physicalId);
+                return false;
+            }
+            // GTA's CBaseModelInfo::DeleteCollisionModel owns through the
+            // high flag bit named bIsColLoaded in this interface. The 0x20
+            // bit is used by big-building classification and is not deletion
+            // ownership despite its historical wrapper name.
+            if (record.model->bIsColLoaded && record.model->pColModel)
+            {
+                if (!ownedColModels.emplace(record.model->pColModel).second)
+                {
+                    error = "static-world-v3 multiple ModelInfos claim deletion ownership of one ColModel";
+                    return false;
+                }
+            }
+        }
+        for (unsigned int id = 0; id < pGame->GetBaseIDforTXD(); ++id)
+        {
+            CBaseModelInfoSAInterface* model = CModelInfoSAInterface::ms_modelInfoPtrs[id];
+            if (model &&
+                (ownedModels.count(model) || ownedTxdSlots.count(model->usTextureDictionary) || (model->pColModel && ownedColModels.count(model->pColModel))))
+            {
+                error = SString("foreign ModelInfo references static-world-v3 model, TXD, or ColModel ownership at FileID=%u", id);
+                return false;
+            }
+        }
+        auto* colModelPool = *reinterpret_cast<CPoolSAInterface<CColModelSAInterface>**>(0xB744A4);
+        for (CColModelSAInterface* colModel : ownedColModels)
+            if (!colModelPool || colModelPool->GetObjectIndexSafe(colModel) < 0 || !colModelPool->IsContains(colModelPool->GetObjectIndexSafe(colModel)))
+            {
+                error = "static-world-v3 owned ColModel is outside its native pool";
+                return false;
+            }
+        return true;
+    }
+
+    bool ValidateStaticWorldV3StreamingOwnership(std::string& error, bool allowLifecycleFlags = false)
+    {
+        if (!g_streaming || !g_staticWorldV3CommittedGeneration)
+        {
+            error = "static-world-v3 streaming ownership journal is unavailable";
+            return false;
+        }
+        std::map<unsigned int, const SStaticWorldV3StreamingBinding*>               ownedBindings;
+        std::set<unsigned int>                                                      ownedFileIds;
+        std::set<unsigned char>                                                     ownedArchives;
+        std::map<unsigned int, unsigned short>                                      canonicalNext;
+        std::map<unsigned char, std::vector<const SStaticWorldV3StreamingBinding*>> chains;
+        for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+        {
+            if (!ownedBindings.emplace(binding.fileId, &binding).second)
+            {
+                error = "static-world-v3 streaming journal contains a duplicate FileID";
+                return false;
+            }
+            ownedFileIds.emplace(binding.fileId);
+            ownedArchives.emplace(binding.archiveId);
+            chains[binding.archiveId].push_back(&binding);
+        }
+        for (const SStaticWorldV3ModelOwnership& model : g_staticWorldV3CommittedGeneration->models)
+            ownedFileIds.emplace(model.physicalId);
+        for (auto& [archiveId, chain] : chains)
+        {
+            std::sort(chain.begin(), chain.end(), [](const auto* left, const auto* right)
+                      { return std::tie(left->entry.offset, left->fileId) < std::tie(right->entry.offset, right->fileId); });
+            for (size_t index = 0; index < chain.size(); ++index)
+                canonicalNext[chain[index]->fileId] = static_cast<unsigned short>(index + 1 < chain.size() ? chain[index + 1]->fileId : 0xFFFF);
+        }
+
+        for (unsigned int id = 0; id < pGame->GetCountOfAllFileIDs(); ++id)
+        {
+            const CStreamingInfo* info = g_streaming->GetStreamingInfo(id);
+            if (!info)
+            {
+                error = SString("static-world-v3 streaming table ended before FileID=%u", id);
+                return false;
+            }
+            const auto binding = ownedBindings.find(id);
+            if (binding != ownedBindings.end())
+            {
+                // Retail RequestModel ORs bits 0..5 into m_Flags, while
+                // RemoveModel only unlinks the entry and resets m_LoadState.
+                // In particular, dynamic IPLs retain PRIORITY|KEEP (0x18)
+                // after a legitimate unload. Treat those bits as lifecycle
+                // state, never as archive/FileID ownership.
+                constexpr unsigned char STREAMING_LIFECYCLE_FLAG_MASK = 0x3F;
+                const bool              validFlags = allowLifecycleFlags ? (info->flg & ~STREAMING_LIFECYCLE_FLAG_MASK) == 0 : info->flg == 0;
+                if (info->archiveId != binding->second->archiveId || info->offsetInBlocks != binding->second->entry.offset ||
+                    info->sizeInBlocks != binding->second->entry.size || info->nextInImg != canonicalNext.at(id) || info->prevId != 0xFFFF ||
+                    info->nextId != 0xFFFF || !validFlags || info->loadState != eModelLoadState::LOADSTATE_NOT_LOADED)
+                {
+                    error = SString(
+                        "static-world-v3 owned streaming binding changed FileID=%u expectedArchive=%u actualArchive=%u expectedOffset=%u "
+                        "actualOffset=%u expectedSize=%u actualSize=%u expectedNext=%u actualNext=%u list=%u,%u flags=0x%02X state=%u "
+                        "lifecycleFlags=%s",
+                        id, binding->second->archiveId, info->archiveId, binding->second->entry.offset, info->offsetInBlocks, binding->second->entry.size,
+                        info->sizeInBlocks, canonicalNext.at(id), info->nextInImg, info->prevId, info->nextId, info->flg,
+                        static_cast<unsigned int>(info->loadState), allowLifecycleFlags ? "allowed" : "neutral");
+                    return false;
+                }
+            }
+            else if (ownedFileIds.count(id))
+            {
+                if (!StreamingInfoIsFree(id))
+                {
+                    error = SString("static-world-v3 recyclable model FileID is not empty id=%u", id);
+                    return false;
+                }
+            }
+            else if (ownedFileIds.count(info->nextInImg) || (ownedArchives.count(info->archiveId) && info->sizeInBlocks != 0))
+            {
+                error = SString("foreign streaming entry references static-world-v3 ownership FileID=%u", id);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool NormalizeStaticWorldV3StreamingLifecycle(std::string& error)
+    {
+        // The first pass is deliberately read-only. Never erase a volatile
+        // flag until every immutable binding, canonical IMG edge, foreign
+        // predecessor and list/load postcondition has proved ownership.
+        if (!ValidateStaticWorldV3StreamingOwnership(error, true))
+            return false;
+        for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+            g_streaming->GetStreamingInfo(binding.fileId)->flg = 0;
+        return ValidateStaticWorldV3StreamingOwnership(error, false);
+    }
+
+    bool RestoreStaticWorldV3StreamingBindings(std::string& error)
+    {
+        std::set<unsigned int>  ownedFileIds;
+        std::set<unsigned char> ownedArchives;
+        for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+        {
+            ownedFileIds.emplace(binding.fileId);
+            ownedArchives.emplace(binding.archiveId);
+            g_streaming->GetStreamingInfo(binding.fileId)->nextInImg = 0xFFFF;
+        }
+        for (const SStaticWorldV3ModelOwnership& model : g_staticWorldV3CommittedGeneration->models)
+            ownedFileIds.emplace(model.physicalId);
+        for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+            *g_streaming->GetStreamingInfo(binding.fileId) = binding.original;
+
+        for (unsigned int id = 0; id < pGame->GetCountOfAllFileIDs(); ++id)
+        {
+            const CStreamingInfo* info = g_streaming->GetStreamingInfo(id);
+            if (ownedFileIds.count(info->nextInImg) || (ownedArchives.count(info->archiveId) && info->sizeInBlocks != 0))
+            {
+                // StreamingInfo restoration itself is reversible. Republish
+                // the committed catalog before refusing so Draining remains a
+                // coherent retryable state on this side of the slot boundary.
+                for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+                {
+                    CStreamingInfo* owned = g_streaming->GetStreamingInfo(binding.fileId);
+                    owned->archiveId = binding.archiveId;
+                    owned->offsetInBlocks = binding.entry.offset;
+                    owned->sizeInBlocks = binding.entry.size;
+                    owned->nextInImg = 0xFFFF;
+                }
+                RebuildStaticWorldV3ArchiveChains();
+                error = SString("streaming ownership remained reachable after restoration FileID=%u", id);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ValidateRestoredStaticWorldV3StreamingBindings(std::string& error)
+    {
+        std::set<unsigned int>  ownedFileIds;
+        std::set<unsigned char> ownedArchives;
+        for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+        {
+            ownedFileIds.emplace(binding.fileId);
+            ownedArchives.emplace(binding.archiveId);
+            const CStreamingInfo* info = g_streaming->GetStreamingInfo(binding.fileId);
+            if (!info || memcmp(info, &binding.original, sizeof(*info)) != 0)
+            {
+                error = SString("static-world-v3 restored FileID drifted before journal release id=%u", binding.fileId);
+                return false;
+            }
+        }
+        for (const SStaticWorldV3ModelOwnership& model : g_staticWorldV3CommittedGeneration->models)
+            ownedFileIds.emplace(model.physicalId);
+        for (unsigned int id = 0; id < pGame->GetCountOfAllFileIDs(); ++id)
+        {
+            const CStreamingInfo* info = g_streaming->GetStreamingInfo(id);
+            if (ownedFileIds.count(info->nextInImg) || (ownedArchives.count(info->archiveId) && info->sizeInBlocks != 0))
+            {
+                error = SString("static-world-v3 restored catalog remains externally reachable FileID=%u", id);
+                return false;
             }
         }
         return true;
@@ -6653,6 +7102,19 @@ bool CNativeWorldPackManagerSA::BeginRuntimeDrain()
         return false;
     }
 
+    // Complete any request queued by the last active frame before the first
+    // generation unload. GTA's TXD loader leaves RenderWare's global current
+    // dictionary at the last loaded slot, so capture and normalize it only
+    // after this preflight flush and before Deactivate can drop the last ref.
+    g_streaming->LoadAllRequestedModels(false, "NativeWorldRuntimeDrainPreflight");
+    reinterpret_cast<void(__cdecl*)()>(FLUSH_STREAMING_CHANNELS)();
+    std::string ownershipError;
+    if (!NormalizeStaticWorldV3RenderWareTxdGlobals(ownershipError))
+    {
+        Log("drain=refused reason=%s", ownershipError.c_str());
+        return false;
+    }
+
     // Publish Draining before touching a working set. Every position-driven
     // entry point requires Active, so no new native request or city transition
     // can race the synchronous main-thread fence below.
@@ -6669,7 +7131,6 @@ bool CNativeWorldPackManagerSA::BeginRuntimeDrain()
     g_streaming->LoadAllRequestedModels(false, "NativeWorldRuntimeDrain");
     reinterpret_cast<void(__cdecl*)()>(FLUSH_STREAMING_CHANNELS)();
 
-    std::string ownershipError;
     if (!CNativeModelStoreSA::ValidateOwnedTail(g_staticWorldV3CommittedGeneration->modelStoreTail, ownershipError))
         Fatal(ownershipError.c_str());
 
@@ -6690,6 +7151,268 @@ bool CNativeWorldPackManagerSA::IsRuntimeDrainQuiescent()
     return IsStaticWorldV3DrainQuiescent();
 }
 
+bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
+{
+    if (!g_staticWorldV3Route || g_state != EState::Draining || g_staticWorldV3Transitioning || !g_staticWorldV3CommittedGeneration || !g_streaming ||
+        !IsStaticWorldV3DrainQuiescent())
+    {
+        Log("teardown=refused lifecycle=%s route=%s transition=%s journal=%s quiescent=%s", StateName(g_state), g_staticWorldV3Route ? "format3" : "other",
+            g_staticWorldV3Transitioning ? "busy" : "idle", g_staticWorldV3CommittedGeneration ? "present" : "absent",
+            IsStaticWorldV3DrainQuiescent() ? "yes" : "no");
+        return false;
+    }
+
+    std::string error;
+    if (!NormalizeStaticWorldV3RenderWareTxdGlobals(error))
+    {
+        Log("teardown=refused reason=%s", error.c_str());
+        return false;
+    }
+
+    // Remove residual TXD/COL/IPL requests while their pool definitions and
+    // direct catalog bindings are still intact. This remains reversible: no
+    // pool slot or inline ModelInfo has been destroyed yet.
+    for (const SStaticWorldV3StreamingBinding& binding : g_staticWorldV3CommittedGeneration->bindings)
+        g_streaming->RemoveModel(binding.fileId);
+    g_streaming->LoadAllRequestedModels(false, "NativeWorldRuntimeTeardownPreflight");
+    reinterpret_cast<void(__cdecl*)()>(FLUSH_STREAMING_CHANNELS)();
+    if (!IsStaticWorldV3DrainQuiescent())
+    {
+        Log("teardown=refused reason=streaming-did-not-return-to-quiescence");
+        return false;
+    }
+
+    std::unordered_set<CColModelSAInterface*> ownedColModels;
+    if (!ValidateStaticWorldV3PoolOwnership(error) || !ValidateStaticWorldV3ModelOwnership(ownedColModels, error) ||
+        !NormalizeStaticWorldV3StreamingLifecycle(error) ||
+        !g_streaming->ValidateArchiveAllocationOwnershipBatch(g_staticWorldV3CommittedGeneration->archives, error))
+    {
+        Log("teardown=refused reason=%s", error.c_str());
+        return false;
+    }
+
+    auto*     txdPool = *reinterpret_cast<CPoolSAInterface<CTextureDictonarySAInterface>**>(0xC8800C);
+    auto*     colPool = *reinterpret_cast<CPoolSAInterface<SColDef>**>(0x965560);
+    auto*     iplPool = *reinterpret_cast<CPoolSAInterface<CIplSAInterface>**>(0x8E3FB0);
+    auto*     colTree = *reinterpret_cast<CQuadTreeNodesSAInterface<SColDef>**>(0x96555C);
+    auto*     iplTree = *reinterpret_cast<CQuadTreeNodesSAInterface<CIplSAInterface>**>(0x8E3FAC);
+    const int colModelsBefore = CountOccupiedColModels();
+    if (!txdPool || !colPool || !iplPool || !colTree || !iplTree || colModelsBefore < static_cast<int>(ownedColModels.size()))
+    {
+        Log("teardown=refused reason=native-pool-or-quadtree-foundation-unavailable");
+        return false;
+    }
+
+    // Allocate and order every work list before publishing TearingDown. From
+    // the first native slot removal onward, any mismatch is fail-stop because
+    // RenderWare and quadtree destruction cannot be reconstructed safely.
+    std::vector<const SStaticWorldV3PoolAllocationJournal::SIpl*> iplRemovalOrder;
+    iplRemovalOrder.reserve(g_staticWorldV3CommittedGeneration->ipls.size());
+    for (const auto& record : g_staticWorldV3CommittedGeneration->ipls)
+        iplRemovalOrder.push_back(&record);
+    std::stable_sort(iplRemovalOrder.begin(), iplRemovalOrder.end(),
+                     [](const auto* left, const auto* right) { return left->hiddenLodOwner < right->hiddenLodOwner; });
+    std::array<std::vector<unsigned char>, 3> livePoolFlags;
+    livePoolFlags[0].assign(reinterpret_cast<const unsigned char*>(txdPool->m_byteMap),
+                            reinterpret_cast<const unsigned char*>(txdPool->m_byteMap) + txdPool->m_nSize);
+    livePoolFlags[1].assign(reinterpret_cast<const unsigned char*>(colPool->m_byteMap),
+                            reinterpret_cast<const unsigned char*>(colPool->m_byteMap) + colPool->m_nSize);
+    livePoolFlags[2].assign(reinterpret_cast<const unsigned char*>(iplPool->m_byteMap),
+                            reinterpret_cast<const unsigned char*>(iplPool->m_byteMap) + iplPool->m_nSize);
+    const int                            liveTxdFirstFree = txdPool->m_nFirstFree;
+    const int                            liveColFirstFree = colPool->m_nFirstFree;
+    const int                            liveIplFirstFree = iplPool->m_nFirstFree;
+    const int                            liveTxdFindCache = *reinterpret_cast<const int*>(TXD_FIND_CACHE);
+    const SStreamingLifecycleTelemetrySA liveStreaming = g_streaming->GetLifecycleTelemetry();
+    const size_t                         ownedArchiveCount = g_staticWorldV3CommittedGeneration->archives.size();
+    if (liveStreaming.boundArchives < ownedArchiveCount || liveStreaming.openStreamHandles < ownedArchiveCount)
+    {
+        Log("teardown=refused reason=owned-archive-count-exceeds-live-streaming-state");
+        return false;
+    }
+    std::set<unsigned int>                     ownedTxdSlots;
+    std::set<unsigned int>                     ownedColSlots;
+    std::set<unsigned int>                     ownedIplSlots;
+    const std::unordered_set<RwTexDictionary*> ownedTxdDictionaries(g_staticWorldV3CommittedGeneration->loadedTxdDictionaries.begin(),
+                                                                    g_staticWorldV3CommittedGeneration->loadedTxdDictionaries.end());
+    for (const auto& record : g_staticWorldV3CommittedGeneration->txds)
+        ownedTxdSlots.emplace(record.slot);
+    for (const auto& record : g_staticWorldV3CommittedGeneration->cols)
+        ownedColSlots.emplace(record.slot);
+    for (const auto& record : g_staticWorldV3CommittedGeneration->ipls)
+        ownedIplSlots.emplace(record.slot);
+
+    if (!RestoreStaticWorldV3StreamingBindings(error))
+    {
+        Log("teardown=refused reason=%s", error.c_str());
+        return false;
+    }
+    // At quiescence the native model arena is empty, and restoring the exact
+    // original FileID records removes every generation-owned streaming entry.
+    // Snapshot the deferred stock foundation so destructive cleanup cannot
+    // silently change it before it becomes the next admission baseline.
+    const SNativeWorldLifecycleTelemetry neutralFoundationBefore = ReadNativeWorldLifecycleTelemetry();
+
+    g_staticWorldV3Transitioning = true;
+    g_state = EState::TearingDown;
+    Log("teardown=begin generation=%u boundary=first-native-slot-or-ModelInfo-removal reversible=no",
+        g_staticWorldV3Generation.load(std::memory_order_acquire));
+
+    const auto removeIplSlot = reinterpret_cast<void(__cdecl*)(int)>(REMOVE_IPL_SLOT);
+    for (const auto* record : iplRemovalOrder)
+    {
+        CIplSAInterface* object = iplPool->GetObject(record->slot);
+        removeIplSlot(static_cast<int>(record->slot));
+        if (iplPool->IsContains(record->slot) || iplTree->CountItemOccurrences(object) != 0)
+            Fatal("static-world-v3 IPL slot or quadtree item survived destructive teardown");
+    }
+
+    if (!CNativeModelStoreSA::ShutdownAndRewindOwnedTail(g_staticWorldV3CommittedGeneration->modelStoreTail, error))
+        Fatal(error.c_str());
+    const int colModelsAfter = CountOccupiedColModels();
+    if (colModelsAfter != colModelsBefore - static_cast<int>(ownedColModels.size()))
+        Fatal("static-world-v3 ModelInfo Shutdown did not release the exact owned ColModel set");
+
+    const auto removeColSlot = reinterpret_cast<void(__cdecl*)(int)>(REMOVE_COL_SLOT);
+    for (const auto& record : g_staticWorldV3CommittedGeneration->cols)
+    {
+        SColDef* object = colPool->GetObject(record.slot);
+        removeColSlot(static_cast<int>(record.slot));
+        if (colPool->IsContains(record.slot) || colTree->CountItemOccurrences(object) != 0)
+            Fatal("static-world-v3 COL slot or quadtree item survived destructive teardown");
+    }
+
+    const auto releaseTxd = reinterpret_cast<void(__cdecl*)(unsigned int)>(0x731E90);
+    const auto removeTxdSlot = reinterpret_cast<void(__cdecl*)(int)>(REMOVE_TXD_SLOT);
+    for (const auto& record : g_staticWorldV3CommittedGeneration->txds)
+    {
+        CTextureDictonarySAInterface* txd = txdPool->GetObject(record.slot);
+        if (txd->usUsagesCount != 0)
+            Fatal("static-world-v3 TXD retained ModelInfo references after owned-tail Shutdown");
+        if (txd->rwTexDictonary)
+            releaseTxd(record.slot);
+        if (txd->rwTexDictonary || txd->usUsagesCount != 0 || txd->usParentIndex != 0xFFFF)
+            Fatal("static-world-v3 TXD did not become neutral before slot removal");
+        removeTxdSlot(static_cast<int>(record.slot));
+        if (txdPool->IsContains(record.slot))
+            Fatal("static-world-v3 TXD slot survived destructive teardown");
+    }
+    if (ownedTxdDictionaries.count(RwTexDictionaryGetCurrent()) || ownedTxdDictionaries.count(*reinterpret_cast<RwTexDictionary**>(0xC88010)))
+    {
+        Fatal("static-world-v3 RenderWare global retained a destroyed generation TXD");
+    }
+
+    for (const auto& record : g_staticWorldV3CommittedGeneration->txds)
+    {
+        *txdPool->GetObject(record.slot) = record.object;
+        reinterpret_cast<unsigned char*>(txdPool->m_byteMap)[record.slot] = record.flag;
+    }
+    for (const auto& record : g_staticWorldV3CommittedGeneration->cols)
+    {
+        *colPool->GetObject(record.slot) = record.object;
+        reinterpret_cast<unsigned char*>(colPool->m_byteMap)[record.slot] = record.flag;
+    }
+    for (const auto& record : g_staticWorldV3CommittedGeneration->ipls)
+    {
+        *iplPool->GetObject(record.slot) = record.object;
+        reinterpret_cast<unsigned char*>(iplPool->m_byteMap)[record.slot] = record.flag;
+    }
+    txdPool->m_nFirstFree = liveTxdFirstFree;
+    colPool->m_nFirstFree = liveColFirstFree;
+    iplPool->m_nFirstFree = liveIplFirstFree;
+    *reinterpret_cast<int*>(TXD_FIND_CACHE) =
+        ownedTxdSlots.count(static_cast<unsigned int>(liveTxdFindCache)) ? g_staticWorldV3CommittedGeneration->txdFindCacheBefore : liveTxdFindCache;
+
+    const auto validatePoolFlags =
+        [](const auto* pool, const std::vector<unsigned char>& before, const std::set<unsigned int>& owned, const auto& records, const char* name)
+    {
+        for (int slot = 0; slot < pool->m_nSize; ++slot)
+        {
+            const auto record =
+                std::find_if(records.begin(), records.end(), [slot](const auto& candidate) { return candidate.slot == static_cast<unsigned int>(slot); });
+            unsigned char expected = record == records.end() ? before[slot] : record->flag;
+            if ((owned.count(static_cast<unsigned int>(slot)) != static_cast<size_t>(record != records.end())) ||
+                reinterpret_cast<const unsigned char*>(pool->m_byteMap)[slot] != expected)
+            {
+                const SString reason("static-world-v3 %s pool flag drifted across destructive teardown slot=%d", name, slot);
+                Fatal(reason.c_str());
+            }
+        }
+    };
+    validatePoolFlags(txdPool, livePoolFlags[0], ownedTxdSlots, g_staticWorldV3CommittedGeneration->txds, "TXD");
+    validatePoolFlags(colPool, livePoolFlags[1], ownedColSlots, g_staticWorldV3CommittedGeneration->cols, "COL");
+    validatePoolFlags(iplPool, livePoolFlags[2], ownedIplSlots, g_staticWorldV3CommittedGeneration->ipls, "IPL");
+
+    if (!g_streaming->RemoveArchiveAllocationsCheckedReverse(g_staticWorldV3CommittedGeneration->archives, error))
+        Fatal(error.c_str());
+    for (CNativeWorldCacheCommittedLeaseSA& lease : g_staticWorldV3CommittedGeneration->cacheLeases)
+        if (!lease.ReleaseChecked(error))
+            Fatal(error.c_str());
+    if (!ValidateRestoredStaticWorldV3StreamingBindings(error))
+        Fatal(error.c_str());
+    const SNativeWorldCacheLeaseTelemetrySA releasedCache = GetNativeWorldCacheLeaseTelemetry();
+    if (releasedCache.committedGroups != 0 || releasedCache.processHandles != 0 || releasedCache.pendingHandles != 0)
+        Fatal("static-world-v3 cache handles survived checked generation release");
+
+    g_staticWorldV3PermanentBindings.clear();
+    g_staticWorldV3ModelBindings.clear();
+    g_staticWorldV3ColOwners.clear();
+    g_staticWorldV3IplOwners.clear();
+    g_staticWorldV3PendingBoundingAnchors.clear();
+    g_staticWorldV3Packs.clear();
+    g_staticWorldV3ChildLeases.clear();
+    g_staticWorldV3Set = {};
+    g_staticWorldV3ActivePack = -1;
+    g_staticWorldV3BankOwners = {-1, -1};
+    g_staticWorldV3NextBank = 0;
+    g_staticWorldV3BootstrapBoundsComplete = false;
+    g_staticWorldV3BoundingCleanupGroups = 0;
+    g_staticWorldV3LodState = EStaticWorldV3LodState::Reserved;
+    g_nativeModelSlotsReserved.store(false, std::memory_order_release);
+    g_reservedPackModelFirst.store(0, std::memory_order_release);
+    g_reservedPackModelLast.store(0, std::memory_order_release);
+    g_staticWorldV3CommittedGeneration.reset();
+    g_staticWorldV3Generation.fetch_add(1, std::memory_order_acq_rel);
+
+    // Archive/handle vector growth patches executable pointers and therefore
+    // remains a process foundation. Promote only those empty-table hashes;
+    // every occupied slot and handle count must still match the initial gate.
+    const SNativeWorldLifecycleTelemetry detached = ReadNativeWorldLifecycleTelemetry();
+    if (detached.streaming.boundArchives != liveStreaming.boundArchives - ownedArchiveCount ||
+        detached.streaming.openStreamHandles != liveStreaming.openStreamHandles - ownedArchiveCount)
+        Fatal("static-world-v3 archive teardown did not restore the neutral occupied counts");
+    if (detached.modelPointers != neutralFoundationBefore.modelPointers || detached.streamingEntries != neutralFoundationBefore.streamingEntries)
+        Fatal("static-world-v3 deferred stock foundation changed during destructive teardown");
+    g_nativeWorldNeutralBaseline.boundArchives = detached.streaming.boundArchives;
+    g_nativeWorldNeutralBaseline.openStreamHandles = detached.streaming.openStreamHandles;
+    g_nativeWorldNeutralBaseline.archiveStateHash = detached.streaming.archiveStateHash;
+    g_nativeWorldNeutralBaseline.streamHandleStateHash = detached.streaming.streamHandleStateHash;
+    g_nativeWorldNeutralBaseline.txdFindCache = detached.txdFindCache;
+    // GTA publishes some stock PLAYER.IMG ModelInfos and streaming entries
+    // after the stock-CD-directory baseline. The generation ownership proofs
+    // above have already removed and restored every native-world tail/binding,
+    // so the remaining counts are the surviving non-generation foundation for
+    // the next admission fence. Session-neutral recapture is a later gate.
+    g_nativeWorldNeutralBaseline.modelPointers = detached.modelPointers;
+    g_nativeWorldNeutralBaseline.streamingEntries = detached.streamingEntries;
+    for (size_t index = 0; index < 3; ++index)
+    {
+        g_nativeWorldNeutralBaseline.pools[index] = detached.pools[index];
+        g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].assign(detached.pools[index].flags, detached.pools[index].flags + detached.pools[index].capacity);
+    }
+
+    g_staticWorldV3Transitioning = false;
+    g_state = EState::Detached;
+    const SNativeWorldLifecycleTelemetry finalState = ReadNativeWorldLifecycleTelemetry();
+    LogNativeWorldLifecycleTelemetry("teardown-detached-postcondition", finalState);
+    if (!finalState.contentNeutral || !finalState.admissionBaselineMatches || !finalState.ioQuiescent)
+        Fatal("static-world-v3 detached state failed the neutral content postcondition");
+    Log("teardown=detached generation=%u content-neutral=yes admission-baseline-match=yes io-quiescent=yes cacheLeases=0 bufferFoundation=retained",
+        g_staticWorldV3Generation.load(std::memory_order_acquire));
+    LogNativeWorldLifecycleTelemetry("teardown-detached", finalState);
+    return true;
+}
+
 void CNativeWorldPackManagerSA::LogLifecycleTelemetry(const char* context)
 {
     const SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
@@ -6703,14 +7426,18 @@ void CNativeWorldPackManagerSA::LogLifecycleTelemetry(const char* context)
 
 unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()
 {
-    if (g_state != EState::Active && g_state != EState::Draining)
-        return 0;
+    unsigned int largestEntryBlocks = g_staticWorldV3LargestEntryBlocks;
+    if (!largestEntryBlocks)
+    {
+        if (g_state != EState::Active && g_state != EState::Draining)
+            return 0;
+        largestEntryBlocks = Pack().largestImgEntryBlocks;
+    }
 
     // SetStreamingBufferSize interprets this value as the total allocation and
     // then splits it into two equal channel buffers. Each half must hold the
     // admitted largest entry, so returning only one rounded entry here would
     // silently halve the usable per-channel capacity.
-    const uint64_t largestEntryBlocks = g_staticWorldV3Route ? g_staticWorldV3LargestEntryBlocks : Pack().largestImgEntryBlocks;
     const uint64_t perChannelBlocks = (largestEntryBlocks + 1) & ~uint64_t{1};
     const uint64_t totalBlocks = perChannelBlocks * 2;
     if (totalBlocks > std::numeric_limits<unsigned int>::max())
@@ -6720,6 +7447,6 @@ unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()
 
 void CNativeWorldPackManagerSA::LogStreamingBufferClamp(unsigned int requestedBlocks, unsigned int effectiveBlocks, unsigned int requiredBlocks)
 {
-    if (g_state == EState::Active || g_state == EState::Draining)
+    if (requiredBlocks)
         Log("streamingBuffer=request-clamped requestedBlocks=%u effectiveBlocks=%u requiredBlocks=%u", requestedBlocks, effectiveBlocks, requiredBlocks);
 }

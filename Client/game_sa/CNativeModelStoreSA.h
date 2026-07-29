@@ -75,6 +75,14 @@ public:
     // Shutdown, destructor, count rewind, or other engine mutation.
     static bool ValidateOwnedTail(const SNativeModelStoreTailSnapshotSA& snapshot, std::string& error);
 
+    // Shuts down the exact generation-owned inline-store tail in reverse
+    // allocation order and rewinds all three store counts. Returning false
+    // means validation failed before the first destructive call. Once the
+    // first virtual Shutdown executes, any failed postcondition terminates the
+    // process because the compact ownership snapshot cannot reconstruct the
+    // released RenderWare or collision state.
+    static bool ShutdownAndRewindOwnedTail(const SNativeModelStoreTailSnapshotSA& snapshot, std::string& error);
+
     // Emits read-only occupancy/high-water diagnostics when the opt-in patch is
     // active. It has no command surface and cannot mutate the relocated stores.
     static void LogDiagnostics(const char* context);

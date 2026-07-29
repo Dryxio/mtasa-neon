@@ -80,6 +80,71 @@ namespace
         }
         return hash;
     }
+
+    bool ArchiveCapacitiesEqual(const SStreamingArchiveCapacitySA& left, const SStreamingArchiveCapacitySA& right)
+    {
+        return left.archiveCapacity == right.archiveCapacity && left.streamHandleCapacity == right.streamHandleCapacity &&
+               left.streamNameCapacity == right.streamNameCapacity;
+    }
+
+    bool ArchiveInfoEqual(const CArchiveInfo& left, const CArchiveInfo& right)
+    {
+        return std::memcmp(&left, &right, sizeof(left)) == 0;
+    }
+
+    bool StreamNameEqual(const SStreamName& left, const SStreamName& right)
+    {
+        return std::memcmp(&left, &right, sizeof(left)) == 0;
+    }
+
+    bool CaptureStreamingFileIdentity(HANDLE handle, SStreamingArchiveFileIdentitySA& identity, std::string& error)
+    {
+        if (!handle || handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_DISK)
+        {
+            error = "streaming archive ownership does not reference a disk handle";
+            return false;
+        }
+
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (!GetFileInformationByHandle(handle, &information))
+        {
+            error = "streaming archive ownership file identity is unavailable";
+            return false;
+        }
+
+        identity.volumeSerialNumber = information.dwVolumeSerialNumber;
+        identity.fileIndexHigh = information.nFileIndexHigh;
+        identity.fileIndexLow = information.nFileIndexLow;
+        identity.fileSizeHigh = information.nFileSizeHigh;
+        identity.fileSizeLow = information.nFileSizeLow;
+        return true;
+    }
+
+    bool StreamingFileIdentityEqual(const SStreamingArchiveFileIdentitySA& left, const SStreamingArchiveFileIdentitySA& right)
+    {
+        return left.volumeSerialNumber == right.volumeSerialNumber && left.fileIndexHigh == right.fileIndexHigh && left.fileIndexLow == right.fileIndexLow &&
+               left.fileSizeHigh == right.fileSizeHigh && left.fileSizeLow == right.fileSizeLow;
+    }
+
+    std::uint64_t HashArchiveOwnership(const SStreamingArchiveOwnershipSA& ownership)
+    {
+        std::uint64_t hash = 14695981039346656037ULL;
+        hash = HashTelemetryBytes(hash, &ownership.allocation, sizeof(ownership.allocation));
+        hash = HashTelemetryBytes(hash, &ownership.capacityBefore.archiveCapacity, sizeof(ownership.capacityBefore.archiveCapacity));
+        hash = HashTelemetryBytes(hash, &ownership.capacityBefore.streamHandleCapacity, sizeof(ownership.capacityBefore.streamHandleCapacity));
+        hash = HashTelemetryBytes(hash, &ownership.capacityBefore.streamNameCapacity, sizeof(ownership.capacityBefore.streamNameCapacity));
+        hash = HashTelemetryBytes(hash, &ownership.capacitySealed.archiveCapacity, sizeof(ownership.capacitySealed.archiveCapacity));
+        hash = HashTelemetryBytes(hash, &ownership.capacitySealed.streamHandleCapacity, sizeof(ownership.capacitySealed.streamHandleCapacity));
+        hash = HashTelemetryBytes(hash, &ownership.capacitySealed.streamNameCapacity, sizeof(ownership.capacitySealed.streamNameCapacity));
+        hash = HashTelemetryBytes(hash, &ownership.archiveBefore, sizeof(ownership.archiveBefore));
+        hash = HashTelemetryBytes(hash, &ownership.archiveSealed, sizeof(ownership.archiveSealed));
+        hash = HashTelemetryBytes(hash, &ownership.streamNameBefore, sizeof(ownership.streamNameBefore));
+        hash = HashTelemetryBytes(hash, &ownership.streamNameSealed, sizeof(ownership.streamNameSealed));
+        hash = HashTelemetryBytes(hash, &ownership.streamHandleBefore, sizeof(ownership.streamHandleBefore));
+        hash = HashTelemetryBytes(hash, &ownership.streamHandleSealed, sizeof(ownership.streamHandleSealed));
+        hash = HashTelemetryBytes(hash, &ownership.fileIdentity, sizeof(ownership.fileIdentity));
+        return hash;
+    }
 }  // namespace
 
 bool IsUpgradeModelId(DWORD dwModelID)
@@ -679,6 +744,241 @@ bool CStreamingSA::ArchiveMatchesAllocation(const SStreamingArchiveAllocationSA&
     return allocation.archiveId < m_Imgs.size() && allocation.streamHandleId < m_StreamHandles.size() && allocation.streamHandleId != 0 &&
            m_Imgs[allocation.archiveId].uiStreamHandleId == static_cast<unsigned int>(allocation.streamHandleId) << 24 &&
            m_StreamHandles[allocation.streamHandleId] != nullptr && m_StreamHandles[allocation.streamHandleId] != INVALID_HANDLE_VALUE;
+}
+
+bool CStreamingSA::CaptureArchiveAllocationOwnership(const SStreamingArchiveAllocationSA& allocation, SStreamingArchiveOwnershipSA& ownership,
+                                                     std::string& error) const
+{
+    if (allocation.archiveId < MIN_IMAGES_NUM || allocation.archiveId >= MAX_IMAGES_NUM || allocation.archiveId > m_Imgs.size() ||
+        allocation.streamHandleId == 0 || allocation.streamHandleId >= MAX_STREAMS_NUM || allocation.streamHandleId > m_StreamHandles.size() ||
+        m_Imgs.size() < MIN_IMAGES_NUM || m_Imgs.size() > MAX_IMAGES_NUM || m_StreamHandles.size() != m_StreamNames.size() ||
+        m_StreamHandles.size() > MAX_STREAMS_NUM)
+    {
+        error = "streaming archive ownership capture has an invalid allocation or table foundation";
+        return false;
+    }
+
+    ownership = {};
+    ownership.allocation = allocation;
+    ownership.capacityBefore = {m_Imgs.size(), m_StreamHandles.size(), m_StreamNames.size()};
+    if (allocation.archiveId < m_Imgs.size())
+    {
+        ownership.archiveBefore = m_Imgs[allocation.archiveId];
+        if (ownership.archiveBefore.uiStreamHandleId != 0)
+        {
+            error = SString("streaming archive ownership capture found occupied archive slot %u", allocation.archiveId);
+            return false;
+        }
+    }
+    if (allocation.streamHandleId < m_StreamHandles.size())
+    {
+        ownership.streamHandleBefore = m_StreamHandles[allocation.streamHandleId];
+        ownership.streamNameBefore = m_StreamNames[allocation.streamHandleId];
+        if (ownership.streamHandleBefore != nullptr)
+        {
+            error = SString("streaming archive ownership capture found occupied handle slot %u", allocation.streamHandleId);
+            return false;
+        }
+    }
+
+    const unsigned int encodedHandle = static_cast<unsigned int>(allocation.streamHandleId) << 24;
+    for (const CArchiveInfo& archive : m_Imgs)
+        if (archive.uiStreamHandleId == encodedHandle)
+        {
+            error = SString("streaming archive ownership capture found an existing descriptor for handle slot %u", allocation.streamHandleId);
+            return false;
+        }
+    ownership.sealHash = HashArchiveOwnership(ownership);
+    return true;
+}
+
+bool CStreamingSA::SealArchiveAllocationOwnership(SStreamingArchiveOwnershipSA& ownership, std::string& error) const
+{
+    const SStreamingArchiveAllocationSA& allocation = ownership.allocation;
+    if (ownership.sealed || ownership.sealHash != HashArchiveOwnership(ownership) || allocation.archiveId < MIN_IMAGES_NUM ||
+        allocation.archiveId >= MAX_IMAGES_NUM || allocation.streamHandleId == 0 || allocation.streamHandleId >= MAX_STREAMS_NUM ||
+        ownership.archiveBefore.uiStreamHandleId != 0 || ownership.streamHandleBefore != nullptr || ownership.capacityBefore.archiveCapacity < MIN_IMAGES_NUM ||
+        ownership.capacityBefore.streamHandleCapacity != ownership.capacityBefore.streamNameCapacity ||
+        ownership.capacityBefore.archiveCapacity > MAX_IMAGES_NUM || ownership.capacityBefore.streamHandleCapacity > MAX_STREAMS_NUM)
+    {
+        error = "streaming archive ownership seal has an invalid capture";
+        return false;
+    }
+
+    size_t expectedArchiveCapacity = ownership.capacityBefore.archiveCapacity;
+    if (allocation.archiveId == ownership.capacityBefore.archiveCapacity)
+        expectedArchiveCapacity = std::min(expectedArchiveCapacity + expectedArchiveCapacity * 2 + 1, MAX_IMAGES_NUM);
+    else if (allocation.archiveId > ownership.capacityBefore.archiveCapacity)
+    {
+        error = "streaming archive ownership seal skipped the next archive growth boundary";
+        return false;
+    }
+    const size_t expectedHandleCapacity =
+        Clamp(static_cast<size_t>(VAR_DefaultStreamHandlersMaxCount), expectedArchiveCapacity + RESERVED_STREAMS_NUM, MAX_STREAMS_NUM);
+    if (m_Imgs.size() != expectedArchiveCapacity || m_StreamHandles.size() != expectedHandleCapacity || m_StreamNames.size() != expectedHandleCapacity ||
+        allocation.archiveId >= m_Imgs.size() || allocation.streamHandleId >= m_StreamHandles.size())
+    {
+        error = "streaming archive ownership seal observed unexpected table growth";
+        return false;
+    }
+
+    CArchiveInfo expectedArchive = ownership.archiveBefore;
+    expectedArchive.uiStreamHandleId = static_cast<unsigned int>(allocation.streamHandleId) << 24;
+    const CArchiveInfo& archive = m_Imgs[allocation.archiveId];
+    const HANDLE        handle = m_StreamHandles[allocation.streamHandleId];
+    const SStreamName&  streamName = m_StreamNames[allocation.streamHandleId];
+    if (!ArchiveInfoEqual(archive, expectedArchive) || handle == nullptr || handle == INVALID_HANDLE_VALUE ||
+        !StreamNameEqual(streamName, ownership.streamNameBefore))
+    {
+        error = "streaming archive allocation differs from its captured descriptor, handle, or name slots";
+        return false;
+    }
+
+    const unsigned int encodedHandle = static_cast<unsigned int>(allocation.streamHandleId) << 24;
+    for (size_t archiveId = 0; archiveId < m_Imgs.size(); ++archiveId)
+        if (archiveId != allocation.archiveId && m_Imgs[archiveId].uiStreamHandleId == encodedHandle)
+        {
+            error = "streaming archive allocation aliases its handle from another descriptor";
+            return false;
+        }
+
+    SStreamingArchiveFileIdentitySA identity;
+    if (!CaptureStreamingFileIdentity(handle, identity, error))
+        return false;
+
+    ownership.capacitySealed = {m_Imgs.size(), m_StreamHandles.size(), m_StreamNames.size()};
+    ownership.archiveSealed = archive;
+    ownership.streamNameSealed = streamName;
+    ownership.streamHandleSealed = handle;
+    ownership.fileIdentity = identity;
+    ownership.sealHash = HashArchiveOwnership(ownership);
+    ownership.sealed = true;
+    return true;
+}
+
+bool CStreamingSA::ValidateArchiveAllocationOwnership(const SStreamingArchiveOwnershipSA& ownership, std::string& error) const
+{
+    const SStreamingArchiveAllocationSA& allocation = ownership.allocation;
+    if (!ownership.sealed || ownership.sealHash != HashArchiveOwnership(ownership) || allocation.archiveId < MIN_IMAGES_NUM ||
+        allocation.archiveId >= m_Imgs.size() || allocation.streamHandleId == 0 || allocation.streamHandleId >= m_StreamHandles.size() ||
+        m_Imgs.size() > MAX_IMAGES_NUM || m_StreamHandles.size() != m_StreamNames.size() || m_StreamHandles.size() > MAX_STREAMS_NUM ||
+        ownership.capacitySealed.streamHandleCapacity != ownership.capacitySealed.streamNameCapacity ||
+        ownership.capacitySealed.archiveCapacity > m_Imgs.size() || ownership.capacitySealed.streamHandleCapacity > m_StreamHandles.size() ||
+        ownership.capacitySealed.streamNameCapacity > m_StreamNames.size())
+    {
+        error = "streaming archive ownership validation has an invalid seal or table capacity";
+        return false;
+    }
+    if (!ArchiveInfoEqual(m_Imgs[allocation.archiveId], ownership.archiveSealed) ||
+        m_StreamHandles[allocation.streamHandleId] != ownership.streamHandleSealed ||
+        !StreamNameEqual(m_StreamNames[allocation.streamHandleId], ownership.streamNameSealed))
+    {
+        error = SString("streaming archive ownership drifted for archive slot %u", allocation.archiveId);
+        return false;
+    }
+
+    const unsigned int encodedHandle = static_cast<unsigned int>(allocation.streamHandleId) << 24;
+    if (ownership.archiveSealed.uiStreamHandleId != encodedHandle || ownership.streamHandleSealed == nullptr ||
+        ownership.streamHandleSealed == INVALID_HANDLE_VALUE)
+    {
+        error = "streaming archive ownership seal contains an invalid handle binding";
+        return false;
+    }
+    for (size_t archiveId = 0; archiveId < m_Imgs.size(); ++archiveId)
+        if (archiveId != allocation.archiveId && m_Imgs[archiveId].uiStreamHandleId == encodedHandle)
+        {
+            error = "streaming archive ownership handle became aliased";
+            return false;
+        }
+    for (size_t streamHandleId = 0; streamHandleId < m_StreamHandles.size(); ++streamHandleId)
+        if (streamHandleId != allocation.streamHandleId && m_StreamHandles[streamHandleId] == ownership.streamHandleSealed)
+        {
+            error = "streaming archive ownership OS handle became aliased";
+            return false;
+        }
+
+    SStreamingArchiveFileIdentitySA identity;
+    if (!CaptureStreamingFileIdentity(ownership.streamHandleSealed, identity, error))
+        return false;
+    if (!StreamingFileIdentityEqual(identity, ownership.fileIdentity))
+    {
+        error = "streaming archive ownership handle now references a different file";
+        return false;
+    }
+    return true;
+}
+
+bool CStreamingSA::ValidateArchiveAllocationOwnershipBatch(const std::vector<SStreamingArchiveOwnershipSA>& ownerships, std::string& error) const
+{
+    std::array<bool, MAX_IMAGES_NUM>  archives{};
+    std::array<bool, MAX_STREAMS_NUM> handles{};
+    for (size_t index = 0; index < ownerships.size(); ++index)
+    {
+        const SStreamingArchiveOwnershipSA& ownership = ownerships[index];
+        if (!ValidateArchiveAllocationOwnership(ownership, error))
+            return false;
+        if (archives[ownership.allocation.archiveId] || handles[ownership.allocation.streamHandleId])
+        {
+            error = "streaming archive ownership batch contains a duplicate archive or handle slot";
+            return false;
+        }
+        archives[ownership.allocation.archiveId] = true;
+        handles[ownership.allocation.streamHandleId] = true;
+        if (index != 0 && !ArchiveCapacitiesEqual(ownership.capacityBefore, ownerships[index - 1].capacitySealed))
+        {
+            error = "streaming archive ownership batch was not sealed in allocation order";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool CStreamingSA::RemoveArchiveAllocationsCheckedReverse(const std::vector<SStreamingArchiveOwnershipSA>& ownerships, std::string& error)
+{
+    if (!ValidateArchiveAllocationOwnershipBatch(ownerships, error))
+        return false;
+
+    // Capacity growth relocates GTA's archive pointers and is intentionally a
+    // process-lifetime foundation. Teardown restores every retained slot but
+    // never shrinks these vectors back through live executable operands.
+    const SStreamingArchiveCapacitySA retainedCapacity{m_Imgs.size(), m_StreamHandles.size(), m_StreamNames.size()};
+    for (auto current = ownerships.rbegin(); current != ownerships.rend(); ++current)
+    {
+        const unsigned int archiveId = current->allocation.archiveId;
+        const unsigned int streamHandleId = current->allocation.streamHandleId;
+
+        // Stop future GTA lookups before crossing the irreversible OS-handle
+        // barrier. The caller must already have proved that channels are idle
+        // and no CStreamingInfo still references this archive.
+        m_Imgs[archiveId] = current->archiveBefore;
+        if (!CloseHandle(current->streamHandleSealed))
+        {
+            m_Imgs[archiveId] = current->archiveSealed;
+            error = SString("fatal partial streaming archive teardown failed to close handle slot %u", streamHandleId);
+            return false;
+        }
+        m_StreamHandles[streamHandleId] = current->streamHandleBefore;
+        m_StreamNames[streamHandleId] = current->streamNameBefore;
+    }
+
+    const SStreamingArchiveCapacitySA finalCapacity{m_Imgs.size(), m_StreamHandles.size(), m_StreamNames.size()};
+    if (!ArchiveCapacitiesEqual(finalCapacity, retainedCapacity))
+    {
+        error = "fatal partial streaming archive teardown changed retained table capacity";
+        return false;
+    }
+    for (const SStreamingArchiveOwnershipSA& ownership : ownerships)
+    {
+        const unsigned int archiveId = ownership.allocation.archiveId;
+        const unsigned int streamHandleId = ownership.allocation.streamHandleId;
+        if (!ArchiveInfoEqual(m_Imgs[archiveId], ownership.archiveBefore) || m_StreamHandles[streamHandleId] != ownership.streamHandleBefore ||
+            !StreamNameEqual(m_StreamNames[streamHandleId], ownership.streamNameBefore))
+        {
+            error = "fatal partial streaming archive teardown failed its slot restoration postcondition";
+            return false;
+        }
+    }
+    return true;
 }
 
 bool CStreamingSA::SetStreamingBufferSize(uint32 numBlocks)

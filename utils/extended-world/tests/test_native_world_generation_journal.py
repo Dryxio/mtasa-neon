@@ -35,7 +35,7 @@ class NativeWorldGenerationJournalTests(unittest.TestCase):
             self.source.index("void RegisterStaticWorldV3Set") :
             self.source.index("void RebuildStaticWorldV3ArchiveChains")
         ]
-        self.assertIn("journal.models.push_back({physicalId, model})", registration)
+        self.assertIn("journal.models.push_back({physicalId, model, model->usTextureDictionary})", registration)
         self.assertIn("CNativeModelStoreSA::CaptureOwnedTail", registration)
         self.assertIn("unboundStoreModels.emplace(entry.model)", registration)
         self.assertIn("ownedPhysicalIds.emplace(model.physicalId)", registration)

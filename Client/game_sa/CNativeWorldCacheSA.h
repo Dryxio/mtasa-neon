@@ -90,6 +90,7 @@ public:
     bool   IsValid() const;
     size_t GetHandleCount() const;
     void   Release();
+    bool   ReleaseChecked(std::string& error);
 
 private:
     struct SImpl;

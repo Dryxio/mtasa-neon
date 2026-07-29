@@ -53,7 +53,10 @@ class NativeModelStoreTailOwnershipTests(unittest.TestCase):
         self.assertIn("index) * definition.stride", pointer)
 
     def test_ownership_api_is_read_only_with_respect_to_engine_state(self) -> None:
-        ownership = self.source[self.source.index("bool CNativeModelStoreSA::CaptureOwnedTail") :]
+        ownership = self.source[
+            self.source.index("bool CNativeModelStoreSA::CaptureOwnedTail") :
+            self.source.index("bool CNativeModelStoreSA::ShutdownAndRewindOwnedTail")
+        ]
         for forbidden in ("Shutdown", "VirtualFree", "store->count =", "Destructor", "DeallocateModel"):
             self.assertNotIn(forbidden, ownership)
 

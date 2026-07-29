@@ -349,6 +349,7 @@ public:
     void PrepareNativeWorldStreaming(const CVector& position) override;
     bool BeginNativeWorldDrain() override;
     bool IsNativeWorldDrainQuiescent() const override;
+    bool TeardownNativeWorldContent() override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;

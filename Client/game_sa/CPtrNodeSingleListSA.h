@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 template <class T>
 struct CPtrNodeSingleLink
 {
@@ -21,8 +23,9 @@ template <class T>
 class CPtrNodeSingleListSAInterface
 {
 public:
-    void RemoveItem(T* item);
-    void RemoveAllItems();
+    void   RemoveItem(T* item);
+    void   RemoveAllItems();
+    size_t CountItemOccurrences(const T* item) const;
 
 private:
     CPtrNodeSingleLink<T>* m_pList;
@@ -42,4 +45,16 @@ void CPtrNodeSingleListSAInterface<T>::RemoveAllItems()
     {
         RemoveItem(m_pList->pItem);
     }
+}
+
+template <class T>
+size_t CPtrNodeSingleListSAInterface<T>::CountItemOccurrences(const T* item) const
+{
+    size_t occurrences = 0;
+    for (const CPtrNodeSingleLink<T>* node = m_pList; node; node = node->pNext)
+    {
+        if (node->pItem == item)
+            ++occurrences;
+    }
+    return occurrences;
 }
