@@ -167,7 +167,12 @@ public:
     // Completes selection, claims the one-shot ticket, retains its exact-cache
     // lease, and prepares model stores before GTA population. The pack hook is
     // still deferred until the second server session is verified.
-    static void HandleStartupSelection(eGameVersion gameVersion, const SNativeWorldStartupSelection& selection);
+    static void HandleStartupSelection(eGameVersion gameVersion, const SNativeWorldStartupSelection& selection, bool runtimeAdmission = false);
+
+    // Reuses the process foundation after a detached session reached Neutral.
+    // Unlike startup activation this path commits directly on GTA's main
+    // thread and rebuilds only the new generation's spatial bounds.
+    static bool HandleRuntimeSelection(eGameVersion gameVersion, const SNativeWorldStartupSelection& selection, std::string& error);
 
     static void AttachAuthorizedStreaming(CStreamingSA* streaming);
     static bool VerifyAuthorizedStartupBeforeStartGame();
@@ -210,8 +215,9 @@ public:
     // Detached still owns the authorizing endpoint. Neutral is published only
     // after Core has destroyed Client Deathmatch and passes back the exact
     // immutable startup selection which owns the detached generation.
-    static bool IsRuntimeContentDetached();
-    static bool ReleaseDetachedRuntimeSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error);
+    static bool                                  IsRuntimeContentDetached();
+    static ENativeWorldRuntimeAdmissionReadiness GetRuntimeAdmissionReadiness();
+    static bool                                  ReleaseDetachedRuntimeSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error);
 
     // Samples the process-wide substrate and generation-owned native state.
     // This is intentionally read-only: later hot-unload checkpoints will use

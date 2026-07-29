@@ -51,8 +51,10 @@ public:
     static bool ValidateExecutableAndPatchManifestReadOnly(eGameVersion gameVersion, std::string& error);
 
     // Repeats the executable audit and installs the foundation after an
-    // authorization ticket has been durably claimed. Unlike the developer
-    // route below, this entry point has no environment selector.
+    // authorization ticket has been durably claimed. A later same-process
+    // admission revalidates the exact installed foundation without allocating
+    // or rewriting it. Unlike the developer route below, this entry point has
+    // no environment selector.
     static bool InstallForAuthorizedStartup(eGameVersion gameVersion, std::string& error);
 
     // This must run before GTA calls CModelInfo::Initialise. The process-start

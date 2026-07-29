@@ -677,38 +677,80 @@ bool CResource::VerifyNativeWorldTransportReady()
                 publication.offerId = result.offerId;
                 publication.contentId = result.contentId;
                 authorizationResult = g_pCore->PersistNativeWorldStartupAuthorization(m_nativeWorldTransport.authorizationSnapshot, publication);
+                if (authorizationResult.success)
+                {
+                    const SNativeWorldAuthorizationRecordResult runtimeResult =
+                        g_pCore->TryActivatePublishedNativeWorldRuntime(m_nativeWorldTransport.authorizationSnapshot, publication, authorizationResult);
+                    if (runtimeResult.runtimeAdmissionDeferred)
+                    {
+                        // The immutable authorization is already durable. Keep
+                        // its exact values on the owning resource and retry only
+                        // from the main-thread resource pulse after stock I/O
+                        // reaches the unchanged neutral admission fence.
+                        m_nativeWorldTransport.authorizationRuntimeDeferred = true;
+                        m_nativeWorldTransport.authorizationPublication = publication;
+                        m_nativeWorldTransport.authorizationPersistedResult = authorizationResult;
+                        m_nativeWorldTransport.authorizationRuntimeNextAttempt = std::chrono::steady_clock::now();
+                    }
+                    else if (runtimeResult.runtimeAdmissionAttempted)
+                        authorizationResult = runtimeResult;
+                }
             }
 
-            if (authorizationResult.success)
+            if (m_nativeWorldTransport.authorizationRuntimeDeferred)
             {
-                m_nativeWorldTransport.authorizationRecordPublished = true;
                 m_nativeWorldTransport.authorizationContentId = result.contentId;
+                m_nativeWorldTransport.authorizationRecordPublished = true;
                 const SString authorizationMessage(
-                    "[NativeWorldAuthorization] state=pending resource=%s contentId=%s ticket=%s issued=%llu expires=%llu disposition=%s "
-                    "activation=no lease=no restart-required=yes action=nativeworldauth-restart",
-                    *m_strResourceName, result.contentId.c_str(), authorizationResult.ticketId.substr(0, 8).c_str(), authorizationResult.issuedAt,
-                    authorizationResult.expiresAt,
-                    authorizationResult.attached     ? "attached"
-                    : authorizationResult.idempotent ? "idempotent"
-                                                     : "published");
+                    "[NativeWorldAuthorization] state=runtime-wait resource=%s contentId=%s ticket=%s reason=stock-streaming-io-busy "
+                    "activation=no lease=no restart-required=no",
+                    *m_strResourceName, result.contentId.c_str(), authorizationResult.ticketId.substr(0, 8).c_str());
+                AddReportLog(7473, authorizationMessage);
+                WriteDebugEvent(authorizationMessage);
+                g_pCore->GetConsole()->Printf("%s", *authorizationMessage);
+            }
+            else if (authorizationResult.success)
+            {
+                m_nativeWorldTransport.authorizationContentId = result.contentId;
+                m_nativeWorldTransport.authorizationRecordPublished = !authorizationResult.claimed;
+                const SString authorizationMessage =
+                    authorizationResult.claimed
+                        ? SString(
+                              "[NativeWorldAuthorization] state=runtime-active resource=%s contentId=%s ticket=%s activation=yes lease=process "
+                              "restart-required=no",
+                              *m_strResourceName, result.contentId.c_str(), authorizationResult.ticketId.substr(0, 8).c_str())
+                        : SString(
+                              "[NativeWorldAuthorization] state=pending resource=%s contentId=%s ticket=%s issued=%llu expires=%llu disposition=%s "
+                              "activation=no lease=no restart-required=yes action=nativeworldauth-restart",
+                              *m_strResourceName, result.contentId.c_str(), authorizationResult.ticketId.substr(0, 8).c_str(), authorizationResult.issuedAt,
+                              authorizationResult.expiresAt,
+                              authorizationResult.attached     ? "attached"
+                              : authorizationResult.idempotent ? "idempotent"
+                                                               : "published");
                 AddReportLog(7473, authorizationMessage);
                 WriteDebugEvent(authorizationMessage);
                 g_pCore->GetConsole()->Printf("%s", *authorizationMessage);
             }
             else
             {
-                // A successful pending rename followed by an inconclusive
-                // reopen must remain attached to this resource so an explicit
-                // ResourceStop can retry terminalization under the store lock.
+                // Any terminalization which was not proved durable must remain
+                // attached to this resource so ResourceStop can retry it under
+                // the store lock, including failures before the first rename.
                 if (authorizationResult.publicationAmbiguous)
                 {
                     m_nativeWorldTransport.authorizationPublicationAmbiguous = true;
                     m_nativeWorldTransport.authorizationContentId = result.contentId;
                 }
-                const SString authorizationMessage(
-                    "[NativeWorldAuthorization] state=refused resource=%s contentId=%s reason=%s activation=no lease=no restart-required=no "
-                    "stock-behavior=preserved",
-                    *m_strResourceName, result.contentId.c_str(), authorizationResult.error.c_str());
+                const SString authorizationMessage =
+                    authorizationResult.publicationAmbiguous
+                        ? SString(
+                              "[NativeWorldAuthorization] state=terminalization-ambiguous resource=%s contentId=%s reason=%s activation=no lease=no "
+                              "restart-required=unknown cleanup-pending=yes action=stop-or-clear stock-behavior=preserved",
+                              *m_strResourceName, result.contentId.c_str(), authorizationResult.error.c_str())
+                        : SString(
+                              "[NativeWorldAuthorization] state=refused resource=%s contentId=%s reason=%s activation=no lease=no restart-required=no "
+                              "stock-behavior=preserved",
+                              *m_strResourceName, result.contentId.c_str(), authorizationResult.error.c_str());
                 AddReportLog(7474, authorizationMessage);
                 WriteDebugEvent(authorizationMessage);
                 g_pCore->GetConsole()->Printf("%s", *authorizationMessage);
@@ -716,11 +758,12 @@ bool CResource::VerifyNativeWorldTransportReady()
         }
         const SString message(
             "[NativeWorldTransport] state=cached resource=%s format=%u manifest=%s files=%u offerId=%s contentId=%s disposition=%s directory=%s "
-            "audit=%s publish=atomic activation=no lease=no restart-required=%s",
+            "audit=%s publish=atomic activation=%s lease=%s restart-required=%s",
             *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath,
             static_cast<unsigned int>(m_nativeWorldTransport.files.size()), result.offerId.c_str(), result.contentId.c_str(),
-            result.cacheHit ? "hit" : "published", result.publishedDirectory.c_str(), result.auditProfile.c_str(),
-            m_nativeWorldTransport.authorizationRecordPublished ? "yes" : "no");
+            result.cacheHit ? "hit" : "published", result.publishedDirectory.c_str(), result.auditProfile.c_str(), authorizationResult.claimed ? "yes" : "no",
+            authorizationResult.claimed ? "process" : "no",
+            m_nativeWorldTransport.authorizationRecordPublished && !m_nativeWorldTransport.authorizationRuntimeDeferred ? "yes" : "no");
         AddReportLog(7471, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
@@ -749,6 +792,88 @@ bool CResource::VerifyNativeWorldTransportReady()
     return true;
 }
 
+void CResource::PulseNativeWorldRuntimeAdmission()
+{
+    if (!m_nativeWorldTransport.authorizationRuntimeDeferred || !m_nativeWorldTransport.authorizationSnapshot.present ||
+        !m_nativeWorldTransport.authorizationPublication.success || !m_nativeWorldTransport.authorizationPersistedResult.success ||
+        !m_nativeWorldTransport.cancellation || m_nativeWorldTransport.cancellation->load(std::memory_order_acquire) || !g_pNet || !g_pNet->IsConnected())
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nativeWorldTransport.authorizationRuntimeNextAttempt)
+        return;
+    m_nativeWorldTransport.authorizationRuntimeNextAttempt = now + std::chrono::milliseconds(50);
+
+    const std::time_t wallNow = std::time(nullptr);
+    if (wallNow > 0 && m_nativeWorldTransport.authorizationPersistedResult.expiresAt != 0 &&
+        m_nativeWorldTransport.authorizationPersistedResult.expiresAt <= static_cast<unsigned long long>(wallNow))
+    {
+        const SNativeWorldAuthorizationRecordResult result =
+            g_pCore->RevokeNativeWorldStartupAuthorization(m_nativeWorldTransport.authorizationSnapshot, m_nativeWorldTransport.authorizationContentId);
+        m_nativeWorldTransport.authorizationRuntimeDeferred = false;
+        m_nativeWorldTransport.authorizationRecordPublished = !result.success || result.publicationAmbiguous;
+        m_nativeWorldTransport.authorizationPublicationAmbiguous = !result.success || result.publicationAmbiguous;
+        const SString message(
+            "[NativeWorldAuthorization] state=runtime-expired resource=%s contentId=%s ticket=%s revocation=%s activation=no lease=no "
+            "restart-required=no stock-behavior=preserved",
+            *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(),
+            m_nativeWorldTransport.authorizationPersistedResult.ticketId.substr(0, 8).c_str(), result.success ? "complete" : "ambiguous");
+        AddReportLog(result.success ? 7475 : 7474, message);
+        WriteDebugEvent(message);
+        g_pCore->GetConsole()->Printf("%s", *message);
+        return;
+    }
+
+    const SNativeWorldAuthorizationRecordResult result = g_pCore->TryActivatePublishedNativeWorldRuntime(
+        m_nativeWorldTransport.authorizationSnapshot, m_nativeWorldTransport.authorizationPublication, m_nativeWorldTransport.authorizationPersistedResult);
+    if (result.runtimeAdmissionDeferred)
+        return;
+
+    m_nativeWorldTransport.authorizationRuntimeDeferred = false;
+    if (!result.runtimeAdmissionAttempted)
+    {
+        // A non-I/O invariant changed while waiting. Do not broaden the hot
+        // path: retain the already durable record and fall back to the closed
+        // restart contract.
+        const SString message(
+            "[NativeWorldAuthorization] state=pending resource=%s contentId=%s ticket=%s issued=%llu expires=%llu disposition=published "
+            "activation=no lease=no restart-required=yes action=nativeworldauth-restart reason=runtime-foundation-ineligible",
+            *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.ticketId.substr(0, 8).c_str(), result.issuedAt, result.expiresAt);
+        AddReportLog(7473, message);
+        WriteDebugEvent(message);
+        g_pCore->GetConsole()->Printf("%s", *message);
+        return;
+    }
+
+    if (result.success && result.claimed)
+    {
+        m_nativeWorldTransport.authorizationRecordPublished = false;
+        m_nativeWorldTransport.authorizationPublicationAmbiguous = false;
+        const SString message(
+            "[NativeWorldAuthorization] state=runtime-active resource=%s contentId=%s ticket=%s activation=yes lease=process restart-required=no",
+            *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.ticketId.substr(0, 8).c_str());
+        AddReportLog(7473, message);
+        WriteDebugEvent(message);
+        g_pCore->GetConsole()->Printf("%s", *message);
+        return;
+    }
+
+    m_nativeWorldTransport.authorizationRecordPublished = result.publicationAmbiguous;
+    m_nativeWorldTransport.authorizationPublicationAmbiguous = result.publicationAmbiguous;
+    const SString message = result.publicationAmbiguous
+                                ? SString(
+                                      "[NativeWorldAuthorization] state=terminalization-ambiguous resource=%s contentId=%s reason=%s activation=no lease=no "
+                                      "restart-required=unknown cleanup-pending=yes action=stop-or-clear stock-behavior=preserved",
+                                      *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.error.c_str())
+                                : SString(
+                                      "[NativeWorldAuthorization] state=refused resource=%s contentId=%s reason=%s activation=no lease=no restart-required=no "
+                                      "stock-behavior=preserved",
+                                      *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.error.c_str());
+    AddReportLog(7474, message);
+    WriteDebugEvent(message);
+    g_pCore->GetConsole()->Printf("%s", *message);
+}
+
 void CResource::RevokeNativeWorldStartupAuthorization()
 {
     if ((!m_nativeWorldTransport.authorizationRecordPublished && !m_nativeWorldTransport.authorizationPublicationAmbiguous) ||
@@ -769,6 +894,7 @@ void CResource::RevokeNativeWorldStartupAuthorization()
     {
         m_nativeWorldTransport.authorizationRecordPublished = false;
         m_nativeWorldTransport.authorizationPublicationAmbiguous = false;
+        m_nativeWorldTransport.authorizationRuntimeDeferred = false;
     }
     else
     {

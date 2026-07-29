@@ -162,7 +162,7 @@ class StartupTransactionTests(unittest.TestCase):
         end = pack.index("void CNativeWorldPackManagerSA::CancelAuthorizedActivation", start)
         body = pack[start:end]
         self.assertLess(body.index("ValidateNativeWorldStartupSession"), body.index("RevalidateClosedObject"))
-        self.assertLess(body.index("RevalidateClosedObject"), body.index("HookInstallCall"))
+        self.assertLess(body.index("RevalidateClosedObject"), body.index("EnsureStaticWorldV3LoaderHookSeal"))
 
     def test_cpp_c_promotes_the_typed_lease_after_native_postconditions(self) -> None:
         pack = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")

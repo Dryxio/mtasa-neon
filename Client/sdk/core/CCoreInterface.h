@@ -203,6 +203,9 @@ public:
                                                         SNativeWorldStartupAuthorization& authorization, std::string& error) = 0;
     virtual SNativeWorldAuthorizationRecordResult PersistNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization&     authorization,
                                                                                          const SNativeWorldAuthorizationPublication& publication) = 0;
+    virtual SNativeWorldAuthorizationRecordResult TryActivatePublishedNativeWorldRuntime(const SNativeWorldStartupAuthorization&      authorization,
+                                                                                         const SNativeWorldAuthorizationPublication&  publication,
+                                                                                         const SNativeWorldAuthorizationRecordResult& persisted) = 0;
     virtual SNativeWorldAuthorizationRecordResult InspectNativeWorldStartupAuthorization() = 0;
     virtual SNativeWorldAuthorizationRecordResult ClearNativeWorldStartupAuthorization() = 0;
     virtual SNativeWorldAuthorizationRecordResult RevokeNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization& authorization,

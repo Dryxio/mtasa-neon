@@ -3219,12 +3219,13 @@ void OnMY_CAnimBlendNode_GetCurrentTranslation(CAnimBlendNodeSAInterface* pInter
         }
     }
 
-    LogEvent(588, "GetCurrentTranslation", "Incorrect endKeyFrameIndex",
-             SString("m_endKeyFrameId = %d | pAnimAssoc = %p | GroupID = %d | AnimID = %d | \
+    LogEvent(588, "GetCurrentTranslation", "Incorrect keyFrameIndex",
+             SString("m_startKeyFrameId = %d | m_endKeyFrameId = %d | keyFrameCount = %u | pAnimAssoc = %p | GroupID = %d | AnimID = %d | \
                 pAnimSeq = %p | BoneID = %d | BoneHash = %u | \
                 pAnimHier = %p | HierHash = %u | SequenceExistsInHierarchy: %s",
-                     pInterface->m_endKeyFrameId, pAnimAssoc, pAnimAssoc->sAnimGroup, pAnimAssoc->sAnimID, pAnimSequence, pAnimSequence->m_boneId,
-                     pAnimSequence->m_hash, pAnimHierarchy, pAnimHierarchy->uiHashKey, bSequenceExistsInHierarchy ? "Yes" : "No"),
+                     pInterface->m_startKeyFrameId, pInterface->m_endKeyFrameId, pAnimSequence->sNumKeyFrames, pAnimAssoc, pAnimAssoc->sAnimGroup,
+                     pAnimAssoc->sAnimID, pAnimSequence, pAnimSequence->m_boneId, pAnimSequence->m_hash, pAnimHierarchy, pAnimHierarchy->uiHashKey,
+                     bSequenceExistsInHierarchy ? "Yes" : "No"),
              588);
 }
 
@@ -3237,27 +3238,44 @@ static void __declspec(naked) HOOK_CAnimBlendNode_GetCurrentTranslation()
     MTA_VERIFY_HOOK_LOCAL_SIZE;
 
     __asm
-        {// if end key frame index is greater than 10,000 then return
-        cmp     eax, 0x2710
-        jg      altcode
+        {// GTA has already resolved the start keyframe into ecx at this point,
+         // but it has not dereferenced either keyframe yet. Validate both signed
+         // indices against the sequence count before either derived pointer is
+         // used; a freshly detached animation node can contain -1 here.
+        push    ebx  // Original code saves ebx here
+        movzx   ebx, word ptr [edx + 6]  // CAnimBlendSequence::sNumKeyFrames
+        test    eax, eax  // m_endKeyFrameId
+        js      altcode
+        cmp     eax, ebx
+        jae     altcode
+        cmp     word ptr [ebp + 0Ah], 0  // m_startKeyFrameId
+        jl      altcode
+        cmp     word ptr [ebp + 0Ah], bx
+        jae     altcode
 
-             // Normal path - execute original code
-        push    ebx
+             // Normal path - finish executing the original code
         mov     bl, [edx + 4]
         shr     bl, 1
         jmp     RETURN_CAnimBlendNode_GetCurrentTranslation
 
              // Crash prevention path
         altcode:
-         // Save registers before logging
+         pop    ebx
+              // Save registers before logging
         pushad
         push    ebp  // Pass 'this' pointer
-        call    OnMY_CAnimBlendNode_GetCurrentTranslation
-        add     esp, 4
-        popad
+         call    OnMY_CAnimBlendNode_GetCurrentTranslation
+         add     esp, 4
+         popad
 
-             // Return safely without executing original buggy code
-             // The function expects 8 bytes of parameters
+              // Mirror GTA's epilogue at 0x4CFD7B. The hook runs after the
+              // function prologue and with the blend value still on the FPU
+              // stack, so a bare retn would corrupt both stacks.
+        pop     edi
+        fstp    st(0)
+        pop     esi
+        pop     ebp
+        add     esp, 18h
         retn    8
         }
 }

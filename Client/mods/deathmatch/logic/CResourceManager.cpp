@@ -161,6 +161,7 @@ void CResourceManager::PulseNativeWorldTransportPublications()
 
     for (CResource* resource : m_resources)
     {
+        resource->PulseNativeWorldRuntimeAdmission();
         if (!resource->IsActive() && resource->IsNativeWorldTransportPublicationPending() && resource->CanBeLoaded())
             resource->Load();
     }

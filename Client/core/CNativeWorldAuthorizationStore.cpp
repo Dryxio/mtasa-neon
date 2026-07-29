@@ -883,9 +883,9 @@ namespace
         // created by this transaction. Assign TokenUser before validation and
         // before publishing any bytes so elevated launches do not strand an
         // Administrators-owned zero-byte fail-closed marker.
-        const bool success = SetOwnerToCurrentUser(file, error) && HandleMatchesPath(file, path, false, error) &&
-                             WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size() &&
-                             FlushFileBuffers(file);
+        const bool  success = SetOwnerToCurrentUser(file, error) && HandleMatchesPath(file, path, false, error) &&
+                              WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size() &&
+                              FlushFileBuffers(file);
         const DWORD writeError = success ? ERROR_SUCCESS : GetLastError();
         CloseHandle(file);
         if (!success && error.empty())
@@ -1627,6 +1627,55 @@ SNativeWorldStartupSelection NativeWorldAuthorizationStore::BeginStartup(const s
                 GetNativeWorldStartupPolicyName(startup->record.authorization.packFormat), selection.contentId.c_str(), ticket.substr(0, 8).c_str());
     beginScope.Publish(std::move(startup));
     return selection;
+}
+
+SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::ClaimPublishedRuntime(const SNativeWorldStartupAuthorization&     authorization,
+                                                                                           const SNativeWorldAuthorizationPublication& publication,
+                                                                                           const std::string&                          ticketId)
+{
+    SNativeWorldAuthorizationRecordResult result;
+    if (!ValidateAuthorization(authorization, result.error) || !publication.success || !IsLowerHex(publication.offerId, 64) ||
+        !IsLowerHex(publication.contentId, 64) || !IsLowerHex(ticketId, 32))
+    {
+        if (result.error.empty())
+            result.error = "native-world runtime claim identity is non-canonical";
+        return result;
+    }
+
+    // Runtime admission performs its expensive cache and executable preflight
+    // before entering this short store transaction. Reopen the exact pending
+    // record here and bind every session/publication field immediately before
+    // the one irreversible pending-to-spent rename.
+    CStartupBeginScope beginScope;
+    if (!beginScope.Enter(result.error))
+        return result;
+    auto startup = std::make_unique<SStartupTransaction>();
+    if (!BeginTransaction(startup->transaction, result.error))
+        return result;
+    if (!startup->transaction.temporaryFiles.empty())
+    {
+        result.error = "authorization store contains an unproven temporary remnant";
+        return result;
+    }
+    unsigned long long now = 0;
+    if (!CurrentTime(now, result.error) || !ValidateSpentLedger(startup->transaction, now, result.error))
+        return result;
+    if (ReadRecord(startup->transaction.pending, startup->record, result.error) != EReadResult::Success)
+    {
+        if (result.error.empty())
+            result.error = "published native-world runtime authorization is no longer pending";
+        return result;
+    }
+    if (EncodeHex(startup->record.ticketId) != ticketId || !SameSemanticAuthorization(startup->record, authorization, publication))
+    {
+        result.error = "published native-world runtime authorization changed before claim";
+        return result;
+    }
+    // Publish only at the short commit boundary so disconnect/shutdown can
+    // set the same cancellation bit used by the startup path. FinishStartup
+    // samples it under g_startupStateMutex immediately before terminalizing.
+    beginScope.Publish(std::move(startup));
+    return FinishStartup(ticketId, true, "");
 }
 
 SNativeWorldAuthorizationRecordResult NativeWorldAuthorizationStore::FinishStartup(const std::string& ticketId, bool claim, const std::string& refusalReason)

@@ -533,6 +533,143 @@ namespace
         return true;
     }
 
+    bool ValidateCommittedAllocation(const void* allocation, size_t requiredBytes, const char* purpose)
+    {
+        MEMORY_BASIC_INFORMATION memory{};
+        if (!allocation || !requiredBytes || VirtualQuery(allocation, &memory, sizeof(memory)) != sizeof(memory) || memory.BaseAddress != allocation ||
+            memory.AllocationBase != allocation || memory.State != MEM_COMMIT || memory.Type != MEM_PRIVATE || memory.Protect != PAGE_READWRITE ||
+            memory.RegionSize < requiredBytes)
+        {
+            DebugLog(
+                "[NativeBW] installed validation failed: %s allocation=%p bytes=%zu base=%p allocationBase=%p region=%zu state=0x%08X type=0x%08X "
+                "protect=0x%08X",
+                purpose, allocation, requiredBytes, memory.BaseAddress, memory.AllocationBase, memory.RegionSize, memory.State, memory.Type, memory.Protect);
+            return false;
+        }
+        return true;
+    }
+
+    bool ValidateInstalledAllocations()
+    {
+        if (!g_installed || !g_executableIdentity || !g_collisionBuffer)
+        {
+            DebugLog("[NativeBW] installed validation failed: foundation ownership is incomplete");
+            return false;
+        }
+
+        for (const SStoreDefinition& definition : STORE_DEFINITIONS)
+        {
+            const SStoreState& state = GetState(definition.kind);
+            const size_t       bytes = offsetof(SStoreHeader, objects) + static_cast<size_t>(definition.newCapacity) * definition.stride;
+            if (!state.store || state.occupiedAtInstall > definition.originalCapacity || state.store->count < state.occupiedAtInstall ||
+                state.store->count > definition.newCapacity || state.highWater < state.store->count || state.highWater > definition.newCapacity ||
+                !ValidateCommittedAllocation(state.store, bytes, definition.name))
+            {
+                DebugLog("[NativeBW] installed validation failed: %s usage occupied=%u startup=%u highWater=%u capacity=%u", definition.name,
+                         state.store ? state.store->count : 0, state.occupiedAtInstall, state.highWater, definition.newCapacity);
+                return false;
+            }
+
+            for (DWORD index = 0; index < definition.newCapacity; ++index)
+            {
+                DWORD vtable = 0;
+                memcpy(&vtable, state.store->objects + static_cast<size_t>(index) * definition.stride, sizeof(vtable));
+                if (vtable != definition.vtable)
+                {
+                    DebugLog("[NativeBW] installed validation failed: %s slot=%u vtable=0x%08X expected=0x%08X", definition.name, index, vtable,
+                             definition.vtable);
+                    return false;
+                }
+            }
+        }
+
+        return ValidateCommittedAllocation(g_collisionBuffer, COLLISION_BUFFER_DEFINITIONS[0].newCapacity, "collision buffer");
+    }
+
+    DWORD GrowerWrapper(EStoreKind kind);
+
+    bool ValidateInstalledPatchSet(DWORD imageSize)
+    {
+        for (const SConstructorSignature& signature : CONSTRUCTOR_SIGNATURES)
+            if (!ValidateBytes(signature.address, signature.expected, sizeof(signature.expected), imageSize, "installed model constructor"))
+                return false;
+        for (const SCrtRoutineSignature& signature : CRT_ROUTINE_SIGNATURES)
+            if (!ValidateBytes(signature.address, signature.expected, sizeof(signature.expected), imageSize, signature.role))
+                return false;
+
+        for (const SPointerSite& site : POINTER_SITES)
+        {
+            if (site.instructionSize > sizeof(site.expected) || site.operandOffset + sizeof(DWORD) > site.instructionSize)
+                return false;
+
+            BYTE  expected[sizeof(site.expected)]{};
+            DWORD manifestPointer = 0;
+            memcpy(expected, site.expected, sizeof(expected));
+            memcpy(&manifestPointer, site.expected + site.operandOffset, sizeof(manifestPointer));
+            if (manifestPointer != GetDefinition(site.kind).originalBase + site.storeDisplacement)
+            {
+                DebugLog("[NativeBW] installed validation failed: manifest pointer mismatch at 0x%08X", site.instructionAddress);
+                return false;
+            }
+            if (site.action == EPatchAction::Patch)
+            {
+                const DWORD relocated = reinterpret_cast<DWORD>(GetState(site.kind).store) + site.storeDisplacement;
+                memcpy(expected + site.operandOffset, &relocated, sizeof(relocated));
+            }
+            if (!ValidateBytes(site.instructionAddress, expected, site.instructionSize, imageSize, "installed model-store pointer"))
+                return false;
+        }
+
+        for (const SGrowerSite& site : GROWER_SITES)
+        {
+            BYTE expected[sizeof(site.expected)]{};
+            memcpy(expected, site.expected, sizeof(expected));
+            const DWORD relative = GrowerWrapper(site.kind) - (site.instructionAddress + sizeof(expected));
+            memcpy(expected + 1, &relative, sizeof(relative));
+            if (!ValidateBytes(site.instructionAddress, expected, sizeof(expected), imageSize, "installed model-store grower call"))
+                return false;
+        }
+
+        for (const SCollisionPointerSite& site : COLLISION_POINTER_SITES)
+        {
+            if (site.instructionSize > sizeof(site.expected) || site.operandOffset + sizeof(DWORD) > site.instructionSize)
+                return false;
+            BYTE expected[sizeof(site.expected)]{};
+            memcpy(expected, site.expected, sizeof(expected));
+            const DWORD relocated = reinterpret_cast<DWORD>(g_collisionBuffer) + site.bufferDisplacement;
+            memcpy(expected + site.operandOffset, &relocated, sizeof(relocated));
+            if (!ValidateBytes(site.instructionAddress, expected, site.instructionSize, imageSize, "installed collision-buffer pointer"))
+                return false;
+        }
+
+        constexpr BYTE NOPS[5] = {0x90, 0x90, 0x90, 0x90, 0x90};
+        for (const SCollisionNopSite& site : COLLISION_NOP_SITES)
+            if (!ValidateBytes(site.instructionAddress, NOPS, sizeof(NOPS), imageSize, "installed scratchpad NOP"))
+                return false;
+        return true;
+    }
+
+    bool ValidateInstalledFoundation(eGameVersion gameVersion, std::string& error)
+    {
+        char        executablePath[MAX_PATH]{};
+        const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
+        if (!executablePathLength || executablePathLength >= sizeof(executablePath))
+        {
+            error = SString("executable path is unavailable or truncated win32=%u", GetLastError());
+            return false;
+        }
+
+        DWORD                      imageSize = 0;
+        const SExecutableIdentity* identity = nullptr;
+        if (!ValidateExecutable(gameVersion, executablePath, imageSize, identity) || identity != g_executableIdentity || !ValidateInstalledAllocations() ||
+            !ValidateInstalledPatchSet(imageSize))
+        {
+            error = "installed native model-store identity, allocations, usage, or patch targets failed read-only validation";
+            return false;
+        }
+        return true;
+    }
+
     bool ValidateOriginalStores()
     {
         for (const SStoreDefinition& definition : STORE_DEFINITIONS)
@@ -699,10 +836,7 @@ namespace
     bool InstallValidated(eGameVersion gameVersion, std::string& error)
     {
         if (g_installed)
-        {
-            error = "native model-store foundation is already installed";
-            return false;
-        }
+            return ValidateInstalledFoundation(gameVersion, error);
 
         char        executablePath[MAX_PATH]{};
         const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
@@ -764,15 +898,20 @@ void CNativeModelStoreSA::InstallFromEnvironment(eGameVersion gameVersion)
 
 bool CNativeModelStoreSA::InstallForAuthorizedStartup(eGameVersion gameVersion, std::string& error)
 {
+    const bool reused = g_installed;
     if (!InstallValidated(gameVersion, error))
         return false;
 
-    DebugLog("[NativeWorldAuthorization] state=model-stores-prepared executable=%s nativeWrites=yes activation=prepared", g_executableIdentity->name);
+    DebugLog("[NativeWorldAuthorization] state=model-stores-prepared executable=%s nativeWrites=%s foundation=%s activation=prepared",
+             g_executableIdentity->name, reused ? "no" : "yes", reused ? "revalidated" : "installed");
     return true;
 }
 
 bool CNativeModelStoreSA::ValidateExecutableAndPatchManifestReadOnly(eGameVersion gameVersion, std::string& error)
 {
+    if (g_installed)
+        return ValidateInstalledFoundation(gameVersion, error);
+
     char        executablePath[MAX_PATH]{};
     const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
     if (!executablePathLength || executablePathLength >= sizeof(executablePath))

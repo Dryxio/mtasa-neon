@@ -27,6 +27,8 @@ namespace NativeWorldAuthorizationStore
     SNativeWorldAuthorizationRecordResult InspectFreshRestartTarget(SRestartTarget& target);
     SNativeWorldAuthorizationRecordResult Clear();
     SNativeWorldAuthorizationRecordResult Revoke(const SNativeWorldStartupAuthorization& authorization, const std::string& contentId);
+    SNativeWorldAuthorizationRecordResult ClaimPublishedRuntime(const SNativeWorldStartupAuthorization&     authorization,
+                                                                const SNativeWorldAuthorizationPublication& publication, const std::string& ticketId);
     SNativeWorldStartupSelection BeginStartup(const std::array<unsigned char, 4>* endpointIpv4, unsigned short endpointPort, bool legacySelectorEnabled);
     SNativeWorldAuthorizationRecordResult FinishStartup(const std::string& ticketId, bool claim, const std::string& refusalReason);
     void                                  CancelStartup(const std::string& ticketId);

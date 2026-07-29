@@ -61,12 +61,19 @@ struct SNativeWorldAuthorizationPublication
 
 struct SNativeWorldAuthorizationRecordResult
 {
-    bool               success{};
-    bool               found{};
-    bool               idempotent{};
-    bool               attached{};
-    bool               publicationAmbiguous{};
-    bool               claimed{};
+    bool success{};
+    bool found{};
+    bool idempotent{};
+    bool attached{};
+    bool publicationAmbiguous{};
+    bool claimed{};
+    // Distinguishes a runtime admission outcome from the untouched Persist
+    // result used by the restart-only fallback path.
+    bool runtimeAdmissionAttempted{};
+    // The retained process foundation is exact, but stock streaming still
+    // owns live I/O.  The resource keeps the immutable Persist result and
+    // retries on the main thread without weakening the final neutral gate.
+    bool               runtimeAdmissionDeferred{};
     unsigned long long issuedAt{};
     unsigned long long expiresAt{};
     std::string        ticketId;

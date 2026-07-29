@@ -517,6 +517,128 @@ SNativeWorldAuthorizationRecordResult CCore::PersistNativeWorldStartupAuthorizat
     return NativeWorldAuthorizationStore::Persist(authorization, publication);
 }
 
+bool CCore::RevalidateNativeWorldRuntimeCandidate(std::string& error)
+{
+    if (!m_nativeWorldRuntimeCandidate)
+    {
+        error = "native-world runtime candidate is unavailable";
+        return false;
+    }
+    SNativeWorldStartupAuthorization current;
+    const auto&                      expected = m_nativeWorldRuntimeAuthorization;
+    if (!CaptureNativeWorldStartupAuthorization(expected.wireVersion, expected.startupMode, expected.policy, expected.packFormat, expected.resourceName,
+                                                expected.resourceNetId, expected.resourceStartCounter, current, error))
+        return false;
+    if (current.serverIdDigest != expected.serverIdDigest || current.serverIpv4 != expected.serverIpv4 || current.serverPort != expected.serverPort ||
+        current.resourceNetId != expected.resourceNetId || current.resourceStartCounter != expected.resourceStartCounter ||
+        current.bitstreamVersion != expected.bitstreamVersion || current.connectionGeneration != expected.connectionGeneration ||
+        current.authorizationEpoch != expected.authorizationEpoch || current.resourceName != expected.resourceName)
+    {
+        error = "native-world runtime session changed during admission";
+        return false;
+    }
+    return true;
+}
+
+SNativeWorldAuthorizationRecordResult CCore::TryActivatePublishedNativeWorldRuntime(const SNativeWorldStartupAuthorization&      authorization,
+                                                                                    const SNativeWorldAuthorizationPublication&  publication,
+                                                                                    const SNativeWorldAuthorizationRecordResult& persisted)
+{
+    SNativeWorldAuthorizationRecordResult result = persisted;
+    result.claimed = false;
+    result.runtimeAdmissionAttempted = false;
+    result.runtimeAdmissionDeferred = false;
+    if (!persisted.success || !persisted.found || persisted.ticketId.empty() || persisted.attached ||
+        authorization.packFormat != NATIVE_WORLD_STATIC_V3_SET_FORMAT || m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off || !m_pGame)
+        return result;
+
+    const ENativeWorldRuntimeAdmissionReadiness readiness = m_pGame->GetNativeWorldRuntimeAdmissionReadiness();
+    if (readiness == ENativeWorldRuntimeAdmissionReadiness::Ineligible)
+        return result;
+    if (readiness == ENativeWorldRuntimeAdmissionReadiness::WaitingForIo)
+    {
+        result.runtimeAdmissionDeferred = true;
+        return result;
+    }
+    if (readiness != ENativeWorldRuntimeAdmissionReadiness::Ready)
+        return result;
+
+    result.runtimeAdmissionAttempted = true;
+    m_nativeWorldRuntimeCandidate = true;
+    m_nativeWorldRuntimeAuthorization = authorization;
+    m_nativeWorldRuntimePublication = publication;
+    m_nativeWorldRuntimeTerminalResult = {};
+    if (!RevalidateNativeWorldRuntimeCandidate(result.error))
+    {
+        const std::string                           admissionError = result.error;
+        const SNativeWorldAuthorizationRecordResult revokeResult = NativeWorldAuthorizationStore::Revoke(authorization, publication.contentId);
+        m_nativeWorldRuntimeCandidate = false;
+        m_nativeWorldRuntimeAuthorization = {};
+        m_nativeWorldRuntimePublication = {};
+        result.success = false;
+        result.found = revokeResult.found;
+        // Until a successful Revoke proves otherwise, the Persist-created
+        // pending record remains resource-owned and must be retried at stop.
+        result.publicationAmbiguous = !revokeResult.success || revokeResult.publicationAmbiguous;
+        result.error = admissionError;
+        if (!revokeResult.success)
+            result.error += "; runtime authorization revocation failed: " + revokeResult.error;
+        return result;
+    }
+
+    SNativeWorldStartupSelection selection;
+    selection.success = true;
+    selection.found = true;
+    selection.ready = true;
+    selection.wireVersion = authorization.wireVersion;
+    selection.startupMode = authorization.startupMode;
+    selection.policy = authorization.policy;
+    selection.packFormat = authorization.packFormat;
+    selection.serverIdDigest = authorization.serverIdDigest;
+    selection.serverIpv4 = authorization.serverIpv4;
+    selection.serverPort = authorization.serverPort;
+    selection.bitstreamVersion = authorization.bitstreamVersion;
+    selection.issuedAt = persisted.issuedAt;
+    selection.expiresAt = persisted.expiresAt;
+    selection.resourceName = authorization.resourceName;
+    selection.offerId = publication.offerId;
+    selection.contentId = publication.contentId;
+    selection.ticketId = persisted.ticketId;
+    selection.diagnostic =
+        SString("state=runtime-selected endpoint=%u.%u.%u.%u:%u format=%u policy=%s contentId=%s ticket=%s activation=no lease=pending",
+                selection.serverIpv4[0], selection.serverIpv4[1], selection.serverIpv4[2], selection.serverIpv4[3], selection.serverPort, selection.packFormat,
+                GetNativeWorldStartupPolicyName(selection.packFormat), selection.contentId.c_str(), selection.ticketId.substr(0, 8).c_str());
+    m_nativeWorldStartupSelection = selection;
+    m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Candidate;
+    WriteDebugEvent(SString("[NativeWorldAuthorization] %s", selection.diagnostic.c_str()));
+
+    std::string error;
+    if (!m_pGame->ActivateNativeWorldRuntimeSelection(selection, error) || m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Active)
+    {
+        result.success = false;
+        result.error = error.empty() ? "native-world runtime registrar did not publish Active" : error;
+        result.found = m_nativeWorldRuntimeTerminalResult.found;
+        result.publicationAmbiguous = !m_nativeWorldRuntimeTerminalResult.success || m_nativeWorldRuntimeTerminalResult.publicationAmbiguous;
+        result.runtimeAdmissionAttempted = true;
+        if (!m_nativeWorldRuntimeTerminalResult.success && !m_nativeWorldRuntimeTerminalResult.error.empty())
+            result.error += "; authorization terminalization failed: " + m_nativeWorldRuntimeTerminalResult.error;
+        if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Candidate)
+        {
+            m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Off;
+            m_nativeWorldStartupSelection = {};
+            m_nativeWorldRuntimeCandidate = false;
+            m_nativeWorldRuntimeAuthorization = {};
+            m_nativeWorldRuntimePublication = {};
+        }
+        return result;
+    }
+
+    result = DescribeNativeWorldStartupProcess();
+    result.claimed = true;
+    result.runtimeAdmissionAttempted = true;
+    return result;
+}
+
 SNativeWorldAuthorizationRecordResult CCore::InspectNativeWorldStartupAuthorization()
 {
     if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off)
@@ -711,8 +833,23 @@ SNativeWorldStartupSelection CCore::BeginNativeWorldStartupSelection(bool legacy
 
 SNativeWorldAuthorizationRecordResult CCore::FinishNativeWorldStartupSelection(const std::string& ticketId, bool claim, const std::string& refusalReason)
 {
-    SNativeWorldAuthorizationRecordResult result = NativeWorldAuthorizationStore::FinishStartup(ticketId, claim, refusalReason);
     const bool exactCandidate = m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Candidate && m_nativeWorldStartupSelection.ticketId == ticketId;
+    SNativeWorldAuthorizationRecordResult result;
+    if (m_nativeWorldRuntimeCandidate && exactCandidate)
+    {
+        if (claim)
+        {
+            if (!RevalidateNativeWorldRuntimeCandidate(result.error))
+                result.success = false;
+            else
+                result = NativeWorldAuthorizationStore::ClaimPublishedRuntime(m_nativeWorldRuntimeAuthorization, m_nativeWorldRuntimePublication, ticketId);
+        }
+        else
+            result = NativeWorldAuthorizationStore::Revoke(m_nativeWorldRuntimeAuthorization, m_nativeWorldRuntimePublication.contentId);
+        m_nativeWorldRuntimeTerminalResult = result;
+    }
+    else
+        result = NativeWorldAuthorizationStore::FinishStartup(ticketId, claim, refusalReason);
     if (claim && result.success && result.claimed && exactCandidate)
     {
         m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Prepared;
@@ -725,6 +862,9 @@ SNativeWorldAuthorizationRecordResult CCore::FinishNativeWorldStartupSelection(c
     {
         m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Off;
         m_nativeWorldStartupSelection = {};
+        m_nativeWorldRuntimeCandidate = false;
+        m_nativeWorldRuntimeAuthorization = {};
+        m_nativeWorldRuntimePublication = {};
         if (claim && result.success && result.claimed)
         {
             WriteDebugEvent("[NativeWorldAuthorization] state=process-terminal reason=claimed-ticket-candidate-mismatch activation=no exit=0xE057C003");
@@ -771,7 +911,7 @@ void CCore::HandleNativeWorldConnectionTargetRefusal(const std::string& reason)
     const SNativeWorldStartupSelection& selection = m_nativeWorldStartupSelection;
     const SString                       diagnostic(
         "state=connection-refused reason=endpoint-mismatch pinned=%u.%u.%u.%u:%u ticket=%s activation=yes lease=process existing-native-world=preserved "
-        "next-server-restart-required=yes",
+                              "next-server-restart-required=yes",
         selection.serverIpv4[0], selection.serverIpv4[1], selection.serverIpv4[2], selection.serverIpv4[3], selection.serverPort,
         selection.ticketId.substr(0, 8).c_str());
     WriteDebugEvent(SString("[NativeWorldAuthorization] %s", diagnostic.c_str()));
@@ -790,6 +930,8 @@ bool CCore::ValidateNativeWorldStartupSession(std::string& error)
 {
     if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off)
         return true;
+    if (m_nativeWorldRuntimeCandidate && !RevalidateNativeWorldRuntimeCandidate(error))
+        return false;
     if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Terminal || !m_pNet || !m_pNet->IsConnected())
     {
         error = "native-world startup session is unavailable";
@@ -877,6 +1019,10 @@ void CCore::MarkNativeWorldStartupActive()
         return;
     }
     m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Active;
+    m_nativeWorldRuntimeCandidate = false;
+    m_nativeWorldRuntimeAuthorization = {};
+    m_nativeWorldRuntimePublication = {};
+    m_nativeWorldRuntimeTerminalResult = {};
     WriteDebugEvent(
         SString("[NativeWorldAuthorization] state=active ticket=%s activation=yes lease=process", m_nativeWorldStartupSelection.ticketId.substr(0, 8).c_str()));
 }
@@ -885,6 +1031,10 @@ void CCore::MarkNativeWorldStartupRefused()
 {
     if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::SessionValidated)
         m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Refused;
+    m_nativeWorldRuntimeCandidate = false;
+    m_nativeWorldRuntimeAuthorization = {};
+    m_nativeWorldRuntimePublication = {};
+    m_nativeWorldRuntimeTerminalResult = {};
 }
 
 void CCore::FailNativeWorldStartupBeforeActive(const std::string& reason)
@@ -916,6 +1066,10 @@ bool CCore::TryReleaseDetachedNativeWorldSessionAfterModUnload()
         ++m_nativeWorldAuthorizationEpoch;
     m_nativeWorldStartupSelection = {};
     m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Off;
+    m_nativeWorldRuntimeCandidate = false;
+    m_nativeWorldRuntimeAuthorization = {};
+    m_nativeWorldRuntimePublication = {};
+    m_nativeWorldRuntimeTerminalResult = {};
     WriteDebugEvent(SString(
         "[NativeWorldAuthorization] state=neutral ticket=%s endpoint=%u.%u.%u.%u:%u activation=no lease=no endpoint-owner=released credential=supported",
         releasedSelection.ticketId.substr(0, 8).c_str(), releasedSelection.serverIpv4[0], releasedSelection.serverIpv4[1], releasedSelection.serverIpv4[2],

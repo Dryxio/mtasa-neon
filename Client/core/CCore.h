@@ -118,6 +118,9 @@ public:
                                                 SNativeWorldStartupAuthorization& authorization, std::string& error) override;
     SNativeWorldAuthorizationRecordResult PersistNativeWorldStartupAuthorization(const SNativeWorldStartupAuthorization&     authorization,
                                                                                  const SNativeWorldAuthorizationPublication& publication) override;
+    SNativeWorldAuthorizationRecordResult TryActivatePublishedNativeWorldRuntime(const SNativeWorldStartupAuthorization&      authorization,
+                                                                                 const SNativeWorldAuthorizationPublication&  publication,
+                                                                                 const SNativeWorldAuthorizationRecordResult& persisted) override;
     SNativeWorldAuthorizationRecordResult InspectNativeWorldStartupAuthorization() override;
     SNativeWorldAuthorizationRecordResult ClearNativeWorldStartupAuthorization() override;
     SNativeWorldAuthorizationRecordResult PrepareNativeWorldStartupRestart();
@@ -441,8 +444,14 @@ private:
         Refused,
         Terminal,
     };
-    ENativeWorldStartupPhase     m_nativeWorldStartupPhase{ENativeWorldStartupPhase::Off};
-    SNativeWorldStartupSelection m_nativeWorldStartupSelection{};
+    ENativeWorldStartupPhase              m_nativeWorldStartupPhase{ENativeWorldStartupPhase::Off};
+    SNativeWorldStartupSelection          m_nativeWorldStartupSelection{};
+    bool                                  m_nativeWorldRuntimeCandidate{};
+    SNativeWorldStartupAuthorization      m_nativeWorldRuntimeAuthorization{};
+    SNativeWorldAuthorizationPublication  m_nativeWorldRuntimePublication{};
+    SNativeWorldAuthorizationRecordResult m_nativeWorldRuntimeTerminalResult{};
+
+    bool RevalidateNativeWorldRuntimeCandidate(std::string& error);
 
     SNativeWorldAuthorizationRecordResult DescribeNativeWorldStartupProcess() const;
 

@@ -18,6 +18,8 @@
 #include "CResourceModelStreamer.h"
 #include "CElementGroup.h"
 #include <game/CGame.h>
+#include <chrono>
+#include <ctime>
 #include <future>
 #include <list>
 #include <memory>
@@ -133,6 +135,7 @@ public:
     bool IsNativeWorldTransportPublicationPending() const noexcept;
     bool SetNativeWorldStartupAuthorization(unsigned char wireVersion, unsigned char startupMode, unsigned char policy);
     void RevokeNativeWorldStartupAuthorization();
+    void PulseNativeWorldRuntimeAdmission();
 
 private:
     unsigned short       m_usNetID;
@@ -210,12 +213,16 @@ private:
         bool                                            authorizationCaptureAttempted{};
         bool                                            authorizationRecordPublished{};
         bool                                            authorizationPublicationAmbiguous{};
+        bool                                            authorizationRuntimeDeferred{};
         unsigned char                                   authorizationWireVersion{};
         unsigned char                                   authorizationStartupMode{};
         unsigned char                                   authorizationPolicy{};
         SNativeWorldStartupAuthorization                authorizationSnapshot;
         SString                                         authorizationError;
         std::string                                     authorizationContentId;
+        SNativeWorldAuthorizationPublication            authorizationPublication;
+        SNativeWorldAuthorizationRecordResult           authorizationPersistedResult;
+        std::chrono::steady_clock::time_point           authorizationRuntimeNextAttempt{};
     } m_nativeWorldTransport;
 
     bool VerifyPendingClientChecksums();

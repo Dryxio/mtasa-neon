@@ -160,6 +160,13 @@ struct SNativeWorldTransportPublishResult
     std::string error;
 };
 
+enum class ENativeWorldRuntimeAdmissionReadiness : unsigned char
+{
+    Ineligible,
+    WaitingForIo,
+    Ready,
+};
+
 // Physical GTA slots owned by the native-world registrar. These are not MTA
 // logical model IDs and are unavailable to dynamic allocation while any
 // native-world activation is prepared or active.
@@ -420,6 +427,8 @@ public:
     // Releasing endpoint ownership is a separate boundary from content
     // teardown. Core may cross it only after Client Deathmatch and its
     // resource-owned GTA state have been completely destroyed.
-    virtual bool IsNativeWorldContentDetached() const = 0;
+    virtual bool                                  IsNativeWorldContentDetached() const = 0;
+    virtual ENativeWorldRuntimeAdmissionReadiness GetNativeWorldRuntimeAdmissionReadiness() const = 0;
+    virtual bool                                  ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelection& selection, std::string& error) = 0;
     virtual bool ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) = 0;
 };

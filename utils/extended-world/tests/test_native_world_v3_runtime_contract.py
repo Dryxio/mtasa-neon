@@ -138,16 +138,17 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
 
     def test_v3_registrar_catalogues_all_packs_then_collapses_startup_ids(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
-        register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
+        register = source[source.index("void RegisterStaticWorldV3Set(") : source.index("void RegisterPack()")]
         self.assertIn("catalogModels == 0 || catalogModels > 12000U", source)
         self.assertIn("std::vector<SStaticWorldV3RuntimePack>", source)
         self.assertIn("ValidateStaticWorldV3LodProfile(error)", source)
-        self.assertIn("HookInstallCall(LOAD_COL_BUFFER_CALL", register)
-        self.assertIn("HookInstallCall(LOAD_IPL_BUFFER_CALL", register)
-        self.assertIn("HookInstall(REMOVE_ALL_COLLISION_TAIL", register)
+        self.assertIn("EnsureStaticWorldV3LoaderHookSeal", register)
+        seal = source[source.index("bool EnsureStaticWorldV3LoaderHookSeal") : source.index("bool StaticWorldV3LoaderHooksOwnContent")]
+        self.assertIn("HookInstallCall(hook.address", seal)
+        self.assertIn("HookInstall(hook.address", seal)
         self.assertIn("barrier=first-ModelInfo", register)
         self.assertIn("startupMapping=canonical-until-bounds", register)
-        self.assertIn("g_staticWorldV3Generation.store(1", register)
+        self.assertIn("AdvanceStaticWorldV3Generation()", register)
         collapse = source[source.index("void __cdecl CompleteStaticWorldV3BoundingBootstrap") : source.index("void RegisterPack()")]
         self.assertIn("REMOVE_ALL_COLLISION", collapse)
         self.assertIn("canonicalPointersCleared", collapse)
@@ -224,14 +225,14 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
                          source.index("void CNativeWorldPackManagerSA::AttachAuthorizedStreaming")]
         self.assertIn("AcquireStaticWorldV3SetChildren(lockedManifest, selection.ticketId", startup)
         self.assertIn("g_staticWorldV3ChildLeases = std::move(childLeases)", startup)
-        register = source[source.index("void RegisterStaticWorldV3Set()") : source.index("void RegisterPack()")]
+        register = source[source.index("void RegisterStaticWorldV3Set(") : source.index("void RegisterPack()")]
         self.assertIn("lease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_POLICY", register)
         self.assertIn("g_authorizedSelection.ticketId", register)
         self.assertIn("g_authorizedLease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_SET_POLICY", register)
 
     def test_v3_registrar_uses_direct_multi_img_streaming_and_buffer_remap(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
-        prepare = source[source.index("bool PrepareStaticWorldV3Transaction") : source.index("void RegisterStaticWorldV3Set()")]
+        prepare = source[source.index("bool PrepareStaticWorldV3Transaction") : source.index("void RegisterStaticWorldV3Set(")]
         self.assertIn("pack.manifest.images", prepare)
         self.assertIn("g_streaming->AddArchive", prepare)
         self.assertGreaterEqual(prepare.count("PredictNextPoolSlot("), 3)
@@ -247,7 +248,7 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
     def test_v3_runtime_baseline_is_structural_and_allocation_driven(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
         streaming = (REPOSITORY / "Client/game_sa/CStreamingSA.cpp").read_text(encoding="utf-8")
-        prepare = source[source.index("bool PrepareStaticWorldV3Transaction") : source.index("void RegisterStaticWorldV3Set()")]
+        prepare = source[source.index("bool PrepareStaticWorldV3Transaction") : source.index("void RegisterStaticWorldV3Set(")]
         aggregate = source[source.index("bool ValidateStaticWorldV3Aggregate") : source.index("bool AcquireStaticWorldV3SetChildren")]
 
         self.assertNotIn("atomic != 13984", prepare)

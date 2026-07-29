@@ -888,6 +888,16 @@ bool CGameSA::IsNativeWorldContentDetached() const
     return CNativeWorldPackManagerSA::IsRuntimeContentDetached();
 }
 
+ENativeWorldRuntimeAdmissionReadiness CGameSA::GetNativeWorldRuntimeAdmissionReadiness() const
+{
+    return CNativeWorldPackManagerSA::GetRuntimeAdmissionReadiness();
+}
+
+bool CGameSA::ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelection& selection, std::string& error)
+{
+    return CNativeWorldPackManagerSA::HandleRuntimeSelection(m_eGameVersion, selection, error);
+}
+
 bool CGameSA::ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error)
 {
     return CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(expectedSelection, error);

@@ -336,22 +336,24 @@ public:
     bool VerifyNativeWorldStartupBeforeStartGame() override;
     void CancelNativeWorldStartupActivation() override;
 
-    bool LoadFileCutscene(const char* name) override;
-    bool IsFileCutsceneActive() const override;
-    bool IsFileCutsceneLoaded() const override;
-    bool StartFileCutscene() override;
-    bool HasFileCutsceneFinished() const override;
-    bool IsFileCutsceneSkipInputPressed() const override;
-    bool WasFileCutsceneSkipped() const override;
-    bool SkipFileCutscene() override;
-    bool DeleteFileCutscene() override;
-    bool IsNativeWorldModelIdReserved(uint32_t modelId) const override;
-    void PrepareNativeWorldStreaming(const CVector& position) override;
-    bool BeginNativeWorldDrain() override;
-    bool IsNativeWorldDrainQuiescent() const override;
-    bool TeardownNativeWorldContent() override;
-    bool IsNativeWorldContentDetached() const override;
-    bool ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) override;
+    bool                                  LoadFileCutscene(const char* name) override;
+    bool                                  IsFileCutsceneActive() const override;
+    bool                                  IsFileCutsceneLoaded() const override;
+    bool                                  StartFileCutscene() override;
+    bool                                  HasFileCutsceneFinished() const override;
+    bool                                  IsFileCutsceneSkipInputPressed() const override;
+    bool                                  WasFileCutsceneSkipped() const override;
+    bool                                  SkipFileCutscene() override;
+    bool                                  DeleteFileCutscene() override;
+    bool                                  IsNativeWorldModelIdReserved(uint32_t modelId) const override;
+    void                                  PrepareNativeWorldStreaming(const CVector& position) override;
+    bool                                  BeginNativeWorldDrain() override;
+    bool                                  IsNativeWorldDrainQuiescent() const override;
+    bool                                  TeardownNativeWorldContent() override;
+    bool                                  IsNativeWorldContentDetached() const override;
+    ENativeWorldRuntimeAdmissionReadiness GetNativeWorldRuntimeAdmissionReadiness() const override;
+    bool                                  ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelection& selection, std::string& error) override;
+    bool                                  ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;
