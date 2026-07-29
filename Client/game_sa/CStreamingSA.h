@@ -55,6 +55,34 @@ struct SStreamName
     char szName[64];
 };
 
+struct SStreamingLifecycleTelemetrySA
+{
+    struct SChannel
+    {
+        int          state{};
+        unsigned int modelCount{};
+        int          sectorCount{};
+        int          cdStreamStatus{};
+    };
+
+    size_t       archiveCapacity{};
+    size_t       archiveLimit{};
+    size_t       namedArchives{};
+    size_t       boundArchives{};
+    size_t       streamHandleCapacity{};
+    size_t       openStreamHandles{};
+    int          requestedModels{};
+    unsigned int memoryUsedBytes{};
+    unsigned int halfBufferBlocks{};
+    SChannel     channels[2]{};
+};
+
+struct SStreamingArchiveAllocationSA
+{
+    unsigned char archiveId{};
+    unsigned char streamHandleId{};
+};
+
 class CStreamingSA final : public CStreaming
 {
 public:
@@ -70,14 +98,17 @@ public:
     void ReinitStreaming();
     void RemoveBigBuildings() override;
 
-    CStreamingInfo* GetStreamingInfo(uint32 id);
-    void            SetStreamingInfo(uint32 modelid, unsigned char usStreamID, uint uiOffset, ushort usSize, uint uiNextInImg = -1);
-    unsigned char   GetUnusedArchive();
-    unsigned char   GetUnusedStreamHandle();
-    unsigned char   AddArchive(const wchar_t* szFilePath);
-    void            RemoveArchive(unsigned char ucStreamHandler);
-    bool            SetStreamingBufferSize(uint32 uiSize);
-    uint32          GetStreamingBufferSize() { return ms_streamingHalfOfBufferSizeBlocks * 2048 * 2; };  // In bytes
+    CStreamingInfo*                GetStreamingInfo(uint32 id);
+    void                           SetStreamingInfo(uint32 modelid, unsigned char usStreamID, uint uiOffset, ushort usSize, uint uiNextInImg = -1);
+    unsigned char                  GetUnusedArchive();
+    unsigned char                  GetUnusedStreamHandle();
+    unsigned char                  AddArchive(const wchar_t* szFilePath);
+    void                           RemoveArchive(unsigned char ucStreamHandler);
+    SStreamingLifecycleTelemetrySA GetLifecycleTelemetry() const;
+    bool                           PlanArchiveAllocations(size_t count, std::vector<SStreamingArchiveAllocationSA>& plan, std::string& error) const;
+    bool                           ArchiveMatchesAllocation(const SStreamingArchiveAllocationSA& allocation) const;
+    bool                           SetStreamingBufferSize(uint32 uiSize);
+    uint32                         GetStreamingBufferSize() { return ms_streamingHalfOfBufferSizeBlocks * 2048 * 2; };  // In bytes
 
     void          MakeSpaceFor(std::uint32_t memoryToCleanInBytes) override;
     std::uint32_t GetMemoryUsed() const override;

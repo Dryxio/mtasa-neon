@@ -781,6 +781,8 @@ void CGameSA::SetGameSpeed(float fSpeed)
 
 void CGameSA::Reset()
 {
+    CNativeWorldPackManagerSA::LogLifecycleTelemetry("CGameSA::Reset-begin");
+
     // Things to do if the game was loaded
     if (GetSystemState() == SystemState::GS_PLAYING_GAME)
     {
@@ -834,6 +836,7 @@ void CGameSA::Terminate()
 void CGameSA::Initialize()
 {
     CNativeModelStoreSA::LogDiagnostics("CGameSA::Initialize");
+    CNativeWorldPackManagerSA::LogLifecycleTelemetry("CGameSA::Initialize");
 
     // Initialize garages
     m_pGarages->Initialize();

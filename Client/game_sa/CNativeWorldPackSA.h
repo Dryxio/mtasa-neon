@@ -194,6 +194,11 @@ public:
     // callers must not mutate model/FileID tables themselves.
     static void PrepareStreamingAtPosition(const CVector& position);
 
+    // Samples the process-wide substrate and generation-owned native state.
+    // This is intentionally read-only: later hot-unload checkpoints will use
+    // the same contract as their commit fence instead of inventing new checks.
+    static void LogLifecycleTelemetry(const char* context);
+
     // Keeps lifecycle-sensitive diagnostics in one place and prefixes them
     // with the active descriptor's stable log tag.
     static void LogStreamingBufferClamp(unsigned int requestedBlocks, unsigned int effectiveBlocks, unsigned int requiredBlocks);

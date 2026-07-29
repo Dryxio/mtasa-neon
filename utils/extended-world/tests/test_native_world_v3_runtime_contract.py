@@ -222,6 +222,66 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("data + offset + 30", source)
         self.assertIn("RemapStaticWorldV3Model(pack, instance.modelId)", source)
 
+    def test_v3_runtime_baseline_is_structural_and_allocation_driven(self) -> None:
+        source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
+        streaming = (REPOSITORY / "Client/game_sa/CStreamingSA.cpp").read_text(encoding="utf-8")
+        prepare = source[source.index("bool PrepareStaticWorldV3Transaction") : source.index("void RegisterStaticWorldV3Set()")]
+        aggregate = source[source.index("bool ValidateStaticWorldV3Aggregate") : source.index("bool AcquireStaticWorldV3SetChildren")]
+
+        self.assertNotIn("atomic != 13984", prepare)
+        self.assertNotIn("occupiedTxd != 3608", prepare)
+        self.assertIn("ValidateStaticWorldV3RuntimeBaseline", prepare)
+        self.assertIn("PlanStaticWorldV3PoolAllocations", prepare)
+        self.assertIn("poolFlagSnapshots", source)
+        self.assertIn("sample.objects != baseline.objects", source)
+        self.assertIn("memcmp(sample.flags", source)
+        self.assertIn("baseline=runtime-deferred", aggregate)
+        self.assertIn("iplSlots += inventory.lodAnchorCount ? 1U : 0U", aggregate)
+        self.assertIn("STATIC_WORLD_V3_STOCK_BUILDING_RESERVE + maximumCityEntities", aggregate)
+        self.assertIn("STATIC_WORLD_V3_STOCK_COL_MODEL_RESERVE + maximumCityColModels", aggregate)
+        self.assertIn("for (unsigned int id = layout.dff; id < layout.txd; ++id)", prepare)
+
+        self.assertIn("PlanArchiveAllocations", prepare)
+        self.assertIn("ArchiveMatchesAllocation", prepare)
+        self.assertIn("!m_StreamHandles[0]", streaming)
+        self.assertIn("!archive.szName[0]", streaming)
+        self.assertIn("DEFERRED_PLAYER_ARCHIVE_ID = MIN_IMAGES_NUM - 1", streaming)
+        self.assertIn("index != DEFERRED_PLAYER_ARCHIVE_ID", streaming)
+        self.assertIn("streaming archive foundation has an unnamed required stock archive", streaming)
+        self.assertIn("streaming archive foundation has a deferred player archive with a bound handle", streaming)
+        self.assertNotIn('error = "streaming archive foundation has an unnamed reserved archive"', streaming)
+        self.assertNotIn("index == 0 ? encodedHandle != 0 : handleId == 0", streaming)
+        self.assertIn("archiveHandles[handleId]", streaming)
+        self.assertIn("archiveNameEnd == std::end(archive.szName)", streaming)
+        self.assertIn("streamNameEnd == std::end(m_StreamNames[handleId].szName)", streaming)
+        self.assertIn("_strnicmp(archive.szName, m_StreamNames[handleId].szName, archiveNameLength)", streaming)
+        self.assertIn("usedHandles[index] = m_StreamHandles[index] != nullptr", streaming)
+        self.assertIn("usedHandles.resize(grownHandleCount)", streaming)
+        self.assertIn("streamHandleId == 0", streaming)
+
+        def simulate(flags: list[bool], cursor: int, additions: int) -> list[int]:
+            planned: list[int] = []
+            occupied = list(flags)
+            for _ in range(additions):
+                selected = -1
+                for offset in range(1, len(occupied) + 1):
+                    slot = (cursor + offset) % len(occupied)
+                    if not occupied[slot]:
+                        selected = slot
+                        break
+                if selected < 0:
+                    raise RuntimeError("exhausted")
+                occupied[selected] = True
+                cursor = selected
+                planned.append(selected)
+            return planned
+
+        self.assertEqual([0, 1], simulate([False, False, True, True], -1, 2))
+        self.assertEqual([3, 1], simulate([True, False, True, False], 2, 2))
+        self.assertEqual([1, 3], simulate([True, False, True, False], 0, 2))
+        with self.assertRaises(RuntimeError):
+            simulate([True, True], 1, 1)
+
     def test_native_physical_model_slots_are_hidden_from_mta_model_apis(self) -> None:
         game_api = (REPOSITORY / "Client/sdk/game/CGame.h").read_text(encoding="utf-8")
         game_sa = (REPOSITORY / "Client/game_sa/CGameSA.cpp").read_text(encoding="utf-8")

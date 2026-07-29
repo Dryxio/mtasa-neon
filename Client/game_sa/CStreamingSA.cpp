@@ -55,6 +55,20 @@ namespace
     constexpr size_t MAX_STREAMS_NUM = 255;
     constexpr size_t MAX_IMAGES_NUM = MAX_STREAMS_NUM - RESERVED_STREAMS_NUM;
     constexpr size_t MIN_IMAGES_NUM = 6;  // GTA3(yes, it is presented twice), GTA_INT, CARREC, SCRIPT, CUTSCENE, PLAYER
+    constexpr size_t DEFERRED_PLAYER_ARCHIVE_ID = MIN_IMAGES_NUM - 1;
+
+    struct SStreamingChannelTelemetryMirror
+    {
+        int32_t  modelIds[16];
+        int32_t  modelStreamingBufferOffsets[16];
+        int32_t  state;
+        int32_t  loadingLevel;
+        uint32_t position;
+        int32_t  sectorCount;
+        int32_t  totalTries;
+        int32_t  cdStreamStatus;
+    };
+    static_assert(sizeof(SStreamingChannelTelemetryMirror) == 0x98, "Invalid streaming channel telemetry mirror size");
 }  // namespace
 
 bool IsUpgradeModelId(DWORD dwModelID)
@@ -456,6 +470,172 @@ void CStreamingSA::RemoveArchive(unsigned char ucArchiveID)
 
     CloseHandle(m_StreamHandles[uiStreamHandlerID]);
     m_StreamHandles[uiStreamHandlerID] = NULL;
+}
+
+SStreamingLifecycleTelemetrySA CStreamingSA::GetLifecycleTelemetry() const
+{
+    SStreamingLifecycleTelemetrySA result;
+    result.archiveCapacity = m_Imgs.size();
+    result.archiveLimit = MAX_IMAGES_NUM;
+    result.streamHandleCapacity = m_StreamHandles.size();
+    result.requestedModels = *reinterpret_cast<const int*>(0x8E4CB8);
+    result.memoryUsedBytes = *reinterpret_cast<const unsigned int*>(0x8E4CB4);
+    result.halfBufferBlocks = ms_streamingHalfOfBufferSizeBlocks;
+
+    for (size_t index = 0; index < m_Imgs.size(); ++index)
+    {
+        const CArchiveInfo& archive = m_Imgs[index];
+        result.namedArchives += archive.szName[0] != '\0';
+        result.boundArchives += index < MIN_IMAGES_NUM ? archive.szName[0] != '\0' : archive.uiStreamHandleId != 0;
+    }
+    for (HANDLE handle : m_StreamHandles)
+        result.openStreamHandles += handle != nullptr && handle != INVALID_HANDLE_VALUE;
+
+    const auto* channels = reinterpret_cast<const SStreamingChannelTelemetryMirror*>(0x8E4A60);
+    for (size_t channelIndex = 0; channelIndex < std::size(result.channels); ++channelIndex)
+    {
+        SStreamingLifecycleTelemetrySA::SChannel& target = result.channels[channelIndex];
+        const SStreamingChannelTelemetryMirror&   source = channels[channelIndex];
+        target.state = source.state;
+        target.sectorCount = source.sectorCount;
+        target.cdStreamStatus = source.cdStreamStatus;
+        for (int32_t modelId : source.modelIds)
+            target.modelCount += modelId >= 0;
+    }
+    return result;
+}
+
+bool CStreamingSA::PlanArchiveAllocations(size_t count, std::vector<SStreamingArchiveAllocationSA>& plan, std::string& error) const
+{
+    if (m_StreamHandles.empty() || m_StreamHandles.size() > MAX_STREAMS_NUM || m_StreamNames.size() != m_StreamHandles.size() ||
+        m_Imgs.size() < MIN_IMAGES_NUM || m_Imgs.size() > MAX_IMAGES_NUM || !m_StreamHandles[0] || m_StreamHandles[0] == INVALID_HANDLE_VALUE)
+    {
+        error = "streaming archive foundation or reserved handle zero is invalid";
+        return false;
+    }
+
+    std::vector<bool> usedArchives(m_Imgs.size());
+    std::vector<bool> usedHandles(m_StreamHandles.size());
+    std::vector<bool> archiveHandles(m_StreamHandles.size());
+    for (size_t index = 0; index < m_Imgs.size(); ++index)
+    {
+        const CArchiveInfo& archive = m_Imgs[index];
+        if (index < MIN_IMAGES_NUM)
+        {
+            // GTA reserves slots 0..5 even when the current startup phase has
+            // not populated every stock descriptor yet. GetUnusedArchive
+            // never returns them, so keep them unavailable to the plan while
+            // accepting an entirely empty deferred stock slot.
+            usedArchives[index] = true;
+            if (!archive.szName[0])
+            {
+                if (index != DEFERRED_PLAYER_ARCHIVE_ID)
+                {
+                    error = "streaming archive foundation has an unnamed required stock archive";
+                    return false;
+                }
+                if (archive.uiStreamHandleId != 0)
+                {
+                    error = "streaming archive foundation has a deferred player archive with a bound handle";
+                    return false;
+                }
+                continue;
+            }
+        }
+        else
+            usedArchives[index] = archive.uiStreamHandleId != 0;
+        if (!usedArchives[index])
+            continue;
+        const unsigned int encodedHandle = archive.uiStreamHandleId;
+        const size_t       handleId = encodedHandle >> 24;
+        if ((encodedHandle & 0x00FFFFFFU) != 0 || handleId >= m_StreamHandles.size() || !m_StreamHandles[handleId] ||
+            m_StreamHandles[handleId] == INVALID_HANDLE_VALUE)
+        {
+            error = "streaming archive foundation references an invalid stream handle";
+            return false;
+        }
+        if (archiveHandles[handleId])
+        {
+            error = "streaming archive foundation aliases a stream handle between stock archives";
+            return false;
+        }
+        if (archive.szName[0])
+        {
+            const auto archiveNameEnd = std::find(std::begin(archive.szName), std::end(archive.szName), '\0');
+            const auto streamNameEnd = std::find(std::begin(m_StreamNames[handleId].szName), std::end(m_StreamNames[handleId].szName), '\0');
+            if (archiveNameEnd == std::end(archive.szName) || streamNameEnd == std::end(m_StreamNames[handleId].szName))
+            {
+                error = "streaming archive foundation contains an unterminated name";
+                return false;
+            }
+            const size_t archiveNameLength = std::distance(std::begin(archive.szName), archiveNameEnd);
+            const size_t streamNameLength = std::distance(std::begin(m_StreamNames[handleId].szName), streamNameEnd);
+            if (archiveNameLength != streamNameLength || _strnicmp(archive.szName, m_StreamNames[handleId].szName, archiveNameLength) != 0)
+            {
+                error = "streaming archive foundation descriptor and stream names differ";
+                return false;
+            }
+        }
+        archiveHandles[handleId] = true;
+    }
+    for (size_t index = 0; index < m_StreamHandles.size(); ++index)
+        // GetUnusedStreamHandle only treats a null entry as reusable. Mirror
+        // that rule exactly so an invalid-but-owned handle cannot shift every
+        // subsequent archive prediction away from GTA's allocator.
+        usedHandles[index] = m_StreamHandles[index] != nullptr;
+
+    plan.clear();
+    plan.reserve(count);
+    for (size_t addition = 0; addition < count; ++addition)
+    {
+        size_t archiveId = usedArchives.size();
+        for (size_t index = MIN_IMAGES_NUM; index < usedArchives.size(); ++index)
+            if (!usedArchives[index])
+            {
+                archiveId = index;
+                break;
+            }
+        if (archiveId == usedArchives.size())
+        {
+            const size_t grownSize = std::min(usedArchives.size() + usedArchives.size() * 2 + 1, MAX_IMAGES_NUM);
+            if (grownSize == usedArchives.size())
+            {
+                error = "streaming archive allocation plan exhausted the archive table";
+                return false;
+            }
+            usedArchives.resize(grownSize);
+            const size_t grownHandleCount = Clamp(static_cast<size_t>(VAR_DefaultStreamHandlersMaxCount), grownSize + RESERVED_STREAMS_NUM, MAX_STREAMS_NUM);
+            usedHandles.resize(grownHandleCount);
+            archiveId = std::max(static_cast<size_t>(MIN_IMAGES_NUM), m_Imgs.size());
+            while (archiveId < usedArchives.size() && usedArchives[archiveId])
+                ++archiveId;
+            if (archiveId == usedArchives.size())
+            {
+                error = "streaming archive allocation growth produced no usable slot";
+                return false;
+            }
+        }
+
+        size_t streamHandleId = 0;
+        while (streamHandleId < usedHandles.size() && usedHandles[streamHandleId])
+            ++streamHandleId;
+        if (streamHandleId == 0 || streamHandleId >= usedHandles.size())
+        {
+            error = "streaming archive allocation plan exhausted safe stream handles";
+            return false;
+        }
+        usedArchives[archiveId] = true;
+        usedHandles[streamHandleId] = true;
+        plan.push_back({static_cast<unsigned char>(archiveId), static_cast<unsigned char>(streamHandleId)});
+    }
+    return true;
+}
+
+bool CStreamingSA::ArchiveMatchesAllocation(const SStreamingArchiveAllocationSA& allocation) const
+{
+    return allocation.archiveId < m_Imgs.size() && allocation.streamHandleId < m_StreamHandles.size() && allocation.streamHandleId != 0 &&
+           m_Imgs[allocation.archiveId].uiStreamHandleId == static_cast<unsigned int>(allocation.streamHandleId) << 24 &&
+           m_StreamHandles[allocation.streamHandleId] != nullptr && m_StreamHandles[allocation.streamHandleId] != INVALID_HANDLE_VALUE;
 }
 
 bool CStreamingSA::SetStreamingBufferSize(uint32 numBlocks)

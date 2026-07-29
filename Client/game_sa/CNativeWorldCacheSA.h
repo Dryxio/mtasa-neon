@@ -63,6 +63,14 @@ struct SNativeWorldV3SetRequestSA
 
 using NativeWorldCacheAuditSA = std::function<bool(const std::string& quarantineDirectory, std::string& error)>;
 
+struct SNativeWorldCacheLeaseTelemetrySA
+{
+    size_t       pendingHandles{};
+    size_t       processHandles{};
+    unsigned int processLeaseCommits{};
+    bool         legacyCachePrepared{};
+};
+
 class CNativeWorldCacheLeaseSA
 {
 public:
@@ -111,3 +119,4 @@ bool AcquireExistingNativeWorldV3SetLease(const SNativeWorldV3SetRequestSA& requ
                                           CNativeWorldCacheLeaseSA& lease, std::string& publishedDirectory, std::string& error);
 void CommitNativeWorldCacheLease();
 void ReleaseNativeWorldCacheLease();
+SNativeWorldCacheLeaseTelemetrySA GetNativeWorldCacheLeaseTelemetry();

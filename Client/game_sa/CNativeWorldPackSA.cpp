@@ -108,6 +108,12 @@ namespace
     constexpr const char*  STATIC_WORLD_V3_SET_MANIFEST = "static-world-v3-set.json";
     constexpr unsigned int STATIC_WORLD_V3_SET_MAX_MANIFEST_BYTES = 16 * 1024;
     constexpr unsigned int STATIC_WORLD_V3_SET_MAX_PACKS = 8;
+    // These are future stock-scene reserves, not startup pool baselines. The
+    // LoadCdDirectory fence precedes bounding-box and scene IPL population, so
+    // replacing them with the current pool occupancy would under-prove the
+    // later building and ColModel peaks.
+    constexpr unsigned int STATIC_WORLD_V3_STOCK_BUILDING_RESERVE = 9166;
+    constexpr unsigned int STATIC_WORLD_V3_STOCK_COL_MODEL_RESERVE = 9980;
     constexpr DWORD        FLUSH_STREAMING_CHANNELS = 0x40E460;
     constexpr DWORD        COVER_INIT = 0x698710;
     constexpr DWORD        REMOVE_ALL_COLLISION_TAIL = 0x5B9321;
@@ -277,6 +283,17 @@ namespace
         bool                                               spatialReady{};
     };
 
+    struct SStaticWorldV3RuntimeDemand
+    {
+        unsigned int ordinaryModels{};
+        unsigned int damageModels{};
+        unsigned int timedModels{};
+        unsigned int txdSlots{};
+        unsigned int colSlots{};
+        unsigned int iplSlots{};
+        unsigned int archives{};
+    };
+
     struct SColDef
     {
         CRect rect;
@@ -398,6 +415,278 @@ namespace
     std::atomic_bool                                     g_nativeModelSlotsReserved{false};
     std::atomic_uint                                     g_reservedPackModelFirst{0};
     std::atomic_uint                                     g_reservedPackModelLast{0};
+
+    struct SNativePoolTelemetry
+    {
+        const void*          objects{};
+        const unsigned char* flags{};
+        int                  capacity{-1};
+        int                  firstFree{-1};
+        int                  occupied{-1};
+        int                  highestOccupied{-1};
+        bool                 valid{};
+    };
+
+    struct SNativeWorldLifecycleTelemetry
+    {
+        bool                                modelStoresInstalled{};
+        unsigned int                        atomicCapacity{};
+        unsigned int                        damageCapacity{};
+        unsigned int                        timedCapacity{};
+        unsigned int                        atomicUsed{};
+        unsigned int                        damageUsed{};
+        unsigned int                        timedUsed{};
+        std::array<SNativePoolTelemetry, 6> pools{};
+        SStreamingLifecycleTelemetrySA      streaming{};
+        SNativeWorldCacheLeaseTelemetrySA   cache{};
+        unsigned int                        modelPointers{};
+        unsigned int                        arenaModelPointers{};
+        unsigned int                        streamingEntries{};
+        unsigned int                        arenaStreamingEntries{};
+        unsigned int                        requestedStreamingEntries{};
+        unsigned int                        loadedStreamingEntries{};
+        unsigned int                        catalogModels{};
+        unsigned int                        validLeaseObjects{};
+        bool                                contentNeutral{};
+        bool                                contentMatchesBaseline{};
+        bool                                sessionNeutral{};
+        bool                                ioQuiescent{};
+    };
+
+    struct SNativeWorldNeutralBaseline
+    {
+        bool                                      captured{};
+        unsigned int                              atomicUsed{};
+        unsigned int                              damageUsed{};
+        unsigned int                              timedUsed{};
+        std::array<SNativePoolTelemetry, 6>       pools{};
+        std::array<std::vector<unsigned char>, 3> poolFlagSnapshots;
+        size_t                                    boundArchives{};
+        size_t                                    openStreamHandles{};
+        unsigned int                              modelPointers{};
+        unsigned int                              streamingEntries{};
+    };
+
+    SNativeWorldNeutralBaseline g_nativeWorldNeutralBaseline;
+
+    constexpr const char* NATIVE_POOL_NAMES[] = {"txd", "col", "ipl", "building", "colModel", "quadTreeNode"};
+    constexpr DWORD       NATIVE_POOL_POINTERS[] = {0x00C8800C, 0x00965560, 0x008E3FB0, 0x00B74498, 0x00B744A4, 0x00B745BC};
+
+    struct SNativePoolHeader
+    {
+        void*          objects;
+        unsigned char* flags;
+        int            capacity;
+        int            firstFree;
+    };
+
+    static_assert(std::size(NATIVE_POOL_NAMES) == std::size(NATIVE_POOL_POINTERS), "Native pool telemetry tables differ");
+
+    const char* StateName(EState state)
+    {
+        switch (state)
+        {
+            case EState::Off:
+                return "off";
+            case EState::Prepared:
+                return "prepared";
+            case EState::Hooked:
+                return "hooked";
+            case EState::Registering:
+                return "registering";
+            case EState::Active:
+                return "active";
+            case EState::Refused:
+                return "refused";
+        }
+        return "unknown";
+    }
+
+    SNativePoolTelemetry ReadNativePoolTelemetry(DWORD pointerAddress)
+    {
+        SNativePoolTelemetry result;
+        const auto*          pool = *reinterpret_cast<SNativePoolHeader* const*>(pointerAddress);
+        if (!pool || !pool->objects || !pool->flags || pool->capacity <= 0)
+            return result;
+
+        result.valid = true;
+        result.objects = pool->objects;
+        result.flags = pool->flags;
+        result.capacity = pool->capacity;
+        result.firstFree = pool->firstFree;
+        result.occupied = 0;
+        for (int slot = 0; slot < pool->capacity; ++slot)
+        {
+            if ((pool->flags[slot] & 0x80) == 0)
+            {
+                ++result.occupied;
+                result.highestOccupied = slot;
+            }
+        }
+        return result;
+    }
+
+    bool StreamingInfoIsEmpty(const CStreamingInfo& info)
+    {
+        return info.prevId == 0xFFFF && info.nextId == 0xFFFF && info.nextInImg == 0xFFFF && info.flg == 0 && info.archiveId == 0 && info.offsetInBlocks == 0 &&
+               info.sizeInBlocks == 0 && info.loadState == eModelLoadState::LOADSTATE_NOT_LOADED;
+    }
+
+    SNativeWorldLifecycleTelemetry ReadNativeWorldLifecycleTelemetry()
+    {
+        SNativeWorldLifecycleTelemetry result;
+        result.modelStoresInstalled = CNativeModelStoreSA::IsInstalled();
+        CNativeModelStoreSA::GetCapacities(result.atomicCapacity, result.damageCapacity, result.timedCapacity);
+        if (result.modelStoresInstalled)
+            CNativeModelStoreSA::GetUsage(result.atomicUsed, result.damageUsed, result.timedUsed);
+
+        for (size_t index = 0; index < result.pools.size(); ++index)
+            result.pools[index] = ReadNativePoolTelemetry(NATIVE_POOL_POINTERS[index]);
+        if (g_streaming)
+            result.streaming = g_streaming->GetLifecycleTelemetry();
+        result.cache = GetNativeWorldCacheLeaseTelemetry();
+
+        if (pGame)
+        {
+            const SFileIDLayout&  layout = pGame->GetFileIDLayout();
+            auto* const*          modelInfos = static_cast<CBaseModelInfoSAInterface* const*>(pGame->GetModelInfoArray());
+            const CStreamingInfo* streamingInfos = pGame->GetStreamingInfoArray();
+            for (unsigned int modelId = layout.dff; modelId < layout.txd; ++modelId)
+            {
+                if (modelInfos[modelId])
+                {
+                    ++result.modelPointers;
+                    if (modelId >= NATIVE_WORLD_MODEL_ARENA_FIRST && modelId <= STATIC_WORLD_V3_LAST_MODEL)
+                        ++result.arenaModelPointers;
+                }
+            }
+            for (unsigned int fileId = 0; fileId < layout.total; ++fileId)
+            {
+                const CStreamingInfo& info = streamingInfos[fileId];
+                if (!StreamingInfoIsEmpty(info))
+                {
+                    ++result.streamingEntries;
+                    if (fileId >= NATIVE_WORLD_MODEL_ARENA_FIRST && fileId <= STATIC_WORLD_V3_LAST_MODEL)
+                        ++result.arenaStreamingEntries;
+                }
+                result.requestedStreamingEntries += info.loadState == eModelLoadState::LOADSTATE_REQUESTED ||
+                                                    info.loadState == eModelLoadState::LOADSTATE_READING ||
+                                                    info.loadState == eModelLoadState::LOADSTATE_FINISHING;
+                result.loadedStreamingEntries += info.loadState == eModelLoadState::LOADSTATE_LOADED;
+            }
+        }
+
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+            result.catalogModels += static_cast<unsigned int>(pack.modelInfos.size());
+        result.validLeaseObjects += g_authorizedLease.IsValid();
+        for (const CNativeWorldCacheLeaseSA& lease : g_staticWorldV3ChildLeases)
+            result.validLeaseObjects += lease.IsValid();
+
+        const bool banksUnowned = std::all_of(g_staticWorldV3BankOwners.begin(), g_staticWorldV3BankOwners.end(), [](int owner) { return owner < 0; });
+        result.contentNeutral = result.catalogModels == 0 && result.arenaModelPointers == 0 && result.arenaStreamingEntries == 0 &&
+                                g_staticWorldV3PermanentBindings.empty() && g_staticWorldV3ColOwners.empty() && g_staticWorldV3IplOwners.empty() &&
+                                g_staticWorldV3PendingBoundingAnchors.empty() && g_staticWorldV3ActivePack < 0 && banksUnowned &&
+                                g_staticWorldV3LodState == EStaticWorldV3LodState::Off;
+        if (g_nativeWorldNeutralBaseline.captured && result.modelStoresInstalled)
+        {
+            result.contentMatchesBaseline = result.contentNeutral && result.atomicUsed == g_nativeWorldNeutralBaseline.atomicUsed &&
+                                            result.damageUsed == g_nativeWorldNeutralBaseline.damageUsed &&
+                                            result.timedUsed == g_nativeWorldNeutralBaseline.timedUsed &&
+                                            result.streaming.boundArchives == g_nativeWorldNeutralBaseline.boundArchives &&
+                                            result.streaming.openStreamHandles == g_nativeWorldNeutralBaseline.openStreamHandles &&
+                                            result.modelPointers == g_nativeWorldNeutralBaseline.modelPointers;
+            for (size_t index = 0; index < 3; ++index)
+            {
+                const SNativePoolTelemetry& current = result.pools[index];
+                const SNativePoolTelemetry& baseline = g_nativeWorldNeutralBaseline.pools[index];
+                result.contentMatchesBaseline = result.contentMatchesBaseline && current.valid && baseline.valid && current.capacity == baseline.capacity &&
+                                                current.firstFree == baseline.firstFree && current.occupied == baseline.occupied &&
+                                                current.highestOccupied == baseline.highestOccupied;
+            }
+        }
+        result.sessionNeutral = !g_authorizedRoute && !g_staticWorldV3Route && result.validLeaseObjects == 0 && result.cache.pendingHandles == 0 &&
+                                result.cache.processHandles == 0 && result.cache.processLeaseCommits == 0 && !result.cache.legacyCachePrepared;
+        result.ioQuiescent = result.streaming.requestedModels == 0;
+        for (const SStreamingLifecycleTelemetrySA::SChannel& channel : result.streaming.channels)
+            result.ioQuiescent = result.ioQuiescent && channel.state == 0 && channel.modelCount == 0;
+        return result;
+    }
+
+    void LogNativeWorldLifecycleTelemetry(const char* context, const SNativeWorldLifecycleTelemetry& sample)
+    {
+        const char* safeContext = context && context[0] ? context : "unspecified";
+        SharedUtil::WriteDebugEvent(SString(
+            "[NativeWorldNeutral] state=sample context=%s lifecycle=%s content-neutral=%s baseline-match=%s session-neutral=%s io-quiescent=%s baseline=%s "
+            "generation=%u "
+            "activePack=%d banks=%d,%d catalogModels=%u colOwners=%u iplOwners=%u permanentBindings=%u reservations=%s leaseObjects=%u "
+            "cacheHandles=%u,%u cacheCommits=%u",
+            safeContext, StateName(g_state), sample.contentNeutral ? "yes" : "no", sample.contentMatchesBaseline ? "yes" : "no",
+            sample.sessionNeutral ? "yes" : "no", sample.ioQuiescent ? "yes" : "no", g_nativeWorldNeutralBaseline.captured ? "captured" : "absent",
+            g_staticWorldV3Generation.load(std::memory_order_acquire), g_staticWorldV3ActivePack, g_staticWorldV3BankOwners[0], g_staticWorldV3BankOwners[1],
+            sample.catalogModels, static_cast<unsigned int>(g_staticWorldV3ColOwners.size()), static_cast<unsigned int>(g_staticWorldV3IplOwners.size()),
+            static_cast<unsigned int>(g_staticWorldV3PermanentBindings.size()), g_nativeModelSlotsReserved.load(std::memory_order_acquire) ? "yes" : "no",
+            sample.validLeaseObjects, static_cast<unsigned int>(sample.cache.pendingHandles), static_cast<unsigned int>(sample.cache.processHandles),
+            sample.cache.processLeaseCommits));
+
+        const SFileIDLayout& layout = pGame->GetFileIDLayout();
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldNeutral] state=capacity context=%s fileIds=%u bases=%u,%u,%u,%u,%u,%u,%u,%u storesInstalled=%s stores=%u/%u,%u/%u,%u/%u "
+                    "modelPointers=%u arenaPointers=%u streamingEntries=%u arenaStreaming=%u streamingRequested=%u streamingLoaded=%u",
+                    safeContext, layout.total, layout.dff, layout.txd, layout.col, layout.ipl, layout.dat, layout.ifp, layout.rrr, layout.scm,
+                    sample.modelStoresInstalled ? "yes" : "no", sample.atomicUsed, sample.atomicCapacity, sample.damageUsed, sample.damageCapacity,
+                    sample.timedUsed, sample.timedCapacity, sample.modelPointers, sample.arenaModelPointers, sample.streamingEntries,
+                    sample.arenaStreamingEntries, sample.requestedStreamingEntries, sample.loadedStreamingEntries));
+
+        SString pools = SString("[NativeWorldNeutral] state=pools context=%s", safeContext);
+        for (size_t index = 0; index < sample.pools.size(); ++index)
+        {
+            const SNativePoolTelemetry& pool = sample.pools[index];
+            pools += SString(" %s=%d/%d firstFree=%d high=%d valid=%s", NATIVE_POOL_NAMES[index], pool.occupied, pool.capacity, pool.firstFree,
+                             pool.highestOccupied, pool.valid ? "yes" : "no");
+        }
+        SharedUtil::WriteDebugEvent(pools);
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldNeutral] state=streaming context=%s archiveSlots=%u/%u named=%u bound=%u streamHandles=%u/%u requests=%d memory=%u "
+                    "halfBufferBlocks=%u "
+                    "channel0=%d:%u:%d:%d channel1=%d:%u:%d:%d",
+                    safeContext, static_cast<unsigned int>(sample.streaming.archiveCapacity), static_cast<unsigned int>(sample.streaming.archiveLimit),
+                    static_cast<unsigned int>(sample.streaming.namedArchives), static_cast<unsigned int>(sample.streaming.boundArchives),
+                    static_cast<unsigned int>(sample.streaming.openStreamHandles), static_cast<unsigned int>(sample.streaming.streamHandleCapacity),
+                    sample.streaming.requestedModels, sample.streaming.memoryUsedBytes, sample.streaming.halfBufferBlocks, sample.streaming.channels[0].state,
+                    sample.streaming.channels[0].modelCount, sample.streaming.channels[0].sectorCount, sample.streaming.channels[0].cdStreamStatus,
+                    sample.streaming.channels[1].state, sample.streaming.channels[1].modelCount, sample.streaming.channels[1].sectorCount,
+                    sample.streaming.channels[1].cdStreamStatus));
+    }
+
+    void CaptureNativeWorldNeutralBaseline(const char* context)
+    {
+        const SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
+        if (!g_nativeWorldNeutralBaseline.captured)
+        {
+            g_nativeWorldNeutralBaseline.captured = true;
+            g_nativeWorldNeutralBaseline.atomicUsed = sample.atomicUsed;
+            g_nativeWorldNeutralBaseline.damageUsed = sample.damageUsed;
+            g_nativeWorldNeutralBaseline.timedUsed = sample.timedUsed;
+            g_nativeWorldNeutralBaseline.pools = sample.pools;
+            for (size_t index = 0; index < g_nativeWorldNeutralBaseline.poolFlagSnapshots.size(); ++index)
+            {
+                const SNativePoolTelemetry& pool = sample.pools[index];
+                if (pool.valid)
+                    g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].assign(pool.flags, pool.flags + pool.capacity);
+            }
+            g_nativeWorldNeutralBaseline.boundArchives = sample.streaming.boundArchives;
+            g_nativeWorldNeutralBaseline.openStreamHandles = sample.streaming.openStreamHandles;
+            g_nativeWorldNeutralBaseline.modelPointers = sample.modelPointers;
+            g_nativeWorldNeutralBaseline.streamingEntries = sample.streamingEntries;
+        }
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldNeutral] state=baseline-captured context=%s content-neutral=%s io-quiescent=%s stores=%u,%u,%u archives=%u handles=%u "
+                    "modelPointers=%u streamingEntries=%u",
+                    context, sample.contentNeutral ? "yes" : "no", sample.ioQuiescent ? "yes" : "no", sample.atomicUsed, sample.damageUsed, sample.timedUsed,
+                    static_cast<unsigned int>(sample.streaming.boundArchives), static_cast<unsigned int>(sample.streaming.openStreamHandles),
+                    sample.modelPointers, sample.streamingEntries));
+        LogNativeWorldLifecycleTelemetry(context, sample);
+    }
 
     const SNativeWorldPackDescriptorSA& Pack()
     {
@@ -3126,6 +3415,9 @@ namespace
         int                        colFirstFree{};
         int                        iplFirstFree{};
         int                        txdFindCache{};
+        unsigned int               atomicUsed{};
+        unsigned int               damageUsed{};
+        unsigned int               timedUsed{};
         std::vector<BYTE>          txdObjects;
         std::vector<BYTE>          txdFlags;
         std::vector<BYTE>          colObjects;
@@ -3704,6 +3996,138 @@ namespace
             g_streaming->RemoveArchive(*archive);
     }
 
+    SStaticWorldV3RuntimeDemand CalculateStaticWorldV3RuntimeDemand()
+    {
+        SStaticWorldV3RuntimeDemand demand;
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+        {
+            demand.ordinaryModels += pack.ide.ordinaryModels;
+            demand.damageModels += pack.ide.damageModels;
+            demand.timedModels += pack.ide.timedModels;
+            demand.txdSlots += static_cast<unsigned int>(pack.ide.txdStems.size());
+            demand.colSlots += static_cast<unsigned int>(pack.inventory.colStems.size());
+            demand.iplSlots += static_cast<unsigned int>(pack.inventory.iplStems.size());
+            demand.iplSlots += pack.inventory.lodAnchorCount ? 1U : 0U;
+            demand.archives += static_cast<unsigned int>(pack.manifest.images.size());
+        }
+        return demand;
+    }
+
+    template <class T>
+    bool PlanStaticWorldV3PoolAllocations(CPoolSAInterface<T>* pool, int expectedCapacity, unsigned int additions, unsigned int fileIdBase, const char* name,
+                                          std::vector<unsigned int>& plannedSlots, std::string& error)
+    {
+        if (!pool || !pool->m_pObjects || !pool->m_byteMap || pool->m_nSize != expectedCapacity || pool->m_nFirstFree < -1 ||
+            pool->m_nFirstFree >= pool->m_nSize)
+        {
+            error = SString("static-world-v3 %s pool structure or allocation cursor is invalid", name);
+            return false;
+        }
+
+        std::vector<bool> occupied(static_cast<size_t>(pool->m_nSize));
+        for (int slot = 0; slot < pool->m_nSize; ++slot)
+            occupied[slot] = pool->IsContains(slot);
+
+        int cursor = pool->m_nFirstFree;
+        plannedSlots.reserve(additions);
+        for (unsigned int addition = 0; addition < additions; ++addition)
+        {
+            int selected = -1;
+            for (int offset = 1; offset <= pool->m_nSize; ++offset)
+            {
+                int slot = cursor + offset;
+                if (slot >= pool->m_nSize)
+                    slot %= pool->m_nSize;
+                if (!occupied[slot])
+                {
+                    selected = slot;
+                    break;
+                }
+            }
+            if (selected < 0)
+            {
+                error = SString("static-world-v3 %s pool cannot satisfy its runtime allocation demand", name);
+                return false;
+            }
+            if (!StreamingInfoIsFree(fileIdBase + static_cast<unsigned int>(selected)))
+            {
+                error = SString("static-world-v3 %s pool selected an occupied streaming slot: %d", name, selected);
+                return false;
+            }
+            occupied[selected] = true;
+            cursor = selected;
+            plannedSlots.push_back(static_cast<unsigned int>(selected));
+        }
+        return true;
+    }
+
+    bool ValidateStaticWorldV3RuntimeBaseline(const SStaticWorldV3RuntimeDemand& demand, SNativeWorldLifecycleTelemetry& current, std::string& error)
+    {
+        current = ReadNativeWorldLifecycleTelemetry();
+        if (!g_nativeWorldNeutralBaseline.captured || !current.modelStoresInstalled || !current.contentNeutral || !current.ioQuiescent)
+        {
+            error = "static-world-v3 runtime baseline was not captured in a neutral, quiescent state";
+            return false;
+        }
+        if (current.atomicCapacity != 32000 || current.damageCapacity != 512 || current.timedCapacity != 1024)
+        {
+            error = "static-world-v3 model-store capacities differ from the installed foundation";
+            return false;
+        }
+        if (current.atomicUsed != g_nativeWorldNeutralBaseline.atomicUsed || current.damageUsed != g_nativeWorldNeutralBaseline.damageUsed ||
+            current.timedUsed != g_nativeWorldNeutralBaseline.timedUsed || current.modelPointers != g_nativeWorldNeutralBaseline.modelPointers ||
+            current.streamingEntries != g_nativeWorldNeutralBaseline.streamingEntries)
+        {
+            error = "static-world-v3 model or streaming baseline changed before runtime planning";
+            return false;
+        }
+
+        constexpr unsigned int EXPECTED_POOL_CAPACITIES[] = {8000, 512, 1024};
+        for (size_t index = 0; index < std::size(EXPECTED_POOL_CAPACITIES); ++index)
+        {
+            const SNativePoolTelemetry& baseline = g_nativeWorldNeutralBaseline.pools[index];
+            const SNativePoolTelemetry& sample = current.pools[index];
+            if (!baseline.valid || !sample.valid || sample.capacity != static_cast<int>(EXPECTED_POOL_CAPACITIES[index]) ||
+                sample.objects != baseline.objects || sample.flags != baseline.flags || sample.capacity != baseline.capacity ||
+                sample.firstFree != baseline.firstFree || sample.occupied != baseline.occupied || sample.highestOccupied != baseline.highestOccupied ||
+                g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].size() != static_cast<size_t>(sample.capacity) ||
+                memcmp(sample.flags, g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].data(), static_cast<size_t>(sample.capacity)) != 0)
+            {
+                error = SString("static-world-v3 %s pool changed after the runtime baseline capture", NATIVE_POOL_NAMES[index]);
+                return false;
+            }
+        }
+        if (current.streaming.boundArchives != g_nativeWorldNeutralBaseline.boundArchives ||
+            current.streaming.openStreamHandles != g_nativeWorldNeutralBaseline.openStreamHandles)
+        {
+            error = "static-world-v3 archive or stream-handle baseline changed before runtime planning";
+            return false;
+        }
+
+        const auto fits = [](int occupied, unsigned int additions, unsigned int capacity)
+        { return occupied >= 0 && static_cast<uint64_t>(occupied) + additions <= capacity; };
+        if (static_cast<uint64_t>(current.atomicUsed) + demand.ordinaryModels > current.atomicCapacity ||
+            static_cast<uint64_t>(current.damageUsed) + demand.damageModels > current.damageCapacity ||
+            static_cast<uint64_t>(current.timedUsed) + demand.timedModels > current.timedCapacity || !fits(current.pools[0].occupied, demand.txdSlots, 8000) ||
+            !fits(current.pools[1].occupied, demand.colSlots, 512) || !fits(current.pools[2].occupied, demand.iplSlots, 1024))
+        {
+            error = "static-world-v3 runtime baseline has insufficient model-store or pool headroom";
+            return false;
+        }
+        SharedUtil::WriteDebugEvent(SString(
+            "[NativeWorldRuntimePlanner] state=proved baselineStores=%u,%u,%u baselinePools=%d,%d,%d demandStores=%u,%u,%u "
+            "demandPools=%u,%u,%u totals=%u/%u,%u/%u,%u/%u,%u/8000,%u/512,%u/1024 archives=%u/%u handles=%u/%u nativeWrites=0",
+            current.atomicUsed, current.damageUsed, current.timedUsed, current.pools[0].occupied, current.pools[1].occupied, current.pools[2].occupied,
+            demand.ordinaryModels, demand.damageModels, demand.timedModels, demand.txdSlots, demand.colSlots, demand.iplSlots,
+            current.atomicUsed + demand.ordinaryModels, current.atomicCapacity, current.damageUsed + demand.damageModels, current.damageCapacity,
+            current.timedUsed + demand.timedModels, current.timedCapacity, static_cast<unsigned int>(current.pools[0].occupied) + demand.txdSlots,
+            static_cast<unsigned int>(current.pools[1].occupied) + demand.colSlots, static_cast<unsigned int>(current.pools[2].occupied) + demand.iplSlots,
+            static_cast<unsigned int>(current.streaming.boundArchives) + demand.archives, static_cast<unsigned int>(current.streaming.archiveLimit),
+            static_cast<unsigned int>(current.streaming.openStreamHandles) + demand.archives,
+            static_cast<unsigned int>(current.streaming.streamHandleCapacity)));
+        return true;
+    }
+
     bool PrepareStaticWorldV3Transaction(SStaticWorldV3PoolAllocationJournal& journal, std::vector<SStaticWorldV3StreamingBinding>& bindings,
                                          unsigned int& largestEntry, std::string& error)
     {
@@ -3720,42 +4144,23 @@ namespace
         }
         if (!ValidateStaticWorldV3LodArrayGlobals(0, error))
             return false;
-        unsigned int atomic = 0, damage = 0, timed = 0;
-        unsigned int atomicCapacity = 0, damageCapacity = 0, timedCapacity = 0;
-        CNativeModelStoreSA::GetCapacities(atomicCapacity, damageCapacity, timedCapacity);
-        if (!CNativeModelStoreSA::GetUsage(atomic, damage, timed) || atomic != 13984 || damage != 69 || timed != 160)
-        {
-            error = SString("static-world-v3 model stores differ from the proved stock baseline actual=%u,%u,%u expected=13984,69,160", atomic, damage, timed);
+        const SStaticWorldV3RuntimeDemand demand = CalculateStaticWorldV3RuntimeDemand();
+        SNativeWorldLifecycleTelemetry    runtimeBaseline;
+        if (!ValidateStaticWorldV3RuntimeBaseline(demand, runtimeBaseline, error))
             return false;
-        }
-        const auto occupiedSlots = [](const auto* pool)
-        {
-            unsigned int occupied = 0;
-            for (int slot = 0; slot < pool->m_nSize; ++slot)
-                occupied += pool->IsContains(slot) ? 1U : 0U;
-            return occupied;
-        };
-        const unsigned int occupiedTxd = occupiedSlots(txdPool);
-        const unsigned int occupiedCol = occupiedSlots(colPool);
-        const unsigned int occupiedIpl = occupiedSlots(iplPool);
-        if (occupiedTxd != 3608 || occupiedCol != 252 || occupiedIpl != 191)
-        {
-            error = SString("static-world-v3 pools differ from the proved stock baseline actual=%u,%u,%u expected=3608,252,191", occupiedTxd, occupiedCol,
-                            occupiedIpl);
+        journal.atomicUsed = runtimeBaseline.atomicUsed;
+        journal.damageUsed = runtimeBaseline.damageUsed;
+        journal.timedUsed = runtimeBaseline.timedUsed;
+
+        std::vector<unsigned int>                  txdAllocationPlan;
+        std::vector<unsigned int>                  colAllocationPlan;
+        std::vector<unsigned int>                  iplAllocationPlan;
+        std::vector<SStreamingArchiveAllocationSA> archiveAllocationPlan;
+        if (!g_streaming->PlanArchiveAllocations(demand.archives, archiveAllocationPlan, error) ||
+            !PlanStaticWorldV3PoolAllocations(txdPool, 8000, demand.txdSlots, pGame->GetBaseIDforTXD(), "TXD", txdAllocationPlan, error) ||
+            !PlanStaticWorldV3PoolAllocations(colPool, 512, demand.colSlots, pGame->GetBaseIDforCOL(), "COL", colAllocationPlan, error) ||
+            !PlanStaticWorldV3PoolAllocations(iplPool, 1024, demand.iplSlots, pGame->GetBaseIDforIPL(), "IPL", iplAllocationPlan, error))
             return false;
-        }
-        unsigned int addedAtomic = 0, addedDamage = 0, addedTimed = 0;
-        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
-        {
-            addedAtomic += pack.ide.ordinaryModels;
-            addedDamage += pack.ide.damageModels;
-            addedTimed += pack.ide.timedModels;
-        }
-        if (atomic + addedAtomic > atomicCapacity || damage + addedDamage > damageCapacity || timed + addedTimed > timedCapacity)
-        {
-            error = "static-world-v3 resident model stores exceed their runtime headroom";
-            return false;
-        }
 
         CBaseModelInfoSAInterface**         modelInfos = CModelInfoSAInterface::ms_modelInfoPtrs;
         const auto                          uppercaseKey = reinterpret_cast<unsigned int(__cdecl*)(const char*)>(GET_UPPERCASE_KEY);
@@ -3798,7 +4203,8 @@ namespace
                 return false;
             }
         }
-        for (unsigned int id = 0; id <= STATIC_WORLD_V3_LAST_STOCK_MODEL; ++id)
+        const SFileIDLayout& layout = pGame->GetFileIDLayout();
+        for (unsigned int id = layout.dff; id < layout.txd; ++id)
             if (modelInfos[id] && residentModelKeys.find(modelInfos[id]->ulHashKey) != residentModelKeys.end())
             {
                 error = SString("static-world-v3 resident DFF key collides with stock model %u", id);
@@ -3822,23 +4228,43 @@ namespace
         memcpy(journal.iplObjects.data(), iplPool->m_pObjects, journal.iplObjects.size());
         memcpy(journal.iplFlags.data(), iplPool->m_byteMap, journal.iplFlags.size());
 
+        size_t archivePlanIndex = 0;
         for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
             for (const SStaticWorldV3File& image : pack.manifest.images)
             {
-                const std::filesystem::path imagePath = std::filesystem::path(pack.directory) / image.name;
-                const unsigned char         archiveId = g_streaming->AddArchive(SharedUtil::FromUTF8(imagePath.string()).c_str());
+                if (archivePlanIndex >= archiveAllocationPlan.size())
+                {
+                    error = "static-world-v3 archive allocation plan ended before the manifest images";
+                    return false;
+                }
+                const SStreamingArchiveAllocationSA& plannedArchive = archiveAllocationPlan[archivePlanIndex++];
+                const std::filesystem::path          imagePath = std::filesystem::path(pack.directory) / image.name;
+                const unsigned char                  archiveId = g_streaming->AddArchive(SharedUtil::FromUTF8(imagePath.string()).c_str());
                 if (archiveId == INVALID_ARCHIVE_ID)
                 {
                     error = SString("static-world-v3 AddArchive failed for %s", image.name.c_str());
                     return false;
                 }
                 journal.archives.push_back(archiveId);
+                if (archiveId != plannedArchive.archiveId || !g_streaming->ArchiveMatchesAllocation(plannedArchive))
+                {
+                    error = SString("static-world-v3 AddArchive drifted from its runtime plan for %s", image.name.c_str());
+                    return false;
+                }
                 pack.archiveIds.emplace(imagePath, archiveId);
             }
+        if (archivePlanIndex != archiveAllocationPlan.size())
+        {
+            error = "static-world-v3 archive allocation plan was not consumed exactly";
+            return false;
+        }
 
         const auto addTxd = reinterpret_cast<int(__cdecl*)(const char*)>(ADD_TXD_SLOT);
         const auto addCol = reinterpret_cast<int(__cdecl*)(const char*)>(0x411140);
         const auto addIpl = reinterpret_cast<int(__cdecl*)(const char*)>(ADD_IPL_SLOT);
+        size_t     txdPlanIndex = 0;
+        size_t     colPlanIndex = 0;
+        size_t     iplPlanIndex = 0;
         for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
         {
             for (const std::string& txd : pack.ide.txdStems)
@@ -3846,10 +4272,15 @@ namespace
                 // CPool::GetFreeSlot advances m_nFirstFree. Using it as a
                 // predictor would make the native allocator advance twice and
                 // skip the slot whose state was journaled for rollback.
-                const int predicted = PredictNextPoolSlot(txdPool);
-                if (predicted < 0)
+                if (txdPlanIndex >= txdAllocationPlan.size())
                 {
-                    error = "static-world-v3 TXD pool exhausted during deterministic allocation";
+                    error = "static-world-v3 TXD allocation plan ended before the admitted names";
+                    return false;
+                }
+                const int predicted = static_cast<int>(txdAllocationPlan[txdPlanIndex++]);
+                if (PredictNextPoolSlot(txdPool) != predicted)
+                {
+                    error = "static-world-v3 TXD pool changed after its runtime allocation plan";
                     return false;
                 }
                 journal.txds.push_back(
@@ -3864,10 +4295,15 @@ namespace
             }
             for (const std::string& col : pack.inventory.colStems)
             {
-                const int predicted = PredictNextPoolSlot(colPool);
-                if (predicted < 0)
+                if (colPlanIndex >= colAllocationPlan.size())
                 {
-                    error = "static-world-v3 COL pool exhausted during deterministic allocation";
+                    error = "static-world-v3 COL allocation plan ended before the admitted names";
+                    return false;
+                }
+                const int predicted = static_cast<int>(colAllocationPlan[colPlanIndex++]);
+                if (PredictNextPoolSlot(colPool) != predicted)
+                {
+                    error = "static-world-v3 COL pool changed after its runtime allocation plan";
                     return false;
                 }
                 journal.cols.push_back(
@@ -3884,10 +4320,15 @@ namespace
             size_t groupIndex = 0;
             for (const std::string& ipl : pack.inventory.iplStems)
             {
-                const int predicted = PredictNextPoolSlot(iplPool);
-                if (predicted < 0)
+                if (iplPlanIndex >= iplAllocationPlan.size())
                 {
-                    error = "static-world-v3 IPL pool exhausted during deterministic allocation";
+                    error = "static-world-v3 IPL allocation plan ended before the admitted names";
+                    return false;
+                }
+                const int predicted = static_cast<int>(iplAllocationPlan[iplPlanIndex++]);
+                if (PredictNextPoolSlot(iplPool) != predicted)
+                {
+                    error = "static-world-v3 IPL pool changed after its runtime allocation plan";
                     return false;
                 }
                 journal.ipls.push_back(
@@ -3912,10 +4353,15 @@ namespace
             if (!pack.inventory.lodAnchorCount)
                 continue;
             const std::string lodOwnerName = pack.inventory.nameSpace + "lodroot";
-            const int         predicted = PredictNextPoolSlot(iplPool);
-            if (predicted < 0)
+            if (iplPlanIndex >= iplAllocationPlan.size())
             {
-                error = "static-world-v3 IPL pool exhausted while allocating the hidden LOD owner";
+                error = "static-world-v3 IPL allocation plan ended before the hidden LOD owners";
+                return false;
+            }
+            const int predicted = static_cast<int>(iplAllocationPlan[iplPlanIndex++]);
+            if (PredictNextPoolSlot(iplPool) != predicted)
+            {
+                error = "static-world-v3 IPL pool changed before allocating the hidden LOD owner";
                 return false;
             }
             journal.ipls.push_back(
@@ -3930,6 +4376,11 @@ namespace
             CIplSAInterface* owner = iplPool->GetObject(slot);
             owner->rect.Reset();
             owner->bDisabledStreaming = 1;
+        }
+        if (txdPlanIndex != txdAllocationPlan.size() || colPlanIndex != colAllocationPlan.size() || iplPlanIndex != iplAllocationPlan.size())
+        {
+            error = "static-world-v3 runtime pool allocation plans were not consumed exactly";
+            return false;
         }
 
         std::map<unsigned char, std::vector<SStaticWorldV3StreamingBinding>> perArchive;
@@ -4021,6 +4472,23 @@ namespace
             return;
         }
 
+        unsigned int atomicBefore = 0, damageBefore = 0, timedBefore = 0;
+        if (!CNativeModelStoreSA::GetUsage(atomicBefore, damageBefore, timedBefore) || atomicBefore != journal.atomicUsed ||
+            damageBefore != journal.damageUsed || timedBefore != journal.timedUsed)
+        {
+            RollbackStaticWorldV3PoolsAndArchives(journal);
+            g_staticWorldV3ColOwners.clear();
+            g_staticWorldV3IplOwners.clear();
+            for (CNativeWorldCacheLeaseSA& lease : g_staticWorldV3ChildLeases)
+                lease.Release();
+            ReleaseRegistrationLease();
+            ReleaseNativeModelSlotReservation();
+            g_state = EState::Refused;
+            MarkRegistrationRefused();
+            Log("registrar=refused format=3 reason=model-store-baseline-changed-before-barrier contentRollback=complete barrier=not-crossed");
+            return;
+        }
+
         if (memcmp(reinterpret_cast<const void*>(LOAD_COL_BUFFER_CALL), LOAD_COL_BUFFER_CALL_BYTES, sizeof(LOAD_COL_BUFFER_CALL_BYTES)) != 0 ||
             memcmp(reinterpret_cast<const void*>(LOAD_IPL_BUFFER_CALL), LOAD_IPL_BUFFER_CALL_BYTES, sizeof(LOAD_IPL_BUFFER_CALL_BYTES)) != 0 ||
             memcmp(reinterpret_cast<const void*>(REMOVE_ALL_COLLISION_TAIL), REMOVE_ALL_COLLISION_TAIL_BYTES, sizeof(REMOVE_ALL_COLLISION_TAIL_BYTES)) != 0)
@@ -4034,8 +4502,6 @@ namespace
         HookInstallCall(LOAD_IPL_BUFFER_CALL, reinterpret_cast<DWORD>(&LoadStaticWorldV3IplBuffer));
         HookInstall(REMOVE_ALL_COLLISION_TAIL, reinterpret_cast<DWORD>(&CompleteStaticWorldV3BoundingBootstrap), 5);
 
-        unsigned int atomicBefore = 0, damageBefore = 0, timedBefore = 0;
-        CNativeModelStoreSA::GetUsage(atomicBefore, damageBefore, timedBefore);
         bool crossedBarrier = false;
         for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
         {
@@ -4178,6 +4644,7 @@ namespace
             static_cast<unsigned int>(journal.archives.size()), static_cast<unsigned int>(journal.txds.size()), static_cast<unsigned int>(journal.cols.size()),
             static_cast<unsigned int>(journal.ipls.size()), hiddenLodOwners, static_cast<unsigned int>(bindings.size()), catalogLodAnchors, catalogLodLinks,
             requiredTotalBlocks, atomicBefore, damageBefore, timedBefore);
+        LogNativeWorldLifecycleTelemetry("registrar-active", ReadNativeWorldLifecycleTelemetry());
     }
 
     void RebuildStaticWorldV3ArchiveChains()
@@ -4378,7 +4845,7 @@ namespace
         const unsigned int generation = g_staticWorldV3Generation.fetch_add(1, std::memory_order_acq_rel) + 1;
         Log("transition=active generation=%u pack=%s bank=%u models=%u placements=%u lodAnchors=%u exclusion=one-city buildingsWorst=%u/32000", generation,
             pack.identity.packId.c_str(), bank, static_cast<unsigned int>(pack.modelInfos.size()), pack.inventory.placements, pack.inventory.lodAnchorCount,
-            9166U + pack.inventory.placements + pack.inventory.lodAnchorCount);
+            STATIC_WORLD_V3_STOCK_BUILDING_RESERVE + pack.inventory.placements + pack.inventory.lodAnchorCount);
     }
 
     int FindStaticWorldV3PackAtPosition(const CVector& position)
@@ -4566,6 +5033,7 @@ namespace
         Log("registrar=active archive=%u models=%u txds=%u txdSlots=%u..%u txdSpanHoles=%u colSlot=%u iplSlots=%s entries=%u lodLinks=none", archiveId,
             Pack().modelCount, Pack().txdCount, ide.txdPlanMin, ide.txdPlanMax, ide.txdPlanSpanHoles, ide.colSlot, iplSlots.str().c_str(),
             Pack().imgEntryCount);
+        LogNativeWorldLifecycleTelemetry("registrar-active", ReadNativeWorldLifecycleTelemetry());
     }
 
     void __cdecl LoadCdDirectoryHook()
@@ -4573,6 +5041,10 @@ namespace
         reinterpret_cast<void(__cdecl*)()>(LOAD_CD_DIRECTORY)();
         if (g_state == EState::Hooked)
         {
+            // This is the last common point where GTA has loaded only its
+            // stock directories and no native-world archive, pool slot, or
+            // ModelInfo has crossed the registrar's mutation barrier.
+            CaptureNativeWorldNeutralBaseline("stock-cd-directory");
             if (g_staticWorldV3Route)
                 RegisterStaticWorldV3Set();
             else
@@ -4683,18 +5155,21 @@ namespace
         std::set<unsigned int>              globalModelIds;
         std::map<unsigned int, std::string> globalModelKeys;
         std::map<unsigned int, std::string> globalTxdKeys;
-        unsigned int                        ordinary = 13984;
-        unsigned int                        damage = 69;
-        unsigned int                        timed = 160;
-        unsigned int                        txds = 3608;
-        unsigned int                        colSlots = 252;
-        unsigned int                        iplSlots = 191;
-        unsigned int                        archives = 6;
-        unsigned int                        handles = 10;
-        unsigned int                        totalModels = 0;
-        unsigned int                        totalPlacements = 0;
-        unsigned int                        maximumCityEntities = 0;
-        unsigned int                        maximumCityColModels = 0;
+        // GTA has not initialized its pools at this authorization stage. Prove
+        // the immutable pack demand here, then combine it with a captured live
+        // stock baseline at the LoadCdDirectory transaction fence.
+        unsigned int ordinary = 0;
+        unsigned int damage = 0;
+        unsigned int timed = 0;
+        unsigned int txds = 0;
+        unsigned int colSlots = 0;
+        unsigned int iplSlots = 0;
+        unsigned int archives = 0;
+        unsigned int handles = 0;
+        unsigned int totalModels = 0;
+        unsigned int totalPlacements = 0;
+        unsigned int maximumCityEntities = 0;
+        unsigned int maximumCityColModels = 0;
         for (size_t index = 0; index < inventories.size(); ++index)
         {
             const SStaticWorldV3Inventory& inventory = inventories[index];
@@ -4739,6 +5214,7 @@ namespace
             txds += inventory.txdCount;
             colSlots += static_cast<unsigned int>(inventory.colStems.size());
             iplSlots += static_cast<unsigned int>(inventory.iplStems.size());
+            iplSlots += inventory.lodAnchorCount ? 1U : 0U;
             archives += inventory.imageCount;
             handles += inventory.imageCount;
             totalModels += inventory.modelCount;
@@ -4750,19 +5226,22 @@ namespace
             maximumCityColModels = std::max(maximumCityColModels, cityColModels);
         }
         if (ordinary > 32000 || damage > 512 || timed > 1024 || txds > 8000 || colSlots > 512 || iplSlots > 1024 || archives > 245 || handles > 255 ||
-            totalModels > 12000 || 9980 + maximumCityColModels > 30000 || 9166 + maximumCityEntities > 32000)
+            totalModels > 12000 || STATIC_WORLD_V3_STOCK_COL_MODEL_RESERVE + maximumCityColModels > 30000 ||
+            STATIC_WORLD_V3_STOCK_BUILDING_RESERVE + maximumCityEntities > 32000)
         {
             error = SString(
-                "static-world-v3-set capacity proof failed atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 col=%u/512 ipl=%u/1024 "
+                "static-world-v3-set pack-demand proof failed atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 col=%u/512 ipl=%u/1024 "
                 "archives=%u/245 handles=%u/255 models=%u/12000 colModel=%u/30000 buildings=%u/32000",
-                ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, totalModels, 9980 + maximumCityColModels, 9166 + maximumCityEntities);
+                ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles, totalModels,
+                STATIC_WORLD_V3_STOCK_COL_MODEL_RESERVE + maximumCityColModels, STATIC_WORLD_V3_STOCK_BUILDING_RESERVE + maximumCityEntities);
             return false;
         }
         SharedUtil::WriteDebugEvent(
-            SString("[NativeWorldAggregatePlanner] state=proved packs=%u models=%u placements=%u atomic=%u/32000 damage=%u/512 timed=%u/1024 txd=%u/8000 "
-                    "col=%u/512 ipl=%u/1024 archives=%u/245 handles=%u/255 maxCityBuildings=%u/32000 maxCityColModels=%u/30000 nativeWrites=0",
+            SString("[NativeWorldAggregatePlanner] state=proved baseline=runtime-deferred packs=%u models=%u placements=%u atomicDemand=%u/32000 "
+                    "damageDemand=%u/512 timedDemand=%u/1024 txdDemand=%u/8000 colDemand=%u/512 iplDemand=%u/1024 archivesDemand=%u/245 "
+                    "handlesDemand=%u/255 maxCityBuildingsDemand=%u/32000 maxCityColModelsDemand=%u/30000 nativeWrites=0",
                     static_cast<unsigned int>(packs.size()), totalModels, totalPlacements, ordinary, damage, timed, txds, colSlots, iplSlots, archives, handles,
-                    9166 + maximumCityEntities, 9980 + maximumCityColModels));
+                    STATIC_WORLD_V3_STOCK_BUILDING_RESERVE + maximumCityEntities, STATIC_WORLD_V3_STOCK_COL_MODEL_RESERVE + maximumCityColModels));
         return true;
     }
 
@@ -5143,7 +5622,7 @@ void CNativeWorldPackManagerSA::HandleStartupSelection(eGameVersion gameVersion,
         if (error.empty() && !CNativeModelStoreSA::ValidateExecutableAndPatchManifestReadOnly(gameVersion, error))
             error = error.empty() ? "static-world-v3 executable validation failed" : error;
         if (error.empty() &&
-            (catalogModels == 0 || catalogModels > 12000U || 9166U + largestCityEntities > 32000U ||
+            (catalogModels == 0 || catalogModels > 12000U || STATIC_WORLD_V3_STOCK_BUILDING_RESERVE + largestCityEntities > 32000U ||
              memcmp(reinterpret_cast<const void*>(LOAD_COL_BUFFER_CALL), LOAD_COL_BUFFER_CALL_BYTES, sizeof(LOAD_COL_BUFFER_CALL_BYTES)) != 0 ||
              memcmp(reinterpret_cast<const void*>(LOAD_IPL_BUFFER_CALL), LOAD_IPL_BUFFER_CALL_BYTES, sizeof(LOAD_IPL_BUFFER_CALL_BYTES)) != 0 ||
              memcmp(reinterpret_cast<const void*>(REMOVE_ALL_COLLISION_TAIL), REMOVE_ALL_COLLISION_TAIL_BYTES, sizeof(REMOVE_ALL_COLLISION_TAIL_BYTES)) != 0))
@@ -5435,6 +5914,10 @@ void CNativeWorldPackManagerSA::CancelAuthorizedActivation()
 
 void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
 {
+    // Keep a read-only view of the streamer even when no legacy selector is
+    // enabled. Stock sessions are part of the reusable Neutral contract and
+    // must produce the same telemetry as authorized sessions.
+    g_streaming = streaming;
     const SNativeWorldPackPolicySA* selected = SelectEnabledPolicy();
     if (!selected)
         return;
@@ -5767,6 +6250,17 @@ void CNativeWorldPackManagerSA::PrepareStreamingAtPosition(const CVector& positi
     if (targetPack >= 0)
         ActivateStaticWorldV3Pack(static_cast<size_t>(targetPack));
     transitioning = false;
+}
+
+void CNativeWorldPackManagerSA::LogLifecycleTelemetry(const char* context)
+{
+    const SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
+    if (!g_nativeWorldNeutralBaseline.captured && sample.contentNeutral && sample.sessionNeutral)
+    {
+        CaptureNativeWorldNeutralBaseline(context);
+        return;
+    }
+    LogNativeWorldLifecycleTelemetry(context, sample);
 }
 
 unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()

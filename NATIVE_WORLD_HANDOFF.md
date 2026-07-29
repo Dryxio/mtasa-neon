@@ -1189,6 +1189,38 @@ The updated checkpoint sequence is:
    was refused before join with the user-visible current-protocol diagnostic;
    the server recorded `Bad version; client: 41DE, server: 41DF`. The current
    `0x41DF` client module was restored by its original SHA-256 after the test.
+
+   A follow-up portability fix removes the format-3 registrar's dependence on
+   one developer GTA installation's exact startup occupancy. The transaction
+   fence now snapshots the live model-store counts, complete TXD/COL/IPL pool
+   bitmaps and allocation cursors, archive descriptors and streaming handles;
+   it then proves the selected set by simulating every reversible allocation
+   before the first ModelInfo write. A second model-store check immediately
+   before that write rejects concurrent drift. Archive planning reproduces GTA's
+   descriptor and handle growth rules, reserves the deferred `PLAYER.IMG` slot,
+   validates each named descriptor against its bounded stream name and verifies
+   every returned archive/handle pair. Hidden LOD-owner IPLs are included in
+   demand, so the exact four-pack catalog adds 123 IPL slots and reaches 314 on
+   the current 191-slot baseline. DFF hash collision checks cover the complete
+   runtime DFF partition. Legacy format-1/2 profiles remain exact and unchanged.
+   The named building `9,166` and ColModel `9,980` reserves are deliberately not
+   replaced by early startup occupancy: they bound objects that GTA creates
+   later while loading the stock scene.
+
+   The 2026-07-29 live gate closed the portability issue. The VM captured
+   model stores `13,984/69/160` and pools `3,608/252/191`, proved totals
+   `25,201/205/644` and `4,933/373/314`, then committed all four packs. At the
+   transaction fence GTA had five named IMG descriptors on handles `10..14`;
+   the registrar allocated its seven archives on handles `15..21`, and the
+   later clothes initialization safely claimed reserved slot 5 and handle 22
+   for `PLAYER.IMG`. The first live attempt usefully proved the fail-closed
+   rollback when an incorrect slot-zero assumption rejected that valid layout;
+   no irreversible barrier had been crossed. After the correction the registrar
+   reached `activation=yes lease=process`, all four city transitions worked,
+   and no new dump was produced. A second player replaced only the resulting
+   `game_sa.dll` in the same reviewed Neon client and confirmed that the same
+   four-city set now activates on the previously rejected `3,599`-TXD GTA
+   baseline.
 12. **Streaming/render/memory tuning.** Measure and tune streaming memory,
    buffers, request lists, IMG channels, cache/disk headroom, spatial IPL and
    LOD/prefetch behavior using high-water and multi-hour traces rather than
