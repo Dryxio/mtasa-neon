@@ -1,6 +1,6 @@
 # Native world streaming handoff
 
-Last updated: 2026-07-18
+Last updated: 2026-07-29
 
 This file is the operational handoff for the native extended-world project
 started from [Dryxio/mtasa-neon issue #1](https://github.com/Dryxio/mtasa-neon/issues/1).
@@ -1262,8 +1262,8 @@ content and cache ownership must not be.
 The implementation sequence is deliberately narrower than a direct
 Active-to-Active switch:
 
-1. **Neutral contract and read-only telemetry — implemented, live gate
-   pending.** `NativeWorldNeutral` samples the relocated model and streaming
+1. **Neutral contract and read-only telemetry — complete; live validated.**
+   `NativeWorldNeutral` samples the relocated model and streaming
    table identities, exact `SFileIDLayout`, model-store counts, complete
    TXD/COL/IPL bitmaps and cursors, dynamic building/ColModel/QuadTree pool
    high-water, IMG descriptors/handles, both bounded streaming lists, request
@@ -1277,11 +1277,29 @@ Active-to-Active switch:
    only for same-process admission-fence comparisons and are intentionally
    logged as `admission-baseline-match`, not as the future gameplay Neutral
    verdict. Buildings, ColModels and QuadTreeNodes are never byte-restored.
-2. **Generation-owned journal.** Retain the committed model-store creation
-   order, TXD/COL/IPL slots, archives and handle bindings, direct streaming
-   entries, owner maps, cache leases, LOD substrate, baseline cursors and the
-   exact set identity. Replace flattened process cache locks with one releasable
-   token per committed set/generation.
+   The 2026-07-29 stock and format-3 live gates proved both streaming lists,
+   channel state and the route-specific admission baseline before the first
+   native write.
+2. **Generation-owned journal — complete; live validated.** The committed
+   generation retains physical FileID-to-ModelInfo construction order, the
+   exact typed/indexed tails of all three relocated inline model stores,
+   TXD/COL/IPL slots and original slot state, archives, direct streaming
+   bindings, baseline cursors and independently releasable cache leases. The
+   store proof checks private base/stride pointer arithmetic, vtables,
+   contiguous indices, unique physical IDs and the live global ModelInfo
+   pointer for every object. Full pool snapshots remain transaction-local and
+   rollback-only. Format-3 child objects and the set envelope no longer enter
+   flattened process ownership; each committed generation owns one move-only
+   token per exact cache object. Legacy format-1/2 startup ownership remains a
+   process-lifetime compatibility path.
+
+   The 2026-07-29 live gate published generation 1 with `8,035` ModelInfos,
+   store tails `13,984..21,796`, `69..203`, `160..249`, `671` TXDs, `65`
+   COLs, `66` IPLs, `6` archives and `801` direct bindings. Its four committed
+   cache groups owned exactly `36` handles; pending lease objects returned to
+   zero and the client joined the server without a new dump. Hooks, the two
+   empty LOD scratch arrays and the streaming-buffer floor remain deliberate
+   process-lifetime foundations and are not reversible journal entries.
 3. **Drain and quiescence fence.** Enter an explicit `Draining` state, reject
    transition re-entry, retire the active city through the existing
    cover/IPL/anchor/channel/COL/DFF fence, stop new native requests, flush both

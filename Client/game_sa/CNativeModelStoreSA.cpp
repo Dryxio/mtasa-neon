@@ -9,6 +9,7 @@
 
 #include "StdInc.h"
 #include "CNativeModelStoreSA.h"
+#include "CModelInfoSA.h"
 #include "SharedUtil.Hash.h"
 #include "SharedUtil.Misc.h"
 #include "gamesa_init.h"
@@ -314,6 +315,60 @@ namespace
     SStoreState& GetState(EStoreKind kind)
     {
         return g_storeStates[static_cast<size_t>(kind)];
+    }
+
+    EStoreKind ToInternalKind(ENativeModelStoreKindSA kind)
+    {
+        switch (kind)
+        {
+            case ENativeModelStoreKindSA::Atomic:
+                return EStoreKind::Atomic;
+            case ENativeModelStoreKindSA::DamageAtomic:
+                return EStoreKind::DamageAtomic;
+            case ENativeModelStoreKindSA::Time:
+                return EStoreKind::Time;
+            default:
+                return EStoreKind::Count;
+        }
+    }
+
+    unsigned int GetCount(const SNativeModelStoreCountsSA& counts, EStoreKind kind)
+    {
+        switch (kind)
+        {
+            case EStoreKind::Atomic:
+                return counts.atomic;
+            case EStoreKind::DamageAtomic:
+                return counts.damageAtomic;
+            case EStoreKind::Time:
+                return counts.time;
+            default:
+                return 0;
+        }
+    }
+
+    void SetCount(SNativeModelStoreCountsSA& counts, EStoreKind kind, unsigned int value)
+    {
+        switch (kind)
+        {
+            case EStoreKind::Atomic:
+                counts.atomic = value;
+                break;
+            case EStoreKind::DamageAtomic:
+                counts.damageAtomic = value;
+                break;
+            case EStoreKind::Time:
+                counts.time = value;
+                break;
+            default:
+                break;
+        }
+    }
+
+    CBaseModelInfoSAInterface* GetStoreObject(EStoreKind kind, unsigned int index)
+    {
+        const SStoreDefinition& definition = GetDefinition(kind);
+        return reinterpret_cast<CBaseModelInfoSAInterface*>(GetState(kind).store->objects + static_cast<size_t>(index) * definition.stride);
     }
 
     void DebugLog(const char* format, ...)
@@ -770,5 +825,100 @@ bool CNativeModelStoreSA::GetUsage(unsigned int& atomic, unsigned int& damageAto
     atomic = GetState(EStoreKind::Atomic).store->count;
     damageAtomic = GetState(EStoreKind::DamageAtomic).store->count;
     time = GetState(EStoreKind::Time).store->count;
+    return true;
+}
+
+bool CNativeModelStoreSA::CaptureOwnedTail(const SNativeModelStoreCountsSA& before, SNativeModelStoreTailSnapshotSA& snapshot, std::string& error)
+{
+    snapshot = {};
+    snapshot.before = before;
+    if (!g_installed)
+    {
+        error = "native model-store foundation is not installed";
+        return false;
+    }
+
+    for (const SStoreDefinition& definition : STORE_DEFINITIONS)
+    {
+        const SStoreState& state = GetState(definition.kind);
+        SetCount(snapshot.after, definition.kind, state.store->count);
+        if (GetCount(before, definition.kind) > state.store->count || state.store->count > definition.newCapacity)
+        {
+            error = SString("native %s ownership baseline is outside the relocated store before=%u after=%u capacity=%u", definition.name,
+                            GetCount(before, definition.kind), state.store->count, definition.newCapacity);
+            return false;
+        }
+    }
+
+    snapshot.entries.reserve(static_cast<size_t>(snapshot.after.atomic - before.atomic) + (snapshot.after.damageAtomic - before.damageAtomic) +
+                             (snapshot.after.time - before.time));
+    const auto append = [&snapshot](ENativeModelStoreKindSA publicKind, EStoreKind internalKind)
+    {
+        for (unsigned int index = GetCount(snapshot.before, internalKind); index < GetCount(snapshot.after, internalKind); ++index)
+            snapshot.entries.push_back({publicKind, index, GetStoreObject(internalKind, index)});
+    };
+    append(ENativeModelStoreKindSA::Atomic, EStoreKind::Atomic);
+    append(ENativeModelStoreKindSA::DamageAtomic, EStoreKind::DamageAtomic);
+    append(ENativeModelStoreKindSA::Time, EStoreKind::Time);
+    return ValidateOwnedTail(snapshot, error);
+}
+
+bool CNativeModelStoreSA::ValidateOwnedTail(const SNativeModelStoreTailSnapshotSA& snapshot, std::string& error)
+{
+    if (!g_installed)
+    {
+        error = "native model-store foundation is not installed";
+        return false;
+    }
+
+    SNativeModelStoreCountsSA next = snapshot.before;
+    size_t                    expectedEntries = 0;
+    for (const SStoreDefinition& definition : STORE_DEFINITIONS)
+    {
+        const unsigned int beforeCount = GetCount(snapshot.before, definition.kind);
+        const unsigned int afterCount = GetCount(snapshot.after, definition.kind);
+        const SStoreState& state = GetState(definition.kind);
+        if (beforeCount > afterCount || afterCount > definition.newCapacity || state.store->count != afterCount)
+        {
+            error = SString("native %s owned tail no longer matches current counts before=%u recordedAfter=%u current=%u capacity=%u", definition.name,
+                            beforeCount, afterCount, state.store->count, definition.newCapacity);
+            return false;
+        }
+        expectedEntries += afterCount - beforeCount;
+    }
+    if (snapshot.entries.size() != expectedEntries)
+    {
+        error = SString("native model-store ownership entry count differs expected=%zu actual=%zu", expectedEntries, snapshot.entries.size());
+        return false;
+    }
+
+    for (const SNativeModelStoreOwnedEntrySA& entry : snapshot.entries)
+    {
+        const EStoreKind kind = ToInternalKind(entry.kind);
+        if (kind == EStoreKind::Count)
+        {
+            error = "native model-store ownership contains an invalid kind";
+            return false;
+        }
+        const unsigned int expectedIndex = GetCount(next, kind);
+        if (entry.index != expectedIndex || entry.index >= GetCount(snapshot.after, kind) || entry.model != GetStoreObject(kind, entry.index))
+        {
+            error = SString("native %s ownership is not the exact appended tail index=%u expected=%u pointer=%p expectedPointer=%p", GetDefinition(kind).name,
+                            entry.index, expectedIndex, entry.model, GetStoreObject(kind, expectedIndex));
+            return false;
+        }
+        if (reinterpret_cast<DWORD>(entry.model->VFTBL) != GetDefinition(kind).vtable)
+        {
+            error = SString("native %s owned ModelInfo vtable changed at store index=%u", GetDefinition(kind).name, entry.index);
+            return false;
+        }
+        SetCount(next, kind, expectedIndex + 1);
+    }
+
+    if (next.atomic != snapshot.after.atomic || next.damageAtomic != snapshot.after.damageAtomic || next.time != snapshot.after.time)
+    {
+        error = "native model-store ownership does not cover every recorded store tail";
+        return false;
+    }
     return true;
 }

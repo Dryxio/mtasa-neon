@@ -37,15 +37,34 @@ namespace
     constexpr size_t        MAX_V3_IMAGES = 32;
 
     // Pending locks are explicit transaction ownership: refusal closes them,
-    // while successful native activation promotes them to process lifetime.
+    // while successful native activation promotes them to a committed group.
     std::vector<HANDLE> g_pendingLocks;
-    std::vector<HANDLE> g_processLocks;
     bool                g_cachePrepared = false;
-    // Diagnostic high-water only. Committed handles are currently retained
-    // for the process lifetime; a later hot-unload checkpoint will replace
-    // this flattened ownership with independently releasable generation
-    // groups.
-    unsigned int g_committedGroupsHighWater = 0;
+
+    struct SCommittedLeaseTelemetryState
+    {
+        size_t groups{};
+        size_t handles{};
+        // Diagnostic high-water only. Neutral decisions use the exact active
+        // group and handle counts above.
+        unsigned int groupsHighWater{};
+    };
+
+    SCommittedLeaseTelemetryState& CommittedLeaseTelemetryState()
+    {
+        // Committed tokens will eventually be owned by generation globals in
+        // another translation unit. Keep the tiny counter state alive until
+        // process exit so cross-TU destruction order cannot make their
+        // destructors update dead telemetry storage.
+        static SCommittedLeaseTelemetryState* state = new SCommittedLeaseTelemetryState;
+        return *state;
+    }
+
+    // Compatibility owners preserve the existing startup behavior. New
+    // generation code receives the same move-only group directly and can
+    // release it after its own teardown fence instead of flattening handles
+    // into process-global storage.
+    std::vector<CNativeWorldCacheCommittedLeaseSA> g_legacyCommittedGroups;
 
     class CScopedHandles
     {
@@ -1218,6 +1237,73 @@ namespace
     }
 }  // namespace
 
+struct CNativeWorldCacheCommittedLeaseSA::SImpl
+{
+    ~SImpl()
+    {
+        const size_t handleCount = handles.size();
+        for (HANDLE handle : handles)
+        {
+            // Acquirers reject invalid handles before transfer. Keep release
+            // fail-closed as well: an invalid sentinel must never be passed to
+            // CloseHandle or counted as committed ownership.
+            if (handle && handle != INVALID_HANDLE_VALUE)
+                CloseHandle(handle);
+        }
+        handles.clear();
+
+        if (registered)
+        {
+            SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
+            if (telemetry.groups)
+                --telemetry.groups;
+            if (telemetry.handles >= handleCount)
+                telemetry.handles -= handleCount;
+            else
+                telemetry.handles = 0;
+        }
+    }
+
+    void Register()
+    {
+        if (registered || handles.empty() ||
+            std::any_of(handles.begin(), handles.end(), [](HANDLE handle) { return !handle || handle == INVALID_HANDLE_VALUE; }))
+            return;
+        SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
+        registered = true;
+        ++telemetry.groups;
+        telemetry.handles += handles.size();
+        telemetry.groupsHighWater = std::max(telemetry.groupsHighWater, static_cast<unsigned int>(telemetry.groups));
+    }
+
+    std::vector<HANDLE> handles;
+    unsigned int        format{};
+    std::string         policy;
+    std::string         contentId;
+    std::string         ticketId;
+    bool                registered{};
+};
+
+CNativeWorldCacheCommittedLeaseSA::CNativeWorldCacheCommittedLeaseSA() = default;
+CNativeWorldCacheCommittedLeaseSA::~CNativeWorldCacheCommittedLeaseSA() = default;
+CNativeWorldCacheCommittedLeaseSA::CNativeWorldCacheCommittedLeaseSA(CNativeWorldCacheCommittedLeaseSA&&) noexcept = default;
+CNativeWorldCacheCommittedLeaseSA& CNativeWorldCacheCommittedLeaseSA::operator=(CNativeWorldCacheCommittedLeaseSA&&) noexcept = default;
+
+bool CNativeWorldCacheCommittedLeaseSA::IsValid() const
+{
+    return m_impl && m_impl->registered && !m_impl->handles.empty();
+}
+
+size_t CNativeWorldCacheCommittedLeaseSA::GetHandleCount() const
+{
+    return IsValid() ? m_impl->handles.size() : 0;
+}
+
+void CNativeWorldCacheCommittedLeaseSA::Release()
+{
+    m_impl.reset();
+}
+
 struct CNativeWorldCacheLeaseSA::SImpl
 {
     ~SImpl()
@@ -1256,11 +1342,16 @@ bool CNativeWorldCacheLeaseSA::RevalidateClosedObject(std::string& error) const
 }
 
 bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& policy, const std::string& contentId, const std::string& ticketId,
-                                      std::string& error)
+                                      CNativeWorldCacheCommittedLeaseSA& committedLease, std::string& error)
 {
     if (!IsValid())
     {
         error = "native-world cache lease is absent or already completed";
+        return false;
+    }
+    if (committedLease.IsValid())
+    {
+        error = "native-world committed cache lease output is already active";
         return false;
     }
     if (m_impl->format != format || m_impl->policy != policy || m_impl->contentId != contentId || m_impl->ticketId != ticketId)
@@ -1268,10 +1359,36 @@ bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& po
         error = "native-world cache lease transaction token mismatch";
         return false;
     }
-    g_processLocks.insert(g_processLocks.end(), m_impl->handles.begin(), m_impl->handles.end());
-    ++g_committedGroupsHighWater;
-    m_impl->handles.clear();
+
+    auto committed = std::make_unique<CNativeWorldCacheCommittedLeaseSA::SImpl>();
+    committed->format = m_impl->format;
+    committed->policy = m_impl->policy;
+    committed->contentId = m_impl->contentId;
+    committed->ticketId = m_impl->ticketId;
+    committed->handles.swap(m_impl->handles);
+    committed->Register();
+    if (!committed->registered)
+    {
+        // The temporary committed owner closes every valid handle and ignores
+        // only invalid sentinels. Do not return a corrupt group to the pending
+        // lease, whose normal destructor assumes acquisition already proved
+        // every Windows handle.
+        error = "native-world cache lease contains an invalid committed handle group";
+        return false;
+    }
+
+    committedLease.m_impl = std::move(committed);
     m_impl.reset();
+    return true;
+}
+
+bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& policy, const std::string& contentId, const std::string& ticketId,
+                                      std::string& error)
+{
+    CNativeWorldCacheCommittedLeaseSA committedLease;
+    if (!Commit(format, policy, contentId, ticketId, committedLease, error))
+        return false;
+    g_legacyCommittedGroups.emplace_back(std::move(committedLease));
     return true;
 }
 
@@ -1679,10 +1796,24 @@ bool PublishNativeWorldCache(const SNativeWorldCacheRequestSA& request, const Na
 
 void CommitNativeWorldCacheLease()
 {
-    if (!g_pendingLocks.empty())
-        ++g_committedGroupsHighWater;
-    g_processLocks.insert(g_processLocks.end(), g_pendingLocks.begin(), g_pendingLocks.end());
-    g_pendingLocks.clear();
+    if (g_pendingLocks.empty())
+        return;
+
+    auto committed = std::make_unique<CNativeWorldCacheCommittedLeaseSA::SImpl>();
+    committed->format = 1;
+    committed->policy = "bullworth";
+    committed->handles.swap(g_pendingLocks);
+    committed->Register();
+    if (!committed->registered)
+    {
+        // This path can only be reached if internal pending ownership was
+        // corrupted. The temporary owner closes every valid handle rather than
+        // exposing a partially committed group.
+        return;
+    }
+    CNativeWorldCacheCommittedLeaseSA committedLease;
+    committedLease.m_impl = std::move(committed);
+    g_legacyCommittedGroups.emplace_back(std::move(committedLease));
 }
 
 void ReleaseNativeWorldCacheLease()
@@ -1695,5 +1826,6 @@ void ReleaseNativeWorldCacheLease()
 
 SNativeWorldCacheLeaseTelemetrySA GetNativeWorldCacheLeaseTelemetry()
 {
-    return {g_pendingLocks.size(), g_processLocks.size(), g_committedGroupsHighWater, g_cachePrepared};
+    const SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
+    return {g_pendingLocks.size(), telemetry.handles, telemetry.groups, telemetry.groupsHighWater, g_cachePrepared};
 }

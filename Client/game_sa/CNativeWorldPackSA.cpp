@@ -38,6 +38,7 @@
 #include <limits>
 #include <mutex>
 #include <sstream>
+#include <unordered_set>
 
 extern CGameSA*        pGame;
 extern CCoreInterface* g_pCore;
@@ -3522,6 +3523,12 @@ namespace
         Log("iplBootstrap dynamicStreaming=enabled slots=%s boundingBoxes=pending-native-pass", slots.str().c_str());
     }
 
+    struct SStaticWorldV3ModelOwnership
+    {
+        unsigned int               physicalId{};
+        CBaseModelInfoSAInterface* model{};
+    };
+
     struct SStaticWorldV3PoolAllocationJournal
     {
         struct STxd
@@ -3560,7 +3567,34 @@ namespace
         std::vector<SCol>          cols;
         std::vector<SIpl>          ipls;
         std::vector<unsigned char> archives;
+        // Model stores append objects contiguously. Preserve their exact
+        // construction order so a later teardown checkpoint can validate and
+        // unwind only the generation-owned tail in reverse.
+        std::vector<SStaticWorldV3ModelOwnership> models;
     };
+
+    struct SStaticWorldV3CommittedGeneration
+    {
+        unsigned int                                           generation{};
+        SNativeModelStoreTailSnapshotSA                        modelStoreTail;
+        int                                                    txdFirstFreeBefore{};
+        int                                                    colFirstFreeBefore{};
+        int                                                    iplFirstFreeBefore{};
+        int                                                    txdFindCacheBefore{};
+        std::vector<SStaticWorldV3PoolAllocationJournal::STxd> txds;
+        std::vector<SStaticWorldV3PoolAllocationJournal::SCol> cols;
+        std::vector<SStaticWorldV3PoolAllocationJournal::SIpl> ipls;
+        std::vector<unsigned char>                             archives;
+        std::vector<SStaticWorldV3StreamingBinding>            bindings;
+        std::vector<SStaticWorldV3ModelOwnership>              models;
+        std::vector<CNativeWorldCacheCommittedLeaseSA>         cacheLeases;
+    };
+
+    // This object is intentionally retained after registration. The
+    // transaction-local full-pool snapshots remain rollback-only, while this
+    // compact journal names every generation-owned mutation needed by the
+    // later quiesce/teardown checkpoints.
+    std::unique_ptr<SStaticWorldV3CommittedGeneration> g_staticWorldV3CommittedGeneration;
 
     const SBinaryIplInstance& GetStaticWorldV3Instance(const SStaticWorldV3RuntimePack& pack, unsigned int ordinal);
     void __cdecl              CompleteStaticWorldV3BoundingBootstrap();
@@ -4273,6 +4307,11 @@ namespace
     bool PrepareStaticWorldV3Transaction(SStaticWorldV3PoolAllocationJournal& journal, std::vector<SStaticWorldV3StreamingBinding>& bindings,
                                          unsigned int& largestEntry, std::string& error)
     {
+        if (g_staticWorldV3CommittedGeneration)
+        {
+            error = "static-world-v3 already owns a committed generation journal";
+            return false;
+        }
         g_staticWorldV3PermanentBindings.clear();
         for (auto& modelBindings : g_staticWorldV3ModelBindings)
             modelBindings.clear();
@@ -4652,10 +4691,13 @@ namespace
                 const unsigned int physicalId = pack.logicalToPhysical.at(row.logicalId);
                 const std::string  line = BuildStaticWorldV3ModelLine(row, physicalId);
                 crossedBarrier = true;
-                const int loadedId = row.timed ? reinterpret_cast<int(__cdecl*)(const char*)>(0x5B3DE0)(line.c_str())
-                                               : reinterpret_cast<int(__cdecl*)(const char*)>(0x5B3C60)(line.c_str());
-                if (loadedId != static_cast<int>(physicalId) || CModelInfoSAInterface::ms_modelInfoPtrs[physicalId] == nullptr)
+                const int                        loadedId = row.timed ? reinterpret_cast<int(__cdecl*)(const char*)>(0x5B3DE0)(line.c_str())
+                                                                      : reinterpret_cast<int(__cdecl*)(const char*)>(0x5B3C60)(line.c_str());
+                CBaseModelInfoSAInterface* const model = CModelInfoSAInterface::ms_modelInfoPtrs[physicalId];
+                if (loadedId != static_cast<int>(physicalId) || !model)
                     Fatal("static-world-v3 ModelInfo construction failed after the irreversible barrier");
+
+                journal.models.push_back({physicalId, model});
             }
         }
         if (!crossedBarrier)
@@ -4687,6 +4729,29 @@ namespace
         if (!CNativeModelStoreSA::GetUsage(atomicAfter, damageAfter, timedAfter) || atomicAfter != expectedAtomic || damageAfter != expectedDamage ||
             timedAfter != expectedTimed)
             Fatal("static-world-v3 append-only model-store delta differs from the resident IDE");
+        SNativeModelStoreTailSnapshotSA modelStoreTail;
+        const SNativeModelStoreCountsSA beforeCounts{atomicBefore, damageBefore, timedBefore};
+        if (!CNativeModelStoreSA::CaptureOwnedTail(beforeCounts, modelStoreTail, error) || modelStoreTail.after.atomic != atomicAfter ||
+            modelStoreTail.after.damageAtomic != damageAfter || modelStoreTail.after.time != timedAfter)
+            Fatal(error.empty() ? "static-world-v3 ModelInfo ownership snapshot differs from the appended store tails" : error.c_str());
+
+        // The store snapshot proves allocation ownership, while this second
+        // one-to-one check ties every appended inline object to the physical
+        // FileID that the registrar published. Neither identity may be
+        // inferred later after physical banks become recyclable.
+        std::unordered_set<CBaseModelInfoSAInterface*> unboundStoreModels;
+        std::unordered_set<unsigned int>               ownedPhysicalIds;
+        unboundStoreModels.reserve(modelStoreTail.entries.size());
+        ownedPhysicalIds.reserve(journal.models.size());
+        for (const SNativeModelStoreOwnedEntrySA& entry : modelStoreTail.entries)
+            if (!unboundStoreModels.emplace(entry.model).second)
+                Fatal("static-world-v3 model-store ownership snapshot contains a duplicate pointer");
+        for (const SStaticWorldV3ModelOwnership& model : journal.models)
+            if (!ownedPhysicalIds.emplace(model.physicalId).second || CModelInfoSAInterface::ms_modelInfoPtrs[model.physicalId] != model.model ||
+                unboundStoreModels.erase(model.model) != 1)
+                Fatal("static-world-v3 physical ModelInfo ownership is outside the appended store tails");
+        if (!unboundStoreModels.empty() || journal.models.size() != modelStoreTail.entries.size())
+            Fatal("static-world-v3 physical ModelInfo ownership does not cover every appended store tail");
 
         ReserveStaticWorldV3LodArrays();
         auto* iplPool = *reinterpret_cast<CPoolSAInterface<CIplSAInterface>**>(0x8E3FB0);
@@ -4759,15 +4824,35 @@ namespace
                     Fatal("static-world-v3 inactive IPL streaming fence was not installed");
             }
 
+        auto committedGeneration = std::make_unique<SStaticWorldV3CommittedGeneration>();
+        committedGeneration->generation = 1;
+        committedGeneration->modelStoreTail = std::move(modelStoreTail);
+        committedGeneration->txdFirstFreeBefore = journal.txdFirstFree;
+        committedGeneration->colFirstFreeBefore = journal.colFirstFree;
+        committedGeneration->iplFirstFreeBefore = journal.iplFirstFree;
+        committedGeneration->txdFindCacheBefore = journal.txdFindCache;
+        committedGeneration->txds = std::move(journal.txds);
+        committedGeneration->cols = std::move(journal.cols);
+        committedGeneration->ipls = std::move(journal.ipls);
+        committedGeneration->archives = std::move(journal.archives);
+        committedGeneration->bindings = bindings;
+        committedGeneration->models = std::move(journal.models);
+        committedGeneration->cacheLeases.reserve(g_staticWorldV3ChildLeases.size() + 1);
+
         for (size_t index = 0; index < g_staticWorldV3Packs.size(); ++index)
         {
             CNativeWorldCacheLeaseSA& lease = g_staticWorldV3ChildLeases[index];
+            committedGeneration->cacheLeases.emplace_back();
             if (!lease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_POLICY, g_staticWorldV3Packs[index].identity.contentId, g_authorizedSelection.ticketId,
-                              error))
+                              committedGeneration->cacheLeases.back(), error))
                 Fatal(error.c_str());
         }
-        if (!g_authorizedLease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_SET_POLICY, g_staticWorldV3Set.setId, g_authorizedSelection.ticketId, error))
+        committedGeneration->cacheLeases.emplace_back();
+        if (!g_authorizedLease.Commit(STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_SET_POLICY, g_staticWorldV3Set.setId, g_authorizedSelection.ticketId,
+                                      committedGeneration->cacheLeases.back(), error))
             Fatal(error.c_str());
+        g_staticWorldV3CommittedGeneration = std::move(committedGeneration);
+
         g_state = EState::Active;
         g_pCore->MarkNativeWorldStartupActive();
         unsigned int catalogModels = 0;
@@ -4779,13 +4864,32 @@ namespace
             catalogLodAnchors += pack.inventory.lodAnchorCount;
             catalogLodLinks += pack.inventory.lodLinkCount;
         }
-        Log("registrar=active format=3 setId=%s generation=1 recyclable=after-fence logicalPacks=%u physicalResident=none catalogModels=%u archives=%u "
+        Log("registrar=active format=3 setId=%s generation=1 recyclable=after-fence ownership=complete logicalPacks=%u physicalResident=none catalogModels=%u "
+            "archives=%u "
             "txds=%u cols=%u iplSlotsTotal=%u hiddenLodIpls=%u bindings=%u lodArrays=2 lodAnchors=%u lodLinks=%u bufferBlocks=%u "
             "modelStoresBefore=%u,%u,%u barrier=first-ModelInfo startupMapping=canonical-until-bounds commit=global",
             g_staticWorldV3Set.setId.c_str(), static_cast<unsigned int>(g_staticWorldV3Packs.size()), catalogModels,
-            static_cast<unsigned int>(journal.archives.size()), static_cast<unsigned int>(journal.txds.size()), static_cast<unsigned int>(journal.cols.size()),
-            static_cast<unsigned int>(journal.ipls.size()), hiddenLodOwners, static_cast<unsigned int>(bindings.size()), catalogLodAnchors, catalogLodLinks,
-            requiredTotalBlocks, atomicBefore, damageBefore, timedBefore);
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->archives.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->txds.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->cols.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->ipls.size()), hiddenLodOwners,
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->bindings.size()), catalogLodAnchors, catalogLodLinks, requiredTotalBlocks,
+            atomicBefore, damageBefore, timedBefore);
+        size_t committedCacheHandles = 0;
+        for (const CNativeWorldCacheCommittedLeaseSA& lease : g_staticWorldV3CommittedGeneration->cacheLeases)
+            committedCacheHandles += lease.GetHandleCount();
+        Log("generationJournal=published generation=%u models=%u txds=%u cols=%u ipls=%u archives=%u bindings=%u cacheLeaseGroups=%u cacheHandles=%u "
+            "storeTails=%u..%u,%u..%u,%u..%u",
+            g_staticWorldV3CommittedGeneration->generation, static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->models.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->txds.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->cols.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->ipls.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->archives.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->bindings.size()),
+            static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->cacheLeases.size()), static_cast<unsigned int>(committedCacheHandles),
+            g_staticWorldV3CommittedGeneration->modelStoreTail.before.atomic, g_staticWorldV3CommittedGeneration->modelStoreTail.after.atomic,
+            g_staticWorldV3CommittedGeneration->modelStoreTail.before.damageAtomic, g_staticWorldV3CommittedGeneration->modelStoreTail.after.damageAtomic,
+            g_staticWorldV3CommittedGeneration->modelStoreTail.before.time, g_staticWorldV3CommittedGeneration->modelStoreTail.after.time);
         LogNativeWorldLifecycleTelemetry("registrar-active", ReadNativeWorldLifecycleTelemetry());
     }
 

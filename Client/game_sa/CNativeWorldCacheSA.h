@@ -67,8 +67,36 @@ struct SNativeWorldCacheLeaseTelemetrySA
 {
     size_t       pendingHandles{};
     size_t       processHandles{};
+    size_t       committedGroups{};
     unsigned int committedGroupsHighWater{};
     bool         legacyCachePrepared{};
+};
+
+// A committed lease group owns the exact cache handles promoted by one
+// successful admission transaction. Keeping groups separate lets a future
+// native-world generation release only its own immutable objects after its GTA
+// references have crossed the teardown fence.
+class CNativeWorldCacheCommittedLeaseSA
+{
+public:
+    CNativeWorldCacheCommittedLeaseSA();
+    ~CNativeWorldCacheCommittedLeaseSA();
+    CNativeWorldCacheCommittedLeaseSA(CNativeWorldCacheCommittedLeaseSA&&) noexcept;
+    CNativeWorldCacheCommittedLeaseSA& operator=(CNativeWorldCacheCommittedLeaseSA&&) noexcept;
+
+    CNativeWorldCacheCommittedLeaseSA(const CNativeWorldCacheCommittedLeaseSA&) = delete;
+    CNativeWorldCacheCommittedLeaseSA& operator=(const CNativeWorldCacheCommittedLeaseSA&) = delete;
+
+    bool   IsValid() const;
+    size_t GetHandleCount() const;
+    void   Release();
+
+private:
+    struct SImpl;
+    std::unique_ptr<SImpl> m_impl;
+
+    friend class CNativeWorldCacheLeaseSA;
+    friend void CommitNativeWorldCacheLease();
 };
 
 class CNativeWorldCacheLeaseSA
@@ -84,6 +112,11 @@ public:
 
     bool IsValid() const;
     bool RevalidateClosedObject(std::string& error) const;
+    bool Commit(unsigned int format, const std::string& policy, const std::string& contentId, const std::string& ticketId,
+                CNativeWorldCacheCommittedLeaseSA& committedLease, std::string& error);
+    // Compatibility path for the current startup registrar. It promotes the
+    // lease into a process-owned committed group until the registrar adopts
+    // explicit generation ownership.
     bool Commit(unsigned int format, const std::string& policy, const std::string& contentId, const std::string& ticketId, std::string& error);
     void Release();
 

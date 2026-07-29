@@ -11,6 +11,37 @@
 
 #include <game/CGame.h>
 #include <string>
+#include <vector>
+
+class CBaseModelInfoSAInterface;
+
+enum class ENativeModelStoreKindSA : unsigned char
+{
+    Atomic,
+    DamageAtomic,
+    Time,
+};
+
+struct SNativeModelStoreCountsSA
+{
+    unsigned int atomic{};
+    unsigned int damageAtomic{};
+    unsigned int time{};
+};
+
+struct SNativeModelStoreOwnedEntrySA
+{
+    ENativeModelStoreKindSA    kind{};
+    unsigned int               index{};
+    CBaseModelInfoSAInterface* model{};
+};
+
+struct SNativeModelStoreTailSnapshotSA
+{
+    SNativeModelStoreCountsSA                  before{};
+    SNativeModelStoreCountsSA                  after{};
+    std::vector<SNativeModelStoreOwnedEntrySA> entries;
+};
 
 class CNativeModelStoreSA
 {
@@ -33,6 +64,16 @@ public:
     static const char* GetExecutableIdentityName();
     static void        GetCapacities(unsigned int& atomic, unsigned int& damageAtomic, unsigned int& time);
     static bool        GetUsage(unsigned int& atomic, unsigned int& damageAtomic, unsigned int& time);
+
+    // Captures the exact appended tails of the three relocated inline stores.
+    // Entries are grouped by kind and ordered by increasing store index; they
+    // describe ownership only and do not change GTA state.
+    static bool CaptureOwnedTail(const SNativeModelStoreCountsSA& before, SNativeModelStoreTailSnapshotSA& snapshot, std::string& error);
+
+    // Revalidates a previously captured ownership slice against the private
+    // relocated store bases and current counts. This deliberately performs no
+    // Shutdown, destructor, count rewind, or other engine mutation.
+    static bool ValidateOwnedTail(const SNativeModelStoreTailSnapshotSA& snapshot, std::string& error);
 
     // Emits read-only occupancy/high-water diagnostics when the opt-in patch is
     // active. It has no command surface and cannot mutate the relocated stores.
