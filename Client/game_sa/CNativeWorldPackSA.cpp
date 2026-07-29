@@ -403,6 +403,7 @@ namespace
     std::map<unsigned int, size_t>                       g_staticWorldV3IplOwners;
     std::atomic_uint                                     g_staticWorldV3Generation{0};
     EStaticWorldV3LodState                               g_staticWorldV3LodState = EStaticWorldV3LodState::Off;
+    bool                                                 g_staticWorldV3LodArraysReserved = false;
     std::array<int, STATIC_WORLD_V3_MODEL_BANK_COUNT>    g_staticWorldV3BankOwners = {-1, -1};
     int                                                  g_staticWorldV3ActivePack = -1;
     unsigned int                                         g_staticWorldV3NextBank = 0;
@@ -427,6 +428,13 @@ namespace
         bool                 valid{};
     };
 
+    struct SStreamingListTelemetry
+    {
+        unsigned int nodes{};
+        unsigned int nativeArenaNodes{};
+        bool         valid{};
+    };
+
     struct SNativeWorldLifecycleTelemetry
     {
         bool                                modelStoresInstalled{};
@@ -439,30 +447,51 @@ namespace
         std::array<SNativePoolTelemetry, 6> pools{};
         SStreamingLifecycleTelemetrySA      streaming{};
         SNativeWorldCacheLeaseTelemetrySA   cache{};
+        const void*                         modelInfoArray{};
+        const void*                         streamingInfoArray{};
+        SFileIDLayout                       fileIdLayout{};
+        int                                 txdFindCache{};
         unsigned int                        modelPointers{};
         unsigned int                        arenaModelPointers{};
         unsigned int                        streamingEntries{};
         unsigned int                        arenaStreamingEntries{};
         unsigned int                        requestedStreamingEntries{};
         unsigned int                        loadedStreamingEntries{};
+        SStreamingListTelemetry             loadedList{};
+        SStreamingListTelemetry             requestedList{};
+        unsigned int                        lodArrayCount{};
+        unsigned int                        lodReservedArrays{};
+        unsigned int                        lodReservedNonNullEntries{};
+        bool                                lodArraysReserved{};
+        bool                                lodScratchNeutral{};
         unsigned int                        catalogModels{};
         unsigned int                        validLeaseObjects{};
         bool                                contentNeutral{};
-        bool                                contentMatchesBaseline{};
+        bool                                admissionBaselineMatches{};
         bool                                sessionNeutral{};
         bool                                ioQuiescent{};
     };
 
     struct SNativeWorldNeutralBaseline
     {
+        // This is an admission-fence snapshot, not a cross-route gameplay
+        // baseline. The authorized hook captures before deferred PLAYER.IMG;
+        // the stock-only fallback at CGameSA::Initialize captures later.
+        // Only same-process comparisons against the captured phase are valid.
         bool                                      captured{};
         unsigned int                              atomicUsed{};
         unsigned int                              damageUsed{};
         unsigned int                              timedUsed{};
         std::array<SNativePoolTelemetry, 6>       pools{};
         std::array<std::vector<unsigned char>, 3> poolFlagSnapshots;
+        const void*                               modelInfoArray{};
+        const void*                               streamingInfoArray{};
+        SFileIDLayout                             fileIdLayout{};
+        int                                       txdFindCache{};
         size_t                                    boundArchives{};
         size_t                                    openStreamHandles{};
+        std::uint64_t                             archiveStateHash{};
+        std::uint64_t                             streamHandleStateHash{};
         unsigned int                              modelPointers{};
         unsigned int                              streamingEntries{};
     };
@@ -502,6 +531,22 @@ namespace
         return "unknown";
     }
 
+    const char* LodStateName(EStaticWorldV3LodState state)
+    {
+        switch (state)
+        {
+            case EStaticWorldV3LodState::Off:
+                return "off";
+            case EStaticWorldV3LodState::Reserved:
+                return "reserved";
+            case EStaticWorldV3LodState::Building:
+                return "building";
+            case EStaticWorldV3LodState::Ready:
+                return "ready";
+        }
+        return "unknown";
+    }
+
     SNativePoolTelemetry ReadNativePoolTelemetry(DWORD pointerAddress)
     {
         SNativePoolTelemetry result;
@@ -532,6 +577,37 @@ namespace
                info.sizeInBlocks == 0 && info.loadState == eModelLoadState::LOADSTATE_NOT_LOADED;
     }
 
+    SStreamingListTelemetry ReadStreamingListTelemetry(const CStreamingInfo* infos, const SFileIDLayout& layout, unsigned int startId, unsigned int endId)
+    {
+        SStreamingListTelemetry result;
+        // CStreamingInfo keeps GTA's m_NextIndex first and m_PrevIndex
+        // second.  The long-standing SDK member names are reversed: prevId
+        // is the forward link and nextId is the backward link.  Walk the
+        // actual list topology instead of the misleading field names.
+        if (!infos || startId >= layout.total || endId >= layout.total || startId == endId || infos[startId].nextId != 0xFFFF || infos[endId].prevId != 0xFFFF)
+            return result;
+
+        std::vector<unsigned char> visited(layout.total);
+        unsigned int               previous = startId;
+        unsigned int               current = infos[startId].prevId;
+        for (unsigned int steps = 0; steps < layout.total; ++steps)
+        {
+            if (current == endId)
+            {
+                result.valid = infos[endId].nextId == previous;
+                return result;
+            }
+            if (current >= layout.total || current == startId || visited[current] || infos[current].nextId != previous)
+                return result;
+            visited[current] = 1;
+            ++result.nodes;
+            result.nativeArenaNodes += current >= NATIVE_WORLD_MODEL_ARENA_FIRST && current <= STATIC_WORLD_V3_LAST_MODEL;
+            previous = current;
+            current = infos[current].prevId;
+        }
+        return result;
+    }
+
     SNativeWorldLifecycleTelemetry ReadNativeWorldLifecycleTelemetry()
     {
         SNativeWorldLifecycleTelemetry result;
@@ -551,6 +627,10 @@ namespace
             const SFileIDLayout&  layout = pGame->GetFileIDLayout();
             auto* const*          modelInfos = static_cast<CBaseModelInfoSAInterface* const*>(pGame->GetModelInfoArray());
             const CStreamingInfo* streamingInfos = pGame->GetStreamingInfoArray();
+            result.modelInfoArray = modelInfos;
+            result.streamingInfoArray = streamingInfos;
+            result.fileIdLayout = layout;
+            result.txdFindCache = *reinterpret_cast<const int*>(TXD_FIND_CACHE);
             for (unsigned int modelId = layout.dff; modelId < layout.txd; ++modelId)
             {
                 if (modelInfos[modelId])
@@ -574,7 +654,27 @@ namespace
                                                     info.loadState == eModelLoadState::LOADSTATE_FINISHING;
                 result.loadedStreamingEntries += info.loadState == eModelLoadState::LOADSTATE_LOADED;
             }
+            result.loadedList = ReadStreamingListTelemetry(streamingInfos, layout, layout.loadedList, layout.loadedList + 1);
+            result.requestedList = ReadStreamingListTelemetry(streamingInfos, layout, layout.requestedList, layout.requestedList + 1);
         }
+
+        result.lodArrayCount = *reinterpret_cast<const unsigned int*>(IPL_ENTITY_INDEX_ARRAY_COUNT);
+        result.lodArraysReserved = g_staticWorldV3LodArraysReserved;
+        if (result.lodArraysReserved)
+        {
+            auto* lodArrays = reinterpret_cast<CEntitySAInterface***>(IPL_ENTITY_INDEX_ARRAYS);
+            for (unsigned int bank = 0; bank < STATIC_WORLD_V3_MODEL_BANK_COUNT; ++bank)
+            {
+                if (bank >= result.lodArrayCount || !lodArrays[bank])
+                    continue;
+                ++result.lodReservedArrays;
+                for (unsigned int index = 0; index < IPL_ENTITY_SCRATCH_CAPACITY; ++index)
+                    result.lodReservedNonNullEntries += lodArrays[bank][index] != nullptr;
+            }
+        }
+        result.lodScratchNeutral =
+            !result.lodArraysReserved || (g_staticWorldV3LodState == EStaticWorldV3LodState::Reserved &&
+                                          result.lodReservedArrays == STATIC_WORLD_V3_MODEL_BANK_COUNT && result.lodReservedNonNullEntries == 0);
 
         for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
             result.catalogModels += static_cast<unsigned int>(pack.modelInfos.size());
@@ -585,28 +685,42 @@ namespace
         const bool banksUnowned = std::all_of(g_staticWorldV3BankOwners.begin(), g_staticWorldV3BankOwners.end(), [](int owner) { return owner < 0; });
         result.contentNeutral = result.catalogModels == 0 && result.arenaModelPointers == 0 && result.arenaStreamingEntries == 0 &&
                                 g_staticWorldV3PermanentBindings.empty() && g_staticWorldV3ColOwners.empty() && g_staticWorldV3IplOwners.empty() &&
-                                g_staticWorldV3PendingBoundingAnchors.empty() && g_staticWorldV3ActivePack < 0 && banksUnowned &&
-                                g_staticWorldV3LodState == EStaticWorldV3LodState::Off;
+                                g_staticWorldV3PendingBoundingAnchors.empty() && g_staticWorldV3ActivePack < 0 && banksUnowned && result.lodScratchNeutral &&
+                                result.loadedList.valid && result.requestedList.valid && result.loadedList.nativeArenaNodes == 0 &&
+                                result.requestedList.nativeArenaNodes == 0;
         if (g_nativeWorldNeutralBaseline.captured && result.modelStoresInstalled)
         {
-            result.contentMatchesBaseline = result.contentNeutral && result.atomicUsed == g_nativeWorldNeutralBaseline.atomicUsed &&
-                                            result.damageUsed == g_nativeWorldNeutralBaseline.damageUsed &&
-                                            result.timedUsed == g_nativeWorldNeutralBaseline.timedUsed &&
-                                            result.streaming.boundArchives == g_nativeWorldNeutralBaseline.boundArchives &&
-                                            result.streaming.openStreamHandles == g_nativeWorldNeutralBaseline.openStreamHandles &&
-                                            result.modelPointers == g_nativeWorldNeutralBaseline.modelPointers;
+            result.admissionBaselineMatches = result.contentNeutral && result.atomicUsed == g_nativeWorldNeutralBaseline.atomicUsed &&
+                                              result.damageUsed == g_nativeWorldNeutralBaseline.damageUsed &&
+                                              result.timedUsed == g_nativeWorldNeutralBaseline.timedUsed &&
+                                              result.modelInfoArray == g_nativeWorldNeutralBaseline.modelInfoArray &&
+                                              result.streamingInfoArray == g_nativeWorldNeutralBaseline.streamingInfoArray &&
+                                              memcmp(&result.fileIdLayout, &g_nativeWorldNeutralBaseline.fileIdLayout, sizeof(result.fileIdLayout)) == 0 &&
+                                              result.txdFindCache == g_nativeWorldNeutralBaseline.txdFindCache &&
+                                              result.streaming.boundArchives == g_nativeWorldNeutralBaseline.boundArchives &&
+                                              result.streaming.openStreamHandles == g_nativeWorldNeutralBaseline.openStreamHandles &&
+                                              result.streaming.archiveStateHash == g_nativeWorldNeutralBaseline.archiveStateHash &&
+                                              result.streaming.streamHandleStateHash == g_nativeWorldNeutralBaseline.streamHandleStateHash &&
+                                              result.modelPointers == g_nativeWorldNeutralBaseline.modelPointers;
             for (size_t index = 0; index < 3; ++index)
             {
                 const SNativePoolTelemetry& current = result.pools[index];
                 const SNativePoolTelemetry& baseline = g_nativeWorldNeutralBaseline.pools[index];
-                result.contentMatchesBaseline = result.contentMatchesBaseline && current.valid && baseline.valid && current.capacity == baseline.capacity &&
-                                                current.firstFree == baseline.firstFree && current.occupied == baseline.occupied &&
-                                                current.highestOccupied == baseline.highestOccupied;
+                result.admissionBaselineMatches =
+                    result.admissionBaselineMatches && current.valid && baseline.valid && current.capacity == baseline.capacity &&
+                    current.firstFree == baseline.firstFree && current.occupied == baseline.occupied && current.highestOccupied == baseline.highestOccupied &&
+                    g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].size() == static_cast<size_t>(current.capacity) &&
+                    memcmp(current.flags, g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].data(), static_cast<size_t>(current.capacity)) == 0;
             }
         }
         result.sessionNeutral = !g_authorizedRoute && !g_staticWorldV3Route && result.validLeaseObjects == 0 && result.cache.pendingHandles == 0 &&
-                                result.cache.processHandles == 0 && result.cache.processLeaseCommits == 0 && !result.cache.legacyCachePrepared;
-        result.ioQuiescent = result.streaming.requestedModels == 0;
+                                result.cache.processHandles == 0 && !result.cache.legacyCachePrepared;
+        // The retail priority counter can remain stale after a request-list
+        // mutation. Log it, but use the bounded list walk and live entry
+        // states as the ownership proof instead of deadlocking a future drain
+        // on that advisory counter alone.
+        result.ioQuiescent = result.streaming.streamTableShapeValid && result.streaming.requestedModels == 0 && result.streaming.channelError == -1 &&
+                             result.requestedStreamingEntries == 0 && result.requestedList.valid && result.requestedList.nodes == 0;
         for (const SStreamingLifecycleTelemetrySA::SChannel& channel : result.streaming.channels)
             result.ioQuiescent = result.ioQuiescent && channel.state == 0 && channel.modelCount == 0;
         return result;
@@ -616,26 +730,31 @@ namespace
     {
         const char* safeContext = context && context[0] ? context : "unspecified";
         SharedUtil::WriteDebugEvent(SString(
-            "[NativeWorldNeutral] state=sample context=%s lifecycle=%s content-neutral=%s baseline-match=%s session-neutral=%s io-quiescent=%s baseline=%s "
+            "[NativeWorldNeutral] state=sample context=%s lifecycle=%s content-neutral=%s admission-baseline-match=%s session-neutral=%s io-quiescent=%s "
+            "baseline=%s "
             "generation=%u "
             "activePack=%d banks=%d,%d catalogModels=%u colOwners=%u iplOwners=%u permanentBindings=%u reservations=%s leaseObjects=%u "
-            "cacheHandles=%u,%u cacheCommits=%u",
-            safeContext, StateName(g_state), sample.contentNeutral ? "yes" : "no", sample.contentMatchesBaseline ? "yes" : "no",
+            "cacheHandles=%u,%u cacheCommitHighWater=%u lod=%s arrays=%u scratchOwned=%s reserved=%u nonNull=%u",
+            safeContext, StateName(g_state), sample.contentNeutral ? "yes" : "no", sample.admissionBaselineMatches ? "yes" : "no",
             sample.sessionNeutral ? "yes" : "no", sample.ioQuiescent ? "yes" : "no", g_nativeWorldNeutralBaseline.captured ? "captured" : "absent",
             g_staticWorldV3Generation.load(std::memory_order_acquire), g_staticWorldV3ActivePack, g_staticWorldV3BankOwners[0], g_staticWorldV3BankOwners[1],
             sample.catalogModels, static_cast<unsigned int>(g_staticWorldV3ColOwners.size()), static_cast<unsigned int>(g_staticWorldV3IplOwners.size()),
             static_cast<unsigned int>(g_staticWorldV3PermanentBindings.size()), g_nativeModelSlotsReserved.load(std::memory_order_acquire) ? "yes" : "no",
             sample.validLeaseObjects, static_cast<unsigned int>(sample.cache.pendingHandles), static_cast<unsigned int>(sample.cache.processHandles),
-            sample.cache.processLeaseCommits));
+            sample.cache.committedGroupsHighWater, LodStateName(g_staticWorldV3LodState), sample.lodArrayCount, sample.lodArraysReserved ? "yes" : "no",
+            sample.lodReservedArrays, sample.lodReservedNonNullEntries));
 
         const SFileIDLayout& layout = pGame->GetFileIDLayout();
         SharedUtil::WriteDebugEvent(
             SString("[NativeWorldNeutral] state=capacity context=%s fileIds=%u bases=%u,%u,%u,%u,%u,%u,%u,%u storesInstalled=%s stores=%u/%u,%u/%u,%u/%u "
-                    "modelPointers=%u arenaPointers=%u streamingEntries=%u arenaStreaming=%u streamingRequested=%u streamingLoaded=%u",
+                    "modelPointers=%u arenaPointers=%u streamingEntries=%u arenaStreaming=%u streamingRequested=%u streamingLoaded=%u "
+                    "modelBase=%p streamingBase=%p loadedList=%s:%u:%u requestedList=%s:%u:%u txdFindCache=%d",
                     safeContext, layout.total, layout.dff, layout.txd, layout.col, layout.ipl, layout.dat, layout.ifp, layout.rrr, layout.scm,
                     sample.modelStoresInstalled ? "yes" : "no", sample.atomicUsed, sample.atomicCapacity, sample.damageUsed, sample.damageCapacity,
                     sample.timedUsed, sample.timedCapacity, sample.modelPointers, sample.arenaModelPointers, sample.streamingEntries,
-                    sample.arenaStreamingEntries, sample.requestedStreamingEntries, sample.loadedStreamingEntries));
+                    sample.arenaStreamingEntries, sample.requestedStreamingEntries, sample.loadedStreamingEntries, sample.modelInfoArray,
+                    sample.streamingInfoArray, sample.loadedList.valid ? "valid" : "invalid", sample.loadedList.nodes, sample.loadedList.nativeArenaNodes,
+                    sample.requestedList.valid ? "valid" : "invalid", sample.requestedList.nodes, sample.requestedList.nativeArenaNodes, sample.txdFindCache));
 
         SString pools = SString("[NativeWorldNeutral] state=pools context=%s", safeContext);
         for (size_t index = 0; index < sample.pools.size(); ++index)
@@ -646,16 +765,20 @@ namespace
         }
         SharedUtil::WriteDebugEvent(pools);
         SharedUtil::WriteDebugEvent(
-            SString("[NativeWorldNeutral] state=streaming context=%s archiveSlots=%u/%u named=%u bound=%u streamHandles=%u/%u requests=%d memory=%u "
+            SString("[NativeWorldNeutral] state=streaming context=%s archiveSlots=%u/%u named=%u bound=%u streamHandles=%u/%u streamNames=%u "
+                    "streamShape=%s requests=%d priorityAdvisory=%u "
+                    "channelError=%d archiveHash=%016llx handleHash=%016llx memory=%u "
                     "halfBufferBlocks=%u "
                     "channel0=%d:%u:%d:%d channel1=%d:%u:%d:%d",
                     safeContext, static_cast<unsigned int>(sample.streaming.archiveCapacity), static_cast<unsigned int>(sample.streaming.archiveLimit),
                     static_cast<unsigned int>(sample.streaming.namedArchives), static_cast<unsigned int>(sample.streaming.boundArchives),
                     static_cast<unsigned int>(sample.streaming.openStreamHandles), static_cast<unsigned int>(sample.streaming.streamHandleCapacity),
-                    sample.streaming.requestedModels, sample.streaming.memoryUsedBytes, sample.streaming.halfBufferBlocks, sample.streaming.channels[0].state,
-                    sample.streaming.channels[0].modelCount, sample.streaming.channels[0].sectorCount, sample.streaming.channels[0].cdStreamStatus,
-                    sample.streaming.channels[1].state, sample.streaming.channels[1].modelCount, sample.streaming.channels[1].sectorCount,
-                    sample.streaming.channels[1].cdStreamStatus));
+                    static_cast<unsigned int>(sample.streaming.streamNameCapacity), sample.streaming.streamTableShapeValid ? "valid" : "invalid",
+                    sample.streaming.requestedModels, sample.streaming.priorityRequests, sample.streaming.channelError, sample.streaming.archiveStateHash,
+                    sample.streaming.streamHandleStateHash, sample.streaming.memoryUsedBytes, sample.streaming.halfBufferBlocks,
+                    sample.streaming.channels[0].state, sample.streaming.channels[0].modelCount, sample.streaming.channels[0].sectorCount,
+                    sample.streaming.channels[0].cdStreamStatus, sample.streaming.channels[1].state, sample.streaming.channels[1].modelCount,
+                    sample.streaming.channels[1].sectorCount, sample.streaming.channels[1].cdStreamStatus));
     }
 
     void CaptureNativeWorldNeutralBaseline(const char* context)
@@ -674,8 +797,14 @@ namespace
                 if (pool.valid)
                     g_nativeWorldNeutralBaseline.poolFlagSnapshots[index].assign(pool.flags, pool.flags + pool.capacity);
             }
+            g_nativeWorldNeutralBaseline.modelInfoArray = sample.modelInfoArray;
+            g_nativeWorldNeutralBaseline.streamingInfoArray = sample.streamingInfoArray;
+            g_nativeWorldNeutralBaseline.fileIdLayout = sample.fileIdLayout;
+            g_nativeWorldNeutralBaseline.txdFindCache = sample.txdFindCache;
             g_nativeWorldNeutralBaseline.boundArchives = sample.streaming.boundArchives;
             g_nativeWorldNeutralBaseline.openStreamHandles = sample.streaming.openStreamHandles;
+            g_nativeWorldNeutralBaseline.archiveStateHash = sample.streaming.archiveStateHash;
+            g_nativeWorldNeutralBaseline.streamHandleStateHash = sample.streaming.streamHandleStateHash;
             g_nativeWorldNeutralBaseline.modelPointers = sample.modelPointers;
             g_nativeWorldNeutralBaseline.streamingEntries = sample.streamingEntries;
         }
@@ -685,7 +814,10 @@ namespace
                     context, sample.contentNeutral ? "yes" : "no", sample.ioQuiescent ? "yes" : "no", sample.atomicUsed, sample.damageUsed, sample.timedUsed,
                     static_cast<unsigned int>(sample.streaming.boundArchives), static_cast<unsigned int>(sample.streaming.openStreamHandles),
                     sample.modelPointers, sample.streamingEntries));
-        LogNativeWorldLifecycleTelemetry(context, sample);
+        // Re-sample after publishing the baseline so the adjacent diagnostic
+        // evaluates the just-captured state instead of reporting the default
+        // not-yet-evaluated result from the first read.
+        LogNativeWorldLifecycleTelemetry(context, ReadNativeWorldLifecycleTelemetry());
     }
 
     const SNativeWorldPackDescriptorSA& Pack()
@@ -3573,6 +3705,7 @@ namespace
                 Fatal("static-world-v3 native IPL entity-index array reservation drifted after the irreversible barrier");
             memset(arrays[actualIndex], 0, IPL_ENTITY_SCRATCH_CAPACITY * sizeof(*arrays[actualIndex]));
         }
+        g_staticWorldV3LodArraysReserved = true;
         g_staticWorldV3LodState = EStaticWorldV3LodState::Reserved;
     }
 
@@ -4067,6 +4200,15 @@ namespace
         if (!g_nativeWorldNeutralBaseline.captured || !current.modelStoresInstalled || !current.contentNeutral || !current.ioQuiescent)
         {
             error = "static-world-v3 runtime baseline was not captured in a neutral, quiescent state";
+            return false;
+        }
+        // The authorized route already owns its immutable cache leases and
+        // FileID reservation here. Those admission controls intentionally
+        // make sessionNeutral false, but they must not hide any change to the
+        // GTA state captured immediately before the registrar mutation gate.
+        if (!current.admissionBaselineMatches)
+        {
+            error = "static-world-v3 GTA admission state changed after the runtime baseline capture";
             return false;
         }
         if (current.atomicCapacity != 32000 || current.damageCapacity != 512 || current.timedCapacity != 1024)

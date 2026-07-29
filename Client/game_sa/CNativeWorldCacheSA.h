@@ -52,13 +52,13 @@ struct SNativeWorldV3SetPackSA
 
 struct SNativeWorldV3SetRequestSA
 {
-    std::string                            sourceAbsoluteDirectory;
-    std::string                            manifestFileName;
-    std::string                            sourceManifestSha256;
-    std::uint64_t                          sourceManifestBytes{};
-    std::string                            setId;
+    std::string                          sourceAbsoluteDirectory;
+    std::string                          manifestFileName;
+    std::string                          sourceManifestSha256;
+    std::uint64_t                        sourceManifestBytes{};
+    std::string                          setId;
     std::vector<SNativeWorldV3SetPackSA> packs;
-    std::shared_ptr<std::atomic_bool>      cancellation;
+    std::shared_ptr<std::atomic_bool>    cancellation;
 };
 
 using NativeWorldCacheAuditSA = std::function<bool(const std::string& quarantineDirectory, std::string& error)>;
@@ -67,7 +67,7 @@ struct SNativeWorldCacheLeaseTelemetrySA
 {
     size_t       pendingHandles{};
     size_t       processHandles{};
-    unsigned int processLeaseCommits{};
+    unsigned int committedGroupsHighWater{};
     bool         legacyCachePrepared{};
 };
 

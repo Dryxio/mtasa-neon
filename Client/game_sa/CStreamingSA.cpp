@@ -69,6 +69,17 @@ namespace
         int32_t  cdStreamStatus;
     };
     static_assert(sizeof(SStreamingChannelTelemetryMirror) == 0x98, "Invalid streaming channel telemetry mirror size");
+
+    std::uint64_t HashTelemetryBytes(std::uint64_t hash, const void* data, size_t size)
+    {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (size_t index = 0; index < size; ++index)
+        {
+            hash ^= bytes[index];
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    }
 }  // namespace
 
 bool IsUpgradeModelId(DWORD dwModelID)
@@ -478,18 +489,40 @@ SStreamingLifecycleTelemetrySA CStreamingSA::GetLifecycleTelemetry() const
     result.archiveCapacity = m_Imgs.size();
     result.archiveLimit = MAX_IMAGES_NUM;
     result.streamHandleCapacity = m_StreamHandles.size();
+    result.streamNameCapacity = m_StreamNames.size();
+    result.streamTableShapeValid = m_StreamHandles.size() == m_StreamNames.size();
     result.requestedModels = *reinterpret_cast<const int*>(0x8E4CB8);
+    result.priorityRequests = *reinterpret_cast<const unsigned int*>(0x8E4BA0);
+    result.channelError = *reinterpret_cast<const int*>(0x8E4B90);
     result.memoryUsedBytes = *reinterpret_cast<const unsigned int*>(0x8E4CB4);
     result.halfBufferBlocks = ms_streamingHalfOfBufferSizeBlocks;
+    result.archiveStateHash = 14695981039346656037ULL;
+    result.streamHandleStateHash = 14695981039346656037ULL;
+
+    result.archiveStateHash = HashTelemetryBytes(result.archiveStateHash, &result.archiveCapacity, sizeof(result.archiveCapacity));
+    result.streamHandleStateHash = HashTelemetryBytes(result.streamHandleStateHash, &result.streamHandleCapacity, sizeof(result.streamHandleCapacity));
 
     for (size_t index = 0; index < m_Imgs.size(); ++index)
     {
         const CArchiveInfo& archive = m_Imgs[index];
         result.namedArchives += archive.szName[0] != '\0';
         result.boundArchives += index < MIN_IMAGES_NUM ? archive.szName[0] != '\0' : archive.uiStreamHandleId != 0;
+        result.archiveStateHash = HashTelemetryBytes(result.archiveStateHash, &archive, sizeof(archive));
     }
-    for (HANDLE handle : m_StreamHandles)
+    const size_t streamTableEntries = std::min(m_StreamHandles.size(), m_StreamNames.size());
+    for (size_t index = 0; index < streamTableEntries; ++index)
+    {
+        const HANDLE handle = m_StreamHandles[index];
         result.openStreamHandles += handle != nullptr && handle != INVALID_HANDLE_VALUE;
+        result.streamHandleStateHash = HashTelemetryBytes(result.streamHandleStateHash, &handle, sizeof(handle));
+        result.streamHandleStateHash = HashTelemetryBytes(result.streamHandleStateHash, &m_StreamNames[index], sizeof(m_StreamNames[index]));
+    }
+    for (size_t index = streamTableEntries; index < m_StreamHandles.size(); ++index)
+    {
+        const HANDLE handle = m_StreamHandles[index];
+        result.openStreamHandles += handle != nullptr && handle != INVALID_HANDLE_VALUE;
+        result.streamHandleStateHash = HashTelemetryBytes(result.streamHandleStateHash, &handle, sizeof(handle));
+    }
 
     const auto* channels = reinterpret_cast<const SStreamingChannelTelemetryMirror*>(0x8E4A60);
     for (size_t channelIndex = 0; channelIndex < std::size(result.channels); ++channelIndex)

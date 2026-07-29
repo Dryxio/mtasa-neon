@@ -41,7 +41,11 @@ namespace
     std::vector<HANDLE> g_pendingLocks;
     std::vector<HANDLE> g_processLocks;
     bool                g_cachePrepared = false;
-    unsigned int        g_processLeaseCommits = 0;
+    // Diagnostic high-water only. Committed handles are currently retained
+    // for the process lifetime; a later hot-unload checkpoint will replace
+    // this flattened ownership with independently releasable generation
+    // groups.
+    unsigned int g_committedGroupsHighWater = 0;
 
     class CScopedHandles
     {
@@ -1265,7 +1269,7 @@ bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& po
         return false;
     }
     g_processLocks.insert(g_processLocks.end(), m_impl->handles.begin(), m_impl->handles.end());
-    ++g_processLeaseCommits;
+    ++g_committedGroupsHighWater;
     m_impl->handles.clear();
     m_impl.reset();
     return true;
@@ -1676,7 +1680,7 @@ bool PublishNativeWorldCache(const SNativeWorldCacheRequestSA& request, const Na
 void CommitNativeWorldCacheLease()
 {
     if (!g_pendingLocks.empty())
-        ++g_processLeaseCommits;
+        ++g_committedGroupsHighWater;
     g_processLocks.insert(g_processLocks.end(), g_pendingLocks.begin(), g_pendingLocks.end());
     g_pendingLocks.clear();
 }
@@ -1691,5 +1695,5 @@ void ReleaseNativeWorldCacheLease()
 
 SNativeWorldCacheLeaseTelemetrySA GetNativeWorldCacheLeaseTelemetry()
 {
-    return {g_pendingLocks.size(), g_processLocks.size(), g_processLeaseCommits, g_cachePrepared};
+    return {g_pendingLocks.size(), g_processLocks.size(), g_committedGroupsHighWater, g_cachePrepared};
 }

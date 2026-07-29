@@ -1250,6 +1250,72 @@ aggregate dry-run of every city; all four imported cities active beside San
 Andreas; seamless native flights; optional environment support; production
 hardening.
 
+## Runtime server-to-server hot switching
+
+The startup/restart route remains the production path. A separate follow-up is
+now building the ability to disconnect from one native-world server, return to
+a reusable in-process Neutral state, and join a server with a different set
+without closing MTA. The relocated FileID tables, enlarged stores/pools, hook
+substrate, and two LOD scratch arrays are process-lifetime infrastructure; pack
+content and cache ownership must not be.
+
+The implementation sequence is deliberately narrower than a direct
+Active-to-Active switch:
+
+1. **Neutral contract and read-only telemetry — implemented, live gate
+   pending.** `NativeWorldNeutral` samples the relocated model and streaming
+   table identities, exact `SFileIDLayout`, model-store counts, complete
+   TXD/COL/IPL bitmaps and cursors, dynamic building/ColModel/QuadTree pool
+   high-water, IMG descriptors/handles, both bounded streaming lists, request
+   counters, channel state, native banks/owners/bindings, LOD scratch contents,
+   cache handles and route/session ownership. The two process-lifetime LOD
+   arrays are Neutral when state is `Reserved`, both arrays exist, and all
+   8,192 entries are null; the remaining GTA scene arrays are soft telemetry.
+   The exact admission baseline is route-phase-specific: format 3 captures
+   before deferred `PLAYER.IMG`, while a stock-only fallback captured from
+   `CGameSA::Initialize` is later. Its archive/handle fingerprints are valid
+   only for same-process admission-fence comparisons and are intentionally
+   logged as `admission-baseline-match`, not as the future gameplay Neutral
+   verdict. Buildings, ColModels and QuadTreeNodes are never byte-restored.
+2. **Generation-owned journal.** Retain the committed model-store creation
+   order, TXD/COL/IPL slots, archives and handle bindings, direct streaming
+   entries, owner maps, cache leases, LOD substrate, baseline cursors and the
+   exact set identity. Replace flattened process cache locks with one releasable
+   token per committed set/generation.
+3. **Drain and quiescence fence.** Enter an explicit `Draining` state, reject
+   transition re-entry, retire the active city through the existing
+   cover/IPL/anchor/channel/COL/DFF fence, stop new native requests, flush both
+   channels, and prove the requested list contains no native ownership or
+   cycles. Global priority-request count remains advisory because retail can
+   leave it stale; the bounded list and entry states are authoritative.
+4. **Transactional content teardown.** Clear permanent FileID bindings, remove
+   child IPLs before hidden LOD owners, unload COL, shut down appended
+   ModelInfos in reverse creation order, rewind each inline GTA `CStore` to its
+   captured count, then release TXDs, archives and the generation cache token.
+   `CModelInfoSA::DeallocateModel` must never be used for these inline store
+   objects.
+5. **Neutral verification and session release.** Require zero active pack,
+   bank owner, arena pointer/streaming entry, native pool owner, binding,
+   catalog ModelInfo and generation lease; retain only the patched substrate
+   and zeroed LOD scratch arrays. Clear route, selection, model reservation and
+   endpoint ownership only after this postcondition succeeds. A failed
+   post-barrier teardown is fail-stop, never a partial rollback.
+6. **Runtime admission and reactivation.** Generalize Core authorization from
+   startup-only tickets to a connected-session transaction, acquire and audit
+   the next immutable set while Neutral, run the registrar outside the one-shot
+   `LoadCdDirectory` hook, rebuild aggregate bounds safely, and publish the new
+   endpoint/set only after global commit.
+7. **Hostile and endurance gate.** Repeat same-set and different-set cycles,
+   VC/LC LOD teardown, disconnect during active streaming, cache corruption,
+   resource/server restart, death/respawn, real D3D reset and long Carcer
+   pressure. Store counts, pool slots, IMG handles, leases and memory must stop
+   growing across at least ten A-to-Neutral-to-B cycles.
+
+Until checkpoints 2 through 6 are complete, `processHandles > 0`, an Active
+Core endpoint and the append-only ModelInfo catalog correctly keep
+`session-neutral=no`; bypassing those observations would only hide ownership
+that cannot yet be released safely.
+
 ## VM and verification quick reference
 
 Follow `AGENTS.md` for full commands and current paths. The essentials are:

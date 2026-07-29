@@ -65,16 +65,22 @@ struct SStreamingLifecycleTelemetrySA
         int          cdStreamStatus{};
     };
 
-    size_t       archiveCapacity{};
-    size_t       archiveLimit{};
-    size_t       namedArchives{};
-    size_t       boundArchives{};
-    size_t       streamHandleCapacity{};
-    size_t       openStreamHandles{};
-    int          requestedModels{};
-    unsigned int memoryUsedBytes{};
-    unsigned int halfBufferBlocks{};
-    SChannel     channels[2]{};
+    size_t        archiveCapacity{};
+    size_t        archiveLimit{};
+    size_t        namedArchives{};
+    size_t        boundArchives{};
+    size_t        streamHandleCapacity{};
+    size_t        streamNameCapacity{};
+    size_t        openStreamHandles{};
+    bool          streamTableShapeValid{};
+    int           requestedModels{};
+    unsigned int  priorityRequests{};
+    int           channelError{};
+    unsigned int  memoryUsedBytes{};
+    unsigned int  halfBufferBlocks{};
+    std::uint64_t archiveStateHash{};
+    std::uint64_t streamHandleStateHash{};
+    SChannel      channels[2]{};
 };
 
 struct SStreamingArchiveAllocationSA
