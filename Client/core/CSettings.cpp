@@ -5212,7 +5212,16 @@ void CSettings::SetChatColorValues(eChatColorType eType, CColor pColor)
 
 void CSettings::LoadChatPresets()
 {
-    CXMLFile* pPresetsFile = CCore::GetSingleton().GetXML()->CreateXML(CalcMTASAPath(CHAT_PRESETS_PATH));
+    const SString presetsPath = g_pCore->GetClientProfilePath(CHAT_PRESETS_PATH);
+    const SString fullPresetsPath = CalcMTASAPath(presetsPath);
+    if (g_pCore->IsSecondaryClient() && !FileExists(fullPresetsPath))
+    {
+        const SString primaryPresetsPath = CalcMTASAPath(CHAT_PRESETS_PATH);
+        if (FileExists(primaryPresetsPath))
+            FileCopy(primaryPresetsPath, fullPresetsPath);
+    }
+
+    CXMLFile* pPresetsFile = CCore::GetSingleton().GetXML()->CreateXML(fullPresetsPath);
     if (pPresetsFile && pPresetsFile->Parse())
     {
         CXMLNode* pPresetsRoot = pPresetsFile->GetRootNode();

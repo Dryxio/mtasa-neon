@@ -15,7 +15,28 @@
 #include "CNewsBrowser.h"
 #include "CFilePathTranslator.h"
 #include "SharedUtil.Thread.h"
+#include <MultiClient.h>
 #include <charconv>
+
+namespace
+{
+    bool IsUpdateBlockedBySecondaryClient()
+    {
+#ifdef MTA_MULTI_CLIENT
+        if (g_pCore && g_pCore->IsSecondaryClient())
+            return true;
+
+        HANDLE mutex = OpenMutexA(SYNCHRONIZE, FALSE, MultiClient::SECONDARY_MUTEX_NAME);
+        if (!mutex)
+            return false;
+
+        CloseHandle(mutex);
+        return true;
+#else
+        return false;
+#endif
+    }
+}
 
 ///////////////////////////////////////////////////////////////
 //
@@ -453,7 +474,9 @@ CReportWrap* CVersionUpdater::GetReportWrap()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::DoPulse()
 {
-    if (!m_bEnabled)
+    // Updating shared binaries while CL2 is active could invalidate one of the
+    // running processes. Resume normal checks after the secondary client exits.
+    if (!m_bEnabled || IsUpdateBlockedBySecondaryClient())
         return;
 
     TIMING_CHECKPOINT("+VersionUpdaterPulse");
@@ -564,6 +587,9 @@ void CVersionUpdater::DoPulse()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::InitiateUpdate(const SString& strType, const SString& strData, const SString& strHost)
 {
+    if (IsUpdateBlockedBySecondaryClient())
+        return;
+
     if (strType == "Mandatory")
     {
         CCore::GetSingleton().RemoveMessageBox();
@@ -603,6 +629,9 @@ bool CVersionUpdater::IsOptionalUpdateInfoRequired(const SString& strHost)
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::InitiateDataFilesFix()
 {
+    if (IsUpdateBlockedBySecondaryClient())
+        return;
+
     RunProgram(EUpdaterProgramType::ServerSaysDataFilesWrong);
 }
 
@@ -615,6 +644,13 @@ void CVersionUpdater::InitiateDataFilesFix()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::InitiateManualCheck()
 {
+    if (IsUpdateBlockedBySecondaryClient())
+    {
+        CCore::GetSingleton().ShowMessageBox(_("Information"), _("Update checking is disabled while the secondary client is running"),
+                                             MB_BUTTON_OK | MB_ICON_INFO);
+        return;
+    }
+
     if (GetQuestionBox().IsVisible())
     {
         // Bring to the front

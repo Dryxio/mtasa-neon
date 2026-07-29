@@ -207,6 +207,8 @@ public:
     bool        IsOfflineMod() { return m_bIsOfflineMod; }
     const char* GetModInstallRoot(const char* szModName);
     bool        CheckDiskSpace(uint uiResourcesPathMinMB = 10, uint uiDataPathMinMB = 10);
+    bool        IsSecondaryClient() const override;
+    SString     GetClientProfilePath(const char* primaryPath) const;
 
     // Subsystems
     void CreateGame();

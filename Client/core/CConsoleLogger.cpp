@@ -19,8 +19,8 @@ CConsoleLogger* CSingleton<CConsoleLogger>::m_pSingleton = NULL;
 
 CConsoleLogger::CConsoleLogger()
 {
-    // Create file name
-    m_strFilename = CalcMTASAPath(MTA_CONSOLE_LOG_PATH);
+    // Keep each process on its own log so concurrent writes remain readable.
+    m_strFilename = CalcMTASAPath(g_pCore->GetClientProfilePath(MTA_CONSOLE_LOG_PATH));
 
     // Cycle if over size (100KB, 5 backup files)
     CycleFile(m_strFilename, 100, 5);

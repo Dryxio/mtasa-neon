@@ -126,8 +126,16 @@ CServerCache::~CServerCache()
 ///////////////////////////////////////////////////////////////
 bool CServerCache::LoadServerCache()
 {
-    // Load config XML file
-    CXMLFile* m_pConfigFile = CCore::GetSingleton().GetXML()->CreateXML(CalcMTASAPath(MTA_SERVER_CACHE_PATH));
+    const SString cachePath = g_pCore->GetClientProfilePath(MTA_SERVER_CACHE_PATH);
+    const SString fullCachePath = CalcMTASAPath(cachePath);
+    if (g_pCore->IsSecondaryClient() && !FileExists(fullCachePath))
+    {
+        const SString primaryCachePath = CalcMTASAPath(MTA_SERVER_CACHE_PATH);
+        if (FileExists(primaryCachePath))
+            FileCopy(primaryCachePath, fullCachePath);
+    }
+
+    CXMLFile* m_pConfigFile = CCore::GetSingleton().GetXML()->CreateXML(fullCachePath);
     if (!m_pConfigFile)
         return false;
     m_pConfigFile->Parse();
@@ -273,7 +281,8 @@ DWORD WINAPI CServerCache::StaticThreadProc(LPVOID lpdwThreadParam)
 ///////////////////////////////////////////////////////////////
 void CServerCache::StaticSaveServerCache()
 {
-    CXMLFile* m_pConfigFile = CCore::GetSingleton().GetXML()->CreateXML(CalcMTASAPath(MTA_SERVER_CACHE_PATH));
+    const SString cachePath = g_pCore->GetClientProfilePath(MTA_SERVER_CACHE_PATH);
+    CXMLFile*     m_pConfigFile = CCore::GetSingleton().GetXML()->CreateXML(CalcMTASAPath(cachePath));
     if (!m_pConfigFile)
         return;
     m_pConfigFile->Parse();

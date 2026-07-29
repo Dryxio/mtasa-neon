@@ -420,7 +420,7 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
 
     m_pLuaManager = new CLuaManager(this);
     m_pScriptDebugging = new CScriptDebugging(m_pLuaManager);
-    m_pScriptDebugging->SetLogfile(CalcMTASAPath("mta\\logs\\clientscript.log"), 3);
+    m_pScriptDebugging->SetLogfile(CalcMTASAPath(g_pCore->IsSecondaryClient() ? "mta\\logs\\clientscript-cl2.log" : "mta\\logs\\clientscript.log"), 3);
 
     CStaticFunctionDefinitions(m_pLuaManager, &m_Events, g_pCore, g_pGame, this, m_pManager);
     CLuaFunctionDefs::Initialize(m_pLuaManager, m_pScriptDebugging, this);
@@ -7510,10 +7510,20 @@ AnimationId CClientGame::DrivebyAnimationHandler(AnimationId animId, AssocGroupI
 //////////////////////////////////////////////////////////////////
 void CClientGame::SetFileCacheRoot()
 {
+    // Resolve one root for the whole cache instead of suffixing individual
+    // resource paths. This also isolates private server IDs and future cache files.
+    const auto resolveClientRoot = [](const SString& baseRoot) { return g_pCore->IsSecondaryClient() ? PathJoin(baseRoot, "cl2") : baseRoot; };
+    const auto prepareClientRoot = [](const SString& clientRoot)
+    {
+        MakeSureDirExists(PathJoin(clientRoot, "resources", ""));
+        MakeSureDirExists(PathJoin(clientRoot, "priv", ""));
+    };
+
     if (g_pCore->GetCVars()->GetValue<bool>("share_file_cache") == false)
     {
         // Not sharing, so use current mod directory
-        m_strFileCacheRoot = GetModRoot();
+        m_strFileCacheRoot = resolveClientRoot(GetModRoot());
+        prepareClientRoot(m_strFileCacheRoot);
         AddReportLog(7410, SString("CClientGame::SetFileCacheRoot - Not shared '%s'", *m_strFileCacheRoot));
     }
     else
@@ -7523,17 +7533,20 @@ void CClientGame::SetFileCacheRoot()
         // Check exists
         if (!strFileCachePath.empty() && DirectoryExists(strFileCachePath))
         {
+            const SString clientFileCachePath = resolveClientRoot(strFileCachePath);
+            prepareClientRoot(clientFileCachePath);
+
             // Check writable
-            SString strTestFileName = PathJoin(strFileCachePath, "resources", "_test.tmp");
+            SString strTestFileName = PathJoin(clientFileCachePath, "resources", "_test.tmp");
             if (FileSave(strTestFileName, "x"))
             {
                 FileDelete(strTestFileName);
-                strTestFileName = PathJoin(strFileCachePath, "priv", "_test.tmp");
+                strTestFileName = PathJoin(clientFileCachePath, "priv", "_test.tmp");
                 if (FileSave(strTestFileName, "x"))
                 {
                     FileDelete(strTestFileName);
                     // Use shared directory
-                    m_strFileCacheRoot = strFileCachePath;
+                    m_strFileCacheRoot = clientFileCachePath;
                     AddReportLog(7411, SString("CClientGame::SetFileCacheRoot - Is shared '%s'", *m_strFileCacheRoot));
                     return;
                 }
@@ -7541,8 +7554,10 @@ void CClientGame::SetFileCacheRoot()
         }
 
         // Otherwise set this install mod directory as shared
-        m_strFileCacheRoot = GetModRoot();
-        SetCommonRegistryValue("", "File Cache Path", m_strFileCacheRoot);
+        const SString baseFileCacheRoot = GetModRoot();
+        m_strFileCacheRoot = resolveClientRoot(baseFileCacheRoot);
+        prepareClientRoot(m_strFileCacheRoot);
+        SetCommonRegistryValue("", "File Cache Path", baseFileCacheRoot);
 
         if (strFileCachePath.empty())
             AddReportLog(7412, SString("CClientGame::SetFileCacheRoot - Initial setting '%s'", *m_strFileCacheRoot));

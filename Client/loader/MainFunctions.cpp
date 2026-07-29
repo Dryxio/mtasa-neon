@@ -1038,6 +1038,11 @@ void PostRunWatchDogs(int iReturnCode)
 //////////////////////////////////////////////////////////
 void HandleIfGTAIsAlreadyRunning()
 {
+    // The secondary launcher intentionally starts beside the primary GTA
+    // process and protects both processes from the normal cleanup path.
+    if (IsSecondaryClient())
+        return;
+
     if (IsGTARunning())
     {
         if (MessageBoxUTF8(
@@ -1125,10 +1130,10 @@ void HandleDuplicateLaunching()
         if (cmdLineLen > 0)
         {
             // Command line args present, so pass it on
-            HWND hwMTAWindow = FindWindow(NULL, "MTA: San Andreas");
+            HWND hwMTAWindow = FindWindow(NULL, IsSecondaryClient() ? "MTA: San Andreas [CL2]" : "MTA: San Andreas");
 #ifdef MTA_DEBUG
             if (!hwMTAWindow)
-                hwMTAWindow = FindWindow(NULL, "MTA: San Andreas [DEBUG]");
+                hwMTAWindow = FindWindow(NULL, IsSecondaryClient() ? "MTA: San Andreas [CL2-DEBUG]" : "MTA: San Andreas [DEBUG]");
 #endif
 
             if (hwMTAWindow)

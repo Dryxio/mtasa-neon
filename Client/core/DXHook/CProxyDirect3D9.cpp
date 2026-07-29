@@ -323,11 +323,11 @@ HRESULT CProxyDirect3D9::CreateDevice(UINT Adapter, D3DDEVTYPE DeviceType, HWND 
     WriteDebugEvent(SString("    FullScreen_RefreshRateInHz:%d  PresentationInterval:0x%08x", pPresentationParameters->FullScreen_RefreshRateInHz,
                             pPresentationParameters->PresentationInterval));
 
-// Change the window title to MTA: San Andreas
+    // Distinct titles let URI launches target the matching client mutex/window.
 #ifdef MTA_DEBUG
-    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16("MTA: San Andreas [DEBUG]").c_str());
+    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16(g_pCore->IsSecondaryClient() ? "MTA: San Andreas [CL2-DEBUG]" : "MTA: San Andreas [DEBUG]").c_str());
 #else
-    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16("MTA: San Andreas").c_str());
+    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16(g_pCore->IsSecondaryClient() ? "MTA: San Andreas [CL2]" : "MTA: San Andreas").c_str());
 #endif
 
     // Set dark titlebar if needed
@@ -1351,11 +1351,11 @@ HRESULT CCore::OnPostCreateDevice(HRESULT hResult, IDirect3D9* pDirect3D, UINT A
     if (hResult == D3D_OK)
         AddCapsReport(Adapter, pDirect3D, *ppReturnedDeviceInterface, true);
 
-// Change the window title to MTA: San Andreas
+    // Preserve the client identity if Direct3D recreates the device.
 #ifdef MTA_DEBUG
-    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16("MTA: San Andreas [DEBUG]").c_str());
+    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16(g_pCore->IsSecondaryClient() ? "MTA: San Andreas [CL2-DEBUG]" : "MTA: San Andreas [DEBUG]").c_str());
 #else
-    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16("MTA: San Andreas").c_str());
+    SetWindowTextW(hFocusWindow, MbUTF8ToUTF16(g_pCore->IsSecondaryClient() ? "MTA: San Andreas [CL2]" : "MTA: San Andreas").c_str());
 #endif
 
     // Log graphic card name

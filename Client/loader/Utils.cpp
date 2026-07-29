@@ -12,6 +12,7 @@
 #include "Utils.h"
 #include "Main.h"
 #include "Dialogs.h"
+#include <MultiClient.h>
 #include <array>
 #include <random>
 #include <cstring>
@@ -34,6 +35,49 @@ static SString g_strGTAPath;
 static HANDLE  g_hMutex = NULL;
 static HMODULE hLibraryModule = NULL;
 HINSTANCE      g_hInstance = NULL;
+
+bool IsSecondaryClient()
+{
+#ifdef MTA_MULTI_CLIENT
+    static const bool isSecondary = []
+    {
+        int     argumentCount = 0;
+        LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+        if (!arguments)
+            return false;
+
+        bool found = false;
+        for (int i = 1; i < argumentCount; ++i)
+        {
+            if (_wcsicmp(arguments[i], L"-cl2") == 0)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        LocalFree(arguments);
+        return found;
+    }();
+    return isSecondary;
+#else
+    return false;
+#endif
+}
+
+bool IsSecondaryClientRunning()
+{
+#ifdef MTA_MULTI_CLIENT
+    HANDLE mutex = OpenMutexA(SYNCHRONIZE, FALSE, MultiClient::SECONDARY_MUTEX_NAME);
+    if (!mutex)
+        return false;
+
+    CloseHandle(mutex);
+    return true;
+#else
+    return false;
+#endif
+}
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -335,6 +379,11 @@ bool IsGTARunning()
 ///////////////////////////////////////////////////////////////////////////
 void TerminateGTAIfRunning()
 {
+    // Broad GTA cleanup is only safe in single-client mode. Either launcher
+    // could otherwise tear down the other half of an intentional client pair.
+    if (IsSecondaryClient() || IsSecondaryClientRunning())
+        return;
+
     std::vector<DWORD> processIdList = GetGTAProcessList();
 
     // Try to stop all GTA process id's
@@ -397,6 +446,11 @@ bool IsOtherMTARunning()
 ///////////////////////////////////////////////////////////////////////////
 void TerminateOtherMTAIfRunning()
 {
+    // Both launchers have the same executable name, so process-wide cleanup
+    // must stay disabled while the secondary client owns its dedicated mutex.
+    if (IsSecondaryClient() || IsSecondaryClientRunning())
+        return;
+
     std::vector<DWORD> processIdList = GetOtherMTAProcessList();
 
     if (processIdList.size())
@@ -1538,7 +1592,14 @@ bool TerminateProcess(DWORD dwProcessID, uint uiExitCode)
 ///////////////////////////////////////////////////////////////////////////
 bool CreateSingleInstanceMutex()
 {
-    HANDLE hMutex = CreateMutex(NULL, FALSE, TEXT(MTA_GUID));
+    if (g_hMutex)
+        return true;
+
+    const char* mutexName = IsSecondaryClient() ? MultiClient::SECONDARY_MUTEX_NAME : MultiClient::PRIMARY_MUTEX_NAME;
+    HANDLE      hMutex = CreateMutexA(NULL, FALSE, mutexName);
+
+    if (!hMutex)
+        return false;
 
     if (GetLastError() == ERROR_ALREADY_EXISTS)
     {
@@ -1560,8 +1621,8 @@ bool CreateSingleInstanceMutex()
 ///////////////////////////////////////////////////////////////////////////
 void ReleaseSingleInstanceMutex()
 {
-    // assert(g_hMutex);
-    CloseHandle(g_hMutex);
+    if (g_hMutex)
+        CloseHandle(g_hMutex);
     g_hMutex = NULL;
 }
 

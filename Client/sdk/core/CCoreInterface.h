@@ -224,6 +224,7 @@ public:
     virtual void MarkNativeWorldStartupRefused() = 0;
     virtual void FailNativeWorldStartupBeforeActive(const std::string& reason) = 0;
     virtual void TerminateNativeWorldStartup(const std::string& reason) = 0;
+    virtual bool IsSecondaryClient() const = 0;
 };
 
 class CClientTime

@@ -1211,6 +1211,11 @@ void MigrateFile(const SString& strFilenameOld, const SString& strFilenameNew)
 //////////////////////////////////////////////////////////
 SString CInstallManager::_PrepareLaunchLocation()
 {
+    // The primary launcher has already prepared these shared binaries. Copying
+    // over them while GTA is using the launch directory creates avoidable races.
+    if (IsSecondaryClient())
+        return "ok";
+
     const bool isAdmin = IsUserAdmin();
 
     // Ensure GTA exe is not running
@@ -1328,6 +1333,11 @@ SString CInstallManager::_ProcessGtaPatchCheck()
 //////////////////////////////////////////////////////////
 SString CInstallManager::_ProcessGtaDllCheck()
 {
+    // Dependency repair writes into the shared GTA launch directory and must be
+    // left to the primary client before a secondary client is started.
+    if (IsSecondaryClient())
+        return "ok";
+
     // Ensure GTA exe is not running
     TerminateGTAIfRunning();
 
@@ -1404,6 +1414,11 @@ SString CInstallManager::_ProcessGtaDllCheck()
 //////////////////////////////////////////////////////////
 SString CInstallManager::_ProcessGtaVersionCheck()
 {
+    // Version conversion can replace the shared executable, which is unsafe
+    // while the primary GTA process is already running from that directory.
+    if (IsSecondaryClient())
+        return "ok";
+
     const fs::path gtaExePath = GetGameExecutablePath();
     const bool     isAdmin = IsUserAdmin();
 

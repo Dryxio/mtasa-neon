@@ -357,6 +357,14 @@ Prerequisites
 
 Visit the wiki article ["Compiling MTASA"](https://wiki.multitheftauto.com/wiki/Compiling_MTASA) for additional information and error troubleshooting.
 
+### Local two-client testing
+
+Custom development builds can run a primary client and a second isolated
+client with the `-cl2` option. This is useful for testing resources that need
+two players on one workstation. See [MULTI_CLIENT.md](./MULTI_CLIENT.md) for
+server configuration, isolated profile behavior, direct launch commands, and
+the macOS/Parallels side-by-side launcher.
+
 ### GNU/Linux
 
 The MTA:SA server can be built on GNU/Linux for x86, x86_64, armhf, and arm64. ARM configurations are experimental; x86_64 is the primary build environment and can be used to cross-compile the other architectures.

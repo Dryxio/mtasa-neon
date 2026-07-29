@@ -51,8 +51,8 @@ CConsole::CConsole(CGUI* pManager, CGUIElement* pParent)
 
     m_pHistory->SetTextChangedHandler(GUI_CALLBACK(&CConsole::History_OnTextChanged, this));
 
-    // Load the console history from a file
-    m_pConsoleHistory->LoadFromFile(MTA_CONSOLE_INPUT_LOG_PATH);
+    // Concurrent clients must not mutate the same history file.
+    m_pConsoleHistory->LoadFromFile(g_pCore->GetClientProfilePath(MTA_CONSOLE_INPUT_LOG_PATH));
 }
 
 CConsole::~CConsole()

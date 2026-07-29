@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "CNativeWorldAuthorizationStore.h"
 #include "SharedUtil.Hash.h"
+#include <MultiClient.h>
 #include <game/CCoronas.h>
 #include <game/CGame.h>
 #include <game/CSettings.h>
@@ -177,7 +178,7 @@ CCore::CCore()
     assert(strcoll("a", "B") > 0);
 
     // Parse the command line
-    const char* pszNoValOptions[] = {"window", NULL};
+    const char* pszNoValOptions[] = {"window", MultiClient::OPTION_NAME, NULL};
     ParseCommandLine(m_CommandLineOptions, m_szCommandLineArgs, pszNoValOptions);
 
     // Load our settings and localization as early as possible
@@ -1519,6 +1520,30 @@ const char* CCore::GetModInstallRoot(const char* szModName)
     return m_strModInstallRoot;
 }
 
+bool CCore::IsSecondaryClient() const
+{
+#ifdef MTA_MULTI_CLIENT
+    return m_CommandLineOptions.find(MultiClient::OPTION_NAME) != m_CommandLineOptions.end();
+#else
+    return false;
+#endif
+}
+
+SString CCore::GetClientProfilePath(const char* primaryPath) const
+{
+    SString path = primaryPath;
+    if (!IsSecondaryClient())
+        return path;
+
+    const size_t separator = path.find_last_of("/\\");
+    const size_t extension = path.rfind('.');
+    if (extension != SString::npos && (separator == SString::npos || extension > separator))
+        path.insert(extension, "-cl2");
+    else
+        path += "-cl2";
+    return path;
+}
+
 void CCore::ForceCursorVisible(bool bVisible, bool bToggleControls)
 {
     m_bCursorToggleControls = bToggleControls;
@@ -1662,6 +1687,26 @@ void CCore::ApplyHooks()
     // Remove useless DirectPlay dependency (dpnhpast.dll) @ 0x745701
     // We have to patch here as multiplayer_sa and game_sa are loaded too late
     DetourLibraryFunction("kernel32.dll", "LoadLibraryA", Win32LoadLibraryA, SkipDirectPlay_LoadLibraryA);
+
+#ifdef MTA_MULTI_CLIENT
+    // Every GTA process must ignore the game's own single-instance guard so a
+    // later -cl2 launch can coexist with the primary process.
+    {
+        DWORD oldProtect;
+        VirtualProtect(reinterpret_cast<void*>(0x74872D), 9, PAGE_READWRITE, &oldProtect);
+        memcpy(reinterpret_cast<void*>(0x74872D), "\x90\x90\x90\x90\x90\x90\x90\x90\x90", 9);
+        VirtualProtect(reinterpret_cast<void*>(0x74872D), 9, oldProtect, &oldProtect);
+    }
+
+    // GTA names this streaming semaphore by default. Making it process-local
+    // prevents one client from blocking the other during streaming startup.
+    {
+        DWORD oldProtect;
+        VirtualProtect(reinterpret_cast<void*>(0x406945), 5, PAGE_READWRITE, &oldProtect);
+        memcpy(reinterpret_cast<void*>(0x406945), "\x6A\x00\x90\x90\x90", 5);
+        VirtualProtect(reinterpret_cast<void*>(0x406945), 5, oldProtect, &oldProtect);
+    }
+#endif
 }
 
 bool UsingAltD3DSetup()
@@ -1898,8 +1943,19 @@ void CCore::CreateXML()
 
     if (!m_pConfigFile)
     {
-        // Load config XML file
-        m_pConfigFile = m_pXML->CreateXML(CalcMTASAPath(MTA_CONFIG_PATH));
+        const SString configPath = GetClientProfilePath(MTA_CONFIG_PATH);
+        const SString fullConfigPath = CalcMTASAPath(configPath);
+
+        // Seed the secondary profile once so display and input settings start
+        // from the known-good primary setup without sharing later writes.
+        if (IsSecondaryClient() && !FileExists(fullConfigPath))
+        {
+            const SString primaryConfigPath = CalcMTASAPath(MTA_CONFIG_PATH);
+            if (FileExists(primaryConfigPath))
+                FileCopy(primaryConfigPath, fullConfigPath);
+        }
+
+        m_pConfigFile = m_pXML->CreateXML(fullConfigPath);
         if (!m_pConfigFile)
         {
             assert(false);
