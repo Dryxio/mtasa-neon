@@ -285,6 +285,11 @@ void CModManager::TryStop()
     CCore::GetSingleton().GetNetwork()->Reset();
     assert(CCore::GetSingleton().GetNetwork()->GetServerBitStreamVersion() == 0);
 
+    // Resource shutdown, GTA restoration, and network reset all precede the
+    // session-neutral baseline. Capturing it earlier would bless state which
+    // the remaining unload path is still allowed to mutate.
+    CCore::GetSingleton().TryReleaseDetachedNativeWorldSessionAfterModUnload();
+
     // Enable the console again
     CCore::GetSingleton().GetConsole()->SetEnabled(true);
 

@@ -369,6 +369,7 @@ namespace
         Draining,
         TearingDown,
         Detached,
+        Neutral,
         Refused,
     };
 
@@ -545,6 +546,8 @@ namespace
                 return "tearing-down";
             case EState::Detached:
                 return "detached";
+            case EState::Neutral:
+                return "neutral";
             case EState::Refused:
                 return "refused";
         }
@@ -557,6 +560,15 @@ namespace
         // like a reversible startup state could release leases underneath the
         // generation whose catalog and physical slots are still installed.
         return state == EState::Active || state == EState::Draining || state == EState::TearingDown || state == EState::Detached;
+    }
+
+    bool StartupSelectionsMatch(const SNativeWorldStartupSelection& left, const SNativeWorldStartupSelection& right)
+    {
+        return left.wireVersion == right.wireVersion && left.startupMode == right.startupMode && left.policy == right.policy &&
+               left.packFormat == right.packFormat && left.serverIdDigest == right.serverIdDigest && left.serverIpv4 == right.serverIpv4 &&
+               left.serverPort == right.serverPort && left.bitstreamVersion == right.bitstreamVersion && left.issuedAt == right.issuedAt &&
+               left.expiresAt == right.expiresAt && left.resourceName == right.resourceName && left.offerId == right.offerId &&
+               left.contentId == right.contentId && left.ticketId == right.ticketId;
     }
 
     const char* LodStateName(EStaticWorldV3LodState state)
@@ -4039,7 +4051,9 @@ namespace
     bool __cdecl LoadStaticWorldV3ColBuffer(int slot, BYTE* data, int size)
     {
         const auto original = reinterpret_cast<bool(__cdecl*)(int, BYTE*, int)>(LOAD_COL_BUFFER);
-        if (g_staticWorldV3Generation.load(std::memory_order_acquire) == 0)
+        const bool contentOwnsLoaders = g_staticWorldV3Route && g_staticWorldV3CommittedGeneration &&
+                                        (g_state == EState::Registering || g_state == EState::Active || g_state == EState::Draining);
+        if (!contentOwnsLoaders)
             return original(slot, data, size);
 
         const auto owner = g_staticWorldV3ColOwners.find(static_cast<unsigned int>(slot));
@@ -4076,7 +4090,9 @@ namespace
     bool __cdecl LoadStaticWorldV3IplBuffer(int slot, char* data, int size)
     {
         const auto original = reinterpret_cast<bool(__cdecl*)(int, char*, int)>(LOAD_IPL_BUFFER);
-        if (g_staticWorldV3Generation.load(std::memory_order_acquire) == 0)
+        const bool contentOwnsLoaders = g_staticWorldV3Route && g_staticWorldV3CommittedGeneration &&
+                                        (g_state == EState::Registering || g_state == EState::Active || g_state == EState::Draining);
+        if (!contentOwnsLoaders)
             return original(slot, data, size);
 
         const auto owner = g_staticWorldV3IplOwners.find(static_cast<unsigned int>(slot));
@@ -5701,7 +5717,10 @@ namespace
     void __cdecl CompleteStaticWorldV3BoundingBootstrap()
     {
         reinterpret_cast<void(__cdecl*)()>(REMOVE_ALL_COLLISION)();
-        if (g_staticWorldV3Generation.load(std::memory_order_acquire) == 0)
+        // This hook is a process foundation. Once a generation is detached it
+        // must behave exactly like stock even though the monotonic generation
+        // epoch intentionally remains non-zero for stale-work detection.
+        if (!g_staticWorldV3Route || g_state != EState::Active || !g_staticWorldV3CommittedGeneration)
             return;
         if (g_staticWorldV3BootstrapBoundsComplete)
             Fatal("static-world-v3 aggregate bounding bootstrap ran more than once");
@@ -6855,7 +6874,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
         result.error = "transport publication was cancelled";
         return result;
     }
-    if (g_state != EState::Off)
+    if (g_state != EState::Off && g_state != EState::Neutral)
     {
         result.existingActivationActive = HasCommittedActivation(g_state);
         result.error = "native registrar state is not idle; transport publication cannot share its mutable descriptor";
@@ -7410,6 +7429,98 @@ bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
     Log("teardown=detached generation=%u content-neutral=yes admission-baseline-match=yes io-quiescent=yes cacheLeases=0 bufferFoundation=retained",
         g_staticWorldV3Generation.load(std::memory_order_acquire));
     LogNativeWorldLifecycleTelemetry("teardown-detached", finalState);
+    return true;
+}
+
+bool CNativeWorldPackManagerSA::IsRuntimeContentDetached()
+{
+    return g_state == EState::Detached;
+}
+
+bool CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error)
+{
+    std::lock_guard<std::mutex> lock(g_transportPublisherMutex);
+
+    if (g_state != EState::Detached || !g_authorizedRoute || !g_staticWorldV3Route)
+    {
+        error = "native-world content is not an endpoint-owned detached format-3 generation";
+        return false;
+    }
+    if (g_staticWorldV3Transitioning || g_staticWorldV3CommittedGeneration)
+    {
+        error = "native-world detached session still owns a transition or committed journal";
+        return false;
+    }
+    if (!StartupSelectionsMatch(expectedSelection, g_authorizedSelection))
+    {
+        error = "native-world detached session selection differs from Core endpoint ownership";
+        return false;
+    }
+
+    const SNativeWorldLifecycleTelemetry detached = ReadNativeWorldLifecycleTelemetry();
+    if (!detached.contentNeutral || !detached.ioQuiescent || !detached.modelStoresInstalled || !g_streaming ||
+        g_nativeModelSlotsReserved.load(std::memory_order_acquire) || detached.validLeaseObjects != 0 || detached.cache.pendingHandles != 0 ||
+        detached.cache.processHandles != 0 || detached.cache.committedGroups != 0 || !g_staticWorldV3ChildLeases.empty())
+    {
+        error = "native-world detached session failed its content, I/O, store, reservation, or cache preflight";
+        return false;
+    }
+    for (size_t index = 0; index < 3; ++index)
+    {
+        if (!detached.pools[index].valid || detached.pools[index].capacity <= 0 || !detached.pools[index].flags)
+        {
+            error = "native-world detached session has an unreadable TXD/COL/IPL pool baseline";
+            return false;
+        }
+    }
+
+    // Resource teardown is allowed to restore stock or server-owned slots
+    // after generation teardown. Capture that final state as a replacement
+    // admission fence before crossing the endpoint-release boundary.
+    SNativeWorldNeutralBaseline nextBaseline;
+    nextBaseline.captured = true;
+    nextBaseline.atomicUsed = detached.atomicUsed;
+    nextBaseline.damageUsed = detached.damageUsed;
+    nextBaseline.timedUsed = detached.timedUsed;
+    nextBaseline.pools = detached.pools;
+    for (size_t index = 0; index < nextBaseline.poolFlagSnapshots.size(); ++index)
+        nextBaseline.poolFlagSnapshots[index].assign(detached.pools[index].flags, detached.pools[index].flags + detached.pools[index].capacity);
+    nextBaseline.modelInfoArray = detached.modelInfoArray;
+    nextBaseline.streamingInfoArray = detached.streamingInfoArray;
+    nextBaseline.fileIdLayout = detached.fileIdLayout;
+    nextBaseline.txdFindCache = detached.txdFindCache;
+    nextBaseline.boundArchives = detached.streaming.boundArchives;
+    nextBaseline.openStreamHandles = detached.streaming.openStreamHandles;
+    nextBaseline.archiveStateHash = detached.streaming.archiveStateHash;
+    nextBaseline.streamHandleStateHash = detached.streaming.streamHandleStateHash;
+    nextBaseline.modelPointers = detached.modelPointers;
+    nextBaseline.streamingEntries = detached.streamingEntries;
+
+    const std::string ticket = g_authorizedSelection.ticketId.substr(0, 8);
+    g_authorizedRoute = false;
+    g_staticWorldV3Route = false;
+    g_authorizedSelection = {};
+    g_authorizedLease = {};
+    g_policy = nullptr;
+    g_manifest = {};
+    g_activeDirectory.clear();
+    g_iplNamePointers.clear();
+    g_runtimeDescriptor = {};
+    g_pack = nullptr;
+    g_staticWorldV3Set = {};
+    g_staticWorldV3Packs.clear();
+    g_staticWorldV3ChildLeases.clear();
+    g_staticWorldV3ModelBindings.clear();
+    g_nativeWorldNeutralBaseline = std::move(nextBaseline);
+    g_state = EState::Neutral;
+
+    const SNativeWorldLifecycleTelemetry finalState = ReadNativeWorldLifecycleTelemetry();
+    LogNativeWorldLifecycleTelemetry("session-release-neutral-postcondition", finalState);
+    if (!finalState.contentNeutral || !finalState.sessionNeutral || !finalState.admissionBaselineMatches || !finalState.ioQuiescent)
+        Fatal("native-world session release failed its final Neutral postcondition");
+    Log("session-release=neutral ticket=%s content-neutral=yes session-neutral=yes admission-baseline-match=yes io-quiescent=yes "
+        "endpoint-ownership=pending-core-release",
+        ticket.c_str());
     return true;
 }
 

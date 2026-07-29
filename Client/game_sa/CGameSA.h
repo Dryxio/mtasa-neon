@@ -350,6 +350,8 @@ public:
     bool BeginNativeWorldDrain() override;
     bool IsNativeWorldDrainQuiescent() const override;
     bool TeardownNativeWorldContent() override;
+    bool IsNativeWorldContentDetached() const override;
+    bool ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;

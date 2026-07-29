@@ -883,6 +883,16 @@ bool CGameSA::TeardownNativeWorldContent()
     return CNativeWorldPackManagerSA::TeardownRuntimeContent();
 }
 
+bool CGameSA::IsNativeWorldContentDetached() const
+{
+    return CNativeWorldPackManagerSA::IsRuntimeContentDetached();
+}
+
+bool CGameSA::ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error)
+{
+    return CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(expectedSelection, error);
+}
+
 eGameVersion CGameSA::FindGameVersion()
 {
     unsigned char ucA = *reinterpret_cast<unsigned char*>(0x748ADD);

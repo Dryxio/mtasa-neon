@@ -771,7 +771,7 @@ void CCore::HandleNativeWorldConnectionTargetRefusal(const std::string& reason)
     const SNativeWorldStartupSelection& selection = m_nativeWorldStartupSelection;
     const SString                       diagnostic(
         "state=connection-refused reason=endpoint-mismatch pinned=%u.%u.%u.%u:%u ticket=%s activation=yes lease=process existing-native-world=preserved "
-                              "next-server-restart-required=yes",
+        "next-server-restart-required=yes",
         selection.serverIpv4[0], selection.serverIpv4[1], selection.serverIpv4[2], selection.serverIpv4[3], selection.serverPort,
         selection.ticketId.substr(0, 8).c_str());
     WriteDebugEvent(SString("[NativeWorldAuthorization] %s", diagnostic.c_str()));
@@ -891,6 +891,36 @@ void CCore::FailNativeWorldStartupBeforeActive(const std::string& reason)
 {
     if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Prepared || m_nativeWorldStartupPhase == ENativeWorldStartupPhase::SessionValidated)
         TerminateNativeWorldStartup(reason);
+}
+
+bool CCore::TryReleaseDetachedNativeWorldSessionAfterModUnload()
+{
+    // Active content which was not explicitly drained remains process-owned.
+    // This preserves the established same-endpoint reconnect behavior until a
+    // later checkpoint can drive the drain automatically.
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Active || !m_pGame || !m_pNet || !m_pModManager || m_pNet->IsConnected() ||
+        m_pModManager->IsLoaded() || !m_pGame->IsNativeWorldContentDetached())
+        return false;
+
+    const SNativeWorldStartupSelection releasedSelection = m_nativeWorldStartupSelection;
+    std::string                        error;
+    if (!m_pGame->ReleaseDetachedNativeWorldSession(m_nativeWorldStartupSelection, error))
+    {
+        WriteDebugEvent(SString("[NativeWorldAuthorization] state=release-refused ticket=%s reason=%s activation=yes lease=process endpoint-owner=pinned",
+                                releasedSelection.ticketId.substr(0, 8).c_str(), error.c_str()));
+        return false;
+    }
+
+    ++m_nativeWorldAuthorizationEpoch;
+    if (m_nativeWorldAuthorizationEpoch == 0)
+        ++m_nativeWorldAuthorizationEpoch;
+    m_nativeWorldStartupSelection = {};
+    m_nativeWorldStartupPhase = ENativeWorldStartupPhase::Off;
+    WriteDebugEvent(SString(
+        "[NativeWorldAuthorization] state=neutral ticket=%s endpoint=%u.%u.%u.%u:%u activation=no lease=no endpoint-owner=released credential=supported",
+        releasedSelection.ticketId.substr(0, 8).c_str(), releasedSelection.serverIpv4[0], releasedSelection.serverIpv4[1], releasedSelection.serverIpv4[2],
+        releasedSelection.serverIpv4[3], releasedSelection.serverPort));
+    return true;
 }
 
 void CCore::TerminateNativeWorldStartup(const std::string& reason)

@@ -416,4 +416,10 @@ public:
     // has proved that no streamer, entity, or RenderWare object can retain it.
     // This remains a local lifecycle primitive and is not exposed to Lua.
     virtual bool TeardownNativeWorldContent() = 0;
+
+    // Releasing endpoint ownership is a separate boundary from content
+    // teardown. Core may cross it only after Client Deathmatch and its
+    // resource-owned GTA state have been completely destroyed.
+    virtual bool IsNativeWorldContentDetached() const = 0;
+    virtual bool ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) = 0;
 };

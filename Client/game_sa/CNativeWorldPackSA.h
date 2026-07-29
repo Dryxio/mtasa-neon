@@ -207,6 +207,12 @@ public:
     // quiescence preflight. Process-wide relocated stores and buffers remain.
     static bool TeardownRuntimeContent();
 
+    // Detached still owns the authorizing endpoint. Neutral is published only
+    // after Core has destroyed Client Deathmatch and passes back the exact
+    // immutable startup selection which owns the detached generation.
+    static bool IsRuntimeContentDetached();
+    static bool ReleaseDetachedRuntimeSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error);
+
     // Samples the process-wide substrate and generation-owned native state.
     // This is intentionally read-only: later hot-unload checkpoints will use
     // the same contract as their commit fence instead of inventing new checks.

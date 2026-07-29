@@ -138,6 +138,7 @@ public:
     void MarkNativeWorldStartupRefused() override;
     void FailNativeWorldStartupBeforeActive(const std::string& reason) override;
     void TerminateNativeWorldStartup(const std::string& reason) override;
+    bool TryReleaseDetachedNativeWorldSessionAfterModUnload();
 
     void SaveConfig(bool bWaitUntilFinished = false);
 
