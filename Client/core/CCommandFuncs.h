@@ -53,6 +53,7 @@ public:
     DECLARE_COMMAND_HANDLER(ShowFrameGraph)
     DECLARE_COMMAND_HANDLER(TimingDebug)
     DECLARE_COMMAND_HANDLER(NativeWorldAuthorization)
+    DECLARE_COMMAND_HANDLER(NativeWorldDrain)
     DECLARE_COMMAND_HANDLER(FakeLag);
     DECLARE_COMMAND_HANDLER(JingleBells);
 };

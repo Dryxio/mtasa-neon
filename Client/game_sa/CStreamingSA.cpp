@@ -494,10 +494,20 @@ SStreamingLifecycleTelemetrySA CStreamingSA::GetLifecycleTelemetry() const
     result.requestedModels = *reinterpret_cast<const int*>(0x8E4CB8);
     result.priorityRequests = *reinterpret_cast<const unsigned int*>(0x8E4BA0);
     result.channelError = *reinterpret_cast<const int*>(0x8E4B90);
+    result.loadingBigModel = *reinterpret_cast<const BYTE*>(0x8E4A58) != 0;
     result.memoryUsedBytes = *reinterpret_cast<const unsigned int*>(0x8E4CB4);
     result.halfBufferBlocks = ms_streamingHalfOfBufferSizeBlocks;
     result.archiveStateHash = 14695981039346656037ULL;
     result.streamHandleStateHash = 14695981039346656037ULL;
+
+    const auto* workerStreams = *reinterpret_cast<SGtaStream* const*>(0x8E3FFC);
+    result.streamTableShapeValid = result.streamTableShapeValid && workerStreams;
+    if (workerStreams)
+        for (size_t channelIndex = 0; channelIndex < 2; ++channelIndex)
+        {
+            result.busyWorkerStreams += workerStreams[channelIndex].bInUse != 0;
+            result.lockedWorkerBuffers += workerStreams[channelIndex].bLocked != 0;
+        }
 
     result.archiveStateHash = HashTelemetryBytes(result.archiveStateHash, &result.archiveCapacity, sizeof(result.archiveCapacity));
     result.streamHandleStateHash = HashTelemetryBytes(result.streamHandleStateHash, &result.streamHandleCapacity, sizeof(result.streamHandleCapacity));

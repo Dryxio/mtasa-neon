@@ -347,6 +347,8 @@ public:
     bool DeleteFileCutscene() override;
     bool IsNativeWorldModelIdReserved(uint32_t modelId) const override;
     void PrepareNativeWorldStreaming(const CVector& position) override;
+    bool BeginNativeWorldDrain() override;
+    bool IsNativeWorldDrainQuiescent() const override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;

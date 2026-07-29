@@ -868,6 +868,16 @@ void CGameSA::PrepareNativeWorldStreaming(const CVector& position)
     CNativeWorldPackManagerSA::PrepareStreamingAtPosition(position);
 }
 
+bool CGameSA::BeginNativeWorldDrain()
+{
+    return CNativeWorldPackManagerSA::BeginRuntimeDrain();
+}
+
+bool CGameSA::IsNativeWorldDrainQuiescent() const
+{
+    return CNativeWorldPackManagerSA::IsRuntimeDrainQuiescent();
+}
+
 eGameVersion CGameSA::FindGameVersion()
 {
     unsigned char ucA = *reinterpret_cast<unsigned char*>(0x748ADD);

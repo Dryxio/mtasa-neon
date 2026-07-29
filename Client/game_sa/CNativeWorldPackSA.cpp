@@ -22,6 +22,7 @@
 #include "CNativeModelStoreSA.h"
 #include "CNativeWorldCacheSA.h"
 #include "CNativeWorldPayloadValidatorSA.h"
+#include "CObjectSA.h"
 #include "CPtrNodeSingleLinkPoolSA.h"
 #include "CPoolSAInterface.h"
 #include "CStreamingSA.h"
@@ -358,6 +359,7 @@ namespace
         Hooked,
         Registering,
         Active,
+        Draining,
         Refused,
     };
 
@@ -408,6 +410,7 @@ namespace
     std::array<int, STATIC_WORLD_V3_MODEL_BANK_COUNT>    g_staticWorldV3BankOwners = {-1, -1};
     int                                                  g_staticWorldV3ActivePack = -1;
     unsigned int                                         g_staticWorldV3NextBank = 0;
+    bool                                                 g_staticWorldV3Transitioning = false;
     bool                                                 g_staticWorldV3BootstrapBoundsComplete = false;
     std::vector<SStaticWorldV3StreamingBinding>          g_staticWorldV3PermanentBindings;
     std::vector<std::vector<SStaticWorldV3ModelBinding>> g_staticWorldV3ModelBindings;
@@ -526,10 +529,20 @@ namespace
                 return "registering";
             case EState::Active:
                 return "active";
+            case EState::Draining:
+                return "draining";
             case EState::Refused:
                 return "refused";
         }
         return "unknown";
+    }
+
+    bool HasCommittedActivation(EState state)
+    {
+        // Draining is already past the registrar's commit barrier. Treating it
+        // like a reversible startup state could release leases underneath the
+        // generation whose catalog and physical slots are still installed.
+        return state == EState::Active || state == EState::Draining;
     }
 
     const char* LodStateName(EStaticWorldV3LodState state)
@@ -720,8 +733,12 @@ namespace
         // mutation. Log it, but use the bounded list walk and live entry
         // states as the ownership proof instead of deadlocking a future drain
         // on that advisory counter alone.
+        // Retail keeps both channel buffers marked locked even in an idle
+        // stock session (bLocked=1, bInUse=0). Preserve that field as
+        // telemetry, but only bInUse is a worker-activity fence.
         result.ioQuiescent = result.streaming.streamTableShapeValid && result.streaming.requestedModels == 0 && result.streaming.channelError == -1 &&
-                             result.requestedStreamingEntries == 0 && result.requestedList.valid && result.requestedList.nodes == 0;
+                             !result.streaming.loadingBigModel && result.streaming.busyWorkerStreams == 0 && result.requestedStreamingEntries == 0 &&
+                             result.requestedList.valid && result.requestedList.nodes == 0;
         for (const SStreamingLifecycleTelemetrySA::SChannel& channel : result.streaming.channels)
             result.ioQuiescent = result.ioQuiescent && channel.state == 0 && channel.modelCount == 0;
         return result;
@@ -765,21 +782,21 @@ namespace
                              pool.highestOccupied, pool.valid ? "yes" : "no");
         }
         SharedUtil::WriteDebugEvent(pools);
-        SharedUtil::WriteDebugEvent(
-            SString("[NativeWorldNeutral] state=streaming context=%s archiveSlots=%u/%u named=%u bound=%u streamHandles=%u/%u streamNames=%u "
-                    "streamShape=%s requests=%d priorityAdvisory=%u "
-                    "channelError=%d archiveHash=%016llx handleHash=%016llx memory=%u "
-                    "halfBufferBlocks=%u "
-                    "channel0=%d:%u:%d:%d channel1=%d:%u:%d:%d",
-                    safeContext, static_cast<unsigned int>(sample.streaming.archiveCapacity), static_cast<unsigned int>(sample.streaming.archiveLimit),
-                    static_cast<unsigned int>(sample.streaming.namedArchives), static_cast<unsigned int>(sample.streaming.boundArchives),
-                    static_cast<unsigned int>(sample.streaming.openStreamHandles), static_cast<unsigned int>(sample.streaming.streamHandleCapacity),
-                    static_cast<unsigned int>(sample.streaming.streamNameCapacity), sample.streaming.streamTableShapeValid ? "valid" : "invalid",
-                    sample.streaming.requestedModels, sample.streaming.priorityRequests, sample.streaming.channelError, sample.streaming.archiveStateHash,
-                    sample.streaming.streamHandleStateHash, sample.streaming.memoryUsedBytes, sample.streaming.halfBufferBlocks,
-                    sample.streaming.channels[0].state, sample.streaming.channels[0].modelCount, sample.streaming.channels[0].sectorCount,
-                    sample.streaming.channels[0].cdStreamStatus, sample.streaming.channels[1].state, sample.streaming.channels[1].modelCount,
-                    sample.streaming.channels[1].sectorCount, sample.streaming.channels[1].cdStreamStatus));
+        SharedUtil::WriteDebugEvent(SString(
+            "[NativeWorldNeutral] state=streaming context=%s archiveSlots=%u/%u named=%u bound=%u streamHandles=%u/%u streamNames=%u "
+            "streamShape=%s requests=%d priorityAdvisory=%u "
+            "channelError=%d loadingBig=%s workerBusy=%u workerLocked=%u archiveHash=%016llx handleHash=%016llx memory=%u "
+            "halfBufferBlocks=%u "
+            "channel0=%d:%u:%d:%d channel1=%d:%u:%d:%d",
+            safeContext, static_cast<unsigned int>(sample.streaming.archiveCapacity), static_cast<unsigned int>(sample.streaming.archiveLimit),
+            static_cast<unsigned int>(sample.streaming.namedArchives), static_cast<unsigned int>(sample.streaming.boundArchives),
+            static_cast<unsigned int>(sample.streaming.openStreamHandles), static_cast<unsigned int>(sample.streaming.streamHandleCapacity),
+            static_cast<unsigned int>(sample.streaming.streamNameCapacity), sample.streaming.streamTableShapeValid ? "valid" : "invalid",
+            sample.streaming.requestedModels, sample.streaming.priorityRequests, sample.streaming.channelError, sample.streaming.loadingBigModel ? "yes" : "no",
+            sample.streaming.busyWorkerStreams, sample.streaming.lockedWorkerBuffers, sample.streaming.archiveStateHash, sample.streaming.streamHandleStateHash,
+            sample.streaming.memoryUsedBytes, sample.streaming.halfBufferBlocks, sample.streaming.channels[0].state, sample.streaming.channels[0].modelCount,
+            sample.streaming.channels[0].sectorCount, sample.streaming.channels[0].cdStreamStatus, sample.streaming.channels[1].state,
+            sample.streaming.channels[1].modelCount, sample.streaming.channels[1].sectorCount, sample.streaming.channels[1].cdStreamStatus));
     }
 
     void CaptureNativeWorldNeutralBaseline(const char* context)
@@ -4969,9 +4986,13 @@ namespace
         SStaticWorldV3RuntimePack& pack = g_staticWorldV3Packs[packIndex];
         for (const auto& [logicalId, physicalId] : pack.logicalToPhysical)
         {
+            CBaseModelInfoSAInterface* model = pack.modelInfos.at(logicalId);
+            auto**                     models = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs);
+            if (!model || models[physicalId] != model || model->usNumberOfRefs != 0)
+                Fatal("static-world-v3 model binding still has an external reference at the generation fence");
             g_streaming->RemoveModel(physicalId);
             CStreamingInfo* info = g_streaming->GetStreamingInfo(physicalId);
-            if (!info || info->loadState != eModelLoadState::LOADSTATE_NOT_LOADED || info->prevId != 0xFFFF || info->nextId != 0xFFFF)
+            if (!info || info->loadState != eModelLoadState::LOADSTATE_NOT_LOADED || info->prevId != 0xFFFF || info->nextId != 0xFFFF || model->pRwObject)
                 Fatal("static-world-v3 model request survived the generation fence");
             *info = CStreamingInfo{};
         }
@@ -4989,8 +5010,14 @@ namespace
 
     void DestroyStaticWorldV3LodAnchors(SStaticWorldV3RuntimePack& pack)
     {
-        if (!pack.inventory.lodAnchorCount || pack.lodAnchors.empty())
+        if (!pack.inventory.lodAnchorCount)
+        {
+            if (!pack.lodAnchors.empty() || pack.lodEntityArray || pack.lodEntityArrayIndex >= 0)
+                Fatal("static-world-v3 non-LOD pack retained unexpected scratch state");
             return;
+        }
+        if (pack.lodAnchors.size() != pack.inventory.lodAnchorCount || !pack.lodEntityArray || pack.lodEntityArrayIndex < 0)
+            Fatal("static-world-v3 LOD anchor ownership is incomplete at the generation fence");
         for (CEntitySAInterface* anchor : pack.lodAnchors)
             if (!anchor || anchor->numLodChildren != 0)
                 Fatal("static-world-v3 generation fence reached a live or missing LOD anchor");
@@ -5055,6 +5082,120 @@ namespace
         RebuildStaticWorldV3ArchiveChains();
         Log("transition=retired generation=%u pack=%s bank=%d fence=cover-ipl-anchors-channels-col-dff reusable=yes", generation, pack.identity.packId.c_str(),
             retiredBank);
+    }
+
+    std::unordered_set<int> GetStaticWorldV3OwnedIplSlots()
+    {
+        std::unordered_set<int> slots;
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+        {
+            for (const auto& [name, slot] : pack.iplSlots)
+                slots.emplace(static_cast<int>(slot));
+            if (pack.inventory.lodAnchorCount)
+                slots.emplace(static_cast<int>(pack.lodOwnerIplSlot));
+        }
+        return slots;
+    }
+
+    bool StaticWorldV3EntityPoolsAreDetached()
+    {
+        const std::unordered_set<int> slots = GetStaticWorldV3OwnedIplSlots();
+        auto*                         buildingPool = *reinterpret_cast<CPoolSAInterface<CBuildingSAInterface>**>(0xB74498);
+        auto*                         objectPool = *reinterpret_cast<CPoolSAInterface<CObjectSAInterface>**>(0xB7449C);
+        auto*                         dummyPool = *reinterpret_cast<CPoolSAInterface<CEntitySAInterface>**>(0xB744A0);
+        if (!buildingPool || !objectPool || !dummyPool)
+            return false;
+
+        const auto belongsToGeneration = [&slots](const void* entity) { return slots.count(CFileIDRuntimeSA::GetEntityIplIndex(entity)) != 0; };
+        for (int index = 0; index < buildingPool->m_nSize; ++index)
+            if (buildingPool->IsContains(index) && belongsToGeneration(buildingPool->GetObject(index)))
+                return false;
+        for (int index = 0; index < objectPool->m_nSize; ++index)
+            if (objectPool->IsContains(index) && belongsToGeneration(objectPool->GetObject(index)))
+                return false;
+        for (int index = 0; index < dummyPool->m_nSize; ++index)
+            if (dummyPool->IsContains(index) && belongsToGeneration(dummyPool->GetObject(index)))
+                return false;
+        return true;
+    }
+
+    void InvalidateStaticWorldV3CollisionProducers()
+    {
+        auto* colPool = *reinterpret_cast<CPoolSAInterface<SColDef>**>(0x965560);
+        if (!colPool || !g_staticWorldV3CommittedGeneration)
+            Fatal("static-world-v3 collision ownership is unavailable during drain");
+
+        for (const auto& allocation : g_staticWorldV3CommittedGeneration->cols)
+        {
+            if (!colPool->IsContains(allocation.slot))
+                Fatal("static-world-v3 generation-owned COL slot disappeared before drain");
+            SColDef* def = colPool->GetObject(allocation.slot);
+            if (def->refCount != 0 || def->procedural)
+                Fatal("static-world-v3 generation-owned COL still has a reference or procedural producer");
+
+            // CColStore::LoadCollision examines these rectangles every frame.
+            // Flip the generation-owned producers before declaring quiescence,
+            // otherwise an idle channel can be repopulated on the next tick.
+            def->rect = CRect();
+            def->required = false;
+            g_streaming->RemoveModel(pGame->GetBaseIDforCOL() + allocation.slot);
+            const CStreamingInfo* info = g_streaming->GetStreamingInfo(pGame->GetBaseIDforCOL() + allocation.slot);
+            if (!info || info->loadState != eModelLoadState::LOADSTATE_NOT_LOADED || def->active || def->required || def->procedural || def->refCount != 0)
+                Fatal("static-world-v3 generation-owned COL remained active after producer invalidation");
+        }
+    }
+
+    bool IsStaticWorldV3DrainQuiescent()
+    {
+        if (!g_staticWorldV3Route || g_state != EState::Draining || g_staticWorldV3Transitioning || !g_staticWorldV3CommittedGeneration || !g_streaming)
+            return false;
+
+        std::string ownershipError;
+        if (!CNativeModelStoreSA::ValidateOwnedTail(g_staticWorldV3CommittedGeneration->modelStoreTail, ownershipError))
+            return false;
+
+        const SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
+        const bool banksUnowned = std::all_of(g_staticWorldV3BankOwners.begin(), g_staticWorldV3BankOwners.end(), [](int owner) { return owner < 0; });
+        const bool cacheOwnershipComplete =
+            g_staticWorldV3CommittedGeneration->cacheLeases.size() == g_staticWorldV3Packs.size() + 1 &&
+            std::all_of(g_staticWorldV3CommittedGeneration->cacheLeases.begin(), g_staticWorldV3CommittedGeneration->cacheLeases.end(),
+                        [](const CNativeWorldCacheCommittedLeaseSA& lease) { return lease.IsValid(); });
+        if (g_staticWorldV3ActivePack >= 0 || !banksUnowned || !sample.lodScratchNeutral || !sample.loadedList.valid || !sample.requestedList.valid ||
+            sample.loadedList.nativeArenaNodes != 0 || sample.requestedList.nativeArenaNodes != 0 || sample.arenaModelPointers != 0 ||
+            sample.arenaStreamingEntries != 0 || !sample.ioQuiescent || !cacheOwnershipComplete || !StaticWorldV3EntityPoolsAreDetached())
+            return false;
+
+        auto* colPool = *reinterpret_cast<CPoolSAInterface<SColDef>**>(0x965560);
+        auto* iplPool = *reinterpret_cast<CPoolSAInterface<CIplSAInterface>**>(0x8E3FB0);
+        if (!colPool || !iplPool)
+            return false;
+        for (const auto& allocation : g_staticWorldV3CommittedGeneration->cols)
+        {
+            if (!colPool->IsContains(allocation.slot))
+                return false;
+            const SColDef* def = colPool->GetObject(allocation.slot);
+            if (def->rect.left <= def->rect.right || def->rect.top <= def->rect.bottom || def->refCount != 0 || def->active || def->required || def->procedural)
+                return false;
+        }
+
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+        {
+            if (pack.activeBank >= 0 || !pack.logicalToPhysical.empty() || !pack.lodAnchors.empty() || pack.lodEntityArray || pack.lodEntityArrayIndex >= 0)
+                return false;
+            for (const auto& [name, slot] : pack.iplSlots)
+            {
+                const CIplSAInterface* def = iplPool->GetObject(slot);
+                if (!def || !def->bDisabledStreaming || def->unk2 || def->relatedIpl != -1)
+                    return false;
+            }
+            if (pack.inventory.lodAnchorCount)
+            {
+                const CIplSAInterface* owner = iplPool->GetObject(pack.lodOwnerIplSlot);
+                if (!owner || !owner->bDisabledStreaming || owner->unk2 || owner->relatedIpl != -1)
+                    return false;
+            }
+        }
+        return true;
     }
 
     void ActivateStaticWorldV3Pack(size_t packIndex)
@@ -6112,11 +6253,14 @@ bool CNativeWorldPackManagerSA::VerifyAuthorizedStartupBeforeStartGame()
     }
     if (!g_pCore->ValidateNativeWorldStartupSession(error))
     {
-        ReleaseRegistrationLease();
+        if (!HasCommittedActivation(g_state))
+            ReleaseRegistrationLease();
         g_pCore->TerminateNativeWorldStartup(error);
         return false;
     }
-    if (g_state == EState::Active || g_state == EState::Refused || g_state == EState::Hooked)
+    if (HasCommittedActivation(g_state))
+        return true;
+    if (g_state == EState::Refused || g_state == EState::Hooked)
         return true;
     if (g_state != EState::Prepared || !CNativeModelStoreSA::IsInstalled() || !g_streaming || !g_authorizedLease.IsValid())
     {
@@ -6150,7 +6294,7 @@ bool CNativeWorldPackManagerSA::VerifyAuthorizedStartupBeforeStartGame()
 
 void CNativeWorldPackManagerSA::CancelAuthorizedActivation()
 {
-    if (!g_authorizedRoute || g_state == EState::Active)
+    if (!g_authorizedRoute || HasCommittedActivation(g_state))
         return;
     ReleaseRegistrationLease();
     ReleaseNativeModelSlotReservation();
@@ -6264,7 +6408,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
     }
     if (g_state != EState::Off)
     {
-        result.existingActivationActive = g_state == EState::Active;
+        result.existingActivationActive = HasCommittedActivation(g_state);
         result.error = "native registrar state is not idle; transport publication cannot share its mutable descriptor";
         return result;
     }
@@ -6484,18 +6628,66 @@ void CNativeWorldPackManagerSA::PrepareStreamingAtPosition(const CVector& positi
     if (!g_staticWorldV3Route || g_state != EState::Active || !g_staticWorldV3BootstrapBoundsComplete)
         return;
 
-    static bool transitioning = false;
-    if (transitioning)
+    if (g_staticWorldV3Transitioning)
         Fatal("static-world-v3 transition coordinator re-entered");
     const int targetPack = FindStaticWorldV3PackAtPosition(position);
     if (targetPack == g_staticWorldV3ActivePack)
         return;
 
-    transitioning = true;
+    g_staticWorldV3Transitioning = true;
     DeactivateStaticWorldV3Pack();
     if (targetPack >= 0)
         ActivateStaticWorldV3Pack(static_cast<size_t>(targetPack));
-    transitioning = false;
+    g_staticWorldV3Transitioning = false;
+}
+
+bool CNativeWorldPackManagerSA::BeginRuntimeDrain()
+{
+    if (!g_staticWorldV3Route || g_state != EState::Active || g_staticWorldV3Transitioning || !g_staticWorldV3CommittedGeneration || !g_streaming ||
+        !g_staticWorldV3BootstrapBoundsComplete)
+    {
+        Log("drain=refused lifecycle=%s route=%s transition=%s journal=%s streaming=%s bounds=%s", StateName(g_state),
+            g_staticWorldV3Route ? "format3" : "other", g_staticWorldV3Transitioning ? "busy" : "idle",
+            g_staticWorldV3CommittedGeneration ? "present" : "absent", g_streaming ? "present" : "absent",
+            g_staticWorldV3BootstrapBoundsComplete ? "ready" : "pending");
+        return false;
+    }
+
+    // Publish Draining before touching a working set. Every position-driven
+    // entry point requires Active, so no new native request or city transition
+    // can race the synchronous main-thread fence below.
+    g_staticWorldV3Transitioning = true;
+    g_state = EState::Draining;
+    LogNativeWorldLifecycleTelemetry("drain-begin", ReadNativeWorldLifecycleTelemetry());
+    DeactivateStaticWorldV3Pack();
+    InvalidateStaticWorldV3CollisionProducers();
+
+    // Finish every request already queued by the current GTA frame, including
+    // dependent native TXDs, then wait for both CD channels. The retail
+    // priority counter is advisory; bounded lists and entry/channel states are
+    // the authoritative postcondition.
+    g_streaming->LoadAllRequestedModels(false, "NativeWorldRuntimeDrain");
+    reinterpret_cast<void(__cdecl*)()>(FLUSH_STREAMING_CHANNELS)();
+
+    std::string ownershipError;
+    if (!CNativeModelStoreSA::ValidateOwnedTail(g_staticWorldV3CommittedGeneration->modelStoreTail, ownershipError))
+        Fatal(ownershipError.c_str());
+
+    g_staticWorldV3Transitioning = false;
+    if (!IsStaticWorldV3DrainQuiescent())
+        Fatal("static-world-v3 drain failed its quiescence or generation-ownership fence");
+
+    const SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
+    Log("drain=quiescent generation=%u requestedEntries=0 arenaLoaded=0 banks=none lodScratch=empty channels=idle requestedList=empty "
+        "entityPools=detached colProducers=invalid cacheLeaseGroups=%u generationOwnership=preserved teardown=not-started",
+        g_staticWorldV3Generation.load(std::memory_order_acquire), static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->cacheLeases.size()));
+    LogNativeWorldLifecycleTelemetry("drain-quiescent", sample);
+    return true;
+}
+
+bool CNativeWorldPackManagerSA::IsRuntimeDrainQuiescent()
+{
+    return IsStaticWorldV3DrainQuiescent();
 }
 
 void CNativeWorldPackManagerSA::LogLifecycleTelemetry(const char* context)
@@ -6511,7 +6703,7 @@ void CNativeWorldPackManagerSA::LogLifecycleTelemetry(const char* context)
 
 unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()
 {
-    if (g_state != EState::Active)
+    if (g_state != EState::Active && g_state != EState::Draining)
         return 0;
 
     // SetStreamingBufferSize interprets this value as the total allocation and
@@ -6528,6 +6720,6 @@ unsigned int CNativeWorldPackManagerSA::GetRequiredStreamingBufferSizeBlocks()
 
 void CNativeWorldPackManagerSA::LogStreamingBufferClamp(unsigned int requestedBlocks, unsigned int effectiveBlocks, unsigned int requiredBlocks)
 {
-    if (g_state == EState::Active)
+    if (g_state == EState::Active || g_state == EState::Draining)
         Log("streamingBuffer=request-clamped requestedBlocks=%u effectiveBlocks=%u requiredBlocks=%u", requestedBlocks, effectiveBlocks, requiredBlocks);
 }

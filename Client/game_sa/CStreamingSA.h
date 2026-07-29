@@ -76,6 +76,9 @@ struct SStreamingLifecycleTelemetrySA
     int           requestedModels{};
     unsigned int  priorityRequests{};
     int           channelError{};
+    bool          loadingBigModel{};
+    unsigned int  busyWorkerStreams{};
+    unsigned int  lockedWorkerBuffers{};
     unsigned int  memoryUsedBytes{};
     unsigned int  halfBufferBlocks{};
     std::uint64_t archiveStateHash{};

@@ -194,6 +194,15 @@ public:
     // callers must not mutate model/FileID tables themselves.
     static void PrepareStreamingAtPosition(const CVector& position);
 
+    // Enters the one-way runtime drain checkpoint on GTA's main thread. This
+    // retires only the spatial working set and proves streaming quiescence;
+    // the committed catalog and cache leases remain owned until teardown.
+    static bool BeginRuntimeDrain();
+
+    // Observes the drain fence without advancing lifecycle state or touching
+    // GTA. Status probes must not turn into hidden teardown work.
+    static bool IsRuntimeDrainQuiescent();
+
     // Samples the process-wide substrate and generation-owned native state.
     // This is intentionally read-only: later hot-unload checkpoints will use
     // the same contract as their commit fence instead of inventing new checks.

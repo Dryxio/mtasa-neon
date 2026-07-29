@@ -1300,12 +1300,28 @@ Active-to-Active switch:
    zero and the client joined the server without a new dump. Hooks, the two
    empty LOD scratch arrays and the streaming-buffer floor remain deliberate
    process-lifetime foundations and are not reversible journal entries.
-3. **Drain and quiescence fence.** Enter an explicit `Draining` state, reject
-   transition re-entry, retire the active city through the existing
-   cover/IPL/anchor/channel/COL/DFF fence, stop new native requests, flush both
-   channels, and prove the requested list contains no native ownership or
-   cycles. Global priority-request count remains advisory because retail can
-   leave it stale; the bounded list and entry states are authoritative.
+3. **Drain and quiescence fence — complete; live validated.** The explicit
+   `Draining` state is entered only from a committed Active generation and
+   rejects transition re-entry. The one-way gate retires the active city
+   through the existing cover/IPL/anchor/channel/COL/DFF fence, invalidates
+   every generation-owned COL producer, stops new native requests, flushes
+   both channels and proves that the native FileID arena, requested/loaded
+   lists, entity pools, ModelInfo references, LOD arrays and cache ownership
+   have reached the drain contract without discarding the generation journal.
+   Global priority-request count remains advisory because retail can leave it
+   stale; the bounded lists and entry states are authoritative. Retail also
+   keeps both worker locks asserted after initialization, so worker `bLocked`
+   is recorded as telemetry while worker `bInUse`, channels and the big-model
+   loader form the actual I/O fence.
+
+   The 2026-07-29 live gate activated the four-cache format-3 generation,
+   survived a server loss and reconnect in the same GTA process, then returned
+   `state=quiescent mutation=begin`. A second begin returned
+   `state=refused mutation=begin`, preserving the drained generation without a
+   second mutation; `gta_sa.exe` remained alive and no new dump was produced.
+   The local `nativeworlddrain status` form is read-only. It is intentionally a
+   manual gate until transactional teardown and Neutral session release are
+   complete.
 4. **Transactional content teardown.** Clear permanent FileID bindings, remove
    child IPLs before hidden LOD owners, unload COL, shut down appended
    ModelInfos in reverse creation order, rewind each inline GTA `CStore` to its

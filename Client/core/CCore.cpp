@@ -2123,6 +2123,7 @@ void CCore::RegisterCommands()
     m_pCommands->Add("showframegraph", _("shows the frame timing graph"), CCommandFuncs::ShowFrameGraph);
     m_pCommands->Add("timingdebug", "enables or disables native timing checkpoints", CCommandFuncs::TimingDebug);
     m_pCommands->Add("nativeworldauth", "inspects, clears, or restarts into an authorized native world", CCommandFuncs::NativeWorldAuthorization);
+    m_pCommands->Add("nativeworlddrain", "queries or enters the native-world streaming drain fence", CCommandFuncs::NativeWorldDrain);
     m_pCommands->Add("jinglebells", "", CCommandFuncs::JingleBells);
     m_pCommands->Add("fakelag", "", CCommandFuncs::FakeLag);
 

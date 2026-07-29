@@ -405,4 +405,10 @@ public:
     // streamer. Keep the generation fence in Game SA while Multiplayer SA and
     // blocking scene loaders provide the exact position.
     virtual void PrepareNativeWorldStreaming(const CVector& position) = 0;
+
+    // Local lifecycle coordination enters a one-way drain fence before any
+    // native content teardown. This append-only ABI surface is not exposed to
+    // downloaded Lua resources.
+    virtual bool BeginNativeWorldDrain() = 0;
+    virtual bool IsNativeWorldDrainQuiescent() const = 0;
 };

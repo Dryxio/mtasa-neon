@@ -203,6 +203,29 @@ void CCommandFuncs::NativeWorldAuthorization(const char* szParameters)
         g_pCore->Quit();
 }
 
+void CCommandFuncs::NativeWorldDrain(const char* szParameters)
+{
+    const SString operation = SString("%s", szParameters ? szParameters : "").TrimStart(" \t\r\n").TrimEnd(" \t\r\n").ToLower();
+    CGame*        game = g_pCore->GetGame();
+    if (operation.empty() || operation == "status")
+    {
+        const bool quiescent = game && game->IsNativeWorldDrainQuiescent();
+        g_pCore->GetConsole()->Printf("[NativeWorldDrain] state=%s mutation=no", quiescent ? "quiescent" : "not-quiescent");
+        return;
+    }
+    if (operation != "begin")
+    {
+        g_pCore->GetConsole()->Print("nativeworlddrain: syntax: nativeworlddrain [status|begin]");
+        return;
+    }
+
+    // Keep this local diagnostic command outside Lua/resource control. It is
+    // an incremental gate for the one-way drain fence until disconnect-driven
+    // teardown and reactivation are complete.
+    const bool success = game && game->BeginNativeWorldDrain();
+    g_pCore->GetConsole()->Printf("[NativeWorldDrain] state=%s mutation=begin", success ? "quiescent" : "refused");
+}
+
 // this fails randomly, see comments in CConsole
 void CCommandFuncs::Clear(const char* szParameters)
 {
