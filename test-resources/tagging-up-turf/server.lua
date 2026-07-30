@@ -2690,10 +2690,10 @@ local function startMission(requester, checkpoint)
     end
 
     if checkpoint == "ballas" then
-        -- This checkpoint preserves the state produced by the completed
-        -- Idlewood and first Ballas tag flow while leaving the encounter's
-        -- spawn, chat, camera, approach, follow, and attack gates untouched.
-        for _, tagId in ipairs({1, 2, 4}) do
+        -- This checkpoint skips only the completed Idlewood group. Vanilla
+        -- exposes both Ballas tags together and does not unlock the rooftop
+        -- until the aggregate area reaches 100 percent, regardless of order.
+        for _, tagId in ipairs({1, 2}) do
             mission.tagProgress[tagId] = 255
             mission.completedTags[tagId] = true
             replaceTagObject(tagId)
