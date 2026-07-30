@@ -46,6 +46,7 @@ local mission = {
     reminderIndex = 1,
     offscreenStored = false,
     vehiclePlayerOnlyLocked = false,
+    presentationDiagnosticLastAt = {},
 }
 
 -- GTA produces every spray hit and exact alpha step. The server validates those
@@ -62,6 +63,67 @@ local function isMissionPlayer(player)
     end
     return false
 end
+
+local function getPresentationDiagnosticActorLabel(actor)
+    if actor == mission.leader then
+        return "CJ"
+    elseif actor == mission.entities.sweet then
+        return "Sweet"
+    elseif actor == mission.entities.smoke then
+        return "Smoke"
+    elseif actor == mission.entities.enemy1 then
+        return "Flat1"
+    elseif actor == mission.entities.enemy2 then
+        return "Flat2"
+    end
+    return nil
+end
+
+local function isFiniteDiagnosticNumber(value, maximumAbsoluteValue)
+    return type(value) == "number" and value == value and math.abs(value) <= maximumAbsoluteValue
+end
+
+local function isBoundedDiagnosticString(value)
+    return type(value) == "string" and #value <= 512
+end
+
+addEvent("tagup:presentationDiagnostic", true)
+addEventHandler("tagup:presentationDiagnostic", resourceRoot,
+                function(actor, sample, streamed, clientClaimsSyncer, x, y, z, heading, cameraHeading, speed, moveState, animation, simplestTask, primaryPhysical,
+                         primaryScript, secondaryAttack, changed)
+    local player = client
+    local actorLabel = getPresentationDiagnosticActorLabel(actor)
+    if source ~= resourceRoot or not mission.running or not isMissionPlayer(player) or not actorLabel or
+        type(sample) ~= "number" or sample < 1 or sample ~= math.floor(sample) or sample > 10000000 or type(streamed) ~= "boolean" or
+        type(clientClaimsSyncer) ~= "boolean" or type(changed) ~= "boolean" or not isFiniteDiagnosticNumber(x, 100000) or
+        not isFiniteDiagnosticNumber(y, 100000) or not isFiniteDiagnosticNumber(z, 100000) or not isFiniteDiagnosticNumber(heading, 100000) or
+        not isFiniteDiagnosticNumber(cameraHeading, 100000) or not isFiniteDiagnosticNumber(speed, 1000) or
+        not isBoundedDiagnosticString(moveState) or not isBoundedDiagnosticString(animation) or not isBoundedDiagnosticString(simplestTask) or
+        not isBoundedDiagnosticString(primaryPhysical) or not isBoundedDiagnosticString(primaryScript) or
+        not isBoundedDiagnosticString(secondaryAttack) then
+        return
+    end
+
+    local now = getTickCount()
+    local playerReports = mission.presentationDiagnosticLastAt[player]
+    if not playerReports then
+        playerReports = {}
+        mission.presentationDiagnosticLastAt[player] = playerReports
+    end
+    if playerReports[actor] and now - playerReports[actor] < 200 then
+        return
+    end
+    playerReports[actor] = now
+
+    local partyRole = player == mission.leader and "leader" or "companion"
+    local serverOwner = actor == player or getElementSyncer(actor) == player
+    outputDebugString(
+        ("[tagging-up-turf][presentation] client=%s partyRole=%s stage=%s actor=%s streamed=%s clientSyncer=%s serverOwner=%s sample=%d "
+            .. "pos=(%.3f,%.3f,%.3f) heading=%.2f camera=%.2f vel=%.4f move=%s anim=%s simplest=%s P0={%s} P3={%s} S0={%s} changed=%s"):format(
+            getPlayerName(player), partyRole, tostring(mission.stage), actorLabel, tostring(streamed), tostring(clientClaimsSyncer), tostring(serverOwner),
+            sample, x, y, z, heading, cameraHeading, speed, moveState, animation, simplestTask, primaryPhysical, primaryScript, secondaryAttack,
+            tostring(changed)))
+end)
 
 local function rememberTimer(timer)
     table.insert(mission.timers, timer)
@@ -2371,6 +2433,7 @@ finishMission = function(passed, traceExtra)
         mission.reminderIndex = 1
         mission.offscreenStored = false
         mission.vehiclePlayerOnlyLocked = false
+        mission.presentationDiagnosticLastAt = {}
     end, delay, 1)
 end
 
@@ -2471,6 +2534,7 @@ local function startMission(requester, checkpoint)
     mission.reminderIndex = 1
     mission.offscreenStored = false
     mission.vehiclePlayerOnlyLocked = false
+    mission.presentationDiagnosticLastAt = {}
     mission.leader = requester
     mission.party = {requester}
     for _, player in ipairs(getElementsByType("player")) do
@@ -3574,7 +3638,10 @@ local function startDemoCheckoutAnimation(scene)
     end
     scene.checkoutAnimationStarted = true
     local sweet = mission.entities.sweet
-    setElementRotation(sweet, 0, 0, 280)
+    -- The corrected ped-rotation path keeps GTA's body and camera headings in
+    -- the same convention on syncers and non-syncers. The legacy default can
+    -- leave a remote named animation facing the mirrored direction.
+    setElementRotation(sweet, 0, 0, 280, "default", true)
     if not setPedAnimation(sweet, "GRAFFITI", "graffiti_Chkout", -1, false, false, true, false, 250, false) then
         return failMission("GRAFFITI_CHKOUT a ete refusee par le pipeline d'animation synchronise.")
     end

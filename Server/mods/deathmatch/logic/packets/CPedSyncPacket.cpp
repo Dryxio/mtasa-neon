@@ -49,6 +49,14 @@ bool CPedSyncPacket::Read(NetBitStreamInterface& BitStream)
                 return false;
         }
 
+        if (Data.flags2 & 0x04)
+        {
+            if (!BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
+                Data.flags2 &= ~0x04;
+            else if (!BitStream.Read(&Data.nativeTaskWeaponPresentation))
+                return false;
+        }
+
         // Did we recieve position?
         if (ucFlags & 0x01)
         {
@@ -120,12 +128,16 @@ bool CPedSyncPacket::Write(NetBitStreamInterface& BitStream) const
     std::uint8_t flags2 = Data.flags2;
     if (!BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
         flags2 &= ~0x02;
+    if (!BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
+        flags2 &= ~0x04;
 
     BitStream.Write(Data.ucFlags);
     BitStream.Write(flags2);
 
     if (flags2 & 0x02)
         BitStream.Write(&Data.nativeTaskLocomotion);
+    if (flags2 & 0x04)
+        BitStream.Write(&Data.nativeTaskWeaponPresentation);
 
     // Position and rotation
     if (Data.ucFlags & 0x01)

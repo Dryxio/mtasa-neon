@@ -108,6 +108,21 @@ CTask* CTaskSA::GetSubTask()
     return s_pTaskManagementSystem->GetTask((CTaskSAInterface*)dwReturn);
 }
 
+CTask* CTaskSA::GetParent()
+{
+    if (Parent)
+        return Parent;
+
+    // Tasks created by GTA do not pass through SetParent on the wrapper. Map
+    // the native parent interface on demand so public task-tree traversal has
+    // the same behavior for engine-created and MTA-created tasks.
+    CTaskSAInterface* pTaskInterface = GetInterface();
+    if (!pTaskInterface || !pTaskInterface->m_pParent)
+        return nullptr;
+
+    return pGame->GetTaskManagementSystem()->GetTask(pTaskInterface->m_pParent);
+}
+
 bool CTaskSA::IsSimpleTask()
 {
     DWORD dwThisInterface = (DWORD)GetInterface();

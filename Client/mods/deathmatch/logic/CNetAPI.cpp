@@ -852,7 +852,7 @@ void CNetAPI::ReadPlayerPuresync(CClientPlayer* pPlayer, NetBitStreamInterface& 
     SNativeTaskLocomotionSync nativeTaskLocomotion;
     if (BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation) && !BitStream.Read(&nativeTaskLocomotion))
         return;
-    pPlayer->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion);
+    pPlayer->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion, "player_sync");
 
     // Read out puresync flags
     SPlayerPuresyncFlags flags;

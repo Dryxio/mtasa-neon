@@ -21,20 +21,21 @@ class CPedSyncPacket final : public CPacket
 public:
     struct SyncData
     {
-        ElementID                 ID;
-        unsigned char             ucFlags;
-        std::uint8_t              flags2;
-        unsigned char             ucSyncTimeContext;
-        SPositionSync             position;
-        SPedRotationSync          rotation;
-        SVelocitySync             velocity;
-        float                     fHealth;
-        float                     fArmor;
-        bool                      bOnFire;
-        bool                      bIsInWater;
-        bool                      isReloadingWeapon;
-        float                     cameraRotation;
-        SNativeTaskLocomotionSync nativeTaskLocomotion;
+        ElementID                         ID;
+        unsigned char                     ucFlags;
+        std::uint8_t                      flags2;
+        unsigned char                     ucSyncTimeContext;
+        SPositionSync                     position;
+        SPedRotationSync                  rotation;
+        SVelocitySync                     velocity;
+        float                             fHealth;
+        float                             fArmor;
+        bool                              bOnFire;
+        bool                              bIsInWater;
+        bool                              isReloadingWeapon;
+        float                             cameraRotation;
+        SNativeTaskLocomotionSync         nativeTaskLocomotion;
+        SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
 
         bool ReadSpatialData(NetBitStreamInterface& BitStream);
         // Backward compatibility

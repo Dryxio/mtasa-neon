@@ -60,6 +60,11 @@ class CTaskComplexGoToPointAndStandStill : public virtual CTaskComplex
 {
 public:
     virtual ~CTaskComplexGoToPointAndStandStill() {};
+
+    // The live ped move state can temporarily differ from the command while
+    // GTA blends or slows the actor. Presentation sync needs the command's
+    // intent so remote clients select the same locomotion animation.
+    virtual int GetMoveState() const = 0;
 };
 
 class CTaskComplexSeekEntityRadiusAngleOffset : public virtual CTaskComplex

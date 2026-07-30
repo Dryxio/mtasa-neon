@@ -384,6 +384,22 @@ bool CTaskSimpleUseGunSA::GetIsFiring()
     return bReturn;
 }
 
+short CTaskSimpleUseGunSA::GetBurstLength()
+{
+    if (!IsValid())
+        return 1;
+
+    return static_cast<const CTaskSimpleUseGunSAInterface*>(GetInterface())->m_nBurstLength;
+}
+
+CVector CTaskSimpleUseGunSA::GetTarget()
+{
+    if (!IsValid())
+        return {};
+
+    return static_cast<const CTaskSimpleUseGunSAInterface*>(GetInterface())->m_vecCoords;
+}
+
 bool CTaskSimpleUseGunSA::GetIsReloading()
 {
     bool  bReturn;

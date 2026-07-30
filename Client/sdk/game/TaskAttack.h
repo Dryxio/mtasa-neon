@@ -49,7 +49,11 @@ public:
     virtual bool ControlGunMove(CVector2D* pMoveVec) = 0;
     virtual void Reset(CPed* pPed, CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength = 1) = 0;
 
-    virtual bool GetSkipAim() = 0;
+    virtual signed char GetCurrentCommand() = 0;
+    virtual bool        GetIsFiring() = 0;
+    virtual short       GetBurstLength() = 0;
+    virtual CVector     GetTarget() = 0;
+    virtual bool        GetSkipAim() = 0;
 };
 
 class CTaskSimpleGunControl : public virtual CTaskSimple

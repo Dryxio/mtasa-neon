@@ -4469,6 +4469,13 @@ bool CClientGame::DamageHandler(CPed* pDamagePed, CEventDamage* pEvent)
         pInflictingEntity = pPools->GetClientEntity((DWORD*)pInflictor->GetInterface());
     }
 
+    // A remote native-task presentation exists only to reproduce weapon
+    // animation, audio and particles. Its syncer remains the sole owner of
+    // gameplay, so discard any damage GTA derives from the viewer-side clone.
+    CClientPed* pPresentationPed = DynamicCast<CClientPed>(pInflictingEntity);
+    if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+        return false;
+
     // If the damage was caused by an explosion
     if (weaponUsed == WEAPONTYPE_EXPLOSION)
     {
@@ -5084,6 +5091,19 @@ void CClientGame::GangTagSprayHandler(CObjectSAInterface* pObjectInterface, CEnt
     if (!pClientObject)
         return;
 
+    CClientEntity* pCreator = pPools->GetClientEntity(reinterpret_cast<DWORD*>(pCreatorInterface));
+    CClientPed*    pPresentationPed = DynamicCast<CClientPed>(pCreator);
+    if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+    {
+        // A remote ped may reconstruct GTA's real spray task so viewers get
+        // its particles and sound. Only the ped syncer owns gameplay, so undo
+        // the native byte written immediately before this callback and do not
+        // emit a second progress event from a presentation-only client.
+        if (CObject* pGameObject = pClientObject->GetGameObject())
+            pGameObject->SetGangTagAlpha(ucPreviousAlpha);
+        return;
+    }
+
     // Persist the native byte above the streamed GTA object so a stream-out or
     // model recreation cannot roll local prediction back to stale Lua state.
     pClientObject->ApplyNativeGangTagProgress(ucCurrentAlpha);
@@ -5091,7 +5111,6 @@ void CClientGame::GangTagSprayHandler(CObjectSAInterface* pObjectInterface, CEnt
     CLuaArguments arguments;
     arguments.PushNumber(ucPreviousAlpha);
     arguments.PushNumber(ucCurrentAlpha);
-    CClientEntity* pCreator = pPools->GetClientEntity(reinterpret_cast<DWORD*>(pCreatorInterface));
     if (pCreator)
         arguments.PushElement(pCreator);
     else
@@ -5906,6 +5925,15 @@ void CClientGame::PostWeaponFire()
                         }
                     }
                 }
+            }
+
+            // GTA has already rendered the audiovisual weapon presentation.
+            // Preserve any shot-compensation cleanup above, but do not expose
+            // the viewer-side reconstruction as a second script shot.
+            if (pPed->IsNativeTaskWeaponPresentationActive())
+            {
+                pWeaponFirePed = NULL;
+                return;
             }
 
             // Call some events

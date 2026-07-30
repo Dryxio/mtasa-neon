@@ -112,17 +112,19 @@ struct SDelayedSyncData
 
 struct SLastSyncedPedData
 {
-    float                     fHealth;
-    float                     fArmour;
-    CVector                   vPosition;
-    CVector                   vVelocity;
-    float                     fRotation;
-    float                     cameraRotation{};
-    bool                      bOnFire;
-    bool                      bIsInWater;
-    bool                      isReloadingWeapon;
-    SNativeTaskLocomotionSync nativeTaskLocomotion;
-    bool                      nativeTaskLocomotionResetPending{true};
+    float                             fHealth;
+    float                             fArmour;
+    CVector                           vPosition;
+    CVector                           vVelocity;
+    float                             fRotation;
+    float                             cameraRotation{};
+    bool                              bOnFire;
+    bool                              bIsInWater;
+    bool                              isReloadingWeapon;
+    SNativeTaskLocomotionSync         nativeTaskLocomotion;
+    bool                              nativeTaskLocomotionResetPending{true};
+    SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
+    bool                              nativeTaskWeaponPresentationResetPending{true};
 };
 
 struct SRestoreWeaponItem
@@ -231,12 +233,15 @@ public:
     void GetTurnSpeed(CVector& vecTurnSpeed) const;
     void SetTurnSpeed(const CVector& vecTurnSpeed);
 
-    void                      GetControllerState(CControllerState& ControllerState);
-    void                      GetLastControllerState(CControllerState& ControllerState);
-    void                      SetControllerState(const CControllerState& ControllerState);
-    SNativeTaskLocomotionSync GetNativeTaskLocomotion();
-    static void               ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
-    void                      SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion);
+    void                              GetControllerState(CControllerState& ControllerState);
+    void                              GetLastControllerState(CControllerState& ControllerState);
+    void                              SetControllerState(const CControllerState& ControllerState);
+    SNativeTaskLocomotionSync         GetNativeTaskLocomotion();
+    static void                       ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
+    void                              SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion, const char* source = "local");
+    SNativeTaskWeaponPresentationSync GetNativeTaskWeaponPresentation();
+    void                              SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source = "local");
+    bool                              IsNativeTaskWeaponPresentationActive() const noexcept { return m_nativeTaskWeaponPresentationActive; }
 
     void AddKeysync(unsigned long ulDelay, const CControllerState& ControllerState, bool bDucking);
     void AddChangeWeapon(unsigned long ulDelay, eWeaponSlot slot, unsigned short usWeaponAmmo);
@@ -610,6 +615,8 @@ protected:
     void ApplyControllerStateFixes(CControllerState& Current);
     void RemoveNativeTaskLocomotionPresentation(CControllerState& ControllerState);
     void ApplyNativeTaskLocomotionPresentation(CControllerState& ControllerState);
+    void UpdateNativeTaskWeaponPresentation();
+    void ClearNativeTaskWeaponPresentation(const char* reason);
 
     void Interpolate();
     void UpdateKeysync(bool bCleanup = false);
@@ -801,6 +808,11 @@ public:
     CControllerState                         m_nativeTaskLocomotionBaseControllerState;
     unsigned long                            m_nativeTaskLocomotionPresentationReceivedAt{};
     bool                                     m_nativeTaskLocomotionPresentationApplied{false};
+    SNativeTaskWeaponPresentationSync        m_nativeTaskWeaponPresentation;
+    CVector                                  m_nativeTaskWeaponPresentationAppliedTarget;
+    unsigned long                            m_nativeTaskWeaponPresentationReceivedAt{};
+    bool                                     m_nativeTaskWeaponPresentationActive{false};
+    std::optional<unsigned char>             m_nativeTaskWeaponPresentationPreviousShootingRate;
     bool                                     m_shouldRecreate{false};
 
     bool             m_bBulletImpactData;

@@ -1077,6 +1077,66 @@ struct SNativeTaskLocomotionSync : public ISyncStructure
     } data{};
 };
 
+// Weapon AI remains authoritative on the ped syncer. Remote clients receive
+// only enough state to reconstruct GTA's audiovisual weapon presentation;
+// gameplay consequences continue through the existing authoritative paths.
+struct SNativeTaskWeaponPresentationSync : public ISyncStructure
+{
+    enum
+    {
+        BITCOUNT = 2
+    };
+
+    enum eMode : unsigned int
+    {
+        NONE = 0,
+        FIRE,
+    };
+
+    bool Read(NetBitStreamInterface& bitStream)
+    {
+        data = {};
+        if (!bitStream.ReadBits(reinterpret_cast<char*>(&data.uiMode), BITCOUNT))
+            return false;
+        if (data.uiMode == NONE)
+            return true;
+        if (data.uiMode != FIRE)
+            return false;
+
+        if (!bitStream.Read(data.ucWeaponType) || !bitStream.Read(data.usBurstLength) || !bitStream.Read(data.ucShootingRate) ||
+            !bitStream.Read(data.vecTarget.fX) || !bitStream.Read(data.vecTarget.fY) || !bitStream.Read(data.vecTarget.fZ))
+        {
+            return false;
+        }
+
+        return data.usBurstLength >= 1 && data.usBurstLength <= 32767 && std::isfinite(data.vecTarget.fX) && std::isfinite(data.vecTarget.fY) &&
+               std::isfinite(data.vecTarget.fZ);
+    }
+
+    void Write(NetBitStreamInterface& bitStream) const
+    {
+        bitStream.WriteBits(reinterpret_cast<const char*>(&data.uiMode), BITCOUNT);
+        if (data.uiMode == NONE)
+            return;
+
+        bitStream.Write(data.ucWeaponType);
+        bitStream.Write(data.usBurstLength);
+        bitStream.Write(data.ucShootingRate);
+        bitStream.Write(data.vecTarget.fX);
+        bitStream.Write(data.vecTarget.fY);
+        bitStream.Write(data.vecTarget.fZ);
+    }
+
+    struct
+    {
+        unsigned int   uiMode{};
+        unsigned char  ucWeaponType{};
+        unsigned short usBurstLength{1};
+        unsigned char  ucShootingRate{};
+        CVector        vecTarget{};
+    } data{};
+};
+
 // TODO: SSmallKeysyncSync is now the same as SFullKeysyncSync ?
 struct SSmallKeysyncSync : public ISyncStructure
 {

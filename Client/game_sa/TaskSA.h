@@ -75,7 +75,7 @@ public:
 
     CTask*      Clone();
     void        SetParent(CTask* pParent);
-    CTask*      GetParent() { return Parent; }
+    CTask*      GetParent();
     CTask*      GetSubTask();
     bool        IsSimpleTask();
     int         GetTaskType();

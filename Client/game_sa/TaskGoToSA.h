@@ -128,6 +128,8 @@ class CTaskComplexGoToPointAndStandStillSA : public virtual CTaskComplexSA, publ
 public:
     CTaskComplexGoToPointAndStandStillSA() {};
     CTaskComplexGoToPointAndStandStillSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance);
+
+    int GetMoveState() const override { return static_cast<const CTaskComplexGoToPointAndStandStillSAInterface*>(GetInterface())->m_iMoveState; }
 };
 
 class CTaskComplexGoToPointAndStandStillTimedSA : public virtual CTaskComplexSA, public virtual CTaskComplexGoToPointAndStandStill
@@ -136,6 +138,8 @@ public:
     CTaskComplexGoToPointAndStandStillTimedSA() {};
     CTaskComplexGoToPointAndStandStillTimedSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance,
                                               const int iTime);
+
+    int GetMoveState() const override { return static_cast<const CTaskComplexGoToPointAndStandStillSAInterface*>(GetInterface())->m_iMoveState; }
 };
 
 class CTaskComplexSeekEntityRadiusAngleOffsetSAInterface : public CTaskComplexSAInterface

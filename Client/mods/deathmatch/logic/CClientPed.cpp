@@ -31,8 +31,10 @@
 #include <game/TaskJumpFall.h>
 #include <game/TaskPhysicalResponse.h>
 #include <game/TaskAttack.h>
+#include <game/TaskGoTo.h>
 #include <game/TaskSimpleSwim.h>
 #include "enums/VehicleType.h"
+#include <unordered_map>
 
 using std::list;
 using std::vector;
@@ -74,6 +76,216 @@ struct SBodyPartName
 
 static const SFixedArray<SBodyPartName, 10> BodyPartNames = {
     {{"Unknown"}, {"Unknown"}, {"Unknown"}, {"Torso"}, {"Ass"}, {"Left Arm"}, {"Right Arm"}, {"Left Leg"}, {"Right Leg"}, {"Head"}}};
+
+namespace
+{
+    constexpr unsigned long NATIVE_TASK_LOCOMOTION_TRACE_HEARTBEAT = 1000;
+
+    enum class ENativeTaskLocomotionTraceChannel
+    {
+        PRODUCER,
+        RECEIVE,
+        APPLY,
+    };
+
+    struct SNativeTaskLocomotionTraceChannelState
+    {
+        SString       signature;
+        unsigned long lastLoggedAt{};
+        bool          initialized{};
+    };
+
+    struct SNativeTaskLocomotionTraceState
+    {
+        SNativeTaskLocomotionTraceChannelState producer;
+        SNativeTaskLocomotionTraceChannelState receive;
+        SNativeTaskLocomotionTraceChannelState apply;
+    };
+
+    std::unordered_map<unsigned int, SNativeTaskLocomotionTraceState> g_nativeTaskLocomotionTraceStates;
+
+    bool IsNativeTaskLocomotionTraceEnabled()
+    {
+        // This diagnostic is deliberately opt-in because these paths execute
+        // every frame for streamed peds. The marker makes field captures easy
+        // to enable without adding a permanent client setting or log volume.
+        static const bool enabled = FileExists(CalcMTASAPath("mta\\logs\\native-task-locomotion-trace.enable"));
+        static bool       announced = false;
+        if (enabled && !announced && g_pCore)
+        {
+            announced = true;
+            g_pCore->GetConsole()->Printf("[native-task-locomotion][enabled] profile=%s pid=%u heartbeat=%lu", g_pCore->IsSecondaryClient() ? "cl2" : "primary",
+                                          static_cast<unsigned int>(GetCurrentProcessId()), NATIVE_TASK_LOCOMOTION_TRACE_HEARTBEAT);
+        }
+        return enabled;
+    }
+
+    const char* GetNativeTaskLocomotionMoveStateName(PedMoveState::Enum moveState)
+    {
+        switch (moveState)
+        {
+            case PedMoveState::PEDMOVE_NONE:
+                return "none";
+            case PedMoveState::PEDMOVE_STILL:
+                return "still";
+            case PedMoveState::PEDMOVE_TURN_L:
+                return "turn_left";
+            case PedMoveState::PEDMOVE_TURN_R:
+                return "turn_right";
+            case PedMoveState::PEDMOVE_WALK:
+                return "walk";
+            case PedMoveState::PEDMOVE_JOG:
+                return "jog";
+            case PedMoveState::PEDMOVE_RUN:
+                return "run";
+            case PedMoveState::PEDMOVE_SPRINT:
+                return "sprint";
+            default:
+                return "unknown";
+        }
+    }
+
+    const char* GetNativeTaskLocomotionModeName(unsigned int mode)
+    {
+        switch (mode)
+        {
+            case SNativeTaskLocomotionSync::NONE:
+                return "none";
+            case SNativeTaskLocomotionSync::WALK:
+                return "walk";
+            case SNativeTaskLocomotionSync::RUN:
+                return "run";
+            case SNativeTaskLocomotionSync::SPRINT:
+                return "sprint";
+            default:
+                return "invalid";
+        }
+    }
+
+    SNativeTaskLocomotionTraceChannelState& GetNativeTaskLocomotionTraceChannel(CClientPed* pPed, ENativeTaskLocomotionTraceChannel channel)
+    {
+        SNativeTaskLocomotionTraceState& state = g_nativeTaskLocomotionTraceStates[pPed->GetID().Value()];
+        switch (channel)
+        {
+            case ENativeTaskLocomotionTraceChannel::PRODUCER:
+                return state.producer;
+            case ENativeTaskLocomotionTraceChannel::RECEIVE:
+                return state.receive;
+            default:
+                return state.apply;
+        }
+    }
+
+    bool ShouldTraceNativeTaskLocomotion(CClientPed* pPed, ENativeTaskLocomotionTraceChannel channel, const SString& signature)
+    {
+        if (!pPed || !pPed->IsMissionActor() || !IsNativeTaskLocomotionTraceEnabled())
+            return false;
+
+        const unsigned long now = CClientTime::GetTime();
+        auto&               state = GetNativeTaskLocomotionTraceChannel(pPed, channel);
+        if (state.initialized && state.signature == signature && now - state.lastLoggedAt < NATIVE_TASK_LOCOMOTION_TRACE_HEARTBEAT)
+            return false;
+
+        state.signature = signature;
+        state.lastLoggedAt = now;
+        state.initialized = true;
+        return true;
+    }
+
+    CTask* GetNativeTaskLocomotionPrimaryTask(CClientPed* pPed)
+    {
+        CTaskManager* pTaskManager = pPed->GetTaskManager();
+        return pTaskManager ? pTaskManager->GetTask(TASK_PRIORITY_PRIMARY) : nullptr;
+    }
+
+    CTask* GetNativeTaskLocomotionSimplestTask(CClientPed* pPed)
+    {
+        CTaskManager* pTaskManager = pPed->GetTaskManager();
+        return pTaskManager ? pTaskManager->GetSimplestActiveTask() : nullptr;
+    }
+
+    PedMoveState::Enum GetNativeTaskLocomotionMoveState(CClientPed* pPed)
+    {
+        return pPed->GetGamePlayer() ? pPed->GetGamePlayer()->GetMoveState() : PedMoveState::PEDMOVE_NONE;
+    }
+
+    std::optional<PedMoveState::Enum> GetNativeTaskLocomotionCommandMoveState(CTask* pTask)
+    {
+        // Script sequences wrap the active go-to task in one or more complex
+        // parents. Walk the live chain until the task that owns the requested
+        // move state is found.
+        for (CTask* pCurrent = pTask; pCurrent; pCurrent = pCurrent->GetParent())
+        {
+            if (pCurrent->GetTaskType() != TASK_COMPLEX_GO_TO_POINT_AND_STAND_STILL)
+                continue;
+
+            auto* pGoTo = dynamic_cast<CTaskComplexGoToPointAndStandStill*>(pCurrent);
+            if (!pGoTo)
+                return std::nullopt;
+
+            return static_cast<PedMoveState::Enum>(pGoTo->GetMoveState());
+        }
+        return std::nullopt;
+    }
+
+    void TraceNativeTaskLocomotionProducer(CClientPed* pPed, const char* reason, const SNativeTaskLocomotionSync& locomotion,
+                                           const CControllerState& controllerState, const CVector& velocity)
+    {
+        CTask*                   pPrimaryTask = GetNativeTaskLocomotionPrimaryTask(pPed);
+        CTask*                   pSimplestTask = GetNativeTaskLocomotionSimplestTask(pPed);
+        const PedMoveState::Enum moveState = GetNativeTaskLocomotionMoveState(pPed);
+        const int                primaryType = pPrimaryTask ? static_cast<int>(pPrimaryTask->GetTaskType()) : -1;
+        const int                simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
+        const SString            signature("%s:%u:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState), primaryType, simplestType,
+                                           controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
+        if (!ShouldTraceNativeTaskLocomotion(pPed, ENativeTaskLocomotionTraceChannel::PRODUCER, signature))
+            return;
+
+        g_pCore->GetConsole()->Printf(
+            "[native-task-locomotion][producer] profile=%s pid=%u ped=%u model=%lu reason=%s mode=%s stick=(%d,%d) controller=(%d,%d,w=%u,x=%u) "
+            "move=%s velocity=(%.4f,%.4f,%.4f) primary=%s(%d) simplest=%s(%d)",
+            g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(), pPed->GetModel(), reason,
+            GetNativeTaskLocomotionModeName(locomotion.data.uiMode), locomotion.data.sLeftStickX, locomotion.data.sLeftStickY, controllerState.LeftStickX,
+            controllerState.LeftStickY, static_cast<unsigned int>(controllerState.m_bPedWalk), static_cast<unsigned int>(controllerState.ButtonCross),
+            GetNativeTaskLocomotionMoveStateName(moveState), velocity.fX, velocity.fY, velocity.fZ, pPrimaryTask ? pPrimaryTask->GetTaskName() : "none",
+            primaryType, pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType);
+    }
+
+    void TraceNativeTaskLocomotionReceive(CClientPed* pPed, const SNativeTaskLocomotionSync& locomotion, const char* source)
+    {
+        const SString signature("%s:%u", source, locomotion.data.uiMode);
+        if (!ShouldTraceNativeTaskLocomotion(pPed, ENativeTaskLocomotionTraceChannel::RECEIVE, signature))
+            return;
+
+        g_pCore->GetConsole()->Printf("[native-task-locomotion][receive] profile=%s pid=%u ped=%u model=%lu source=%s mode=%s stick=(%d,%d) syncing=%d",
+                                      g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(),
+                                      pPed->GetModel(), source, GetNativeTaskLocomotionModeName(locomotion.data.uiMode), locomotion.data.sLeftStickX,
+                                      locomotion.data.sLeftStickY, pPed->IsSyncing());
+    }
+
+    void TraceNativeTaskLocomotionApply(CClientPed* pPed, const char* reason, const SNativeTaskLocomotionSync& locomotion, unsigned long sampleAge,
+                                        unsigned long presentationLease, const CControllerState& baseState, const CControllerState& appliedState)
+    {
+        CTask*                   pPrimaryTask = GetNativeTaskLocomotionPrimaryTask(pPed);
+        CTask*                   pSimplestTask = GetNativeTaskLocomotionSimplestTask(pPed);
+        const PedMoveState::Enum moveState = GetNativeTaskLocomotionMoveState(pPed);
+        const int                primaryType = pPrimaryTask ? static_cast<int>(pPrimaryTask->GetTaskType()) : -1;
+        const int                simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
+        const SString signature("%s:%u:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState), primaryType, simplestType, pPed->IsSyncing());
+        if (!ShouldTraceNativeTaskLocomotion(pPed, ENativeTaskLocomotionTraceChannel::APPLY, signature))
+            return;
+
+        g_pCore->GetConsole()->Printf(
+            "[native-task-locomotion][apply] profile=%s pid=%u ped=%u model=%lu reason=%s mode=%s sampleAge=%lu lease=%lu syncing=%d "
+            "base=(%d,%d,w=%u,x=%u) applied=(%d,%d,w=%u,x=%u) move=%s primary=%s(%d) simplest=%s(%d)",
+            g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(), pPed->GetModel(), reason,
+            GetNativeTaskLocomotionModeName(locomotion.data.uiMode), sampleAge, presentationLease, pPed->IsSyncing(), baseState.LeftStickX,
+            baseState.LeftStickY, static_cast<unsigned int>(baseState.m_bPedWalk), static_cast<unsigned int>(baseState.ButtonCross), appliedState.LeftStickX,
+            appliedState.LeftStickY, static_cast<unsigned int>(appliedState.m_bPedWalk), static_cast<unsigned int>(appliedState.ButtonCross),
+            GetNativeTaskLocomotionMoveStateName(moveState), pPrimaryTask ? pPrimaryTask->GetTaskName() : "none", primaryType,
+            pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType);
+    }
+}  // namespace
 
 CClientPed::CClientPed(CClientManager* pManager, unsigned long ulModelID, ElementID ID)
     : ClassInit(this), CClientStreamElement(pManager->GetPlayerStreamer(), ID), CAntiCheatModule(pManager->GetAntiCheat())
@@ -968,24 +1180,73 @@ void CClientPed::SetControllerState(const CControllerState& ControllerState)
 SNativeTaskLocomotionSync CClientPed::GetNativeTaskLocomotion()
 {
     SNativeTaskLocomotionSync locomotion;
-    if (!m_pPlayerPed || GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDucked() || IsDead() || HasSyncedAnim())
-        return locomotion;
+    CControllerState          controllerState{};
+    CVector                   velocity{};
 
-    CControllerState controllerState;
+    if (!m_pPlayerPed)
+    {
+        TraceNativeTaskLocomotionProducer(this, "no_game_ped", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+    if (GetRealOccupiedVehicle())
+    {
+        TraceNativeTaskLocomotionProducer(this, "occupied", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+    if (IsGettingIntoVehicle())
+    {
+        TraceNativeTaskLocomotionProducer(this, "entering_vehicle", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+    if (IsGettingOutOfVehicle())
+    {
+        TraceNativeTaskLocomotionProducer(this, "exiting_vehicle", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+    if (IsDucked())
+    {
+        TraceNativeTaskLocomotionProducer(this, "ducked", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+    if (IsDead())
+    {
+        TraceNativeTaskLocomotionProducer(this, "dead", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+    if (HasSyncedAnim())
+    {
+        TraceNativeTaskLocomotionProducer(this, "synced_anim", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+
     GetControllerState(controllerState);
     if (controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0)
+    {
+        TraceNativeTaskLocomotionProducer(this, "controller_input", locomotion, controllerState, velocity);
         return locomotion;
+    }
 
     CTask* pTask = m_pTaskManager->GetSimplestActiveTask();
-    if (!pTask || (pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT && pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT_FINE))
+    if (!pTask)
+    {
+        TraceNativeTaskLocomotionProducer(this, "no_task", locomotion, controllerState, velocity);
         return locomotion;
+    }
+    if (pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT && pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT_FINE)
+    {
+        TraceNativeTaskLocomotionProducer(this, "unsupported_task", locomotion, controllerState, velocity);
+        return locomotion;
+    }
 
-    CVector velocity;
     GetMoveSpeed(velocity);
     if (velocity.fX * velocity.fX + velocity.fY * velocity.fY < 0.0001f)
+    {
+        TraceNativeTaskLocomotionProducer(this, "stationary", locomotion, controllerState, velocity);
         return locomotion;
+    }
 
-    switch (m_pPlayerPed->GetMoveState())
+    const PedMoveState::Enum presentationMoveState = GetNativeTaskLocomotionCommandMoveState(pTask).value_or(m_pPlayerPed->GetMoveState());
+    switch (presentationMoveState)
     {
         case PedMoveState::PEDMOVE_WALK:
             locomotion.data.uiMode = SNativeTaskLocomotionSync::WALK;
@@ -998,6 +1259,7 @@ SNativeTaskLocomotionSync CClientPed::GetNativeTaskLocomotion()
             locomotion.data.uiMode = SNativeTaskLocomotionSync::SPRINT;
             break;
         default:
+            TraceNativeTaskLocomotionProducer(this, "unsupported_move_state", locomotion, controllerState, velocity);
             return locomotion;
     }
 
@@ -1008,6 +1270,7 @@ SNativeTaskLocomotionSync CClientPed::GetNativeTaskLocomotion()
     const float inputHeading = desiredHeading + GetCameraRotation();
     locomotion.data.sLeftStickX = static_cast<short>(std::lround(std::clamp(-sin(inputHeading) * 128.0f, -128.0f, 128.0f)));
     locomotion.data.sLeftStickY = static_cast<short>(std::lround(std::clamp(-cos(inputHeading) * 128.0f, -128.0f, 128.0f)));
+    TraceNativeTaskLocomotionProducer(this, "emitted", locomotion, controllerState, velocity);
     return locomotion;
 }
 
@@ -1019,10 +1282,149 @@ void CClientPed::ApplyNativeTaskLocomotion(CControllerState& controllerState, co
     controllerState.ButtonCross = locomotion.data.uiMode == SNativeTaskLocomotionSync::SPRINT ? 255 : 0;
 }
 
-void CClientPed::SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion)
+void CClientPed::SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion, const char* source)
 {
     m_nativeTaskLocomotionPresentation = locomotion;
     m_nativeTaskLocomotionPresentationReceivedAt = CClientTime::GetTime();
+    TraceNativeTaskLocomotionReceive(this, locomotion, source ? source : "unknown");
+}
+
+SNativeTaskWeaponPresentationSync CClientPed::GetNativeTaskWeaponPresentation()
+{
+    SNativeTaskWeaponPresentationSync presentation;
+    if (!m_pPlayerPed || GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDead() || HasSyncedAnim() ||
+        GetCurrentWeaponType() != WEAPONTYPE_SPRAYCAN)
+    {
+        return presentation;
+    }
+
+    CTaskSimpleUseGun* useGun = m_pPlayerPed->GetPedIntelligence()->GetTaskUseGun();
+    if (!useGun)
+        return presentation;
+
+    const signed char command = useGun->GetCurrentCommand();
+    if (command != GCOMMAND_FIRE && command != GCOMMAND_FIREBURST && !useGun->GetIsFiring())
+        return presentation;
+
+    const CVector target = useGun->GetTarget();
+    if (!std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ))
+        return presentation;
+
+    presentation.data.uiMode = SNativeTaskWeaponPresentationSync::FIRE;
+    presentation.data.ucWeaponType = static_cast<unsigned char>(WEAPONTYPE_SPRAYCAN);
+    presentation.data.usBurstLength = static_cast<unsigned short>(std::clamp<short>(useGun->GetBurstLength(), 1, 32767));
+    presentation.data.ucShootingRate = m_pPlayerPed->GetWeaponShootingRate();
+    presentation.data.vecTarget = target;
+    return presentation;
+}
+
+void CClientPed::SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source)
+{
+    const bool taskShapeChanged = presentation.data.uiMode != m_nativeTaskWeaponPresentation.data.uiMode ||
+                                  presentation.data.ucWeaponType != m_nativeTaskWeaponPresentation.data.ucWeaponType ||
+                                  presentation.data.usBurstLength != m_nativeTaskWeaponPresentation.data.usBurstLength ||
+                                  presentation.data.ucShootingRate != m_nativeTaskWeaponPresentation.data.ucShootingRate;
+    const bool targetChanged = presentation.data.vecTarget != m_nativeTaskWeaponPresentation.data.vecTarget;
+    // Minor target jitter must not restart GunControl between packets: doing
+    // so cuts a continuous native spray into viewer-side micro-bursts. A real
+    // retarget still rebuilds the task because GTA snapshots the coordinate.
+    // Compare against the coordinate actually applied to GTA, not the last
+    // packet, so small movements cannot accumulate forever without a rebuild.
+    const bool targetRequiresRestart =
+        m_nativeTaskWeaponPresentationActive && (presentation.data.vecTarget - m_nativeTaskWeaponPresentationAppliedTarget).LengthSquared() > 0.0625f;
+    const bool changed = taskShapeChanged || targetChanged;
+    if ((taskShapeChanged || targetRequiresRestart) && m_nativeTaskWeaponPresentationActive)
+        ClearNativeTaskWeaponPresentation("sample_changed");
+
+    m_nativeTaskWeaponPresentation = presentation;
+    m_nativeTaskWeaponPresentationReceivedAt = CClientTime::GetTime();
+
+    if (changed && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    {
+        g_pCore->GetConsole()->Printf(
+            "[native-task-weapon][receive] profile=%s pid=%u ped=%u source=%s mode=%u weapon=%u burst=%u rate=%u target=(%.3f,%.3f,%.3f)",
+            g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(), source ? source : "unknown", presentation.data.uiMode,
+            presentation.data.ucWeaponType, presentation.data.usBurstLength, presentation.data.ucShootingRate, presentation.data.vecTarget.fX,
+            presentation.data.vecTarget.fY, presentation.data.vecTarget.fZ);
+    }
+
+    if (presentation.data.uiMode == SNativeTaskWeaponPresentationSync::NONE || m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim())
+        ClearNativeTaskWeaponPresentation("inactive");
+}
+
+void CClientPed::ClearNativeTaskWeaponPresentation(const char* reason)
+{
+    if (m_nativeTaskWeaponPresentationActive && m_pTaskManager && m_pPlayerPed)
+    {
+        CTask* primaryTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
+        if (primaryTask && primaryTask->GetTaskType() == TASK_SIMPLE_GUN_CTRL)
+            m_pTaskManager->RemoveTask(TASK_PRIORITY_PRIMARY);
+
+        CTask* attackTask = m_pTaskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
+        if (attackTask && attackTask->GetTaskType() == TASK_SIMPLE_USE_GUN)
+            m_pTaskManager->RemoveTaskSecondary(TASK_SECONDARY_ATTACK);
+    }
+
+    if (m_nativeTaskWeaponPresentationPreviousShootingRate && m_pPlayerPed)
+        m_pPlayerPed->SetWeaponShootingRate(*m_nativeTaskWeaponPresentationPreviousShootingRate);
+    m_nativeTaskWeaponPresentationPreviousShootingRate.reset();
+
+    if (m_nativeTaskWeaponPresentationActive && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    {
+        g_pCore->GetConsole()->Printf("[native-task-weapon][clear] profile=%s pid=%u ped=%u reason=%s", g_pCore->IsSecondaryClient() ? "cl2" : "primary",
+                                      GetCurrentProcessId(), GetID().Value(), reason ? reason : "unknown");
+    }
+
+    m_nativeTaskWeaponPresentationActive = false;
+    m_nativeTaskWeaponPresentation = {};
+    m_nativeTaskWeaponPresentationAppliedTarget = {};
+}
+
+void CClientPed::UpdateNativeTaskWeaponPresentation()
+{
+    const unsigned long presentationLease = std::max(500UL, static_cast<unsigned long>(g_TickRateSettings.iPedSync) * 3);
+    const unsigned long sampleAge = CClientTime::GetTime() - m_nativeTaskWeaponPresentationReceivedAt;
+    if (m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim() || GetRealOccupiedVehicle() || IsDead() ||
+        m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::NONE || sampleAge > presentationLease)
+    {
+        ClearNativeTaskWeaponPresentation(sampleAge > presentationLease ? "lease_expired" : "invalid_state");
+        return;
+    }
+
+    if (m_nativeTaskWeaponPresentationActive)
+        return;
+
+    const CVector& target = m_nativeTaskWeaponPresentation.data.vecTarget;
+    if (m_nativeTaskWeaponPresentation.data.uiMode != SNativeTaskWeaponPresentationSync::FIRE ||
+        m_nativeTaskWeaponPresentation.data.ucWeaponType != WEAPONTYPE_SPRAYCAN || m_nativeTaskWeaponPresentation.data.usBurstLength < 1 ||
+        m_nativeTaskWeaponPresentation.data.usBurstLength > 32767 || !std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) ||
+        GetCurrentWeaponType() != WEAPONTYPE_SPRAYCAN || !m_pPlayerPed)
+    {
+        ClearNativeTaskWeaponPresentation("unsupported_weapon");
+        return;
+    }
+
+    m_nativeTaskWeaponPresentationPreviousShootingRate = m_pPlayerPed->GetWeaponShootingRate();
+    m_pPlayerPed->SetWeaponShootingRate(m_nativeTaskWeaponPresentation.data.ucShootingRate);
+    CTask* task = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
+                                                                  static_cast<short>(m_nativeTaskWeaponPresentation.data.usBurstLength), 60000);
+    if (!task || !g_pGame->GetTasks()->AddPedScriptCommandTask(m_pPlayerPed, task))
+    {
+        if (task)
+            task->Destroy();
+        ClearNativeTaskWeaponPresentation("task_refused");
+        return;
+    }
+
+    m_nativeTaskWeaponPresentationAppliedTarget = target;
+    m_nativeTaskWeaponPresentationActive = true;
+    if (IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    {
+        g_pCore->GetConsole()->Printf("[native-task-weapon][apply] profile=%s pid=%u ped=%u weapon=%u burst=%u rate=%u target=(%.3f,%.3f,%.3f)",
+                                      g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(),
+                                      m_nativeTaskWeaponPresentation.data.ucWeaponType, m_nativeTaskWeaponPresentation.data.usBurstLength,
+                                      m_nativeTaskWeaponPresentation.data.ucShootingRate, target.fX, target.fY, target.fZ);
+    }
 }
 
 void CClientPed::RemoveNativeTaskLocomotionPresentation(CControllerState& controllerState)
@@ -1042,25 +1444,56 @@ void CClientPed::ApplyNativeTaskLocomotionPresentation(CControllerState& control
     // Ped and player sync intervals are server-configurable up to four
     // seconds. Keep the presentation through two missed unreliable updates,
     // while retaining a short floor for the default player sync rate.
-    const unsigned long syncInterval = static_cast<unsigned long>(GetType() == CCLIENTPED ? g_TickRateSettings.iPedSync : g_TickRateSettings.iPureSync);
-    const unsigned long presentationLease = std::max(500UL, syncInterval * 3);
+    const unsigned long    syncInterval = static_cast<unsigned long>(GetType() == CCLIENTPED ? g_TickRateSettings.iPedSync : g_TickRateSettings.iPureSync);
+    const unsigned long    presentationLease = std::max(500UL, syncInterval * 3);
+    const unsigned long    sampleAge = CClientTime::GetTime() - m_nativeTaskLocomotionPresentationReceivedAt;
+    const CControllerState baseState = controllerState;
 
-    if (m_bIsLocalPlayer || m_bIsSyncing || m_nativeTaskLocomotionPresentation.data.uiMode == SNativeTaskLocomotionSync::NONE)
+    if (m_bIsLocalPlayer)
     {
+        TraceNativeTaskLocomotionApply(this, "local_player", m_nativeTaskLocomotionPresentation, sampleAge, presentationLease, baseState, controllerState);
+        return;
+    }
+    if (m_bIsSyncing)
+    {
+        TraceNativeTaskLocomotionApply(this, "syncing", m_nativeTaskLocomotionPresentation, sampleAge, presentationLease, baseState, controllerState);
+        return;
+    }
+    if (m_nativeTaskLocomotionPresentation.data.uiMode == SNativeTaskLocomotionSync::NONE)
+    {
+        TraceNativeTaskLocomotionApply(this, "no_sample", m_nativeTaskLocomotionPresentation, sampleAge, presentationLease, baseState, controllerState);
         return;
     }
 
     // Never let a delayed on-foot presentation sample leak into a different
     // gameplay state. Clearing it here also prevents a quick transition back
     // to on foot from reviving the stale input for the remainder of its lease.
-    if (GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDucked() || IsDead() || HasSyncedAnim())
+    const char* invalidState = nullptr;
+    if (GetRealOccupiedVehicle())
+        invalidState = "occupied";
+    else if (IsGettingIntoVehicle())
+        invalidState = "entering_vehicle";
+    else if (IsGettingOutOfVehicle())
+        invalidState = "exiting_vehicle";
+    else if (IsDucked())
+        invalidState = "ducked";
+    else if (IsDead())
+        invalidState = "dead";
+    else if (HasSyncedAnim())
+        invalidState = "synced_anim";
+
+    if (invalidState)
     {
+        TraceNativeTaskLocomotionApply(this, invalidState, m_nativeTaskLocomotionPresentation, sampleAge, presentationLease, baseState, controllerState);
         m_nativeTaskLocomotionPresentation = {};
         return;
     }
 
-    if (CClientTime::GetTime() - m_nativeTaskLocomotionPresentationReceivedAt > presentationLease)
+    if (sampleAge > presentationLease)
+    {
+        TraceNativeTaskLocomotionApply(this, "lease_expired", m_nativeTaskLocomotionPresentation, sampleAge, presentationLease, baseState, controllerState);
         return;
+    }
 
     m_nativeTaskLocomotionBaseControllerState.LeftStickX = controllerState.LeftStickX;
     m_nativeTaskLocomotionBaseControllerState.LeftStickY = controllerState.LeftStickY;
@@ -1068,6 +1501,7 @@ void CClientPed::ApplyNativeTaskLocomotionPresentation(CControllerState& control
     m_nativeTaskLocomotionBaseControllerState.ButtonCross = controllerState.ButtonCross;
     ApplyNativeTaskLocomotion(controllerState, m_nativeTaskLocomotionPresentation);
     m_nativeTaskLocomotionPresentationApplied = true;
+    TraceNativeTaskLocomotionApply(this, "applied", m_nativeTaskLocomotionPresentation, sampleAge, presentationLease, baseState, controllerState);
 }
 
 void CClientPed::AddKeysync(unsigned long ulDelay, const CControllerState& ControllerState, bool bDucking)
@@ -2910,6 +3344,8 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
         if (m_bPendingRebuildPlayer)
             ProcessRebuildPlayer(true);
 
+        UpdateNativeTaskWeaponPresentation();
+
         // Run any gang driveby abort deferred by SetDoingGangDriveby(false).
         if (m_bDeferredGangDrivebyAbort)
         {
@@ -3979,6 +4415,11 @@ void CClientPed::_CreateLocalModel()
 
 void CClientPed::_DestroyModel()
 {
+    // This path also serves model recreation without StreamOut. Release a
+    // presentation task while its original GTA ped and saved shooting rate
+    // still exist, so the replacement entity can accept the next sample.
+    ClearNativeTaskWeaponPresentation("destroy_model");
+
     // Store ped ammo
     if (GetType() == CCLIENTPED)
     {
@@ -4372,7 +4813,8 @@ void CClientPed::StreamOut()
     // the local player
     if (m_pPlayerPed && !m_bIsLocalPlayer)
     {
-        SetNativeTaskLocomotionPresentation({});
+        SetNativeTaskLocomotionPresentation({}, "stream_out");
+        ClearNativeTaskWeaponPresentation("stream_out");
 
         // Destroy us
         _DestroyModel();
@@ -7654,7 +8096,10 @@ void CClientPed::UpdateVehicleInOut()
 void CClientPed::SetSyncing(bool bIsSyncing)
 {
     if (m_bIsSyncing != bIsSyncing)
-        SetNativeTaskLocomotionPresentation({});
+    {
+        SetNativeTaskLocomotionPresentation({}, "syncer_transition");
+        ClearNativeTaskWeaponPresentation("syncer_transition");
+    }
     m_bIsSyncing = bIsSyncing;
     ApplyNativeMissionEventProfileState();
     if (!bIsSyncing)

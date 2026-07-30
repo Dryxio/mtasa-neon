@@ -55,6 +55,9 @@ local state = {
     traceStarted = false,
     traceDemoTagActive = false,
     traceCurrentStep = nil,
+    presentationDiagnosticLastSampleAt = 0,
+    presentationDiagnosticSerial = 0,
+    presentationDiagnosticActors = {},
 }
 
 local TAG_PAINT_ALPHA_DATA = "tagup.paintAlpha"
@@ -674,7 +677,11 @@ local function shouldEnableGangTag(object, alpha)
 
     local tagId = tonumber(getElementData(object, "tagup.tagId"))
     if not tagId then
-        return object == state.demoTag and (state.stage == "demo" or alpha == 255)
+        -- Only Sweet's authoritative syncer may let GTA predict native spray
+        -- hits. Other clients still render the server-mirrored alpha while
+        -- using local controls solely to reproduce Sweet's presentation.
+        return object == state.demoTag and
+                   (alpha == 255 or (state.stage == "demo" and isElement(state.sweet) and isElementSyncer(state.sweet)))
     end
 
     if state.completedTags[tagId] or alpha == 255 then
@@ -4111,6 +4118,8 @@ local BALLAS_TASK_OBSERVATION_INTERVAL = 50
 local BALLAS_TASK_STABLE_SAMPLES = 3
 local BALLAS_ATTACK_RECOVERY_STABLE_SAMPLES = 3
 local BALLAS_COMBAT_OBSERVATION_INTERVAL = 250
+local PRESENTATION_DIAGNOSTIC_INTERVAL = 250
+local PRESENTATION_DIAGNOSTIC_HEARTBEAT = 1000
 
 local function getBallasTaskHierarchy(ped, taskType, slot)
     if type(getPedTask) ~= "function" then
@@ -4141,6 +4150,102 @@ local function describeBallasTaskSlots(ped, taskType, firstSlot, lastSlot)
         end
     end
     return #parts > 0 and table.concat(parts, "|") or "nil"
+end
+
+local function resetPresentationDiagnostics()
+    state.presentationDiagnosticLastSampleAt = 0
+    state.presentationDiagnosticSerial = 0
+    state.presentationDiagnosticActors = {}
+end
+
+local function getPresentationDiagnosticActors()
+    local actors = {}
+    local seen = {}
+    local function add(label, element)
+        if isElement(element) and not seen[element] then
+            seen[element] = true
+            actors[#actors + 1] = {label = label, element = element}
+        end
+    end
+
+    add("CJ", state.leader)
+    add("Sweet", state.sweet)
+    if state.introScene then
+        add("Smoke", state.introScene.smoke)
+    end
+    if state.ballasEncounter then
+        for index, ped in ipairs(state.ballasEncounter.enemies or {}) do
+            add(("Flat%d"):format(index), ped)
+        end
+    end
+    return actors
+end
+
+local function presentationDiagnosticValue(value)
+    if value == false or value == nil or value == "" then
+        return "nil"
+    end
+    return tostring(value)
+end
+
+local function samplePresentationDiagnostics()
+    local now = getTickCount()
+    if not state.active or now - state.presentationDiagnosticLastSampleAt < PRESENTATION_DIAGNOSTIC_INTERVAL then
+        return
+    end
+    state.presentationDiagnosticLastSampleAt = now
+    state.presentationDiagnosticSerial = state.presentationDiagnosticSerial + 1
+
+    local clientName = getPlayerName(localPlayer)
+    local partyRole = localPlayer == state.leader and "leader" or "companion"
+    for _, actor in ipairs(getPresentationDiagnosticActors()) do
+        local ped = actor.element
+        local streamed = ped == localPlayer or isElementStreamedIn(ped)
+        local syncer = ped == localPlayer or isElementSyncer(ped)
+        local role = ped == localPlayer and "local-player" or (syncer and "syncer" or "non-syncer")
+        local x, y, z = getElementPosition(ped)
+        local _, _, heading = getElementRotation(ped)
+        local cameraHeading = type(getPedCameraRotation) == "function" and getPedCameraRotation(ped) or 0
+        cameraHeading = type(cameraHeading) == "number" and cameraHeading or 0
+        local vx, vy, vz = getElementVelocity(ped)
+        local speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        local moveState = streamed and type(getPedMoveState) == "function" and getPedMoveState(ped) or false
+        local animationBlock, animationName
+        if streamed then
+            animationBlock, animationName = getPedAnimation(ped)
+        end
+        local simplestTask = streamed and type(getPedSimplestTask) == "function" and getPedSimplestTask(ped) or false
+        local primaryPhysical = streamed and describeBallasTaskSlots(ped, "primary", 0, 0) or "nil"
+        local primaryScript = streamed and describeBallasTaskSlots(ped, "primary", 3, 3) or "nil"
+        local secondaryAttack = streamed and describeBallasTaskSlots(ped, "secondary", 0, 0) or "nil"
+        local animation = presentationDiagnosticValue(animationBlock) .. "/" .. presentationDiagnosticValue(animationName)
+        local signature = table.concat({
+            tostring(streamed),
+            tostring(syncer),
+            presentationDiagnosticValue(moveState),
+            animation,
+            presentationDiagnosticValue(simplestTask),
+            primaryPhysical,
+            primaryScript,
+            secondaryAttack,
+        }, "|")
+        local previous = state.presentationDiagnosticActors[ped]
+        local changed = not previous or previous.signature ~= signature
+        local heartbeat = not previous or now - previous.loggedAt >= PRESENTATION_DIAGNOSTIC_HEARTBEAT
+
+        if changed or heartbeat then
+            state.presentationDiagnosticActors[ped] = {signature = signature, loggedAt = now}
+            outputDebugString(
+                ("[tagging-up-turf][presentation] sample=%d client=%s partyRole=%s stage=%s actor=%s role=%s streamed=%s "
+                    .. "pos=(%.3f,%.3f,%.3f) heading=%.2f camera=%.2f vel=%.4f move=%s ground=%s anim=%s simplest=%s P0={%s} P3={%s} S0={%s} changed=%s"):format(
+                    state.presentationDiagnosticSerial, clientName, partyRole, tostring(state.stage), actor.label, role, tostring(streamed), x, y, z,
+                    heading, cameraHeading, speed, presentationDiagnosticValue(moveState), tostring(streamed and isPedOnGround(ped) or false), animation,
+                    presentationDiagnosticValue(simplestTask), primaryPhysical, primaryScript, secondaryAttack, tostring(changed)))
+            triggerServerEvent("tagup:presentationDiagnostic", resourceRoot, ped, state.presentationDiagnosticSerial, streamed, syncer, x, y, z, heading,
+                               cameraHeading, speed, presentationDiagnosticValue(moveState), animation, presentationDiagnosticValue(simplestTask), primaryPhysical,
+                               primaryScript, secondaryAttack, changed)
+        end
+    end
 end
 
 local function signedHeadingDifference(target, current)
@@ -4225,7 +4330,7 @@ local function traceBallasCombatState(encounter, phase)
                     tostring(isElementStreamedIn(ped)), tostring(isElementSyncer(ped)),
                     tostring(type(isPedMissionActor) == "function" and isPedMissionActor(ped) or "api_unavailable"), x, y, z, distance2D,
                     distance3D, targetZ - z, nativeHeading, matrixHeading, targetBearing, headingError, expectedCommand, vx, vy, vz, speed2D,
-                    tostring(moveState), tostring(isPedOnGround(ped)), tostring(isPedFrozen(ped)), tostring(isPedChoking(ped)), tostring(style),
+                    tostring(moveState), tostring(isPedOnGround(ped)), tostring(isElementFrozen(ped)), tostring(isPedChoking(ped)), tostring(style),
                     tostring(shootingRate), tostring(animationBlock), tostring(animationName), describeBallasTarget(target),
                     tostring(target == localPlayer), describeBallasTarget(contact), tostring(simplestTask),
                     describeBallasTaskSlots(ped, "primary", 0, 4), describeBallasTaskSlots(ped, "secondary", 0, 5)))
@@ -5381,6 +5486,7 @@ addEventHandler("tagup:state", resourceRoot, function(payload)
     refreshGangTagStates()
 
     if previousStage ~= state.stage then
+        resetPresentationDiagnostics()
         if previousStage == "sweet1a" and state.stage ~= "sweet1a" and state.fileCutscene then
             clearFileCutscene("stage_changed_to_" .. tostring(state.stage), state.stage == "intro")
         end
@@ -5527,6 +5633,7 @@ addEventHandler("tagup:stop", resourceRoot, function()
     state.rooftopTagRevealed = false
     state.allWheelsMismatchStage = nil
     state.allWheelsPassedStage = nil
+    resetPresentationDiagnostics()
     if type(TAGUP_TRACE) == "table" then
         TAGUP_TRACE.toggle(false)
         TAGUP_TRACE.reset()
@@ -5698,6 +5805,7 @@ addEventHandler("onClientPreRender", root, function()
     reportVehicleProgress()
     reportBallasGangTrigger()
     reportBallasApproachTrigger()
+    samplePresentationDiagnostics()
     if state.active and isElement(state.vehicle) then
         applyGreenwoodNativeState()
     end

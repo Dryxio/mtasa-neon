@@ -83,6 +83,7 @@ void CPedSync::AddPed(CClientPed* pPed)
     // state is NONE, so ownership migration clears the old locomotion without
     // waiting for the receiver lease.
     pPed->m_LastSyncedData->nativeTaskLocomotionResetPending = true;
+    pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending = true;
     pPed->SetSyncing(true);
 }
 
@@ -195,6 +196,10 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             if ((flags2 & 0x02) && BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation) && !BitStream.Read(&nativeTaskLocomotion))
                 return;
 
+            SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
+            if ((flags2 & 0x04) && BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation) && !BitStream.Read(&nativeTaskWeaponPresentation))
+                return;
+
             CVector vecPosition{CVector::NoInit{}}, vecMoveSpeed{CVector::NoInit{}};
             float   fRotation, fHealth, fArmor;
             bool    bOnFire;
@@ -245,20 +250,33 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             CClientPed* pPed = m_pPedManager->Get(ID);
             if (pPed && pPed->CanUpdateSync(ucSyncTimeContext))
             {
-                if (ucFlags & 0x01)
+                const bool lockSyncedAnimationTransform = pPed->HasSyncedAnim() && !pPed->GetAnimationCache().bUpdatePosition;
+                if ((ucFlags & 0x01) && !lockSyncedAnimationTransform)
                     pPed->SetTargetPosition(vecPosition, PED_SYNC_RATE);
-                if (ucFlags & 0x02)
+                if ((ucFlags & 0x02) && !lockSyncedAnimationTransform)
                     pPed->SetTargetRotation(PED_SYNC_RATE, fRotation, std::nullopt);
-                if (ucFlags & 0x04)
+                if ((ucFlags & 0x04) && !lockSyncedAnimationTransform)
                     pPed->SetMoveSpeed(vecMoveSpeed);
                 if (ucFlags & 0x08)
                     pPed->LockHealth(fHealth);
                 if (ucFlags & 0x10)
                     pPed->LockArmor(fArmor);
-                if (flags2 & 0x01)
+                if ((flags2 & 0x01) && !lockSyncedAnimationTransform)
                     pPed->SetTargetRotation(PED_SYNC_RATE, std::nullopt, cameraRotation);
                 if ((flags2 & 0x02) && BitStream.Can(eBitStreamVersion::NativeTaskLocomotionPresentation))
-                    pPed->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion);
+                    pPed->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion, "ped_sync");
+                if ((flags2 & 0x04) && BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
+                    pPed->SetNativeTaskWeaponPresentation(nativeTaskWeaponPresentation, "ped_sync");
+                // The syncer uses this bit when a synchronized animation ends
+                // or is overridden. Mirror the cleanup locally; otherwise the
+                // remote ped remains permanently excluded from native-task
+                // locomotion presentation even though its anim task is gone.
+                if (ucFlags & 0x80)
+                {
+                    pPed->KillAnimation();
+                    pPed->SetHasSyncedAnim(false);
+                    pPed->m_animationOverridedByClient = false;
+                }
                 if (ucFlags & 0x20)
                     pPed->SetOnFire(bOnFire);
                 if (ucFlags & 0x40)
@@ -298,12 +316,19 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
     CVector vecVelocity;
     pPed->GetMoveSpeed(vecVelocity);
 
+    // Server-authored named animations without root motion must keep the
+    // transform that accompanied their RPC. GTA can reset its transient
+    // current-rotation field while such an animation is running even though
+    // the rendered matrix is unchanged; publishing that field turns remote
+    // actors toward zero and also corrupts the server's authoritative state.
+    const bool lockSyncedAnimationTransform = pPed->HasSyncedAnim() && !pPed->GetAnimationCache().bUpdatePosition;
+
     unsigned char ucFlags = 0;
-    if (vecPosition != pPed->m_LastSyncedData->vPosition)
+    if (!lockSyncedAnimationTransform && vecPosition != pPed->m_LastSyncedData->vPosition)
         ucFlags |= 0x01;
-    if (pPed->GetCurrentRotation() != pPed->m_LastSyncedData->fRotation)
+    if (!lockSyncedAnimationTransform && pPed->GetCurrentRotation() != pPed->m_LastSyncedData->fRotation)
         ucFlags |= 0x02;
-    if (vecVelocity != pPed->m_LastSyncedData->vVelocity)
+    if (!lockSyncedAnimationTransform && vecVelocity != pPed->m_LastSyncedData->vVelocity)
         ucFlags |= 0x04;
     if (pPed->GetHealth() != pPed->m_LastSyncedData->fHealth)
         ucFlags |= 0x08;
@@ -319,7 +344,7 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         ucFlags |= 0x80;
 
     std::uint8_t flags2{};
-    if (!IsNearlyEqual(pPed->GetCameraRotation(), pPed->m_LastSyncedData->cameraRotation))
+    if (!lockSyncedAnimationTransform && !IsNearlyEqual(pPed->GetCameraRotation(), pPed->m_LastSyncedData->cameraRotation))
         flags2 |= 0x01;
 
     const SNativeTaskLocomotionSync  nativeTaskLocomotion = pPed->GetNativeTaskLocomotion();
@@ -332,6 +357,20 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
          pPed->m_LastSyncedData->nativeTaskLocomotionResetPending))
     {
         flags2 |= 0x02;
+    }
+
+    const SNativeTaskWeaponPresentationSync  nativeTaskWeaponPresentation = pPed->GetNativeTaskWeaponPresentation();
+    const SNativeTaskWeaponPresentationSync& lastNativeTaskWeaponPresentation = pPed->m_LastSyncedData->nativeTaskWeaponPresentation;
+    const bool nativeTaskWeaponPresentationChanged = nativeTaskWeaponPresentation.data.uiMode != lastNativeTaskWeaponPresentation.data.uiMode ||
+                                                     nativeTaskWeaponPresentation.data.ucWeaponType != lastNativeTaskWeaponPresentation.data.ucWeaponType ||
+                                                     nativeTaskWeaponPresentation.data.usBurstLength != lastNativeTaskWeaponPresentation.data.usBurstLength ||
+                                                     nativeTaskWeaponPresentation.data.ucShootingRate != lastNativeTaskWeaponPresentation.data.ucShootingRate ||
+                                                     nativeTaskWeaponPresentation.data.vecTarget != lastNativeTaskWeaponPresentation.data.vecTarget;
+    if (pBitStream->Can(eBitStreamVersion::NativeTaskWeaponPresentation) &&
+        (nativeTaskWeaponPresentation.data.uiMode != SNativeTaskWeaponPresentationSync::NONE || nativeTaskWeaponPresentationChanged ||
+         pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending))
+    {
+        flags2 |= 0x04;
     }
 
     // Do we really have to sync this ped?
@@ -355,6 +394,13 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         pBitStream->Write(&nativeTaskLocomotion);
         pPed->m_LastSyncedData->nativeTaskLocomotion = nativeTaskLocomotion;
         pPed->m_LastSyncedData->nativeTaskLocomotionResetPending = false;
+    }
+
+    if (flags2 & 0x04)
+    {
+        pBitStream->Write(&nativeTaskWeaponPresentation);
+        pPed->m_LastSyncedData->nativeTaskWeaponPresentation = nativeTaskWeaponPresentation;
+        pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending = false;
     }
 
     // Write position if needed

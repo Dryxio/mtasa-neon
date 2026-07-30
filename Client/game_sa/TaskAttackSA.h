@@ -131,6 +131,12 @@ public:
 
     unsigned char m_bAimImmediate;
 };
+static_assert(sizeof(CTaskSimpleUseGunSAInterface) == 0x3C, "Unexpected CTaskSimpleUseGunSAInterface size");
+static_assert(offsetof(CTaskSimpleUseGunSAInterface, m_nFireGunThisFrame) == 0x0D, "Invalid use-gun fire-frame offset");
+static_assert(offsetof(CTaskSimpleUseGunSAInterface, m_nLastCommand) == 0x10, "Invalid use-gun command offset");
+static_assert(offsetof(CTaskSimpleUseGunSAInterface, m_vecCoords) == 0x20, "Invalid use-gun target offset");
+static_assert(offsetof(CTaskSimpleUseGunSAInterface, m_nBurstLength) == 0x34, "Invalid use-gun burst-length offset");
+static_assert(offsetof(CTaskSimpleUseGunSAInterface, m_nBurstShots) == 0x36, "Invalid use-gun burst-shots offset");
 
 class CTaskSimpleUseGunSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleUseGun
 {
@@ -150,13 +156,15 @@ public:
     void        AbortIK(CPed* pPed);
     void        AimGun(CPed* pPed);
     void        ClearAnim(CPed* pPed);
-    signed char GetCurrentCommand();
+    signed char GetCurrentCommand() override;
     bool        GetDoneFiring();
     bool        GetIsFinished();
     bool        IsLineOfSightBlocked();
-    bool        GetIsFiring();
+    bool        GetIsFiring() override;
+    short       GetBurstLength() override;
     bool        GetIsReloading();
-    bool        GetSkipAim();
+    CVector     GetTarget() override;
+    bool        GetSkipAim() override;
     bool        PlayerPassiveControlGun();
     void        RemoveStanceAnims(CPed* pPed, float);
     static bool RequirePistolWhip(CPed* pPed, CEntity*);

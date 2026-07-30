@@ -14,6 +14,7 @@
  *****************************************************************************/
 
 #include <gtest/gtest.h>
+#include <limits>
 #include "MockBitStream.h"
 #include <net/SyncStructures.h>
 
@@ -77,6 +78,121 @@ TEST(SNativeTaskLocomotionSync, VersionGatePreservesFollowingFields)
         ASSERT_TRUE(bitStream.Read(decodedSentinel));
         EXPECT_EQ(sentinel, decodedSentinel);
         EXPECT_EQ(version == eBitStreamVersion::Latest ? SNativeTaskLocomotionSync::RUN : SNativeTaskLocomotionSync::NONE, decoded.data.uiMode);
+    }
+}
+
+TEST(SNativeTaskWeaponPresentationSync, RoundTrip)
+{
+    MockBitStream                     bitStream(static_cast<unsigned short>(eBitStreamVersion::Latest));
+    SNativeTaskWeaponPresentationSync source;
+    source.data.uiMode = SNativeTaskWeaponPresentationSync::FIRE;
+    source.data.ucWeaponType = 41;
+    source.data.usBurstLength = 5;
+    source.data.ucShootingRate = 100;
+    source.data.vecTarget = CVector(2100.25f, -1649.5f, 14.0f);
+    bitStream.Write(&source);
+
+    bitStream.ResetReadPointer();
+    SNativeTaskWeaponPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskWeaponPresentationSync::FIRE, decoded.data.uiMode);
+    EXPECT_EQ(41, decoded.data.ucWeaponType);
+    EXPECT_EQ(5, decoded.data.usBurstLength);
+    EXPECT_EQ(100, decoded.data.ucShootingRate);
+    EXPECT_FLOAT_EQ(source.data.vecTarget.fX, decoded.data.vecTarget.fX);
+    EXPECT_FLOAT_EQ(source.data.vecTarget.fY, decoded.data.vecTarget.fY);
+    EXPECT_FLOAT_EQ(source.data.vecTarget.fZ, decoded.data.vecTarget.fZ);
+}
+
+TEST(SNativeTaskWeaponPresentationSync, RejectsInvalidPayloads)
+{
+    for (const unsigned int invalidMode : {2U, 3U})
+    {
+        MockBitStream bitStream;
+        bitStream.WriteBits(reinterpret_cast<const char*>(&invalidMode), SNativeTaskWeaponPresentationSync::BITCOUNT);
+        bitStream.ResetReadPointer();
+
+        SNativeTaskWeaponPresentationSync decoded;
+        EXPECT_FALSE(bitStream.Read(&decoded));
+    }
+
+    for (const unsigned short invalidBurst : {0U, 32768U})
+    {
+        MockBitStream bitStream;
+        unsigned int  fireMode = SNativeTaskWeaponPresentationSync::FIRE;
+        bitStream.WriteBits(reinterpret_cast<const char*>(&fireMode), SNativeTaskWeaponPresentationSync::BITCOUNT);
+        bitStream.Write(static_cast<unsigned char>(41));
+        bitStream.Write(invalidBurst);
+        bitStream.Write(static_cast<unsigned char>(100));
+        bitStream.Write(1.0f);
+        bitStream.Write(2.0f);
+        bitStream.Write(3.0f);
+        bitStream.ResetReadPointer();
+
+        SNativeTaskWeaponPresentationSync decoded;
+        EXPECT_FALSE(bitStream.Read(&decoded));
+    }
+
+    MockBitStream bitStream;
+    unsigned int  fireMode = SNativeTaskWeaponPresentationSync::FIRE;
+    bitStream.WriteBits(reinterpret_cast<const char*>(&fireMode), SNativeTaskWeaponPresentationSync::BITCOUNT);
+    bitStream.Write(static_cast<unsigned char>(41));
+    bitStream.Write(static_cast<unsigned short>(5));
+    bitStream.Write(static_cast<unsigned char>(100));
+    bitStream.Write(std::numeric_limits<float>::quiet_NaN());
+    bitStream.Write(2.0f);
+    bitStream.Write(3.0f);
+    bitStream.ResetReadPointer();
+
+    SNativeTaskWeaponPresentationSync decoded;
+    EXPECT_FALSE(bitStream.Read(&decoded));
+}
+
+TEST(SNativeTaskWeaponPresentationSync, NonePreservesFollowingFields)
+{
+    constexpr unsigned char           sentinel = 0xC3;
+    MockBitStream                     bitStream;
+    SNativeTaskWeaponPresentationSync source;
+    bitStream.Write(&source);
+    bitStream.Write(sentinel);
+
+    bitStream.ResetReadPointer();
+    SNativeTaskWeaponPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskWeaponPresentationSync::NONE, decoded.data.uiMode);
+
+    unsigned char decodedSentinel = 0;
+    ASSERT_TRUE(bitStream.Read(decodedSentinel));
+    EXPECT_EQ(sentinel, decodedSentinel);
+}
+
+TEST(SNativeTaskWeaponPresentationSync, VersionGatePreservesFollowingFields)
+{
+    constexpr unsigned char sentinel = 0x5A;
+    for (const auto version : {eBitStreamVersion::NativeTaskLocomotionPresentation, eBitStreamVersion::Latest})
+    {
+        MockBitStream                     bitStream(static_cast<unsigned short>(version));
+        SNativeTaskWeaponPresentationSync source;
+        source.data.uiMode = SNativeTaskWeaponPresentationSync::FIRE;
+        source.data.ucWeaponType = 41;
+        source.data.usBurstLength = 5;
+        source.data.ucShootingRate = 100;
+        source.data.vecTarget = CVector(1.0f, 2.0f, 3.0f);
+
+        if (bitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
+            bitStream.Write(&source);
+        bitStream.Write(sentinel);
+
+        bitStream.ResetReadPointer();
+        SNativeTaskWeaponPresentationSync decoded;
+        if (bitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
+            ASSERT_TRUE(bitStream.Read(&decoded));
+
+        unsigned char decodedSentinel = 0;
+        ASSERT_TRUE(bitStream.Read(decodedSentinel));
+        EXPECT_EQ(sentinel, decodedSentinel);
+        EXPECT_EQ(version == eBitStreamVersion::Latest ? SNativeTaskWeaponPresentationSync::FIRE : SNativeTaskWeaponPresentationSync::NONE,
+                  decoded.data.uiMode);
     }
 }
 

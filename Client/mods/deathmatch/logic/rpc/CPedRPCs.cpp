@@ -77,7 +77,10 @@ void CPedRPCs::SetPedRotation(CClientEntity* pSource, NetBitStreamInterface& bit
             else
                 pPed->SetCurrentRotation(rotation.data.fRotation);
 
-            if (!IS_PLAYER(pPed))
+            // SetCurrentRotationNew already installs the corrected negative
+            // camera heading for peds. Reapplying the legacy positive heading
+            // here makes remote named animations rotate back toward zero.
+            if (!IS_PLAYER(pPed) && ucNewWay != 1)
                 pPed->SetCameraRotation(rotation.data.fRotation);
             pPed->SetSyncTimeContext(ucTimeContext);
         }
@@ -271,6 +274,13 @@ void CPedRPCs::SetPedAnimation(CClientEntity* pSource, NetBitStreamInterface& bi
                     if (pBlock)
                     {
                         pPed->RunNamedAnimation(pBlock, animName.c_str(), iTime, iBlend, bLoop, bUpdatePosition, bInterruptible, bFreezeLastFrame);
+                        // A non-root-motion synchronized animation owns the
+                        // authoritative transform sent immediately before it.
+                        // Drop any queued ped-sync interpolation that could
+                        // otherwise overwrite that transform on non-syncers.
+                        if (!bUpdatePosition)
+                            pPed->ResetInterpolation();
+                        pPed->SetNativeTaskWeaponPresentation({}, "synced_animation");
                         pPed->SetTaskToBeRestoredOnAnimEnd(bTaskToBeRestoredOnAnimEnd);
                         pPed->SetTaskTypeToBeRestoredOnAnimEnd((eTaskType)TASK_SIMPLE_DUCK);
 
@@ -285,6 +295,10 @@ void CPedRPCs::SetPedAnimation(CClientEntity* pSource, NetBitStreamInterface& bi
             else
             {
                 pPed->KillAnimation();
+                // A server-authoritative animation clear is final for every
+                // recipient, including non-syncers that never emit PedSync.
+                pPed->SetHasSyncedAnim(false);
+                pPed->m_animationOverridedByClient = false;
             }
         }
     }

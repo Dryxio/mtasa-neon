@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "../core/CModelCacheManager.h"
 #define ALLOC_STATS_MODULE_NAME "game_sa"
 #include "SharedUtil.hpp"
 #include "SharedUtil.MemAccess.hpp"
@@ -144,6 +145,8 @@ namespace
     CStreamingInfo             g_stockCutsceneObjectStreamingInfos[MTA_CUTSCENE_OBJECT_SLOT_COUNT]{};
     bool                       g_cutsceneObjectMappingsCaptured{};
     bool                       g_managedFileCutsceneObjectAreasRestored{};
+    unsigned int               g_managedFileCutsceneBlockingModel{UINT_MAX};
+    unsigned int               g_managedFileCutsceneBlockingRefs{};
 
     bool RestoreManagedFileCutsceneObjectAreas()
     {
@@ -173,25 +176,113 @@ namespace
         return true;
     }
 
-    bool InstallManagedFileCutsceneModelMappings(CStreaming* streaming)
+    bool ValidateManagedFileCutsceneModelMappings(CStreaming* streaming)
     {
-        auto* currentModelInfo = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
-        auto* streamingInfo = streaming->GetStreamingInfo(MODEL_CSPLAY);
-        if (!g_cutscenePlayerMappingsCaptured || !currentModelInfo || !streamingInfo || currentModelInfo != g_mtaSpecialCharacterModelInfo ||
-            currentModelInfo->usNumberOfRefs != 0)
+        if (!streaming || !g_cutscenePlayerMappingsCaptured || !g_cutsceneObjectMappingsCaptured)
             return false;
 
-        if (!g_cutsceneObjectMappingsCaptured)
+        auto* currentModelInfo = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
+        auto* streamingInfo = streaming->GetStreamingInfo(MODEL_CSPLAY);
+        if (!currentModelInfo || !streamingInfo || currentModelInfo != g_mtaSpecialCharacterModelInfo)
             return false;
 
         for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
         {
             const unsigned int modelId = MODEL_CUTOBJ01 + static_cast<unsigned int>(index);
             auto*              objectModelInfo = CModelInfoSAInterface::GetModelInfo(modelId);
-            if (!objectModelInfo || !streaming->GetStreamingInfo(modelId) || objectModelInfo == g_stockCutsceneObjectModelInfos[index] ||
-                objectModelInfo->usNumberOfRefs != 0)
+            if (!objectModelInfo || !streaming->GetStreamingInfo(modelId) || objectModelInfo == g_stockCutsceneObjectModelInfos[index])
                 return false;
         }
+        return true;
+    }
+
+    int GetManagedFileCutsceneMtaReferences(unsigned int modelId)
+    {
+        CModelInfo* managedModel = pGame ? pGame->GetModelInfo(modelId, true) : nullptr;
+        return managedModel ? managedModel->GetRefCount() : 0;
+    }
+
+    bool GetManagedFileCutsceneMappingBlocker(CStreaming* streaming, unsigned int& modelId, unsigned int& nativeReferences, int& mtaReferences)
+    {
+        if (!ValidateManagedFileCutsceneModelMappings(streaming))
+            return false;
+
+        auto* cutscenePlayerModel = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
+        nativeReferences = cutscenePlayerModel->usNumberOfRefs;
+        mtaReferences = GetManagedFileCutsceneMtaReferences(MODEL_CSPLAY);
+        if (nativeReferences != 0 || mtaReferences != 0)
+        {
+            modelId = MODEL_CSPLAY;
+            return true;
+        }
+
+        for (std::size_t index = 0; index < MTA_CUTSCENE_OBJECT_SLOT_COUNT; ++index)
+        {
+            modelId = MODEL_CUTOBJ01 + static_cast<unsigned int>(index);
+            auto* objectModelInfo = CModelInfoSAInterface::GetModelInfo(modelId);
+            nativeReferences = objectModelInfo->usNumberOfRefs;
+            mtaReferences = GetManagedFileCutsceneMtaReferences(modelId);
+            if (nativeReferences != 0 || mtaReferences != 0)
+                return true;
+        }
+        return false;
+    }
+
+    bool EvictManagedFileCutsceneModelCachePins()
+    {
+        CModelCacheManager* cacheManager = g_pCore ? g_pCore->GetModelCacheManager() : nullptr;
+        if (!cacheManager)
+            return false;
+
+        // The core cache owns a revocable CModelInfoSA reference for nearby
+        // ped models. A skin transition can leave that cache-only reference
+        // resident forever after the last GTA ped released its RwObject. Ask
+        // the cache to relinquish only its own known reference; Lua/resource
+        // requests and live GTA instances remain visible as hard blockers.
+        cacheManager->OnRestreamModel(MODEL_CSPLAY);
+        for (unsigned int modelId = MODEL_CUTOBJ01; modelId <= MODEL_CUTOBJ13; ++modelId)
+            cacheManager->OnRestreamModel(static_cast<unsigned short>(modelId));
+        return true;
+    }
+
+    void ReportManagedFileCutsceneMappingWait(unsigned int modelId, unsigned int nativeReferences, int mtaReferences)
+    {
+        if (modelId == g_managedFileCutsceneBlockingModel && nativeReferences == g_managedFileCutsceneBlockingRefs)
+            return;
+
+        g_managedFileCutsceneBlockingModel = modelId;
+        g_managedFileCutsceneBlockingRefs = nativeReferences;
+        if (g_pCore && g_pCore->GetConsole())
+        {
+            g_pCore->GetConsole()->Printf("[native-file-cutscene][wait] name=%s model=%u nativeRefs=%u mtaRefs=%d", g_managedFileCutsceneName, modelId,
+                                          nativeReferences, mtaReferences);
+        }
+    }
+
+    void ReportManagedFileCutsceneMappingReady()
+    {
+        if (g_managedFileCutsceneBlockingModel != UINT_MAX && g_pCore && g_pCore->GetConsole())
+        {
+            g_pCore->GetConsole()->Printf("[native-file-cutscene][resume] name=%s releasedModel=%u", g_managedFileCutsceneName,
+                                          g_managedFileCutsceneBlockingModel);
+        }
+        g_managedFileCutsceneBlockingModel = UINT_MAX;
+        g_managedFileCutsceneBlockingRefs = 0;
+    }
+
+    bool InstallManagedFileCutsceneModelMappings(CStreaming* streaming)
+    {
+        if (!ValidateManagedFileCutsceneModelMappings(streaming))
+            return false;
+
+        unsigned int blockingModel{};
+        unsigned int blockingNativeReferences{};
+        int          blockingMtaReferences{};
+        if (GetManagedFileCutsceneMappingBlocker(streaming, blockingModel, blockingNativeReferences, blockingMtaReferences))
+            return false;
+
+        auto* currentModelInfo = CModelInfoSAInterface::GetModelInfo(MODEL_CSPLAY);
+        auto* streamingInfo = streaming->GetStreamingInfo(MODEL_CSPLAY);
 
         // MTA replaces GTA's stock slot 1 with TRUTH during initialization.
         // RequestSpecialModel cannot reverse that operation for CSPLAY because
@@ -1819,13 +1910,15 @@ bool CGameSA::LoadFileCutscene(const char* name)
     if (reinterpret_cast<short(__cdecl*)(const char*)>(FUNC_FindCutsceneAudioTrack)(name) < 0)
         return false;
 
-    // MTA permanently repurposes GTA's CSPLAY slot 1 as TRUTH. Temporarily put
-    // back the captured vanilla model mapping for native cutscene playback;
-    // requesting "csplay" as a special model would search the wrong directory.
-    if (!InstallManagedFileCutsceneModelMappings(m_pStreaming))
+    // Validate the captured stock mappings now, but do not reject the lease
+    // merely because a ped is still releasing one of MTA's repurposed model
+    // slots. IsFileCutsceneLoaded retries the atomic remap after ordinary
+    // streaming finishes the model transition.
+    if (!ValidateManagedFileCutsceneModelMappings(m_pStreaming))
         return false;
 
-    g_restoreManagedFileCutsceneModelMappings = true;
+    g_managedFileCutsceneBlockingModel = UINT_MAX;
+    g_managedFileCutsceneBlockingRefs = 0;
     g_preloadingManagedFileCutscene = true;
     std::memcpy(g_managedFileCutsceneName, name, std::strlen(name) + 1);
     g_suppressManagedFileCutsceneSkipInput = true;
@@ -1844,6 +1937,37 @@ bool CGameSA::IsFileCutsceneLoaded() const
 {
     if (g_preloadingManagedFileCutscene)
     {
+        if (!g_restoreManagedFileCutsceneModelMappings)
+        {
+            // The core may recache a still-needed model while a real owner is
+            // draining. Evict its revocable pin on every poll, then perform
+            // the double-zero test and mapping install synchronously in this
+            // same game-thread call.
+            if (!EvictManagedFileCutsceneModelCachePins())
+                return false;
+
+            unsigned int blockingModel{};
+            unsigned int blockingNativeReferences{};
+            int          blockingMtaReferences{};
+            if (GetManagedFileCutsceneMappingBlocker(m_pStreaming, blockingModel, blockingNativeReferences, blockingMtaReferences))
+            {
+                ReportManagedFileCutsceneMappingWait(blockingModel, blockingNativeReferences, blockingMtaReferences);
+                return false;
+            }
+
+            // The validation pass above does not mutate mappings. Install only
+            // once every MTA request and GTA instance reference is gone, so
+            // live peds and resource-owned model requests can never retain a
+            // clump whose global slot is being repurposed underneath them.
+            // Keep the installed mapping across later polling pulses while
+            // ordinary streaming finishes loading CSPLAY.
+            if (!InstallManagedFileCutsceneModelMappings(m_pStreaming))
+                return false;
+
+            ReportManagedFileCutsceneMappingReady();
+            g_restoreManagedFileCutsceneModelMappings = true;
+        }
+
         // CStreaming::LoadAllRequestedModels cannot safely be nested inside
         // the Lua pulse that requested the cutscene. Let ordinary game pulses
         // finish CSPLAY, then enter GTA's native loader with the correct base
@@ -1915,5 +2039,7 @@ bool CGameSA::DeleteFileCutscene()
 
     const bool deleted = !IsFileCutsceneActive();
     RestoreManagedFileCutsceneModelMappings(m_pStreaming);
+    g_managedFileCutsceneBlockingModel = UINT_MAX;
+    g_managedFileCutsceneBlockingRefs = 0;
     return deleted;
 }
