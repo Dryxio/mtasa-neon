@@ -396,6 +396,8 @@ bool WriteTargetDataForPed(CPedSAInterface* pPed, DWORD vecTargetPos, CVector* o
     if (m_pPreWeaponFireHandler && pTargetingPed)
     {
         bDoBulletTraceHere = m_pPreWeaponFireHandler(pTargetingPlayerPed, true);
+        if (!bDoBulletTraceHere)
+            return false;
     }
 
     if (!IsLocalPlayer(pTargetingPed))
@@ -776,6 +778,7 @@ static void __declspec(naked) HOOK_CWeapon__Fire()
     if (!WriteTargetDataForPed(pShootingPed, vecTargetPosition, vecOrigin))
     {
         // Don't fire shot
+        bWeaponFire = false;
         // clang-format off
          __asm
         {

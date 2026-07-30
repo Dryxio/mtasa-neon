@@ -572,6 +572,14 @@ void CPedSA::AddWeaponAudioEvent(EPedWeaponAudioEventType audioEventType)
         &GetPedInterface()->weaponAudioEntity, static_cast<std::uint16_t>(audioEventType));
 }
 
+bool CPedSA::DoGunFlash(std::uint32_t duration, bool leftHand)
+{
+    if (!GetPedInterface() || !duration)
+        return false;
+
+    return reinterpret_cast<bool(__thiscall*)(CPedSAInterface*, std::uint32_t, bool)>(FUNC_CPed_DoGunFlash)(GetPedInterface(), duration, leftHand);
+}
+
 bool CPedSA::IsDoingGangDriveby() const
 {
     if (!m_pedIntelligence)

@@ -1950,7 +1950,12 @@ void CPacketHandler::Packet_Vehicle_InOut(NetBitStreamInterface& bitStream)
                             pPed->m_ucVehicleInOutSeat = ucSeat;
                         }
 
-                        pPed->GetOutOfVehicle(ucDoor);
+                        // A syncer-owned native sequence may already be
+                        // executing LEAVE_CAR. Preserve that hierarchy so its
+                        // following walk/run children survive; remote viewers
+                        // still construct the ordinary GTA exit task here.
+                        if (!pPed->IsSyncing() || !pPed->IsLeavingVehicle())
+                            pPed->GetOutOfVehicle(ucDoor);
 
                         // Remember that this ped is working on leaving a vehicle
                         pPed->SetVehicleInOutState(VEHICLE_INOUT_GETTING_OUT);
@@ -2191,6 +2196,23 @@ void CPacketHandler::Packet_Vehicle_InOut(NetBitStreamInterface& bitStream)
 
                     case CClientGame::VEHICLE_ATTEMPT_FAILED:
                     {
+                        // If a native task initiated the request, GTA may have
+                        // started moving before the server rejected it. Honour
+                        // the authoritative denial and restore the recorded
+                        // seat instead of leaving a physically invisible
+                        // occupant behind on this client.
+                        CClientVehicle* occupiedVehicle = pPed->GetOccupiedVehicle();
+                        if (pPed->IsSyncing() && occupiedVehicle && (pPed->IsLeavingVehicle() || !pPed->GetRealOccupiedVehicle()))
+                        {
+                            // Emergency jump-outs live in an event-response
+                            // slot. Abort only the chain that attempted the
+                            // exit so an unrelated mission sequence survives
+                            // the authoritative denial.
+                            const unsigned int occupiedSeat = pPed->GetOccupiedVehicleSeat();
+                            pPed->AbortLeavingVehicleTask();
+                            pPed->WarpIntoVehicle(occupiedVehicle, occupiedSeat);
+                        }
+
                         // Reset in/out stuff if it was the local player or syncing ped
                         if (pPed->IsLocalPlayer() || pPed->IsSyncing())
                             pPed->ResetVehicleInOut();

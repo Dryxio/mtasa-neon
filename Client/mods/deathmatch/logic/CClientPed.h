@@ -40,6 +40,7 @@ class CClientProjectile;
 class CResource;
 class CClientVehicle;
 class CTask;
+class CTaskSAInterface;
 class CTaskSimpleSwim;
 
 enum eDelayedSyncData
@@ -245,6 +246,8 @@ public:
     SNativeTaskWeaponPresentationSync    GetNativeTaskWeaponPresentation();
     void                                 SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source = "local");
     bool                                 IsNativeTaskWeaponPresentationActive() const noexcept { return m_nativeTaskWeaponPresentationActive; }
+    bool                                 PresentNativeTaskWeaponShot();
+    void                                 NotifyNativeTaskWeaponPresentationFire();
     SNativeTaskAnimationPresentationSync GetNativeTaskAnimationPresentation();
     void SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source = "local");
     bool IsNativeTaskAnimationPresentationActive() const noexcept { return m_nativeTaskAnimationPresentationActive; }
@@ -463,6 +466,7 @@ public:
 
     bool IsEnteringVehicle();
     bool IsLeavingVehicle();
+    void AbortLeavingVehicleTask();
     bool IsGettingIntoVehicle();
     bool IsGettingOutOfVehicle();
     bool IsGettingJacked();
@@ -625,6 +629,8 @@ protected:
     void ClearNativeTaskWeaponPresentation(const char* reason);
     void UpdateNativeTaskAnimationPresentation();
     void ClearNativeTaskAnimationPresentation(const char* reason);
+    void ApplyNativeTaskAnimationPresentationHeading(float fHeading);
+    int  FindLeavingVehicleTaskPriority();
 
     void Interpolate();
     void UpdateKeysync(bool bCleanup = false);
@@ -820,12 +826,17 @@ public:
     CVector                                  m_nativeTaskWeaponPresentationAppliedTarget;
     unsigned long                            m_nativeTaskWeaponPresentationReceivedAt{};
     bool                                     m_nativeTaskWeaponPresentationActive{false};
+    unsigned int                             m_nativeTaskWeaponPresentationFireCount{};
+    CTaskSAInterface*                        m_nativeTaskWeaponPresentationPrimaryTask{};
+    CTaskSAInterface*                        m_nativeTaskWeaponPresentationAttackTask{};
+    CTaskSAInterface*                        m_nativeTaskWeaponPresentationPreviousAttackTask{};
     std::optional<unsigned char>             m_nativeTaskWeaponPresentationPreviousShootingRate;
     SNativeTaskAnimationPresentationSync     m_nativeTaskAnimationPresentation;
     unsigned long                            m_nativeTaskAnimationPresentationReceivedAt{};
     unsigned short                           m_nativeTaskAnimationPresentationAppliedGroup{};
     unsigned short                           m_nativeTaskAnimationPresentationAppliedAnimId{};
     CAnimBlendAssociationSAInterface*        m_nativeTaskAnimationPresentationAppliedAssociation{};
+    std::optional<float>                     m_nativeTaskAnimationPresentationAppliedHeading;
     bool                                     m_nativeTaskAnimationPresentationActive{false};
     bool                                     m_shouldRecreate{false};
 

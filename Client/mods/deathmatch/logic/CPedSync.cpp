@@ -368,11 +368,16 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
 
     const SNativeTaskWeaponPresentationSync  nativeTaskWeaponPresentation = pPed->GetNativeTaskWeaponPresentation();
     const SNativeTaskWeaponPresentationSync& lastNativeTaskWeaponPresentation = pPed->m_LastSyncedData->nativeTaskWeaponPresentation;
-    const bool nativeTaskWeaponPresentationChanged = nativeTaskWeaponPresentation.data.uiMode != lastNativeTaskWeaponPresentation.data.uiMode ||
-                                                     nativeTaskWeaponPresentation.data.ucWeaponType != lastNativeTaskWeaponPresentation.data.ucWeaponType ||
-                                                     nativeTaskWeaponPresentation.data.usBurstLength != lastNativeTaskWeaponPresentation.data.usBurstLength ||
-                                                     nativeTaskWeaponPresentation.data.ucShootingRate != lastNativeTaskWeaponPresentation.data.ucShootingRate ||
-                                                     nativeTaskWeaponPresentation.data.vecTarget != lastNativeTaskWeaponPresentation.data.vecTarget;
+    const bool                               nativeTaskWeaponPresentationChanged =
+        nativeTaskWeaponPresentation.data.uiMode != lastNativeTaskWeaponPresentation.data.uiMode ||
+        nativeTaskWeaponPresentation.data.ucWeaponType != lastNativeTaskWeaponPresentation.data.ucWeaponType ||
+        nativeTaskWeaponPresentation.data.usBurstLength != lastNativeTaskWeaponPresentation.data.usBurstLength ||
+        nativeTaskWeaponPresentation.data.ucShootingRate != lastNativeTaskWeaponPresentation.data.ucShootingRate ||
+        nativeTaskWeaponPresentation.data.vecTarget != lastNativeTaskWeaponPresentation.data.vecTarget ||
+        nativeTaskWeaponPresentation.data.fAbortRange != lastNativeTaskWeaponPresentation.data.fAbortRange ||
+        nativeTaskWeaponPresentation.data.ucFrequencyPercentage != lastNativeTaskWeaponPresentation.data.ucFrequencyPercentage ||
+        nativeTaskWeaponPresentation.data.ucDriveByStyle != lastNativeTaskWeaponPresentation.data.ucDriveByStyle ||
+        nativeTaskWeaponPresentation.data.bSeatRHS != lastNativeTaskWeaponPresentation.data.bSeatRHS;
     if (pBitStream->Can(eBitStreamVersion::NativeTaskWeaponPresentation) &&
         (nativeTaskWeaponPresentation.data.uiMode != SNativeTaskWeaponPresentationSync::NONE || nativeTaskWeaponPresentationChanged ||
          pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending))
@@ -388,7 +393,8 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         nativeTaskAnimationPresentation.data.usAnimId != lastNativeTaskAnimationPresentation.data.usAnimId ||
         nativeTaskAnimationPresentation.data.fProgress != lastNativeTaskAnimationPresentation.data.fProgress ||
         nativeTaskAnimationPresentation.data.fSpeed != lastNativeTaskAnimationPresentation.data.fSpeed ||
-        nativeTaskAnimationPresentation.data.fBlendAmount != lastNativeTaskAnimationPresentation.data.fBlendAmount;
+        nativeTaskAnimationPresentation.data.fBlendAmount != lastNativeTaskAnimationPresentation.data.fBlendAmount ||
+        nativeTaskAnimationPresentation.data.fHeading != lastNativeTaskAnimationPresentation.data.fHeading;
     if (pBitStream->Can(eBitStreamVersion::NativeTaskAnimationPresentation) &&
         (nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::NONE || nativeTaskAnimationPresentationChanged ||
          pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending))

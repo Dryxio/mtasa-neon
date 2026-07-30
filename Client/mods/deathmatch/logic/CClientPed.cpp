@@ -15,8 +15,10 @@
 #include <game/CCam.h>
 #include <game/CCarEnterExit.h>
 #include <game/CColPoint.h>
+#include <game/CFx.h>
 #include <game/CPedIntelligence.h>
 #include <game/CPedSound.h>
+#include <game/CPointLights.h>
 #include <game/CStreaming.h>
 #include <game/CTaskManager.h>
 #include <game/CTasks.h>
@@ -284,6 +286,36 @@ namespace
             appliedState.LeftStickY, static_cast<unsigned int>(appliedState.m_bPedWalk), static_cast<unsigned int>(appliedState.ButtonCross),
             GetNativeTaskLocomotionMoveStateName(moveState), pPrimaryTask ? pPrimaryTask->GetTaskName() : "none", primaryType,
             pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType);
+    }
+
+    CWeaponInfo* GetNativeTaskWeaponPresentationInfo(CClientPed* ped, eWeaponType weaponType)
+    {
+        if (!ped || weaponType < WEAPONTYPE_UNARMED || weaponType >= WEAPONTYPE_LAST_WEAPONTYPE)
+            return nullptr;
+
+        CWeapon* weapon = ped->GetWeapon(ped->GetCurrentWeaponSlot());
+        if (!weapon || weapon->GetType() != weaponType)
+            return nullptr;
+
+        eWeaponSkill skill = WEAPONSKILL_STD;
+        if (weaponType >= WEAPONTYPE_PISTOL && weaponType <= WEAPONTYPE_TEC9)
+        {
+            const float level = ped->GetStat(g_pGame->GetStats()->GetSkillStatIndex(weaponType));
+            skill = g_pGame->GetWeaponStatManager()->GetWeaponSkillFromSkillLevel(weaponType, level);
+        }
+        return weapon->GetInfo(skill);
+    }
+
+    bool IsNativeTaskWeaponPresentationSupported(CClientPed* ped, eWeaponType weaponType, bool allowSpray)
+    {
+        CWeaponInfo* info = GetNativeTaskWeaponPresentationInfo(ped, weaponType);
+        if (!info)
+            return false;
+
+        // Use the live weapon-property fire type, not a weapon-ID list: Lua can
+        // alter weapon properties, and projectile/area-effect weapons carry
+        // world authority that a presentation-only peer must never inherit.
+        return info->GetFireType() == FIRETYPE_INSTANT_HIT || (allowSpray && weaponType == WEAPONTYPE_SPRAYCAN && info->GetFireType() == FIRETYPE_AREA_EFFECT);
     }
 }  // namespace
 
@@ -1292,11 +1324,36 @@ void CClientPed::SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotion
 SNativeTaskWeaponPresentationSync CClientPed::GetNativeTaskWeaponPresentation()
 {
     SNativeTaskWeaponPresentationSync presentation;
-    if (!m_pPlayerPed || GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDead() || HasSyncedAnim() ||
-        GetCurrentWeaponType() != WEAPONTYPE_SPRAYCAN)
+    if (!m_pPlayerPed || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDead() || HasSyncedAnim())
     {
         return presentation;
     }
+
+    if (GetRealOccupiedVehicle())
+    {
+        CTask* primaryTask = m_pTaskManager ? m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY) : nullptr;
+        auto*  driveByTask =
+            primaryTask && primaryTask->GetTaskType() == TASK_SIMPLE_GANG_DRIVEBY ? dynamic_cast<CTaskSimpleGangDriveBy*>(primaryTask) : nullptr;
+        if (!driveByTask || !driveByTask->GetPresentation(presentation.data.vecTarget, presentation.data.fAbortRange, presentation.data.ucFrequencyPercentage,
+                                                          presentation.data.ucDriveByStyle, presentation.data.bSeatRHS))
+        {
+            return presentation;
+        }
+
+        const eWeaponType weaponType = GetCurrentWeaponType();
+        if (!IsNativeTaskWeaponPresentationSupported(this, weaponType, false))
+            return presentation;
+
+        presentation.data.uiMode = SNativeTaskWeaponPresentationSync::DRIVEBY;
+        presentation.data.ucWeaponType = static_cast<unsigned char>(weaponType);
+        presentation.data.usBurstLength = 1;
+        presentation.data.ucShootingRate = m_pPlayerPed->GetWeaponShootingRate();
+        return presentation;
+    }
+
+    const eWeaponType weaponType = GetCurrentWeaponType();
+    if (!IsNativeTaskWeaponPresentationSupported(this, weaponType, true))
+        return presentation;
 
     CTaskSimpleUseGun* useGun = m_pPlayerPed->GetPedIntelligence()->GetTaskUseGun();
     if (!useGun)
@@ -1306,12 +1363,12 @@ SNativeTaskWeaponPresentationSync CClientPed::GetNativeTaskWeaponPresentation()
     if (command != GCOMMAND_FIRE && command != GCOMMAND_FIREBURST && !useGun->GetIsFiring())
         return presentation;
 
-    const CVector target = useGun->GetTarget();
-    if (!std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ))
+    CVector target;
+    if (!useGun->GetPresentationTarget(target))
         return presentation;
 
     presentation.data.uiMode = SNativeTaskWeaponPresentationSync::FIRE;
-    presentation.data.ucWeaponType = static_cast<unsigned char>(WEAPONTYPE_SPRAYCAN);
+    presentation.data.ucWeaponType = static_cast<unsigned char>(weaponType);
     presentation.data.usBurstLength = static_cast<unsigned short>(std::clamp<short>(useGun->GetBurstLength(), 1, 32767));
     presentation.data.ucShootingRate = m_pPlayerPed->GetWeaponShootingRate();
     presentation.data.vecTarget = target;
@@ -1323,17 +1380,17 @@ void CClientPed::SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresenta
     const bool taskShapeChanged = presentation.data.uiMode != m_nativeTaskWeaponPresentation.data.uiMode ||
                                   presentation.data.ucWeaponType != m_nativeTaskWeaponPresentation.data.ucWeaponType ||
                                   presentation.data.usBurstLength != m_nativeTaskWeaponPresentation.data.usBurstLength ||
-                                  presentation.data.ucShootingRate != m_nativeTaskWeaponPresentation.data.ucShootingRate;
+                                  presentation.data.ucShootingRate != m_nativeTaskWeaponPresentation.data.ucShootingRate ||
+                                  presentation.data.fAbortRange != m_nativeTaskWeaponPresentation.data.fAbortRange ||
+                                  presentation.data.ucFrequencyPercentage != m_nativeTaskWeaponPresentation.data.ucFrequencyPercentage ||
+                                  presentation.data.ucDriveByStyle != m_nativeTaskWeaponPresentation.data.ucDriveByStyle ||
+                                  presentation.data.bSeatRHS != m_nativeTaskWeaponPresentation.data.bSeatRHS;
     const bool targetChanged = presentation.data.vecTarget != m_nativeTaskWeaponPresentation.data.vecTarget;
-    // Minor target jitter must not restart GunControl between packets: doing
-    // so cuts a continuous native spray into viewer-side micro-bursts. A real
-    // retarget still rebuilds the task because GTA snapshots the coordinate.
-    // Compare against the coordinate actually applied to GTA, not the last
-    // packet, so small movements cannot accumulate forever without a rebuild.
-    const bool targetRequiresRestart =
-        m_nativeTaskWeaponPresentationActive && (presentation.data.vecTarget - m_nativeTaskWeaponPresentationAppliedTarget).LengthSquared() > 0.0625f;
+    // Target coordinates are updated in place during the pulse. Rebuild only
+    // when the task shape changes; restarting on ordinary target motion cuts a
+    // continuous native burst into viewer-side aim/fire pops.
     const bool changed = taskShapeChanged || targetChanged;
-    if ((taskShapeChanged || targetRequiresRestart) && m_nativeTaskWeaponPresentationActive)
+    if (taskShapeChanged && m_nativeTaskWeaponPresentationActive)
         ClearNativeTaskWeaponPresentation("sample_changed");
 
     m_nativeTaskWeaponPresentation = presentation;
@@ -1344,10 +1401,12 @@ void CClientPed::SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresenta
     if (changed && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
     {
         g_pCore->GetConsole()->Printf(
-            "[native-task-weapon][receive] profile=%s pid=%u ped=%u source=%s mode=%u weapon=%u burst=%u rate=%u target=(%.3f,%.3f,%.3f)",
+            "[native-task-weapon][receive] profile=%s pid=%u ped=%u source=%s mode=%u weapon=%u burst=%u rate=%u "
+            "target=(%.3f,%.3f,%.3f) abort=%.1f frequency=%u style=%u rhs=%u",
             g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(), source ? source : "unknown", presentation.data.uiMode,
             presentation.data.ucWeaponType, presentation.data.usBurstLength, presentation.data.ucShootingRate, presentation.data.vecTarget.fX,
-            presentation.data.vecTarget.fY, presentation.data.vecTarget.fZ);
+            presentation.data.vecTarget.fY, presentation.data.vecTarget.fZ, presentation.data.fAbortRange, presentation.data.ucFrequencyPercentage,
+            presentation.data.ucDriveByStyle, presentation.data.bSeatRHS);
     }
 
     if (presentation.data.uiMode == SNativeTaskWeaponPresentationSync::NONE || m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim())
@@ -1356,14 +1415,14 @@ void CClientPed::SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresenta
 
 void CClientPed::ClearNativeTaskWeaponPresentation(const char* reason)
 {
-    if (m_nativeTaskWeaponPresentationActive && m_pTaskManager && m_pPlayerPed)
+    if (m_pTaskManager && m_pPlayerPed)
     {
         CTask* primaryTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
-        if (primaryTask && primaryTask->GetTaskType() == TASK_SIMPLE_GUN_CTRL)
+        if (primaryTask && primaryTask->GetInterface() == m_nativeTaskWeaponPresentationPrimaryTask)
             m_pTaskManager->RemoveTask(TASK_PRIORITY_PRIMARY);
 
         CTask* attackTask = m_pTaskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
-        if (attackTask && attackTask->GetTaskType() == TASK_SIMPLE_USE_GUN)
+        if (attackTask && attackTask->GetInterface() == m_nativeTaskWeaponPresentationAttackTask)
             m_pTaskManager->RemoveTaskSecondary(TASK_SECONDARY_ATTACK);
     }
 
@@ -1373,34 +1432,231 @@ void CClientPed::ClearNativeTaskWeaponPresentation(const char* reason)
 
     if (m_nativeTaskWeaponPresentationActive && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
     {
-        g_pCore->GetConsole()->Printf("[native-task-weapon][clear] profile=%s pid=%u ped=%u reason=%s", g_pCore->IsSecondaryClient() ? "cl2" : "primary",
-                                      GetCurrentProcessId(), GetID().Value(), reason ? reason : "unknown");
+        g_pCore->GetConsole()->Printf("[native-task-weapon][clear] profile=%s pid=%u ped=%u reason=%s visualShots=%u",
+                                      g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(), reason ? reason : "unknown",
+                                      m_nativeTaskWeaponPresentationFireCount);
     }
 
     m_nativeTaskWeaponPresentationActive = false;
+    m_nativeTaskWeaponPresentationFireCount = 0;
+    m_nativeTaskWeaponPresentationPrimaryTask = nullptr;
+    m_nativeTaskWeaponPresentationAttackTask = nullptr;
+    m_nativeTaskWeaponPresentationPreviousAttackTask = nullptr;
     m_nativeTaskWeaponPresentation = {};
     m_nativeTaskWeaponPresentationAppliedTarget = {};
+}
+
+bool CClientPed::PresentNativeTaskWeaponShot()
+{
+    if (!m_nativeTaskWeaponPresentationActive || !m_pPlayerPed || !m_pTaskManager)
+        return false;
+
+    CTask* primaryTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
+    if (!primaryTask || primaryTask->GetInterface() != m_nativeTaskWeaponPresentationPrimaryTask)
+        return false;
+
+    const eWeaponType weaponType = GetCurrentWeaponType();
+    const eWeaponType presentedWeapon = static_cast<eWeaponType>(m_nativeTaskWeaponPresentation.data.ucWeaponType);
+    CWeaponInfo*      weaponInfo = GetNativeTaskWeaponPresentationInfo(this, weaponType);
+    if (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::FIRE && presentedWeapon == WEAPONTYPE_SPRAYCAN &&
+        weaponType == presentedWeapon && weaponInfo && weaponInfo->GetFireType() == FIRETYPE_AREA_EFFECT)
+    {
+        // Spray presentation deliberately keeps GTA's native area FX. Damage
+        // and tag progress are rejected by the presentation guards downstream.
+        return false;
+    }
+
+    // This exact viewer-owned task must fail closed. If a live weapon property
+    // or equipped weapon changes before the next presentation pulse, cancel
+    // GTA's real fire even though there is no safe visual shot to emit.
+    if (weaponType != presentedWeapon || !weaponInfo || weaponInfo->GetFireType() != FIRETYPE_INSTANT_HIT)
+        return true;
+
+    CVector target = m_nativeTaskWeaponPresentation.data.vecTarget;
+    if (!std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ))
+        return true;
+
+    CVector muzzle = *weaponInfo->GetFireOffset();
+    bool    leftHand = false;
+    if (CTaskSimpleUseGun* useGun = m_pPlayerPed->GetPedIntelligence()->GetTaskUseGun())
+        leftHand = useGun->IsPresentationFiringLeftHand();
+    GetTransformedBonePosition(leftHand ? BONE_LEFTWRIST : BONE_RIGHTWRIST, muzzle);
+
+    CVector shotDirection = target - muzzle;
+    if (shotDirection.LengthSquared() < 0.000001f)
+    {
+        CMatrix matrix;
+        GetMatrix(matrix);
+        shotDirection = matrix.vFront;
+    }
+    else
+        shotDirection.Normalize();
+
+    float shellBackOffset = 0.0f;
+    float shellSize = 0.0f;
+    switch (weaponType)
+    {
+        case WEAPONTYPE_PISTOL:
+        case WEAPONTYPE_PISTOL_SILENCED:
+        case WEAPONTYPE_DESERT_EAGLE:
+        case WEAPONTYPE_COUNTRYRIFLE:
+        case WEAPONTYPE_SNIPERRIFLE:
+            shellBackOffset = 0.2f;
+            shellSize = 0.25f;
+            break;
+        case WEAPONTYPE_SHOTGUN:
+        case WEAPONTYPE_SAWNOFF_SHOTGUN:
+        case WEAPONTYPE_SPAS12_SHOTGUN:
+            shellBackOffset = 0.3f;
+            shellSize = 0.45f;
+            break;
+        case WEAPONTYPE_MICRO_UZI:
+        case WEAPONTYPE_MP5:
+        case WEAPONTYPE_TEC9:
+            shellBackOffset = 0.2f;
+            shellSize = 0.3f;
+            break;
+        case WEAPONTYPE_AK47:
+        case WEAPONTYPE_M4:
+        case WEAPONTYPE_MINIGUN:
+            shellBackOffset = 0.65f;
+            shellSize = 0.25f;
+            break;
+        default:
+            break;
+    }
+
+    if (shellSize > 0.0f)
+    {
+        g_pGame->GetPointLights()->AddLight(PLTYPE_POINTLIGHT, muzzle, CVector(), 3.0f, SColorRGBA(220, 255, 0, 0), 0, false, nullptr);
+        CVector shellPosition = muzzle - shotDirection * shellBackOffset;
+        g_pGame->GetFx()->TriggerGunshot(m_pPlayerPed, muzzle, shellPosition, true);
+        m_pPlayerPed->DoGunFlash(250, leftHand);
+
+        if (CWeapon* weapon = GetWeapon(GetCurrentWeaponSlot()))
+        {
+            CMatrix matrix;
+            GetMatrix(matrix);
+            weapon->AddGunshell(m_pPlayerPed, shellPosition, CVector2D(matrix.vRight.fX, matrix.vRight.fY), shellSize);
+        }
+    }
+
+    m_pPlayerPed->AddWeaponAudioEvent(weaponType == WEAPONTYPE_MINIGUN ? EPedWeaponAudioEventType::FIRE_MINIGUN_AMMO : EPedWeaponAudioEventType::FIRE);
+    NotifyNativeTaskWeaponPresentationFire();
+    return true;
+}
+
+void CClientPed::NotifyNativeTaskWeaponPresentationFire()
+{
+    if (!m_nativeTaskWeaponPresentationActive)
+        return;
+
+    ++m_nativeTaskWeaponPresentationFireCount;
+    if (IsNativeTaskLocomotionTraceEnabled() && IsMissionActor() &&
+        (m_nativeTaskWeaponPresentationFireCount == 1 || m_nativeTaskWeaponPresentationFireCount % 10 == 0))
+    {
+        // Script weapon-fire events remain suppressed for presentation clones;
+        // this bounded trace proves that GTA actually emitted audiovisual
+        // shots without exposing them as a second gameplay action.
+        g_pCore->GetConsole()->Printf("[native-task-weapon][fire] profile=%s pid=%u ped=%u mode=%u weapon=%u visualShots=%u",
+                                      g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(),
+                                      m_nativeTaskWeaponPresentation.data.uiMode, m_nativeTaskWeaponPresentation.data.ucWeaponType,
+                                      m_nativeTaskWeaponPresentationFireCount);
+    }
 }
 
 void CClientPed::UpdateNativeTaskWeaponPresentation()
 {
     const unsigned long presentationLease = std::max(500UL, static_cast<unsigned long>(g_TickRateSettings.iPedSync) * 3);
     const unsigned long sampleAge = CClientTime::GetTime() - m_nativeTaskWeaponPresentationReceivedAt;
-    if (m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim() || GetRealOccupiedVehicle() || IsDead() ||
+    const bool          occupied = GetRealOccupiedVehicle() != nullptr;
+    const bool          invalidVehicleState = (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::FIRE && occupied) ||
+                                     (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::DRIVEBY && !occupied);
+    if (m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim() || IsDead() || invalidVehicleState ||
         m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::NONE || sampleAge > presentationLease)
     {
         ClearNativeTaskWeaponPresentation(sampleAge > presentationLease ? "lease_expired" : "invalid_state");
         return;
     }
 
-    if (m_nativeTaskWeaponPresentationActive)
+    const eWeaponType presentedWeapon = static_cast<eWeaponType>(m_nativeTaskWeaponPresentation.data.ucWeaponType);
+    const bool        allowSpray = m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::FIRE;
+    if (presentedWeapon != GetCurrentWeaponType() || !IsNativeTaskWeaponPresentationSupported(this, presentedWeapon, allowSpray))
+    {
+        ClearNativeTaskWeaponPresentation("unsupported_weapon");
         return;
+    }
 
     const CVector& target = m_nativeTaskWeaponPresentation.data.vecTarget;
-    if (m_nativeTaskWeaponPresentation.data.uiMode != SNativeTaskWeaponPresentationSync::FIRE ||
-        m_nativeTaskWeaponPresentation.data.ucWeaponType != WEAPONTYPE_SPRAYCAN || m_nativeTaskWeaponPresentation.data.usBurstLength < 1 ||
-        m_nativeTaskWeaponPresentation.data.usBurstLength > 32767 || !std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) ||
-        GetCurrentWeaponType() != WEAPONTYPE_SPRAYCAN || !m_pPlayerPed)
+    if (m_nativeTaskWeaponPresentation.data.usBurstLength < 1 || m_nativeTaskWeaponPresentation.data.usBurstLength > 32767 || !std::isfinite(target.fX) ||
+        !std::isfinite(target.fY) || !std::isfinite(target.fZ))
+    {
+        ClearNativeTaskWeaponPresentation("invalid_payload");
+        return;
+    }
+
+    if (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::DRIVEBY &&
+        (!std::isfinite(m_nativeTaskWeaponPresentation.data.fAbortRange) || m_nativeTaskWeaponPresentation.data.fAbortRange < 0.0f ||
+         m_nativeTaskWeaponPresentation.data.fAbortRange > 100000.0f || m_nativeTaskWeaponPresentation.data.ucFrequencyPercentage > 100 ||
+         m_nativeTaskWeaponPresentation.data.ucDriveByStyle > SNativeTaskWeaponPresentationSync::MAX_DRIVEBY_STYLE))
+    {
+        ClearNativeTaskWeaponPresentation("invalid_payload");
+        return;
+    }
+
+    if (m_nativeTaskWeaponPresentationActive)
+    {
+        CTask* primaryTask = m_pTaskManager ? m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY) : nullptr;
+        if (!primaryTask || primaryTask->GetInterface() != m_nativeTaskWeaponPresentationPrimaryTask)
+        {
+            ClearNativeTaskWeaponPresentation("task_lost");
+            return;
+        }
+
+        if (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::DRIVEBY)
+        {
+            auto* driveByTask = primaryTask->GetTaskType() == TASK_SIMPLE_GANG_DRIVEBY ? dynamic_cast<CTaskSimpleGangDriveBy*>(primaryTask) : nullptr;
+            if (!driveByTask)
+            {
+                ClearNativeTaskWeaponPresentation("task_lost");
+                return;
+            }
+            driveByTask->SetPresentationTarget(m_nativeTaskWeaponPresentation.data.vecTarget);
+        }
+        else
+        {
+            auto* gunControlTask = primaryTask->GetTaskType() == TASK_SIMPLE_GUN_CTRL ? dynamic_cast<CTaskSimpleGunControl*>(primaryTask) : nullptr;
+            if (!gunControlTask)
+            {
+                ClearNativeTaskWeaponPresentation("task_lost");
+                return;
+            }
+
+            // GunControl owns the long-lived firing schedule while UseGun owns
+            // the current aim. Update both coordinate snapshots so a moving
+            // authoritative target stays aligned without restarting the burst.
+            gunControlTask->SetPresentationTarget(m_nativeTaskWeaponPresentation.data.vecTarget);
+            if (CTaskSimpleUseGun* useGun = m_pPlayerPed->GetPedIntelligence()->GetTaskUseGun())
+            {
+                useGun->SetPresentationTarget(m_nativeTaskWeaponPresentation.data.vecTarget);
+                if (!m_nativeTaskWeaponPresentationAttackTask && useGun->GetInterface() != m_nativeTaskWeaponPresentationPreviousAttackTask)
+                    m_nativeTaskWeaponPresentationAttackTask = useGun->GetInterface();
+            }
+        }
+        m_nativeTaskWeaponPresentationAppliedTarget = m_nativeTaskWeaponPresentation.data.vecTarget;
+        return;
+    }
+
+    const bool validFire = m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::FIRE &&
+                           IsNativeTaskWeaponPresentationSupported(this, presentedWeapon, true) && presentedWeapon == GetCurrentWeaponType();
+    const bool validDriveBy =
+        m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::DRIVEBY && occupied &&
+        m_nativeTaskWeaponPresentation.data.ucWeaponType == GetCurrentWeaponType() && IsNativeTaskWeaponPresentationSupported(this, presentedWeapon, false) &&
+        std::isfinite(m_nativeTaskWeaponPresentation.data.fAbortRange) && m_nativeTaskWeaponPresentation.data.fAbortRange >= 0.0f &&
+        m_nativeTaskWeaponPresentation.data.fAbortRange <= 100000.0f && m_nativeTaskWeaponPresentation.data.ucFrequencyPercentage <= 100 &&
+        m_nativeTaskWeaponPresentation.data.ucDriveByStyle <= SNativeTaskWeaponPresentationSync::MAX_DRIVEBY_STYLE;
+    if ((!validFire && !validDriveBy) || m_nativeTaskWeaponPresentation.data.usBurstLength < 1 || m_nativeTaskWeaponPresentation.data.usBurstLength > 32767 ||
+        !std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) || !m_pPlayerPed)
     {
         ClearNativeTaskWeaponPresentation("unsupported_weapon");
         return;
@@ -1408,12 +1664,36 @@ void CClientPed::UpdateNativeTaskWeaponPresentation()
 
     m_nativeTaskWeaponPresentationPreviousShootingRate = m_pPlayerPed->GetWeaponShootingRate();
     m_pPlayerPed->SetWeaponShootingRate(m_nativeTaskWeaponPresentation.data.ucShootingRate);
-    CTask* task = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
-                                                                  static_cast<short>(m_nativeTaskWeaponPresentation.data.usBurstLength), 60000);
-    if (!task || !g_pGame->GetTasks()->AddPedScriptCommandTask(m_pPlayerPed, task))
+    CTask* task = nullptr;
+    if (validDriveBy)
     {
-        if (task)
-            task->Destroy();
+        auto* driveByTask = g_pGame->GetTasks()->CreateTaskSimpleGangDriveBy(
+            nullptr, &target, m_nativeTaskWeaponPresentation.data.fAbortRange, static_cast<char>(m_nativeTaskWeaponPresentation.data.ucFrequencyPercentage),
+            static_cast<char>(m_nativeTaskWeaponPresentation.data.ucDriveByStyle), m_nativeTaskWeaponPresentation.data.bSeatRHS);
+        if (driveByTask)
+            driveByTask->SetFromScriptCommand(true);
+        task = driveByTask;
+    }
+    else
+    {
+        task = g_pGame->GetTasks()->CreateTaskSimpleGunControl(nullptr, &target, nullptr, static_cast<char>(GCOMMAND_FIREBURST),
+                                                               static_cast<short>(m_nativeTaskWeaponPresentation.data.usBurstLength), 60000);
+    }
+    if (!task)
+    {
+        ClearNativeTaskWeaponPresentation("task_refused");
+        return;
+    }
+
+    CTask* previousAttackTask = m_pTaskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
+    m_nativeTaskWeaponPresentationPreviousAttackTask = previousAttackTask ? previousAttackTask->GetInterface() : nullptr;
+    m_nativeTaskWeaponPresentationPrimaryTask = task->GetInterface();
+    task->SetAsPedTask(m_pPlayerPed, TASK_PRIORITY_PRIMARY, true);
+
+    CTask* installedTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
+    if (!installedTask || installedTask->GetInterface() != m_nativeTaskWeaponPresentationPrimaryTask)
+    {
+        m_nativeTaskWeaponPresentationPrimaryTask = nullptr;
         ClearNativeTaskWeaponPresentation("task_refused");
         return;
     }
@@ -1422,10 +1702,11 @@ void CClientPed::UpdateNativeTaskWeaponPresentation()
     m_nativeTaskWeaponPresentationActive = true;
     if (IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
     {
-        g_pCore->GetConsole()->Printf("[native-task-weapon][apply] profile=%s pid=%u ped=%u weapon=%u burst=%u rate=%u target=(%.3f,%.3f,%.3f)",
+        g_pCore->GetConsole()->Printf("[native-task-weapon][apply] profile=%s pid=%u ped=%u mode=%u weapon=%u burst=%u rate=%u target=(%.3f,%.3f,%.3f)",
                                       g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(),
-                                      m_nativeTaskWeaponPresentation.data.ucWeaponType, m_nativeTaskWeaponPresentation.data.usBurstLength,
-                                      m_nativeTaskWeaponPresentation.data.ucShootingRate, target.fX, target.fY, target.fZ);
+                                      m_nativeTaskWeaponPresentation.data.uiMode, m_nativeTaskWeaponPresentation.data.ucWeaponType,
+                                      m_nativeTaskWeaponPresentation.data.usBurstLength, m_nativeTaskWeaponPresentation.data.ucShootingRate, target.fX,
+                                      target.fY, target.fZ);
     }
 }
 
@@ -1450,6 +1731,12 @@ SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentat
     }
 
     presentation.data.uiMode = SNativeTaskAnimationPresentationSync::ANIMATION;
+    CVector rotation;
+    // Presentation headings use the ordinary ped convention, which is the
+    // inverse of the legacy matrix Euler Z returned by GetRotationRadians.
+    // Sample through the corrected API so viewers reproduce visible facing.
+    GetRotationRadiansNew(rotation);
+    presentation.data.fHeading = rotation.fZ;
     return presentation;
 }
 
@@ -1463,7 +1750,8 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
     // fading and recreating it at every progress wrap causes a visible pop.
     const bool changed = shapeChanged || presentation.data.fProgress != m_nativeTaskAnimationPresentation.data.fProgress ||
                          presentation.data.fSpeed != m_nativeTaskAnimationPresentation.data.fSpeed ||
-                         presentation.data.fBlendAmount != m_nativeTaskAnimationPresentation.data.fBlendAmount;
+                         presentation.data.fBlendAmount != m_nativeTaskAnimationPresentation.data.fBlendAmount ||
+                         presentation.data.fHeading != m_nativeTaskAnimationPresentation.data.fHeading;
     if (shapeChanged && m_nativeTaskAnimationPresentationActive)
         ClearNativeTaskAnimationPresentation("sample_changed");
 
@@ -1475,9 +1763,10 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
     if (changed && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
     {
         g_pCore->GetConsole()->Printf(
-            "[native-task-animation][receive] profile=%s pid=%u ped=%u source=%s mode=%u group=%u anim=%u progress=%.3f speed=%.3f blend=%.3f",
+            "[native-task-animation][receive] profile=%s pid=%u ped=%u source=%s mode=%u group=%u anim=%u progress=%.3f speed=%.3f blend=%.3f heading=%.3f",
             g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(), source ? source : "unknown", presentation.data.uiMode,
-            presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress, presentation.data.fSpeed, presentation.data.fBlendAmount);
+            presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress, presentation.data.fSpeed, presentation.data.fBlendAmount,
+            presentation.data.fHeading);
     }
 
     if (presentation.data.uiMode == SNativeTaskAnimationPresentationSync::NONE || m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim())
@@ -1494,6 +1783,13 @@ void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
         {
             animation->SetBlendDelta(-8.0f);
         }
+
+        // Native tasks can leave their matrix-authored facing in place after
+        // the animation ends. Commit only the last heading that was actually
+        // validated and applied; never restore the stale CPed rotation or an
+        // unvalidated incoming sample during cleanup.
+        if (m_nativeTaskAnimationPresentationAppliedHeading.has_value())
+            ApplyNativeTaskAnimationPresentationHeading(m_nativeTaskAnimationPresentationAppliedHeading.value());
     }
 
     if (m_nativeTaskAnimationPresentationActive && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
@@ -1506,7 +1802,36 @@ void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
     m_nativeTaskAnimationPresentationAppliedGroup = 0;
     m_nativeTaskAnimationPresentationAppliedAnimId = 0;
     m_nativeTaskAnimationPresentationAppliedAssociation = nullptr;
+    m_nativeTaskAnimationPresentationAppliedHeading.reset();
     m_nativeTaskAnimationPresentation = {};
+}
+
+void CClientPed::ApplyNativeTaskAnimationPresentationHeading(float fHeading)
+{
+    if (!m_pPlayerPed)
+        return;
+
+    // GTA can rotate a native task's rendered matrix without updating these
+    // fields. Align current, target, and the active interpolation endpoints so
+    // the later Interpolate() pulse has zero rotational delta while camera
+    // interpolation remains intact.
+    SetCurrentRotation(fHeading);
+    m_fBeginRotation = fHeading;
+    m_fTargetRotationA = fHeading;
+
+    CMatrix matrix;
+    GetMatrix(matrix);
+
+    CVector matrixRotation;
+    g_pMultiplayer->ConvertMatrixToEulerAngles(matrix, matrixRotation.fX, matrixRotation.fY, matrixRotation.fZ);
+    // Ped headings use the inverse of the legacy matrix Euler Z convention.
+    // Write the visible matrix directly for this frame and keep frozen-ped
+    // caches consistent with the committed current/target rotation.
+    g_pMultiplayer->ConvertEulerAnglesToMatrix(matrix, matrixRotation.fX, matrixRotation.fY, -fHeading);
+    m_pPlayerPed->SetMatrix(&matrix);
+    m_Matrix = matrix;
+    m_matFrozen = matrix;
+    m_nativeTaskAnimationPresentationAppliedHeading = fHeading;
 }
 
 void CClientPed::UpdateNativeTaskAnimationPresentation()
@@ -1525,7 +1850,8 @@ void CClientPed::UpdateNativeTaskAnimationPresentation()
         m_nativeTaskAnimationPresentation.data.fProgress > 1.0f || !std::isfinite(m_nativeTaskAnimationPresentation.data.fSpeed) ||
         m_nativeTaskAnimationPresentation.data.fSpeed <= 0.0f || m_nativeTaskAnimationPresentation.data.fSpeed > 16.0f || !m_pPlayerPed ||
         !std::isfinite(m_nativeTaskAnimationPresentation.data.fBlendAmount) || m_nativeTaskAnimationPresentation.data.fBlendAmount < 0.0f ||
-        m_nativeTaskAnimationPresentation.data.fBlendAmount > 1.0f ||
+        m_nativeTaskAnimationPresentation.data.fBlendAmount > 1.0f || !std::isfinite(m_nativeTaskAnimationPresentation.data.fHeading) ||
+        m_nativeTaskAnimationPresentation.data.fHeading < -6.2831855f || m_nativeTaskAnimationPresentation.data.fHeading > 6.2831855f ||
         !g_pGame->GetAnimManager()->IsValidGroup(m_nativeTaskAnimationPresentation.data.usAnimGroup) ||
         !g_pGame->GetAnimManager()->IsValidAnim(m_nativeTaskAnimationPresentation.data.usAnimGroup, m_nativeTaskAnimationPresentation.data.usAnimId))
     {
@@ -1573,6 +1899,10 @@ void CClientPed::UpdateNativeTaskAnimationPresentation()
     animation->SetCurrentProgress(std::clamp(compensatedProgress, 0.0f, 1.0f));
     animation->SetCurrentSpeed(m_nativeTaskAnimationPresentation.data.fSpeed);
     animation->SetBlendAmount(m_nativeTaskAnimationPresentation.data.fBlendAmount);
+    // Some native tasks, notably PartnerChat, rotate the rendered matrix
+    // without updating CPed's ordinary current-rotation field. Mirror that
+    // visible facing and retain its final validated value through cleanup.
+    ApplyNativeTaskAnimationPresentationHeading(m_nativeTaskAnimationPresentation.data.fHeading);
 }
 
 void CClientPed::RemoveNativeTaskLocomotionPresentation(CControllerState& controllerState)
@@ -6095,29 +6425,45 @@ bool CClientPed::IsEnteringVehicle()
 
 bool CClientPed::IsLeavingVehicle()
 {
-    if (m_pPlayerPed)
+    return FindLeavingVehicleTaskPriority() != TASK_PRIORITY_MAX;
+}
+
+int CClientPed::FindLeavingVehicleTaskPriority()
+{
+    if (m_pPlayerPed && m_pTaskManager)
     {
-        CTask* pTask = GetCurrentPrimaryTask();
-        if (pTask)
+        // Scripted exits normally live under PRIMARY, but emergency jump-outs
+        // are event-response tasks. Inspect every removable primary slot so
+        // both forms enter the same reliable vehicle lifecycle. DEFAULT is
+        // deliberately excluded because GTA owns that permanent slot.
+        for (int priority = TASK_PRIORITY_PHYSICAL_RESPONSE; priority < TASK_PRIORITY_DEFAULT; ++priority)
         {
-            switch (pTask->GetTaskType())
+            for (CTask* task = m_pTaskManager->GetTask(priority); task; task = task->GetSubTask())
             {
-                case TASK_COMPLEX_LEAVE_CAR:  // We only use this task
-                case TASK_COMPLEX_LEAVE_CAR_AND_DIE:
-                case TASK_COMPLEX_LEAVE_CAR_AND_FLEE:
-                case TASK_COMPLEX_LEAVE_CAR_AND_WANDER:
-                case TASK_COMPLEX_SCREAM_IN_CAR_THEN_LEAVE:
+                switch (task->GetTaskType())
                 {
-                    return true;
-                    break;
+                    case TASK_COMPLEX_LEAVE_CAR:
+                    case TASK_COMPLEX_LEAVE_CAR_AND_DIE:
+                    case TASK_COMPLEX_LEAVE_CAR_AND_FLEE:
+                    case TASK_COMPLEX_LEAVE_CAR_AND_WANDER:
+                    case TASK_COMPLEX_SCREAM_IN_CAR_THEN_LEAVE:
+                    case TASK_SIMPLE_CAR_JUMP_OUT:
+                        return priority;
+                    default:
+                        break;
                 }
-                default:
-                    break;
             }
         }
     }
 
-    return false;
+    return TASK_PRIORITY_MAX;
+}
+
+void CClientPed::AbortLeavingVehicleTask()
+{
+    const int priority = FindLeavingVehicleTaskPriority();
+    if (priority != TASK_PRIORITY_MAX)
+        KillTask(priority, true);
 }
 
 bool CClientPed::IsGettingIntoVehicle()
@@ -7918,6 +8264,18 @@ void CClientPed::ResetVehicleInOut()
 //////////////////////////////////////////////////////////////////
 void CClientPed::UpdateVehicleInOut()
 {
+    // Script-command tasks can make a synchronized ped leave its vehicle
+    // without going through CClientPed::ExitVehicle. Enter the ordinary
+    // request/confirmation lifecycle as soon as the active native hierarchy
+    // exposes a scripted leave or emergency jump-out. Viewers then run GTA's
+    // exit task and the server clears the authoritative seat before
+    // locomotion presentation resumes.
+    if (IsSyncing() && m_VehicleInOutID == INVALID_ELEMENT_ID && !m_bIsGettingIntoVehicle && !m_bIsGettingOutOfVehicle && GetOccupiedVehicle() &&
+        GetRealOccupiedVehicle() && IsLeavingVehicle())
+    {
+        ExitVehicle();
+    }
+
     if (IsLocalEntity())
     {
         // If getting inside vehicle

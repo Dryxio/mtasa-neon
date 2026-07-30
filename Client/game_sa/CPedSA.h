@@ -47,6 +47,7 @@ class CVehicleSAInterface;
 #define FUNC_SetCharCreatedBy           0x5E47E0  // CPed::SetCharCreatedBy
 #define FUNC_DisableSpeechForScript     0x5EFF80
 #define FUNC_EnableSpeechForScript      0x5EFF90
+#define FUNC_CPed_DoGunFlash            0x5DF340
 
 // CPlayerPed
 #define FUNC_MakeChangesForNewWeapon_Slot 0x60D000  // CPlayerPed::MakeChangesForNewWeapon
@@ -496,6 +497,7 @@ public:
     CWeaponStat* GetCurrentWeaponStat() const override;
     float        GetCurrentWeaponRange() const override;
     void         AddWeaponAudioEvent(EPedWeaponAudioEventType audioEventType) override;
+    bool         DoGunFlash(std::uint32_t duration, bool leftHand) override;
 
     int GetCustomMoveAnim() const noexcept override { return m_iCustomMoveAnim; }
 

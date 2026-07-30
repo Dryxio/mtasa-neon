@@ -24,6 +24,12 @@ public:
     // Script-created drive-by tasks use a distinct native control path from
     // the interactive player drive-by state managed by MTA.
     virtual void SetFromScriptCommand(bool bFromScriptCommand) = 0;
+
+    // Presentation-only peers reconstruct the task from the authoritative
+    // task's live parameters without acquiring its target or damage authority.
+    virtual bool GetPresentation(CVector& vecTarget, float& fAbortRange, unsigned char& ucFrequencyPercentage, unsigned char& ucDriveByStyle,
+                                 bool& bSeatRHS) = 0;
+    virtual void SetPresentationTarget(const CVector& vecTarget) = 0;
 };
 
 enum eGunCommand
@@ -52,14 +58,22 @@ public:
     virtual signed char GetCurrentCommand() = 0;
     virtual bool        GetIsFiring() = 0;
     virtual short       GetBurstLength() = 0;
-    virtual CVector     GetTarget() = 0;
+    virtual bool        GetPresentationTarget(CVector& vecTarget) = 0;
+    virtual bool        IsPresentationFiringLeftHand() const = 0;
     virtual bool        GetSkipAim() = 0;
+
+    // Presentation clones target coordinates only. Updating that coordinate
+    // in place keeps remote weapon FX aligned without retaining another
+    // client's native entity pointer or restarting the firing task.
+    virtual void SetPresentationTarget(const CVector& vecTarget) = 0;
 };
 
 class CTaskSimpleGunControl : public virtual CTaskSimple
 {
 public:
     virtual ~CTaskSimpleGunControl() {};
+
+    virtual void SetPresentationTarget(const CVector& vecTarget) = 0;
 };
 
 class CTaskSimpleFight : public virtual CTaskSimple

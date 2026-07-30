@@ -106,7 +106,7 @@ TEST(SNativeTaskWeaponPresentationSync, RoundTrip)
 
 TEST(SNativeTaskWeaponPresentationSync, RejectsInvalidPayloads)
 {
-    for (const unsigned int invalidMode : {2U, 3U})
+    for (const unsigned int invalidMode : {3U})
     {
         MockBitStream bitStream;
         bitStream.WriteBits(reinterpret_cast<const char*>(&invalidMode), SNativeTaskWeaponPresentationSync::BITCOUNT);
@@ -146,6 +146,93 @@ TEST(SNativeTaskWeaponPresentationSync, RejectsInvalidPayloads)
 
     SNativeTaskWeaponPresentationSync decoded;
     EXPECT_FALSE(bitStream.Read(&decoded));
+}
+
+TEST(SNativeTaskWeaponPresentationSync, DriveByRoundTrip)
+{
+    MockBitStream                     bitStream(static_cast<unsigned short>(eBitStreamVersion::Latest));
+    SNativeTaskWeaponPresentationSync source;
+    source.data.uiMode = SNativeTaskWeaponPresentationSync::DRIVEBY;
+    source.data.ucWeaponType = 32;
+    source.data.usBurstLength = 1;
+    source.data.ucShootingRate = 90;
+    source.data.vecTarget = CVector(2305.0f, -1900.0f, 13.0f);
+    source.data.fAbortRange = 5000.0f;
+    source.data.ucFrequencyPercentage = 99;
+    source.data.ucDriveByStyle = 8;
+    source.data.bSeatRHS = true;
+    bitStream.Write(&source);
+
+    bitStream.ResetReadPointer();
+    SNativeTaskWeaponPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskWeaponPresentationSync::DRIVEBY, decoded.data.uiMode);
+    EXPECT_EQ(source.data.ucWeaponType, decoded.data.ucWeaponType);
+    EXPECT_FLOAT_EQ(source.data.vecTarget.fX, decoded.data.vecTarget.fX);
+    EXPECT_FLOAT_EQ(source.data.vecTarget.fY, decoded.data.vecTarget.fY);
+    EXPECT_FLOAT_EQ(source.data.vecTarget.fZ, decoded.data.vecTarget.fZ);
+    EXPECT_FLOAT_EQ(source.data.fAbortRange, decoded.data.fAbortRange);
+    EXPECT_EQ(source.data.ucFrequencyPercentage, decoded.data.ucFrequencyPercentage);
+    EXPECT_EQ(source.data.ucDriveByStyle, decoded.data.ucDriveByStyle);
+    EXPECT_EQ(source.data.bSeatRHS, decoded.data.bSeatRHS);
+}
+
+TEST(SNativeTaskWeaponPresentationSync, RejectsInvalidDriveByPayloads)
+{
+    for (const float invalidAbortRange : {-1.0f, 100000.1f, std::numeric_limits<float>::quiet_NaN()})
+    {
+        MockBitStream bitStream;
+        unsigned int  mode = SNativeTaskWeaponPresentationSync::DRIVEBY;
+        bitStream.WriteBits(reinterpret_cast<const char*>(&mode), SNativeTaskWeaponPresentationSync::BITCOUNT);
+        bitStream.Write(static_cast<unsigned char>(32));
+        bitStream.Write(static_cast<unsigned short>(1));
+        bitStream.Write(static_cast<unsigned char>(90));
+        bitStream.Write(1.0f);
+        bitStream.Write(2.0f);
+        bitStream.Write(3.0f);
+        bitStream.Write(invalidAbortRange);
+        bitStream.Write(static_cast<unsigned char>(99));
+        bitStream.Write(static_cast<unsigned char>(8));
+        bitStream.WriteBit(true);
+        bitStream.ResetReadPointer();
+
+        SNativeTaskWeaponPresentationSync decoded;
+        EXPECT_FALSE(bitStream.Read(&decoded));
+    }
+
+    MockBitStream bitStream;
+    unsigned int  mode = SNativeTaskWeaponPresentationSync::DRIVEBY;
+    bitStream.WriteBits(reinterpret_cast<const char*>(&mode), SNativeTaskWeaponPresentationSync::BITCOUNT);
+    bitStream.Write(static_cast<unsigned char>(32));
+    bitStream.Write(static_cast<unsigned short>(1));
+    bitStream.Write(static_cast<unsigned char>(90));
+    bitStream.Write(1.0f);
+    bitStream.Write(2.0f);
+    bitStream.Write(3.0f);
+    bitStream.Write(5000.0f);
+    bitStream.Write(static_cast<unsigned char>(101));
+    bitStream.Write(static_cast<unsigned char>(8));
+    bitStream.WriteBit(true);
+    bitStream.ResetReadPointer();
+
+    SNativeTaskWeaponPresentationSync decoded;
+    EXPECT_FALSE(bitStream.Read(&decoded));
+
+    MockBitStream invalidStyleBitStream;
+    invalidStyleBitStream.WriteBits(reinterpret_cast<const char*>(&mode), SNativeTaskWeaponPresentationSync::BITCOUNT);
+    invalidStyleBitStream.Write(static_cast<unsigned char>(32));
+    invalidStyleBitStream.Write(static_cast<unsigned short>(1));
+    invalidStyleBitStream.Write(static_cast<unsigned char>(90));
+    invalidStyleBitStream.Write(1.0f);
+    invalidStyleBitStream.Write(2.0f);
+    invalidStyleBitStream.Write(3.0f);
+    invalidStyleBitStream.Write(5000.0f);
+    invalidStyleBitStream.Write(static_cast<unsigned char>(99));
+    invalidStyleBitStream.Write(static_cast<unsigned char>(SNativeTaskWeaponPresentationSync::MAX_DRIVEBY_STYLE + 1));
+    invalidStyleBitStream.WriteBit(true);
+    invalidStyleBitStream.ResetReadPointer();
+
+    EXPECT_FALSE(invalidStyleBitStream.Read(&decoded));
 }
 
 TEST(SNativeTaskWeaponPresentationSync, NonePreservesFollowingFields)
@@ -206,6 +293,7 @@ TEST(SNativeTaskAnimationPresentationSync, RoundTrip)
     source.data.fProgress = 0.375f;
     source.data.fSpeed = 1.0f;
     source.data.fBlendAmount = 0.8f;
+    source.data.fHeading = 5.481f;
     bitStream.Write(&source);
 
     bitStream.ResetReadPointer();
@@ -217,6 +305,7 @@ TEST(SNativeTaskAnimationPresentationSync, RoundTrip)
     EXPECT_FLOAT_EQ(source.data.fProgress, decoded.data.fProgress);
     EXPECT_FLOAT_EQ(source.data.fSpeed, decoded.data.fSpeed);
     EXPECT_FLOAT_EQ(source.data.fBlendAmount, decoded.data.fBlendAmount);
+    EXPECT_FLOAT_EQ(source.data.fHeading, decoded.data.fHeading);
 }
 
 TEST(SNativeTaskAnimationPresentationSync, RejectsInvalidPayloads)
@@ -231,6 +320,7 @@ TEST(SNativeTaskAnimationPresentationSync, RejectsInvalidPayloads)
         bitStream.Write(invalidProgress);
         bitStream.Write(1.0f);
         bitStream.Write(1.0f);
+        bitStream.Write(0.0f);
         bitStream.ResetReadPointer();
 
         SNativeTaskAnimationPresentationSync decoded;
@@ -247,6 +337,24 @@ TEST(SNativeTaskAnimationPresentationSync, RejectsInvalidPayloads)
         bitStream.Write(0.5f);
         bitStream.Write(1.0f);
         bitStream.Write(invalidBlend);
+        bitStream.Write(0.0f);
+        bitStream.ResetReadPointer();
+
+        SNativeTaskAnimationPresentationSync decoded;
+        EXPECT_FALSE(bitStream.Read(&decoded));
+    }
+
+    for (const auto invalidHeading : {-6.2833f, 6.2833f, std::numeric_limits<float>::quiet_NaN()})
+    {
+        MockBitStream bitStream;
+        unsigned int  mode = SNativeTaskAnimationPresentationSync::ANIMATION;
+        bitStream.WriteBits(reinterpret_cast<const char*>(&mode), SNativeTaskAnimationPresentationSync::BITCOUNT);
+        bitStream.Write(static_cast<unsigned short>(4));
+        bitStream.Write(static_cast<unsigned short>(18));
+        bitStream.Write(0.5f);
+        bitStream.Write(1.0f);
+        bitStream.Write(1.0f);
+        bitStream.Write(invalidHeading);
         bitStream.ResetReadPointer();
 
         SNativeTaskAnimationPresentationSync decoded;
@@ -285,6 +393,7 @@ TEST(SNativeTaskAnimationPresentationSync, VersionGatePreservesFollowingFields)
         source.data.fProgress = 0.5f;
         source.data.fSpeed = 1.0f;
         source.data.fBlendAmount = 1.0f;
+        source.data.fHeading = 0.5f;
 
         if (bitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation))
             bitStream.Write(&source);

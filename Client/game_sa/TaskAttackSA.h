@@ -99,6 +99,8 @@ public:
     CTaskSimpleGangDriveBySA(CEntity* pTargetEntity, const CVector* pVecTarget, float fAbortRange, char FrequencyPercentage, char nDrivebyStyle, bool bSeatRHS);
 
     void SetFromScriptCommand(bool bFromScriptCommand) override;
+    bool GetPresentation(CVector& vecTarget, float& fAbortRange, unsigned char& ucFrequencyPercentage, unsigned char& ucDriveByStyle, bool& bSeatRHS) override;
+    void SetPresentationTarget(const CVector& vecTarget) override;
 };
 
 class CTaskSimpleUseGunSAInterface : public CTaskSimpleSAInterface
@@ -163,8 +165,10 @@ public:
     bool        GetIsFiring() override;
     short       GetBurstLength() override;
     bool        GetIsReloading();
-    CVector     GetTarget() override;
+    bool        GetPresentationTarget(CVector& vecTarget) override;
+    bool        IsPresentationFiringLeftHand() const override;
     bool        GetSkipAim() override;
+    void        SetPresentationTarget(const CVector& vecTarget) override;
     bool        PlayerPassiveControlGun();
     void        RemoveStanceAnims(CPed* pPed, float);
     static bool RequirePistolWhip(CPed* pPed, CEntity*);
@@ -174,14 +178,28 @@ public:
     void        StartCountDown(unsigned char, bool);
 };
 
-// The verified GTA layout is intentionally opaque: Neon only constructs and
-// owns this task, while GTA remains responsible for all firing state changes.
 class CTaskSimpleGunControlSAInterface : public CTaskSimpleSAInterface
 {
-private:
-    unsigned char m_opaqueState[0x34];
+public:
+    bool         m_bIsFinished;
+    CEntity*     m_pTargetEntity;
+    CVector      m_vecTarget;
+    CVector      m_vecMoveTarget;
+    int          m_iDuration;
+    short        m_nBurstLength;
+    signed char  m_nFiringTask;
+    float        m_fAttackIntervalMultiplier;
+    unsigned int m_uiNextAttackTime;
+    bool         m_bIsFirstTime;
+    bool         m_bLineOfSightBlocked;
+    bool         m_bAimImmediate;
 };
 static_assert(sizeof(CTaskSimpleGunControlSAInterface) == 0x3C, "Unexpected CTaskSimpleGunControlSAInterface size");
+static_assert(offsetof(CTaskSimpleGunControlSAInterface, m_pTargetEntity) == 0x0C, "Invalid gun-control target-entity offset");
+static_assert(offsetof(CTaskSimpleGunControlSAInterface, m_vecTarget) == 0x10, "Invalid gun-control target offset");
+static_assert(offsetof(CTaskSimpleGunControlSAInterface, m_nBurstLength) == 0x2C, "Invalid gun-control burst-length offset");
+static_assert(offsetof(CTaskSimpleGunControlSAInterface, m_nFiringTask) == 0x2E, "Invalid gun-control command offset");
+static_assert(offsetof(CTaskSimpleGunControlSAInterface, m_bAimImmediate) == 0x3A, "Invalid gun-control aim-immediate offset");
 
 class CTaskSimpleGunControlSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleGunControl
 {
@@ -189,6 +207,8 @@ public:
     CTaskSimpleGunControlSA() {};
     CTaskSimpleGunControlSA(CEntity* pTargetEntity, const CVector* pVecTarget, const CVector* pVecMoveTarget, char nFiringTask, short nBurstLength,
                             int iDuration);
+
+    void SetPresentationTarget(const CVector& vecTarget) override;
 };
 
 class CTaskSimpleFightSAInterface : public CTaskSimpleSAInterface

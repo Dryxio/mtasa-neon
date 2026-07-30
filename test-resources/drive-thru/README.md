@@ -10,6 +10,18 @@ This resource targets the complete multiplayer-visible path of `SCRIPT_NAME SWEE
 - `/drivethruabort` destroys mission entities and restores the leader's original position, dimension, appearance, health, armour, and weapons.
 - `/drivethrusimfar` moves the occupied Greenwood more than three kilometres away during the active chase. It explicitly tests the managed Voodoo route and server-side Grove failure condition.
 
+Connect every test client before the leader enters `/drivethru`. Every other connected player is enrolled as a passive observer: the server snapshots that player, moves it into the mission dimension, freezes it, disables its collision, hides its world ped, and asks only its local camera to follow the leader. The observer is not placed in the full Greenwood, never receives a task-construction event, cannot report mission gates, and has no damage or target authority. Success, failure, abort, disconnect, and resource shutdown restore the observer snapshot and local camera. Native file cutscenes remain leader-owned; the observer mode is deliberately for synchronized world actors, vehicles, combat, and transitions.
+
+During an active run, both clients emit bounded `[drive-thru][presentation]` samples for CJ, Smoke, Sweet, Ryder, both Ballas, and the two Grove support actors. A sample records the local syncer role, transform, alpha, dimension/interior, freeze and on-screen state, network vehicle/seat, physical in-vehicle state, speed, movement, animation, simplest native task, decisive task slots, weapon, target, locally presented shot count, and whether drive-by or kill-on-foot is locally authoritative. The server mirrors validated reports with its actual owner result, allowing `clientscript.log`, `clientscript-cl2.log`, `console.log`, `console-cl2.log`, and `server.log` to be correlated without granting the observer a competing GTA task.
+
+For the first two-client pass, compare these visible checkpoints:
+
+- Sweet, Ryder, and Smoke entering their seats before the restaurant drive;
+- the Ballas Voodoo route and all three pursuit drive-bys, including aim direction, rotation, weapon animation, muzzle flash, sound, and burst continuity;
+- the vehicle-to-foot handoff, surviving Ballas movement and melee/firearm presentation;
+- Sweet and Ryder leaving at Grove Street, then Smoke leaving at his house;
+- observer camera and player-state restoration after pass, failure, abort, or resource restart.
+
 ## SCM coverage audit
 
 The installed `main.scm` has SHA-256

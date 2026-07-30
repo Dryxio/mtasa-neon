@@ -329,6 +329,7 @@ public:
     virtual CWeaponStat* GetCurrentWeaponStat() const = 0;
     virtual float        GetCurrentWeaponRange() const = 0;
     virtual void         AddWeaponAudioEvent(EPedWeaponAudioEventType audioEventType) = 0;
+    virtual bool         DoGunFlash(std::uint32_t duration, bool leftHand) = 0;
 
     virtual int  GetCustomMoveAnim() const noexcept = 0;
     virtual bool IsDoingGangDriveby() const = 0;

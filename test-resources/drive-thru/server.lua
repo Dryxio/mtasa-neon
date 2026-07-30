@@ -4,6 +4,8 @@ local mission = {
     stage = nil,
     leader = nil,
     snapshot = nil,
+    observers = {},
+    presentationDiagnosticLastAt = {},
     entities = {},
     timers = {},
     cutsceneSerial = 0,
@@ -155,6 +157,9 @@ local function snapshotPlayer(player)
         dimension = getElementDimension(player),
         health = getElementHealth(player),
         armor = getPedArmor(player),
+        alpha = getElementAlpha(player),
+        frozen = isElementFrozen(player),
+        collisionsEnabled = getElementCollisionsEnabled(player),
         model = getElementModel(player),
         clothes = snapshotPedClothes(player),
         weapons = weapons,
@@ -175,7 +180,9 @@ local function restorePlayer(player, snapshot)
     setElementDimension(player, snapshot.dimension)
     setElementPosition(player, snapshot.x, snapshot.y, snapshot.z)
     setElementRotation(player, 0, 0, snapshot.rotation)
-    setElementFrozen(player, false)
+    setElementAlpha(player, snapshot.alpha or 255)
+    setElementCollisionsEnabled(player, snapshot.collisionsEnabled ~= false)
+    setElementFrozen(player, snapshot.frozen == true)
     setElementHealth(player, math.max(1, snapshot.health))
     setPedArmor(player, snapshot.armor)
     takeAllWeapons(player)
@@ -183,6 +190,147 @@ local function restorePlayer(player, snapshot)
         giveWeapon(player, weapon.weapon, weapon.ammo, false)
     end
 end
+
+local function isMissionParticipant(player)
+    return player == mission.leader or mission.observers[player] ~= nil
+end
+
+local function publishPresentationState()
+    if not mission.running then
+        return
+    end
+    if isElement(mission.leader) then
+        triggerClientEvent(mission.leader, "drivethru:presentationState", resourceRoot, mission.stage, mission.leader,
+                           mission.entities)
+    end
+    for observer in pairs(mission.observers) do
+        if isElement(observer) then
+            triggerClientEvent(observer, "drivethru:presentationState", resourceRoot, mission.stage, mission.leader,
+                               mission.entities)
+        else
+            mission.observers[observer] = nil
+        end
+    end
+end
+
+local function startMissionObservers(leader)
+    -- The Greenwood has no spare seat. A camera-following, collisionless
+    -- observer keeps the second client close enough to inspect replicated GTA
+    -- presentation without creating another driver, target, or task owner.
+    mission.observers = {}
+    local observerCount = 0
+    for _, player in ipairs(getElementsByType("player")) do
+        if player ~= leader then
+            observerCount = observerCount + 1
+            mission.observers[player] = snapshotPlayer(player)
+            removePedFromVehicle(player)
+            setElementInterior(player, 0)
+            setElementDimension(player, DRIVETHRU.dimension)
+            setElementFrozen(player, true)
+            setElementCollisionsEnabled(player, false)
+            setElementAlpha(player, 0)
+            triggerClientEvent(player, "drivethru:observerStart", resourceRoot, leader)
+        end
+    end
+    outputDebugString(("[drive-thru] Passive observers enrolled: %d"):format(observerCount))
+end
+
+local function stopMissionObservers(reason, restore)
+    for observer, snapshot in pairs(mission.observers) do
+        if isElement(observer) then
+            triggerClientEvent(observer, "drivethru:observerStop", resourceRoot, reason or "cleanup")
+            if restore then
+                restorePlayer(observer, snapshot)
+            end
+        end
+    end
+    mission.observers = {}
+end
+
+local presentationActorLabels = {
+    smoke = "Smoke",
+    sweet = "Sweet",
+    ryder = "Ryder",
+    ballas_driver = "BallasDriver",
+    ballas_passenger = "BallasPassenger",
+    mate1 = "GroveMate1",
+    mate2 = "GroveMate2",
+}
+
+local function getPresentationDiagnosticActorLabel(actor)
+    if actor == mission.leader then
+        return "CJ"
+    end
+    for key, label in pairs(presentationActorLabels) do
+        if actor == mission.entities[key] then
+            return label
+        end
+    end
+    return nil
+end
+
+local function isFiniteDiagnosticNumber(value, maximumAbsoluteValue)
+    return type(value) == "number" and value == value and math.abs(value) <= maximumAbsoluteValue
+end
+
+local function isBoundedDiagnosticString(value)
+    return type(value) == "string" and #value <= 512
+end
+
+addEvent("drivethru:presentationDiagnostic", true)
+addEventHandler("drivethru:presentationDiagnostic", resourceRoot,
+                function(actor, sample, streamed, clientClaimsSyncer, x, y, z, heading, speed,
+                         alpha, dimension, interior, frozen, onScreen, occupiedVehicle, occupiedSeat, physicallyInVehicle,
+                         moveState, animation,
+                         simplestTask, primaryPhysical, primaryScript, secondaryAttack, weapon, target, shots, driveBy,
+                         killOnFoot, changed)
+    local player = client
+    local actorLabel = getPresentationDiagnosticActorLabel(actor)
+    if source ~= resourceRoot or not mission.running or not isMissionParticipant(player) or not isElement(actor) or
+        (getElementType(actor) ~= "ped" and getElementType(actor) ~= "player") or not actorLabel or
+        type(sample) ~= "number" or sample < 1 or sample ~= math.floor(sample) or sample > 10000000 or
+        type(streamed) ~= "boolean" or type(clientClaimsSyncer) ~= "boolean" or type(driveBy) ~= "boolean" or
+        type(killOnFoot) ~= "boolean" or type(changed) ~= "boolean" or type(frozen) ~= "boolean" or
+        type(onScreen) ~= "boolean" or type(physicallyInVehicle) ~= "boolean" or type(shots) ~= "number" or shots < 0 or
+        shots ~= math.floor(shots) or shots > 10000000 or not isFiniteDiagnosticNumber(x, 100000) or
+        not isFiniteDiagnosticNumber(y, 100000) or not isFiniteDiagnosticNumber(z, 100000) or
+        not isFiniteDiagnosticNumber(heading, 100000) or not isFiniteDiagnosticNumber(speed, 1000) or
+        type(alpha) ~= "number" or alpha < 0 or alpha > 255 or alpha ~= math.floor(alpha) or
+        type(dimension) ~= "number" or dimension < 0 or dimension > 65535 or dimension ~= math.floor(dimension) or
+        type(interior) ~= "number" or interior < 0 or interior > 255 or interior ~= math.floor(interior) or
+        type(occupiedSeat) ~= "number" or occupiedSeat < -1 or occupiedSeat > 255 or occupiedSeat ~= math.floor(occupiedSeat) or
+        not isBoundedDiagnosticString(moveState) or not isBoundedDiagnosticString(animation) or
+        not isBoundedDiagnosticString(occupiedVehicle) or
+        not isBoundedDiagnosticString(simplestTask) or not isBoundedDiagnosticString(primaryPhysical) or
+        not isBoundedDiagnosticString(primaryScript) or not isBoundedDiagnosticString(secondaryAttack) or
+        not isBoundedDiagnosticString(weapon) or not isBoundedDiagnosticString(target) then
+        return
+    end
+
+    local now = getTickCount()
+    local playerReports = mission.presentationDiagnosticLastAt[player]
+    if not playerReports then
+        playerReports = {}
+        mission.presentationDiagnosticLastAt[player] = playerReports
+    end
+    if playerReports[actor] and now - playerReports[actor] < 200 then
+        return
+    end
+    playerReports[actor] = now
+
+    local partyRole = player == mission.leader and "leader" or "observer"
+    local serverOwner = actor == player or (getElementType(actor) ~= "player" and getElementSyncer(actor) == player)
+    outputDebugString(
+        ("[drive-thru][presentation] client=%s partyRole=%s stage=%s actor=%s streamed=%s clientSyncer=%s serverOwner=%s "
+            .. "sample=%d alpha=%d dim=%d int=%d frozen=%s onScreen=%s vehicle=%s seat=%d physicallyInVehicle=%s "
+            .. "pos=(%.3f,%.3f,%.3f) heading=%.2f vel=%.4f move=%s anim=%s simplest=%s P0={%s} P3={%s} "
+            .. "S0={%s} weapon=%s target=%s shots=%d driveBy=%s killOnFoot=%s changed=%s"):format(
+            getPlayerName(player), partyRole, tostring(mission.stage), actorLabel, tostring(streamed),
+            tostring(clientClaimsSyncer), tostring(serverOwner), sample, alpha, dimension, interior, tostring(frozen), tostring(onScreen),
+            occupiedVehicle, occupiedSeat, tostring(physicallyInVehicle), x, y, z, heading, speed, moveState, animation,
+            simplestTask, primaryPhysical, primaryScript, secondaryAttack, weapon, target, shots, tostring(driveBy),
+            tostring(killOnFoot), tostring(changed)))
+end)
 
 local function destroyMissionEntities()
     cancelPursuitRoute("entity_cleanup", false)
@@ -200,6 +348,8 @@ local function resetMissionState()
     mission.stage = nil
     mission.leader = nil
     mission.snapshot = nil
+    mission.observers = {}
+    mission.presentationDiagnosticLastAt = {}
     mission.cutscene = nil
     mission.audio = nil
     mission.driveLineIndex = 0
@@ -236,6 +386,7 @@ local function cleanupMission(reason, restore)
     if isElement(leader) then
         triggerClientEvent(leader, "drivethru:stop", resourceRoot, reason or "cleanup")
     end
+    stopMissionObservers(reason, true)
     destroyMissionEntities()
     if restore and isElement(leader) then
         restorePlayer(leader, snapshot)
@@ -256,6 +407,7 @@ local function failMission(reason, textKey)
         mission.hoodFailure.frozenElement = nil
     end
     outputDebugString("[drive-thru] Mission failed: " .. tostring(reason), 1)
+    publishPresentationState()
     if isElement(mission.leader) then
         triggerClientEvent(mission.leader, "drivethru:failed", resourceRoot, textKey, reason)
     end
@@ -1119,6 +1271,7 @@ local function startMission(player)
     mission.running = true
     mission.leader = player
     mission.snapshot = snapshotPlayer(player)
+    mission.presentationDiagnosticLastAt = {}
     mission.snapshot.cjAppearanceApplied = true
     local applied, details = applyMissionCJ(player)
     if not applied then
@@ -1131,9 +1284,12 @@ local function startMission(player)
     setElementDimension(player, DRIVETHRU.dimension)
     setElementFrozen(player, true)
     triggerClientEvent(player, "drivethru:start", resourceRoot)
+    startMissionObservers(player)
     outputDebugString(("[drive-thru] Starting SWEET2A for leader %s in dimension %d"):format(getPlayerName(player), DRIVETHRU.dimension))
     startMissionWatchdog()
     startFileCutscene("intro")
+    publishPresentationState()
+    rememberTimer(setTimer(publishPresentationState, 1000, 0))
 end
 
 addEvent("drivethru:cutsceneReady", true)
@@ -1880,6 +2036,9 @@ end)
 addEventHandler("onPlayerQuit", root, function()
     if mission.running and source == mission.leader then
         cleanupMission("leader_disconnect", false)
+    elseif mission.running and mission.observers[source] then
+        mission.observers[source] = nil
+        mission.presentationDiagnosticLastAt[source] = nil
     end
 end)
 
@@ -1934,6 +2093,7 @@ addEventHandler("onResourceStop", resourceRoot, function()
             finishChaseDamageTrace("resource_stop")
         end
         clearMissionTimers()
+        stopMissionObservers("resource_stop", true)
         destroyMissionEntities()
         if isElement(leader) then
             restorePlayer(leader, snapshot)

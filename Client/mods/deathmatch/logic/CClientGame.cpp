@@ -4987,6 +4987,14 @@ bool CClientGame::VehicleDamageHandler(CEntitySAInterface* pVehicleInterface, fl
         }
 
         CClientEntity* pClientAttacker = pPools->GetClientEntity((DWORD*)pAttackerInterface);
+        CClientPed*    pPresentationPed = DynamicCast<CClientPed>(pClientAttacker);
+        if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+        {
+            // Viewer-side native weapon tasks exist only for audiovisual
+            // parity. The syncer remains the sole owner of vehicle damage and
+            // its corresponding Lua event.
+            return false;
+        }
 
         // Compose arguments
         // attacker, weapon, loss, damagepos, tyreIdx
@@ -5034,6 +5042,9 @@ bool CClientGame::ObjectDamageHandler(CObjectSAInterface* pObjectInterface, floa
             Arguments.PushNumber(fLoss);
 
             CClientEntity* pClientAttacker = pPools->GetClientEntity((DWORD*)pAttackerInterface);
+            CClientPed*    pPresentationPed = DynamicCast<CClientPed>(pClientAttacker);
+            if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+                return false;
             if (pClientAttacker)
                 Arguments.PushElement(pClientAttacker);
             else
@@ -5062,12 +5073,16 @@ bool CClientGame::ObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEnti
             if (!pClientObject->IsBreakable(false))
                 return false;
 
+            CClientEntity* pClientAttacker = pPools->GetClientEntity((DWORD*)pAttackerInterface);
+            CClientPed*    pPresentationPed = DynamicCast<CClientPed>(pClientAttacker);
+            if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+                return false;
+
             // Apply to MTA's "internal storage", too
             pClientObject->SetHealth(0.0f);
 
             CLuaArguments Arguments;
 
-            CClientEntity* pClientAttacker = pPools->GetClientEntity((DWORD*)pAttackerInterface);
             if (pClientAttacker)
                 Arguments.PushElement(pClientAttacker);
             else
@@ -5830,6 +5845,20 @@ bool CClientGame::PreWeaponFire(CPlayerPed* pPlayerPed, bool bStopIfUsingBulletS
 {
     pWeaponFirePed = pPlayerPed;
 
+    if (pWeaponFirePed)
+    {
+        SClientEntity<CPedSA>* pedEntity = g_pGame->GetPools()->GetPed(reinterpret_cast<DWORD*>(pWeaponFirePed->GetInterface()));
+        CClientPed*            ped = pedEntity ? reinterpret_cast<CClientPed*>(pedEntity->pClientEntity) : nullptr;
+        if (ped && ped->PresentNativeTaskWeaponShot())
+        {
+            // The task supplied the native shot edge and cadence; the viewer
+            // emitted only audiovisual FX. Stop before GTA can consume ammo,
+            // trace a bullet, create world events, or initiate projectiles.
+            pWeaponFirePed = nullptr;
+            return false;
+        }
+    }
+
     // Got a local player model?
     CClientPed* pLocalPlayer = g_pClientGame->m_pLocalPlayer;
     if (pLocalPlayer && pWeaponFirePed)
@@ -5927,11 +5956,13 @@ void CClientGame::PostWeaponFire()
                 }
             }
 
-            // GTA has already rendered the audiovisual weapon presentation.
-            // Preserve any shot-compensation cleanup above, but do not expose
-            // the viewer-side reconstruction as a second script shot.
+            // Instant-hit presentation is cancelled in PreWeaponFire. Reaching
+            // PostWeaponFire here is the native area-effect path used by the
+            // spraycan; do not expose that viewer-side reconstruction as a
+            // second script shot.
             if (pPed->IsNativeTaskWeaponPresentationActive())
             {
+                pPed->NotifyNativeTaskWeaponPresentationFire();
                 pWeaponFirePed = NULL;
                 return;
             }

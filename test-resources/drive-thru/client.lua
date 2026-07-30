@@ -1,5 +1,7 @@
 local state = {
     active = false,
+    observer = false,
+    leader = nil,
     stage = nil,
     vehicle = nil,
     actors = {},
@@ -25,7 +27,16 @@ local state = {
     hoodFailure = nil,
     damageTrace = nil,
     nativeEventProfileLeases = {},
+    presentationStage = nil,
+    presentationEntities = {},
+    presentationLastSampleAt = 0,
+    presentationSerial = 0,
+    presentationActors = {},
+    presentationShots = {},
 }
+
+local PRESENTATION_DIAGNOSTIC_INTERVAL = 250
+local PRESENTATION_DIAGNOSTIC_HEARTBEAT = 1000
 
 local SCM_DESTINATION_BLIP_COLOR = {226, 192, 99, 255}
 local SCM_FRIENDLY_BLIP_COLOR = {0, 0, 255, 255}
@@ -524,6 +535,183 @@ local function beginClientDamageTrace(entities)
                           greenwoodHealth, voodooHealth))
 end
 
+local function getPresentationTaskHierarchy(ped, taskType, slot)
+    if type(getPedTask) ~= "function" then
+        return {}
+    end
+    local hierarchy = {getPedTask(ped, taskType, slot)}
+    if hierarchy[1] == false then
+        return {}
+    end
+    return hierarchy
+end
+
+local function describePresentationTaskSlot(ped, taskType, slot)
+    local hierarchy = getPresentationTaskHierarchy(ped, taskType, slot)
+    if #hierarchy == 0 then
+        return "nil"
+    end
+    return ("%s%d=%s"):format(taskType == "primary" and "P" or "S", slot, table.concat(hierarchy, ">"))
+end
+
+local function presentationValue(value)
+    if value == false or value == nil or value == "" then
+        return "nil"
+    end
+    return tostring(value)
+end
+
+local presentationActorKeys = {
+    {key = "smoke", label = "Smoke"},
+    {key = "sweet", label = "Sweet"},
+    {key = "ryder", label = "Ryder"},
+    {key = "ballas_driver", label = "BallasDriver"},
+    {key = "ballas_passenger", label = "BallasPassenger"},
+    {key = "mate1", label = "GroveMate1"},
+    {key = "mate2", label = "GroveMate2"},
+}
+
+local function getPresentationActors()
+    local actors, seen = {}, {}
+    local function add(label, ped)
+        if isElement(ped) and (getElementType(ped) == "ped" or getElementType(ped) == "player") and not seen[ped] then
+            seen[ped] = true
+            actors[#actors + 1] = {label = label, element = ped}
+        end
+    end
+    add("CJ", state.leader)
+    for _, actor in ipairs(presentationActorKeys) do
+        add(actor.label, state.presentationEntities[actor.key])
+    end
+    return actors
+end
+
+local function isPresentationActor(ped)
+    for _, actor in ipairs(getPresentationActors()) do
+        if actor.element == ped then
+            return true
+        end
+    end
+    return false
+end
+
+local function describePresentationTarget(target)
+    if not isElement(target) then
+        return "nil"
+    end
+    if target == state.leader then
+        return "CJ"
+    end
+    for _, actor in ipairs(presentationActorKeys) do
+        if target == state.presentationEntities[actor.key] then
+            return actor.label
+        end
+    end
+    if target == state.presentationEntities.vehicle or target == state.presentationEntities.greenwood then
+        return "Greenwood"
+    elseif target == state.presentationEntities.voodoo then
+        return "Voodoo"
+    end
+    return getElementType(target)
+end
+
+local function applyObserverPresentationPolicy(ped)
+    if isElement(ped) and getElementType(ped) == "ped" and type(setPedMissionActor) == "function" then
+        pcall(setPedMissionActor, ped, getElementData(ped, DRIVETHRU.missionActorData) == true)
+    end
+end
+
+local function samplePresentationDiagnostics()
+    local now = getTickCount()
+    if not state.active or now - state.presentationLastSampleAt < PRESENTATION_DIAGNOSTIC_INTERVAL then
+        return
+    end
+    state.presentationLastSampleAt = now
+    state.presentationSerial = state.presentationSerial + 1
+
+    local partyRole = state.observer and "observer" or "leader"
+    for _, actor in ipairs(getPresentationActors()) do
+        local ped = actor.element
+        local streamed = ped == localPlayer or isElementStreamedIn(ped)
+        local syncer = ped == localPlayer or isElementSyncer(ped)
+        local x, y, z = getElementPosition(ped)
+        local _, _, heading = getElementRotation(ped)
+        local alpha = getElementAlpha(ped)
+        local dimension = getElementDimension(ped)
+        local interior = getElementInterior(ped)
+        local frozen = isElementFrozen(ped)
+        local onScreen = streamed and isElementOnScreen(ped) or false
+        local occupiedVehicle = streamed and getPedOccupiedVehicle(ped) or false
+        local occupiedVehicleLabel = describePresentationTarget(occupiedVehicle)
+        local occupiedSeat = occupiedVehicle and getPedOccupiedVehicleSeat(ped) or -1
+        local physicallyInVehicle = streamed and isPedInVehicle(ped) or false
+        local vx, vy, vz = getElementVelocity(ped)
+        local speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        local moveState = streamed and type(getPedMoveState) == "function" and getPedMoveState(ped) or false
+        local animationBlock, animationName
+        if streamed then
+            animationBlock, animationName = getPedAnimation(ped)
+        end
+        local animation = presentationValue(animationBlock) .. "/" .. presentationValue(animationName)
+        local simplestTask = streamed and type(getPedSimplestTask) == "function" and getPedSimplestTask(ped) or false
+        local primaryPhysical = streamed and describePresentationTaskSlot(ped, "primary", 0) or "nil"
+        local primaryScript = streamed and describePresentationTaskSlot(ped, "primary", 3) or "nil"
+        local secondaryAttack = streamed and describePresentationTaskSlot(ped, "secondary", 0) or "nil"
+        local weapon = streamed and getPedWeapon(ped) or false
+        local target = streamed and type(getPedTarget) == "function" and getPedTarget(ped) or false
+        local driveBy = streamed and type(isPedDoingTask) == "function" and isPedDoingTask(ped, "TASK_SIMPLE_GANG_DRIVEBY") == true
+        local killOnFoot = streamed and type(isPedDoingTask) == "function" and
+                               isPedDoingTask(ped, "TASK_COMPLEX_KILL_PED_ON_FOOT") == true
+        local shots = state.presentationShots[ped] and state.presentationShots[ped].count or 0
+        local targetLabel = describePresentationTarget(target)
+        local signature = table.concat({
+            tostring(streamed),
+            tostring(syncer),
+            tostring(alpha),
+            tostring(dimension),
+            tostring(interior),
+            tostring(frozen),
+            tostring(onScreen),
+            occupiedVehicleLabel,
+            tostring(occupiedSeat),
+            tostring(physicallyInVehicle),
+            presentationValue(moveState),
+            animation,
+            presentationValue(simplestTask),
+            primaryPhysical,
+            primaryScript,
+            secondaryAttack,
+            presentationValue(weapon),
+            targetLabel,
+            tostring(shots),
+            tostring(driveBy),
+            tostring(killOnFoot),
+        }, "|")
+        local previous = state.presentationActors[ped]
+        local changed = not previous or previous.signature ~= signature
+        local heartbeat = not previous or now - previous.loggedAt >= PRESENTATION_DIAGNOSTIC_HEARTBEAT
+        if changed or heartbeat then
+            state.presentationActors[ped] = {signature = signature, loggedAt = now}
+            outputDebugString(
+                ("[drive-thru][presentation] sample=%d client=%s partyRole=%s stage=%s actor=%s role=%s streamed=%s "
+                    .. "alpha=%d dim=%d int=%d frozen=%s onScreen=%s vehicle=%s seat=%d physicallyInVehicle=%s "
+                    .. "pos=(%.3f,%.3f,%.3f) heading=%.2f vel=%.4f move=%s anim=%s simplest=%s P0={%s} P3={%s} "
+                    .. "S0={%s} weapon=%s target=%s shots=%d driveBy=%s killOnFoot=%s changed=%s"):format(
+                    state.presentationSerial, getPlayerName(localPlayer), partyRole, tostring(state.presentationStage or state.stage), actor.label,
+                    ped == localPlayer and "local-player" or (syncer and "syncer" or "non-syncer"), tostring(streamed), alpha, dimension,
+                    interior, tostring(frozen), tostring(onScreen), occupiedVehicleLabel, occupiedSeat, tostring(physicallyInVehicle), x, y, z,
+                    heading, speed, presentationValue(moveState), animation, presentationValue(simplestTask), primaryPhysical,
+                    primaryScript, secondaryAttack, presentationValue(weapon), targetLabel, shots, tostring(driveBy),
+                    tostring(killOnFoot), tostring(changed)))
+            triggerServerEvent("drivethru:presentationDiagnostic", resourceRoot, ped, state.presentationSerial, streamed, syncer, x,
+                               y, z, heading, speed, alpha, dimension, interior, frozen, onScreen, occupiedVehicleLabel, occupiedSeat,
+                               physicallyInVehicle, presentationValue(moveState), animation,
+                               presentationValue(simplestTask), primaryPhysical, primaryScript, secondaryAttack,
+                               presentationValue(weapon), targetLabel, shots, driveBy, killOnFoot, changed)
+        end
+    end
+end
+
 local function clearClientState(reason)
     finishClientDamageTrace(reason or "cleanup")
     if isTimer(state.entryTimer) then
@@ -572,12 +760,23 @@ local function clearClientState(reason)
             end
         end
     end
+    for _, actor in ipairs(getPresentationActors()) do
+        local ped = actor.element
+        if ped ~= localPlayer and getElementType(ped) == "ped" and type(setPedMissionActor) == "function" then
+            pcall(setPedMissionActor, ped, false)
+        end
+    end
     if state.missionTextReady then
         callMissionTextApi("clearMissionHelp")
         callMissionTextApi("clearMissionTexts")
         callMissionTextApi("releaseMissionText")
     end
     state.active = false
+    if state.observer then
+        setCameraTarget(localPlayer)
+    end
+    state.observer = false
+    state.leader = nil
     state.stage = nil
     state.vehicle = nil
     state.actors = {}
@@ -588,16 +787,76 @@ local function clearClientState(reason)
     state.supportChatAccepted = false
     state.returnPhase = nil
     state.damageTrace = nil
+    state.presentationStage = nil
+    state.presentationEntities = {}
+    state.presentationLastSampleAt = 0
+    state.presentationSerial = 0
+    state.presentationActors = {}
+    state.presentationShots = {}
 end
 
 addEvent("drivethru:start", true)
 addEventHandler("drivethru:start", resourceRoot, function(vehicle)
     clearClientState("replaced")
     state.active = true
+    state.observer = false
+    state.leader = localPlayer
     state.stage = "preparing"
     state.vehicle = vehicle
     ensureMissionText()
     traceStart()
+end)
+
+addEvent("drivethru:observerStart", true)
+addEventHandler("drivethru:observerStart", resourceRoot, function(leader)
+    if source ~= resourceRoot or not isElement(leader) or getElementType(leader) ~= "player" then
+        return
+    end
+    clearClientState("observer_replaced")
+    state.active = true
+    state.observer = true
+    state.leader = leader
+    state.stage = "spectating"
+    state.presentationStage = "preparing"
+    -- Following the authoritative player gives the observer a stable chase
+    -- view while its own hidden ped remains unable to consume a seat or alter
+    -- mission physics. No native task event is sent to this client.
+    setCameraTarget(leader)
+    fadeCamera(true, 0.5)
+    outputDebugString(("[drive-thru][observer] passive camera following %s; no mission task or gameplay authority acquired"):format(
+                          getPlayerName(leader)))
+end)
+
+addEvent("drivethru:presentationState", true)
+addEventHandler("drivethru:presentationState", resourceRoot, function(stage, leader, entities)
+    if source ~= resourceRoot or not state.active or not isElement(leader) or type(entities) ~= "table" then
+        return
+    end
+    state.leader = leader
+    state.presentationStage = tostring(stage or "unknown")
+    state.presentationEntities = entities
+    if state.observer then
+        state.stage = state.presentationStage
+    end
+    for _, actor in ipairs(getPresentationActors()) do
+        local ped = actor.element
+        if ped ~= localPlayer and getElementType(ped) == "ped" and isElementStreamedIn(ped) then
+            if state.observer then
+                applyObserverPresentationPolicy(ped)
+            else
+                applyActorPolicies(ped)
+            end
+        end
+    end
+end)
+
+addEvent("drivethru:observerStop", true)
+addEventHandler("drivethru:observerStop", resourceRoot, function(reason)
+    if source == resourceRoot and state.observer then
+        clearClientState("observer_" .. tostring(reason or "cleanup"))
+        setCameraTarget(localPlayer)
+        fadeCamera(true, 0.5)
+    end
 end)
 
 addEvent("drivethru:cutscenePrepare", true)
@@ -2126,8 +2385,12 @@ addEventHandler("onClientElementStreamIn", root, function()
         return
     end
     if getElementData(source, DRIVETHRU.missionActorData) == true then
-        applyActorPolicies(source)
-        if getElementData(source, DRIVETHRU.actorRoleData) == "grove_support" then
+        if state.observer then
+            applyObserverPresentationPolicy(source)
+        else
+            applyActorPolicies(source)
+        end
+        if not state.observer and getElementData(source, DRIVETHRU.actorRoleData) == "grove_support" then
             tryStartSupportChat()
         end
     elseif getElementData(source, DRIVETHRU.vehicleData) == true or type(getElementData(source, DRIVETHRU.vehicleRoleData)) == "string" then
@@ -2136,6 +2399,13 @@ addEventHandler("onClientElementStreamIn", root, function()
 end)
 
 addEventHandler("onClientPedWeaponFire", root, function(weapon, ammo, ammoInClip, hitX, hitY, hitZ, hitElement)
+    if state.active and isPresentationActor(source) then
+        local shot = state.presentationShots[source] or {count = 0}
+        shot.count = shot.count + 1
+        shot.weapon = weapon
+        shot.hit = describePresentationTarget(hitElement)
+        state.presentationShots[source] = shot
+    end
     local trace = state.damageTrace
     local name = trace and damageTraceActorName(source) or nil
     if not trace or not name then
@@ -2199,6 +2469,7 @@ addEventHandler("onClientPreRender", root, function()
     if not state.active then
         return
     end
+    samplePresentationDiagnostics()
     local scene = state.cutscene
     if scene and scene.startedAt and not scene.skipRequested and hasFileCutsceneLease(scene) then
         local ok, pressed = pcall(isFileCutsceneSkipInputPressed, scene.token)

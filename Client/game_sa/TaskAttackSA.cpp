@@ -14,7 +14,35 @@
 #include "CAnimBlendAssociationSA.h"
 #include "CAnimBlendHierarchySA.h"
 #include "CEntitySA.h"
+#include "CGameSA.h"
 #include "CPedSA.h"
+
+extern CGameSA* pGame;
+
+namespace
+{
+    constexpr unsigned char MAX_DRIVEBY_STYLE = 8;
+
+    bool ResolvePresentationTarget(CEntity* targetEntity, const CVector& coordinateTarget, CVector& resolvedTarget)
+    {
+        if (!targetEntity)
+        {
+            resolvedTarget = coordinateTarget;
+            return std::isfinite(resolvedTarget.fX) && std::isfinite(resolvedTarget.fY) && std::isfinite(resolvedTarget.fZ);
+        }
+
+        const auto* target = reinterpret_cast<const CEntitySAInterface*>(targetEntity);
+        if (target->nType == ENTITY_TYPE_PED)
+        {
+            SClientEntity<CPedSA>* pedEntity = pGame->GetPools()->GetPed(reinterpret_cast<DWORD*>(targetEntity));
+            if (pedEntity && pedEntity->pEntity && pedEntity->pEntity->GetBonePosition(BONE_SPINE1, &resolvedTarget))
+                return true;
+        }
+
+        resolvedTarget = target->matrix ? target->matrix->vPos : target->m_transform.m_translate;
+        return std::isfinite(resolvedTarget.fX) && std::isfinite(resolvedTarget.fY) && std::isfinite(resolvedTarget.fZ);
+    }
+}
 
 CTaskComplexKillPedOnFootSA::CTaskComplexKillPedOnFootSA(CPed* pTarget)
 {
@@ -74,6 +102,39 @@ void CTaskSimpleGangDriveBySA::SetFromScriptCommand(bool bFromScriptCommand)
     // Opcode 0713 writes this byte after construction, before routing the task
     // through GTA's scripted-event path. Preserve that native distinction.
     static_cast<CTaskSimpleGangDriveBySAInterface*>(GetInterface())->m_bFromScriptCommand = bFromScriptCommand;
+}
+
+bool CTaskSimpleGangDriveBySA::GetPresentation(CVector& vecTarget, float& fAbortRange, unsigned char& ucFrequencyPercentage, unsigned char& ucDriveByStyle,
+                                               bool& bSeatRHS)
+{
+    if (!IsValid())
+        return false;
+
+    const auto* task = static_cast<const CTaskSimpleGangDriveBySAInterface*>(GetInterface());
+    if (!ResolvePresentationTarget(task->m_pTargetEntity, task->m_vecCoords, vecTarget))
+        return false;
+
+    fAbortRange = task->m_fAbortRange;
+    ucFrequencyPercentage = static_cast<unsigned char>(task->m_nFrequencyPercentage);
+    ucDriveByStyle = static_cast<unsigned char>(task->m_nDrivebyStyle);
+    bSeatRHS = task->m_bSeatRHS;
+    // GTA only defines drive-by styles 0..8. Do not export corrupt native task
+    // state into a presentation packet that another client would construct.
+    return std::isfinite(vecTarget.fX) && std::isfinite(vecTarget.fY) && std::isfinite(vecTarget.fZ) && std::isfinite(fAbortRange) && fAbortRange >= 0.0f &&
+           ucFrequencyPercentage <= 100 && ucDriveByStyle <= MAX_DRIVEBY_STYLE;
+}
+
+void CTaskSimpleGangDriveBySA::SetPresentationTarget(const CVector& vecTarget)
+{
+    if (!IsValid())
+        return;
+
+    auto* task = static_cast<CTaskSimpleGangDriveBySAInterface*>(GetInterface());
+    // Presentation clones deliberately use a coordinate rather than retaining
+    // another client's native entity pointer. Updating that coordinate in
+    // place keeps a moving target smooth without restarting the drive-by task.
+    task->m_pTargetEntity = nullptr;
+    task->m_vecCoords = vecTarget;
 }
 
 CTaskSimpleUseGunSA::CTaskSimpleUseGunSA(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength, unsigned char bAimImmediate)
@@ -394,12 +455,37 @@ short CTaskSimpleUseGunSA::GetBurstLength()
     return static_cast<const CTaskSimpleUseGunSAInterface*>(GetInterface())->m_nBurstLength;
 }
 
-CVector CTaskSimpleUseGunSA::GetTarget()
+bool CTaskSimpleUseGunSA::GetPresentationTarget(CVector& vecTarget)
 {
     if (!IsValid())
-        return {};
+        return false;
 
-    return static_cast<const CTaskSimpleUseGunSAInterface*>(GetInterface())->m_vecCoords;
+    const auto* task = static_cast<const CTaskSimpleUseGunSAInterface*>(GetInterface());
+    return ResolvePresentationTarget(task->m_pTargetEntity, task->m_vecCoords, vecTarget);
+}
+
+bool CTaskSimpleUseGunSA::IsPresentationFiringLeftHand() const
+{
+    if (!GetInterface())
+        return false;
+
+    const unsigned char fireThisFrame = static_cast<const CTaskSimpleUseGunSAInterface*>(GetInterface())->m_nFireGunThisFrame;
+    // Dual-wield UseGun fires the right hand first and clears bit zero before
+    // entering CWeapon::Fire for the left hand.
+    return !(fireThisFrame & 0x1) && (fireThisFrame & 0x2);
+}
+
+void CTaskSimpleUseGunSA::SetPresentationTarget(const CVector& vecTarget)
+{
+    if (!IsValid())
+        return;
+
+    auto* task = static_cast<CTaskSimpleUseGunSAInterface*>(GetInterface());
+    // Only coordinate-backed presentation clones may use this shortcut. A
+    // native entity target owns a GTA reference that must not be severed by a
+    // viewer-side smoothing update.
+    if (!task->m_pTargetEntity)
+        task->m_vecCoords = vecTarget;
 }
 
 bool CTaskSimpleUseGunSA::GetIsReloading()
@@ -570,6 +656,19 @@ CTaskSimpleGunControlSA::CTaskSimpleGunControlSA(CEntity* pTargetEntity, const C
         call    dwFunc
     }
     // clang-format on
+}
+
+void CTaskSimpleGunControlSA::SetPresentationTarget(const CVector& vecTarget)
+{
+    if (!IsValid())
+        return;
+
+    auto* task = static_cast<CTaskSimpleGunControlSAInterface*>(GetInterface());
+    // Presentation tasks are constructed with a coordinate and no native
+    // target reference. Keep that contract explicit so this helper can never
+    // mutate ownership of an authoritative GTA target.
+    if (!task->m_pTargetEntity)
+        task->m_vecTarget = vecTarget;
 }
 
 CTaskSimpleFightSA::CTaskSimpleFightSA(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod)

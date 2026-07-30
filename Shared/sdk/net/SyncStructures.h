@@ -1084,10 +1084,13 @@ struct SNativeTaskWeaponPresentationSync : public ISyncStructure
         BITCOUNT = 2
     };
 
+    static constexpr unsigned char MAX_DRIVEBY_STYLE = 8;
+
     enum eMode : unsigned int
     {
         NONE = 0,
         FIRE,
+        DRIVEBY,
     };
 
     bool Read(NetBitStreamInterface& bitStream)
@@ -1097,7 +1100,7 @@ struct SNativeTaskWeaponPresentationSync : public ISyncStructure
             return false;
         if (data.uiMode == NONE)
             return true;
-        if (data.uiMode != FIRE)
+        if (data.uiMode != FIRE && data.uiMode != DRIVEBY)
             return false;
 
         if (!bitStream.Read(data.ucWeaponType) || !bitStream.Read(data.usBurstLength) || !bitStream.Read(data.ucShootingRate) ||
@@ -1106,8 +1109,23 @@ struct SNativeTaskWeaponPresentationSync : public ISyncStructure
             return false;
         }
 
-        return data.usBurstLength >= 1 && data.usBurstLength <= 32767 && std::isfinite(data.vecTarget.fX) && std::isfinite(data.vecTarget.fY) &&
-               std::isfinite(data.vecTarget.fZ);
+        if (data.usBurstLength < 1 || data.usBurstLength > 32767 || !std::isfinite(data.vecTarget.fX) || !std::isfinite(data.vecTarget.fY) ||
+            !std::isfinite(data.vecTarget.fZ))
+        {
+            return false;
+        }
+
+        if (data.uiMode == DRIVEBY)
+        {
+            if (!bitStream.Read(data.fAbortRange) || !bitStream.Read(data.ucFrequencyPercentage) || !bitStream.Read(data.ucDriveByStyle) ||
+                !bitStream.ReadBit(data.bSeatRHS))
+            {
+                return false;
+            }
+            return std::isfinite(data.fAbortRange) && data.fAbortRange >= 0.0f && data.fAbortRange <= 100000.0f && data.ucFrequencyPercentage <= 100 &&
+                   data.ucDriveByStyle <= MAX_DRIVEBY_STYLE;
+        }
+        return true;
     }
 
     void Write(NetBitStreamInterface& bitStream) const
@@ -1122,6 +1140,13 @@ struct SNativeTaskWeaponPresentationSync : public ISyncStructure
         bitStream.Write(data.vecTarget.fX);
         bitStream.Write(data.vecTarget.fY);
         bitStream.Write(data.vecTarget.fZ);
+        if (data.uiMode == DRIVEBY)
+        {
+            bitStream.Write(data.fAbortRange);
+            bitStream.Write(data.ucFrequencyPercentage);
+            bitStream.Write(data.ucDriveByStyle);
+            bitStream.WriteBit(data.bSeatRHS);
+        }
     }
 
     struct
@@ -1131,6 +1156,10 @@ struct SNativeTaskWeaponPresentationSync : public ISyncStructure
         unsigned short usBurstLength{1};
         unsigned char  ucShootingRate{};
         CVector        vecTarget{};
+        float          fAbortRange{};
+        unsigned char  ucFrequencyPercentage{};
+        unsigned char  ucDriveByStyle{};
+        bool           bSeatRHS{};
     } data{};
 };
 
@@ -1158,11 +1187,12 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
         if (data.uiMode == NONE)
             return true;
         if (data.uiMode != ANIMATION || !bitStream.Read(data.usAnimGroup) || !bitStream.Read(data.usAnimId) || !bitStream.Read(data.fProgress) ||
-            !bitStream.Read(data.fSpeed) || !bitStream.Read(data.fBlendAmount))
+            !bitStream.Read(data.fSpeed) || !bitStream.Read(data.fBlendAmount) || !bitStream.Read(data.fHeading))
             return false;
 
         return std::isfinite(data.fProgress) && data.fProgress >= 0.0f && data.fProgress <= 1.0f && std::isfinite(data.fSpeed) && data.fSpeed > 0.0f &&
-               data.fSpeed <= 16.0f && std::isfinite(data.fBlendAmount) && data.fBlendAmount >= 0.0f && data.fBlendAmount <= 1.0f;
+               data.fSpeed <= 16.0f && std::isfinite(data.fBlendAmount) && data.fBlendAmount >= 0.0f && data.fBlendAmount <= 1.0f &&
+               std::isfinite(data.fHeading) && data.fHeading >= -6.2831855f && data.fHeading <= 6.2831855f;
     }
 
     void Write(NetBitStreamInterface& bitStream) const
@@ -1176,6 +1206,7 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
         bitStream.Write(data.fProgress);
         bitStream.Write(data.fSpeed);
         bitStream.Write(data.fBlendAmount);
+        bitStream.Write(data.fHeading);
     }
 
     struct
@@ -1186,6 +1217,7 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
         float          fProgress{};
         float          fSpeed{};
         float          fBlendAmount{};
+        float          fHeading{};
     } data{};
 };
 
