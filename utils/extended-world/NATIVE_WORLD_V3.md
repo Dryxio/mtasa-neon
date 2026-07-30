@@ -123,7 +123,8 @@ mutating them. `build_native_world_v3.py` applies only closed, reported
 conversions:
 
 - the single pinned Vice City RenderWare 3.4 DFF is deserialized and serialized
-  through the pinned local librw null backend;
+  through the pinned local Southland-FR/librw null backend at
+  `e91821e3caefe701b9d047ceb7d6428cf291b3b9`;
 - two pinned malformed Carcer 2DFX extensions are reduced to empty extensions
   because their claimed 12 effects have no bytes before the next clump child;
 - all 57 COL2 records are validated, converted to COL3, and revalidated;
@@ -156,6 +157,10 @@ change fails closed and requires a reviewed new conversion vector.
 Build the local librw converter:
 
 ```sh
+# Select the documented master baseline before building and running the audit.
+test "$(git -C ../librw rev-parse HEAD)" = \
+  "e91821e3caefe701b9d047ceb7d6428cf291b3b9"
+
 clang++ -std=c++17 \
   -I../librw -I../librw/src -DRW_NULL \
   utils/extended-world/librw_dff_upgrade.cpp \
