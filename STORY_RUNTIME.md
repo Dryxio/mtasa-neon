@@ -114,6 +114,22 @@ Non-syncers should not reconstruct the AI task. They should apply a generation-s
 
 This presentation layer should describe reusable visual channels rather than individual missions or opcodes. Reliable ordered baselines must cover start, stop, stream-in, join-in-progress, and syncer migration; sequenced snapshots may carry continuous pose and animation progress. A new syncer reconstructs the semantic task from the server-owned descriptor and last accepted checkpoint instead of copying raw GTA task memory.
 
+### Transversal fix policy
+
+In this project, a **transversal fix** is a correction made at the lowest reusable layer that owns a synchronization mismatch, so every mission and resource using the same task family or presentation channel inherits the result. Typical owners are the GTA task wrapper, the presentation snapshot, packet serialization, ped-sync application, synchronized animation handling, or the generic task runtime. Mission coordinates, timings, dialogue, and stage policy are not transversal behavior.
+
+A native task family is not complete when it works only on its syncer. Its first integration and every material extension must compare the syncer and at least one non-syncer for all visible channels the task can affect: locomotion and speed, animation and phase, body and camera heading, aim, weapon pose, sound, particles and other FX, vehicle transition, and cleanup. The expected result is perceptual equivalence within the limits of ordinary network interpolation, not identical private `CTask` trees.
+
+When that comparison exposes a mismatch:
+
+1. Identify the reusable semantic channel that is missing or being overwritten.
+2. Correct that channel generically before adding a mission-local replay or animation substitute.
+3. Keep the non-syncer presentation-only. It must not create AI decisions, damage, projectiles, tag progress, seat changes, completion reports, or any other authoritative side effect.
+4. Cover start, update, stop, replacement, stream-in, stream-out, join-in-progress, syncer migration, entity destruction, and resource shutdown as applicable to the channel.
+5. Add protocol or lifecycle tests and retain one mission or isolated resource as runtime evidence that the fix propagates through a real consumer.
+
+A mission-specific correction is acceptable only when the mismatched value is genuinely authored by that mission, such as an explicit heading, camera shot, coordinate, or timing. Document why the generic task contract cannot own it. Convenience, schedule pressure, or a single passing scene is not sufficient justification.
+
 ## SCM runtime responsibilities
 
 The story runtime should provide the parts that are actually script semantics:
@@ -589,6 +605,8 @@ Validation should proceed at three levels:
 
 Single-client tests can prove native task behavior, server authority, cleanup, packet encoding, and local reconstruction. Non-syncer presentation, live syncer handoff, join-in-progress, and cross-client animation agreement require at least two connected GTA clients. They do not require two human testers: an automated observer client and comparison harness may remain passive, with human visual review reserved for multiplayer checkpoints.
 
+For every new task family, the two-client checkpoint must record which presentation channels apply and compare them explicitly. A task cannot be marked complete while the non-syncer still slides, uses the wrong movement state or rotation, omits an animation, sound, or FX, or retains stale presentation after the syncer stops. Prefer one transversal engine correction that covers every consumer of the channel. If the implementation instead changes a mission resource, its evidence must explain why the value is mission-authored and cannot safely be generalized.
+
 The Windows VM remains the runtime target: source changes are made in the canonical macOS tree, synchronized into the VM-local build copy, built as `Release|Win32` for the client and `Release|x64` for the server where applicable, then exercised against the local server.
 
 ## Non-goals
@@ -602,4 +620,4 @@ The Windows VM remains the runtime target: source changes are made in the canoni
 
 ## Change documentation
 
-Commits for this project should describe the prompt or goal, the gameplay or engine motivation, the architectural reasoning, the affected task/opcode contract, and exactly how the change was tested. A green build alone is not sufficient evidence for networking or lifecycle changes.
+Commits for this project should describe the prompt or goal, the gameplay or engine motivation, the architectural reasoning, the affected task/opcode contract, and exactly how the change was tested. They should also state the transversal scope of a synchronization fix, or justify why a correction is intentionally mission-specific. A green build alone is not sufficient evidence for networking or lifecycle changes.

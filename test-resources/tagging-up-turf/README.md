@@ -12,6 +12,8 @@ The 30 July 2026 two-player full-start run validated native `SWEET1A` startup an
 
 The resource emits `[tagging-up-turf][presentation]` diagnostics on task-state changes and once per second while the mission is active. Each client records its local view of CJ, Sweet, Smoke, and the two Flats with an explicit `syncer`/`non-syncer` role, movement state, animation, simplest native task, and the decisive task slots. The same bounded samples are mirrored into the server log with the server's ownership result so `console.log`, `console-cl2.log`, and `server.log` can be correlated after one two-client run.
 
+The locomotion, weapon-presentation, synchronized-animation rotation, and managed file-cutscene corrections validated here are transversal fixes. They live in reusable engine and network contracts rather than in SWEET1-specific animation playback, so future missions and resources using the same channels inherit them. Each later Tagging Up Turf task family must still be checked on both the syncer and non-syncer. Any mismatch should first be traced to a reusable presentation channel and fixed there; mission-local handling is reserved for values genuinely authored by this mission.
+
 ## Play
 
 1. Start the resource: `start tagging-up-turf`.

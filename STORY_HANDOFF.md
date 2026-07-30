@@ -176,6 +176,14 @@ After the test, correlate visual feedback with client and server logs. A PASS is
 valid only when all required predicates agree. If a metric was capable of a
 false positive, invalidate that result, repair the harness, and repeat it.
 
+Every new native task family also requires a two-client presentation matrix.
+List each applicable visible channel, including locomotion, movement speed,
+animation and phase, rotation, aim, weapon pose, sound, FX, vehicle transition,
+and cleanup. Record the syncer and non-syncer observation separately. A task
+that is correct only on its syncer has not passed its multiplayer checkpoint.
+Differences should be corrected through a transversal engine or network layer
+whenever that behavior belongs to the reusable task contract.
+
 ### Parity completion gate
 
 Do not write `1:1`, `complete`, or `no missing behavior` unless all of the
@@ -230,6 +238,8 @@ This keeps exposed APIs, completed slices, pending substitutes, test evidence, a
 - A synchronized mission must not rely on a client-local actor policy being coincidentally present. Replicate desired policy to every potential syncer and restore state when relinquishing a surviving entity.
 - Treat native task acceptance, task observation, and authoritative world-state completion as separate facts. Harnesses should prove the relevant combination rather than passing on a single Lua return value.
 - Do not postpone non-syncer behavior until every mission is ported. Validate each new task family first on its native syncer, then with at least two connected clients before multiplying it across mission resources. A second connected client is mandatory for this evidence, but a second human is not; prefer a passive automated observer and reserve human visual checks for checkpoints.
+- Treat syncer and non-syncer presentation agreement as a completion gate for every new task family. Ordinary interpolation may differ, but sliding, wrong movement state or rotation, missing animation, sound or FX, and stale stop state are unresolved defects.
+- Prefer transversal fixes at the lowest reusable owner of a mismatch, such as the task wrapper, presentation schema, packet relay, animation transform handling, or generic runtime. Do not patch one mission when the same correction can propagate automatically to other tasks, missions, and resources. A mission-specific exception must identify the genuinely mission-authored value and explain why the generic contract cannot own it.
 - Preserve GTA constructor, vtable, destructor, and layout semantics where possible. Prefer calling verified original engine routines over copying incomplete reconstructed C++.
 - Keep generic engine behavior in reusable Neon APIs. Mission-specific coordinates, sequence order, dialogue choices, co-op conditions, and failure policy belong in the story resource/runtime.
 - Treat every SCM opcode as a semantic adapter, not as a raw argument copy into an MTA function. Audit and document handler-side conversions such as `009A CREATE_CHAR` adding `1.0` to script Z, then assert the converted native state before dependent tasks begin.
