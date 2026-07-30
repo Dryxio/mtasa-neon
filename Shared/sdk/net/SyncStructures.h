@@ -389,8 +389,7 @@ struct SLowPrecisionPositionSync : public ISyncStructure
         unsigned short usZ;
 
         if (!bitStream.Read(usX) || !bitStream.Read(usY) ||
-            (bitStream.Can(eBitStreamVersion::ExtendedWorldLowPrecisionZ) ? !bitStream.Read(usZ)
-                                                                          : !bitStream.ReadBits(reinterpret_cast<char*>(&usZ), 11)))
+            (bitStream.Can(eBitStreamVersion::ExtendedWorldLowPrecisionZ) ? !bitStream.Read(usZ) : !bitStream.ReadBits(reinterpret_cast<char*>(&usZ), 11)))
             return false;
         const float positionBound =
             bitStream.Can(eBitStreamVersion::ExtendedWorldPositions) ? LOW_PRECISION_POSITION_BOUND : LEGACY_LOW_PRECISION_POSITION_BOUND;
@@ -406,18 +405,16 @@ struct SLowPrecisionPositionSync : public ISyncStructure
     {
         const float positionBound =
             bitStream.Can(eBitStreamVersion::ExtendedWorldPositions) ? LOW_PRECISION_POSITION_BOUND : LEGACY_LOW_PRECISION_POSITION_BOUND;
-        float fX = SharedUtil::Clamp(-positionBound, data.vecPosition.fX, positionBound);
-        float fY = SharedUtil::Clamp(-positionBound, data.vecPosition.fY, positionBound);
+        float      fX = SharedUtil::Clamp(-positionBound, data.vecPosition.fX, positionBound);
+        float      fY = SharedUtil::Clamp(-positionBound, data.vecPosition.fY, positionBound);
         const bool extendedZ = bitStream.Can(eBitStreamVersion::ExtendedWorldLowPrecisionZ);
         float      fZ = extendedZ ? SharedUtil::Clamp(-LOW_PRECISION_POSITION_BOUND, data.vecPosition.fZ, LOW_PRECISION_POSITION_BOUND)
                                   : SharedUtil::Clamp(-110.0f, data.vecPosition.fZ, 2048.0f - 110.0f);
 
         unsigned short usX = static_cast<unsigned short>(((fX + positionBound) / (positionBound * 2.0f)) * 65535.0f);
         unsigned short usY = static_cast<unsigned short>(((fY + positionBound) / (positionBound * 2.0f)) * 65535.0f);
-        unsigned short usZ = extendedZ ? static_cast<unsigned short>(((fZ + LOW_PRECISION_POSITION_BOUND) /
-                                                                       (LOW_PRECISION_POSITION_BOUND * 2.0f)) *
-                                                                      65535.0f)
-                                      : static_cast<unsigned short>(fZ + 110.0f);
+        unsigned short usZ = extendedZ ? static_cast<unsigned short>(((fZ + LOW_PRECISION_POSITION_BOUND) / (LOW_PRECISION_POSITION_BOUND * 2.0f)) * 65535.0f)
+                                       : static_cast<unsigned short>(fZ + 110.0f);
 
         bitStream.Write(usX);
         bitStream.Write(usY);
@@ -1134,6 +1131,61 @@ struct SNativeTaskWeaponPresentationSync : public ISyncStructure
         unsigned short usBurstLength{1};
         unsigned char  ucShootingRate{};
         CVector        vecTarget{};
+    } data{};
+};
+
+// Native AI remains authoritative on the ped syncer. Remote clients receive
+// only the animation association already selected by GTA, never the task,
+// target, or decisions that could produce viewer-side gameplay.
+struct SNativeTaskAnimationPresentationSync : public ISyncStructure
+{
+    enum
+    {
+        BITCOUNT = 1
+    };
+
+    enum eMode : unsigned int
+    {
+        NONE = 0,
+        ANIMATION,
+    };
+
+    bool Read(NetBitStreamInterface& bitStream)
+    {
+        data = {};
+        if (!bitStream.ReadBits(reinterpret_cast<char*>(&data.uiMode), BITCOUNT))
+            return false;
+        if (data.uiMode == NONE)
+            return true;
+        if (data.uiMode != ANIMATION || !bitStream.Read(data.usAnimGroup) || !bitStream.Read(data.usAnimId) || !bitStream.Read(data.fProgress) ||
+            !bitStream.Read(data.fSpeed) || !bitStream.Read(data.fBlendAmount))
+            return false;
+
+        return std::isfinite(data.fProgress) && data.fProgress >= 0.0f && data.fProgress <= 1.0f && std::isfinite(data.fSpeed) && data.fSpeed > 0.0f &&
+               data.fSpeed <= 16.0f && std::isfinite(data.fBlendAmount) && data.fBlendAmount >= 0.0f && data.fBlendAmount <= 1.0f;
+    }
+
+    void Write(NetBitStreamInterface& bitStream) const
+    {
+        bitStream.WriteBits(reinterpret_cast<const char*>(&data.uiMode), BITCOUNT);
+        if (data.uiMode == NONE)
+            return;
+
+        bitStream.Write(data.usAnimGroup);
+        bitStream.Write(data.usAnimId);
+        bitStream.Write(data.fProgress);
+        bitStream.Write(data.fSpeed);
+        bitStream.Write(data.fBlendAmount);
+    }
+
+    struct
+    {
+        unsigned int   uiMode{};
+        unsigned short usAnimGroup{};
+        unsigned short usAnimId{};
+        float          fProgress{};
+        float          fSpeed{};
+        float          fBlendAmount{};
     } data{};
 };
 

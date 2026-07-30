@@ -281,6 +281,7 @@ void CPedRPCs::SetPedAnimation(CClientEntity* pSource, NetBitStreamInterface& bi
                         if (!bUpdatePosition)
                             pPed->ResetInterpolation();
                         pPed->SetNativeTaskWeaponPresentation({}, "synced_animation");
+                        pPed->SetNativeTaskAnimationPresentation({}, "synced_animation");
                         pPed->SetTaskToBeRestoredOnAnimEnd(bTaskToBeRestoredOnAnimEnd);
                         pPed->SetTaskTypeToBeRestoredOnAnimEnd((eTaskType)TASK_SIMPLE_DUCK);
 

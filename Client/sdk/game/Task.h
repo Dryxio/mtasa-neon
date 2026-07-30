@@ -35,9 +35,15 @@ public:
     virtual const char*                   GetTaskName() = 0;
     virtual class CTaskSAInterface*       GetInterface() noexcept = 0;
     virtual const class CTaskSAInterface* GetInterface() const noexcept = 0;
-    virtual bool                          IsValid() = 0;
-    virtual void                          SetAsPedTask(CPed* pPed, const int iTaskPriority, const bool bForceNewTask = false) = 0;
-    virtual void                          SetAsSecondaryPedTask(CPed* pPed, const int iType) = 0;
+    // Presentation-only observers can mirror a task-owned animation without
+    // constructing the task or inheriting any of its gameplay authority.
+    virtual bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const
+    {
+        return false;
+    }
+    virtual bool IsValid() = 0;
+    virtual void SetAsPedTask(CPed* pPed, const int iTaskPriority, const bool bForceNewTask = false) = 0;
+    virtual void SetAsSecondaryPedTask(CPed* pPed, const int iType) = 0;
 
     virtual void Destroy() = 0;
     virtual void DestroyJustThis() = 0;

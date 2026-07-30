@@ -1338,6 +1338,8 @@ void CClientPed::SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresenta
 
     m_nativeTaskWeaponPresentation = presentation;
     m_nativeTaskWeaponPresentationReceivedAt = CClientTime::GetTime();
+    if (presentation.data.uiMode != SNativeTaskWeaponPresentationSync::NONE)
+        ClearNativeTaskAnimationPresentation("weapon_presentation");
 
     if (changed && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
     {
@@ -1425,6 +1427,152 @@ void CClientPed::UpdateNativeTaskWeaponPresentation()
                                       m_nativeTaskWeaponPresentation.data.ucWeaponType, m_nativeTaskWeaponPresentation.data.usBurstLength,
                                       m_nativeTaskWeaponPresentation.data.ucShootingRate, target.fX, target.fY, target.fZ);
     }
+}
+
+SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentation()
+{
+    SNativeTaskAnimationPresentationSync presentation;
+    if (!m_pPlayerPed || GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDead() || HasSyncedAnim())
+        return presentation;
+
+    CTask* presentationTask = m_pPlayerPed->GetPedIntelligence()->GetFightTask();
+    if (!presentationTask && m_pTaskManager)
+    {
+        CTask* simplestTask = m_pTaskManager->GetSimplestActiveTask();
+        if (simplestTask && simplestTask->GetTaskType() == TASK_SIMPLE_CHAT)
+            presentationTask = simplestTask;
+    }
+
+    if (!presentationTask || !presentationTask->GetPresentationAnimation(presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress,
+                                                                         presentation.data.fSpeed, presentation.data.fBlendAmount))
+    {
+        return presentation;
+    }
+
+    presentation.data.uiMode = SNativeTaskAnimationPresentationSync::ANIMATION;
+    return presentation;
+}
+
+void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source)
+{
+    const bool shapeChanged = presentation.data.uiMode != m_nativeTaskAnimationPresentation.data.uiMode ||
+                              presentation.data.usAnimGroup != m_nativeTaskAnimationPresentation.data.usAnimGroup ||
+                              presentation.data.usAnimId != m_nativeTaskAnimationPresentation.data.usAnimId;
+    // Native tasks can loop or restart while reusing the same animation
+    // association. Rewinding that association in place preserves both cases;
+    // fading and recreating it at every progress wrap causes a visible pop.
+    const bool changed = shapeChanged || presentation.data.fProgress != m_nativeTaskAnimationPresentation.data.fProgress ||
+                         presentation.data.fSpeed != m_nativeTaskAnimationPresentation.data.fSpeed ||
+                         presentation.data.fBlendAmount != m_nativeTaskAnimationPresentation.data.fBlendAmount;
+    if (shapeChanged && m_nativeTaskAnimationPresentationActive)
+        ClearNativeTaskAnimationPresentation("sample_changed");
+
+    m_nativeTaskAnimationPresentation = presentation;
+    m_nativeTaskAnimationPresentationReceivedAt = CClientTime::GetTime();
+    if (presentation.data.uiMode != SNativeTaskAnimationPresentationSync::NONE)
+        ClearNativeTaskWeaponPresentation("animation_presentation");
+
+    if (changed && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    {
+        g_pCore->GetConsole()->Printf(
+            "[native-task-animation][receive] profile=%s pid=%u ped=%u source=%s mode=%u group=%u anim=%u progress=%.3f speed=%.3f blend=%.3f",
+            g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(), source ? source : "unknown", presentation.data.uiMode,
+            presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress, presentation.data.fSpeed, presentation.data.fBlendAmount);
+    }
+
+    if (presentation.data.uiMode == SNativeTaskAnimationPresentationSync::NONE || m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim())
+        ClearNativeTaskAnimationPresentation("inactive");
+}
+
+void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
+{
+    if (m_nativeTaskAnimationPresentationActive && m_pPlayerPed)
+    {
+        auto animation = g_pGame->GetAnimManager()->RpAnimBlendClumpGetAssociation(m_pPlayerPed->GetRpClump(), m_nativeTaskAnimationPresentationAppliedAnimId);
+        if (animation && animation->GetInterface() == m_nativeTaskAnimationPresentationAppliedAssociation &&
+            static_cast<unsigned short>(animation->GetAnimGroup()) == m_nativeTaskAnimationPresentationAppliedGroup)
+        {
+            animation->SetBlendDelta(-8.0f);
+        }
+    }
+
+    if (m_nativeTaskAnimationPresentationActive && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    {
+        g_pCore->GetConsole()->Printf("[native-task-animation][clear] profile=%s pid=%u ped=%u reason=%s", g_pCore->IsSecondaryClient() ? "cl2" : "primary",
+                                      GetCurrentProcessId(), GetID().Value(), reason ? reason : "unknown");
+    }
+
+    m_nativeTaskAnimationPresentationActive = false;
+    m_nativeTaskAnimationPresentationAppliedGroup = 0;
+    m_nativeTaskAnimationPresentationAppliedAnimId = 0;
+    m_nativeTaskAnimationPresentationAppliedAssociation = nullptr;
+    m_nativeTaskAnimationPresentation = {};
+}
+
+void CClientPed::UpdateNativeTaskAnimationPresentation()
+{
+    const unsigned long presentationLease = std::max(500UL, static_cast<unsigned long>(g_TickRateSettings.iPedSync) * 3);
+    const unsigned long sampleAge = CClientTime::GetTime() - m_nativeTaskAnimationPresentationReceivedAt;
+    if (m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim() || GetRealOccupiedVehicle() || IsDead() ||
+        m_nativeTaskAnimationPresentation.data.uiMode == SNativeTaskAnimationPresentationSync::NONE || sampleAge > presentationLease)
+    {
+        ClearNativeTaskAnimationPresentation(sampleAge > presentationLease ? "lease_expired" : "invalid_state");
+        return;
+    }
+
+    if (m_nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::ANIMATION ||
+        !std::isfinite(m_nativeTaskAnimationPresentation.data.fProgress) || m_nativeTaskAnimationPresentation.data.fProgress < 0.0f ||
+        m_nativeTaskAnimationPresentation.data.fProgress > 1.0f || !std::isfinite(m_nativeTaskAnimationPresentation.data.fSpeed) ||
+        m_nativeTaskAnimationPresentation.data.fSpeed <= 0.0f || m_nativeTaskAnimationPresentation.data.fSpeed > 16.0f || !m_pPlayerPed ||
+        !std::isfinite(m_nativeTaskAnimationPresentation.data.fBlendAmount) || m_nativeTaskAnimationPresentation.data.fBlendAmount < 0.0f ||
+        m_nativeTaskAnimationPresentation.data.fBlendAmount > 1.0f ||
+        !g_pGame->GetAnimManager()->IsValidGroup(m_nativeTaskAnimationPresentation.data.usAnimGroup) ||
+        !g_pGame->GetAnimManager()->IsValidAnim(m_nativeTaskAnimationPresentation.data.usAnimGroup, m_nativeTaskAnimationPresentation.data.usAnimId))
+    {
+        ClearNativeTaskAnimationPresentation("invalid_sample");
+        return;
+    }
+
+    std::unique_ptr<CAnimBlendAssociation> animation;
+    if (m_nativeTaskAnimationPresentationActive)
+    {
+        animation = g_pGame->GetAnimManager()->RpAnimBlendClumpGetAssociation(m_pPlayerPed->GetRpClump(), m_nativeTaskAnimationPresentationAppliedAnimId);
+        if (!animation || animation->GetInterface() != m_nativeTaskAnimationPresentationAppliedAssociation ||
+            static_cast<unsigned short>(animation->GetAnimGroup()) != m_nativeTaskAnimationPresentationAppliedGroup)
+        {
+            m_nativeTaskAnimationPresentationActive = false;
+        }
+    }
+
+    if (!m_nativeTaskAnimationPresentationActive)
+    {
+        animation = BlendAnimation(m_nativeTaskAnimationPresentation.data.usAnimGroup, m_nativeTaskAnimationPresentation.data.usAnimId, 8.0f);
+        if (!animation)
+        {
+            ClearNativeTaskAnimationPresentation("blend_refused");
+            return;
+        }
+
+        m_nativeTaskAnimationPresentationAppliedGroup = m_nativeTaskAnimationPresentation.data.usAnimGroup;
+        m_nativeTaskAnimationPresentationAppliedAnimId = m_nativeTaskAnimationPresentation.data.usAnimId;
+        m_nativeTaskAnimationPresentationAppliedAssociation = animation->GetInterface();
+        m_nativeTaskAnimationPresentationActive = true;
+        if (IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+        {
+            g_pCore->GetConsole()->Printf("[native-task-animation][apply] profile=%s pid=%u ped=%u group=%u anim=%u",
+                                          g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(),
+                                          m_nativeTaskAnimationPresentation.data.usAnimGroup, m_nativeTaskAnimationPresentation.data.usAnimId);
+        }
+    }
+
+    const float animationLength = animation->GetLength();
+    const float compensatedProgress = animationLength > 0.0f
+                                          ? m_nativeTaskAnimationPresentation.data.fProgress +
+                                                static_cast<float>(sampleAge) / 1000.0f * m_nativeTaskAnimationPresentation.data.fSpeed / animationLength
+                                          : m_nativeTaskAnimationPresentation.data.fProgress;
+    animation->SetCurrentProgress(std::clamp(compensatedProgress, 0.0f, 1.0f));
+    animation->SetCurrentSpeed(m_nativeTaskAnimationPresentation.data.fSpeed);
+    animation->SetBlendAmount(m_nativeTaskAnimationPresentation.data.fBlendAmount);
 }
 
 void CClientPed::RemoveNativeTaskLocomotionPresentation(CControllerState& controllerState)
@@ -3345,6 +3493,7 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
             ProcessRebuildPlayer(true);
 
         UpdateNativeTaskWeaponPresentation();
+        UpdateNativeTaskAnimationPresentation();
 
         // Run any gang driveby abort deferred by SetDoingGangDriveby(false).
         if (m_bDeferredGangDrivebyAbort)
@@ -4419,6 +4568,7 @@ void CClientPed::_DestroyModel()
     // presentation task while its original GTA ped and saved shooting rate
     // still exist, so the replacement entity can accept the next sample.
     ClearNativeTaskWeaponPresentation("destroy_model");
+    ClearNativeTaskAnimationPresentation("destroy_model");
 
     // Store ped ammo
     if (GetType() == CCLIENTPED)
@@ -4815,6 +4965,7 @@ void CClientPed::StreamOut()
     {
         SetNativeTaskLocomotionPresentation({}, "stream_out");
         ClearNativeTaskWeaponPresentation("stream_out");
+        ClearNativeTaskAnimationPresentation("stream_out");
 
         // Destroy us
         _DestroyModel();
@@ -8099,6 +8250,7 @@ void CClientPed::SetSyncing(bool bIsSyncing)
     {
         SetNativeTaskLocomotionPresentation({}, "syncer_transition");
         ClearNativeTaskWeaponPresentation("syncer_transition");
+        ClearNativeTaskAnimationPresentation("syncer_transition");
     }
     m_bIsSyncing = bIsSyncing;
     ApplyNativeMissionEventProfileState();

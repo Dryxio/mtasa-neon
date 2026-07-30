@@ -11,6 +11,8 @@
 
 #include "StdInc.h"
 #include "TaskBasicSA.h"
+#include "CAnimBlendAssociationSA.h"
+#include "CAnimBlendHierarchySA.h"
 #include "CPedSA.h"
 
 CTaskComplexPartnerChatSA::CTaskComplexPartnerChatSA(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled)
@@ -134,6 +136,26 @@ CTaskSimpleRunAnimSA::CTaskSimpleRunAnimSA(const AssocGroupId animGroup, const A
         call    dwFunc
     }
     // clang-format on
+}
+
+bool CTaskSimpleRunAnimSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                    float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface());
+    const auto* association = reinterpret_cast<const CAnimBlendAssociationSAInterface*>(task->m_pAnim);
+    if (!association || !association->pAnimHierarchy || association->pAnimHierarchy->fTotalTime <= 0.0f || association->sAnimGroup < 0 ||
+        association->sAnimID < 0 || !std::isfinite(association->fCurrentTime) || !std::isfinite(association->fSpeed) || association->fSpeed <= 0.0f ||
+        !std::isfinite(association->fBlendAmount) || association->fBlendAmount <= 0.01f)
+    {
+        return false;
+    }
+
+    usAnimGroup = static_cast<unsigned short>(association->sAnimGroup);
+    usAnimId = static_cast<unsigned short>(association->sAnimID);
+    fProgress = std::clamp(association->fCurrentTime / association->pAnimHierarchy->fTotalTime, 0.0f, 1.0f);
+    fSpeed = association->fSpeed;
+    fBlendAmount = std::clamp(association->fBlendAmount, 0.0f, 1.0f);
+    return true;
 }
 
 CTaskSimpleRunNamedAnimSA::CTaskSimpleRunNamedAnimSA(const char* pAnimName, const char* pAnimGroupName, const int flags, const float fBlendDelta,

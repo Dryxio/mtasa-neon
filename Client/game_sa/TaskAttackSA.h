@@ -220,6 +220,8 @@ class CTaskSimpleFightSA : public virtual CTaskSimpleSA, public virtual CTaskSim
 public:
     CTaskSimpleFightSA() {};
     CTaskSimpleFightSA(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000);
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
 };
 
 class CTaskComplexKillPedOnFootSAInterface : public CTaskComplexSAInterface

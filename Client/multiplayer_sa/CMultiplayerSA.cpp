@@ -78,6 +78,11 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define RETURN_CTaskSimpleFight_FightHitPed_Attacker_IsPlayer  0x61CEAB
 #define RETURN_CTaskSimpleFight_FindTargetOnGround_IsPlayer    0x61D8D2
 #define RETURN_CTaskSimpleFight_MakeAbortable_IsPlayer         0x623ADE
+#define RETURN_CTaskSimpleFight_StartAnim_Init_IsPlayer        0x623C3C
+#define RETURN_CTaskSimpleFight_StartAnim_ResetMove_IsPlayer   0x623DEA
+#define RETURN_CTaskSimpleFight_StartAnim_Move_IsPlayer        0x623E2C
+#define RETURN_CTaskSimpleFight_FightStrike_Collision_IsPlayer 0x624191
+#define RETURN_CTaskSimpleFight_FightStrike_Event_IsPlayer     0x6245FD
 #define RETURN_CTaskSimpleFight_ProcessPed_Init_IsPlayer       0x629A34
 #define RETURN_CTaskSimpleFight_ProcessPed_Idle_IsPlayer       0x629BC2
 #define RETURN_CTaskSimpleFight_ProcessPed_Attack_IsPlayer     0x629C11
@@ -3806,6 +3811,11 @@ static bool IsTaskSimpleFightIsPlayerCallSite(DWORD returnAddress)
         case RETURN_CTaskSimpleFight_FightHitPed_Attacker_IsPlayer:
         case RETURN_CTaskSimpleFight_FindTargetOnGround_IsPlayer:
         case RETURN_CTaskSimpleFight_MakeAbortable_IsPlayer:
+        case RETURN_CTaskSimpleFight_StartAnim_Init_IsPlayer:
+        case RETURN_CTaskSimpleFight_StartAnim_ResetMove_IsPlayer:
+        case RETURN_CTaskSimpleFight_StartAnim_Move_IsPlayer:
+        case RETURN_CTaskSimpleFight_FightStrike_Collision_IsPlayer:
+        case RETURN_CTaskSimpleFight_FightStrike_Event_IsPlayer:
         case RETURN_CTaskSimpleFight_ProcessPed_Init_IsPlayer:
         case RETURN_CTaskSimpleFight_ProcessPed_Idle_IsPlayer:
         case RETURN_CTaskSimpleFight_ProcessPed_Attack_IsPlayer:

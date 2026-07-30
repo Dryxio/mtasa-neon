@@ -216,6 +216,11 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_SIMPLE_ANIM:
             pTaskSA = new CTaskSimpleRunAnimSA;
             break;
+        case TASK_SIMPLE_CHAT:
+            // Chat is a timed run-animation task. Keeping its concrete wrapper
+            // exposes GTA's live association to presentation-only observers.
+            pTaskSA = new CTaskSimpleRunAnimSA;
+            break;
         case TASK_SIMPLE_NAMED_ANIM:
             pTaskSA = new CTaskSimpleRunNamedAnimSA;
             break;

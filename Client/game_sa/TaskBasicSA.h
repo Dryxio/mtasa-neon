@@ -128,6 +128,8 @@ public:
     CTaskSimpleRunAnimSA() {};
     CTaskSimpleRunAnimSA(const AssocGroupId animGroup, const AnimationId animID, const float fBlendDelta, const int iTaskType, const char* pTaskName,
                          const bool bHoldLastFrame = false);
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
 };
 
 #define ANIM_NAMELEN      24

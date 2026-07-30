@@ -28,6 +28,7 @@ class CClientPed;
 #include <net/SyncStructures.h>
 
 class CAnimBlock;
+class CAnimBlendAssociationSAInterface;
 class CClientCamera;
 class CClientManager;
 class CClientModelRequestManager;
@@ -112,19 +113,21 @@ struct SDelayedSyncData
 
 struct SLastSyncedPedData
 {
-    float                             fHealth;
-    float                             fArmour;
-    CVector                           vPosition;
-    CVector                           vVelocity;
-    float                             fRotation;
-    float                             cameraRotation{};
-    bool                              bOnFire;
-    bool                              bIsInWater;
-    bool                              isReloadingWeapon;
-    SNativeTaskLocomotionSync         nativeTaskLocomotion;
-    bool                              nativeTaskLocomotionResetPending{true};
-    SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
-    bool                              nativeTaskWeaponPresentationResetPending{true};
+    float                                fHealth;
+    float                                fArmour;
+    CVector                              vPosition;
+    CVector                              vVelocity;
+    float                                fRotation;
+    float                                cameraRotation{};
+    bool                                 bOnFire;
+    bool                                 bIsInWater;
+    bool                                 isReloadingWeapon;
+    SNativeTaskLocomotionSync            nativeTaskLocomotion;
+    bool                                 nativeTaskLocomotionResetPending{true};
+    SNativeTaskWeaponPresentationSync    nativeTaskWeaponPresentation;
+    bool                                 nativeTaskWeaponPresentationResetPending{true};
+    SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
+    bool                                 nativeTaskAnimationPresentationResetPending{true};
 };
 
 struct SRestoreWeaponItem
@@ -233,15 +236,18 @@ public:
     void GetTurnSpeed(CVector& vecTurnSpeed) const;
     void SetTurnSpeed(const CVector& vecTurnSpeed);
 
-    void                              GetControllerState(CControllerState& ControllerState);
-    void                              GetLastControllerState(CControllerState& ControllerState);
-    void                              SetControllerState(const CControllerState& ControllerState);
-    SNativeTaskLocomotionSync         GetNativeTaskLocomotion();
-    static void                       ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
-    void                              SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion, const char* source = "local");
-    SNativeTaskWeaponPresentationSync GetNativeTaskWeaponPresentation();
-    void                              SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source = "local");
-    bool                              IsNativeTaskWeaponPresentationActive() const noexcept { return m_nativeTaskWeaponPresentationActive; }
+    void                                 GetControllerState(CControllerState& ControllerState);
+    void                                 GetLastControllerState(CControllerState& ControllerState);
+    void                                 SetControllerState(const CControllerState& ControllerState);
+    SNativeTaskLocomotionSync            GetNativeTaskLocomotion();
+    static void                          ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
+    void                                 SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion, const char* source = "local");
+    SNativeTaskWeaponPresentationSync    GetNativeTaskWeaponPresentation();
+    void                                 SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source = "local");
+    bool                                 IsNativeTaskWeaponPresentationActive() const noexcept { return m_nativeTaskWeaponPresentationActive; }
+    SNativeTaskAnimationPresentationSync GetNativeTaskAnimationPresentation();
+    void SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source = "local");
+    bool IsNativeTaskAnimationPresentationActive() const noexcept { return m_nativeTaskAnimationPresentationActive; }
 
     void AddKeysync(unsigned long ulDelay, const CControllerState& ControllerState, bool bDucking);
     void AddChangeWeapon(unsigned long ulDelay, eWeaponSlot slot, unsigned short usWeaponAmmo);
@@ -617,6 +623,8 @@ protected:
     void ApplyNativeTaskLocomotionPresentation(CControllerState& ControllerState);
     void UpdateNativeTaskWeaponPresentation();
     void ClearNativeTaskWeaponPresentation(const char* reason);
+    void UpdateNativeTaskAnimationPresentation();
+    void ClearNativeTaskAnimationPresentation(const char* reason);
 
     void Interpolate();
     void UpdateKeysync(bool bCleanup = false);
@@ -813,6 +821,12 @@ public:
     unsigned long                            m_nativeTaskWeaponPresentationReceivedAt{};
     bool                                     m_nativeTaskWeaponPresentationActive{false};
     std::optional<unsigned char>             m_nativeTaskWeaponPresentationPreviousShootingRate;
+    SNativeTaskAnimationPresentationSync     m_nativeTaskAnimationPresentation;
+    unsigned long                            m_nativeTaskAnimationPresentationReceivedAt{};
+    unsigned short                           m_nativeTaskAnimationPresentationAppliedGroup{};
+    unsigned short                           m_nativeTaskAnimationPresentationAppliedAnimId{};
+    CAnimBlendAssociationSAInterface*        m_nativeTaskAnimationPresentationAppliedAssociation{};
+    bool                                     m_nativeTaskAnimationPresentationActive{false};
     bool                                     m_shouldRecreate{false};
 
     bool             m_bBulletImpactData;

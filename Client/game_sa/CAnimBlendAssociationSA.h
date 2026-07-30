@@ -172,6 +172,7 @@ public:
     void  SetAnimID(short sAnimID) { m_pInterface->sAnimID = sAnimID; }
     void  SetAnimGroup(short sAnimGroup) { m_pInterface->sAnimGroup = sAnimGroup; }
     void  SetFlags(short sFlags) { m_pInterface->m_nFlags = sFlags; }
+    void  SetBlendDelta(float fDelta) { m_pInterface->fBlendDelta = fDelta; }
 
 protected:
     CAnimBlendAssociationSAInterface* m_pInterface;

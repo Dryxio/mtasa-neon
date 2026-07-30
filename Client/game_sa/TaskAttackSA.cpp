@@ -11,6 +11,8 @@
 
 #include "StdInc.h"
 #include "TaskAttackSA.h"
+#include "CAnimBlendAssociationSA.h"
+#include "CAnimBlendHierarchySA.h"
 #include "CEntitySA.h"
 #include "CPedSA.h"
 
@@ -588,4 +590,26 @@ CTaskSimpleFightSA::CTaskSimpleFightSA(CEntity* pTargetEntity, int nCommand, uns
         call    dwFunc
     }
     // clang-format on
+}
+
+bool CTaskSimpleFightSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                  float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleFightSAInterface*>(GetInterface());
+    const auto* strike = reinterpret_cast<const CAnimBlendAssociationSAInterface*>(task->m_pAnim);
+    const auto* idle = reinterpret_cast<const CAnimBlendAssociationSAInterface*>(task->m_pIdleAnim);
+    const auto* association = strike && (!idle || strike->fBlendAmount >= idle->fBlendAmount) ? strike : idle;
+    if (!association || !association->pAnimHierarchy || association->pAnimHierarchy->fTotalTime <= 0.0f || association->sAnimGroup < 0 ||
+        association->sAnimID < 0 || !std::isfinite(association->fCurrentTime) || !std::isfinite(association->fSpeed) || association->fSpeed <= 0.0f ||
+        !std::isfinite(association->fBlendAmount) || association->fBlendAmount <= 0.01f)
+    {
+        return false;
+    }
+
+    usAnimGroup = static_cast<unsigned short>(association->sAnimGroup);
+    usAnimId = static_cast<unsigned short>(association->sAnimID);
+    fProgress = std::clamp(association->fCurrentTime / association->pAnimHierarchy->fTotalTime, 0.0f, 1.0f);
+    fSpeed = association->fSpeed;
+    fBlendAmount = std::clamp(association->fBlendAmount, 0.0f, 1.0f);
+    return true;
 }

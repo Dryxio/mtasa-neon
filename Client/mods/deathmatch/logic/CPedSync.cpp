@@ -84,6 +84,7 @@ void CPedSync::AddPed(CClientPed* pPed)
     // waiting for the receiver lease.
     pPed->m_LastSyncedData->nativeTaskLocomotionResetPending = true;
     pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending = true;
+    pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending = true;
     pPed->SetSyncing(true);
 }
 
@@ -200,6 +201,10 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             if ((flags2 & 0x04) && BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation) && !BitStream.Read(&nativeTaskWeaponPresentation))
                 return;
 
+            SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
+            if ((flags2 & 0x08) && BitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation) && !BitStream.Read(&nativeTaskAnimationPresentation))
+                return;
+
             CVector vecPosition{CVector::NoInit{}}, vecMoveSpeed{CVector::NoInit{}};
             float   fRotation, fHealth, fArmor;
             bool    bOnFire;
@@ -267,6 +272,8 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
                     pPed->SetNativeTaskLocomotionPresentation(nativeTaskLocomotion, "ped_sync");
                 if ((flags2 & 0x04) && BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
                     pPed->SetNativeTaskWeaponPresentation(nativeTaskWeaponPresentation, "ped_sync");
+                if ((flags2 & 0x08) && BitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation))
+                    pPed->SetNativeTaskAnimationPresentation(nativeTaskAnimationPresentation, "ped_sync");
                 // The syncer uses this bit when a synchronized animation ends
                 // or is overridden. Mirror the cleanup locally; otherwise the
                 // remote ped remains permanently excluded from native-task
@@ -373,6 +380,22 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         flags2 |= 0x04;
     }
 
+    const SNativeTaskAnimationPresentationSync  nativeTaskAnimationPresentation = pPed->GetNativeTaskAnimationPresentation();
+    const SNativeTaskAnimationPresentationSync& lastNativeTaskAnimationPresentation = pPed->m_LastSyncedData->nativeTaskAnimationPresentation;
+    const bool                                  nativeTaskAnimationPresentationChanged =
+        nativeTaskAnimationPresentation.data.uiMode != lastNativeTaskAnimationPresentation.data.uiMode ||
+        nativeTaskAnimationPresentation.data.usAnimGroup != lastNativeTaskAnimationPresentation.data.usAnimGroup ||
+        nativeTaskAnimationPresentation.data.usAnimId != lastNativeTaskAnimationPresentation.data.usAnimId ||
+        nativeTaskAnimationPresentation.data.fProgress != lastNativeTaskAnimationPresentation.data.fProgress ||
+        nativeTaskAnimationPresentation.data.fSpeed != lastNativeTaskAnimationPresentation.data.fSpeed ||
+        nativeTaskAnimationPresentation.data.fBlendAmount != lastNativeTaskAnimationPresentation.data.fBlendAmount;
+    if (pBitStream->Can(eBitStreamVersion::NativeTaskAnimationPresentation) &&
+        (nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::NONE || nativeTaskAnimationPresentationChanged ||
+         pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending))
+    {
+        flags2 |= 0x08;
+    }
+
     // Do we really have to sync this ped?
     if (ucFlags == 0 && flags2 == 0)
         return;
@@ -401,6 +424,13 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         pBitStream->Write(&nativeTaskWeaponPresentation);
         pPed->m_LastSyncedData->nativeTaskWeaponPresentation = nativeTaskWeaponPresentation;
         pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending = false;
+    }
+
+    if (flags2 & 0x08)
+    {
+        pBitStream->Write(&nativeTaskAnimationPresentation);
+        pPed->m_LastSyncedData->nativeTaskAnimationPresentation = nativeTaskAnimationPresentation;
+        pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending = false;
     }
 
     // Write position if needed

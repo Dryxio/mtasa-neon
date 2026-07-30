@@ -102,6 +102,7 @@ enum class eBitStreamVersion : unsigned short
     ExtendedWorldLowPrecisionZ = NativeWorldStaticWorldV3ServerSelectedSet,
     NativeWorldStaticWorldV3GenericSet = NativeWorldStaticWorldV3ServerSelectedSet,
     NativeTaskWeaponPresentation = NativeWorldStaticWorldV3ServerSelectedSet,
+    NativeTaskAnimationPresentation = NativeWorldStaticWorldV3ServerSelectedSet,
 
     // This allows us to automatically increment the BitStreamVersion when things are added to this enum.
     // Make sure you only add things above this comment.
@@ -113,6 +114,7 @@ static_assert(static_cast<unsigned short>(eBitStreamVersion::NativeWorldStaticWo
 static_assert(eBitStreamVersion::ExtendedWorldLowPrecisionZ == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
 static_assert(eBitStreamVersion::NativeWorldStaticWorldV3GenericSet == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
 static_assert(eBitStreamVersion::NativeTaskWeaponPresentation == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
+static_assert(eBitStreamVersion::NativeTaskAnimationPresentation == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
 static_assert(eBitStreamVersion::Latest == eBitStreamVersion::NativeWorldStaticWorldV3ServerSelectedSet);
 
 class NetBitStreamInterface : public CRefCountable

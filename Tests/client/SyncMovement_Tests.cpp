@@ -196,6 +196,113 @@ TEST(SNativeTaskWeaponPresentationSync, VersionGatePreservesFollowingFields)
     }
 }
 
+TEST(SNativeTaskAnimationPresentationSync, RoundTrip)
+{
+    MockBitStream                        bitStream(static_cast<unsigned short>(eBitStreamVersion::Latest));
+    SNativeTaskAnimationPresentationSync source;
+    source.data.uiMode = SNativeTaskAnimationPresentationSync::ANIMATION;
+    source.data.usAnimGroup = 4;
+    source.data.usAnimId = 18;
+    source.data.fProgress = 0.375f;
+    source.data.fSpeed = 1.0f;
+    source.data.fBlendAmount = 0.8f;
+    bitStream.Write(&source);
+
+    bitStream.ResetReadPointer();
+    SNativeTaskAnimationPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskAnimationPresentationSync::ANIMATION, decoded.data.uiMode);
+    EXPECT_EQ(source.data.usAnimGroup, decoded.data.usAnimGroup);
+    EXPECT_EQ(source.data.usAnimId, decoded.data.usAnimId);
+    EXPECT_FLOAT_EQ(source.data.fProgress, decoded.data.fProgress);
+    EXPECT_FLOAT_EQ(source.data.fSpeed, decoded.data.fSpeed);
+    EXPECT_FLOAT_EQ(source.data.fBlendAmount, decoded.data.fBlendAmount);
+}
+
+TEST(SNativeTaskAnimationPresentationSync, RejectsInvalidPayloads)
+{
+    for (const auto invalidProgress : {-0.01f, 1.01f, std::numeric_limits<float>::quiet_NaN()})
+    {
+        MockBitStream bitStream;
+        unsigned int  mode = SNativeTaskAnimationPresentationSync::ANIMATION;
+        bitStream.WriteBits(reinterpret_cast<const char*>(&mode), SNativeTaskAnimationPresentationSync::BITCOUNT);
+        bitStream.Write(static_cast<unsigned short>(4));
+        bitStream.Write(static_cast<unsigned short>(18));
+        bitStream.Write(invalidProgress);
+        bitStream.Write(1.0f);
+        bitStream.Write(1.0f);
+        bitStream.ResetReadPointer();
+
+        SNativeTaskAnimationPresentationSync decoded;
+        EXPECT_FALSE(bitStream.Read(&decoded));
+    }
+
+    for (const auto invalidBlend : {-0.01f, 1.01f, std::numeric_limits<float>::quiet_NaN()})
+    {
+        MockBitStream bitStream;
+        unsigned int  mode = SNativeTaskAnimationPresentationSync::ANIMATION;
+        bitStream.WriteBits(reinterpret_cast<const char*>(&mode), SNativeTaskAnimationPresentationSync::BITCOUNT);
+        bitStream.Write(static_cast<unsigned short>(4));
+        bitStream.Write(static_cast<unsigned short>(18));
+        bitStream.Write(0.5f);
+        bitStream.Write(1.0f);
+        bitStream.Write(invalidBlend);
+        bitStream.ResetReadPointer();
+
+        SNativeTaskAnimationPresentationSync decoded;
+        EXPECT_FALSE(bitStream.Read(&decoded));
+    }
+}
+
+TEST(SNativeTaskAnimationPresentationSync, NonePreservesFollowingFields)
+{
+    constexpr unsigned char              sentinel = 0x7B;
+    MockBitStream                        bitStream;
+    SNativeTaskAnimationPresentationSync source;
+    bitStream.Write(&source);
+    bitStream.Write(sentinel);
+
+    bitStream.ResetReadPointer();
+    SNativeTaskAnimationPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskAnimationPresentationSync::NONE, decoded.data.uiMode);
+
+    unsigned char decodedSentinel = 0;
+    ASSERT_TRUE(bitStream.Read(decodedSentinel));
+    EXPECT_EQ(sentinel, decodedSentinel);
+}
+
+TEST(SNativeTaskAnimationPresentationSync, VersionGatePreservesFollowingFields)
+{
+    constexpr unsigned char sentinel = 0x91;
+    for (const auto version : {eBitStreamVersion::NativeTaskLocomotionPresentation, eBitStreamVersion::Latest})
+    {
+        MockBitStream                        bitStream(static_cast<unsigned short>(version));
+        SNativeTaskAnimationPresentationSync source;
+        source.data.uiMode = SNativeTaskAnimationPresentationSync::ANIMATION;
+        source.data.usAnimGroup = 4;
+        source.data.usAnimId = 18;
+        source.data.fProgress = 0.5f;
+        source.data.fSpeed = 1.0f;
+        source.data.fBlendAmount = 1.0f;
+
+        if (bitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation))
+            bitStream.Write(&source);
+        bitStream.Write(sentinel);
+
+        bitStream.ResetReadPointer();
+        SNativeTaskAnimationPresentationSync decoded;
+        if (bitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation))
+            ASSERT_TRUE(bitStream.Read(&decoded));
+
+        unsigned char decodedSentinel = 0;
+        ASSERT_TRUE(bitStream.Read(decodedSentinel));
+        EXPECT_EQ(sentinel, decodedSentinel);
+        EXPECT_EQ(version == eBitStreamVersion::Latest ? SNativeTaskAnimationPresentationSync::ANIMATION : SNativeTaskAnimationPresentationSync::NONE,
+                  decoded.data.uiMode);
+    }
+}
+
 // ============================================================================
 // Position syncs
 // ============================================================================

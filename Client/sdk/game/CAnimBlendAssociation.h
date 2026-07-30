@@ -47,4 +47,5 @@ public:
     virtual void  SetAnimID(short sAnimID) = 0;
     virtual void  SetAnimGroup(short sAnimGroup) = 0;
     virtual void  SetFlags(short sFlags) = 0;
+    virtual void  SetBlendDelta(float fDelta) = 0;
 };
