@@ -173,6 +173,7 @@ public:
     void  SetAnimGroup(short sAnimGroup) { m_pInterface->sAnimGroup = sAnimGroup; }
     void  SetFlags(short sFlags) { m_pInterface->m_nFlags = sFlags; }
     void  SetBlendDelta(float fDelta) { m_pInterface->fBlendDelta = fDelta; }
+    bool  IsLooped() const noexcept { return m_pInterface->m_bLooped; }
 
 protected:
     CAnimBlendAssociationSAInterface* m_pInterface;

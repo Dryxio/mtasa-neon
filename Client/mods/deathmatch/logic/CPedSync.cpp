@@ -17,10 +17,16 @@ extern CClientGame* g_pClientGame;
 
 #define PED_SYNC_RATE (g_TickRateSettings.iPedSync)
 
+namespace
+{
+    constexpr unsigned long NATIVE_TASK_ANIMATION_SYNC_RATE = 100;
+}
+
 CPedSync::CPedSync(CClientPedManager* pPedManager)
 {
     m_pPedManager = pPedManager;
     m_ulLastSyncTime = 0;
+    m_ulLastNativeTaskAnimationSyncTime = 0;
 }
 
 CPedSync::~CPedSync()
@@ -72,6 +78,16 @@ void CPedSync::DoPulse()
     {
         Update();
         m_ulLastSyncTime = ulCurrentTime;
+    }
+
+    // Native fight strikes and shuffles can begin and finish inside the
+    // ordinary ped-sync interval. Sample presentation independently so an
+    // observer sees those short clips without increasing spatial bandwidth.
+    const unsigned long nativeTaskAnimationSyncRate = std::min<unsigned long>(PED_SYNC_RATE, NATIVE_TASK_ANIMATION_SYNC_RATE);
+    if (ulCurrentTime >= m_ulLastNativeTaskAnimationSyncTime + nativeTaskAnimationSyncRate)
+    {
+        UpdateNativeTaskAnimationPresentation();
+        m_ulLastNativeTaskAnimationSyncTime = ulCurrentTime;
     }
 }
 
@@ -273,7 +289,10 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
                 if ((flags2 & 0x04) && BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
                     pPed->SetNativeTaskWeaponPresentation(nativeTaskWeaponPresentation, "ped_sync");
                 if ((flags2 & 0x08) && BitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation))
-                    pPed->SetNativeTaskAnimationPresentation(nativeTaskAnimationPresentation, "ped_sync");
+                {
+                    const char* source = flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE ? "ped_sync_fast" : "ped_sync";
+                    pPed->SetNativeTaskAnimationPresentation(nativeTaskAnimationPresentation, source);
+                }
                 // The syncer uses this bit when a synchronized animation ends
                 // or is overridden. Mirror the cleanup locally; otherwise the
                 // remote ped remains permanently excluded from native-task
@@ -314,6 +333,55 @@ void CPedSync::Update()
             g_pNet->DeallocateNetBitStream(pBitStream);
         }
     }
+}
+
+void CPedSync::UpdateNativeTaskAnimationPresentation()
+{
+    if (m_List.empty())
+        return;
+
+    NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
+    if (!pBitStream)
+        return;
+
+    bool wrotePresentation = false;
+    for (CClientPed* pPed : m_List)
+        wrotePresentation |= WriteNativeTaskAnimationPresentation(pBitStream, pPed);
+
+    if (wrotePresentation)
+    {
+        g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED,
+                           PACKET_ORDERING_NATIVE_TASK_PRESENTATION);
+    }
+    g_pNet->DeallocateNetBitStream(pBitStream);
+}
+
+bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed)
+{
+    if (!pBitStream->Can(eBitStreamVersion::NativeTaskAnimationPresentation))
+        return false;
+
+    const SNativeTaskAnimationPresentationSync  presentation = pPed->GetNativeTaskAnimationPresentation();
+    const SNativeTaskAnimationPresentationSync& lastPresentation = pPed->m_LastSyncedData->nativeTaskAnimationPresentation;
+    const bool changed = presentation.data.uiMode != lastPresentation.data.uiMode || presentation.data.usAnimGroup != lastPresentation.data.usAnimGroup ||
+                         presentation.data.usAnimId != lastPresentation.data.usAnimId || presentation.data.fProgress != lastPresentation.data.fProgress ||
+                         presentation.data.fSpeed != lastPresentation.data.fSpeed || presentation.data.fBlendAmount != lastPresentation.data.fBlendAmount ||
+                         presentation.data.fHeading != lastPresentation.data.fHeading;
+    if (presentation.data.uiMode == SNativeTaskAnimationPresentationSync::NONE && !changed &&
+        !pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending)
+    {
+        return false;
+    }
+
+    pBitStream->Write(pPed->GetID());
+    pBitStream->Write(pPed->GetSyncTimeContext());
+    pBitStream->Write(static_cast<unsigned char>(0));
+    pBitStream->Write(static_cast<std::uint8_t>(0x08 | PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE));
+    pBitStream->Write(&presentation);
+
+    pPed->m_LastSyncedData->nativeTaskAnimationPresentation = presentation;
+    pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending = false;
+    return true;
 }
 
 void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed)
@@ -385,23 +453,6 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         flags2 |= 0x04;
     }
 
-    const SNativeTaskAnimationPresentationSync  nativeTaskAnimationPresentation = pPed->GetNativeTaskAnimationPresentation();
-    const SNativeTaskAnimationPresentationSync& lastNativeTaskAnimationPresentation = pPed->m_LastSyncedData->nativeTaskAnimationPresentation;
-    const bool                                  nativeTaskAnimationPresentationChanged =
-        nativeTaskAnimationPresentation.data.uiMode != lastNativeTaskAnimationPresentation.data.uiMode ||
-        nativeTaskAnimationPresentation.data.usAnimGroup != lastNativeTaskAnimationPresentation.data.usAnimGroup ||
-        nativeTaskAnimationPresentation.data.usAnimId != lastNativeTaskAnimationPresentation.data.usAnimId ||
-        nativeTaskAnimationPresentation.data.fProgress != lastNativeTaskAnimationPresentation.data.fProgress ||
-        nativeTaskAnimationPresentation.data.fSpeed != lastNativeTaskAnimationPresentation.data.fSpeed ||
-        nativeTaskAnimationPresentation.data.fBlendAmount != lastNativeTaskAnimationPresentation.data.fBlendAmount ||
-        nativeTaskAnimationPresentation.data.fHeading != lastNativeTaskAnimationPresentation.data.fHeading;
-    if (pBitStream->Can(eBitStreamVersion::NativeTaskAnimationPresentation) &&
-        (nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::NONE || nativeTaskAnimationPresentationChanged ||
-         pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending))
-    {
-        flags2 |= 0x08;
-    }
-
     // Do we really have to sync this ped?
     if (ucFlags == 0 && flags2 == 0)
         return;
@@ -430,13 +481,6 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         pBitStream->Write(&nativeTaskWeaponPresentation);
         pPed->m_LastSyncedData->nativeTaskWeaponPresentation = nativeTaskWeaponPresentation;
         pPed->m_LastSyncedData->nativeTaskWeaponPresentationResetPending = false;
-    }
-
-    if (flags2 & 0x08)
-    {
-        pBitStream->Write(&nativeTaskAnimationPresentation);
-        pPed->m_LastSyncedData->nativeTaskAnimationPresentation = nativeTaskAnimationPresentation;
-        pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending = false;
     }
 
     // Write position if needed

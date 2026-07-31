@@ -48,4 +48,5 @@ public:
     virtual void  SetAnimGroup(short sAnimGroup) = 0;
     virtual void  SetFlags(short sFlags) = 0;
     virtual void  SetBlendDelta(float fDelta) = 0;
+    virtual bool  IsLooped() const noexcept = 0;
 };

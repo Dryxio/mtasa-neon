@@ -33,6 +33,10 @@ Start the mission with either command:
 
 Only one mission session may run at a time. The test owner is placed in dimension `4103`. The resource does not launch or control a client process.
 
+Connect every test client before the leader enters `/nines`. Every other connected player becomes a passive observer: the server snapshots and hides that player in the mission dimension, disables its collision, freezes it, and gives its client a camera target on CJ. The observer receives no native mission tasks, bottle authority or stage-report events. It mirrors only inert local bottle presentation from the server's validated round phase and break evidence. Its interior follows the leader so exterior and Binco presentation can stream, and every success, failure, disconnect or resource-stop path restores its original state and camera.
+
+While this conformance resource is active, both clients emit bounded `[nines-and-aks][presentation]` samples for CJ, Smoke, Emmet, the Glendale and the Tampa. Ped samples include syncer role, transform, vehicle seat, movement, animation, decisive native task slots, weapon, target and locally presented shot count; vehicle samples include transform, health and blown state. Validated reports are mirrored into the local server log for correlation. This is test-resource telemetry, not a release-wide Neon logger: building or installing the client alone does not enable it, and the resource sends nothing outside the server on which it is deliberately started.
+
 ## Reachable mission graph
 
 | Phase | SCM behavior covered |
@@ -54,7 +58,7 @@ Only one mission session may run at a time. The test owner is placed in dimensio
 
 ## Runtime ownership
 
-The server owns the mission state, actors, vehicles, authoritative stage changes, player snapshot, pass/fail decision and cleanup. The mission client owns native cutscene/audio/camera leases, native ped tasks for the local syncer, local target bottles, their damage evidence, navigation and the Binco tutorial presentation. The separate story entry-exit runtime owns Binco's paired IPL triggers, fade transaction and server-authoritative area transition.
+The server owns the mission state, actors, vehicles, authoritative stage changes, participant snapshots, pass/fail decision and cleanup. The leader client owns native cutscene/audio/camera leases, native ped tasks for the local syncer, local target bottles, their damage evidence, navigation and the Binco tutorial presentation. Observer clients own only their passive camera, inert bottle clones and diagnostic sampling. The separate story entry-exit runtime owns Binco's paired IPL triggers, fade transaction and server-authoritative area transition.
 
 The resource waits for managed file-cutscene release before asking the server to create model 302. Neon maps that playable slot to `EMMET`; creating the ped before `SWEET3B` teardown would race the temporary CUTOBJ model mapping.
 

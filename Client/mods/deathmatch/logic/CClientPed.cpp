@@ -104,7 +104,8 @@ namespace
         SNativeTaskLocomotionTraceChannelState apply;
     };
 
-    std::unordered_map<unsigned int, SNativeTaskLocomotionTraceState> g_nativeTaskLocomotionTraceStates;
+    std::unordered_map<unsigned int, SNativeTaskLocomotionTraceState>        g_nativeTaskLocomotionTraceStates;
+    std::unordered_map<unsigned int, SNativeTaskLocomotionTraceChannelState> g_nativeTaskAnimationProducerTraceStates;
 
     bool IsNativeTaskLocomotionTraceEnabled()
     {
@@ -204,6 +205,78 @@ namespace
     {
         CTaskManager* pTaskManager = pPed->GetTaskManager();
         return pTaskManager ? pTaskManager->GetSimplestActiveTask() : nullptr;
+    }
+
+    const char* GetNamedAnimPresentationValidationName(ENamedAnimPresentationValidation validation)
+    {
+        switch (validation)
+        {
+            case ENamedAnimPresentationValidation::VALID:
+                return "valid";
+            case ENamedAnimPresentationValidation::NO_ASSOCIATION:
+                return "no_association";
+            case ENamedAnimPresentationValidation::NO_HIERARCHY:
+                return "no_hierarchy";
+            case ENamedAnimPresentationValidation::INVALID_TOTAL_TIME:
+                return "invalid_total_time";
+            case ENamedAnimPresentationValidation::INVALID_ANIM_GROUP:
+                return "invalid_anim_group";
+            case ENamedAnimPresentationValidation::INVALID_ANIM_ID:
+                return "invalid_anim_id";
+            case ENamedAnimPresentationValidation::INVALID_CURRENT_TIME:
+                return "invalid_current_time";
+            case ENamedAnimPresentationValidation::INVALID_SPEED:
+                return "invalid_speed";
+            case ENamedAnimPresentationValidation::NON_POSITIVE_SPEED:
+                return "non_positive_speed";
+            case ENamedAnimPresentationValidation::INVALID_BLEND_AMOUNT:
+                return "invalid_blend_amount";
+            case ENamedAnimPresentationValidation::INACTIVE_BLEND_AMOUNT:
+                return "inactive_blend_amount";
+            default:
+                return "unknown";
+        }
+    }
+
+    void TraceNativeTaskAnimationProducer(CClientPed* pPed, const char* reason, const char* selection, CTask* pPresentationTask,
+                                          const SNamedAnimPresentationDiagnostic* pNamedDiagnostic = nullptr)
+    {
+        if (!pPed || !pPed->IsMissionActor() || !IsNativeTaskLocomotionTraceEnabled())
+            return;
+
+        CTask*              pFightTask = pPed->GetGamePlayer() ? pPed->GetGamePlayer()->GetPedIntelligence()->GetFightTask() : nullptr;
+        CTask*              pSimplestTask = GetNativeTaskLocomotionSimplestTask(pPed);
+        const int           fightType = pFightTask ? static_cast<int>(pFightTask->GetTaskType()) : -1;
+        const int           simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
+        const int           selectedType = pPresentationTask ? static_cast<int>(pPresentationTask->GetTaskType()) : -1;
+        const auto          validation = pNamedDiagnostic ? pNamedDiagnostic->validation : ENamedAnimPresentationValidation::VALID;
+        const SString       signature("%s:%s:%d:%d:%d:%d:%d", reason, selection, selectedType, fightType, simplestType, pPed->HasSyncedAnim(),
+                                      static_cast<int>(validation));
+        const unsigned long now = CClientTime::GetTime();
+        auto&               state = g_nativeTaskAnimationProducerTraceStates[pPed->GetID().Value()];
+        if (state.initialized && state.signature == signature && now - state.lastLoggedAt < NATIVE_TASK_LOCOMOTION_TRACE_HEARTBEAT)
+            return;
+
+        state.signature = signature;
+        state.lastLoggedAt = now;
+        state.initialized = true;
+
+        const auto* pNamedTask =
+            pPresentationTask && selectedType == TASK_SIMPLE_NAMED_ANIM ? dynamic_cast<const CTaskSimpleRunNamedAnim*>(pPresentationTask) : nullptr;
+        g_pCore->GetConsole()->Printf(
+            "[native-task-animation][producer] profile=%s pid=%u ped=%u model=%lu reason=%s selection=%s syncedAnim=%d occupied=%d entering=%d "
+            "exiting=%d dead=%d fight=%s(%d) simplest=%s(%d) selected=%s(%d) named=%s/%s validation=%s association=%p hierarchy=%p "
+            "group=%d anim=%d total=%.4f current=%.4f speed=%.4f blend=%.4f",
+            g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(), pPed->GetModel(), reason,
+            selection, pPed->HasSyncedAnim(), pPed->GetRealOccupiedVehicle() != nullptr, pPed->IsGettingIntoVehicle(), pPed->IsGettingOutOfVehicle(),
+            pPed->IsDead(), pFightTask ? pFightTask->GetTaskName() : "none", fightType, pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType,
+            pPresentationTask ? pPresentationTask->GetTaskName() : "none", selectedType,
+            pNamedTask && pNamedTask->GetGroupName() ? pNamedTask->GetGroupName() : "none",
+            pNamedTask && pNamedTask->GetAnimName() ? pNamedTask->GetAnimName() : "none", GetNamedAnimPresentationValidationName(validation),
+            pNamedDiagnostic ? pNamedDiagnostic->association : nullptr, pNamedDiagnostic ? pNamedDiagnostic->hierarchy : nullptr,
+            pNamedDiagnostic ? pNamedDiagnostic->animGroup : -1, pNamedDiagnostic ? pNamedDiagnostic->animId : -1,
+            pNamedDiagnostic ? pNamedDiagnostic->totalTime : 0.0f, pNamedDiagnostic ? pNamedDiagnostic->currentTime : 0.0f,
+            pNamedDiagnostic ? pNamedDiagnostic->speed : 0.0f, pNamedDiagnostic ? pNamedDiagnostic->blendAmount : 0.0f);
     }
 
     PedMoveState::Enum GetNativeTaskLocomotionMoveState(CClientPed* pPed)
@@ -1417,11 +1490,29 @@ void CClientPed::ClearNativeTaskWeaponPresentation(const char* reason)
 {
     if (m_pTaskManager && m_pPlayerPed)
     {
-        CTask* primaryTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
-        if (primaryTask && primaryTask->GetInterface() == m_nativeTaskWeaponPresentationPrimaryTask)
-            m_pTaskManager->RemoveTask(TASK_PRIORITY_PRIMARY);
+        CTask*     primaryTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
+        CTask*     attackTask = m_pTaskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
+        const bool ownsPrimaryTask = primaryTask && primaryTask->GetInterface() == m_nativeTaskWeaponPresentationPrimaryTask;
+        const bool ownsAttackTask = attackTask && attackTask->GetInterface() == m_nativeTaskWeaponPresentationAttackTask;
+        if (ownsAttackTask)
+        {
+            // GTA's task abort owns presentation cleanup: UseGun removes its
+            // upper-body stance and arm IK, while GangDriveBy fades its
+            // vehicle association. Merely detaching these viewer-owned tasks
+            // can leave that visual state stuck after the authoritative peer
+            // has stopped firing.
+            attackTask->MakeAbortable(m_pPlayerPed, ABORT_PRIORITY_IMMEDIATE, nullptr);
+        }
+        // GunControl's abort reaches through the ped intelligence and mutates
+        // whichever UseGun task is currently installed. The exact owned
+        // secondary was already aborted above; only GangDriveBy has primary-
+        // task animation state that still needs native cleanup here.
+        if (ownsPrimaryTask && primaryTask->GetTaskType() == TASK_SIMPLE_GANG_DRIVEBY)
+            primaryTask->MakeAbortable(m_pPlayerPed, ABORT_PRIORITY_IMMEDIATE, nullptr);
 
-        CTask* attackTask = m_pTaskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
+        if (ownsPrimaryTask)
+            m_pTaskManager->RemoveTask(TASK_PRIORITY_PRIMARY);
+        attackTask = m_pTaskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
         if (attackTask && attackTask->GetInterface() == m_nativeTaskWeaponPresentationAttackTask)
             m_pTaskManager->RemoveTaskSecondary(TASK_SECONDARY_ATTACK);
     }
@@ -1713,20 +1804,72 @@ void CClientPed::UpdateNativeTaskWeaponPresentation()
 SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentation()
 {
     SNativeTaskAnimationPresentationSync presentation;
-    if (!m_pPlayerPed || GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDead() || HasSyncedAnim())
+    if (!m_pPlayerPed)
+    {
+        TraceNativeTaskAnimationProducer(this, "no_game_ped", "none", nullptr);
         return presentation;
+    }
+    if (GetRealOccupiedVehicle())
+    {
+        TraceNativeTaskAnimationProducer(this, "occupied", "none", nullptr);
+        return presentation;
+    }
+    if (IsGettingIntoVehicle())
+    {
+        TraceNativeTaskAnimationProducer(this, "entering_vehicle", "none", nullptr);
+        return presentation;
+    }
+    if (IsGettingOutOfVehicle())
+    {
+        TraceNativeTaskAnimationProducer(this, "exiting_vehicle", "none", nullptr);
+        return presentation;
+    }
+    if (IsDead())
+    {
+        TraceNativeTaskAnimationProducer(this, "dead", "none", nullptr);
+        return presentation;
+    }
+    if (HasSyncedAnim())
+    {
+        TraceNativeTaskAnimationProducer(this, "synced_animation", "none", nullptr);
+        return presentation;
+    }
 
-    CTask* presentationTask = m_pPlayerPed->GetPedIntelligence()->GetFightTask();
+    CTask*      presentationTask = m_pPlayerPed->GetPedIntelligence()->GetFightTask();
+    const char* selection = presentationTask ? "fight" : "none";
     if (!presentationTask && m_pTaskManager)
     {
         CTask* simplestTask = m_pTaskManager->GetSimplestActiveTask();
-        if (simplestTask && simplestTask->GetTaskType() == TASK_SIMPLE_CHAT)
+        if (simplestTask && (simplestTask->GetTaskType() == TASK_SIMPLE_CHAT || simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM))
+        {
             presentationTask = simplestTask;
+            selection = simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM ? "named" : "chat";
+        }
+    }
+
+    if (!presentationTask)
+    {
+        TraceNativeTaskAnimationProducer(this, "no_supported_task", selection, nullptr);
+        return presentation;
+    }
+
+    SNamedAnimPresentationDiagnostic        namedDiagnostic;
+    const SNamedAnimPresentationDiagnostic* pNamedDiagnostic = nullptr;
+    if (presentationTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM && IsMissionActor() && IsNativeTaskLocomotionTraceEnabled())
+    {
+        if (auto* pNamedTask = dynamic_cast<CTaskSimpleRunNamedAnim*>(presentationTask))
+        {
+            pNamedTask->GetPresentationDiagnostic(namedDiagnostic);
+            pNamedDiagnostic = &namedDiagnostic;
+        }
+        else
+            TraceNativeTaskAnimationProducer(this, "named_task_cast_failed", selection, presentationTask);
     }
 
     if (!presentationTask || !presentationTask->GetPresentationAnimation(presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress,
                                                                          presentation.data.fSpeed, presentation.data.fBlendAmount))
     {
+        TraceNativeTaskAnimationProducer(this, "task_rejected", selection, presentationTask, pNamedDiagnostic);
         return presentation;
     }
 
@@ -1737,6 +1880,7 @@ SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentat
     // Sample through the corrected API so viewers reproduce visible facing.
     GetRotationRadiansNew(rotation);
     presentation.data.fHeading = rotation.fZ;
+    TraceNativeTaskAnimationProducer(this, "emitted", selection, presentationTask, pNamedDiagnostic);
     return presentation;
 }
 
@@ -1896,7 +2040,13 @@ void CClientPed::UpdateNativeTaskAnimationPresentation()
                                           ? m_nativeTaskAnimationPresentation.data.fProgress +
                                                 static_cast<float>(sampleAge) / 1000.0f * m_nativeTaskAnimationPresentation.data.fSpeed / animationLength
                                           : m_nativeTaskAnimationPresentation.data.fProgress;
-    animation->SetCurrentProgress(std::clamp(compensatedProgress, 0.0f, 1.0f));
+    // Fight idle and shuffle associations loop. Clamping their compensated
+    // progress at 1 freezes the observer until the next snapshot wraps back
+    // near zero, producing the visible stop/teleport cadence. Preserve the
+    // native wrap for looped clips and clamp only one-shot strikes.
+    const float safeCompensatedProgress = std::isfinite(compensatedProgress) ? compensatedProgress : m_nativeTaskAnimationPresentation.data.fProgress;
+    const float playbackProgress = animation->IsLooped() ? std::fmod(safeCompensatedProgress, 1.0f) : std::clamp(safeCompensatedProgress, 0.0f, 1.0f);
+    animation->SetCurrentProgress(playbackProgress);
     animation->SetCurrentSpeed(m_nativeTaskAnimationPresentation.data.fSpeed);
     animation->SetBlendAmount(m_nativeTaskAnimationPresentation.data.fBlendAmount);
     // Some native tasks, notably PartnerChat, rotate the rendered matrix

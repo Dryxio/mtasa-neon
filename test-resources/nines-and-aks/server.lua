@@ -4,10 +4,13 @@ local mission = {
     player = nil,
     stage = nil,
     snapshot = nil,
+    observers = {},
+    presentationDiagnosticLastAt = {},
     entities = {},
     timers = {},
     rangeRound = 0,
     rangeHits = {},
+    bottlePresentation = {phase = "none", round = 0, broken = {}},
     bincoEntered = false,
     bincoExited = false,
     bincoEntryExit = nil,
@@ -52,7 +55,8 @@ local function snapshotPlayer(player)
     return {
         position = {x, y, z, rz}, interior = getElementInterior(player), dimension = getElementDimension(player),
         model = getElementModel(player), health = getElementHealth(player), armor = getPedArmor(player),
-        clothes = snapshotClothes(player), weapons = weapons,
+        alpha = getElementAlpha(player), frozen = isElementFrozen(player),
+        collisionsEnabled = getElementCollisionsEnabled(player), clothes = snapshotClothes(player), weapons = weapons,
     }
 end
 
@@ -105,7 +109,188 @@ local function restorePlayer(player, snapshot, passed)
     end
     setElementHealth(player, math.max(1, snapshot.health))
     setPedArmor(player, snapshot.armor)
+    setElementAlpha(player, snapshot.alpha or 255)
+    setElementCollisionsEnabled(player, snapshot.collisionsEnabled ~= false)
+    setElementFrozen(player, snapshot.frozen == true)
 end
+
+local function isMissionParticipant(player)
+    return player == mission.player or mission.observers[player] ~= nil
+end
+
+local function getBottlePresentationSnapshot()
+    local broken = {}
+    for index in pairs(mission.bottlePresentation.broken) do
+        broken[#broken + 1] = index
+    end
+    table.sort(broken)
+    return {
+        phase = mission.bottlePresentation.phase,
+        round = mission.bottlePresentation.round,
+        broken = broken,
+    }
+end
+
+local function setBottlePresentation(phase, round)
+    mission.bottlePresentation = {
+        phase = phase,
+        round = round or 0,
+        broken = {},
+    }
+end
+
+local function publishPresentationState()
+    if not mission.running or not isElement(mission.player) then
+        return
+    end
+    local bottlePresentation = getBottlePresentationSnapshot()
+    triggerClientEvent(mission.player, "nines:presentationState", resourceRoot, mission.stage, mission.player,
+                       mission.entities, bottlePresentation)
+    local leaderInterior = getElementInterior(mission.player)
+    for observer in pairs(mission.observers) do
+        if isElement(observer) then
+            -- The hidden observer follows only the presentation island. Keep
+            -- its area aligned so Binco and exterior actors can stream without
+            -- giving it a position, collision or gameplay role in the mission.
+            setElementDimension(observer, NINES.dimension)
+            setElementInterior(observer, leaderInterior)
+            setCameraInterior(observer, leaderInterior)
+            triggerClientEvent(observer, "nines:presentationState", resourceRoot, mission.stage, mission.player,
+                               mission.entities, bottlePresentation)
+        else
+            mission.observers[observer] = nil
+            mission.presentationDiagnosticLastAt[observer] = nil
+        end
+    end
+end
+
+local function startMissionObservers(leader)
+    mission.observers = {}
+    local observerCount = 0
+    for _, player in ipairs(getElementsByType("player")) do
+        if player ~= leader then
+            observerCount = observerCount + 1
+            mission.observers[player] = snapshotPlayer(player)
+            removePedFromVehicle(player)
+            setElementInterior(player, 0)
+            setElementDimension(player, NINES.dimension)
+            setElementFrozen(player, true)
+            setElementCollisionsEnabled(player, false)
+            setElementAlpha(player, 0)
+            toggleAllControls(player, false, true, true)
+            triggerClientEvent(player, "nines:observerStart", resourceRoot, leader)
+        end
+    end
+    outputDebugString(("[nines-and-aks] Passive observers enrolled: %d"):format(observerCount))
+end
+
+local function stopMissionObservers(reason, restore)
+    for observer, snapshot in pairs(mission.observers) do
+        if isElement(observer) then
+            triggerClientEvent(observer, "nines:observerStop", resourceRoot, reason or "cleanup")
+            if restore then
+                restorePlayer(observer, snapshot, false)
+            end
+        end
+    end
+    mission.observers = {}
+    mission.presentationDiagnosticLastAt = {}
+end
+
+local presentationLabels = {
+    smoke = "Smoke",
+    emmet = "Emmet",
+    glendale = "Glendale",
+    tampa = "Tampa",
+}
+
+local function getPresentationLabel(element)
+    if element == mission.player then
+        return "CJ"
+    end
+    for key, label in pairs(presentationLabels) do
+        if element == mission.entities[key] then
+            return label
+        end
+    end
+    return nil
+end
+
+local function finiteDiagnosticNumber(value, maximumAbsoluteValue)
+    return type(value) == "number" and value == value and math.abs(value) <= maximumAbsoluteValue
+end
+
+local function boundedDiagnosticString(value)
+    return type(value) == "string" and #value <= 512
+end
+
+addEvent("nines:presentationDiagnostic", true)
+addEventHandler("nines:presentationDiagnostic", resourceRoot, function(element, report)
+    local player = client
+    local label = getPresentationLabel(element)
+    if source ~= resourceRoot or not mission.running or not isMissionParticipant(player) or not isElement(element) or
+        not label or type(report) ~= "table" or (report.kind ~= "ped" and report.kind ~= "vehicle") or
+        type(report.sample) ~= "number" or report.sample < 1 or report.sample ~= math.floor(report.sample) or
+        report.sample > 10000000 or type(report.streamed) ~= "boolean" or type(report.syncer) ~= "boolean" or
+        type(report.onScreen) ~= "boolean" or not finiteDiagnosticNumber(report.x, 100000) or
+        not finiteDiagnosticNumber(report.y, 100000) or not finiteDiagnosticNumber(report.z, 100000) or
+        not finiteDiagnosticNumber(report.heading, 100000) or not finiteDiagnosticNumber(report.speed, 1000) or
+        type(report.dimension) ~= "number" or report.dimension < 0 or report.dimension > 65535 or
+        report.dimension ~= math.floor(report.dimension) or type(report.interior) ~= "number" or report.interior < 0 or
+        report.interior > 255 or report.interior ~= math.floor(report.interior) or
+        type(report.seat) ~= "number" or report.seat < -1 or report.seat > 255 or
+        report.seat ~= math.floor(report.seat) or type(report.changed) ~= "boolean" or
+        not boundedDiagnosticString(report.clientStage) or type(report.round) ~= "number" or report.round < 0 or
+        report.round > 3 or report.round ~= math.floor(report.round) or type(report.bottles) ~= "number" or
+        report.bottles < 0 or report.bottles > 20 or report.bottles ~= math.floor(report.bottles) or
+        type(report.shots) ~= "number" or report.shots < 0 or report.shots ~= math.floor(report.shots) or
+        report.shots > 10000000 or not boundedDiagnosticString(report.vehicle) or
+        not boundedDiagnosticString(report.move) or not boundedDiagnosticString(report.animation) or
+        not boundedDiagnosticString(report.simplest) or not boundedDiagnosticString(report.primaryPhysical) or
+        not boundedDiagnosticString(report.primaryScript) or not boundedDiagnosticString(report.secondaryAttack) or
+        not boundedDiagnosticString(report.weapon) or not boundedDiagnosticString(report.target) or
+        not finiteDiagnosticNumber(report.currentRotation, 100000) or
+        not finiteDiagnosticNumber(report.cameraRotation, 100000) or
+        not finiteDiagnosticNumber(report.matrixForwardX, 10) or
+        not finiteDiagnosticNumber(report.matrixForwardY, 10) or
+        not finiteDiagnosticNumber(report.aimStartX, 100000) or not finiteDiagnosticNumber(report.aimStartY, 100000) or
+        not finiteDiagnosticNumber(report.aimStartZ, 100000) or not finiteDiagnosticNumber(report.aimEndX, 100000) or
+        not finiteDiagnosticNumber(report.aimEndY, 100000) or not finiteDiagnosticNumber(report.aimEndZ, 100000) or
+        type(report.onFire) ~= "boolean" or not finiteDiagnosticNumber(report.health, 100000) or
+        type(report.blown) ~= "boolean" then
+        return
+    end
+
+    local now = getTickCount()
+    local playerReports = mission.presentationDiagnosticLastAt[player]
+    if not playerReports then
+        playerReports = {}
+        mission.presentationDiagnosticLastAt[player] = playerReports
+    end
+    if playerReports[element] and now - playerReports[element] < 200 then
+        return
+    end
+    playerReports[element] = now
+
+    local serverOwner = element == player or ((getElementType(element) == "ped" or getElementType(element) == "vehicle") and
+                                                    getElementSyncer(element) == player)
+    outputDebugString(
+        ("[nines-and-aks][presentation] client=%s partyRole=%s stage=%s clientStage=%s round=%d bottles=%d " ..
+            "actor=%s kind=%s sample=%d " ..
+            "streamed=%s clientSyncer=%s serverOwner=%s onScreen=%s dim=%d int=%d pos=(%.3f,%.3f,%.3f) " ..
+            "heading=%.2f vel=%.4f vehicle=%s seat=%d move=%s anim=%s simplest=%s P0={%s} P3={%s} S0={%s} " ..
+            "weapon=%s target=%s shots=%d rotCurrent=%.2f rotCamera=%.2f matrixForward=(%.4f,%.4f) " ..
+            "aimStart=(%.3f,%.3f,%.3f) aimEnd=(%.3f,%.3f,%.3f) onFire=%s health=%.1f blown=%s changed=%s"):format(
+            getPlayerName(player), player == mission.player and "leader" or "observer", tostring(mission.stage),
+            report.clientStage, report.round, report.bottles, label, report.kind, report.sample, tostring(report.streamed),
+            tostring(report.syncer), tostring(serverOwner), tostring(report.onScreen), report.dimension, report.interior,
+            report.x, report.y, report.z, report.heading, report.speed, report.vehicle, report.seat, report.move,
+            report.animation, report.simplest, report.primaryPhysical, report.primaryScript, report.secondaryAttack,
+            report.weapon, report.target, report.shots, report.currentRotation, report.cameraRotation,
+            report.matrixForwardX, report.matrixForwardY, report.aimStartX, report.aimStartY, report.aimStartZ,
+            report.aimEndX, report.aimEndY, report.aimEndZ, tostring(report.onFire), report.health,
+            tostring(report.blown), tostring(report.changed)))
+end)
 
 local function destroyEntities()
     for _, element in pairs(mission.entities) do
@@ -122,8 +307,11 @@ local function resetMission()
     mission.player = nil
     mission.stage = nil
     mission.snapshot = nil
+    mission.observers = {}
+    mission.presentationDiagnosticLastAt = {}
     mission.rangeRound = 0
     mission.rangeHits = {}
+    setBottlePresentation("none", 0)
     mission.bincoEntered = false
     mission.bincoExited = false
     mission.bincoEntryExit = nil
@@ -152,6 +340,7 @@ local function cleanup(reason, restore, passed)
     if isElement(player) then
         triggerClientEvent(player, "nines:stop", resourceRoot, reason)
     end
+    stopMissionObservers(reason, true)
     destroyEntities()
     if restore and isElement(player) then
         restorePlayer(player, snapshot, passed == true)
@@ -286,7 +475,10 @@ local function beginMission(player)
     setElementPosition(player, NINES.cj.position[1], NINES.cj.position[2], NINES.cj.position[3])
     setElementRotation(player, 0, 0, NINES.cj.position[4])
     triggerClientEvent(player, "nines:start", resourceRoot)
+    startMissionObservers(player)
     triggerClientEvent(player, "nines:cutscene", resourceRoot, "intro", NINES.cutscenes.intro)
+    publishPresentationState()
+    rememberTimer(setTimer(publishPresentationState, 1000, 0))
     outputDebugString(("[nines-and-aks] Started for %s"):format(getPlayerName(player)))
 end
 
@@ -307,12 +499,14 @@ addEventHandler("nines:cutsceneFinished", resourceRoot, function(kind, result)
         triggerClientEvent(client, "nines:drive", resourceRoot, "emmet", car, smoke)
     elseif kind == "emmet" and mission.stage == "emmet_cutscene" then
         mission.stage = "range"
+        setBottlePresentation("demo", 1)
         createRangeWorld()
         stageRangeActors()
         giveWeapon(client, 22, 1, true)
         setWeaponAmmo(client, 22, 30000)
         giveWeapon(mission.entities.smoke, 22, 10000, true)
         triggerClientEvent(client, "nines:range", resourceRoot, mission.entities)
+        publishPresentationState()
     end
 end)
 
@@ -343,6 +537,7 @@ addEventHandler("nines:rangeFinished", resourceRoot, function()
         return
     end
     mission.stage = "gas_tank"
+    setBottlePresentation("none", 0)
     local tampa, emmet, car = mission.entities.tampa, mission.entities.emmet, mission.entities.glendale
     setElementPosition(tampa, 2446.49, -1966.47, 13.0441911)
     setElementRotation(tampa, 0, 0, 101.85)
@@ -360,6 +555,7 @@ addEventHandler("nines:rangeFinished", resourceRoot, function()
         end
     end, 5000, 1))
     triggerClientEvent(client, "nines:gasTank", resourceRoot, mission.entities)
+    publishPresentationState()
 end)
 
 addEvent("nines:stagePlayerRound", true)
@@ -381,10 +577,12 @@ addEventHandler("nines:stagePlayerRound", resourceRoot, function(round)
         end
     end
     mission.rangeRound, mission.rangeHits = round, {}
+    setBottlePresentation("player", round)
     setElementPosition(client, 2450.7402, -1978.3749, 13.5469)
     setElementRotation(client, 0, 0, 89.5159)
     setWeaponAmmo(client, 22, 30000)
     triggerClientEvent(client, "nines:playerRoundReady", resourceRoot, round)
+    publishPresentationState()
 end)
 
 addEvent("nines:stageDemoRound", true)
@@ -407,18 +605,40 @@ addEventHandler("nines:stageDemoRound", resourceRoot, function(round)
     end
     setElementPosition(client, 2453.8206, -1978.7771, 13.5469)
     setElementRotation(client, 0, 0, 89.5159)
+    setBottlePresentation("demo", round)
     triggerClientEvent(client, "nines:demoRoundReady", resourceRoot, round)
+    publishPresentationState()
+end)
+
+addEvent("nines:demoBottleBroken", true)
+addEventHandler("nines:demoBottleBroken", resourceRoot, function(round, index)
+    round, index = tonumber(round), tonumber(index)
+    local expected = ({1, 3, 5})[round or 0]
+    if not validClient() or mission.stage ~= "range" or mission.bottlePresentation.phase ~= "demo" or
+        round ~= mission.bottlePresentation.round or not index or index ~= math.floor(index) or not expected or
+        index < 1 or index > expected or mission.bottlePresentation.broken[index] then
+        return
+    end
+    mission.bottlePresentation.broken[index] = true
+    outputDebugString(("[nines-and-aks][bottle-presentation] server accepted demo break round=%d index=%d"):format(
+                          round, index))
+    publishPresentationState()
 end)
 
 addEvent("nines:bottleHit", true)
 addEventHandler("nines:bottleHit", resourceRoot, function(round, index)
     round, index = tonumber(round), tonumber(index)
     local expected = ({1, 3, 5})[mission.rangeRound]
-    if not validClient() or mission.stage ~= "range" or round ~= mission.rangeRound or not index or not expected or
+    if not validClient() or mission.stage ~= "range" or round ~= mission.rangeRound or not index or
+        index ~= math.floor(index) or not expected or
         index < 1 or index > expected or mission.rangeHits[index] then
         return
     end
     mission.rangeHits[index] = true
+    if mission.bottlePresentation.phase == "player" and mission.bottlePresentation.round == round then
+        mission.bottlePresentation.broken[index] = true
+        publishPresentationState()
+    end
 end)
 
 addEvent("nines:rangePresence", true)
@@ -602,6 +822,9 @@ end)
 addEventHandler("onPlayerQuit", root, function()
     if source == mission.player then
         cleanup("player_quit", false, false)
+    elseif mission.running and mission.observers[source] then
+        mission.observers[source] = nil
+        mission.presentationDiagnosticLastAt[source] = nil
     end
 end)
 

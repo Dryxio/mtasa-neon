@@ -43,11 +43,43 @@ public:
     virtual ~CTaskSimpleRunAnim() {};
 };
 
+enum class ENamedAnimPresentationValidation : unsigned char
+{
+    VALID,
+    NO_ASSOCIATION,
+    NO_HIERARCHY,
+    INVALID_TOTAL_TIME,
+    INVALID_ANIM_GROUP,
+    INVALID_ANIM_ID,
+    INVALID_CURRENT_TIME,
+    INVALID_SPEED,
+    NON_POSITIVE_SPEED,
+    INVALID_BLEND_AMOUNT,
+    INACTIVE_BLEND_AMOUNT,
+};
+
+struct SNamedAnimPresentationDiagnostic
+{
+    ENamedAnimPresentationValidation validation{ENamedAnimPresentationValidation::NO_ASSOCIATION};
+    const void*                      association{};
+    const void*                      hierarchy{};
+    short                            animGroup{-1};
+    short                            animId{-1};
+    float                            totalTime{};
+    float                            currentTime{};
+    float                            speed{};
+    float                            blendAmount{};
+};
+
 class CTaskSimpleRunNamedAnim : public virtual CTaskSimpleAnim
 {
 public:
     virtual const char* GetAnimName() const noexcept = 0;
     virtual const char* GetGroupName() const noexcept = 0;
+    // This mirrors the validation used by presentation extraction so opt-in
+    // diagnostics can explain a rejected live named animation without
+    // weakening any of the engine-facing safety checks.
+    virtual void GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept = 0;
 };
 
 class CTaskComplexDie : public virtual CTaskComplex

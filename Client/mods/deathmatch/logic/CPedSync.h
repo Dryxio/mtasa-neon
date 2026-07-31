@@ -38,9 +38,12 @@ private:
     void Packet_PedSync(NetBitStreamInterface& BitStream);
 
     void Update();
+    void UpdateNativeTaskAnimationPresentation();
     void WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
+    bool WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
 
     CClientPedManager*       m_pPedManager;
     CMappedList<CClientPed*> m_List;
     unsigned long            m_ulLastSyncTime;
+    unsigned long            m_ulLastNativeTaskAnimationSyncTime;
 };

@@ -163,6 +163,8 @@ public:
 
     const char* GetAnimName() const noexcept override;
     const char* GetGroupName() const noexcept override;
+    void        GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept override;
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
 };
 
 class CTaskComplexDieSAInterface : public CTaskComplexSAInterface

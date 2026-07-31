@@ -1221,6 +1221,11 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
     } data{};
 };
 
+// Native-task animation snapshots share the ped-sync payload, but use a
+// separate unreliable-sequenced lane so their higher cadence cannot discard
+// an ordinary ped transform packet (or be discarded by one).
+constexpr std::uint8_t PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE = 0x10;
+
 // TODO: SSmallKeysyncSync is now the same as SFullKeysyncSync ?
 struct SSmallKeysyncSync : public ISyncStructure
 {

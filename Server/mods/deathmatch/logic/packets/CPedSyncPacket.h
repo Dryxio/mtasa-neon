@@ -49,8 +49,13 @@ public:
     // Used when sending ped sync to clients, only contains one SyncData
     CPedSyncPacket(SyncData& pReadData);
 
-    ePacketID     GetPacketID() const { return PACKET_ID_PED_SYNC; };
-    unsigned long GetFlags() const { return PACKET_MEDIUM_PRIORITY | PACKET_SEQUENCED; };
+    ePacketID       GetPacketID() const { return PACKET_ID_PED_SYNC; };
+    unsigned long   GetFlags() const { return PACKET_MEDIUM_PRIORITY | PACKET_SEQUENCED; };
+    ePacketOrdering GetPacketOrdering() const override
+    {
+        return !m_Syncs.empty() && (m_Syncs.front().flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE) ? PACKET_ORDERING_NATIVE_TASK_PRESENTATION
+                                                                                                        : PACKET_ORDERING_DEFAULT;
+    }
 
     bool Read(NetBitStreamInterface& BitStream);
     bool Write(NetBitStreamInterface& BitStream) const;

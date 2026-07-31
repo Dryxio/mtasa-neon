@@ -291,8 +291,11 @@ void CPedSync::Packet_PedSync(CPedSyncPacket& Packet)
         if (Data.ucFlags & 0x80)
             pPed->SetAnimationData({});
 
-        // Is it time to sync to everyone
-        bool bDoFarSync = llTickCountNow - pPed->GetLastFarSyncTick() >= g_TickRateSettings.iPedFarSync;
+        // Presentation snapshots are intentionally near-viewer only. Letting
+        // their 100 ms cadence advance the far-sync timer would starve remote
+        // viewers of the ordinary transform packet that owns server state.
+        const bool nativeTaskAnimationLane = Data.flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE;
+        bool       bDoFarSync = !nativeTaskAnimationLane && llTickCountNow - pPed->GetLastFarSyncTick() >= g_TickRateSettings.iPedFarSync;
 
         if (!bDoFarSync && pPed->IsNearPlayersListEmpty())
             continue;

@@ -160,6 +160,7 @@ enum ePacketOrdering
     PACKET_ORDERING_CHAT,
     PACKET_ORDERING_DATA_TRANSFER,
     PACKET_ORDERING_VOICE,
+    PACKET_ORDERING_NATIVE_TASK_PRESENTATION,
 };
 
 // Typedefs to make shared code easier

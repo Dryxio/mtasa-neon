@@ -65,6 +65,18 @@ bool CPedSyncPacket::Read(NetBitStreamInterface& BitStream)
                 return false;
         }
 
+        const bool nativeTaskAnimationLane = Data.flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE;
+        // This marker selects a separate sequencing channel; accepting any
+        // spatial or unrelated presentation payload on it could let a newer
+        // packet suppress ordinary state ordering. Keep the lane narrowly
+        // scoped to animation snapshots.
+        if (nativeTaskAnimationLane && (Data.ucFlags != 0 || Data.flags2 != (0x08 | PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE)))
+            return false;
+        if (!m_Syncs.empty() && nativeTaskAnimationLane != static_cast<bool>(m_Syncs.front().flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE))
+        {
+            return false;
+        }
+
         // Did we recieve position?
         if (ucFlags & 0x01)
         {
@@ -139,7 +151,9 @@ bool CPedSyncPacket::Write(NetBitStreamInterface& BitStream) const
     if (!BitStream.Can(eBitStreamVersion::NativeTaskWeaponPresentation))
         flags2 &= ~0x04;
     if (!BitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation))
-        flags2 &= ~0x08;
+        flags2 &= ~(0x08 | PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE);
+    if ((Data.flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE) && !(flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE))
+        return false;
 
     BitStream.Write(Data.ucFlags);
     BitStream.Write(flags2);

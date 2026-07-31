@@ -1,5 +1,7 @@
 local state = {
     active = false,
+    observer = false,
+    leader = nil,
     stage = nil,
     entities = {},
     timers = {},
@@ -14,7 +16,19 @@ local state = {
     rangeOutside = false,
     phoneFinished = false,
     emmetModelHeld = false,
+    presentationStage = nil,
+    presentationEntities = {},
+    presentationLastSampleAt = 0,
+    presentationSerial = 0,
+    presentationActors = {},
+    presentationShots = {},
+    observerBottleSignature = nil,
+    observerBottlePhase = nil,
+    observerBottleRound = nil,
 }
+
+local PRESENTATION_DIAGNOSTIC_INTERVAL = 250
+local PRESENTATION_DIAGNOSTIC_HEARTBEAT = 1000
 
 local function rememberTimer(timer)
     state.timers[#state.timers + 1] = timer
@@ -280,8 +294,8 @@ local function destroyBottles()
     state.bottles = {}
 end
 
-local function createBottle(index, playerTarget)
-    local layout = NINES.bottleRounds[state.round]
+local function createBottle(index, playerTarget, round)
+    local layout = NINES.bottleRounds[round or state.round]
     local p = layout and layout[playerTarget and "player" or "demo"][index]
     if not p then
         return nil
@@ -295,6 +309,78 @@ local function createBottle(index, playerTarget)
     setElementData(object, "nines.bottle", playerTarget and index or false, false)
     state.bottles[object] = {index = index, playerTarget = playerTarget == true}
     return object
+end
+
+local function syncObserverBottles(presentation)
+    if not state.observer or type(presentation) ~= "table" then
+        return
+    end
+    local phase, round = presentation.phase, tonumber(presentation.round)
+    if (phase ~= "demo" and phase ~= "player" and phase ~= "none") or not round or round < 0 or round > 3 or
+        round ~= math.floor(round) or type(presentation.broken) ~= "table" then
+        return
+    end
+    local broken, ordered = {}, {}
+    for _, value in ipairs(presentation.broken) do
+        local index = tonumber(value)
+        if index and index >= 1 and index <= 5 and index == math.floor(index) and not broken[index] then
+            broken[index] = true
+            ordered[#ordered + 1] = index
+        end
+    end
+    table.sort(ordered)
+    local signature = ("%s|%d|%s"):format(phase, round, table.concat(ordered, ","))
+    if signature == state.observerBottleSignature then
+        return
+    end
+
+    outputDebugString(("[nines-and-aks][bottle-presentation] role=observer phase=%s round=%d broken={%s}"):format(
+                          phase, round, table.concat(ordered, ",")))
+
+    local previousPhase, previousRound = state.observerBottlePhase, state.observerBottleRound
+    if phase == "none" or phase ~= previousPhase or round ~= previousRound then
+        destroyBottles()
+        state.observerBottlePhase, state.observerBottleRound = phase, round
+        if phase == "none" then
+            state.round = 0
+        else
+            local layout = NINES.bottleRounds[round]
+            local positions = layout and layout[phase == "player" and "player" or "demo"]
+            if not positions then
+                state.observerBottleSignature = signature
+                return
+            end
+            state.round = round
+            for index = 1, #positions do
+                local object = createBottle(index, phase == "player", round)
+                if isElement(object) then
+                    -- Observer props are visual evidence only. Their local
+                    -- collision must never influence a networked actor or
+                    -- manufacture a second bottle hit.
+                    setElementCollisionsEnabled(object, false)
+                end
+            end
+        end
+    end
+
+    for object, bottle in pairs(state.bottles) do
+        if broken[bottle.index] and isElement(object) then
+            if phase == "player" then
+                state.bottles[object] = nil
+                destroyElement(object)
+            elseif not bottle.presentationBroken then
+                bottle.presentationBroken = true
+                local accepted = breakObject(object)
+                outputDebugString(
+                    ("[nines-and-aks][bottle-presentation] role=observer action=break round=%d index=%d accepted=%s " ..
+                        "element=%s breakable=%s collisions=%s"):format(
+                        round, bottle.index, tostring(accepted), tostring(isElement(object)),
+                        tostring(isElement(object) and isObjectBreakable(object) or false),
+                        tostring(isElement(object) and getElementCollisionsEnabled(object) or false)))
+            end
+        end
+    end
+    state.observerBottleSignature = signature
 end
 
 local function applyActorPolicies()
@@ -316,6 +402,235 @@ local function applyActorPolicies()
     if isElement(smoke) and type(setPedWeaponAccuracy) == "function" then
         pcall(setPedWeaponAccuracy, smoke, 100)
         pcall(setPedWeaponShootingRate, smoke, 30)
+    end
+end
+
+local function getPresentationTaskHierarchy(ped, taskType, slot)
+    if type(getPedTask) ~= "function" then
+        return {}
+    end
+    local hierarchy = {getPedTask(ped, taskType, slot)}
+    if hierarchy[1] == false then
+        return {}
+    end
+    return hierarchy
+end
+
+local function describePresentationTaskSlot(ped, taskType, slot)
+    local hierarchy = getPresentationTaskHierarchy(ped, taskType, slot)
+    if #hierarchy == 0 then
+        return "nil"
+    end
+    return ("%s%d=%s"):format(taskType == "primary" and "P" or "S", slot, table.concat(hierarchy, ">"))
+end
+
+local function presentationValue(value)
+    if value == false or value == nil or value == "" then
+        return "nil"
+    end
+    return tostring(value)
+end
+
+local presentationEntityKeys = {
+    {key = "smoke", label = "Smoke", kind = "ped"},
+    {key = "emmet", label = "Emmet", kind = "ped"},
+    {key = "glendale", label = "Glendale", kind = "vehicle"},
+    {key = "tampa", label = "Tampa", kind = "vehicle"},
+}
+
+local function getPresentationEntities()
+    local entities, seen = {}, {}
+    local function add(label, element, kind)
+        if isElement(element) and not seen[element] then
+            local elementType = getElementType(element)
+            if (kind == "ped" and (elementType == "ped" or elementType == "player")) or
+                (kind == "vehicle" and elementType == "vehicle") then
+                seen[element] = true
+                entities[#entities + 1] = {label = label, element = element, kind = kind}
+            end
+        end
+    end
+    add("CJ", state.leader, "ped")
+    for _, descriptor in ipairs(presentationEntityKeys) do
+        add(descriptor.label, state.presentationEntities[descriptor.key], descriptor.kind)
+    end
+    return entities
+end
+
+local function isPresentationPed(ped)
+    for _, descriptor in ipairs(getPresentationEntities()) do
+        if descriptor.kind == "ped" and descriptor.element == ped then
+            return true
+        end
+    end
+    return false
+end
+
+local function describePresentationElement(element)
+    if not isElement(element) then
+        return "nil"
+    end
+    for _, descriptor in ipairs(getPresentationEntities()) do
+        if descriptor.element == element then
+            return descriptor.label
+        end
+    end
+    return getElementType(element)
+end
+
+local function applyObserverPresentationPolicy(ped)
+    if isElement(ped) and getElementType(ped) == "ped" and type(setPedMissionActor) == "function" then
+        pcall(setPedMissionActor, ped, getElementData(ped, "nines.missionActor") == true)
+    end
+end
+
+local function countPresentationBottles()
+    local count = 0
+    for bottle in pairs(state.bottles) do
+        if isElement(bottle) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function samplePresentationDiagnostics()
+    local now = getTickCount()
+    if not state.active or now - state.presentationLastSampleAt < PRESENTATION_DIAGNOSTIC_INTERVAL then
+        return
+    end
+    state.presentationLastSampleAt = now
+    state.presentationSerial = state.presentationSerial + 1
+    local clientStage = tostring(state.stage or "unknown")
+    local bottleCount = countPresentationBottles()
+
+    for _, descriptor in ipairs(getPresentationEntities()) do
+        local element, kind = descriptor.element, descriptor.kind
+        local streamed = element == localPlayer or isElementStreamedIn(element)
+        local syncer = element == localPlayer or isElementSyncer(element)
+        local x, y, z = getElementPosition(element)
+        local _, _, heading = getElementRotation(element)
+        local vx, vy, vz = getElementVelocity(element)
+        local speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        local onScreen = streamed and isElementOnScreen(element) or false
+        local vehicle, seat, move, animation = "nil", -1, "nil", "nil"
+        local simplest, primaryPhysical, primaryScript, secondaryAttack = "nil", "nil", "nil", "nil"
+        local weapon, target, shots = "nil", "nil", 0
+        local currentRotation, cameraRotation = 0, 0
+        local matrixForwardX, matrixForwardY = 0, 0
+        local aimStartX, aimStartY, aimStartZ = 0, 0, 0
+        local aimEndX, aimEndY, aimEndZ = 0, 0, 0
+        local onFire = false
+        if kind == "ped" then
+            local occupiedVehicle = streamed and getPedOccupiedVehicle(element) or false
+            vehicle = describePresentationElement(occupiedVehicle)
+            seat = occupiedVehicle and getPedOccupiedVehicleSeat(element) or -1
+            move = streamed and presentationValue(getPedMoveState(element)) or "nil"
+            local animationBlock, animationName
+            if streamed then
+                animationBlock, animationName = getPedAnimation(element)
+            end
+            animation = presentationValue(animationBlock) .. "/" .. presentationValue(animationName)
+            simplest = streamed and type(getPedSimplestTask) == "function" and
+                           presentationValue(getPedSimplestTask(element)) or "nil"
+            primaryPhysical = streamed and describePresentationTaskSlot(element, "primary", 0) or "nil"
+            primaryScript = streamed and describePresentationTaskSlot(element, "primary", 3) or "nil"
+            secondaryAttack = streamed and describePresentationTaskSlot(element, "secondary", 0) or "nil"
+            weapon = streamed and presentationValue(getPedWeapon(element)) or "nil"
+            target = streamed and type(getPedTarget) == "function" and describePresentationElement(getPedTarget(element)) or
+                         "nil"
+            shots = state.presentationShots[element] and state.presentationShots[element].count or 0
+            if streamed then
+                currentRotation = tonumber(getPedRotation(element)) or 0
+                cameraRotation = tonumber(getPedCameraRotation(element)) or 0
+                local matrix = getElementMatrix(element, false)
+                if type(matrix) == "table" and type(matrix[2]) == "table" then
+                    matrixForwardX = tonumber(matrix[2][1]) or 0
+                    matrixForwardY = tonumber(matrix[2][2]) or 0
+                end
+                aimStartX, aimStartY, aimStartZ = getPedTargetStart(element)
+                aimEndX, aimEndY, aimEndZ = getPedTargetEnd(element)
+                aimStartX, aimStartY, aimStartZ = tonumber(aimStartX) or 0, tonumber(aimStartY) or 0,
+                                                  tonumber(aimStartZ) or 0
+                aimEndX, aimEndY, aimEndZ = tonumber(aimEndX) or 0, tonumber(aimEndY) or 0, tonumber(aimEndZ) or 0
+                onFire = isElementOnFire(element) == true
+            end
+        end
+        local health = getElementHealth(element) or 0
+        local blown = kind == "vehicle" and isVehicleBlown(element) or false
+        local signature = table.concat({
+            tostring(streamed), tostring(syncer), tostring(onScreen), tostring(getElementDimension(element)),
+            tostring(getElementInterior(element)), vehicle, tostring(seat), move, animation, simplest, primaryPhysical,
+            primaryScript, secondaryAttack, weapon, target, tostring(shots), ("%.1f"):format(health), tostring(blown),
+            ("%.3f"):format(currentRotation), ("%.3f"):format(cameraRotation), ("%.4f"):format(matrixForwardX),
+            ("%.4f"):format(matrixForwardY), ("%.3f"):format(aimStartX), ("%.3f"):format(aimStartY),
+            ("%.3f"):format(aimStartZ), ("%.3f"):format(aimEndX), ("%.3f"):format(aimEndY),
+            ("%.3f"):format(aimEndZ), tostring(onFire), clientStage, tostring(state.round), tostring(bottleCount),
+        }, "|")
+        local previous = state.presentationActors[element]
+        local changed = not previous or previous.signature ~= signature
+        local heartbeat = not previous or now - previous.loggedAt >= PRESENTATION_DIAGNOSTIC_HEARTBEAT
+        if changed or heartbeat then
+            state.presentationActors[element] = {signature = signature, loggedAt = now}
+            local role = element == localPlayer and "local-player" or (syncer and "syncer" or "non-syncer")
+            local report = {
+                kind = kind,
+                sample = state.presentationSerial,
+                streamed = streamed,
+                syncer = syncer,
+                onScreen = onScreen,
+                x = x,
+                y = y,
+                z = z,
+                heading = heading,
+                speed = speed,
+                dimension = getElementDimension(element),
+                interior = getElementInterior(element),
+                vehicle = vehicle,
+                seat = seat,
+                move = move,
+                animation = animation,
+                simplest = simplest,
+                primaryPhysical = primaryPhysical,
+                primaryScript = primaryScript,
+                secondaryAttack = secondaryAttack,
+                weapon = weapon,
+                target = target,
+                shots = shots,
+                currentRotation = currentRotation,
+                cameraRotation = cameraRotation,
+                matrixForwardX = matrixForwardX,
+                matrixForwardY = matrixForwardY,
+                aimStartX = aimStartX,
+                aimStartY = aimStartY,
+                aimStartZ = aimStartZ,
+                aimEndX = aimEndX,
+                aimEndY = aimEndY,
+                aimEndZ = aimEndZ,
+                onFire = onFire,
+                health = health,
+                blown = blown,
+                changed = changed,
+                clientStage = clientStage,
+                round = state.round,
+                bottles = bottleCount,
+            }
+            outputDebugString(
+                ("[nines-and-aks][presentation] sample=%d client=%s partyRole=%s stage=%s clientStage=%s round=%d bottles=%d " ..
+                    "actor=%s kind=%s role=%s " ..
+                    "streamed=%s onScreen=%s dim=%d int=%d pos=(%.3f,%.3f,%.3f) heading=%.2f vel=%.4f " ..
+                    "vehicle=%s seat=%d move=%s anim=%s simplest=%s P0={%s} P3={%s} S0={%s} weapon=%s " ..
+                    "target=%s shots=%d rotCurrent=%.2f rotCamera=%.2f matrixForward=(%.4f,%.4f) " ..
+                    "aimStart=(%.3f,%.3f,%.3f) aimEnd=(%.3f,%.3f,%.3f) onFire=%s health=%.1f blown=%s changed=%s"):format(
+                    state.presentationSerial, getPlayerName(localPlayer), state.observer and "observer" or "leader",
+                    tostring(state.presentationStage or state.stage), clientStage, state.round, bottleCount, descriptor.label,
+                    kind, role, tostring(streamed), tostring(onScreen), report.dimension, report.interior, x, y, z,
+                    heading, speed, vehicle, seat, move, animation, simplest, primaryPhysical, primaryScript,
+                    secondaryAttack, weapon, target, shots, currentRotation, cameraRotation, matrixForwardX,
+                    matrixForwardY, aimStartX, aimStartY, aimStartZ, aimEndX, aimEndY, aimEndZ, tostring(onFire), health,
+                    tostring(blown), tostring(changed)))
+            triggerServerEvent("nines:presentationDiagnostic", resourceRoot, element, report)
+        end
     end
 end
 
@@ -584,7 +899,15 @@ end
 local function breakDemoBottle(index)
     for object, bottle in pairs(state.bottles) do
         if not bottle.playerTarget and bottle.index == index and isElement(object) then
-            breakObject(object)
+            bottle.presentationBroken = true
+            local accepted = breakObject(object)
+            outputDebugString(
+                ("[nines-and-aks][bottle-presentation] role=leader action=break round=%d index=%d accepted=%s " ..
+                    "element=%s breakable=%s collisions=%s"):format(
+                    state.round, index, tostring(accepted), tostring(isElement(object)),
+                    tostring(isElement(object) and isObjectBreakable(object) or false),
+                    tostring(isElement(object) and getElementCollisionsEnabled(object) or false)))
+            triggerServerEvent("nines:demoBottleBroken", resourceRoot, state.round, index)
             return
         end
     end
@@ -1160,9 +1483,21 @@ local function clearState(reason)
         textApi("clearMissionTexts")
         textApi("releaseMissionText")
     end
+    for _, descriptor in ipairs(getPresentationEntities()) do
+        local element = descriptor.element
+        if descriptor.kind == "ped" and element ~= localPlayer and getElementType(element) == "ped" and
+            type(setPedMissionActor) == "function" then
+            pcall(setPedMissionActor, element, false)
+        end
+    end
     setPedAnimation(localPlayer, false)
     setControls(true)
+    if state.observer then
+        setCameraTarget(localPlayer)
+    end
     state.active = false
+    state.observer = false
+    state.leader = nil
     state.stage = nil
     state.entities = {}
     state.missionText = false
@@ -1170,14 +1505,81 @@ local function clearState(reason)
     state.roundHits = 0
     state.rangeOutside = false
     state.phoneFinished = false
+    state.presentationStage = nil
+    state.presentationEntities = {}
+    state.presentationLastSampleAt = 0
+    state.presentationSerial = 0
+    state.presentationActors = {}
+    state.presentationShots = {}
+    state.observerBottleSignature = nil
+    state.observerBottlePhase = nil
+    state.observerBottleRound = nil
 end
 
 addEvent("nines:start", true)
 addEventHandler("nines:start", resourceRoot, function()
     clearState("replaced")
     state.active = true
+    state.observer = false
+    state.leader = localPlayer
     state.stage = "intro"
     ensureText()
+end)
+
+addEvent("nines:observerStart", true)
+addEventHandler("nines:observerStart", resourceRoot, function(leader)
+    if source ~= resourceRoot or not isElement(leader) or getElementType(leader) ~= "player" then
+        return
+    end
+    clearState("observer_replaced")
+    state.active = true
+    state.observer = true
+    state.leader = leader
+    state.stage = "spectating"
+    state.presentationStage = "intro"
+    setControls(false)
+    -- Nines and AK's has no spare mission role for a second player. Following
+    -- CJ keeps this hidden, collisionless client near the synchronized island
+    -- without granting it native tasks, bottle authority or stage reports.
+    setCameraTarget(leader)
+    fadeCamera(true, 0.5)
+    outputDebugString(("[nines-and-aks][observer] passive camera following %s; no mission authority acquired"):format(
+                          getPlayerName(leader)))
+end)
+
+addEvent("nines:presentationState", true)
+addEventHandler("nines:presentationState", resourceRoot, function(stage, leader, entities, bottlePresentation)
+    if source ~= resourceRoot or not state.active or not isElement(leader) or type(entities) ~= "table" then
+        return
+    end
+    state.leader = leader
+    state.presentationStage = tostring(stage or "unknown")
+    state.presentationEntities = entities
+    if state.observer then
+        state.stage = state.presentationStage
+        setCameraTarget(leader)
+        syncObserverBottles(bottlePresentation)
+    end
+    for _, descriptor in ipairs(getPresentationEntities()) do
+        local element = descriptor.element
+        if descriptor.kind == "ped" and element ~= localPlayer and getElementType(element) == "ped" and
+            isElementStreamedIn(element) then
+            if state.observer then
+                applyObserverPresentationPolicy(element)
+            else
+                applyActorPolicies()
+            end
+        end
+    end
+end)
+
+addEvent("nines:observerStop", true)
+addEventHandler("nines:observerStop", resourceRoot, function(reason)
+    if source == resourceRoot and state.observer then
+        clearState("observer_" .. tostring(reason or "cleanup"))
+        setCameraTarget(localPlayer)
+        fadeCamera(true, 0.5)
+    end
 end)
 
 addEvent("nines:cutscene", true)
@@ -1279,7 +1681,14 @@ end)
 
 addEventHandler("onClientObjectDamage", root, function(_, attacker)
     local bottle = state.bottles[source]
-    if not state.active or state.stage ~= "range" or not bottle or not bottle.playerTarget or attacker ~= localPlayer then
+    if not state.active or state.stage ~= "range" or not bottle then
+        return
+    end
+    if state.observer then
+        cancelEvent()
+        return
+    end
+    if not bottle.playerTarget or attacker ~= localPlayer then
         return
     end
     cancelEvent()
@@ -1295,15 +1704,32 @@ addEventHandler("onClientObjectDamage", root, function(_, attacker)
 end)
 
 addEventHandler("onClientElementStreamIn", root, function()
-    if state.active and (source == state.entities.smoke or source == state.entities.emmet) then
+    if not state.active then
+        return
+    end
+    if state.observer and getElementData(source, "nines.missionActor") == true then
+        rememberTimer(setTimer(applyObserverPresentationPolicy, 0, 1, source))
+    elseif source == state.entities.smoke or source == state.entities.emmet then
         rememberTimer(setTimer(applyActorPolicies, 0, 1))
     end
+end)
+
+addEventHandler("onClientPedWeaponFire", root, function(weapon, ammo, ammoInClip, hitX, hitY, hitZ, hitElement)
+    if not state.active or not isPresentationPed(source) then
+        return
+    end
+    local shot = state.presentationShots[source] or {count = 0}
+    shot.count = shot.count + 1
+    shot.weapon = weapon
+    shot.hit = describePresentationElement(hitElement)
+    state.presentationShots[source] = shot
 end)
 
 addEventHandler("onClientRender", root, function()
     if not state.active then
         return
     end
+    samplePresentationDiagnostics()
     if state.navigation.mode == "destination" and state.navigation.destination and type(renderScriptImportantArea) == "function" then
         local destination = NINES.destinations[state.navigation.destination]
         renderScriptImportantArea(Vector3(destination[1], destination[2], destination[3]), destination[4],
