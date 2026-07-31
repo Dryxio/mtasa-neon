@@ -11,17 +11,10 @@ local function replyToExecutor(executor, message, red, green, blue)
     end
 end
 
-addCommandHandler("faststrafe", function(executor, _, requestedState)
-    requestedState = requestedState and requestedState:lower() or "status"
-    if requestedState == "on" then
-        setGlitchEnabled(GLITCH_NAME, true)
-    elseif requestedState == "off" then
-        setGlitchEnabled(GLITCH_NAME, false)
-    elseif requestedState ~= "status" then
-        return replyToExecutor(executor, "Usage: /faststrafe [on|off|status]", 255, 190, 80)
-    end
+addCommandHandler("faststrafe", function(executor)
+    local enabled = not isGlitchEnabled(GLITCH_NAME)
+    setGlitchEnabled(GLITCH_NAME, enabled)
 
-    local enabled = isGlitchEnabled(GLITCH_NAME)
     local message = "[faststrafe] " .. (enabled and "enabled" or "disabled")
     replyToExecutor(executor, message, enabled and 110 or 255, enabled and 230 or 190, enabled and 140 or 80)
     outputServerLog(message .. (isElement(executor) and (" by " .. getPlayerName(executor)) or " from server console"))
