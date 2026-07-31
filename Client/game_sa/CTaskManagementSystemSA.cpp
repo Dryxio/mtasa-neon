@@ -245,6 +245,13 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_SIMPLE_STAND_STILL:
             pTaskSA = new CTaskSimpleStandStillSA;
             break;
+        case TASK_SIMPLE_GO_TO_POINT:
+        case TASK_SIMPLE_GO_TO_POINT_FINE:
+            // Both tasks share CTaskSimpleGoTo's movement-state prefix. The
+            // active subtask is the value GTA actually consumes for movement,
+            // so keep its concrete wrapper available to observer sync.
+            pTaskSA = new CTaskSimpleGoToSA;
+            break;
         case TASK_COMPLEX_SEQUENCE:
             pTaskSA = new CTaskComplexSequenceSA;
             break;

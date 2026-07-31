@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 #include <SString.h>
+#include <CVector.h>
 #include <core/CNativeWorldAuthorization.h>
 #include "Common.h"
 #include "CWeaponInfo.h"
@@ -137,6 +138,30 @@ struct SNativeWorldTransportFile
 };
 
 struct SNativeWorldStartupAuthorization;
+
+// A read-only proposal produced by GTA's stock population rules. The caller
+// still owns the network element and its lifetime; Game SA never creates an
+// unmanaged ambient ped from this structure.
+struct SAmbientPedSpawnCandidate
+{
+    CVector       position{};
+    unsigned int  modelId{};
+    unsigned char pedType{};
+    unsigned char wanderDirection{};
+    float         pathLerp{};
+};
+
+enum class EAmbientPedSpawnCandidateResult : unsigned char
+{
+    Success,
+    InvalidOrigin,
+    NoModel,
+    UnsupportedModel,
+    NoPath,
+    PathDensity,
+    VisibleTooClose,
+    Blocked,
+};
 
 struct SNativeWorldTransportOffer
 {
@@ -431,4 +456,11 @@ public:
     virtual ENativeWorldRuntimeAdmissionReadiness GetNativeWorldRuntimeAdmissionReadiness() const = 0;
     virtual bool                                  ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelection& selection, std::string& error) = 0;
     virtual bool ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) = 0;
+
+    // Ambient traffic uses GTA as a placement/model oracle while keeping
+    // entity creation, ownership and cleanup under the multiplayer runtime.
+    // Append-only: CGame is shared across the Game SA/Client modules.
+    virtual void                            UpdateAmbientPedPopulationModels(const CVector& origin) = 0;
+    virtual void                            ResetAmbientPedPopulationModels() = 0;
+    virtual EAmbientPedSpawnCandidateResult GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate) = 0;
 };

@@ -181,7 +181,10 @@ namespace
 
     bool ShouldTraceNativeTaskLocomotion(CClientPed* pPed, ENativeTaskLocomotionTraceChannel channel, const SString& signature)
     {
-        if (!pPed || !pPed->IsMissionActor() || !IsNativeTaskLocomotionTraceEnabled())
+        // Native walking-style peds use the same presentation channel as
+        // mission actors. Including them keeps the opt-in trace useful for
+        // ambient AI without coupling diagnostics to a particular resource.
+        if (!pPed || (!pPed->IsMissionActor() && !pPed->IsUsingNativeWalkingStyle()) || !IsNativeTaskLocomotionTraceEnabled())
             return false;
 
         const unsigned long now = CClientTime::GetTime();
@@ -284,22 +287,49 @@ namespace
         return pPed->GetGamePlayer() ? pPed->GetGamePlayer()->GetMoveState() : PedMoveState::PEDMOVE_NONE;
     }
 
-    std::optional<PedMoveState::Enum> GetNativeTaskLocomotionCommandMoveState(CTask* pTask)
+    std::optional<PedMoveState::Enum> GetNativeTaskLocomotionParentMoveState(CTask* pTask)
     {
-        // Script sequences wrap the active go-to task in one or more complex
-        // parents. Walk the live chain until the task that owns the requested
-        // move state is found.
         for (CTask* pCurrent = pTask; pCurrent; pCurrent = pCurrent->GetParent())
         {
-            if (pCurrent->GetTaskType() != TASK_COMPLEX_GO_TO_POINT_AND_STAND_STILL)
-                continue;
+            if (pCurrent->GetTaskType() == TASK_COMPLEX_WANDER)
+            {
+                auto* pWander = dynamic_cast<CTaskComplexWander*>(pCurrent);
+                if (!pWander)
+                    return std::nullopt;
 
-            auto* pGoTo = dynamic_cast<CTaskComplexGoToPointAndStandStill*>(pCurrent);
-            if (!pGoTo)
-                return std::nullopt;
+                return static_cast<PedMoveState::Enum>(pWander->GetMoveState());
+            }
 
-            return static_cast<PedMoveState::Enum>(pGoTo->GetMoveState());
+            if (pCurrent->GetTaskType() == TASK_COMPLEX_GO_TO_POINT_AND_STAND_STILL)
+            {
+                auto* pGoTo = dynamic_cast<CTaskComplexGoToPointAndStandStill*>(pCurrent);
+                if (!pGoTo)
+                    return std::nullopt;
+
+                return static_cast<PedMoveState::Enum>(pGoTo->GetMoveState());
+            }
         }
+        return std::nullopt;
+    }
+
+    std::optional<PedMoveState::Enum> GetNativeTaskLocomotionCommandMoveState(CTask* pTask)
+    {
+        // Preserve the durable complex command first. Story go-to tasks rely
+        // on that intent while GTA blends or slows their active subtask.
+        if (const auto parentMoveState = GetNativeTaskLocomotionParentMoveState(pTask))
+            return parentMoveState;
+
+        // Event-response tasks such as pedestrian avoidance can temporarily
+        // own Wander's active SimpleGoTo without linking its parent chain back
+        // to the primary Wander. That subtask still carries the exact movement
+        // command GTA is processing and must win over the transient ped state.
+        if (pTask && (pTask->GetTaskType() == TASK_SIMPLE_GO_TO_POINT || pTask->GetTaskType() == TASK_SIMPLE_GO_TO_POINT_FINE))
+        {
+            auto* pSimpleGoTo = dynamic_cast<CTaskSimpleGoTo*>(pTask);
+            if (pSimpleGoTo)
+                return static_cast<PedMoveState::Enum>(pSimpleGoTo->GetMoveState());
+        }
+
         return std::nullopt;
     }
 
@@ -309,21 +339,29 @@ namespace
         CTask*                   pPrimaryTask = GetNativeTaskLocomotionPrimaryTask(pPed);
         CTask*                   pSimplestTask = GetNativeTaskLocomotionSimplestTask(pPed);
         const PedMoveState::Enum moveState = GetNativeTaskLocomotionMoveState(pPed);
+        const auto               commandMoveState = GetNativeTaskLocomotionCommandMoveState(pSimplestTask);
+        const auto               parentMoveState = GetNativeTaskLocomotionParentMoveState(pSimplestTask);
+        const char*              commandSource = parentMoveState ? "complex-parent" : (commandMoveState ? "simple-go-to" : "live-ped");
+        CTask*                   pSimplestParentTask = pSimplestTask ? pSimplestTask->GetParent() : nullptr;
         const int                primaryType = pPrimaryTask ? static_cast<int>(pPrimaryTask->GetTaskType()) : -1;
         const int                simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
-        const SString            signature("%s:%u:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState), primaryType, simplestType,
-                                           controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
+        const int                simplestParentType = pSimplestParentTask ? static_cast<int>(pSimplestParentTask->GetTaskType()) : -1;
+        const SString            signature("%s:%u:%d:%d:%d:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState),
+                                commandMoveState ? static_cast<int>(*commandMoveState) : -1, parentMoveState ? static_cast<int>(*parentMoveState) : -1,
+                                           primaryType, simplestType, simplestParentType, controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
         if (!ShouldTraceNativeTaskLocomotion(pPed, ENativeTaskLocomotionTraceChannel::PRODUCER, signature))
             return;
 
         g_pCore->GetConsole()->Printf(
             "[native-task-locomotion][producer] profile=%s pid=%u ped=%u model=%lu reason=%s mode=%s stick=(%d,%d) controller=(%d,%d,w=%u,x=%u) "
-            "move=%s velocity=(%.4f,%.4f,%.4f) primary=%s(%d) simplest=%s(%d)",
+            "move=%s command=%s commandSource=%s parentCommand=%s velocity=(%.4f,%.4f,%.4f) primary=%s(%d) simplest=%s(%d) simplestParent=%s(%d)",
             g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(), pPed->GetModel(), reason,
             GetNativeTaskLocomotionModeName(locomotion.data.uiMode), locomotion.data.sLeftStickX, locomotion.data.sLeftStickY, controllerState.LeftStickX,
             controllerState.LeftStickY, static_cast<unsigned int>(controllerState.m_bPedWalk), static_cast<unsigned int>(controllerState.ButtonCross),
-            GetNativeTaskLocomotionMoveStateName(moveState), velocity.fX, velocity.fY, velocity.fZ, pPrimaryTask ? pPrimaryTask->GetTaskName() : "none",
-            primaryType, pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType);
+            GetNativeTaskLocomotionMoveStateName(moveState), commandMoveState ? GetNativeTaskLocomotionMoveStateName(*commandMoveState) : "unavailable",
+            commandSource, parentMoveState ? GetNativeTaskLocomotionMoveStateName(*parentMoveState) : "unavailable", velocity.fX, velocity.fY, velocity.fZ,
+            pPrimaryTask ? pPrimaryTask->GetTaskName() : "none", primaryType, pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType,
+            pSimplestParentTask ? pSimplestParentTask->GetTaskName() : "none", simplestParentType);
     }
 
     void TraceNativeTaskLocomotionReceive(CClientPed* pPed, const SNativeTaskLocomotionSync& locomotion, const char* source)

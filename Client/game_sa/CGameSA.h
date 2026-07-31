@@ -354,6 +354,9 @@ public:
     ENativeWorldRuntimeAdmissionReadiness GetNativeWorldRuntimeAdmissionReadiness() const override;
     bool                                  ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelection& selection, std::string& error) override;
     bool                                  ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) override;
+    void                                  UpdateAmbientPedPopulationModels(const CVector& origin) override;
+    void                                  ResetAmbientPedPopulationModels() override;
+    EAmbientPedSpawnCandidateResult       GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate) override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;
@@ -428,6 +431,7 @@ private:
     bool             m_isExtendedWaterCannonsEnabled{false};
     bool             m_isIgnoreFireStateEnabled{false};
     bool             m_isVehicleBurnExplosionsEnabled{true};
+    bool             m_areAmbientPedPopulationModelsActive{false};
 
     static unsigned int& ClumpOffset;
 

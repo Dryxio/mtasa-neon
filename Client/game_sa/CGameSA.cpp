@@ -45,6 +45,7 @@
 #include "CNativeModelStoreSA.h"
 #include "CNativeWorldPackSA.h"
 #include "CPadSA.h"
+#include "CPedModelInfoSA.h"
 #include "CPickupsSA.h"
 #include "CPlayerInfoSA.h"
 #include "CPointLightsSA.h"
@@ -89,6 +90,19 @@ namespace
     constexpr std::uintptr_t FUNC_StartVehiclePlayback = 0x45A980;
     constexpr std::uintptr_t FUNC_StopVehiclePlayback = 0x45A280;
     constexpr std::uintptr_t FUNC_IsVehiclePlaybackActive = 0x4594C0;
+
+    constexpr std::uintptr_t GTA_PATH_FIND = 0x96F050;
+    constexpr std::uintptr_t FUNC_StreamZoneModels = 0x40A560;
+    constexpr std::uintptr_t FUNC_ClearPedModelSlots = 0x40BAA0;
+    constexpr std::uintptr_t FUNC_GeneratePedCreationCoors = 0x44E790;
+    constexpr std::uintptr_t FUNC_TakePathWidthIntoAccount = 0x44DA30;
+    constexpr std::uintptr_t FUNC_PedCreationDistMultiplier = 0x6116C0;
+    constexpr std::uintptr_t FUNC_ChooseCivilianOccupation = 0x612F90;
+    constexpr std::uintptr_t FUNC_IsPositionClearForPed = 0x616860;
+    constexpr std::uintptr_t GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER = 0xB6F11C;
+    constexpr std::uintptr_t GTA_CURRENT_STREAMING_ZONE_TYPE = 0x8E4C20;
+    constexpr unsigned int   PED_TYPE_CIVMALE = 4;
+    constexpr unsigned int   PED_TYPE_CIVFEMALE = 5;
 
     constexpr std::uintptr_t GTA_TEXT = 0xC1B340;
     constexpr std::uintptr_t GTA_SETTINGS = 0xBA6748;
@@ -698,6 +712,7 @@ CGameSA::CGameSA()
 
 CGameSA::~CGameSA()
 {
+    ResetAmbientPedPopulationModels();
     delete reinterpret_cast<CPlayerInfoSA*>(m_pPlayerInfo);
 
     for (int i = 0; i < NUM_WeaponInfosTotal; i++)
@@ -872,6 +887,7 @@ void CGameSA::SetGameSpeed(float fSpeed)
 
 void CGameSA::Reset()
 {
+    ResetAmbientPedPopulationModels();
     CNativeWorldPackManagerSA::LogLifecycleTelemetry("CGameSA::Reset-begin");
 
     // Things to do if the game was loaded
@@ -992,6 +1008,131 @@ bool CGameSA::ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelec
 bool CGameSA::ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error)
 {
     return CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(expectedSelection, error);
+}
+
+void CGameSA::UpdateAmbientPedPopulationModels(const CVector& origin)
+{
+    // MTA skips GTA's ambient StreamZoneModels caller so unmanaged population
+    // cannot appear. Calling the intact ped-only pass preserves the stock zone
+    // model cadence without enabling CPopulation::AddToPopulation.
+    m_areAmbientPedPopulationModelsActive = true;
+    reinterpret_cast<void(__cdecl*)(const CVector&)>(FUNC_StreamZoneModels)(origin);
+}
+
+void CGameSA::ResetAmbientPedPopulationModels()
+{
+    if (!m_areAmbientPedPopulationModelsActive)
+        return;
+
+    // These eight stock slots are otherwise orphaned when MTA's ambient caller
+    // remains disabled. The native routine clears only its KEEP_IN_MEMORY pins;
+    // live MTA peds and resource model references still protect their models.
+    reinterpret_cast<void(__cdecl*)(int)>(FUNC_ClearPedModelSlots)(8);
+    *reinterpret_cast<int*>(GTA_CURRENT_STREAMING_ZONE_TYPE) = -1;
+    m_areAmbientPedPopulationModelsActive = false;
+}
+
+EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate)
+{
+    candidate = {};
+    if (!std::isfinite(origin.fX) || !std::isfinite(origin.fY) || !std::isfinite(origin.fZ))
+        return EAmbientPedSpawnCandidateResult::InvalidOrigin;
+
+    const float distanceMultiplier = reinterpret_cast<float(__cdecl*)()>(FUNC_PedCreationDistMultiplier)();
+    const float generationMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
+    if (!std::isfinite(distanceMultiplier) || !std::isfinite(generationMultiplier) || distanceMultiplier <= 0.0f || generationMultiplier <= 0.0f)
+        return EAmbientPedSpawnCandidateResult::InvalidOrigin;
+
+    const float visibleMinDistance = distanceMultiplier * generationMultiplier * 42.5f;
+    const float visibleMaxDistance = distanceMultiplier * generationMultiplier * 50.5f;
+    const float hiddenMinDistance = distanceMultiplier * 25.0f - 10.0f;
+    const float hiddenMaxDistance = distanceMultiplier * 25.0f;
+    const float visibleTooCloseDistance = distanceMultiplier * 42.5f;
+
+    const auto chooseCivilian = reinterpret_cast<int(__cdecl*)(bool, bool, int, int, int, bool, bool, bool, const char*)>(FUNC_ChooseCivilianOccupation);
+    auto       modelId = chooseCivilian(false, false, -1, -1, -1, false, true, false, nullptr);
+    if (modelId < 0)
+        return EAmbientPedSpawnCandidateResult::NoModel;
+
+    auto* modelInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(modelId));
+    if (!modelInfo || (modelInfo->pedType != PED_TYPE_CIVMALE && modelInfo->pedType != PED_TYPE_CIVFEMALE))
+    {
+        const bool tryMaleFirst = (rand() & 1) != 0;
+        modelId = chooseCivilian(tryMaleFirst, !tryMaleFirst, -1, -1, -1, false, true, false, nullptr);
+        if (modelId < 0)
+            modelId = chooseCivilian(!tryMaleFirst, tryMaleFirst, -1, -1, -1, false, true, false, nullptr);
+        if (modelId < 0)
+            return EAmbientPedSpawnCandidateResult::UnsupportedModel;
+        modelInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(modelId));
+    }
+    if (!modelInfo || !modelInfo->pRwObject || (modelInfo->pedType != PED_TYPE_CIVMALE && modelInfo->pedType != PED_TYPE_CIVFEMALE))
+        return EAmbientPedSpawnCandidateResult::UnsupportedModel;
+
+    CVector      position{};
+    unsigned int firstNode{};
+    unsigned int secondNode{};
+    float        pathLerp{};
+    const bool   generated =
+        reinterpret_cast<bool(__thiscall*)(void*, float, float, float, float, float, float, CVector*, unsigned int*, unsigned int*, float*, bool, void*)>(
+            FUNC_GeneratePedCreationCoors)(reinterpret_cast<void*>(GTA_PATH_FIND), origin.fX, origin.fY, visibleMinDistance, visibleMaxDistance,
+                                           hiddenMinDistance, hiddenMaxDistance, &position, &firstNode, &secondNode, &pathLerp, false, nullptr);
+    if (!generated)
+        return EAmbientPedSpawnCandidateResult::NoPath;
+
+    const auto getSpawnProbability = [](unsigned int nodeAddress, unsigned char& probability)
+    {
+        constexpr unsigned int PATH_NODE_AREA_COUNT = 64;
+        constexpr unsigned int PATH_NODE_ARRAY_OFFSET = 0x804;
+        constexpr unsigned int PATH_NODE_SIZE = 0x1C;
+        constexpr unsigned int PATH_NODE_SPAWN_FLAGS_OFFSET = 0x1A;
+
+        const auto area = nodeAddress & 0xFFFF;
+        const auto node = nodeAddress >> 16;
+        if (area >= PATH_NODE_AREA_COUNT || area == 0xFFFF || node == 0xFFFF)
+            return false;
+
+        auto* const* nodeAreas = reinterpret_cast<unsigned char* const*>(GTA_PATH_FIND + PATH_NODE_ARRAY_OFFSET);
+        const auto*  nodeArray = nodeAreas[area];
+        if (!nodeArray)
+            return false;
+
+        probability = nodeArray[node * PATH_NODE_SIZE + PATH_NODE_SPAWN_FLAGS_OFFSET] & 0xF;
+        return true;
+    };
+
+    unsigned char firstProbability{};
+    unsigned char secondProbability{};
+    if (!getSpawnProbability(firstNode, firstProbability) || !getSpawnProbability(secondNode, secondProbability))
+        return EAmbientPedSpawnCandidateResult::NoPath;
+    if ((rand() & 0xF) > std::min(firstProbability, secondProbability))
+        return EAmbientPedSpawnCandidateResult::PathDensity;
+
+    const auto widthSeed = static_cast<unsigned short>(rand());
+    reinterpret_cast<void(__thiscall*)(void*, unsigned int, unsigned int, unsigned short, float*, float*)>(FUNC_TakePathWidthIntoAccount)(
+        reinterpret_cast<void*>(GTA_PATH_FIND), firstNode, secondNode, widthSeed, &position.fX, &position.fY);
+
+    // The generic single-ped AddToPopulation branch lifts the grounded path
+    // result by this amount; the +1 m probe belongs only to couple placement.
+    position.fZ += 0.7f;
+
+    // This is the same conservative collision query used by AddToPopulation.
+    if (!reinterpret_cast<bool(__cdecl*)(const CVector&, float, int, void*, bool, bool, bool)>(FUNC_IsPositionClearForPed)(position, -1.0f, -1, nullptr, true,
+                                                                                                                           true, true))
+    {
+        return EAmbientPedSpawnCandidateResult::Blocked;
+    }
+
+    const float deltaX = position.fX - origin.fX;
+    const float deltaY = position.fY - origin.fY;
+    if (m_pCamera->IsSphereVisible(&position, 2.0f) && std::sqrt(deltaX * deltaX + deltaY * deltaY) < visibleTooCloseDistance)
+        return EAmbientPedSpawnCandidateResult::VisibleTooClose;
+
+    candidate.position = position;
+    candidate.modelId = static_cast<unsigned int>(modelId);
+    candidate.pedType = static_cast<unsigned char>(modelInfo->pedType);
+    candidate.wanderDirection = static_cast<unsigned char>(rand() & 7);
+    candidate.pathLerp = pathLerp;
+    return EAmbientPedSpawnCandidateResult::Success;
 }
 
 eGameVersion CGameSA::FindGameVersion()

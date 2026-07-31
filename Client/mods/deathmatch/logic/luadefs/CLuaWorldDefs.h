@@ -106,6 +106,9 @@ public:
     LUA_DECLARE(CreateSWATRope);
     LUA_DECLARE(SetBirdsEnabled);
     LUA_DECLARE(GetBirdsEnabled);
+    static bool UpdateAmbientPedPopulationModels(CVector origin);
+    static bool ResetAmbientPedPopulationModels();
+    LUA_DECLARE(GetAmbientPedSpawnCandidate);
     LUA_DECLARE(SetPedTargetingMarkerEnabled);
     LUA_DECLARE(IsPedTargetingMarkerEnabled);
     LUA_DECLARE(SetMoonSize);

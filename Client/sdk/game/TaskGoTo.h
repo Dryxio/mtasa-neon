@@ -36,6 +36,18 @@ enum
 
 #define NO_WANDER_TYPE 9999
 
+// Common movement command stored by GTA's active point-navigation subtasks.
+// Reading this task is important for script commands because GTA installs a
+// clone through CEventScriptCommand and may no longer expose the constructor's
+// original wrapper as the active parent.
+class CTaskSimpleGoTo : public virtual CTaskSimple
+{
+public:
+    virtual ~CTaskSimpleGoTo() {};
+
+    virtual int GetMoveState() const = 0;
+};
+
 class CTaskComplexWander : public virtual CTaskComplex
 {
 public:
@@ -45,6 +57,11 @@ public:
     virtual CNodeAddress* GetLastNode() = 0;
 
     virtual int GetWanderType() = 0;
+
+    // The live ped move state can be rewritten while GTA processes or blends
+    // a subtask. Observer presentation needs the durable command stored by the
+    // Wander parent so a requested walk is never serialized as a run.
+    virtual int GetMoveState() const = 0;
 };
 
 class CTaskComplexWanderStandard : public virtual CTaskComplexWander

@@ -45,6 +45,26 @@ public:
 };
 
 // ##############################################################################
+// ## Name:    CTaskSimpleGoTo
+// ## Purpose: Common prefix used by GTA's point-navigation subtasks.
+// ##############################################################################
+
+class CTaskSimpleGoToSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    int m_iMoveState;
+};
+static_assert(offsetof(CTaskSimpleGoToSAInterface, m_iMoveState) == 0x08, "Invalid simple go-to movement offset");
+
+class CTaskSimpleGoToSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleGoTo
+{
+public:
+    CTaskSimpleGoToSA() {};
+
+    int GetMoveState() const override { return static_cast<const CTaskSimpleGoToSAInterface*>(GetInterface())->m_iMoveState; }
+};
+
+// ##############################################################################
 // ## Name:    CTaskComplexWander
 // ## Purpose: Generic task that makes peds wander around. Can't be used
 // ##          directly, use a superclass of this instead.
@@ -69,6 +89,8 @@ public:
     unsigned char m_bNewNodes : 1;
     unsigned char m_bAllNodesBlocked : 1;
 };
+static_assert(offsetof(CTaskComplexWanderSAInterface, m_iMoveState) == 0x0C, "Invalid wander movement offset");
+static_assert(sizeof(CTaskComplexWanderSAInterface) == 0x28, "Invalid wander task size");
 
 class CTaskComplexWanderSA : public virtual CTaskComplexSA, public virtual CTaskComplexWander
 {
@@ -79,6 +101,7 @@ public:
     CNodeAddress* GetLastNode();
 
     int GetWanderType();
+    int GetMoveState() const override { return static_cast<const CTaskComplexWanderSAInterface*>(GetInterface())->m_iMoveState; }
 };
 
 // ##############################################################################
@@ -93,6 +116,7 @@ public:
     CTaskTimer m_timer;
     int        m_iMinNextScanTime;
 };
+static_assert(sizeof(CTaskComplexWanderStandardSAInterface) == 0x38, "Invalid standard wander task size");
 
 class CTaskComplexWanderStandardSA : public virtual CTaskComplexWanderSA, public virtual CTaskComplexWanderStandard
 {

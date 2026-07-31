@@ -59,6 +59,9 @@ void CLuaWorldDefs::LoadFunctions()
         {"getMoonSize", GetMoonSize},
         {"getFPSLimit", GetFPSLimit},
         {"getBirdsEnabled", GetBirdsEnabled},
+        {"updateAmbientPedPopulationModels", ArgumentParser<UpdateAmbientPedPopulationModels>},
+        {"resetAmbientPedPopulationModels", ArgumentParser<ResetAmbientPedPopulationModels>},
+        {"getAmbientPedSpawnCandidate", GetAmbientPedSpawnCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
         {"getWorldProperty", ArgumentParser<GetWorldProperty>},
 
@@ -185,6 +188,86 @@ int CLuaWorldDefs::CreateExplosion(lua_State* luaVM)
 
     lua_pushboolean(luaVM, false);
     return 1;
+}
+
+int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
+{
+    CVector origin;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadVector3D(origin);
+
+    if (argStream.HasErrors())
+    {
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SAmbientPedSpawnCandidate candidate;
+    const auto                result = g_pGame->GetAmbientPedSpawnCandidate(origin, candidate);
+    if (result != EAmbientPedSpawnCandidateResult::Success)
+    {
+        const char* reason = "unknown";
+        switch (result)
+        {
+            case EAmbientPedSpawnCandidateResult::InvalidOrigin:
+                reason = "invalid-origin";
+                break;
+            case EAmbientPedSpawnCandidateResult::NoModel:
+                reason = "no-model";
+                break;
+            case EAmbientPedSpawnCandidateResult::UnsupportedModel:
+                reason = "unsupported-model";
+                break;
+            case EAmbientPedSpawnCandidateResult::NoPath:
+                reason = "no-path";
+                break;
+            case EAmbientPedSpawnCandidateResult::PathDensity:
+                reason = "path-density";
+                break;
+            case EAmbientPedSpawnCandidateResult::VisibleTooClose:
+                reason = "visible-too-close";
+                break;
+            case EAmbientPedSpawnCandidateResult::Blocked:
+                reason = "blocked";
+                break;
+            case EAmbientPedSpawnCandidateResult::Success:
+                break;
+        }
+        lua_pushboolean(luaVM, false);
+        lua_pushstring(luaVM, reason);
+        return 2;
+    }
+
+    lua_createtable(luaVM, 0, 8);
+    lua_pushinteger(luaVM, candidate.modelId);
+    lua_setfield(luaVM, -2, "model");
+    lua_pushinteger(luaVM, candidate.pedType);
+    lua_setfield(luaVM, -2, "pedType");
+    lua_pushnumber(luaVM, candidate.position.fX);
+    lua_setfield(luaVM, -2, "x");
+    lua_pushnumber(luaVM, candidate.position.fY);
+    lua_setfield(luaVM, -2, "y");
+    lua_pushnumber(luaVM, candidate.position.fZ);
+    lua_setfield(luaVM, -2, "z");
+    lua_pushinteger(luaVM, candidate.wanderDirection);
+    lua_setfield(luaVM, -2, "direction");
+    lua_pushnumber(luaVM, candidate.pathLerp);
+    lua_setfield(luaVM, -2, "pathLerp");
+    return 1;
+}
+
+bool CLuaWorldDefs::UpdateAmbientPedPopulationModels(CVector origin)
+{
+    g_pGame->UpdateAmbientPedPopulationModels(origin);
+    return true;
+}
+
+bool CLuaWorldDefs::ResetAmbientPedPopulationModels()
+{
+    g_pGame->ResetAmbientPedPopulationModels();
+    return true;
 }
 
 int CLuaWorldDefs::GetTime(lua_State* luaVM)
