@@ -28,6 +28,10 @@ The repository preserves the complete upstream history and adds proof-of-concept
 
 Readers familiar with the historical [MTA:Eir](https://wiki.multitheftauto.com/wiki/MTA:Eir) project may recognize a related ambition: using an independent MTA:BLUE-derived codebase as a laboratory for deeper GTA:SA engine integration, expanded streaming and IMG workflows, reverse-engineered native features, and new scripting APIs. Neon is not a continuation of or affiliated with MTA:Eir; the comparison is about scope and experimental spirit.
 
+## GTA:SA's native AI, synchronized for multiplayer
+
+**MTA:SA Neon brings GTA:SA's single-player NPCs, traffic, vehicles, and native AI into one shared, synchronized multiplayer world.** The system is still growing, with more of the original solo behavior becoming available over time. [Learn more on the Neon wiki.](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai)
+
 ## MTA:SA vs MTA:SA Neon
 
 Neon keeps MTA:SA's resource model and default gameplay behavior while lifting selected GTA:SA engine limits and exposing new opt-in features to resources. The figures below describe the currently implemented Neon client/server patches and resource workflows.
@@ -51,6 +55,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Native minimap tiles | Fixed 12 x 12 stock grid, approximately -3,000 to +3,000 | Sparse 40 x 40 logical grid covering -10,000 to +9,999, with resource-owned TXDs and protected stock tiles |
 | Extended F11 world map | Packaged San Andreas map | Dynamic atlas composed from GTA's native tiles and registered extended tiles, with catalog-derived world bounds |
 | Large IMG-backed map residency | Basic client-side IMG linking | Resource-managed per-client residency for large map packs, with bounded model/TXD allocation, scene preloading, teardown-safe slot reuse, and optional switching |
+| Server-delivered native world packs | Not available | Audited format-3 city sets loaded through GTA's IDE/IMG/COL/IPL path, one imported city resident at a time, with immutable cache, startup authorization, generation-fenced teardown, and current restart-required readmission |
 | MTA pickup visual XY | -4,096 to +4,095.875 | -10,000 to +9,999 |
 | Low-precision networked XY | Approximately -8,192 to +8,192 | -10,000 to +10,000 for Neon-capable connections |
 | Absolute networked camera range | Approximately -8,192 to +8,192 | Approximately -16,384 to +16,384 for Neon-capable connections |
@@ -61,14 +66,16 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
+| Shared ambient pedestrian traffic | GTA population remains client-local and disabled by MTA | Server-owned MTA peds proposed from GTA's civilian models and paths, with one native-AI owner, syncer handoff, observer presentation, and deterministic cleanup |
 | Native ped task primitives | No direct resource API for these GTA tasks | Client-owned native movement/combat/vehicle tasks plus persistent GTA mission-actor classification with verified layouts and lifecycles |
+| Native task presentation to non-syncers | Ordinary element state only | Reusable locomotion, animation, fight/chat, weapon audiovisual, and selected physical-response channels without giving observers AI or gameplay authority |
 | Per-object gang-tag rendering | Single-player tag gameplay disabled by MTA | Opt-in native Grove-material alpha for scripted tag objects without restoring gameplay progress |
 | SA-MP-style fast weapon strafe | Not available as a synchronized glitch | Optional `fastweaponstrafe` glitch, server-synchronized and disabled by default |
 | Neon diagnostics and stress tests | Not included | Reproducible resources for limits, rendering, extended-world systems, radar/F11 composition, model-registry lifecycle, IMG residency, native mirrors, and dense-entity profiling |
 
 These are capacity increases, not forced visual defaults. Distant lights and extended world draw distance are disabled by default, so a clean Neon installation retains GTA's ordinary rendering distances. Players can opt in through the Neon settings tab, while servers and client resources can still apply temporary runtime overrides. Legacy network connections retain MTA:SA's original position formats. The CULL relocation and Lua lifecycle have been exercised in game; dedicated tunnel and mirror capacity-boundary tests remain follow-up validation.
 
-Project2DFX support currently covers distant static coronas and timed traffic lights using `SALodLights.dat`. Searchlight cones are recorded for future work; distant cars, static shadows, and the other Project2DFX modules are not included. The drag-and-drop skin and animation previews are intentionally insecure local development prototypes, not production or competitive-client features. Drop one IFP onto the game window to load its animation list; a one-animation file starts immediately, while multi-animation files can be searched and played from the in-game preview window with loop, freeze-last-frame, root-motion, speed, and blend controls. Technical design, executable address inventories, validation results, and reproducible limit-test resources are documented in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md). Dense-entity profiling methodology and results are documented separately in [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md). The extended native minimap design and Lua API are documented in [EXTENDED_RADAR.md](./EXTENDED_RADAR.md). The proposed server-authoritative story runtime, reusable native task API, SCM compatibility layer, and co-op roadmap are documented in [STORY_RUNTIME.md](./STORY_RUNTIME.md).
+Project2DFX support currently covers distant static coronas and timed traffic lights from the complete IPL catalogue captured at startup, using Neon's private 25,000-entry render queue. Searchlight cones are recorded for future work; distant cars, static shadows, and the other Project2DFX modules are not included. The drag-and-drop skin and animation previews are intentionally insecure local development prototypes, not production or competitive-client features. Drop one IFP onto the game window to load its animation list; a one-animation file starts immediately, while multi-animation files can be searched and played from the in-game preview window with loop, freeze-last-frame, root-motion, speed, and blend controls. Technical design, executable address inventories, validation results, and reproducible limit-test resources are documented in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md). Dense-entity profiling methodology and results are documented separately in [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md). The extended native minimap design and Lua API are documented in [EXTENDED_RADAR.md](./EXTENDED_RADAR.md). The current server-authoritative story runtime, reusable native task API, SCM compatibility layer, and co-op roadmap are documented in [STORY_RUNTIME.md](./STORY_RUNTIME.md).
 
 ### Neon visual settings
 
@@ -131,7 +138,7 @@ Radar tile registrations are resource-scoped: destroying their TXD or stopping t
 | `engineGetModelRuntimeID(serverModel)` | Client | Resolves a stable server model ID to the GTA runtime slot allocated on this client, or `false` when no slot is active. |
 | `engineGetModelServerID(runtimeModel)` | Client | Reverse-resolves a client runtime slot to its stable server model ID, or `false` when it is not a server model. |
 
-Logical IDs start at 30,000, are never reused during the server process, and remain independent from the runtime slot selected by each client. Clients without an active slot, including legacy clients, fall back to the model's native parent. Resource shutdown frees owned registrations automatically.
+Logical IDs use the reserved range 42,341–65,534, are never reused during the server process, and remain independent from the runtime slot selected by each client. ID 65,535 stays invalid. Server-managed model identities require the exact current Neon network epoch; resource shutdown frees owned registrations automatically.
 
 ### Renderer and distant lights
 
@@ -185,11 +192,21 @@ These functions affect only the rendered procedural seabed. They do not remove t
 
 The mode follows skin changes, entity recreation, joins, and streaming. The OOP equivalents are `ped:setUseNativeWalkingStyle(enabled)`, `ped:isUsingNativeWalkingStyle()`, and the `ped.usingNativeWalkingStyle` property.
 
+### Synchronized ambient pedestrian traffic
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `updateAmbientPedPopulationModels(origin)` | Client | Runs GTA's ped-only zone-model residency pass around a finite `Vector3` origin without enabling unmanaged population creation. |
+| `getAmbientPedSpawnCandidate(origin)` | Client | Returns one read-only civilian model and native path-placement proposal, or `false` plus a bounded rejection reason. It creates no ped and grants no authority. |
+| `resetAmbientPedPopulationModels()` | Client | Releases the eight stock population-model slots retained by the update pass; live MTA peds keep their own model references. |
+
+These primitives are deliberately smaller than a population manager. The server must validate proposals against every player and its own caps, create and own the synchronized peds, assign exactly one syncer, advance ownership epochs, and clean up the resource's elements. The reference resource combines them with native Wander, the `"ambient-wander"` event profile, and the two event bridges listed below.
+
 ### Native vehicle predicates, ped tasks and gang tags
 
-**Neon lets multiplayer NPCs drive with GTA:SA's original AI, fully synchronized.**
+**Neon lets one authoritative client run GTA:SA's original NPC tasks while other players receive synchronized, native-looking presentation.**
 
-Use it for story missions, convoys, escorts, scripted traffic, freeroam events, and more.
+Use it for story missions, convoys, escorts, scripted traffic, freeroam events, and more. Full ambient vehicle traffic is still open work.
 
 | Function | Side | Description |
 | --- | --- | --- |
@@ -235,6 +252,7 @@ Use it for story missions, convoys, escorts, scripted traffic, freeroam events, 
 | `setVehiclePhysicalProofs(vehicle, bullet, fire, explosion, collision, melee)` | Client | Persists GTA's five independent SCM vehicle-proof flags across local native vehicle recreation. |
 | `setVehicleLoadCollisionFlag(vehicle, loadCollision)` | Client | Reproduces SCM opcode `0587` and persists GTA's mission-car collision-loading/ghost-physics policy across local native vehicle recreation. |
 | `setPedShootAt(ped, target [, duration, burstLength])` | Client | Replaces the owned ped's primary task with GTA's native coordinate `GunControl` firing task. |
+| `getPedWeaponShootingRate(ped)` | Client | Reads GTA's current native 0–255 shooting-rate byte from a streamed ped. |
 | `setPedWeaponShootingRate(ped, rate)` | Client | Sets GTA's persistent 0-255 shooting-rate byte used by native gun tasks. |
 | `setPedWeaponAccuracy(ped, accuracy)` | Client | Sets GTA's persistent 0-255 weapon-accuracy byte used for shot spread. |
 | `setObjectGangTagAlpha(object, alpha)` | Client | Sets a logical 0-255 Grove-material alpha on a streamed native gang-tag object, or clears the opt-in override when `alpha` is `false`. |
