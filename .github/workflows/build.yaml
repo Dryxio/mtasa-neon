@@ -543,15 +543,14 @@ jobs:
               --title 'MTA:SA Neon — latest download' \
               --notes-file ReleaseNotes.md \
               --target "$GITHUB_SHA" \
-              --prerelease \
-              --latest=false \
+              --prerelease=false \
+              --latest \
               --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$release_tag" "${release_assets[@]}" \
               --title 'MTA:SA Neon — latest download' \
               --notes-file ReleaseNotes.md \
               --verify-tag \
-              --prerelease \
-              --latest=false \
+              --latest \
               --repo "$GITHUB_REPOSITORY"
           fi
