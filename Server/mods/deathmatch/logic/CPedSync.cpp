@@ -277,6 +277,9 @@ void CPedSync::Packet_PedSync(CPedSyncPacket& Packet)
         if (Data.flags2 & 0x01)
             pPed->SetCameraRotation(Data.cameraRotation);
 
+        if (Data.flags2 & 0x08)
+            pPed->SetNativeTaskAirborne(Data.nativeTaskAnimationPresentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION);
+
         if (Data.ucFlags & 0x20)
             pPed->SetOnFire(Data.bOnFire);
 

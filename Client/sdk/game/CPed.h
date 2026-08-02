@@ -362,12 +362,17 @@ public:
     virtual bool                     NativeChokingUsesNonPlayerBehavior() const = 0;
     virtual void                     SetNativeFightUsesNonPlayerBehavior(bool enabled) = 0;
     virtual bool                     NativeFightUsesNonPlayerBehavior() const = 0;
+    virtual void                     SetNativeJumpUsesNonPlayerBehavior(bool enabled) = 0;
+    virtual bool                     NativeJumpUsesNonPlayerBehavior() const = 0;
     virtual void                     SetNativeAmbientWanderEventProfile(bool selected, bool active) = 0;
     virtual bool                     IsNativeAmbientWanderEventProfileSelected() const = 0;
     virtual bool                     IsNativeAmbientWanderEventProfileActive() const = 0;
     virtual bool                     AddNativeGunAimedAtEvent(CPed* aimingPed) = 0;
     virtual int                      GetNativeCurrentEventType() const = 0;
     virtual bool                     AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone) = 0;
+    virtual eWeaponType              GetLastWeaponDamage() const noexcept = 0;
+    virtual void                     SetNativeTaskAirbornePresentationState(bool airborne, bool observer) = 0;
+    virtual bool                     IsNativeTaskAirbornePresentationObserver() const noexcept = 0;
 
     // The game interface keeps the virtuals private because they were
     // originally implementation details. Story-script policies need a

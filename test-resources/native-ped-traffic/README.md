@@ -12,9 +12,9 @@ locomotion presentation through normal ped sync.
 The shared ped-sync path keeps its normal update interval as the baseline. A
 material locomotion mode, speed, or direction change opens a bounded 800 ms
 spatial burst at 100 ms, with a 400 ms cooldown and a global limit of 16 peds
-per pulse. It uses the ordinary sequenced ped-sync lane and applies to any
-eligible synchronized script ped, rather than being traffic-resource logic.
-Physical and synchronized animations keep their separate presentation path.
+per pulse. Vehicle evasions and impacts can opt into that same bounded writer
+while their task animation is presented; there is no second high-rate network
+lane. Scripted animations remain separate and do not consume this budget.
 
 The first behavior checkpoint also enables GTA's stock pedestrian and parked
 vehicle avoidance responses. Every client leases the same `ambient-wander`
@@ -38,6 +38,28 @@ model's decision maker. Observers mirror the result through the existing
 locomotion and animation-presentation lanes without installing local AI or
 applying damage a second time.
 
+The moving-vehicle checkpoint keeps that same authority model. GTA's native
+`POTENTIAL_GET_RUN_OVER`, `VEHICLE_COLLISION`, `DAMAGE`, and
+`GOT_KNOCKED_OVER_BY_CAR` chain runs only on the current ped syncer. It selects
+the stock evasive step or dive, hit-by-car, fall/get-up and post-impact response
+from the pedestrian's model profile. Observers receive the chosen transient
+animation and its bounded spatial samples without running a competing local
+collision response. `VEHICLE_HIT_AND_RUN` is deliberately excluded: it belongs
+to the future crime/wanted checkpoint, not victim presentation.
+
+The airborne checkpoint extends the shared native-task presentation to GTA's
+`JUMP -> IN_AIR_AND_LAND -> LAND` lifecycle, including a blocked jump or a hard
+fall/get-up. The owner publishes GTA's selected clip plus a physical airborne
+semantic; observers mirror the animation and spatial samples without creating
+their own in-air response. During a handoff in flight, the new owner preserves
+the synchronized position and velocity and starts GTA's stock
+`CTaskComplexInAirAndLand` at the transferred phase. This avoids depending on
+the new client's local `EVENT_IN_AIR` geometry check while leaving GTA in
+control of `SIMPLE_IN_AIR -> SIMPLE_LAND`. The exact scanner call is fenced on
+observers so they cannot create a competing response. Climbing remains a
+separate checkpoint because it is anchored to a specific world entity and
+surface.
+
 The initial limits are intentionally conservative: 24 peds globally, 12 near a
 player, four per 64 m cell, one candidate request every 500 ms, at least 10 m
 between traffic peds, and a 20-slot reserve below MTA's 110-ped logical limit.
@@ -55,11 +77,16 @@ lease before the new epoch is assigned.
 - `/pedtraffic debug on|off` enables bounded client/server telemetry.
 - `/pedtraffic cap 1..110` changes the test cap; keep 24 for the first run.
 - `/pedtraffic weapon` gives the caller a pistol for the threat checkpoint.
+- `/pedtraffic vehicle [model]` creates one resource-owned player vehicle for
+  collision testing (default model 560). It is removed on `off`, quit or stop.
+- `/pedtraffic airtest` makes the closest active traffic ped perform a native
+  jump; add `handoff` to transfer ownership during the real in-air phase.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
-and civilian-only. Vehicles, cops, gangs, dealers, couples, attractors,
-conversations and headless/offline simulation are deliberately outside this
-checkpoint.
+and civilian-only. Ambient vehicle population, cops, gangs, dealers, couples,
+attractors, conversations and headless/offline simulation are deliberately
+outside this checkpoint. The optional command above creates a test vehicle,
+not autonomous vehicle traffic.
 
 ## Engine APIs exercised
 
@@ -128,6 +155,49 @@ up every resource-owned element.
    The old owner must return to `state=none`; the observer must never report a
    native threat task, correction snap or duplicate damage.
 
+## Moving-vehicle checkpoint
+
+1. Enable debug traffic, wait for nearby pedestrians, then run
+   `/pedtraffic vehicle` on CL1.
+2. Approach a ped without touching it at low and medium speed. The owner alone
+   should log `vehicle-transition`; both clients should show the same native
+   step, dive, gesture or unchanged response selected by GTA.
+3. Repeat with a light bump and a harder non-lethal impact. Compare the initial
+   force, fall, ground pose, get-up and subsequent flee or attack. Vanilla does
+   not guarantee a flee after every impact.
+4. Repeat after choosing a ped owned by CL2 so the vehicle driver and ped owner
+   differ. This is the required cross-owner case; record whether either client
+   reports damage without the owner reporting the matching native response.
+5. Test a frontal approach, a side impact and a ped briefly carried onto the
+   bonnet or trapped under the vehicle. Then force an ownership handoff during
+   a dive or fall/get-up transition.
+6. Run the same matrix from CL2, then `/pedtraffic off`. No observer should
+   retain a native vehicle-response task, animation or residual velocity.
+
+Current boundaries for this checkpoint are explicit. GTA's rare
+`VEHICLE_COLLISION -> JUMP -> IN_AIR_AND_LAND` branch now uses the shared
+airborne presentation, while climbing and a remote driver's horn-only gesture
+are not bridged. Car-impact fall/get-up is cleared narrowly on the old owner
+during a handoff; bullet, explosion and unrelated physical-response tasks are
+preserved.
+
+## Airborne lifecycle checkpoint
+
+1. Keep both clients near the same active traffic ped and run
+   `/pedtraffic airtest`. Compare launch, glide, landing, position and velocity.
+2. Repeat with `/pedtraffic airtest handoff`. The server transfers the ped only
+   after its owner reports the real `TASK_SIMPLE_IN_AIR` phase.
+3. Repeat from each client so both ownership directions are covered. The old
+   owner must stop integrating the jump, the new owner must finish through
+   GTA's native in-air/landing chain, and observers must never create a second
+   airborne task.
+4. Watch for a double launch, upright frame in mid-air, landing teleport,
+   residual vertical velocity or Wander restarting before ground contact.
+
+`setPedJump(ped [, allowClimb = true])` is the reusable owner-side primitive
+used by this deterministic test. The harness passes `false` so a nearby ledge
+cannot turn the baseline into the separate climb lifecycle.
+
 ## Checkpoint evidence
 
 The V1 was built as `Release|Win32` for the affected client projects and
@@ -147,3 +217,12 @@ one to two metres before reconverging because each client reaches the local
 collision on a different frame. Both clients then quit cleanly and the server
 returned `spawned=191`, `despawned=191`, and `active=0` without a sync or script
 error.
+
+The moving-vehicle run confirmed owner-only native evasive steps, dives,
+impact falls and get-up presentation across two clients, including bounded
+spatial bursts during abrupt collision detours. The final airborne regression
+then alternated three forced in-flight handoffs between both clients. All three
+completed without a timeout, script error, crash or observer-side native task;
+two explicitly recorded the new owner's complete `IN_AIR -> LAND` chain. The
+third reached the ground before the next 50 ms diagnostic sample and completed
+without a residual task or velocity.

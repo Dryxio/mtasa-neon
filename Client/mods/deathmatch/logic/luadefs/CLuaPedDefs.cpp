@@ -306,6 +306,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedGoToOffset", ArgumentParser<SetPedGoToOffset>},
         {"setPedKillOnFoot", ArgumentParser<SetPedKillOnFoot>},
         {"setPedWander", ArgumentParser<SetPedWander>},
+        {"setPedJump", ArgumentParser<SetPedJump>},
         {"setPedScriptedSpeechMuted", ArgumentParser<SetPedScriptedSpeechMuted>},
         {"setPedFacialTalk", ArgumentParser<SetPedFacialTalk>},
         {"stopPedFacialTalk", ArgumentParser<StopPedFacialTalk>},
@@ -495,6 +496,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setGoToOffset", "setPedGoToOffset");
     lua_classfunction(luaVM, "setKillOnFoot", "setPedKillOnFoot");
     lua_classfunction(luaVM, "setWander", "setPedWander");
+    lua_classfunction(luaVM, "setJump", "setPedJump");
     lua_classfunction(luaVM, "setScriptedSpeechMuted", "setPedScriptedSpeechMuted");
     lua_classfunction(luaVM, "setFacialTalk", "setPedFacialTalk");
     lua_classfunction(luaVM, "stopFacialTalk", "stopPedFacialTalk");
@@ -3053,6 +3055,19 @@ bool CLuaPedDefs::SetPedWander(CClientPed* ped, std::optional<std::string> movem
         return false;
 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexWanderStandard(moveState, static_cast<char>(taskDirection), wanderSensibly.value_or(true));
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedJump(CClientPed* ped, std::optional<bool> allowClimb)
+{
+    if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+    {
+        return false;
+    }
+
+    // Only the simulation owner constructs the native task. GTA then owns the
+    // launch, airborne, optional climb, and landing transitions end to end.
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexJump(allowClimb.value_or(true));
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 

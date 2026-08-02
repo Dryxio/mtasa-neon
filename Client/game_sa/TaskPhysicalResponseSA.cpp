@@ -20,8 +20,8 @@ extern CGameSA* pGame;
 
 namespace
 {
-    bool GetPhysicalResponsePresentationAnimation(const CAnimBlendAssociationSAInterface* association, unsigned short& usAnimGroup, unsigned short& usAnimId,
-                                                  float& fProgress, float& fSpeed, float& fBlendAmount)
+    bool GetTransientPresentationAnimation(const CAnimBlendAssociationSAInterface* association, unsigned short& usAnimGroup, unsigned short& usAnimId,
+                                           float& fProgress, float& fSpeed, float& fBlendAmount)
     {
         if (!association || !association->pAnimHierarchy || !std::isfinite(association->pAnimHierarchy->fTotalTime) ||
             association->pAnimHierarchy->fTotalTime <= 0.0f || association->sAnimGroup < 0 || association->sAnimID < 0 ||
@@ -40,18 +40,39 @@ namespace
     }
 }
 
+bool CTaskSimpleEvasiveStepSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                        float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleEvasiveStepSAInterface*>(GetInterface());
+    return task && GetTransientPresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+}
+
+bool CTaskSimpleEvasiveDiveSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                        float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleEvasiveDiveSAInterface*>(GetInterface());
+    return task && GetTransientPresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+}
+
+bool CTaskSimpleShakeFistSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                      float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleShakeFistSAInterface*>(GetInterface());
+    return task && GetTransientPresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+}
+
 bool CTaskSimpleFallSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
                                                  float& fBlendAmount) const
 {
     const auto* task = static_cast<const CTaskSimpleFallSAInterface*>(GetInterface());
-    return task && GetPhysicalResponsePresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+    return task && GetTransientPresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
 }
 
 bool CTaskSimpleGetUpSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
                                                   float& fBlendAmount) const
 {
     const auto* task = static_cast<const CTaskSimpleGetUpSAInterface*>(GetInterface());
-    return task && GetPhysicalResponsePresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+    return task && GetTransientPresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
 }
 
 // ##############################################################################

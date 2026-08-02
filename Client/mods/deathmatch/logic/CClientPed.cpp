@@ -2015,6 +2015,71 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
     CTask*      presentationTask = nullptr;
     const char* selection = "none";
     bool        physicalPresentation = false;
+    bool        spatialBurstPresentation = false;
+    bool        airbornePresentation = false;
+    const auto  selectSpatialTransientTask = [&](CTask* task)
+    {
+        if (!task)
+            return false;
+
+        switch (task->GetTaskType())
+        {
+            case TASK_SIMPLE_JUMP:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                selection = "jump_launch";
+                return true;
+            case TASK_SIMPLE_IN_AIR:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                airbornePresentation = true;
+                selection = "in_air";
+                return true;
+            case TASK_SIMPLE_LAND:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                selection = "land";
+                return true;
+            case TASK_SIMPLE_HIT_HEAD:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                selection = "hit_head";
+                return true;
+            case TASK_SIMPLE_EVASIVE_STEP:
+                presentationTask = task;
+                selection = "evasive_step";
+                spatialBurstPresentation = true;
+                return true;
+            case TASK_SIMPLE_EVASIVE_DIVE:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                selection = "evasive_dive";
+                return true;
+            case TASK_SIMPLE_FALL:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                selection = "fall";
+                return true;
+            case TASK_SIMPLE_GET_UP:
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                selection = "get_up";
+                return true;
+            case TASK_SIMPLE_SHAKE_FIST:
+                presentationTask = task;
+                selection = "shake_fist";
+                return true;
+            default:
+                return false;
+        }
+    };
     if (m_pTaskManager)
     {
         CTask* physicalTask = m_pTaskManager->GetSimplestTask(TASK_PRIORITY_PHYSICAL_RESPONSE);
@@ -2028,6 +2093,27 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
             selection = physicalTask->GetTaskType() == TASK_SIMPLE_FALL ? "fall" : "get_up";
         }
     }
+    if (!presentationTask && m_pTaskManager)
+    {
+        // Vehicle-danger responses normally live in one of the event slots,
+        // and HIT_PED_WITH_CAR nests FALL/GET_UP there instead of in GTA's
+        // physical-response slot. Inspect those slots before unrelated fight
+        // or primary tasks so the owner publishes the animation that is
+        // actually controlling the ped.
+        for (const int priority : {TASK_PRIORITY_EVENT_RESPONSE_TEMP, TASK_PRIORITY_EVENT_RESPONSE_NONTEMP})
+        {
+            CTask* eventTask = m_pTaskManager->GetSimplestTask(priority);
+            if (selectSpatialTransientTask(eventTask))
+                break;
+        }
+    }
+    if (!presentationTask && m_pTaskManager)
+    {
+        // A script-command jump occupies the ordinary primary slot. Select
+        // that physical chain before a secondary fight task so combat pose
+        // presentation can never hide the ped's airborne semantic or burst.
+        selectSpatialTransientTask(m_pTaskManager->GetSimplestTask(TASK_PRIORITY_PRIMARY));
+    }
     if (!presentationTask)
     {
         presentationTask = m_pPlayerPed->GetPedIntelligence()->GetFightTask();
@@ -2037,9 +2123,10 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
     if (!presentationTask && m_pTaskManager)
     {
         CTask* simplestTask = m_pTaskManager->GetSimplestActiveTask();
-        if (simplestTask && (simplestTask->GetTaskType() == TASK_SIMPLE_CHAT || simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM ||
-                             simplestTask->GetTaskType() == TASK_SIMPLE_COWER || simplestTask->GetTaskType() == TASK_SIMPLE_HANDS_UP ||
-                             simplestTask->GetTaskType() == TASK_SIMPLE_DUCK))
+        if (!selectSpatialTransientTask(simplestTask) && simplestTask &&
+            (simplestTask->GetTaskType() == TASK_SIMPLE_CHAT || simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM ||
+             simplestTask->GetTaskType() == TASK_SIMPLE_COWER || simplestTask->GetTaskType() == TASK_SIMPLE_HANDS_UP ||
+             simplestTask->GetTaskType() == TASK_SIMPLE_DUCK))
         {
             presentationTask = simplestTask;
             switch (simplestTask->GetTaskType())
@@ -2065,6 +2152,18 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
 
     if (!presentationTask)
     {
+        // EVASIVE_DIVE deliberately inserts a native pause between the dive
+        // and GET_UP. Keep the terminal frame and the spatial burst alive
+        // across that gap instead of exposing the observer's upright base
+        // pose. FindActiveTaskByType walks the active task chain, so this does
+        // not affect unrelated pauses.
+        if (m_pTaskManager && m_pTaskManager->FindActiveTaskByType(TASK_COMPLEX_EVASIVE_DIVE_AND_GET_UP))
+        {
+            result.state = eNativeTaskAnimationPresentationState::HOLD_LAST_PHYSICAL_FRAME;
+            result.spatialBurst = true;
+            TraceNativeTaskAnimationProducer(this, "hold_evasive_dive", "evasive_dive_pause", nullptr);
+            return result;
+        }
         TraceNativeTaskAnimationProducer(this, "no_supported_task", selection, nullptr);
         return result;
     }
@@ -2087,6 +2186,8 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
     {
         if (physicalPresentation)
             result.state = eNativeTaskAnimationPresentationState::HOLD_LAST_PHYSICAL_FRAME;
+        result.airborne = airbornePresentation;
+        result.spatialBurst = spatialBurstPresentation || physicalPresentation;
         TraceNativeTaskAnimationProducer(this, physicalPresentation ? "hold_last_physical_frame" : "task_rejected", selection, presentationTask,
                                          pNamedDiagnostic);
         return result;
@@ -2101,6 +2202,8 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
     presentation.data.fHeading = rotation.fZ;
     result.state = eNativeTaskAnimationPresentationState::READY;
     result.physical = physicalPresentation;
+    result.airborne = airbornePresentation;
+    result.spatialBurst = spatialBurstPresentation || physicalPresentation;
     TraceNativeTaskAnimationProducer(this, "emitted", selection, presentationTask, pNamedDiagnostic);
     return result;
 }
@@ -2122,6 +2225,23 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
 
     m_nativeTaskAnimationPresentation = presentation;
     m_nativeTaskAnimationPresentationReceivedAt = CClientTime::GetTime();
+    const bool airborne = presentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
+    if (!m_bIsLocalPlayer && !m_bIsSyncing && !HasSyncedAnim() && m_pPlayerPed)
+    {
+        if (airborne)
+        {
+            m_pPlayerPed->SetNativeTaskAirbornePresentationState(true, true);
+            m_nativeTaskAirbornePresentationActive = true;
+        }
+        else if (m_nativeTaskAirbornePresentationActive && IsOnGround(true))
+        {
+            // LAND can arrive while the replicated body is still fractionally
+            // above the floor. Keep the observer EVENT_IN_AIR fence until the
+            // synchronized transform confirms real contact.
+            m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+            m_nativeTaskAirbornePresentationActive = false;
+        }
+    }
     if (presentation.data.uiMode != SNativeTaskAnimationPresentationSync::NONE)
         ClearNativeTaskWeaponPresentation("animation_presentation");
 
@@ -2138,8 +2258,18 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
         ClearNativeTaskAnimationPresentation("inactive");
 }
 
+void CClientPed::SetNativeTaskAirborneTakeoverState(bool airborne)
+{
+    m_nativeTaskAirborneTakeoverPending = airborne;
+    m_nativeTaskAirborneTakeoverStartedAt = airborne ? CClientTime::GetTime() : 0;
+    if (m_pPlayerPed)
+        m_pPlayerPed->SetNativeTaskAirbornePresentationState(airborne, false);
+}
+
 void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
 {
+    const bool preserveAirborneObserverFence = m_nativeTaskAirbornePresentationActive && m_pPlayerPed && !m_bIsLocalPlayer && !m_bIsSyncing && IsStreamedIn() &&
+                                               !HasSyncedAnim() && !GetRealOccupiedVehicle() && !IsDead() && !IsOnGround(true);
     if (m_nativeTaskAnimationPresentationActive && m_pPlayerPed)
     {
         auto animation = g_pGame->GetAnimManager()->RpAnimBlendClumpGetAssociation(m_pPlayerPed->GetRpClump(), m_nativeTaskAnimationPresentationAppliedAnimId);
@@ -2174,6 +2304,10 @@ void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
     m_nativeTaskAnimationPresentationAppliedAssociation = nullptr;
     m_nativeTaskAnimationPresentationAppliedHeading.reset();
     m_nativeTaskAnimationPresentation = {};
+    if (m_nativeTaskAirbornePresentationActive && !preserveAirborneObserverFence && m_pPlayerPed)
+        m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+    if (!preserveAirborneObserverFence)
+        m_nativeTaskAirbornePresentationActive = false;
 }
 
 void CClientPed::ApplyNativeTaskAnimationPresentationHeading(float fHeading)
@@ -2206,6 +2340,31 @@ void CClientPed::ApplyNativeTaskAnimationPresentationHeading(float fHeading)
 
 void CClientPed::UpdateNativeTaskAnimationPresentation()
 {
+    if (m_nativeTaskAirbornePresentationActive && m_pPlayerPed && !m_bIsSyncing &&
+        m_nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION && IsOnGround(true))
+    {
+        m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+        m_nativeTaskAirbornePresentationActive = false;
+    }
+
+    if (m_bIsSyncing && m_nativeTaskAirborneTakeoverPending)
+    {
+        const unsigned long takeoverAge = CClientTime::GetTime() - m_nativeTaskAirborneTakeoverStartedAt;
+        if (m_pTaskManager && m_pTaskManager->FindActiveTaskByType(TASK_COMPLEX_IN_AIR_AND_LAND))
+        {
+            // The seeded native task has now created its active airborne
+            // chain. It owns the physical flags through landing from here.
+            m_nativeTaskAirborneTakeoverPending = false;
+            m_nativeTaskAirborneTakeoverStartedAt = 0;
+        }
+        else if (takeoverAge >= 2000 || (takeoverAge >= 250 && IsOnGround(true)))
+        {
+            // A stale server bit or failed task seed must not suspend the ped
+            // forever. Two seconds covers the complete ordinary jump arc.
+            SetNativeTaskAirborneTakeoverState(false);
+        }
+    }
+
     const unsigned long presentationLease = std::max(500UL, static_cast<unsigned long>(g_TickRateSettings.iPedSync) * 3);
     const unsigned long sampleAge = CClientTime::GetTime() - m_nativeTaskAnimationPresentationReceivedAt;
     if (m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim() || GetRealOccupiedVehicle() || IsDead() ||
@@ -2215,7 +2374,7 @@ void CClientPed::UpdateNativeTaskAnimationPresentation()
         return;
     }
 
-    if (m_nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::ANIMATION ||
+    if (!SNativeTaskAnimationPresentationSync::IsAnimationMode(m_nativeTaskAnimationPresentation.data.uiMode) ||
         !std::isfinite(m_nativeTaskAnimationPresentation.data.fProgress) || m_nativeTaskAnimationPresentation.data.fProgress < 0.0f ||
         m_nativeTaskAnimationPresentation.data.fProgress > 1.0f || !std::isfinite(m_nativeTaskAnimationPresentation.data.fSpeed) ||
         m_nativeTaskAnimationPresentation.data.fSpeed <= 0.0f || m_nativeTaskAnimationPresentation.data.fSpeed > 16.0f || !m_pPlayerPed ||
@@ -5126,6 +5285,10 @@ void CClientPed::_CreateModel()
         // the element identity separately so the one IsPlayer check inside
         // GTA's choking task can retain ordinary CPed behaviour for NPCs.
         m_pPlayerPed->SetNativeChokingUsesNonPlayerBehavior(GetType() == CCLIENTPED);
+        // Script peds are also CPlayerPed wrappers, but native jump tasks must
+        // use GTA's CPed force, climb, voice and landing paths. The multiplayer
+        // hook applies this bit only at audited jump/fall callsites.
+        m_pPlayerPed->SetNativeJumpUsesNonPlayerBehavior(GetType() == CCLIENTPED);
 
         // Script peds are reconstructed as CPlayerPed instances whenever they
         // stream in. Reapply their persisted actor classification before GTA
@@ -5296,6 +5459,11 @@ void CClientPed::_DestroyModel()
     // presentation task while its original GTA ped and saved shooting rate
     // still exist, so the replacement entity can accept the next sample.
     ClearNativeTaskWeaponPresentation("destroy_model");
+    if (m_nativeTaskAirbornePresentationActive && m_pPlayerPed)
+        m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+    m_nativeTaskAirbornePresentationActive = false;
+    m_nativeTaskAirborneTakeoverPending = false;
+    m_nativeTaskAirborneTakeoverStartedAt = 0;
     ClearNativeTaskAnimationPresentation("destroy_model");
 
     // Store ped ammo
@@ -5871,15 +6039,31 @@ void CClientPed::ApplyNativeEventProfileState()
 
 void CClientPed::ClearNativeAmbientWanderResponse()
 {
-    if (!m_pTaskManager)
+    if (!m_pTaskManager || !m_pPlayerPed)
         return;
+
+    CTask*            physicalRoot = m_pTaskManager->GetTask(TASK_PRIORITY_PHYSICAL_RESPONSE);
+    CTask*            physicalLeaf = m_pTaskManager->GetSimplestTask(TASK_PRIORITY_PHYSICAL_RESPONSE);
+    const eWeaponType lastWeaponDamage = m_pPlayerPed->GetLastWeaponDamage();
+    const bool        isVehicleImpactFall = physicalRoot && physicalRoot->GetTaskType() == TASK_COMPLEX_FALL_AND_GET_UP && physicalLeaf &&
+                                     (physicalLeaf->GetTaskType() == TASK_SIMPLE_FALL || physicalLeaf->GetTaskType() == TASK_SIMPLE_GET_UP) &&
+                                     (lastWeaponDamage == WEAPONTYPE_RAMMEDBYCAR || lastWeaponDamage == WEAPONTYPE_RUNOVERBYCAR);
+    if (isVehicleImpactFall)
+    {
+        // KillPedWithCar puts its fall/get-up chain in the physical slot. Do
+        // not let that exact old-owner reaction keep applying movement after
+        // a handoff; every other physical response remains in MTA's existing
+        // damage pipeline.
+        KillTask(TASK_PRIORITY_PHYSICAL_RESPONSE, true);
+    }
 
     // These two slots are entirely GTA event-handler responses. Once this peer
     // is fenced as an ambient observer, letting any previous generation remain
     // would keep old-owner AI alive beside the new authority. The event type can
     // already have advanced by handoff time, so task-type/event-type filtering
-    // is not a reliable ownership boundary. Physical damage response, primary
-    // wander and the permanent default task are deliberately left untouched.
+    // is not a reliable ownership boundary. Every other physical response,
+    // primary wander and the permanent default task are deliberately left
+    // untouched.
     for (const int priority : {TASK_PRIORITY_EVENT_RESPONSE_TEMP, TASK_PRIORITY_EVENT_RESPONSE_NONTEMP})
         KillTask(priority, true);
 }
@@ -9065,10 +9249,61 @@ void CClientPed::SetSyncing(bool bIsSyncing)
 {
     if (m_bIsSyncing != bIsSyncing)
     {
+        if (!bIsSyncing && m_pTaskManager)
+        {
+            // The old authority must not keep integrating a native vertical
+            // task after handoff. Remove only the exact jump/in-air chains;
+            // ordinary primary and physical-response tasks are untouched.
+            bool removedAirborneTask = false;
+            for (const int priority : {TASK_PRIORITY_EVENT_RESPONSE_TEMP, TASK_PRIORITY_EVENT_RESPONSE_NONTEMP, TASK_PRIORITY_PRIMARY})
+            {
+                if (m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_JUMP) || m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_IN_AIR_AND_LAND))
+                {
+                    KillTask(priority, true);
+                    removedAirborneTask = true;
+                }
+            }
+            if (removedAirborneTask && m_pPlayerPed)
+                m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+        }
+
+        // A start-sync packet can seed this state even when the new owner was
+        // not close enough to receive the last presentation snapshot. Keep
+        // the physical phase while removing the observer-only association.
+        // Do not wait for EVENT_IN_AIR here: its geometry gate is intentionally
+        // local and can reject an early handoff while the observer transform
+        // is still close to the floor. Install the same native response task
+        // that the event would create and let GTA own InAir -> Land from here.
+        const bool continueAirborne = bIsSyncing && m_nativeTaskAirborneTakeoverPending;
+        if (m_nativeTaskAirbornePresentationActive && m_pPlayerPed)
+        {
+            m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+            m_nativeTaskAirbornePresentationActive = false;
+        }
         SetNativeTaskLocomotionPresentation({}, "syncer_transition");
         m_nativeTaskLocomotionAuthoritativeVelocityValid = false;
         ClearNativeTaskWeaponPresentation("syncer_transition");
         ClearNativeTaskAnimationPresentation("syncer_transition");
+        if (continueAirborne && m_pPlayerPed)
+        {
+            m_pPlayerPed->SetNativeTaskAirbornePresentationState(true, false);
+            CTaskComplex* airborneTask = g_pGame->GetTasks()->CreateTaskComplexInAirAndLand(true, false);
+            if (airborneTask && SetTask(airborneTask, TASK_PRIORITY_EVENT_RESPONSE_TEMP))
+            {
+                m_nativeTaskAirborneTakeoverPending = true;
+            }
+            else
+            {
+                // Allocation failure must not leave physical flags latched
+                // without a task that can clear them on landing.
+                SetNativeTaskAirborneTakeoverState(false);
+            }
+        }
+        else if (!bIsSyncing)
+        {
+            m_nativeTaskAirborneTakeoverPending = false;
+            m_nativeTaskAirborneTakeoverStartedAt = 0;
+        }
     }
     m_bIsSyncing = bIsSyncing;
     ApplyNativeEventProfileState();

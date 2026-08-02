@@ -421,6 +421,20 @@ CTaskComplex* CTasksSA::CreateTaskComplexSmartFleeEntity(CPed* pTarget, bool bSc
     return pTask;
 }
 
+CTaskComplex* CTasksSA::CreateTaskComplexJump(bool bAllowClimb)
+{
+    auto* pTask = NewTask<CTaskComplexJumpSA>(bAllowClimb);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+CTaskComplex* CTasksSA::CreateTaskComplexInAirAndLand(bool bUsingJumpGlide, bool bUsingFallGlide)
+{
+    auto* pTask = NewTask<CTaskComplexInAirAndLandSA>(bUsingJumpGlide, bUsingFallGlide);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
 CTaskSimpleStandStill* CTasksSA::CreateTaskSimpleStandStill(int iDuration)
 {
     auto* pTask = NewTask<CTaskSimpleStandStillSA>(iDuration);

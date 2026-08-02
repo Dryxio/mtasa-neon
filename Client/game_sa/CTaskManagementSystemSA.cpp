@@ -325,6 +325,18 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             break;
 
         // JumpFall
+        case TASK_SIMPLE_JUMP:
+            pTaskSA = new CTaskSimpleJumpSA;
+            break;
+        case TASK_SIMPLE_IN_AIR:
+            pTaskSA = new CTaskSimpleInAirSA;
+            break;
+        case TASK_SIMPLE_LAND:
+            pTaskSA = new CTaskSimpleLandSA;
+            break;
+        case TASK_SIMPLE_HIT_HEAD:
+            pTaskSA = new CTaskSimpleHitHeadSA;
+            break;
         case TASK_SIMPLE_CLIMB:
             pTaskSA = new CTaskSimpleClimbSA;
             break;
@@ -333,6 +345,12 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             break;
 
         // Physical response
+        case TASK_SIMPLE_EVASIVE_STEP:
+            pTaskSA = new CTaskSimpleEvasiveStepSA;
+            break;
+        case TASK_SIMPLE_EVASIVE_DIVE:
+            pTaskSA = new CTaskSimpleEvasiveDiveSA;
+            break;
         case TASK_SIMPLE_FALL:
             // Physical reactions stay authoritative on the syncer. This
             // wrapper exposes only GTA's live animation association so remote
@@ -344,6 +362,9 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             break;
         case TASK_SIMPLE_CHOKING:
             pTaskSA = new CTaskSimpleChokingSA;
+            break;
+        case TASK_SIMPLE_SHAKE_FIST:
+            pTaskSA = new CTaskSimpleShakeFistSA;
             break;
 
         // Secondary

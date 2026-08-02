@@ -122,10 +122,10 @@ public:
     virtual CTaskComplexSunbathe*   CreateTaskComplexSunbathe(class CObject* pTowel, const bool bStartStanding) = 0;
 
     // IK
-    virtual CTaskSimpleIKChain*  CreateTaskSimpleIKChain(char* idString, int effectorBoneTag, CVector effectorVec, int pivotBoneTag, CEntity* pEntity,
-                                                         int offsetBoneTag, CVector offsetPos, float speed, int time = 99999999, int blendTime = 1000) = 0;
-    virtual CTaskSimpleIKLookAt* CreateTaskSimpleIKLookAt(char* idString, CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
-                                                          unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000, int m_priority = 3) = 0;
+    virtual CTaskSimpleIKChain*       CreateTaskSimpleIKChain(char* idString, int effectorBoneTag, CVector effectorVec, int pivotBoneTag, CEntity* pEntity,
+                                                              int offsetBoneTag, CVector offsetPos, float speed, int time = 99999999, int blendTime = 1000) = 0;
+    virtual CTaskSimpleIKLookAt*      CreateTaskSimpleIKLookAt(char* idString, CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
+                                                               unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000, int m_priority = 3) = 0;
     virtual CTaskSimpleTriggerLookAt* CreateTaskSimpleTriggerLookAt(CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
                                                                     unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000,
                                                                     int priority = 3) = 0;
@@ -171,4 +171,12 @@ public:
     // reference, timeout, and cloned task lifecycle.
     virtual CTaskComplex* CreateTaskComplexSmartFleeEntity(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod,
                                                            float fPositionChangeTolerance) = 0;
+
+    // Appended so existing CTasks vtable indices remain stable. GTA owns the
+    // complete Jump -> InAirAndLand -> Land lifecycle after construction.
+    virtual CTaskComplex* CreateTaskComplexJump(bool bAllowClimb = true) = 0;
+
+    // Authority can move after the launch task has already finished. Resume
+    // directly in GTA's native airborne state machine without replaying launch.
+    virtual CTaskComplex* CreateTaskComplexInAirAndLand(bool bUsingJumpGlide = true, bool bUsingFallGlide = false) = 0;
 };

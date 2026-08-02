@@ -22,6 +22,7 @@ namespace
     constexpr unsigned long NATIVE_TASK_ANIMATION_SYNC_RATE = 100;
     constexpr unsigned long NATIVE_TASK_LOCOMOTION_BURST_RATE = 100;
     constexpr unsigned long NATIVE_TASK_LOCOMOTION_BURST_DURATION = 800;
+    constexpr unsigned long NATIVE_TASK_SPATIAL_BURST_MAX_CHAIN_DURATION = 1600;
     constexpr unsigned long NATIVE_TASK_LOCOMOTION_BURST_COOLDOWN = 400;
     constexpr std::size_t   NATIVE_TASK_LOCOMOTION_BURST_PED_BUDGET = 16;
     constexpr float         NATIVE_TASK_LOCOMOTION_BURST_FAST_SPEED = 0.045f;
@@ -30,6 +31,7 @@ namespace
     constexpr float         NATIVE_TASK_LOCOMOTION_BURST_RELATIVE_SPEED_DELTA = 0.004f;
     constexpr float         NATIVE_TASK_LOCOMOTION_BURST_SPEED_DELTA_RATIO = 0.40f;
     constexpr float         NATIVE_TASK_LOCOMOTION_BURST_DIRECTION_DOT = 0.9063078f;  // 25 degrees
+    constexpr float         NATIVE_TASK_SPATIAL_BURST_VERTICAL_DELTA = 0.01f;
 
     float GetPlanarSpeed(const CVector& velocity)
     {
@@ -53,7 +55,7 @@ namespace
         return enabled;
     }
 
-    bool IsNativeTaskLocomotionBurstEligible(CClientPed* pPed)
+    bool IsNativeTaskSpatialBurstBaseEligible(CClientPed* pPed)
     {
         if (pPed->GetType() != CCLIENTPED || !pPed->IsSyncing() || !pPed->GetGamePlayer() || pPed->GetRealOccupiedVehicle() || pPed->IsGettingIntoVehicle() ||
             pPed->IsGettingOutOfVehicle() || pPed->IsDucked() || pPed->IsDead() || pPed->HasSyncedAnim())
@@ -61,10 +63,23 @@ namespace
             return false;
         }
 
-        // Physical reactions and synchronized animations have their own
-        // presentation lanes. Letting their actors reserve locomotion burst slots
-        // would starve nearby fleeing peds without producing a usable sample.
-        return pPed->GetNativeTaskAnimationPresentation().state == eNativeTaskAnimationPresentationState::NONE;
+        return true;
+    }
+
+    bool IsNativeTaskSpatialBurstEligible(CClientPed* pPed, SNativeTaskAnimationPresentationResult* presentationResult = nullptr)
+    {
+        if (!IsNativeTaskSpatialBurstBaseEligible(pPed))
+            return false;
+
+        const SNativeTaskAnimationPresentationResult presentation = pPed->GetNativeTaskAnimationPresentation();
+        if (presentationResult)
+            *presentationResult = presentation;
+
+        // Ordinary synchronized animations and stationary native reactions
+        // keep their animation-only lane. Vehicle evasions and impacts opt in
+        // because their GTA-owned animation is coupled to real displacement;
+        // they share the existing bounded global budget with locomotion.
+        return presentation.state == eNativeTaskAnimationPresentationState::NONE || presentation.spatialBurst;
     }
 }
 
@@ -213,6 +228,9 @@ void CPedSync::Packet_PedStartSync(NetBitStreamInterface& BitStream)
             BitStream.Read(cameraRotation);
             pPed->SetCameraRotation(cameraRotation);
 
+            bool nativeTaskAirborne{};
+            BitStream.ReadBit(nativeTaskAirborne);
+
             // Set data
             pPed->SetPosition(vecPosition);
             pPed->SetCurrentRotation(fRotation);
@@ -225,6 +243,7 @@ void CPedSync::Packet_PedStartSync(NetBitStreamInterface& BitStream)
             // Set the new health
             pPed->SetHealth(fHealth);
             pPed->SetArmor(fArmor);
+            pPed->SetNativeTaskAirborneTakeoverState(nativeTaskAirborne);
 
             AddPed(pPed);
         }
@@ -410,12 +429,13 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
 
     for (CClientPed* pPed : m_List)
     {
-        auto& state = m_NativeTaskLocomotionBurstStates[pPed];
-        if (!IsNativeTaskLocomotionBurstEligible(pPed))
+        auto&                                  state = m_NativeTaskLocomotionBurstStates[pPed];
+        SNativeTaskAnimationPresentationResult animationPresentation;
+        if (!IsNativeTaskSpatialBurstEligible(pPed, &animationPresentation))
         {
-            // Eligibility can change temporarily during a fall, get-up or
-            // vehicle transition. Cancel its old window so only actors that
-            // can actually serialize compete for the bounded global budget.
+            // Eligibility can change during a scripted animation or vehicle
+            // transition. Cancel its old window so only actors that can
+            // actually serialize compete for the bounded global budget.
             state = {};
             continue;
         }
@@ -432,13 +452,18 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
         const bool hasLocomotion =
             locomotion.data.uiMode != SNativeTaskLocomotionSync::NONE || previousLocomotion.data.uiMode != SNativeTaskLocomotionSync::NONE;
         const bool modeChanged = locomotion.data.uiMode != previousLocomotion.data.uiMode;
+        const bool spatialTransient = animationPresentation.spatialBurst;
+        const bool transientChanged = spatialTransient != state.spatialTransient ||
+                                      (spatialTransient && (animationPresentation.presentation.data.usAnimGroup != state.transientAnimGroup ||
+                                                            animationPresentation.presentation.data.usAnimId != state.transientAnimId));
 
         bool significantTransition = false;
-        if (finiteSample && hasLocomotion && !state.initialized)
+        if (finiteSample && !state.initialized)
         {
-            significantTransition = locomotion.data.uiMode != SNativeTaskLocomotionSync::NONE && currentSpeed >= NATIVE_TASK_LOCOMOTION_BURST_FAST_SPEED;
+            significantTransition =
+                spatialTransient || (locomotion.data.uiMode != SNativeTaskLocomotionSync::NONE && currentSpeed >= NATIVE_TASK_LOCOMOTION_BURST_FAST_SPEED);
         }
-        else if (finiteSample && hasLocomotion)
+        else if (finiteSample && (hasLocomotion || spatialTransient || state.spatialTransient))
         {
             const float speedDelta = std::abs(currentSpeed - previousSpeed);
             const float maximumSpeed = std::max(previousSpeed, currentSpeed);
@@ -446,36 +471,62 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
                                       (speedDelta >= NATIVE_TASK_LOCOMOTION_BURST_RELATIVE_SPEED_DELTA && maximumSpeed > 0.0f &&
                                        speedDelta / maximumSpeed >= NATIVE_TASK_LOCOMOTION_BURST_SPEED_DELTA_RATIO);
             const bool directionChanged = HasSignificantLocomotionDirectionChange(previousVelocity, currentVelocity);
-            significantTransition = modeChanged || speedChanged || directionChanged;
+            const bool verticalChanged = std::abs(currentVelocity.fZ - previousVelocity.fZ) >= NATIVE_TASK_SPATIAL_BURST_VERTICAL_DELTA;
+            significantTransition = modeChanged || transientChanged || speedChanged || directionChanged || verticalChanged;
         }
 
         if (state.burstUntil != 0 && currentTime >= state.burstUntil)
         {
             state.burstUntil = 0;
+            state.burstHardUntil = 0;
             state.cooldownUntil = currentTime + NATIVE_TASK_LOCOMOTION_BURST_COOLDOWN;
         }
 
-        if (significantTransition && currentTime >= state.cooldownUntil)
+        if (transientChanged && spatialTransient)
+            state.pendingTransientTransition = true;
+        else if (!spatialTransient)
+            state.pendingTransientTransition = false;
+
+        if (state.burstUntil != 0 && state.pendingTransientTransition)
+        {
+            // FALL, GET_UP and the evasive-dive pause are separate native
+            // subtasks. A phase change near the end of the initial window
+            // extends that same window, but the hard deadline prevents a
+            // pathological task loop from reserving a slot indefinitely.
+            state.burstUntil = std::min(state.burstHardUntil, std::max(state.burstUntil, currentTime + NATIVE_TASK_LOCOMOTION_BURST_DURATION));
+            state.pendingTransientTransition = false;
+        }
+
+        const bool pendingTransitionReady = state.pendingTransientTransition && spatialTransient && currentTime >= state.cooldownUntil;
+        if ((significantTransition || pendingTransitionReady) && currentTime >= state.cooldownUntil)
         {
             if (state.burstUntil == 0)
             {
                 state.burstUntil = currentTime + NATIVE_TASK_LOCOMOTION_BURST_DURATION;
+                state.burstHardUntil = currentTime + NATIVE_TASK_SPATIAL_BURST_MAX_CHAIN_DURATION;
+                state.pendingTransientTransition = false;
                 if (IsNativeTaskLocomotionBurstTraceEnabled())
                 {
                     g_pCore->GetConsole()->Printf(
                         "[native-task-locomotion][burst-trigger] profile=%s pid=%u ped=%u model=%lu reason=%s previousMode=%u currentMode=%u "
                         "previousSpeed=%.4f currentSpeed=%.4f duration=%lu",
                         g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(),
-                        pPed->GetModel(), modeChanged ? "mode" : "kinematic", previousLocomotion.data.uiMode, locomotion.data.uiMode, previousSpeed,
-                        currentSpeed, NATIVE_TASK_LOCOMOTION_BURST_DURATION);
+                        pPed->GetModel(),
+                        modeChanged        ? "mode"
+                        : transientChanged ? "transient"
+                                           : "kinematic",
+                        previousLocomotion.data.uiMode, locomotion.data.uiMode, previousSpeed, currentSpeed, NATIVE_TASK_LOCOMOTION_BURST_DURATION);
                 }
             }
         }
 
         state.initialized = true;
+        state.spatialTransient = spatialTransient;
+        state.transientAnimGroup = animationPresentation.presentation.data.usAnimGroup;
+        state.transientAnimId = animationPresentation.presentation.data.usAnimId;
 
         if (state.burstUntil != 0 && currentTime < state.burstUntil && currentTime >= state.lastSentAt + NATIVE_TASK_LOCOMOTION_BURST_RATE)
-            candidates.push_back({pPed, &state, modeChanged});
+            candidates.push_back({pPed, &state, modeChanged || transientChanged});
     }
 
     if (candidates.empty())
@@ -526,7 +577,10 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
 
 bool CPedSync::WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed)
 {
-    if (!pBitStream->Can(eBitStreamVersion::NativeTaskLocomotionPresentation) || !IsNativeTaskLocomotionBurstEligible(pPed))
+    // Candidate discovery already sampled the animation presentation. Avoid
+    // repeating that diagnostic-heavy task traversal for every emitted ped;
+    // this base check still fences lifecycle changes before serialization.
+    if (!pBitStream->Can(eBitStreamVersion::NativeTaskLocomotionPresentation) || !IsNativeTaskSpatialBurstBaseEligible(pPed))
         return false;
 
     CVector position;
@@ -611,40 +665,52 @@ void CPedSync::UpdateNativeTaskAnimationPresentation()
         return;
 
     bool wrotePresentation = false;
+    bool reliableSemanticTransition = false;
     for (CClientPed* pPed : m_List)
-        wrotePresentation |= WriteNativeTaskAnimationPresentation(pBitStream, pPed);
+        wrotePresentation |= WriteNativeTaskAnimationPresentation(pBitStream, pPed, reliableSemanticTransition);
 
     if (wrotePresentation)
     {
-        g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED,
-                           PACKET_ORDERING_NATIVE_TASK_PRESENTATION);
+        // Physical airborne edges seed the server's next-owner state. Send
+        // only those rare semantic transitions reliably; ordinary 100 ms
+        // animation progress remains unreliable and bandwidth-bounded.
+        const NetPacketReliability reliability = reliableSemanticTransition ? PACKET_RELIABILITY_RELIABLE_ORDERED : PACKET_RELIABILITY_UNRELIABLE_SEQUENCED;
+        g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, reliability, PACKET_ORDERING_NATIVE_TASK_PRESENTATION);
     }
     g_pNet->DeallocateNetBitStream(pBitStream);
 }
 
-bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed)
+bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed, bool& reliableSemanticTransition)
 {
     if (!pBitStream->Can(eBitStreamVersion::NativeTaskAnimationPresentation))
         return false;
 
     const SNativeTaskAnimationPresentationResult presentationResult = pPed->GetNativeTaskAnimationPresentation();
     SNativeTaskAnimationPresentationSync         presentation = presentationResult.presentation;
-    const SNativeTaskAnimationPresentationSync&  lastPresentation = pPed->m_LastSyncedData->nativeTaskAnimationPresentation;
-    const bool                                   resetPending = pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending;
-    const bool                                   lastPresentationWasPhysical = pPed->m_LastSyncedData->nativeTaskAnimationPresentationWasPhysical;
+    if (presentationResult.airborne && SNativeTaskAnimationPresentationSync::IsAnimationMode(presentation.data.uiMode))
+        presentation.data.uiMode = SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
+    const SNativeTaskAnimationPresentationSync& lastPresentation = pPed->m_LastSyncedData->nativeTaskAnimationPresentation;
+    const bool                                  resetPending = pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending;
+    const bool                                  lastPresentationWasPhysical = pPed->m_LastSyncedData->nativeTaskAnimationPresentationWasPhysical;
     const bool canBridgeNativeTaskTransition = pPed->GetGamePlayer() && !pPed->GetRealOccupiedVehicle() && !pPed->IsGettingIntoVehicle() &&
                                                !pPed->IsGettingOutOfVehicle() && !pPed->IsDead() && !pPed->HasSyncedAnim();
     bool forcePhysicalTransitionHold = false;
 
     if (presentationResult.state == eNativeTaskAnimationPresentationState::HOLD_LAST_PHYSICAL_FRAME && !resetPending && canBridgeNativeTaskTransition)
     {
-        if (lastPresentationWasPhysical && lastPresentation.data.uiMode == SNativeTaskAnimationPresentationSync::ANIMATION)
+        if (lastPresentationWasPhysical && SNativeTaskAnimationPresentationSync::IsAnimationMode(lastPresentation.data.uiMode))
         {
             // FALL_AND_GET_UP has a real one-frame (and potentially longer
             // under load) association gap between its simple tasks. Refresh
             // the terminal FALL pose until GET_UP is ready instead of
             // exposing the observer's upright base pose between both phases.
             presentation = lastPresentation;
+            // The association can disappear for a frame on both sides of the
+            // airborne phase. Preserve the terminal clip while still
+            // publishing the new physical semantic, so observers launch and
+            // land on the same transition as the owner.
+            presentation.data.uiMode =
+                presentationResult.airborne ? SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION : SNativeTaskAnimationPresentationSync::ANIMATION;
             presentation.data.fProgress = 1.0f;
             presentation.data.fBlendAmount = 1.0f;
             forcePhysicalTransitionHold = true;
@@ -660,6 +726,10 @@ bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitS
     {
         return false;
     }
+
+    const bool airborne = presentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
+    const bool wasAirborne = lastPresentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
+    reliableSemanticTransition |= airborne != wasAirborne;
 
     pBitStream->Write(pPed->GetID());
     pBitStream->Write(pPed->GetSyncTimeContext());

@@ -19,9 +19,11 @@ local enabled = false
 local debugEnabled = false
 local nextRequestId = 0
 local nextPedId = 0
+local nextAirTestId = 0
 local requestCursor = 0
 local pendingRequests = {}
 local trafficPeds = {}
+local testVehicles = {}
 local stats = {
     requests = 0,
     candidateMisses = 0,
@@ -164,6 +166,10 @@ local function removeRecord(record, reason)
         return
     end
     record.removing = true
+    if record.airTest then
+        triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, reason)
+        record.airTest = nil
+    end
     trafficPeds[record.ped] = nil
     if isElement(record.ped) then
         if isElement(record.owner) then
@@ -180,7 +186,8 @@ local function sendAssignment(record, reason)
         return false
     end
     record.assignmentLastSent = getTickCount()
-    return triggerClientEvent(record.owner, "pedTraffic:assign", resourceRoot, record.ped, record.epoch, record.direction, reason)
+    local resumeAirborne = record.airTest and record.airTest.handoffTriggered == true
+    return triggerClientEvent(record.owner, "pedTraffic:assign", resourceRoot, record.ped, record.epoch, record.direction, reason, resumeAirborne)
 end
 
 local function hasValidGunAimContext(player, ped, requireSyncedControl)
@@ -247,8 +254,73 @@ local function assignOwner(record, owner, reason)
         stats.handoffs = stats.handoffs + 1
     end
 
+    if record.airTest then
+        record.airTest.epoch = record.epoch
+        triggerClientEvent(root, "pedTraffic:airTestWatch", resourceRoot, record.ped, record.epoch, record.airTest.nonce,
+                           record.airTest.forceHandoff)
+    end
     sendAssignment(record, reason)
     log(("assign id=%d epoch=%d owner=%s reason=%s"):format(record.id, record.epoch, getPlayerName(owner), tostring(reason)))
+    return true
+end
+
+local function findClosestActiveTrafficPed(player, maxDistance)
+    if not isEligiblePlayer(player) then
+        return false
+    end
+
+    local x, y, z = getElementPosition(player)
+    local closestRecord, closestDistanceSquared
+    local maximumDistanceSquared = maxDistance * maxDistance
+    for _, record in pairs(trafficPeds) do
+        if not record.removing and record.state == "active" and isElement(record.ped) and not isPedDead(record.ped) and
+            getElementDimension(record.ped) == getElementDimension(player) and getElementInterior(record.ped) == getElementInterior(player) then
+            local px, py, pz = getElementPosition(record.ped)
+            local distanceSquared = squaredDistance(x, y, z, px, py, pz)
+            if distanceSquared <= maximumDistanceSquared and (not closestDistanceSquared or distanceSquared < closestDistanceSquared) then
+                closestRecord = record
+                closestDistanceSquared = distanceSquared
+            end
+        end
+    end
+    return closestRecord
+end
+
+local function startAirTest(player, forceHandoff)
+    if not enabled or not isEligiblePlayer(player) then
+        outputChatBox("Run /pedtraffic on before starting the airborne test", player, 255, 160, 80)
+        return false
+    end
+
+    local record = findClosestActiveTrafficPed(player, 30)
+    if not record then
+        outputChatBox("No active traffic ped within 30 metres", player, 255, 160, 80)
+        return false
+    end
+    if record.airTest then
+        outputChatBox("That traffic ped already has an airborne test in progress", player, 255, 160, 80)
+        return false
+    end
+    if forceHandoff and #getEligiblePlayers() < 2 then
+        outputChatBox("The airborne handoff test requires two connected players", player, 255, 160, 80)
+        return false
+    end
+
+    nextAirTestId = nextAirTestId + 1
+    record.airTest = {
+        nonce = nextAirTestId,
+        epoch = record.epoch,
+        requester = player,
+        forceHandoff = forceHandoff == true,
+        startedAt = getTickCount(),
+    }
+    triggerClientEvent(root, "pedTraffic:airTestWatch", resourceRoot, record.ped, record.epoch, record.airTest.nonce,
+                       record.airTest.forceHandoff)
+    triggerClientEvent(record.owner, "pedTraffic:airTest", resourceRoot, record.ped, record.epoch, record.airTest.nonce)
+    log(("airtest-start id=%d epoch=%d nonce=%d owner=%s handoff=%s"):format(
+            record.id, record.epoch, record.airTest.nonce, getPlayerName(record.owner), tostring(record.airTest.forceHandoff)), true)
+    outputChatBox(("Native airborne test started on traffic ped %d%s"):format(
+                      record.id, record.airTest.forceHandoff and " with forced handoff" or ""), player, 120, 220, 255)
     return true
 end
 
@@ -385,14 +457,74 @@ local function clearTraffic(reason)
     pendingRequests = {}
 end
 
+local function removeTestVehicle(player)
+    local vehicle = testVehicles[player]
+    testVehicles[player] = nil
+    if isElement(vehicle) then
+        destroyElement(vehicle)
+    end
+end
+
+local function clearTestVehicles()
+    local players = {}
+    for player in pairs(testVehicles) do
+        players[#players + 1] = player
+    end
+    for _, player in ipairs(players) do
+        removeTestVehicle(player)
+    end
+end
+
+local function createTestVehicle(player, requestedModel)
+    if not enabled or not isEligiblePlayer(player) then
+        if isElement(player) then
+            outputChatBox("Run /pedtraffic on before creating the test vehicle", player, 255, 160, 80)
+        end
+        return false
+    end
+
+    local model = math.floor(tonumber(requestedModel) or 560)
+    if model < 400 or model > 611 then
+        outputChatBox("Usage: /pedtraffic vehicle [model 400..611]", player, 255, 160, 80)
+        return false
+    end
+
+    removeTestVehicle(player)
+    local matrix = getElementMatrix(player)
+    local x = matrix[4][1] + matrix[1][1] * 4
+    local y = matrix[4][2] + matrix[1][2] * 4
+    local z = matrix[4][3] + 0.5
+    local _, _, rotation = getElementRotation(player)
+    local vehicle = createVehicle(model, x, y, z, 0, 0, rotation)
+    if not vehicle then
+        outputChatBox("Could not create the ped-traffic test vehicle", player, 255, 80, 80)
+        return false
+    end
+
+    testVehicles[player] = vehicle
+    setElementDimension(vehicle, getElementDimension(player))
+    setElementInterior(vehicle, getElementInterior(player))
+    setElementData(vehicle, "neon:pedTrafficTestVehicle", true, false)
+    warpPedIntoVehicle(player, vehicle)
+    outputChatBox(("Ped traffic collision test vehicle: model %d"):format(model), player, 120, 220, 255)
+    return true
+end
+
 local function setEnabled(value, actor)
     value = value == true
     if enabled == value then
+        if not value then
+            -- Keep `off` idempotent so an interrupted test cannot leave a
+            -- resource-owned vehicle behind even if traffic was already off.
+            clearTraffic("disabled")
+            clearTestVehicles()
+        end
         return
     end
     enabled = value
     if not enabled then
         clearTraffic("disabled")
+        clearTestVehicles()
     end
     triggerClientEvent(root, "pedTraffic:setEnabled", resourceRoot, enabled, debugEnabled)
     log(("enabled=%s actor=%s"):format(tostring(enabled), isElement(actor) and getPlayerName(actor) or "console"), true)
@@ -450,6 +582,29 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
         end
     elseif evidence == "released" and record.state == "revoking" then
         finishHandoff(record, "release-ack")
+    elseif evidence == "airtest-phase" and record.airTest and type(data) == "table" and
+        tonumber(data.nonce) == record.airTest.nonce then
+        local phase = tostring(data.phase or "unknown")
+        local detail = type(data.reason) == "string" and (" reason=" .. data.reason) or ""
+        log(("airtest-phase id=%d epoch=%d nonce=%d owner=%s phase=%s%s"):format(
+                record.id, epoch, record.airTest.nonce, getPlayerName(client), phase, detail), true)
+        if record.state == "revoking" and record.airTest.handoffTriggered then
+            log(("airtest-phase-ignored id=%d epoch=%d nonce=%d phase=%s reason=handoff-in-progress"):format(
+                    record.id, epoch, record.airTest.nonce, phase))
+        elseif record.airTest.forceHandoff and not record.airTest.handoffTriggered and phase == "in_air" then
+            local x, y, z = getElementPosition(record.ped)
+            local newOwner = findClosestPlayer(x, y, z, config.despawnRadius, record.owner)
+            if newOwner then
+                record.airTest.handoffTriggered = true
+                beginHandoff(record, newOwner, "airtest-in-air")
+            else
+                triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, "handoff-no-owner")
+                record.airTest = nil
+            end
+        elseif phase == "complete" or phase == "failed" then
+            triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, phase)
+            record.airTest = nil
+        end
     elseif evidence == "failure" then
         log(("client-failure id=%d epoch=%d owner=%s reason=%s"):format(record.id, epoch, getPlayerName(client),
                                                                         type(data) == "table" and tostring(data.reason) or "unknown"), true)
@@ -508,6 +663,7 @@ end)
 
 addEventHandler("onPlayerQuit", root, function()
     pendingRequests[source] = nil
+    removeTestVehicle(source)
     for _, record in pairs(trafficPeds) do
         if record.owner == source and not record.removing then
             local x, y, z = getElementPosition(record.ped)
@@ -576,6 +732,10 @@ setTimer(function()
                 elseif now - (record.assignmentLastSent or 0) >= 1000 then
                     sendAssignment(record, "assignment-retry")
                 end
+            elseif record.airTest and now - record.airTest.startedAt >= 8000 then
+                log(("airtest-timeout id=%d epoch=%d nonce=%d"):format(record.id, record.epoch, record.airTest.nonce), true)
+                triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, "timeout")
+                record.airTest = nil
             elseif not isPedDead(record.ped) then
                 local x, y, z = getElementPosition(record.ped)
                 local closest, closestDistanceSquared = findClosestPlayer(x, y, z, config.despawnRadius)
@@ -583,6 +743,12 @@ setTimer(function()
                     removeRecord(record, "outside-residency")
                 elseif not isEligiblePlayer(record.owner) then
                     beginHandoff(record, closest, "owner-ineligible")
+                elseif record.airTest then
+                    -- Keep the deterministic baseline on one owner. The
+                    -- handoff variant transfers only when its owner reports
+                    -- the real SIMPLE_IN_AIR phase above.
+                    record.handoffCandidate = nil
+                    record.handoffCandidateSince = nil
                 elseif closest ~= record.owner then
                     local ownerX, ownerY, ownerZ = getElementPosition(record.owner)
                     local ownerDistance = math.sqrt(squaredDistance(x, y, z, ownerX, ownerY, ownerZ))
@@ -636,6 +802,10 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
     elseif action == "weapon" and isElement(player) then
         giveWeapon(player, 22, 200, true)
         outputChatBox("Ped traffic threat test: pistol + 200 rounds", player, 120, 220, 255)
+    elseif action == "vehicle" and isElement(player) then
+        createTestVehicle(player, value)
+    elseif action == "airtest" and isElement(player) then
+        startAirTest(player, tostring(value or ""):lower() == "handoff")
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do
@@ -654,4 +824,5 @@ end)
 addEventHandler("onResourceStop", resourceRoot, function()
     triggerClientEvent(root, "pedTraffic:setEnabled", resourceRoot, false, false)
     clearTraffic("resource-stop")
+    clearTestVehicles()
 end)

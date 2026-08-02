@@ -22,7 +22,7 @@
 
 <p align="center"><strong>An independent MTA:BLUE-derived playground for deeper GTA:SA engine work.</strong></p>
 
-MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue), focused on prototyping advanced engine features and exploring changes that may be too early or too specialized for the upstream project.
+MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) that pushes beyond standard MTA with larger worlds, higher engine limits, deeper access to GTA:SA's native systems, and new scripting APIs. One of its flagship systems brings FiveM-style shared NPCs and traffic into MTA, powered by the original single-player AI.
 
 The repository preserves the complete upstream history and adds proof-of-concept work on top of it. Neon is not affiliated with or endorsed by the Multi Theft Auto team.
 
@@ -227,12 +227,13 @@ Use it for story missions, convoys, escorts, scripted traffic, freeroam events, 
 | `setPedGoToOffset(ped, target [, timeout, radius, angle, repeat])` | Client | Makes an owned ped seek a live offset around another ped, optionally through GTA's repeating mission-sequence lifecycle. |
 | `setPedKillOnFoot(ped, target)` | Client | Gives GTA full native control of an owned ped's indefinite on-foot pursuit and attack task. |
 | `setPedWander(ped [, movement, direction, wanderSensibly])` | Client | Assigns GTA's standard on-foot Wander AI; an omitted direction uses GTA's own random choice. |
+| `setPedJump(ped [, allowClimb])` | Client | Starts GTA's native jump lifecycle on an owned ped. GTA controls launch, in-air movement and landing; climbing is enabled by default. |
 | `setPedScriptedSpeechMuted(ped, muted)` | Client | Disables or restores ambient ped speech through GTA's scripted-speech state. |
 | `setPedFacialTalk(ped, duration)` | Client | Requests GTA's native `FACTALK` facial expression for a non-negative duration in milliseconds. |
 | `stopPedFacialTalk(ped)` | Client | Stops the streamed ped's active native facial expression request. |
 | `setPedMissionActor(ped, enabled)` | Client | Persists GTA's `PED_MISSION` classification and native AI weapon ownership on a script ped across local native model recreation, restoring its previous MTA policy when disabled. |
 | `isPedMissionActor(ped)` | Client | Reports the locally persisted mission-actor policy for a script ped, including while its native model is streamed out. |
-| `acquirePedNativeEventProfile(ped, "mission" or "ambient-wander")` | Client | Exclusively leases a stock event profile. Mission requires a mission actor; ambient wander enables owner-only pedestrian/vehicle avoidance plus civilian gun-threat and damage responses. Returns a resource-owned token. |
+| `acquirePedNativeEventProfile(ped, "mission" or "ambient-wander")` | Client | Exclusively leases a stock event profile. Mission requires a mission actor; ambient wander enables owner-only pedestrian and vehicle avoidance, moving-vehicle danger, civilian gun-threat and damage responses. Returns a resource-owned token. |
 | `releasePedNativeEventProfile(token)` | Client | Releases one native event-profile token owned by the calling resource. |
 | `isPedNativeEventProfileActive(ped, token)` | Client | Reports whether the calling resource's lease is currently applied by this ped's authoritative syncer generation. |
 | `addPedNativeGunAimedAtEvent(ped, aimingPed, token)` | Client | Bridges synchronized targeting into GTA's real aimed-at event on the active ambient owner; the leased profile token is required. |

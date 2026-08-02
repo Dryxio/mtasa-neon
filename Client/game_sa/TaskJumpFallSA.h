@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <CVector.h>
 #include <game/TaskJumpFall.h>
 #include <game/CTasks.h>
@@ -18,10 +20,143 @@
 
 // temporary
 class CAnimBlendAssociation;
+class CAnimBlendAssociationSAInterface;
 class FxSystem_c;
 
-#define FUNC_CTaskSimpleClimb__Constructor   0x67A110
-#define FUNC_CTaskSimpleJetPack__Constructor 0x67B4E0
+#define FUNC_CTaskSimpleClimb__Constructor         0x67A110
+#define FUNC_CTaskSimpleJetPack__Constructor       0x67B4E0
+#define FUNC_CTaskComplexJump__Constructor         0x67A030
+#define FUNC_CTaskComplexInAirAndLand__Constructor 0x678C80
+
+// Neon only needs to construct this task. GTA retains ownership of its native
+// jump, airborne, optional climb, and landing state machine.
+class CTaskComplexJumpSAInterface : public CTaskComplexSAInterface
+{
+private:
+    int           m_iForceClimb;
+    unsigned char m_bUsePlayerLaunchForce;
+    unsigned char m_pad[3];
+};
+static_assert(sizeof(CTaskComplexJumpSAInterface) == 0x14, "Unexpected CTaskComplexJumpSAInterface size");
+
+class CTaskComplexJumpSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexJumpSA() {};
+    explicit CTaskComplexJumpSA(bool bAllowClimb);
+};
+
+class CTaskComplexInAirAndLandSAInterface : public CTaskComplexSAInterface
+{
+private:
+    bool         m_bUsingJumpGlide;
+    bool         m_bUsingFallGlide;
+    bool         m_bInvalidClimb;
+    std::uint8_t m_pad;
+};
+static_assert(sizeof(CTaskComplexInAirAndLandSAInterface) == 0x10, "Unexpected CTaskComplexInAirAndLandSAInterface size");
+
+class CTaskComplexInAirAndLandSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexInAirAndLandSA() {};
+    CTaskComplexInAirAndLandSA(bool bUsingJumpGlide, bool bUsingFallGlide);
+};
+
+// GTA owns the entire airborne state machine. These wrappers expose only the
+// live associations selected by its simple subtasks so remote clients can
+// present the same launch, glide, landing, or blocked-jump response.
+class CTaskSimpleJumpSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    CVector                           m_vecClimbPosition;
+    float                             m_fClimbAngle;
+    std::uint8_t                      m_ucClimbSurfaceType;
+    std::uint8_t                      m_padSurface[3];
+    CEntitySAInterface*               m_pClimbEntity;
+    bool                              m_bIsFinished;
+    bool                              m_bIsJumpBlocked;
+    bool                              m_bClimbJump;
+    bool                              m_bLaunchAnimationStarted;
+    bool                              m_bCanClimb;
+    bool                              m_bHighJump;
+    std::uint8_t                      m_padAnimation[2];
+    CAnimBlendAssociationSAInterface* m_pAnim;
+};
+static_assert(sizeof(CTaskSimpleJumpSAInterface) == 0x2C, "Unexpected CTaskSimpleJumpSAInterface size");
+static_assert(offsetof(CTaskSimpleJumpSAInterface, m_pAnim) == 0x28, "Invalid simple-jump animation offset");
+
+class CTaskSimpleJumpSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleJumpSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
+
+class CTaskSimpleInAirSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    CVector                           m_vecPosition;
+    float                             m_fAngle;
+    std::uint8_t                      m_ucSurfaceType;
+    std::uint8_t                      m_padSurface[3];
+    CAnimBlendAssociationSAInterface* m_pAnim;
+    float                             m_fMinimumVerticalSpeed;
+    std::uint8_t                      m_ucFlags;
+    std::uint8_t                      m_padCounter[3];
+    std::uint32_t                     m_uiProcessCounter;
+    std::uint8_t                      m_timer[10];
+    std::uint8_t                      m_padTimer[2];
+    CEntitySAInterface*               m_pClimbEntity;
+};
+static_assert(sizeof(CTaskSimpleInAirSAInterface) == 0x3C, "Unexpected CTaskSimpleInAirSAInterface size");
+static_assert(offsetof(CTaskSimpleInAirSAInterface, m_pAnim) == 0x1C, "Invalid in-air animation offset");
+
+class CTaskSimpleInAirSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleInAirSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
+
+class CTaskSimpleLandSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    CAnimBlendAssociationSAInterface* m_pAnim;
+    std::int32_t                      m_iAnimId;
+    std::uint8_t                      m_ucFlags;
+    std::uint8_t                      m_pad[3];
+};
+static_assert(sizeof(CTaskSimpleLandSAInterface) == 0x14, "Unexpected CTaskSimpleLandSAInterface size");
+static_assert(offsetof(CTaskSimpleLandSAInterface, m_pAnim) == 0x08, "Invalid landing animation offset");
+
+class CTaskSimpleLandSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleLandSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
+
+class CTaskSimpleHitHeadSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    bool                              m_bIsFinished;
+    std::uint8_t                      m_pad[3];
+    CAnimBlendAssociationSAInterface* m_pAnim;
+};
+static_assert(sizeof(CTaskSimpleHitHeadSAInterface) == 0x10, "Unexpected CTaskSimpleHitHeadSAInterface size");
+static_assert(offsetof(CTaskSimpleHitHeadSAInterface, m_pAnim) == 0x0C, "Invalid hit-head animation offset");
+
+class CTaskSimpleHitHeadSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleHitHeadSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
 
 class CTaskSimpleClimbSAInterface : public CTaskSimpleSAInterface
 {

@@ -134,6 +134,7 @@ public:
                                  std::optional<bool> repeatTask);
     static bool SetPedKillOnFoot(CClientPed* ped, CClientPed* target);
     static bool SetPedWander(CClientPed* ped, std::optional<std::string> movement, std::optional<int> direction, std::optional<bool> wanderSensibly);
+    static bool SetPedJump(CClientPed* ped, std::optional<bool> allowClimb);
     static bool SetPedScriptedSpeechMuted(CClientPed* ped, bool muted);
     static bool SetPedFacialTalk(CClientPed* ped, int duration);
     static bool StopPedFacialTalk(CClientPed* ped);

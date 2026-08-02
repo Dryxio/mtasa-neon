@@ -21,6 +21,65 @@
 
 class CAnimBlendAssociationSAInterface;
 
+// GTA owns these short vehicle-danger tasks and all of their gameplay side
+// effects.  Neon only exposes the live animation association so non-owning
+// clients can present the exact native clip chosen by the syncer.
+class CTaskSimpleEvasiveStepSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    class CEntitySAInterface*         m_pEntity;
+    bool                              m_bIsFinished;
+    unsigned char                     m_pad[3];
+    CAnimBlendAssociationSAInterface* m_pAnim;
+};
+static_assert(sizeof(CTaskSimpleEvasiveStepSAInterface) == 0x14, "Unexpected evasive-step task size");
+static_assert(offsetof(CTaskSimpleEvasiveStepSAInterface, m_pAnim) == 0x10, "Invalid evasive-step animation offset");
+
+class CTaskSimpleEvasiveStepSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleEvasiveStepSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
+
+class CTaskSimpleEvasiveDiveSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    class CVehicleSAInterface*        m_pVehicle;
+    bool                              m_bIsFinished;
+    unsigned char                     m_pad[3];
+    CAnimBlendAssociationSAInterface* m_pAnim;
+};
+static_assert(sizeof(CTaskSimpleEvasiveDiveSAInterface) == 0x14, "Unexpected evasive-dive task size");
+static_assert(offsetof(CTaskSimpleEvasiveDiveSAInterface, m_pAnim) == 0x10, "Invalid evasive-dive animation offset");
+
+class CTaskSimpleEvasiveDiveSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleEvasiveDiveSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
+
+class CTaskSimpleShakeFistSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    bool                              m_bIsFinished;
+    unsigned char                     m_pad[3];
+    CAnimBlendAssociationSAInterface* m_pAnim;
+};
+static_assert(sizeof(CTaskSimpleShakeFistSAInterface) == 0x10, "Unexpected shake-fist task size");
+static_assert(offsetof(CTaskSimpleShakeFistSAInterface, m_pAnim) == 0x0C, "Invalid shake-fist animation offset");
+
+class CTaskSimpleShakeFistSA : public virtual CTaskSimpleSA
+{
+public:
+    CTaskSimpleShakeFistSA() {};
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+};
+
 class CTaskSimpleFallSAInterface : public CTaskSimpleSAInterface
 {
 public:

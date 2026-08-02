@@ -308,6 +308,42 @@ TEST(SNativeTaskAnimationPresentationSync, RoundTrip)
     EXPECT_FLOAT_EQ(source.data.fHeading, decoded.data.fHeading);
 }
 
+TEST(SNativeTaskAnimationPresentationSync, AirborneRoundTrip)
+{
+    MockBitStream                        bitStream(static_cast<unsigned short>(eBitStreamVersion::Latest));
+    SNativeTaskAnimationPresentationSync source;
+    source.data.uiMode = SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
+    source.data.usAnimGroup = 0;
+    source.data.usAnimId = 118;
+    source.data.fProgress = 0.625f;
+    source.data.fSpeed = 1.0f;
+    source.data.fBlendAmount = 1.0f;
+    source.data.fHeading = -0.75f;
+    bitStream.Write(&source);
+
+    bitStream.ResetReadPointer();
+    SNativeTaskAnimationPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION, decoded.data.uiMode);
+    EXPECT_EQ(source.data.usAnimGroup, decoded.data.usAnimGroup);
+    EXPECT_EQ(source.data.usAnimId, decoded.data.usAnimId);
+    EXPECT_FLOAT_EQ(source.data.fProgress, decoded.data.fProgress);
+    EXPECT_FLOAT_EQ(source.data.fSpeed, decoded.data.fSpeed);
+    EXPECT_FLOAT_EQ(source.data.fBlendAmount, decoded.data.fBlendAmount);
+    EXPECT_FLOAT_EQ(source.data.fHeading, decoded.data.fHeading);
+}
+
+TEST(SNativeTaskAnimationPresentationSync, RejectsReservedMode)
+{
+    MockBitStream bitStream;
+    unsigned int  reservedMode = 3;
+    bitStream.WriteBits(reinterpret_cast<const char*>(&reservedMode), SNativeTaskAnimationPresentationSync::BITCOUNT);
+    bitStream.ResetReadPointer();
+
+    SNativeTaskAnimationPresentationSync decoded;
+    EXPECT_FALSE(bitStream.Read(&decoded));
+}
+
 TEST(SNativeTaskAnimationPresentationSync, RejectsInvalidPayloads)
 {
     for (const auto invalidProgress : {-0.01f, 1.01f, std::numeric_limits<float>::quiet_NaN()})

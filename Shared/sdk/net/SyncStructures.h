@@ -1170,14 +1170,20 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
 {
     enum
     {
-        BITCOUNT = 1
+        BITCOUNT = 2
     };
 
     enum eMode : unsigned int
     {
         NONE = 0,
         ANIMATION,
+        // Observers must distinguish a task-owned airborne clip from an
+        // ordinary animation. Animation IDs are reused by several GTA task
+        // families and cannot safely carry this physical-state semantic.
+        AIRBORNE_ANIMATION,
     };
+
+    static bool IsAnimationMode(unsigned int mode) { return mode == ANIMATION || mode == AIRBORNE_ANIMATION; }
 
     bool Read(NetBitStreamInterface& bitStream)
     {
@@ -1186,7 +1192,7 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
             return false;
         if (data.uiMode == NONE)
             return true;
-        if (data.uiMode != ANIMATION || !bitStream.Read(data.usAnimGroup) || !bitStream.Read(data.usAnimId) || !bitStream.Read(data.fProgress) ||
+        if (!IsAnimationMode(data.uiMode) || !bitStream.Read(data.usAnimGroup) || !bitStream.Read(data.usAnimId) || !bitStream.Read(data.fProgress) ||
             !bitStream.Read(data.fSpeed) || !bitStream.Read(data.fBlendAmount) || !bitStream.Read(data.fHeading))
             return false;
 
@@ -1198,7 +1204,7 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
     void Write(NetBitStreamInterface& bitStream) const
     {
         bitStream.WriteBits(reinterpret_cast<const char*>(&data.uiMode), BITCOUNT);
-        if (data.uiMode == NONE)
+        if (!IsAnimationMode(data.uiMode))
             return;
 
         bitStream.Write(data.usAnimGroup);

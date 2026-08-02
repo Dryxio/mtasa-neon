@@ -345,6 +345,30 @@ void CPedSA::SetIsStanding(bool standing)
     ((void(__thiscall*)(CEntitySAInterface*, bool))FUNC_SetIsStanding)(m_pInterface, standing);
 }
 
+void CPedSA::SetNativeTaskAirbornePresentationState(bool airborne, bool observer)
+{
+    auto& flags = GetPedInterface()->pedFlags;
+    m_bNativeTaskAirbornePresentationObserver = airborne && observer;
+
+    if (airborne)
+    {
+        // A replicated vertical velocity cannot launch a ped while GTA still
+        // considers it planted. These are the same physical flags set by
+        // CTaskSimpleJump::Launch; the observer still receives no native task.
+        flags.bIsStanding = false;
+        flags.bWasStanding = false;
+        flags.bIsInTheAir = true;
+        flags.bIsLanding = false;
+        return;
+    }
+
+    // Do not force bIsStanding here. The replicated position may still be a
+    // fraction above the floor, so GTA's ordinary collision pass must decide
+    // when contact is real instead of leaving the ped suspended.
+    flags.bIsInTheAir = false;
+    flags.bIsLanding = false;
+}
+
 void CPedSA::RestoreLastGoodPhysicsState()
 {
     CPhysicalSA::RestoreLastGoodPhysicsState();

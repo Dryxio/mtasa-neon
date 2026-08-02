@@ -65,6 +65,30 @@ end)
 
 Names and signatures are provisional. The contract matters more than the exact syntax.
 
+### Planned behavior control and task interception
+
+The generic layer should also let a resource constrain GTA-selected behavior
+without replacing the complete native AI tree. A resource may, for example,
+disable a supported reaction family such as fighting while leaving avoidance,
+pathfinding, animation choice, and the remaining decisions native:
+
+```lua
+setPedNativeBehaviorEnabled(ped, "fight", false)
+
+addEventHandler("onPedNativeTaskStart", ped, function(task, parentTask)
+    if task == "evasive_dive" then
+        cancelEvent()
+    end
+end)
+```
+
+The event names and task labels above are illustrative, not implemented API.
+The intended contract is that the resource owning the behavior policy can
+observe a complex task selecting a simple child and allow, cancel, or replace
+that child with a validated native task descriptor. Interception runs only on
+the authoritative syncer, follows the same resource cleanup and owner-epoch
+lifecycle as the task, and must not fire independently on observers.
+
 ### Initial task families
 
 The first useful native task set is driven by the needs of `SWEET1`/Tagging Up Turf but must remain generic:

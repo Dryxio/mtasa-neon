@@ -39,5 +39,10 @@ bool CPedStartSyncPacket::Write(NetBitStreamInterface& BitStream) const
 
     BitStream.Write(m_pPed->GetCameraRotation());
 
+    // The new owner may not have been a near-viewer for the final animation
+    // snapshot. Carry the cached physical phase in the existing start-sync
+    // lifecycle so it can seed GTA's native in-air-and-land task directly.
+    BitStream.WriteBit(m_pPed->IsNativeTaskAirborne());
+
     return true;
 }

@@ -322,6 +322,9 @@ public:
     bool IsReloadingWeapon() const noexcept { return m_reloadingWeapon; }
     void SetReloadingWeapon(bool state) noexcept { m_reloadingWeapon = state; }
 
+    bool IsNativeTaskAirborne() const noexcept { return m_nativeTaskAirborne; }
+    void SetNativeTaskAirborne(bool airborne) noexcept { m_nativeTaskAirborne = airborne; }
+
     bool GetCollisionEnabled() { return m_bCollisionsEnabled; }
     void SetCollisionEnabled(bool bCollisionEnabled) { m_bCollisionsEnabled = bCollisionEnabled; }
 
@@ -382,6 +385,7 @@ protected:
     bool                                 m_bFrozen;
     bool                                 m_bStealthAiming;
     bool                                 m_reloadingWeapon{};
+    bool                                 m_nativeTaskAirborne{};
     CVehicle*                            m_pJackingVehicle;
     SPlayerAnimData                      m_animData{};
     float                                m_cameraRotation{};

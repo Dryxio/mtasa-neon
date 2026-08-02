@@ -368,6 +368,9 @@ static_assert(offsetof(CPedSAInterface, createdBy) == 0x484, "Invalid created-by
 // GunControl reads this exact byte to choose both burst length and the delay
 // between bursts, so a layout drift here would silently change scripted combat.
 static_assert(offsetof(CPedSAInterface, weaponShootingRate) == 0x719, "Invalid weapon shooting rate offset for CPedSAInterface");
+// Owner handoff removes only car-impact fall/get-up tasks. Keep this cause byte
+// pinned so unrelated physical responses can never be cleared by layout drift.
+static_assert(offsetof(CPedSAInterface, lastWeaponDamage) == 0x760, "Invalid last weapon damage offset for CPedSAInterface");
 // GTA's weapon code reads accuracy directly from the following byte when it
 // calculates shot spread, so keep the verified executable layout explicit.
 static_assert(offsetof(CPedSAInterface, weaponAccuracy) == 0x71A, "Invalid weapon accuracy offset for CPedSAInterface");
@@ -540,15 +543,20 @@ public:
         m_bNativeAmbientWanderEventProfileSelected = selected;
         m_bNativeAmbientWanderEventProfileActive = active;
     }
-    bool IsNativeAmbientWanderEventProfileSelected() const override { return m_bNativeAmbientWanderEventProfileSelected; }
-    bool IsNativeAmbientWanderEventProfileActive() const override { return m_bNativeAmbientWanderEventProfileActive; }
-    bool AddNativeGunAimedAtEvent(CPed* aimingPed) override;
-    int  GetNativeCurrentEventType() const override;
-    bool AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone) override;
-    void SetNativeChokingUsesNonPlayerBehavior(bool enabled) override { m_bNativeChokingUsesNonPlayerBehavior = enabled; }
-    bool NativeChokingUsesNonPlayerBehavior() const override { return m_bNativeChokingUsesNonPlayerBehavior; }
-    void SetNativeFightUsesNonPlayerBehavior(bool enabled) override { m_bNativeFightUsesNonPlayerBehavior = enabled; }
-    bool NativeFightUsesNonPlayerBehavior() const override { return m_bNativeFightUsesNonPlayerBehavior; }
+    bool        IsNativeAmbientWanderEventProfileSelected() const override { return m_bNativeAmbientWanderEventProfileSelected; }
+    bool        IsNativeAmbientWanderEventProfileActive() const override { return m_bNativeAmbientWanderEventProfileActive; }
+    bool        AddNativeGunAimedAtEvent(CPed* aimingPed) override;
+    int         GetNativeCurrentEventType() const override;
+    bool        AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone) override;
+    eWeaponType GetLastWeaponDamage() const noexcept override { return static_cast<eWeaponType>(GetPedInterface()->lastWeaponDamage); }
+    void        SetNativeTaskAirbornePresentationState(bool airborne, bool observer) override;
+    bool        IsNativeTaskAirbornePresentationObserver() const noexcept override { return m_bNativeTaskAirbornePresentationObserver; }
+    void        SetNativeChokingUsesNonPlayerBehavior(bool enabled) override { m_bNativeChokingUsesNonPlayerBehavior = enabled; }
+    bool        NativeChokingUsesNonPlayerBehavior() const override { return m_bNativeChokingUsesNonPlayerBehavior; }
+    void        SetNativeFightUsesNonPlayerBehavior(bool enabled) override { m_bNativeFightUsesNonPlayerBehavior = enabled; }
+    bool        NativeFightUsesNonPlayerBehavior() const override { return m_bNativeFightUsesNonPlayerBehavior; }
+    void        SetNativeJumpUsesNonPlayerBehavior(bool enabled) override { m_bNativeJumpUsesNonPlayerBehavior = enabled; }
+    bool        NativeJumpUsesNonPlayerBehavior() const override { return m_bNativeJumpUsesNonPlayerBehavior; }
 
     static void __fastcall RemoveWeaponWhenEnteringVehicle(CPedSAInterface* pedInterface, void*, int jetpack);
     static void            StaticSetHooks();
@@ -575,4 +583,6 @@ private:
     bool          m_bNativeAmbientWanderEventProfileActive{false};
     bool          m_bNativeChokingUsesNonPlayerBehavior{false};
     bool          m_bNativeFightUsesNonPlayerBehavior{false};
+    bool          m_bNativeJumpUsesNonPlayerBehavior{false};
+    bool          m_bNativeTaskAirbornePresentationObserver{false};
 };

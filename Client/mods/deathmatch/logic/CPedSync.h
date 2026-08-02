@@ -36,10 +36,15 @@ public:
 private:
     struct SNativeTaskLocomotionBurstState
     {
-        bool          initialized{};
-        unsigned long burstUntil{};
-        unsigned long cooldownUntil{};
-        unsigned long lastSentAt{};
+        bool           initialized{};
+        unsigned long  burstUntil{};
+        unsigned long  cooldownUntil{};
+        unsigned long  lastSentAt{};
+        unsigned long  burstHardUntil{};
+        bool           spatialTransient{};
+        bool           pendingTransientTransition{};
+        unsigned short transientAnimGroup{};
+        unsigned short transientAnimId{};
     };
 
     void Packet_PedStartSync(NetBitStreamInterface& BitStream);
@@ -50,7 +55,7 @@ private:
     void UpdateNativeTaskAnimationPresentation();
     void UpdateNativeTaskLocomotionBurst(unsigned long currentTime);
     void WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
-    bool WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
+    bool WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed, bool& reliableSemanticTransition);
     bool WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed);
 
     CClientPedManager*                                               m_pPedManager;
