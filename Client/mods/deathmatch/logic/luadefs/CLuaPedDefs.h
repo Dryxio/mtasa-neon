@@ -149,6 +149,8 @@ public:
     LUA_DECLARE(AcquirePedNativeEventProfile);
     LUA_DECLARE(ReleasePedNativeEventProfile);
     LUA_DECLARE(IsPedNativeEventProfileActive);
+    LUA_DECLARE(AddPedNativeGunAimedAtEvent);
+    LUA_DECLARE(AddPedNativeDamageResponseEvent);
     static bool SetPedStoryProtected(CClientPed* ped, bool enabled);
     static bool SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits);
     static bool SetPedStayInSamePlace(CClientPed* ped, bool stayInSamePlace);

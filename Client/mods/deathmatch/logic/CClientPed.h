@@ -19,6 +19,7 @@ class CClientPed;
 #include <multiplayer/CMultiplayer.h>
 #include "CClientPad.h"
 #include "CClientModel.h"
+#include "CPedNativeEventProfile.h"
 #include <memory>
 #include <optional>
 
@@ -129,6 +130,21 @@ struct SLastSyncedPedData
     bool                                 nativeTaskWeaponPresentationResetPending{true};
     SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
     bool                                 nativeTaskAnimationPresentationResetPending{true};
+    bool                                 nativeTaskAnimationPresentationWasPhysical{};
+};
+
+enum class eNativeTaskAnimationPresentationState
+{
+    NONE,
+    READY,
+    HOLD_LAST_PHYSICAL_FRAME,
+};
+
+struct SNativeTaskAnimationPresentationResult
+{
+    SNativeTaskAnimationPresentationSync  presentation;
+    eNativeTaskAnimationPresentationState state{eNativeTaskAnimationPresentationState::NONE};
+    bool                                  physical{};
 };
 
 struct SRestoreWeaponItem
@@ -237,18 +253,20 @@ public:
     void GetTurnSpeed(CVector& vecTurnSpeed) const;
     void SetTurnSpeed(const CVector& vecTurnSpeed);
 
-    void                                 GetControllerState(CControllerState& ControllerState);
-    void                                 GetLastControllerState(CControllerState& ControllerState);
-    void                                 SetControllerState(const CControllerState& ControllerState);
-    SNativeTaskLocomotionSync            GetNativeTaskLocomotion();
-    static void                          ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
-    void                                 SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion, const char* source = "local");
-    SNativeTaskWeaponPresentationSync    GetNativeTaskWeaponPresentation();
-    void                                 SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source = "local");
-    bool                                 IsNativeTaskWeaponPresentationActive() const noexcept { return m_nativeTaskWeaponPresentationActive; }
-    bool                                 PresentNativeTaskWeaponShot();
-    void                                 NotifyNativeTaskWeaponPresentationFire();
-    SNativeTaskAnimationPresentationSync GetNativeTaskAnimationPresentation();
+    void                                   GetControllerState(CControllerState& ControllerState);
+    void                                   GetLastControllerState(CControllerState& ControllerState);
+    void                                   SetControllerState(const CControllerState& ControllerState);
+    SNativeTaskLocomotionSync              GetNativeTaskLocomotion();
+    static void                            ApplyNativeTaskLocomotion(CControllerState& ControllerState, const SNativeTaskLocomotionSync& locomotion);
+    void                                   SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotionSync& locomotion, const char* source = "local");
+    void                                   SetNativeTaskLocomotionAuthoritativeVelocity(const CVector& velocity);
+    void                                   ApplyNativeTaskLocomotionVelocityLimit();
+    SNativeTaskWeaponPresentationSync      GetNativeTaskWeaponPresentation();
+    void                                   SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresentationSync& presentation, const char* source = "local");
+    bool                                   IsNativeTaskWeaponPresentationActive() const noexcept { return m_nativeTaskWeaponPresentationActive; }
+    bool                                   PresentNativeTaskWeaponShot();
+    void                                   NotifyNativeTaskWeaponPresentationFire();
+    SNativeTaskAnimationPresentationResult GetNativeTaskAnimationPresentation();
     void SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source = "local");
     bool IsNativeTaskAnimationPresentationActive() const noexcept { return m_nativeTaskAnimationPresentationActive; }
 
@@ -437,9 +455,11 @@ public:
 
     bool IsMissionActor() const noexcept { return m_bMissionActor; }
     bool SetMissionActor(bool enabled);
-    bool AcquireNativeMissionEventProfile(CResource* owner, unsigned int token);
-    bool ReleaseNativeMissionEventProfile(CResource* owner, unsigned int token);
-    bool IsNativeMissionEventProfileActive(const CResource* owner, unsigned int token) const;
+    bool AcquireNativeEventProfile(CResource* owner, unsigned int token, ePedNativeEventProfile profile);
+    bool ReleaseNativeEventProfile(CResource* owner, unsigned int token, ePedNativeEventProfile profile);
+    bool IsNativeEventProfileActive(const CResource* owner, unsigned int token, ePedNativeEventProfile profile) const;
+    bool AddNativeGunAimedAtEvent(CClientPed* aimingPed);
+    bool AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone);
     bool IsStoryProtected() const noexcept { return m_bStoryProtected; }
     bool SetStoryProtected(bool enabled);
     bool GetSuffersCriticalHits() const noexcept { return m_suffersCriticalHits.value_or(true); }
@@ -624,6 +644,7 @@ protected:
     void StreamedInPulse(bool bDoStandardPulses);
     void ApplyControllerStateFixes(CControllerState& Current);
     void RemoveNativeTaskLocomotionPresentation(CControllerState& ControllerState);
+    void ApplyNativeTaskOwnerLocomotionAssist(CControllerState& ControllerState);
     void ApplyNativeTaskLocomotionPresentation(CControllerState& ControllerState);
     void UpdateNativeTaskWeaponPresentation();
     void ClearNativeTaskWeaponPresentation(const char* reason);
@@ -645,7 +666,8 @@ protected:
     void _DestroyLocalModel();
     void _ChangeModel();
     void ApplyMissionActorState();
-    void ApplyNativeMissionEventProfileState();
+    void ApplyNativeEventProfileState();
+    void ClearNativeAmbientWanderResponse();
     void ApplyStoryProtectionState();
     void ApplySuffersCriticalHitsState();
     void ApplyStayInSamePlaceState();
@@ -778,8 +800,9 @@ public:
     eMoveAnim                                m_MoveAnim;
     bool                                     m_bUseNativeWalkingStyle{false};
     bool                                     m_bMissionActor{false};
-    CResource*                               m_nativeMissionEventProfileOwner{};
-    unsigned int                             m_uiNativeMissionEventProfileToken{};
+    CResource*                               m_nativeEventProfileOwner{};
+    unsigned int                             m_uiNativeEventProfileToken{};
+    ePedNativeEventProfile                   m_nativeEventProfile{ePedNativeEventProfile::NONE};
     bool                                     m_bStoryProtected{false};
     std::optional<SPedCreatedByState>        m_missionActorNativeState;
     std::optional<SPedStoryProtectionState>  m_storyProtectionNativeState;
@@ -822,6 +845,9 @@ public:
     CControllerState                         m_nativeTaskLocomotionBaseControllerState;
     unsigned long                            m_nativeTaskLocomotionPresentationReceivedAt{};
     bool                                     m_nativeTaskLocomotionPresentationApplied{false};
+    CVector                                  m_nativeTaskLocomotionAuthoritativeVelocity;
+    unsigned long                            m_nativeTaskLocomotionAuthoritativeVelocityReceivedAt{};
+    bool                                     m_nativeTaskLocomotionAuthoritativeVelocityValid{false};
     SNativeTaskWeaponPresentationSync        m_nativeTaskWeaponPresentation;
     CVector                                  m_nativeTaskWeaponPresentationAppliedTarget;
     unsigned long                            m_nativeTaskWeaponPresentationReceivedAt{};

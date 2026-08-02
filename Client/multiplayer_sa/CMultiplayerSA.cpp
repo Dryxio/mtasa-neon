@@ -16,6 +16,7 @@
 #include <game/CPedDamageResponse.h>
 #include <game/CEventList.h>
 #include <game/CEventDamage.h>
+#include "../game_sa/CPedModelInfoSA.h"
 
 class CEventDamageSAInterface;
 static CEventDamageSAInterface* __fastcall CopyDamageEvent(CEventDamageSAInterface* pDestination, void* pUnused, CEventDamageSAInterface* pSource);
@@ -69,9 +70,29 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define HOOKPOS_CCam_ProcessFixed                              0x51D470
 #define HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon    0x6859a0
 #define HOOKPOS_CPed_IsPlayer                                  0x5DF8F0
+#define CALL_CEventGroup_Add_ComputeInformGroup                0x4AB45A
+#define CALL_CEventGroup_Add_ComputeInformRespectedFriends     0x4AB46C
+#define CALL_CEventGroup_Add_ComputeLookAt                     0x4AB480
 #define CALL_CEventGroup_Add_ComputeResponseTaskType           0x4AB491
 #define FUNC_CEventEditableResponse_ComputeResponseTaskType    0x4B56C0
+#define FUNC_CEventEditableResponse_ComputeResponseTaskOfType  0x4B5730
+#define FUNC_CPedType_GetPedTypeAcquaintances                  0x6089B0
+#define RETURN_CEventDamage_ComputeDamageAnim_Floor_IsPlayer   0x4B415F
+#define RETURN_CEventDamage_ComputeDamageAnim_Pistol_IsPlayer  0x4B41D8
+#define RETURN_CEventDamage_ComputeDamageAnim_Heavy_IsPlayer   0x4B41F3
+#define RETURN_CEventDamage_ComputeDamageAnim_Fight_IsPlayer   0x4B4292
+#define RETURN_CEventDamage_ComputeDamageAnim_BodyA_IsPlayer   0x4B438A
+#define RETURN_CEventDamage_ComputeDamageAnim_BodyB_IsPlayer   0x4B4399
+#define RETURN_CEventDamage_ComputeDamageAnim_Delay_IsPlayer   0x4B43E0
+#define RETURN_CEventDamage_ComputeDamageAnim_Partial_IsPlayer 0x4B4468
 #define RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer         0x4B5005
+#define RETURN_CEventGunAimedAt_AffectsPed_IsPlayer            0x4B4EEF
+#define RETURN_CEventGunShot_AffectsPed_IsPlayer               0x4B2DB7
+#define RETURN_CEventGunShotWhizzedBy_AffectsPed_IsPlayer      0x4B5132
+#define RETURN_CEventHandler_ComputeDamage_Initial_IsPlayer    0x4C0222
+#define RETURN_CEventHandler_ComputeDamage_Final_IsPlayer      0x4C068D
+#define RETURN_CEventHandler_ComputeDamage_Death_IsPlayer      0x4C0A58
+#define RETURN_CEventHandler_ComputeGunAimedAt_IsPlayer        0x4C286A
 #define RETURN_CTaskSimpleChoking_ProcessPed_IsPlayer          0x6204B4
 #define RETURN_CTaskSimpleFight_GetStrikeDamage_IsPlayer       0x61C772
 #define RETURN_CTaskSimpleFight_FightHitPed_Victim_IsPlayer    0x61CBC7
@@ -91,6 +112,12 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define RETURN_CTaskSimpleFight_ProcessPed_ChainA_IsPlayer     0x629FAB
 #define RETURN_CTaskSimpleFight_ProcessPed_ChainB_IsPlayer     0x629FD7
 #define RETURN_CTaskSimpleFight_ProcessPed_Heading_IsPlayer    0x62A035
+constexpr int EVENT_TYPE_DAMAGE = 9;
+constexpr int EVENT_TYPE_POTENTIAL_WALK_INTO_PED = 13;
+constexpr int EVENT_TYPE_SHOT_FIRED = 15;
+constexpr int EVENT_TYPE_GUN_AIMED_AT = 31;
+constexpr int EVENT_TYPE_SHOT_FIRED_WHIZZED_BY = 49;
+constexpr int EVENT_TYPE_POTENTIAL_WALK_INTO_VEHICLE = 56;
 constexpr int EVENT_TYPE_VEHICLE_ON_FIRE = 79;
 
 DWORD RETURN_CCam_ProcessFixed = 0x51D475;
@@ -548,6 +575,7 @@ void            HOOK_CCam_ProcessFixed();
 void            HOOK_Render3DStuff();
 void            HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon();
 void            HOOK_CPed_IsPlayer();
+bool __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, void*, CPedSAInterface* ped, int taskType);
 void __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*, CPedSAInterface* ped, bool decisionMakerTypeInGroup);
 void            HOOK_CTrain_ProcessControl_Derail();
 void            HOOK_CVehicle_SetupRender();
@@ -760,6 +788,9 @@ void CMultiplayerSA::InitHooks()
     HookInstall(HOOKPOS_CCam_ProcessFixed, (DWORD)HOOK_CCam_ProcessFixed, 5);
     HookInstall(HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon, (DWORD)HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon, 7);
     HookInstall(HOOKPOS_CPed_IsPlayer, (DWORD)HOOK_CPed_IsPlayer, 6);
+    HookInstallCall(CALL_CEventGroup_Add_ComputeInformGroup, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
+    HookInstallCall(CALL_CEventGroup_Add_ComputeInformRespectedFriends, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
+    HookInstallCall(CALL_CEventGroup_Add_ComputeLookAt, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
     HookInstallCall(CALL_CEventGroup_Add_ComputeResponseTaskType, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskType);
     HookInstall(HOOKPOS_CTrain_ProcessControl_Derail, (DWORD)HOOK_CTrain_ProcessControl_Derail, 6);
     HookInstall(HOOKPOS_CVehicle_SetupRender, (DWORD)HOOK_CVehicle_SetupRender, 5);
@@ -3790,6 +3821,112 @@ static bool HasNativeMissionEventProfile(CPedSAInterface* pedInterface)
     return pPed && pPed->IsNativeMissionEventProfileActive();
 }
 
+static bool HasNativeAmbientWanderEventProfile(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    return pPed && pPed->IsNativeAmbientWanderEventProfileSelected();
+}
+
+static bool IsNativeAmbientWanderEventProfileActive(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    return pPed && pPed->IsNativeAmbientWanderEventProfileActive();
+}
+
+static bool IsNativeAmbientWanderProfileEvent(int eventType)
+{
+    switch (eventType)
+    {
+        case EVENT_TYPE_DAMAGE:
+        case EVENT_TYPE_POTENTIAL_WALK_INTO_PED:
+        case EVENT_TYPE_SHOT_FIRED:
+        case EVENT_TYPE_GUN_AIMED_AT:
+        case EVENT_TYPE_SHOT_FIRED_WHIZZED_BY:
+        case EVENT_TYPE_POTENTIAL_WALK_INTO_VEHICLE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+class CScopedAmbientPedModelIdentity
+{
+public:
+    CScopedAmbientPedModelIdentity(CPedSAInterface* ped, bool enabled) : m_pPed(enabled ? ped : nullptr)
+    {
+        if (!m_pPed || !pGameInterface)
+            return;
+
+        auto** modelInfoArray = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray());
+        auto*  modelInfo = modelInfoArray ? reinterpret_cast<CPedModelInfoSAInterface*>(modelInfoArray[m_pPed->m_nModelIndex]) : nullptr;
+        if (!modelInfo)
+            return;
+
+        if (modelInfo->pedType >= 32)
+            return;
+
+        using GetPedTypeAcquaintances = CPedAcquaintanceSAInterface*(__cdecl*)(int);
+        const int modelPedType = static_cast<int>(modelInfo->pedType);
+        auto*     modelAcquaintance = reinterpret_cast<GetPedTypeAcquaintances>(FUNC_CPedType_GetPedTypeAcquaintances)(modelPedType);
+        if (!modelAcquaintance)
+            return;
+
+        m_iPreviousPedType = m_pPed->bPedType;
+        m_PreviousAcquaintance = m_pPed->pedAcquaintance;
+
+        // Script peds are CPlayerPed wrappers, but ambient decisions must see
+        // the civilian/gang/cop identity declared by their current model.
+        // Otherwise GTA classifies the local player as a same-type friend
+        // before it reaches the player-source decision table.
+        m_pPed->bPedType = modelPedType;
+        m_pPed->pedAcquaintance = *modelAcquaintance;
+        m_bApplied = true;
+    }
+
+    ~CScopedAmbientPedModelIdentity()
+    {
+        if (!m_bApplied)
+            return;
+
+        m_pPed->bPedType = m_iPreviousPedType;
+        m_pPed->pedAcquaintance = m_PreviousAcquaintance;
+    }
+
+    CScopedAmbientPedModelIdentity(const CScopedAmbientPedModelIdentity&) = delete;
+    CScopedAmbientPedModelIdentity& operator=(const CScopedAmbientPedModelIdentity&) = delete;
+
+private:
+    CPedSAInterface*            m_pPed{};
+    int                         m_iPreviousPedType{};
+    CPedAcquaintanceSAInterface m_PreviousAcquaintance{};
+    bool                        m_bApplied{};
+};
+
+static bool IsNativeAmbientBehaviorIsPlayerCallSite(DWORD returnAddress)
+{
+    switch (returnAddress)
+    {
+        case RETURN_CEventDamage_ComputeDamageAnim_Floor_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_Pistol_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_Heavy_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_Fight_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_BodyA_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_BodyB_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_Delay_IsPlayer:
+        case RETURN_CEventDamage_ComputeDamageAnim_Partial_IsPlayer:
+        case RETURN_CEventGunAimedAt_AffectsPed_IsPlayer:
+        case RETURN_CEventGunShot_AffectsPed_IsPlayer:
+        case RETURN_CEventGunShotWhizzedBy_AffectsPed_IsPlayer:
+        case RETURN_CEventHandler_ComputeDamage_Initial_IsPlayer:
+        case RETURN_CEventHandler_ComputeDamage_Final_IsPlayer:
+        case RETURN_CEventHandler_ComputeDamage_Death_IsPlayer:
+        case RETURN_CEventHandler_ComputeGunAimedAt_IsPlayer:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool NativeChokingUsesNonPlayerBehavior(CPedSAInterface* pedInterface)
 {
     CPed* pPed = GetPedFromInterface(pedInterface);
@@ -3836,6 +3973,8 @@ bool IsPlayer()
     // MTA's CPlayerPed wrapper. Every other task retains the real runtime
     // identity so movement, vehicle entry and player input remain untouched.
     if (dwIsPlayerReturnAddress == RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer && HasNativeMissionEventProfile(pIsPlayerPed))
+        return false;
+    if (IsNativeAmbientBehaviorIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientWanderEventProfileActive(pIsPlayerPed))
         return false;
     if (dwIsPlayerReturnAddress == RETURN_CTaskSimpleChoking_ProcessPed_IsPlayer && NativeChokingUsesNonPlayerBehavior(pIsPlayerPed))
         return false;
@@ -3885,24 +4024,71 @@ static void __declspec(naked) HOOK_CPed_IsPlayer()
     }
 }
 
+bool __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, void*, CPedSAInterface* ped, int taskType)
+{
+    using GetEventType = int(__thiscall*)(void*);
+    using ComputeResponseTaskOfType = bool(__thiscall*)(void*, CPedSAInterface*, int);
+
+    auto*      intelligence = ped ? ped->pPedIntelligence : nullptr;
+    auto*      vtable = event ? *static_cast<DWORD**>(event) : nullptr;
+    const int  eventType = vtable ? reinterpret_cast<GetEventType>(vtable[1])(event) : -1;
+    const bool isAmbientEvent = IsNativeAmbientWanderProfileEvent(eventType) && intelligence && HasNativeAmbientWanderEventProfile(ped);
+
+    // EventGroup computes inform/look-at decisions before the main response.
+    // Fence every one of those calls as well so an observer never emits local
+    // side effects and an owner uses the civilian model's complete stock DM.
+    // Damage is still admitted below on observers by GTA's special damage
+    // rule, preserving MTA's physical response, health and death pipeline.
+    if (isAmbientEvent && !IsNativeAmbientWanderEventProfileActive(ped))
+        return false;
+
+    const bool         useAmbientDecisionMaker = isAmbientEvent && ped->pPedStats;
+    const std::int32_t previousDecisionMaker = useAmbientDecisionMaker ? intelligence->decisionMakerType : 0;
+    if (useAmbientDecisionMaker)
+        intelligence->decisionMakerType = ped->pPedStats->GetDefaultDecisionMaker();
+
+    bool result;
+    {
+        CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientDecisionMaker);
+        result = reinterpret_cast<ComputeResponseTaskOfType>(FUNC_CEventEditableResponse_ComputeResponseTaskOfType)(event, ped, taskType);
+    }
+    if (useAmbientDecisionMaker && ped->pPedIntelligence == intelligence)
+        intelligence->decisionMakerType = previousDecisionMaker;
+    return result;
+}
+
 void __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*, CPedSAInterface* ped, bool decisionMakerTypeInGroup)
 {
     using GetEventType = int(__thiscall*)(void*);
     using ComputeResponseTaskType = void(__thiscall*)(void*, CPedSAInterface*, bool);
 
-    auto*              intelligence = ped ? ped->pPedIntelligence : nullptr;
-    auto*              vtable = event ? *static_cast<DWORD**>(event) : nullptr;
-    const int          eventType = vtable ? reinterpret_cast<GetEventType>(vtable[1])(event) : -1;
+    auto*      intelligence = ped ? ped->pPedIntelligence : nullptr;
+    auto*      vtable = event ? *static_cast<DWORD**>(event) : nullptr;
+    const int  eventType = vtable ? reinterpret_cast<GetEventType>(vtable[1])(event) : -1;
+    const bool isAmbientWanderEvent = IsNativeAmbientWanderProfileEvent(eventType) && intelligence && HasNativeAmbientWanderEventProfile(ped);
+
+    // Every peer scans local contacts, but only the syncer may turn this
+    // potential encounter into an avoidance task. The observer continues its
+    // normal ProcessControl path and renders the owner's locomotion sync.
+    if (isAmbientWanderEvent && !IsNativeAmbientWanderEventProfileActive(ped))
+        return;
+
+    const bool         useAmbientDecisionMaker = isAmbientWanderEvent && ped->pPedStats;
     const bool         useMissionDecisionMaker = eventType == EVENT_TYPE_VEHICLE_ON_FIRE && intelligence && HasNativeMissionEventProfile(ped);
-    const std::int32_t previousDecisionMaker = useMissionDecisionMaker ? intelligence->decisionMakerType : 0;
+    const std::int32_t previousDecisionMaker = useAmbientDecisionMaker || useMissionDecisionMaker ? intelligence->decisionMakerType : 0;
+    if (useAmbientDecisionMaker)
+        intelligence->decisionMakerType = ped->pPedStats->GetDefaultDecisionMaker();
     if (useMissionDecisionMaker)
         intelligence->decisionMakerType = -1;
 
-    reinterpret_cast<ComputeResponseTaskType>(FUNC_CEventEditableResponse_ComputeResponseTaskType)(event, ped, decisionMakerTypeInGroup);
+    {
+        CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientDecisionMaker);
+        reinterpret_cast<ComputeResponseTaskType>(FUNC_CEventEditableResponse_ComputeResponseTaskType)(event, ped, decisionMakerTypeInGroup);
+    }
 
     // The response constructor is synchronous. Restore the player decision
     // maker before any ordinary movement or combat task starts processing.
-    if (useMissionDecisionMaker && ped->pPedIntelligence == intelligence)
+    if ((useAmbientDecisionMaker || useMissionDecisionMaker) && ped->pPedIntelligence == intelligence)
         intelligence->decisionMakerType = previousDecisionMaker;
 }
 

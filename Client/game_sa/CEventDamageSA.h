@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <game/CEventDamage.h>
 #include "CPedDamageResponseSA.h"
 
@@ -32,31 +33,39 @@ enum ePedPieceTypes;
 class CEventDamageSAInterface
 {
 public:
-    DWORD                         vmt;                 // 0
-    DWORD                         ticks;               // 4
-    BYTE                          unk8;                // 8
-    BYTE                          unk9;                // 9
-    BYTE                          unkA;                // Ah
-    BYTE                          unkB;                // Bh
-    BYTE                          unkC;                // Ch
-    BYTE                          unkD;                // Dh
-    WORD                          unkE;                // Eh
-    WORD                          unk10;               // 10h
-    WORD                          unk12;               // 12h
-    CEntitySAInterface*           pInflictor;          // 14h
-    DWORD                         damageTime;          // 18h
-    eWeaponType                   weaponUsed;          // 1Ch
-    ePedPieceTypes                pedPieceType;        // 20h
-    BYTE                          ucDirection;         // 24h
-    BYTE                          ucFlags;             // 25h
-    BYTE                          unk26;               // 26h
-    BYTE                          unk27;               // 27h
-    DWORD                         dwAnimGroup;         // 28h
-    DWORD                         dwAnimID;            // 2Ch
-    float                         fAnimBlend;          // 30h
-    float                         fAnimSpeed;          // 34h
-    CPedDamageResponseSAInterface damageResponseData;  // 38h
+    DWORD                         vmt;                   // 0
+    DWORD                         ticks;                 // 4
+    BYTE                          unk8;                  // 8
+    BYTE                          unk9;                  // 9
+    BYTE                          unkA;                  // Ah
+    BYTE                          unkB;                  // Bh
+    BYTE                          bAddToEventGroup;      // Ch
+    BYTE                          padD;                  // Dh
+    WORD                          taskId;                // Eh
+    WORD                          facialExpressionType;  // 10h
+    WORD                          unk12;                 // 12h
+    CEntitySAInterface*           pInflictor;            // 14h
+    DWORD                         damageTime;            // 18h
+    eWeaponType                   weaponUsed;            // 1Ch
+    ePedPieceTypes                pedPieceType;          // 20h
+    BYTE                          ucDirection;           // 24h
+    BYTE                          ucFlags;               // 25h
+    BYTE                          unk26;                 // 26h
+    BYTE                          unk27;                 // 27h
+    DWORD                         dwAnimGroup;           // 28h
+    DWORD                         dwAnimID;              // 2Ch
+    float                         fAnimBlend;            // 30h
+    float                         fAnimSpeed;            // 34h
+    CPedDamageResponseSAInterface damageResponseData;    // 38h
 };
+static_assert(sizeof(CEventDamageSAInterface) == 0x44, "Invalid damage event size");
+static_assert(offsetof(CEventDamageSAInterface, bAddToEventGroup) == 0xC, "Invalid damage event response flag offset");
+static_assert(offsetof(CEventDamageSAInterface, taskId) == 0xE, "Invalid damage event task offset");
+static_assert(offsetof(CEventDamageSAInterface, damageResponseData) == 0x38, "Invalid damage response offset");
+static_assert(offsetof(CEventDamageSAInterface, damageResponseData) + offsetof(CPedDamageResponseSAInterface, bDamageCalculated) == 0x42,
+              "Invalid damage-calculated flag offset");
+static_assert(offsetof(CEventDamageSAInterface, damageResponseData) + offsetof(CPedDamageResponseSAInterface, bCheckIfAffectsPed) == 0x43,
+              "Invalid damage-affects-ped flag offset");
 
 class CEventDamageSA : public CEventDamage
 {

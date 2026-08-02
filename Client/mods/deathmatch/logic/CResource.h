@@ -17,6 +17,7 @@
 #include "CResourceFile.h"
 #include "CResourceModelStreamer.h"
 #include "CElementGroup.h"
+#include "CPedNativeEventProfile.h"
 #include <game/CGame.h>
 #include <chrono>
 #include <ctime>
@@ -63,7 +64,7 @@ public:
     unsigned int AcquireElementStreamingLease(class CClientStreamElement* pElement);
     bool         ReleaseElementStreamingLease(unsigned int uiToken);
     void         ReleaseAllElementStreamingLeases();
-    unsigned int AcquirePedNativeEventProfile(class CClientPed* pPed);
+    unsigned int AcquirePedNativeEventProfile(class CClientPed* pPed, ePedNativeEventProfile profile);
     bool         ReleasePedNativeEventProfile(unsigned int uiToken);
     bool         IsPedNativeEventProfileActive(class CClientPed* pPed, unsigned int uiToken) const;
     void         ReleaseAllPedNativeEventProfiles();
@@ -191,7 +192,8 @@ private:
 
     struct SPedNativeEventProfileLease
     {
-        CClientEntityPtr ped;
+        CClientEntityPtr       ped;
+        ePedNativeEventProfile profile{ePedNativeEventProfile::NONE};
     };
 
     unsigned int                                                                   m_uiNextPedNativeEventProfileToken{1};

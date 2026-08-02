@@ -18,11 +18,12 @@ class CPedDamageResponseSAInterface
 public:
     float fDamageHealth;
     float fDamageArmor;
-    bool  bUnk;
+    bool  bHealthZero;
     bool  bForceDeath;
     bool  bDamageCalculated;
-    bool  bUnk3;
+    bool  bCheckIfAffectsPed;
 };
+static_assert(sizeof(CPedDamageResponseSAInterface) == 0xC, "Invalid ped damage response size");
 
 class CPedDamageResponseSA : public CPedDamageResponse
 {

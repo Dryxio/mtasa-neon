@@ -294,9 +294,9 @@ void CResource::ReleaseAllElementStreamingLeases()
         ReleaseElementStreamingLease(m_elementStreamingLeases.begin()->first);
 }
 
-unsigned int CResource::AcquirePedNativeEventProfile(CClientPed* pPed)
+unsigned int CResource::AcquirePedNativeEventProfile(CClientPed* pPed, ePedNativeEventProfile profile)
 {
-    if (!pPed)
+    if (!pPed || profile == ePedNativeEventProfile::NONE)
         return 0;
 
     unsigned int uiToken = 0;
@@ -305,11 +305,12 @@ unsigned int CResource::AcquirePedNativeEventProfile(CClientPed* pPed)
         uiToken = m_uiNextPedNativeEventProfileToken++;
     } while (uiToken == 0 || m_pedNativeEventProfileLeases.contains(uiToken));
 
-    if (!pPed->AcquireNativeMissionEventProfile(this, uiToken))
+    if (!pPed->AcquireNativeEventProfile(this, uiToken, profile))
         return 0;
 
     auto pLease = std::make_unique<SPedNativeEventProfileLease>();
     pLease->ped = pPed;
+    pLease->profile = profile;
     m_pedNativeEventProfileLeases.emplace(uiToken, std::move(pLease));
     return uiToken;
 }
@@ -322,7 +323,7 @@ bool CResource::ReleasePedNativeEventProfile(unsigned int uiToken)
 
     CClientEntity* pEntity = iter->second->ped;
     if (pEntity && pEntity->GetType() == CCLIENTPED)
-        static_cast<CClientPed*>(pEntity)->ReleaseNativeMissionEventProfile(this, uiToken);
+        static_cast<CClientPed*>(pEntity)->ReleaseNativeEventProfile(this, uiToken, iter->second->profile);
 
     m_pedNativeEventProfileLeases.erase(iter);
     return true;
@@ -330,9 +331,11 @@ bool CResource::ReleasePedNativeEventProfile(unsigned int uiToken)
 
 bool CResource::IsPedNativeEventProfileActive(CClientPed* pPed, unsigned int uiToken) const
 {
-    const auto           iter = m_pedNativeEventProfileLeases.find(uiToken);
-    const CClientEntity* pLeasedEntity = iter != m_pedNativeEventProfileLeases.end() ? iter->second->ped : nullptr;
-    return pPed && pLeasedEntity == pPed && pPed->IsNativeMissionEventProfileActive(this, uiToken);
+    const auto iter = m_pedNativeEventProfileLeases.find(uiToken);
+    if (iter == m_pedNativeEventProfileLeases.end() || iter->second->ped != pPed)
+        return false;
+
+    return pPed && pPed->IsNativeEventProfileActive(this, uiToken, iter->second->profile);
 }
 
 void CResource::ReleaseAllPedNativeEventProfiles()

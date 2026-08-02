@@ -2231,6 +2231,14 @@ void CGame::Packet_PedWasted(CPedWastedPacket& Packet)
     {
         CVehicle* pVehicle = pPed->GetOccupiedVehicle();
 
+        // A ped death is authoritative state. A previous syncer can still
+        // have a reliable death packet in flight after ownership changes, so
+        // accept syncable ped deaths only from the server's current syncer.
+        // Keep the legacy non-syncable vehicle exception below: those peds do
+        // not have a ped syncer to report an exploding or drowning vehicle.
+        if (pPed->IsSyncable() && pPed->GetSyncer() != Packet.GetSourcePlayer())
+            return;
+
         // Non syncable peds should be fully ignored unless in vehicle (Fix for 3598)
         // We allow it only if the ped should die from their occupied vehicle exploding or drowning
         if (!pPed->IsSyncable() && (!pVehicle || (Packet.m_ucKillerWeapon != 51 && Packet.m_ucKillerWeapon != 53)))

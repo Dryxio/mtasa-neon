@@ -373,6 +373,7 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pMultiplayer->SetPreWorldProcessHandler(CClientGame::StaticPreWorldProcessHandler);
     g_pMultiplayer->SetPostWorldProcessHandler(CClientGame::StaticPostWorldProcessHandler);
     g_pMultiplayer->SetPostWorldProcessPedsAfterPreRenderHandler(CClientGame::StaticPostWorldProcessPedsAfterPreRenderHandler);
+    g_pMultiplayer->SetPostContextSwitchHandler(CClientGame::StaticPostContextSwitchHandler);
     g_pMultiplayer->SetPreFxRenderHandler(CClientGame::StaticPreFxRenderHandler);
     g_pMultiplayer->SetPostColorFilterRenderHandler(CClientGame::StaticPostColorFilterRenderHandler);
     g_pMultiplayer->SetPreHudRenderHandler(CClientGame::StaticPreHudRenderHandler);
@@ -3782,6 +3783,17 @@ void CClientGame::StaticPostWorldProcessPedsAfterPreRenderHandler()
     g_pClientGame->PostWorldProcessPedsAfterPreRenderHandler();
 }
 
+void CClientGame::StaticPostContextSwitchHandler()
+{
+    CPed* pGamePed = g_pMultiplayer->GetContextSwitchedPed();
+    if (!pGamePed)
+        return;
+
+    CClientPed* pClientPed = reinterpret_cast<CClientPed*>(pGamePed->GetStoredPointer());
+    if (pClientPed)
+        pClientPed->ApplyNativeTaskLocomotionVelocityLimit();
+}
+
 void CClientGame::StaticPreFxRenderHandler()
 {
     // RenderFadingInEntities is done at this point, so alpha entity list callbacks
@@ -6385,7 +6397,11 @@ void CClientGame::ResetMapInfo()
 void CClientGame::SendPedWastedPacket(CClientPed* Ped, ElementID damagerID, unsigned char ucWeapon, unsigned char ucBodyPiece, AssocGroupId animGroup,
                                       AnimationId animID)
 {
-    if (Ped && Ped->GetHealth() == 0.0f)
+    // Only the current ped syncer may author networked death state. Preserve
+    // the legacy vehicle exception because a non-syncable ped has no ped
+    // syncer to report death when its occupied vehicle explodes or drowns.
+    const bool isOccupiedVehicleDeath = Ped && Ped->GetOccupiedVehicle() && (ucWeapon == WEAPONTYPE_EXPLOSION || ucWeapon == WEAPONTYPE_DROWNING);
+    if (Ped && Ped->GetHealth() == 0.0f && (Ped->IsSyncing() || isOccupiedVehicleDeath))
     {
         NetBitStreamInterface* pBitStream = g_pNet->AllocateNetBitStream();
         if (pBitStream)

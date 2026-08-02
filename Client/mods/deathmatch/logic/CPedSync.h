@@ -12,6 +12,7 @@
 #pragma once
 
 #include <CClientCommon.h>
+#include <unordered_map>
 #include "CClientVehicle.h"
 
 class CPedSync
@@ -33,17 +34,30 @@ public:
     bool Exists(CClientPed* pPed);
 
 private:
+    struct SNativeTaskLocomotionBurstState
+    {
+        bool          initialized{};
+        unsigned long burstUntil{};
+        unsigned long cooldownUntil{};
+        unsigned long lastSentAt{};
+    };
+
     void Packet_PedStartSync(NetBitStreamInterface& BitStream);
     void Packet_PedStopSync(NetBitStreamInterface& BitStream);
     void Packet_PedSync(NetBitStreamInterface& BitStream);
 
     void Update();
     void UpdateNativeTaskAnimationPresentation();
+    void UpdateNativeTaskLocomotionBurst(unsigned long currentTime);
     void WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
     bool WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
+    bool WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed);
 
-    CClientPedManager*       m_pPedManager;
-    CMappedList<CClientPed*> m_List;
-    unsigned long            m_ulLastSyncTime;
-    unsigned long            m_ulLastNativeTaskAnimationSyncTime;
+    CClientPedManager*                                               m_pPedManager;
+    CMappedList<CClientPed*>                                         m_List;
+    unsigned long                                                    m_ulLastSyncTime;
+    unsigned long                                                    m_ulLastNativeTaskAnimationSyncTime;
+    unsigned long                                                    m_ulLastNativeTaskLocomotionBurstPollTime;
+    std::unordered_map<CClientPed*, SNativeTaskLocomotionBurstState> m_NativeTaskLocomotionBurstStates;
+    std::unordered_map<CClientPed*, unsigned long>                   m_NativeTaskLocomotionSpatialReceiveTimes;
 };

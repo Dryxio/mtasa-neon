@@ -318,6 +318,8 @@ void CLuaPedDefs::LoadFunctions()
         {"acquirePedNativeEventProfile", AcquirePedNativeEventProfile},
         {"releasePedNativeEventProfile", ReleasePedNativeEventProfile},
         {"isPedNativeEventProfileActive", IsPedNativeEventProfileActive},
+        {"addPedNativeGunAimedAtEvent", AddPedNativeGunAimedAtEvent},
+        {"addPedNativeDamageResponseEvent", AddPedNativeDamageResponseEvent},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
         {"setPedStayInSamePlace", ArgumentParser<SetPedStayInSamePlace>},
@@ -3508,11 +3510,17 @@ int CLuaPedDefs::AcquirePedNativeEventProfile(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
-        CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
-        if (pResource && pPed && pPed->GetType() == CCLIENTPED && strProfile == "mission")
+        CLuaMain*              pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource*             pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+        ePedNativeEventProfile profile = ePedNativeEventProfile::NONE;
+        if (strProfile == "mission")
+            profile = ePedNativeEventProfile::MISSION;
+        else if (strProfile == "ambient-wander")
+            profile = ePedNativeEventProfile::AMBIENT_WANDER;
+
+        if (pResource && pPed && pPed->GetType() == CCLIENTPED && profile != ePedNativeEventProfile::NONE)
         {
-            const unsigned int uiToken = pResource->AcquirePedNativeEventProfile(pPed);
+            const unsigned int uiToken = pResource->AcquirePedNativeEventProfile(pPed, profile);
             if (uiToken != 0)
             {
                 lua_pushnumber(luaVM, uiToken);
@@ -3563,6 +3571,67 @@ int CLuaPedDefs::IsPedNativeEventProfileActive(lua_State* luaVM)
         CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
         CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
         lua_pushboolean(luaVM, pResource && pResource->IsPedNativeEventProfileActive(pPed, uiToken));
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::AddPedNativeGunAimedAtEvent(lua_State* luaVM)
+{
+    CClientPed*      pPed = nullptr;
+    CClientPed*      pAimingPed = nullptr;
+    unsigned int     uiToken = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPed);
+    argStream.ReadUserData(pAimingPed);
+    argStream.ReadNumber(uiToken);
+
+    if (!argStream.HasErrors())
+    {
+        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+
+        // Binding injection to the active resource-owned profile prevents an
+        // observer or unrelated script from manufacturing authoritative AI.
+        lua_pushboolean(luaVM, pResource && pResource->IsPedNativeEventProfileActive(pPed, uiToken) && pPed && pPed->AddNativeGunAimedAtEvent(pAimingPed));
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::AddPedNativeDamageResponseEvent(lua_State* luaVM)
+{
+    CClientPed*      pPed = nullptr;
+    CClientPed*      pAttackingPed = nullptr;
+    int              iWeaponType = WEAPONTYPE_UNIDENTIFIED;
+    int              iHitZone = PED_PIECE_UNKNOWN;
+    unsigned int     uiToken = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPed);
+    argStream.ReadUserData(pAttackingPed);
+    argStream.ReadNumber(iWeaponType);
+    argStream.ReadNumber(iHitZone);
+    argStream.ReadNumber(uiToken);
+
+    if (!argStream.HasErrors())
+    {
+        const bool validWeapon = iWeaponType >= WEAPONTYPE_UNARMED && iWeaponType <= WEAPONTYPE_FALL;
+        const bool validHitZone = iHitZone == PED_PIECE_UNKNOWN || (iHitZone >= PED_PIECE_TORSO && iHitZone <= PED_PIECE_HEAD);
+        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+
+        // This is a behavior-only replay after MTA has synchronized health. It
+        // is therefore restricted to the active owner of the exclusive ambient
+        // profile so observers cannot manufacture a competing GTA response.
+        lua_pushboolean(luaVM,
+                        validWeapon && validHitZone && pResource && pResource->IsPedNativeEventProfileActive(pPed, uiToken) && pPed &&
+                            pPed->AddNativeDamageResponseEvent(pAttackingPed, static_cast<eWeaponType>(iWeaponType), static_cast<ePedPieceTypes>(iHitZone)));
         return 1;
     }
 

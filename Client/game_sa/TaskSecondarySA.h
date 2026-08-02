@@ -50,4 +50,6 @@ class CTaskSimpleDuckSA : public virtual CTaskSimpleSA, public virtual CTaskSimp
 public:
     CTaskSimpleDuckSA() {};
     CTaskSimpleDuckSA(eDuckControlTypes nDuckControl, unsigned short nLengthOfDuck = 0, short nUseShotsWhizzingEvents = -1);
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
 };

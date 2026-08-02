@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CGameSA.h"
+#include "CEventDamageSA.h"
 #include "CPedSA.h"
 #include "CPedModelInfoSA.h"
 #include "CPlayerInfoSA.h"
@@ -111,6 +112,78 @@ void CPedSA::RestoreCreatedByState(const SPedCreatedByState& state)
     intelligence->seeingRange = state.seeingRange;
     intelligence->numPedsToScan = state.numPedsToScan;
     intelligence->decisionMakerRadius = state.decisionMakerRadius;
+}
+
+bool CPedSA::AddNativeGunAimedAtEvent(CPed* aimingPed)
+{
+    constexpr std::uintptr_t FUNC_CEventGunAimedAt_Constructor = 0x4B0700;
+    constexpr std::uintptr_t FUNC_CEventGunAimedAt_Destructor = 0x4B07B0;
+    constexpr std::uintptr_t FUNC_CEventGroup_Add = 0x4AB420;
+    constexpr std::size_t    EVENT_GUN_AIMED_AT_SIZE = 0x18;
+
+    auto* targetInterface = GetPedInterface();
+    auto* sourceInterface = aimingPed ? aimingPed->GetPedInterface() : nullptr;
+    if (!targetInterface || !targetInterface->pPedIntelligence || !sourceInterface || targetInterface == sourceInterface)
+        return false;
+
+    // The server already synchronizes player targeting. Recreate only the
+    // missing owner-side event and let GTA clone, validate and select its
+    // stock response exactly as it does for a locally targeted ambient ped.
+    alignas(void*) std::byte eventStorage[EVENT_GUN_AIMED_AT_SIZE]{};
+    using EventConstructor = void*(__thiscall*)(void*, CPedSAInterface*);
+    using EventDestructor = void(__thiscall*)(void*);
+    using AddEvent = void*(__thiscall*)(void*, void*, bool);
+
+    reinterpret_cast<EventConstructor>(FUNC_CEventGunAimedAt_Constructor)(eventStorage, sourceInterface);
+    void* const accepted = reinterpret_cast<AddEvent>(FUNC_CEventGroup_Add)(targetInterface->pPedIntelligence->eventGroup, eventStorage, false);
+    reinterpret_cast<EventDestructor>(FUNC_CEventGunAimedAt_Destructor)(eventStorage);
+    return accepted != nullptr;
+}
+
+int CPedSA::GetNativeCurrentEventType() const
+{
+    constexpr std::uintptr_t FUNC_CEventHandler_GetCurrentEventType = 0x4B8CC0;
+    const auto*              pedInterface = GetPedInterface();
+    const auto*              intelligence = pedInterface ? pedInterface->pPedIntelligence : nullptr;
+    if (!intelligence)
+        return -1;
+
+    using GetCurrentEventType = int(__thiscall*)(const void*);
+    return reinterpret_cast<GetCurrentEventType>(FUNC_CEventHandler_GetCurrentEventType)(intelligence->eventHandler);
+}
+
+bool CPedSA::AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone)
+{
+    constexpr std::uintptr_t FUNC_CEventGroup_Add = 0x4AB420;
+
+    auto* targetInterface = GetPedInterface();
+    auto* sourceInterface = attackingPed ? attackingPed->GetPedInterface() : nullptr;
+    if (!targetInterface || !targetInterface->pPedIntelligence || !sourceInterface || targetInterface == sourceInterface)
+        return false;
+
+    CEventDamageSA event(attackingPed, pGame->GetSystemTime(), weaponType, hitZone, 0, false, targetInterface->pVehicle != nullptr);
+    auto*          eventInterface = event.GetInterface();
+
+    // Cross-owner damage has already passed through MTA's authoritative health
+    // pipeline. Keep the input event eligible for CEventGroup's stock damage
+    // admission rule, including when the decision maker chooses TASK_NONE.
+    // Once GTA has cloned it, mark only the stored event as personality-only so
+    // CEventHandler skips ProcessDamage without losing the native AI decision.
+    eventInterface->damageResponseData.fDamageHealth = 0.0f;
+    eventInterface->damageResponseData.fDamageArmor = 0.0f;
+    eventInterface->damageResponseData.bHealthZero = false;
+    eventInterface->damageResponseData.bForceDeath = false;
+    eventInterface->damageResponseData.bDamageCalculated = true;
+    eventInterface->damageResponseData.bCheckIfAffectsPed = false;
+
+    using AddEvent = void*(__thiscall*)(void*, void*, bool);
+    auto* const accepted = reinterpret_cast<CEventDamageSAInterface*>(
+        reinterpret_cast<AddEvent>(FUNC_CEventGroup_Add)(targetInterface->pPedIntelligence->eventGroup, eventInterface, false));
+    if (!accepted)
+        return false;
+
+    accepted->bAddToEventGroup = false;
+    return true;
 }
 
 void CPedSA::DisableSpeechForScript(bool stopCurrentSpeech)

@@ -105,6 +105,7 @@ namespace
     };
 
     std::unordered_map<unsigned int, SNativeTaskLocomotionTraceState>        g_nativeTaskLocomotionTraceStates;
+    std::unordered_map<unsigned int, SNativeTaskLocomotionTraceChannelState> g_nativeTaskLocomotionVelocityTraceStates;
     std::unordered_map<unsigned int, SNativeTaskLocomotionTraceChannelState> g_nativeTaskAnimationProducerTraceStates;
 
     bool IsNativeTaskLocomotionTraceEnabled()
@@ -244,7 +245,7 @@ namespace
     void TraceNativeTaskAnimationProducer(CClientPed* pPed, const char* reason, const char* selection, CTask* pPresentationTask,
                                           const SNamedAnimPresentationDiagnostic* pNamedDiagnostic = nullptr)
     {
-        if (!pPed || !pPed->IsMissionActor() || !IsNativeTaskLocomotionTraceEnabled())
+        if (!pPed || (!pPed->IsMissionActor() && !pPed->IsUsingNativeWalkingStyle()) || !IsNativeTaskLocomotionTraceEnabled())
             return;
 
         CTask*              pFightTask = pPed->GetGamePlayer() ? pPed->GetGamePlayer()->GetPedIntelligence()->GetFightTask() : nullptr;
@@ -397,6 +398,32 @@ namespace
             appliedState.LeftStickY, static_cast<unsigned int>(appliedState.m_bPedWalk), static_cast<unsigned int>(appliedState.ButtonCross),
             GetNativeTaskLocomotionMoveStateName(moveState), pPrimaryTask ? pPrimaryTask->GetTaskName() : "none", primaryType,
             pSimplestTask ? pSimplestTask->GetTaskName() : "none", simplestType);
+    }
+
+    void TraceNativeTaskLocomotionVelocityLimit(CClientPed* pPed, const CVector& authoritativeVelocity, const CVector& localVelocity,
+                                                const CVector& limitedVelocity, unsigned long sampleAge)
+    {
+        if (!pPed || (!pPed->IsMissionActor() && !pPed->IsUsingNativeWalkingStyle()) || !IsNativeTaskLocomotionTraceEnabled())
+            return;
+
+        const float   authoritativeSpeed = std::sqrt(authoritativeVelocity.fX * authoritativeVelocity.fX + authoritativeVelocity.fY * authoritativeVelocity.fY);
+        const float   localSpeed = std::sqrt(localVelocity.fX * localVelocity.fX + localVelocity.fY * localVelocity.fY);
+        const float   limitedSpeed = std::sqrt(limitedVelocity.fX * limitedVelocity.fX + limitedVelocity.fY * limitedVelocity.fY);
+        const SString signature("%.3f:%.3f:%.3f", authoritativeSpeed, localSpeed, limitedSpeed);
+        const unsigned long now = CClientTime::GetTime();
+        auto&               state = g_nativeTaskLocomotionVelocityTraceStates[pPed->GetID().Value()];
+        if (state.initialized && state.signature == signature && now - state.lastLoggedAt < NATIVE_TASK_LOCOMOTION_TRACE_HEARTBEAT)
+            return;
+
+        state.signature = signature;
+        state.lastLoggedAt = now;
+        state.initialized = true;
+        g_pCore->GetConsole()->Printf(
+            "[native-task-locomotion][velocity-limit] profile=%s pid=%u ped=%u model=%lu sampleAge=%lu authoritative=(%.4f,%.4f,%.4f) "
+            "local=(%.4f,%.4f,%.4f) limited=(%.4f,%.4f,%.4f)",
+            g_pCore->IsSecondaryClient() ? "cl2" : "primary", static_cast<unsigned int>(GetCurrentProcessId()), pPed->GetID().Value(), pPed->GetModel(),
+            sampleAge, authoritativeVelocity.fX, authoritativeVelocity.fY, authoritativeVelocity.fZ, localVelocity.fX, localVelocity.fY, localVelocity.fZ,
+            limitedVelocity.fX, limitedVelocity.fY, limitedVelocity.fZ);
     }
 
     CWeaponInfo* GetNativeTaskWeaponPresentationInfo(CClientPed* ped, eWeaponType weaponType)
@@ -1381,14 +1408,25 @@ SNativeTaskLocomotionSync CClientPed::GetNativeTaskLocomotion()
         return locomotion;
     }
 
-    GetMoveSpeed(velocity);
-    if (velocity.fX * velocity.fX + velocity.fY * velocity.fY < 0.0001f)
-    {
-        TraceNativeTaskLocomotionProducer(this, "stationary", locomotion, controllerState, velocity);
-        return locomotion;
-    }
+    const PedMoveState::Enum liveMoveState = m_pPlayerPed->GetMoveState();
+    PedMoveState::Enum       presentationMoveState = GetNativeTaskLocomotionCommandMoveState(pTask).value_or(liveMoveState);
 
-    const PedMoveState::Enum presentationMoveState = GetNativeTaskLocomotionCommandMoveState(pTask).value_or(m_pPlayerPed->GetMoveState());
+    // Script peds use CPlayerPed internally, so GTA can still reject a task's
+    // sprint request because of its current surface or animation set. Mirror
+    // that authoritative fallback instead of making observers sprint alone.
+    if (presentationMoveState == PedMoveState::PEDMOVE_SPRINT)
+    {
+        switch (liveMoveState)
+        {
+            case PedMoveState::PEDMOVE_WALK:
+            case PedMoveState::PEDMOVE_JOG:
+            case PedMoveState::PEDMOVE_RUN:
+                presentationMoveState = liveMoveState;
+                break;
+            default:
+                break;
+        }
+    }
     switch (presentationMoveState)
     {
         case PedMoveState::PEDMOVE_WALK:
@@ -1406,13 +1444,56 @@ SNativeTaskLocomotionSync CClientPed::GetNativeTaskLocomotion()
             return locomotion;
     }
 
+    // GTA divides pad magnitude by 60 and classifies exactly 1.0 as running.
+    // Keep walking strictly below that boundary. Remote translation is capped
+    // separately after ProcessControl, so this input remains presentation-only.
+    const float inputMagnitude =
+        locomotion.data.uiMode == SNativeTaskLocomotionSync::WALK ? 59.0f : (locomotion.data.uiMode == SNativeTaskLocomotionSync::RUN ? 108.0f : 128.0f);
+
+    const auto applyInputDirection = [&locomotion, inputMagnitude](float directionX, float directionY)
+    {
+        const float directionLength = std::sqrt(directionX * directionX + directionY * directionY);
+        if (directionLength <= 0.0001f || inputMagnitude < 0.5f)
+        {
+            locomotion.data.sLeftStickX = 0;
+            locomotion.data.sLeftStickY = 0;
+            return;
+        }
+
+        const float directionScale = inputMagnitude / directionLength;
+        locomotion.data.sLeftStickX = static_cast<short>(std::lround(std::clamp(directionX * directionScale, -inputMagnitude, inputMagnitude)));
+        locomotion.data.sLeftStickY = static_cast<short>(std::lround(std::clamp(directionY * directionScale, -inputMagnitude, inputMagnitude)));
+    };
+
+    GetMoveSpeed(velocity);
+    if (velocity.fX * velocity.fX + velocity.fY * velocity.fY < 0.0001f)
+    {
+        if (m_LastSyncedData && !m_LastSyncedData->nativeTaskLocomotionResetPending &&
+            m_LastSyncedData->nativeTaskLocomotion.data.uiMode == locomotion.data.uiMode)
+        {
+            // GO_TO_POINT is the durable semantic signal that GTA is still
+            // driving locomotion. Slow walking styles and blocked path steps
+            // can report almost no instantaneous velocity for longer than a
+            // network tick; clearing on that sample makes observers alternate
+            // between the native gait and an idle/default gait. Keep the last
+            // direction until GTA replaces the task with its real idle,
+            // animation, damage response, or another unsupported state.
+            applyInputDirection(m_LastSyncedData->nativeTaskLocomotion.data.sLeftStickX, m_LastSyncedData->nativeTaskLocomotion.data.sLeftStickY);
+            TraceNativeTaskLocomotionProducer(this, "task_intent_hold", locomotion, controllerState, velocity);
+            return locomotion;
+        }
+
+        locomotion = {};
+        TraceNativeTaskLocomotionProducer(this, "stationary", locomotion, controllerState, velocity);
+        return locomotion;
+    }
+
     // GTA rotates on-foot pad input by the camera orientation. Encode the
     // authoritative velocity in that same input space so remote actors can
     // strafe or backpedal without fighting their synchronized world heading.
     const float desiredHeading = atan2(-velocity.fX, velocity.fY);
     const float inputHeading = desiredHeading + GetCameraRotation();
-    locomotion.data.sLeftStickX = static_cast<short>(std::lround(std::clamp(-sin(inputHeading) * 128.0f, -128.0f, 128.0f)));
-    locomotion.data.sLeftStickY = static_cast<short>(std::lround(std::clamp(-cos(inputHeading) * 128.0f, -128.0f, 128.0f)));
+    applyInputDirection(-sin(inputHeading), -cos(inputHeading));
     TraceNativeTaskLocomotionProducer(this, "emitted", locomotion, controllerState, velocity);
     return locomotion;
 }
@@ -1430,6 +1511,63 @@ void CClientPed::SetNativeTaskLocomotionPresentation(const SNativeTaskLocomotion
     m_nativeTaskLocomotionPresentation = locomotion;
     m_nativeTaskLocomotionPresentationReceivedAt = CClientTime::GetTime();
     TraceNativeTaskLocomotionReceive(this, locomotion, source ? source : "unknown");
+}
+
+void CClientPed::SetNativeTaskLocomotionAuthoritativeVelocity(const CVector& velocity)
+{
+    if (!std::isfinite(velocity.fX) || !std::isfinite(velocity.fY) || !std::isfinite(velocity.fZ))
+    {
+        m_nativeTaskLocomotionAuthoritativeVelocityValid = false;
+        return;
+    }
+
+    m_nativeTaskLocomotionAuthoritativeVelocity = velocity;
+    m_nativeTaskLocomotionAuthoritativeVelocityReceivedAt = CClientTime::GetTime();
+    m_nativeTaskLocomotionAuthoritativeVelocityValid = true;
+}
+
+void CClientPed::ApplyNativeTaskLocomotionVelocityLimit()
+{
+    if (GetType() != CCLIENTPED || m_bIsLocalPlayer || m_bIsSyncing || !m_pPlayerPed || !m_nativeTaskLocomotionAuthoritativeVelocityValid ||
+        m_nativeTaskLocomotionPresentation.data.uiMode == SNativeTaskLocomotionSync::NONE || m_nativeTaskAnimationPresentationActive ||
+        GetRealOccupiedVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDucked() || IsDead() || HasSyncedAnim())
+    {
+        return;
+    }
+
+    const unsigned long presentationLease = std::max(500UL, static_cast<unsigned long>(g_TickRateSettings.iPedSync) * 3);
+    const unsigned long now = CClientTime::GetTime();
+    const unsigned long sampleAge = now - m_nativeTaskLocomotionAuthoritativeVelocityReceivedAt;
+    const unsigned long presentationAge = now - m_nativeTaskLocomotionPresentationReceivedAt;
+    if (sampleAge > presentationLease || presentationAge > presentationLease)
+        return;
+
+    CVector localVelocity;
+    m_pPlayerPed->GetMoveSpeed(&localVelocity);
+    const float localSpeedSquared = localVelocity.fX * localVelocity.fX + localVelocity.fY * localVelocity.fY;
+    const float authoritativeSpeedSquared = m_nativeTaskLocomotionAuthoritativeVelocity.fX * m_nativeTaskLocomotionAuthoritativeVelocity.fX +
+                                            m_nativeTaskLocomotionAuthoritativeVelocity.fY * m_nativeTaskLocomotionAuthoritativeVelocity.fY;
+    if (!std::isfinite(localSpeedSquared) || !std::isfinite(authoritativeSpeedSquared) || localSpeedSquared <= authoritativeSpeedSquared + 0.000001f)
+        return;
+
+    CVector limitedVelocity = localVelocity;
+    if (authoritativeSpeedSquared <= 0.000001f)
+    {
+        limitedVelocity.fX = 0.0f;
+        limitedVelocity.fY = 0.0f;
+    }
+    else
+    {
+        const float scale = std::sqrt(authoritativeSpeedSquared / localSpeedSquared);
+        limitedVelocity.fX *= scale;
+        limitedVelocity.fY *= scale;
+    }
+
+    // Locomotion input is presentation-only for non-syncers. Preserve local
+    // collision direction and vertical physics, but never let its root motion
+    // outrun the last authoritative XY speed received from the syncer.
+    m_pPlayerPed->SetMoveSpeed(limitedVelocity);
+    TraceNativeTaskLocomotionVelocityLimit(this, m_nativeTaskLocomotionAuthoritativeVelocity, localVelocity, limitedVelocity, sampleAge);
 }
 
 SNativeTaskWeaponPresentationSync CClientPed::GetNativeTaskWeaponPresentation()
@@ -1839,56 +1977,96 @@ void CClientPed::UpdateNativeTaskWeaponPresentation()
     }
 }
 
-SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentation()
+SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresentation()
 {
-    SNativeTaskAnimationPresentationSync presentation;
+    SNativeTaskAnimationPresentationResult result;
+    SNativeTaskAnimationPresentationSync&  presentation = result.presentation;
     if (!m_pPlayerPed)
     {
         TraceNativeTaskAnimationProducer(this, "no_game_ped", "none", nullptr);
-        return presentation;
+        return result;
     }
     if (GetRealOccupiedVehicle())
     {
         TraceNativeTaskAnimationProducer(this, "occupied", "none", nullptr);
-        return presentation;
+        return result;
     }
     if (IsGettingIntoVehicle())
     {
         TraceNativeTaskAnimationProducer(this, "entering_vehicle", "none", nullptr);
-        return presentation;
+        return result;
     }
     if (IsGettingOutOfVehicle())
     {
         TraceNativeTaskAnimationProducer(this, "exiting_vehicle", "none", nullptr);
-        return presentation;
+        return result;
     }
     if (IsDead())
     {
         TraceNativeTaskAnimationProducer(this, "dead", "none", nullptr);
-        return presentation;
+        return result;
     }
     if (HasSyncedAnim())
     {
         TraceNativeTaskAnimationProducer(this, "synced_animation", "none", nullptr);
-        return presentation;
+        return result;
     }
 
-    CTask*      presentationTask = m_pPlayerPed->GetPedIntelligence()->GetFightTask();
-    const char* selection = presentationTask ? "fight" : "none";
+    CTask*      presentationTask = nullptr;
+    const char* selection = "none";
+    bool        physicalPresentation = false;
+    if (m_pTaskManager)
+    {
+        CTask* physicalTask = m_pTaskManager->GetSimplestTask(TASK_PRIORITY_PHYSICAL_RESPONSE);
+        if (physicalTask && (physicalTask->GetTaskType() == TASK_SIMPLE_FALL || physicalTask->GetTaskType() == TASK_SIMPLE_GET_UP))
+        {
+            // The physical-response slot must win over a concurrent fight or
+            // ambient pose. Only its selected animation is mirrored; health,
+            // collision and event authority remain on the syncer.
+            presentationTask = physicalTask;
+            physicalPresentation = true;
+            selection = physicalTask->GetTaskType() == TASK_SIMPLE_FALL ? "fall" : "get_up";
+        }
+    }
+    if (!presentationTask)
+    {
+        presentationTask = m_pPlayerPed->GetPedIntelligence()->GetFightTask();
+        if (presentationTask)
+            selection = "fight";
+    }
     if (!presentationTask && m_pTaskManager)
     {
         CTask* simplestTask = m_pTaskManager->GetSimplestActiveTask();
-        if (simplestTask && (simplestTask->GetTaskType() == TASK_SIMPLE_CHAT || simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM))
+        if (simplestTask && (simplestTask->GetTaskType() == TASK_SIMPLE_CHAT || simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM ||
+                             simplestTask->GetTaskType() == TASK_SIMPLE_COWER || simplestTask->GetTaskType() == TASK_SIMPLE_HANDS_UP ||
+                             simplestTask->GetTaskType() == TASK_SIMPLE_DUCK))
         {
             presentationTask = simplestTask;
-            selection = simplestTask->GetTaskType() == TASK_SIMPLE_NAMED_ANIM ? "named" : "chat";
+            switch (simplestTask->GetTaskType())
+            {
+                case TASK_SIMPLE_NAMED_ANIM:
+                    selection = "named";
+                    break;
+                case TASK_SIMPLE_CHAT:
+                    selection = "chat";
+                    break;
+                case TASK_SIMPLE_COWER:
+                    selection = "cower";
+                    break;
+                case TASK_SIMPLE_HANDS_UP:
+                    selection = "hands_up";
+                    break;
+                default:
+                    selection = "duck";
+                    break;
+            }
         }
     }
 
     if (!presentationTask)
     {
         TraceNativeTaskAnimationProducer(this, "no_supported_task", selection, nullptr);
-        return presentation;
+        return result;
     }
 
     SNamedAnimPresentationDiagnostic        namedDiagnostic;
@@ -1907,8 +2085,11 @@ SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentat
     if (!presentationTask || !presentationTask->GetPresentationAnimation(presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress,
                                                                          presentation.data.fSpeed, presentation.data.fBlendAmount))
     {
-        TraceNativeTaskAnimationProducer(this, "task_rejected", selection, presentationTask, pNamedDiagnostic);
-        return presentation;
+        if (physicalPresentation)
+            result.state = eNativeTaskAnimationPresentationState::HOLD_LAST_PHYSICAL_FRAME;
+        TraceNativeTaskAnimationProducer(this, physicalPresentation ? "hold_last_physical_frame" : "task_rejected", selection, presentationTask,
+                                         pNamedDiagnostic);
+        return result;
     }
 
     presentation.data.uiMode = SNativeTaskAnimationPresentationSync::ANIMATION;
@@ -1918,8 +2099,10 @@ SNativeTaskAnimationPresentationSync CClientPed::GetNativeTaskAnimationPresentat
     // Sample through the corrected API so viewers reproduce visible facing.
     GetRotationRadiansNew(rotation);
     presentation.data.fHeading = rotation.fZ;
+    result.state = eNativeTaskAnimationPresentationState::READY;
+    result.physical = physicalPresentation;
     TraceNativeTaskAnimationProducer(this, "emitted", selection, presentationTask, pNamedDiagnostic);
-    return presentation;
+    return result;
 }
 
 void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source)
@@ -1942,7 +2125,7 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
     if (presentation.data.uiMode != SNativeTaskAnimationPresentationSync::NONE)
         ClearNativeTaskWeaponPresentation("animation_presentation");
 
-    if (changed && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    if (changed && IsNativeTaskLocomotionTraceEnabled() && (IsMissionActor() || IsUsingNativeWalkingStyle()))
     {
         g_pCore->GetConsole()->Printf(
             "[native-task-animation][receive] profile=%s pid=%u ped=%u source=%s mode=%u group=%u anim=%u progress=%.3f speed=%.3f blend=%.3f heading=%.3f",
@@ -1963,6 +2146,11 @@ void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
         if (animation && animation->GetInterface() == m_nativeTaskAnimationPresentationAppliedAssociation &&
             static_cast<unsigned short>(animation->GetAnimGroup()) == m_nativeTaskAnimationPresentationAppliedGroup)
         {
+            // Presentation associations have no native task destructor to add
+            // GTA's blend-auto-remove flag. Without it, a zero-blend HANDSUP
+            // association survives an ownership handoff and prevents the new
+            // owner's native RunTimedAnim task from ever starting.
+            animation->GetInterface()->m_bBlendAutoRemove = true;
             animation->SetBlendDelta(-8.0f);
         }
 
@@ -1974,7 +2162,7 @@ void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
             ApplyNativeTaskAnimationPresentationHeading(m_nativeTaskAnimationPresentationAppliedHeading.value());
     }
 
-    if (m_nativeTaskAnimationPresentationActive && IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+    if (m_nativeTaskAnimationPresentationActive && IsNativeTaskLocomotionTraceEnabled() && (IsMissionActor() || IsUsingNativeWalkingStyle()))
     {
         g_pCore->GetConsole()->Printf("[native-task-animation][clear] profile=%s pid=%u ped=%u reason=%s", g_pCore->IsSecondaryClient() ? "cl2" : "primary",
                                       GetCurrentProcessId(), GetID().Value(), reason ? reason : "unknown");
@@ -2065,7 +2253,7 @@ void CClientPed::UpdateNativeTaskAnimationPresentation()
         m_nativeTaskAnimationPresentationAppliedAnimId = m_nativeTaskAnimationPresentation.data.usAnimId;
         m_nativeTaskAnimationPresentationAppliedAssociation = animation->GetInterface();
         m_nativeTaskAnimationPresentationActive = true;
-        if (IsNativeTaskLocomotionTraceEnabled() && IsMissionActor())
+        if (IsNativeTaskLocomotionTraceEnabled() && (IsMissionActor() || IsUsingNativeWalkingStyle()))
         {
             g_pCore->GetConsole()->Printf("[native-task-animation][apply] profile=%s pid=%u ped=%u group=%u anim=%u",
                                           g_pCore->IsSecondaryClient() ? "cl2" : "primary", GetCurrentProcessId(), GetID().Value(),
@@ -2103,6 +2291,27 @@ void CClientPed::RemoveNativeTaskLocomotionPresentation(CControllerState& contro
     controllerState.m_bPedWalk = m_nativeTaskLocomotionBaseControllerState.m_bPedWalk;
     controllerState.ButtonCross = m_nativeTaskLocomotionBaseControllerState.ButtonCross;
     m_nativeTaskLocomotionPresentationApplied = false;
+}
+
+void CClientPed::ApplyNativeTaskOwnerLocomotionAssist(CControllerState& controllerState)
+{
+    if (!m_bIsSyncing || !m_pPlayerPed || !m_pTaskManager || !m_pPlayerPed->IsNativeAmbientWanderEventProfileActive() || GetRealOccupiedVehicle() ||
+        IsGettingIntoVehicle() || IsGettingOutOfVehicle() || IsDucked() || IsDead() || HasSyncedAnim() || controllerState.LeftStickX != 0 ||
+        controllerState.LeftStickY != 0)
+    {
+        return;
+    }
+
+    CTask* pTask = m_pTaskManager->GetSimplestActiveTask();
+    if (!pTask || pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT)
+        return;
+
+    // GTA's non-player go-to branch can sprint directly. MTA script peds are
+    // CPlayerPed wrappers, so their equivalent branch requires pad sprint
+    // input. Supply only that missing intent; the native task keeps ownership
+    // of direction and GTA still enforces surface, stamina and animation rules.
+    if (GetNativeTaskLocomotionCommandMoveState(pTask) == PedMoveState::PEDMOVE_SPRINT)
+        controllerState.ButtonCross = 255;
 }
 
 void CClientPed::ApplyNativeTaskLocomotionPresentation(CControllerState& controllerState)
@@ -2147,6 +2356,8 @@ void CClientPed::ApplyNativeTaskLocomotionPresentation(CControllerState& control
         invalidState = "dead";
     else if (HasSyncedAnim())
         invalidState = "synced_anim";
+    else if (m_nativeTaskAnimationPresentationActive)
+        invalidState = "native_task_animation";
 
     if (invalidState)
     {
@@ -3704,11 +3915,9 @@ eMovementState CClientPed::GetMovementState()
 
         if (!IsDucked())
         {
-            bool walking = false;
-            if (GetType() == CCLIENTPLAYER)
-                walking = CClientPad::GetControlState("walk", cs, true);
-            else
-                m_Pad.GetControlState("walk", walking);
+            // Use the effective controller state. It includes both the local
+            // scripted pad and the observer-side native-task presentation.
+            const bool walking = CClientPad::GetControlState("walk", cs, true);
 
             switch (m_pPlayerPed->GetMoveState())
             {
@@ -4166,6 +4375,7 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
             CControllerState Current;
             GetControllerState(Current);
             m_rawControllerState = Current;
+            ApplyNativeTaskOwnerLocomotionAssist(Current);
             ApplyNativeTaskLocomotionPresentation(Current);
             memcpy(m_currentControllerState, &Current, sizeof(CControllerState));
         }
@@ -4921,7 +5131,7 @@ void CClientPed::_CreateModel()
         // stream in. Reapply their persisted actor classification before GTA
         // starts evaluating ambient task transitions on the new instance.
         ApplyMissionActorState();
-        ApplyNativeMissionEventProfileState();
+        ApplyNativeEventProfileState();
         ApplyStoryProtectionState();
         ApplySuffersCriticalHitsState();
         ApplyStayInSamePlaceState();
@@ -5537,7 +5747,7 @@ bool CClientPed::SetMissionActor(bool enabled)
 
     if (m_pPlayerPed)
         ApplyMissionActorState();
-    ApplyNativeMissionEventProfileState();
+    ApplyNativeEventProfileState();
 
     return true;
 }
@@ -5571,46 +5781,107 @@ void CClientPed::ApplyMissionActorState()
         m_remoteDataStorage->SetProcessPlayerWeapon(false);
 }
 
-bool CClientPed::AcquireNativeMissionEventProfile(CResource* owner, unsigned int token)
+bool CClientPed::AcquireNativeEventProfile(CResource* owner, unsigned int token, ePedNativeEventProfile profile)
 {
-    if (!owner || token == 0 || GetType() != CCLIENTPED || !m_bMissionActor || m_nativeMissionEventProfileOwner)
+    if (!owner || token == 0 || profile == ePedNativeEventProfile::NONE || GetType() != CCLIENTPED || m_nativeEventProfileOwner)
+        return false;
+    if (profile == ePedNativeEventProfile::MISSION && !m_bMissionActor)
+        return false;
+    if (profile == ePedNativeEventProfile::AMBIENT_WANDER && m_bMissionActor)
         return false;
 
     // Every client remembers the resource-scoped lease, including before it
     // becomes syncer. Apply gates the native exception to the authoritative
     // generation and teardown can still revoke a surviving server-owned ped.
-    m_nativeMissionEventProfileOwner = owner;
-    m_uiNativeMissionEventProfileToken = token;
-    ApplyNativeMissionEventProfileState();
+    m_nativeEventProfileOwner = owner;
+    m_uiNativeEventProfileToken = token;
+    m_nativeEventProfile = profile;
+    ApplyNativeEventProfileState();
     return true;
 }
 
-bool CClientPed::ReleaseNativeMissionEventProfile(CResource* owner, unsigned int token)
+bool CClientPed::ReleaseNativeEventProfile(CResource* owner, unsigned int token, ePedNativeEventProfile profile)
 {
-    if (!owner || token == 0 || m_nativeMissionEventProfileOwner != owner || m_uiNativeMissionEventProfileToken != token)
+    if (!owner || token == 0 || m_nativeEventProfileOwner != owner || m_uiNativeEventProfileToken != token || m_nativeEventProfile != profile)
         return false;
 
-    m_nativeMissionEventProfileOwner = nullptr;
-    m_uiNativeMissionEventProfileToken = 0;
-    ApplyNativeMissionEventProfileState();
+    m_nativeEventProfileOwner = nullptr;
+    m_uiNativeEventProfileToken = 0;
+    m_nativeEventProfile = ePedNativeEventProfile::NONE;
+    ApplyNativeEventProfileState();
     return true;
 }
 
-bool CClientPed::IsNativeMissionEventProfileActive(const CResource* owner, unsigned int token) const
+bool CClientPed::IsNativeEventProfileActive(const CResource* owner, unsigned int token, ePedNativeEventProfile profile) const
 {
-    return owner && token != 0 && m_nativeMissionEventProfileOwner == owner && m_uiNativeMissionEventProfileToken == token && m_bMissionActor && m_bIsSyncing &&
-           m_pPlayerPed && m_pPlayerPed->IsNativeMissionEventProfileActive();
+    if (!owner || token == 0 || m_nativeEventProfileOwner != owner || m_uiNativeEventProfileToken != token || m_nativeEventProfile != profile ||
+        !m_bIsSyncing || !m_pPlayerPed)
+        return false;
+
+    if (profile == ePedNativeEventProfile::MISSION)
+        return m_bMissionActor && m_pPlayerPed->IsNativeMissionEventProfileActive();
+    if (profile == ePedNativeEventProfile::AMBIENT_WANDER)
+        return m_pPlayerPed->IsNativeAmbientWanderEventProfileActive();
+    return false;
 }
 
-void CClientPed::ApplyNativeMissionEventProfileState()
+bool CClientPed::AddNativeGunAimedAtEvent(CClientPed* aimingPed)
+{
+    if (!aimingPed || aimingPed == this || GetType() != CCLIENTPED || !m_bIsSyncing || IsDead() || !m_pPlayerPed || !aimingPed->m_pPlayerPed ||
+        !m_pPlayerPed->IsNativeAmbientWanderEventProfileActive())
+    {
+        return false;
+    }
+
+    return m_pPlayerPed->AddNativeGunAimedAtEvent(aimingPed->m_pPlayerPed);
+}
+
+bool CClientPed::AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone)
+{
+    if (!attackingPed || attackingPed == this || GetType() != CCLIENTPED || !m_bIsSyncing || IsDead() || !m_pPlayerPed || !attackingPed->m_pPlayerPed ||
+        !m_pPlayerPed->IsNativeAmbientWanderEventProfileActive())
+    {
+        return false;
+    }
+
+    return m_pPlayerPed->AddNativeDamageResponseEvent(attackingPed->m_pPlayerPed, weaponType, hitZone);
+}
+
+void CClientPed::ApplyNativeEventProfileState()
 {
     if (!m_pPlayerPed)
         return;
 
     // The lease remains logically owned across stream and syncer generations,
     // but only the authoritative syncer may let GTA consume ambient events.
-    const bool active = m_nativeMissionEventProfileOwner && m_uiNativeMissionEventProfileToken != 0 && m_bMissionActor && m_bIsSyncing;
-    m_pPlayerPed->SetNativeMissionEventProfileActive(active);
+    const bool leased = m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0;
+    const bool missionActive = leased && m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor && m_bIsSyncing;
+    const bool ambientSelected = leased && m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER;
+    const bool ambientActive = ambientSelected && !m_bMissionActor && m_bIsSyncing;
+
+    // Acquiring the lease can race a local scanner event. Purge a response
+    // whenever this peer is fenced as an observer, even if the wrapper was not
+    // previously marked active.
+    if (!ambientActive && (ambientSelected || m_pPlayerPed->IsNativeAmbientWanderEventProfileActive()))
+        ClearNativeAmbientWanderResponse();
+
+    m_pPlayerPed->SetNativeMissionEventProfileActive(missionActive);
+    m_pPlayerPed->SetNativeAmbientWanderEventProfile(ambientSelected, ambientActive);
+}
+
+void CClientPed::ClearNativeAmbientWanderResponse()
+{
+    if (!m_pTaskManager)
+        return;
+
+    // These two slots are entirely GTA event-handler responses. Once this peer
+    // is fenced as an ambient observer, letting any previous generation remain
+    // would keep old-owner AI alive beside the new authority. The event type can
+    // already have advanced by handoff time, so task-type/event-type filtering
+    // is not a reliable ownership boundary. Physical damage response, primary
+    // wander and the permanent default task are deliberately left untouched.
+    for (const int priority : {TASK_PRIORITY_EVENT_RESPONSE_TEMP, TASK_PRIORITY_EVENT_RESPONSE_NONTEMP})
+        KillTask(priority, true);
 }
 
 bool CClientPed::SetStoryProtected(bool enabled)
@@ -8795,11 +9066,12 @@ void CClientPed::SetSyncing(bool bIsSyncing)
     if (m_bIsSyncing != bIsSyncing)
     {
         SetNativeTaskLocomotionPresentation({}, "syncer_transition");
+        m_nativeTaskLocomotionAuthoritativeVelocityValid = false;
         ClearNativeTaskWeaponPresentation("syncer_transition");
         ClearNativeTaskAnimationPresentation("syncer_transition");
     }
     m_bIsSyncing = bIsSyncing;
-    ApplyNativeMissionEventProfileState();
+    ApplyNativeEventProfileState();
     if (!bIsSyncing)
     {
         // Reset vehicle in/out stuff in case the ped was entering/exiting

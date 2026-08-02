@@ -183,6 +183,43 @@ local function sendAssignment(record, reason)
     return triggerClientEvent(record.owner, "pedTraffic:assign", resourceRoot, record.ped, record.epoch, record.direction, reason)
 end
 
+local function hasValidGunAimContext(player, ped, requireSyncedControl)
+    if not isElement(player) or not isElement(ped) or getPedTarget(player) ~= ped then
+        return false
+    end
+
+    local weapon = getPedWeapon(player)
+    if weapon < 22 or weapon > 39 or (requireSyncedControl and not getControlState(player, "aim_weapon")) then
+        return false
+    end
+
+    local px, py, pz = getElementPosition(ped)
+    local ax, ay, az = getElementPosition(player)
+    return getElementDimension(player) == getElementDimension(ped) and getElementInterior(player) == getElementInterior(ped) and
+        squaredDistance(px, py, pz, ax, ay, az) <= 250 * 250
+end
+
+local function bridgeGunAim(record, aimingPlayer)
+    if not record or record.removing or record.state ~= "active" or not isElement(record.owner) or not isElement(aimingPlayer) or
+        record.owner == aimingPlayer then
+        return false
+    end
+
+    log(("gun-aim-bridge id=%d shooter=%s owner=%s"):format(record.id, getPlayerName(aimingPlayer), getPlayerName(record.owner)))
+    return triggerClientEvent(record.owner, "pedTraffic:gunAimedAt", resourceRoot, record.ped, aimingPlayer)
+end
+
+local function bridgeDamageResponse(record, attackingPlayer, weapon, bodypart)
+    if not record or record.removing or record.state ~= "active" or not isElement(record.owner) or not isElement(attackingPlayer) or
+        record.owner == attackingPlayer then
+        return false
+    end
+
+    log(("damage-bridge id=%d attacker=%s owner=%s weapon=%d bodypart=%d"):format(
+            record.id, getPlayerName(attackingPlayer), getPlayerName(record.owner), weapon, bodypart))
+    return triggerClientEvent(record.owner, "pedTraffic:damageResponse", resourceRoot, record.ped, attackingPlayer, weapon, bodypart)
+end
+
 local function assignOwner(record, owner, reason)
     if not record or record.removing or not isElement(record.ped) or not isEligiblePlayer(owner) then
         return false
@@ -404,6 +441,13 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
         record.state = "active"
         record.acceptedAt = getTickCount()
         log(("accepted id=%d epoch=%d owner=%s"):format(record.id, epoch, getPlayerName(client)))
+        for _, player in ipairs(getEligiblePlayers()) do
+            -- Reconstruct a still-active threat after an owner handoff, but do
+            -- not confuse MTA's permanent shot raycast with actual aiming.
+            if hasValidGunAimContext(player, record.ped, true) then
+                bridgeGunAim(record, player)
+            end
+        end
     elseif evidence == "released" and record.state == "revoking" then
         finishHandoff(record, "release-ack")
     elseif evidence == "failure" then
@@ -411,6 +455,37 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
                                                                         type(data) == "table" and tostring(data.reason) or "unknown"), true)
         removeRecord(record, "client-failure")
     end
+end)
+
+addEvent("pedTraffic:gunAimObserved", true)
+addEventHandler("pedTraffic:gunAimObserved", resourceRoot, function(ped)
+    local record = trafficPeds[ped]
+    -- The client owns its input transition. The server still requires the
+    -- synchronized target ray, firearm, world context and bounded distance.
+    if not record or not hasValidGunAimContext(client, ped, false) then
+        return
+    end
+    bridgeGunAim(record, client)
+end)
+
+addEvent("pedTraffic:damageObserved", true)
+addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon, bodypart)
+    local record = trafficPeds[ped]
+    weapon = tonumber(weapon)
+    bodypart = tonumber(bodypart)
+    if not record or not isElement(client) or not weapon or not bodypart or weapon < 0 or weapon > 54 or
+        (bodypart ~= 0 and (bodypart < 3 or bodypart > 9)) then
+        return
+    end
+
+    local px, py, pz = getElementPosition(ped)
+    local ax, ay, az = getElementPosition(client)
+    if getElementDimension(client) ~= getElementDimension(ped) or getElementInterior(client) ~= getElementInterior(ped) or
+        squaredDistance(px, py, pz, ax, ay, az) > 250 * 250 then
+        return
+    end
+
+    bridgeDamageResponse(record, client, math.floor(weapon), math.floor(bodypart))
 end)
 
 addEventHandler("onPedWasted", root, function()
@@ -558,6 +633,9 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         else
             outputChatBox("Usage: /pedtraffic cap 1..110", player, 255, 160, 80)
         end
+    elseif action == "weapon" and isElement(player) then
+        giveWeapon(player, 22, 200, true)
+        outputChatBox("Ped traffic threat test: pistol + 200 rounds", player, 120, 220, 255)
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do

@@ -218,6 +218,10 @@ static_assert(sizeof(CPedAcquaintanceSAInterface) == 0x14, "Invalid size for CPe
 
 class CPedStatSAInterface
 {
+public:
+    std::uint8_t GetDefaultDecisionMaker() const noexcept { return defaultDecisionMaker; }
+
+private:
     std::uint32_t id;
     char          name[24];
     float         fleedDistance;
@@ -531,6 +535,16 @@ public:
     }
     void SetNativeMissionEventProfileActive(bool active) override { m_bNativeMissionEventProfileActive = active; }
     bool IsNativeMissionEventProfileActive() const override { return m_bNativeMissionEventProfileActive; }
+    void SetNativeAmbientWanderEventProfile(bool selected, bool active) override
+    {
+        m_bNativeAmbientWanderEventProfileSelected = selected;
+        m_bNativeAmbientWanderEventProfileActive = active;
+    }
+    bool IsNativeAmbientWanderEventProfileSelected() const override { return m_bNativeAmbientWanderEventProfileSelected; }
+    bool IsNativeAmbientWanderEventProfileActive() const override { return m_bNativeAmbientWanderEventProfileActive; }
+    bool AddNativeGunAimedAtEvent(CPed* aimingPed) override;
+    int  GetNativeCurrentEventType() const override;
+    bool AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone) override;
     void SetNativeChokingUsesNonPlayerBehavior(bool enabled) override { m_bNativeChokingUsesNonPlayerBehavior = enabled; }
     bool NativeChokingUsesNonPlayerBehavior() const override { return m_bNativeChokingUsesNonPlayerBehavior; }
     void SetNativeFightUsesNonPlayerBehavior(bool enabled) override { m_bNativeFightUsesNonPlayerBehavior = enabled; }
@@ -557,6 +571,8 @@ private:
     std::uint32_t m_type{PLAYER_PED};
     std::uint8_t  m_occupiedSeat;
     bool          m_bNativeMissionEventProfileActive{false};
+    bool          m_bNativeAmbientWanderEventProfileSelected{false};
+    bool          m_bNativeAmbientWanderEventProfileActive{false};
     bool          m_bNativeChokingUsesNonPlayerBehavior{false};
     bool          m_bNativeFightUsesNonPlayerBehavior{false};
 };

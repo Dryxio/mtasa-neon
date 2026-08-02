@@ -38,18 +38,25 @@ public:
     DWORD                   taskManager;  // +4 (really CTaskManagerSAInterface)
     BYTE                    bPad[16];
     CFightManagerInterface* fightInterface;  // +24
-    BYTE                    bPad2[152];
-    std::int32_t            decisionMakerType;         // +180
-    std::int32_t            decisionMakerTypeInGroup;  // +184
-    float                   hearingRange;              // +188
-    float                   seeingRange;               // +192
-    DWORD                   numPedsToScan;             // +196
-    float                   decisionMakerRadius;       // +200
-    BYTE                    bPad3[8];
-    DWORD                   vehicleScanner;  // +212 (really CVehicleScannerSAInterface)
+    BYTE                    bPad2[28];
+    BYTE                    eventHandler[0x30];
+    // CEventGroup is embedded here in the target executable. Keeping the
+    // verified span explicit lets narrow native-event bridges use GTA's own
+    // clone/admission lifecycle without reconstructing intelligence state.
+    BYTE         eventGroup[0x4C];
+    std::int32_t decisionMakerType;         // +180
+    std::int32_t decisionMakerTypeInGroup;  // +184
+    float        hearingRange;              // +188
+    float        seeingRange;               // +192
+    DWORD        numPedsToScan;             // +196
+    float        decisionMakerRadius;       // +200
+    BYTE         bPad3[8];
+    DWORD        vehicleScanner;  // +212 (really CVehicleScannerSAInterface)
 };
 
 static_assert(offsetof(CPedIntelligenceSAInterface, decisionMakerType) == 0xB4, "Invalid ped decision-maker type offset");
+static_assert(offsetof(CPedIntelligenceSAInterface, eventHandler) == 0x38, "Invalid ped event-handler offset");
+static_assert(offsetof(CPedIntelligenceSAInterface, eventGroup) == 0x68, "Invalid ped event-group offset");
 static_assert(offsetof(CPedIntelligenceSAInterface, decisionMakerTypeInGroup) == 0xB8, "Invalid ped group decision-maker type offset");
 static_assert(offsetof(CPedIntelligenceSAInterface, hearingRange) == 0xBC, "Invalid ped hearing range offset");
 static_assert(offsetof(CPedIntelligenceSAInterface, seeingRange) == 0xC0, "Invalid ped seeing range offset");

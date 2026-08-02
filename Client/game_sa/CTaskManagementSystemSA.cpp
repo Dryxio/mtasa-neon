@@ -221,6 +221,13 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             // exposes GTA's live association to presentation-only observers.
             pTaskSA = new CTaskSimpleRunAnimSA;
             break;
+        case TASK_SIMPLE_COWER:
+        case TASK_SIMPLE_HANDS_UP:
+            // Both threat responses derive from GTA's RunAnim prefix. Expose
+            // only their live association so observers can mirror the pose
+            // without constructing an event-response task of their own.
+            pTaskSA = new CTaskSimpleRunAnimSA;
+            break;
         case TASK_SIMPLE_NAMED_ANIM:
             pTaskSA = new CTaskSimpleRunNamedAnimSA;
             break;
@@ -326,6 +333,15 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             break;
 
         // Physical response
+        case TASK_SIMPLE_FALL:
+            // Physical reactions stay authoritative on the syncer. This
+            // wrapper exposes only GTA's live animation association so remote
+            // viewers can reproduce the fall without constructing the task.
+            pTaskSA = new CTaskSimpleFallSA;
+            break;
+        case TASK_SIMPLE_GET_UP:
+            pTaskSA = new CTaskSimpleGetUpSA;
+            break;
         case TASK_SIMPLE_CHOKING:
             pTaskSA = new CTaskSimpleChokingSA;
             break;

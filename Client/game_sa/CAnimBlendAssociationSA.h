@@ -101,10 +101,10 @@ public:
         {
             unsigned short m_bPlaying : 1;          // Anim will stop playing if flag is not set
             unsigned short m_bLooped : 1;           // Anim will always restart when it completes
-            unsigned short m_bFreezeLastFrame : 1;  // Anim will freeze on last frame
+            unsigned short m_bBlendAutoRemove : 1;  // Delete the association after it has faded out
 
             // When this flag is Set, IF m_bLooped == false, m_bPlaying == true, and anim progress >= total anim time
-            // THEN m_bFreezeLastFrame is set to TRUE and m_fBlendDelta is set to -4.0.
+            // THEN m_bBlendAutoRemove is set to TRUE and m_fBlendDelta is set to -4.0.
             // Result: https://i.imgur.com/idw0jsX.png
             unsigned short m_bLockLastFrame : 1;
 

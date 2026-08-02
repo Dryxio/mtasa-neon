@@ -10,11 +10,49 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CAnimBlendAssociationSA.h"
+#include "CAnimBlendHierarchySA.h"
 #include "CGameSA.h"
 #include "CPedSA.h"
 #include "TaskPhysicalResponseSA.h"
 
 extern CGameSA* pGame;
+
+namespace
+{
+    bool GetPhysicalResponsePresentationAnimation(const CAnimBlendAssociationSAInterface* association, unsigned short& usAnimGroup, unsigned short& usAnimId,
+                                                  float& fProgress, float& fSpeed, float& fBlendAmount)
+    {
+        if (!association || !association->pAnimHierarchy || !std::isfinite(association->pAnimHierarchy->fTotalTime) ||
+            association->pAnimHierarchy->fTotalTime <= 0.0f || association->sAnimGroup < 0 || association->sAnimID < 0 ||
+            !std::isfinite(association->fCurrentTime) || !std::isfinite(association->fSpeed) || association->fSpeed <= 0.0f ||
+            !std::isfinite(association->fBlendAmount) || association->fBlendAmount <= 0.01f)
+        {
+            return false;
+        }
+
+        usAnimGroup = static_cast<unsigned short>(association->sAnimGroup);
+        usAnimId = static_cast<unsigned short>(association->sAnimID);
+        fProgress = std::clamp(association->fCurrentTime / association->pAnimHierarchy->fTotalTime, 0.0f, 1.0f);
+        fSpeed = association->fSpeed;
+        fBlendAmount = std::clamp(association->fBlendAmount, 0.0f, 1.0f);
+        return true;
+    }
+}
+
+bool CTaskSimpleFallSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                 float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleFallSAInterface*>(GetInterface());
+    return task && GetPhysicalResponsePresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+}
+
+bool CTaskSimpleGetUpSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                  float& fBlendAmount) const
+{
+    const auto* task = static_cast<const CTaskSimpleGetUpSAInterface*>(GetInterface());
+    return task && GetPhysicalResponsePresentationAnimation(task->m_pAnim, usAnimGroup, usAnimId, fProgress, fSpeed, fBlendAmount);
+}
 
 // ##############################################################################
 // ## Name:    CTaskSimpleChoking
