@@ -497,13 +497,13 @@ jobs:
 
           short_sha="${GITHUB_SHA:0:9}"
           cat > ReleaseNotes.md <<EOF
-          ## 🎮 Windows player / Joueur Windows
+          ## 🎮 Windows player
 
           **Download only [MTA-Neon-Setup.exe](https://github.com/$GITHUB_REPOSITORY/releases/download/neon-latest/MTA-Neon-Setup.exe).**
 
-          **Télécharge uniquement \`MTA-Neon-Setup.exe\`.** Run it, select your GTA: San Andreas folder, and finish the installation. You can ignore every \`.zip\`, \`.tar.gz\`, and checksum file below.
+          Run it, select your GTA: San Andreas folder, and finish the installation. You can ignore every \`.zip\`, \`.tar.gz\`, and checksum file below.
 
-          ## 🖥️ Server owner / Hébergeur
+          ## 🖥️ Server owner
 
           - **Windows x64:** download \`MTA-Neon-Server-Windows-x64.zip\`, extract it, edit \`mods/deathmatch/mtaserver.conf\`, then start \`MTA Server64.exe\`.
           - **Linux x64 or ARM64:** download the matching \`.tar.gz\` package.
