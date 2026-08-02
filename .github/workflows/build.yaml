@@ -3,6 +3,10 @@ name: Build
 # Trigger the workflow on any pull request, push or manual dispatch
 on: [pull_request, push, workflow_dispatch]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     strategy:
@@ -63,13 +67,27 @@ jobs:
         if: matrix.platform == 'x64'
         run: utils\premake5 install_resources
 
-      - name: Smoke test Neon Windows server
+      - name: Package Neon Windows server
+        if: matrix.platform == 'x64'
+        shell: powershell
+        run: .\utils\package-windows-server.ps1
+
+      - name: Smoke test packaged Neon Windows server
         if: matrix.platform == 'x64'
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $serverRoot = (Resolve-Path 'Bin\server').Path
+          $packageName = 'MTA-Neon-Server-Windows-x64'
+          $archivePath = (Resolve-Path "$packageName.zip").Path
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'neon-windows-server-package'
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          & 7z x $archivePath "-o$extractRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip could not extract the server package (exit code $LASTEXITCODE)"
+          }
+
+          $serverRoot = (Resolve-Path (Join-Path $extractRoot $packageName)).Path
           $stdoutPath = Join-Path $env:RUNNER_TEMP 'neon-server-smoke.stdout.log'
           $stderrPath = Join-Path $env:RUNNER_TEMP 'neon-server-smoke.stderr.log'
           $process = Start-Process `
@@ -230,6 +248,7 @@ jobs:
           name: InstallFiles-${{ matrix.platform }}
           path: InstallFiles/
           if-no-files-found: error
+          retention-days: 14
 
       - uses: actions/upload-artifact@v6
         if: matrix.platform == 'win32'
@@ -237,6 +256,15 @@ jobs:
           name: MTA-Neon-Windows-Installer
           path: InstallerOutput/MTA-Neon-Setup.exe
           if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v6
+        if: matrix.platform == 'x64'
+        with:
+          name: MTA-Neon-Windows-Server-x64
+          path: MTA-Neon-Server-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
 
   macOS:
     name: macOS
@@ -413,3 +441,117 @@ jobs:
           name: MTA-Neon-Linux-Server-${{ matrix.architecture }}
           path: MTA-Neon-Linux-Server-${{ matrix.architecture }}.tar.gz
           if-no-files-found: error
+          retention-days: 14
+
+  publish-latest:
+    name: Publish latest Neon build
+    if: github.repository == 'Dryxio/mtasa-neon' && github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [windows, macOS, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: MTA-Neon-Windows-Installer
+          path: ReleaseAssets
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: MTA-Neon-Windows-Server-x64
+          path: ReleaseAssets
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: MTA-Neon-Linux-Server-x64
+          path: ReleaseAssets
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: MTA-Neon-Linux-Server-arm64
+          path: ReleaseAssets
+
+      - name: Create checksums and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_assets=(
+            MTA-Neon-Setup.exe
+            MTA-Neon-Server-Windows-x64.zip
+            MTA-Neon-Linux-Server-x64.tar.gz
+            MTA-Neon-Linux-Server-arm64.tar.gz
+          )
+          for asset in "${required_assets[@]}"; do
+            test -f "ReleaseAssets/$asset"
+          done
+
+          (
+            cd ReleaseAssets
+            sha256sum "${required_assets[@]}" > SHA256SUMS.txt
+          )
+
+          short_sha="${GITHUB_SHA:0:9}"
+          cat > ReleaseNotes.md <<EOF
+          ## 🎮 Windows player / Joueur Windows
+
+          **Download only [MTA-Neon-Setup.exe](https://github.com/$GITHUB_REPOSITORY/releases/download/neon-latest/MTA-Neon-Setup.exe).**
+
+          **Télécharge uniquement \`MTA-Neon-Setup.exe\`.** Run it, select your GTA: San Andreas folder, and finish the installation. You can ignore every \`.zip\`, \`.tar.gz\`, and checksum file below.
+
+          ## 🖥️ Server owner / Hébergeur
+
+          - **Windows x64:** download \`MTA-Neon-Server-Windows-x64.zip\`, extract it, edit \`mods/deathmatch/mtaserver.conf\`, then start \`MTA Server64.exe\`.
+          - **Linux x64 or ARM64:** download the matching \`.tar.gz\` package.
+
+          Client and server files in this release come from the same successful \`master\` build. Keep them together when using Neon-specific network features.
+
+          ## Build information
+
+          - Commit: [\`$short_sha\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)
+          - Workflow run: [#$GITHUB_RUN_NUMBER](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+          - Built: $(date -u +'%Y-%m-%d %H:%M UTC')
+
+          Neon is experimental and is not affiliated with or endorsed by the Multi Theft Auto team. SHA-256 hashes are provided in \`SHA256SUMS.txt\`.
+          EOF
+
+      - name: Publish rolling Neon release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_tag='neon-latest'
+          release_assets=(
+            'ReleaseAssets/MTA-Neon-Setup.exe#PLAY ON WINDOWS - MTA Neon client installer'
+            'ReleaseAssets/MTA-Neon-Server-Windows-x64.zip#HOST ON WINDOWS - x64 server package'
+            'ReleaseAssets/MTA-Neon-Linux-Server-x64.tar.gz#HOST ON LINUX - x64 server package'
+            'ReleaseAssets/MTA-Neon-Linux-Server-arm64.tar.gz#HOST ON LINUX - ARM64 server package'
+            'ReleaseAssets/SHA256SUMS.txt#OPTIONAL - SHA-256 checksums'
+          )
+          git tag --force "$release_tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$release_tag" --force
+
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "${release_assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$release_tag" \
+              --title 'MTA:SA Neon — latest download' \
+              --notes-file ReleaseNotes.md \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --latest=false \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$release_tag" "${release_assets[@]}" \
+              --title 'MTA:SA Neon — latest download' \
+              --notes-file ReleaseNotes.md \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --repo "$GITHUB_REPOSITORY"
+          fi

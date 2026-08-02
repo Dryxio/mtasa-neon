@@ -6,6 +6,13 @@
   <a href="https://mtasa-neon-wiki.vercel.app/neon"><img alt="Open the Neon documentation and Lua API" src="https://img.shields.io/badge/DOCUMENTATION_%26_LUA_API-OPEN_THE_NEON_WIKI-F28C18?style=for-the-badge&amp;labelColor=0A0908" height="40"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Dryxio/mtasa-neon/releases/download/neon-latest/MTA-Neon-Setup.exe"><img alt="Download the latest MTA Neon client for Windows" src="https://img.shields.io/badge/WINDOWS_CLIENT-DOWNLOAD_INSTALLER-F28C18?style=for-the-badge&amp;logo=windows&amp;logoColor=F28C18&amp;labelColor=0A0908" height="40"></a>
+  <a href="https://github.com/Dryxio/mtasa-neon/releases/download/neon-latest/MTA-Neon-Server-Windows-x64.zip"><img alt="Download the latest MTA Neon server for Windows x64" src="https://img.shields.io/badge/WINDOWS_SERVER-DOWNLOAD_X64_ZIP-F28C18?style=for-the-badge&amp;logo=windows&amp;logoColor=F28C18&amp;labelColor=0A0908" height="40"></a>
+</p>
+
+<p align="center"><strong>Players only need the Windows client installer. Server owners should use the separate server package. Both links always track the latest successful build.</strong></p>
+
 <p align="center"><strong>New to Neon? Start with the documentation, feature guides, and complete Lua API.</strong></p>
 
 <p align="center">
