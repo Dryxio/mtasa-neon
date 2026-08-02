@@ -58,6 +58,7 @@ class CTaskComplexInWater;
 class CTaskComplexKillPedOnFoot;
 class CVector;
 class CVehicle;
+struct SClimbTaskState;
 
 typedef unsigned long AssocGroupId;
 typedef unsigned long AnimationId;
@@ -179,4 +180,12 @@ public:
     // Authority can move after the launch task has already finished. Resume
     // directly in GTA's native airborne state machine without replaying launch.
     virtual CTaskComplex* CreateTaskComplexInAirAndLand(bool bUsingJumpGlide = true, bool bUsingFallGlide = false) = 0;
+
+    // A climb handoff must preserve the native anchor and both phase cursors;
+    // replaying Jump would rescan different geometry in each process.
+    virtual CTaskComplex* CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state) = 0;
+
+    // Script peds need GTA's FORCE value to run the climb scan; OK only does
+    // so for a real player even though both modes share the same jump task.
+    virtual CTaskComplex* CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true) = 0;
 };

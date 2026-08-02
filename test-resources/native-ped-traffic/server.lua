@@ -20,6 +20,7 @@ local debugEnabled = false
 local nextRequestId = 0
 local nextPedId = 0
 local nextAirTestId = 0
+local nextClimbTestId = 0
 local requestCursor = 0
 local pendingRequests = {}
 local trafficPeds = {}
@@ -161,6 +162,24 @@ local function hasOtherPlayerTooClose(x, y, z, proposingPlayer)
     return false
 end
 
+local function stopClimbTest(record, reason)
+    local test = record and record.climbTest
+    if not test then
+        return
+    end
+    if isTimer(test.prepareTimer) then
+        killTimer(test.prepareTimer)
+    end
+    if isElement(record.ped) then
+        setElementFrozen(record.ped, false)
+    end
+    triggerClientEvent(root, "pedTraffic:climbTestStop", resourceRoot, record.ped, record.epoch, test.nonce, reason)
+    if isElement(test.obstacle) then
+        destroyElement(test.obstacle)
+    end
+    record.climbTest = nil
+end
+
 local function removeRecord(record, reason)
     if not record or record.removing then
         return
@@ -170,6 +189,7 @@ local function removeRecord(record, reason)
         triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, reason)
         record.airTest = nil
     end
+    stopClimbTest(record, reason)
     trafficPeds[record.ped] = nil
     if isElement(record.ped) then
         if isElement(record.owner) then
@@ -186,8 +206,10 @@ local function sendAssignment(record, reason)
         return false
     end
     record.assignmentLastSent = getTickCount()
-    local resumeAirborne = record.airTest and record.airTest.handoffTriggered == true
-    return triggerClientEvent(record.owner, "pedTraffic:assign", resourceRoot, record.ped, record.epoch, record.direction, reason, resumeAirborne)
+    local resumePhysical = (record.airTest and record.airTest.handoffTriggered == true) or
+        (record.climbTest and record.climbTest.handoffTriggered == true)
+    return triggerClientEvent(record.owner, "pedTraffic:assign", resourceRoot, record.ped, record.epoch, record.direction, reason,
+                              resumePhysical)
 end
 
 local function hasValidGunAimContext(player, ped, requireSyncedControl)
@@ -259,6 +281,11 @@ local function assignOwner(record, owner, reason)
         triggerClientEvent(root, "pedTraffic:airTestWatch", resourceRoot, record.ped, record.epoch, record.airTest.nonce,
                            record.airTest.forceHandoff)
     end
+    if record.climbTest then
+        record.climbTest.epoch = record.epoch
+        triggerClientEvent(root, "pedTraffic:climbTestWatch", resourceRoot, record.ped, record.epoch, record.climbTest.nonce,
+                           record.climbTest.forceHandoff)
+    end
     sendAssignment(record, reason)
     log(("assign id=%d epoch=%d owner=%s reason=%s"):format(record.id, record.epoch, getPlayerName(owner), tostring(reason)))
     return true
@@ -301,6 +328,10 @@ local function startAirTest(player, forceHandoff)
         outputChatBox("That traffic ped already has an airborne test in progress", player, 255, 160, 80)
         return false
     end
+    if record.climbTest then
+        outputChatBox("That traffic ped already has a climb test in progress", player, 255, 160, 80)
+        return false
+    end
     if forceHandoff and #getEligiblePlayers() < 2 then
         outputChatBox("The airborne handoff test requires two connected players", player, 255, 160, 80)
         return false
@@ -321,6 +352,86 @@ local function startAirTest(player, forceHandoff)
             record.id, record.epoch, record.airTest.nonce, getPlayerName(record.owner), tostring(record.airTest.forceHandoff)), true)
     outputChatBox(("Native airborne test started on traffic ped %d%s"):format(
                       record.id, record.airTest.forceHandoff and " with forced handoff" or ""), player, 120, 220, 255)
+    return true
+end
+
+local function startClimbTest(player, forceHandoff)
+    if not enabled or not isEligiblePlayer(player) then
+        outputChatBox("Run /pedtraffic on before starting the climb test", player, 255, 160, 80)
+        return false
+    end
+
+    local record = findClosestActiveTrafficPed(player, 30)
+    if not record then
+        outputChatBox("No active traffic ped within 30 metres", player, 255, 160, 80)
+        return false
+    end
+    if record.airTest or record.climbTest then
+        outputChatBox("That traffic ped already has a physical test in progress", player, 255, 160, 80)
+        return false
+    end
+    if forceHandoff and #getEligiblePlayers() < 2 then
+        outputChatBox("The climb handoff test requires two connected players", player, 255, 160, 80)
+        return false
+    end
+
+    local playerX, playerY, playerZ = getElementPosition(player)
+    local _, _, heading = getElementRotation(player)
+    local radians = math.rad(heading)
+    local forwardX, forwardY = -math.sin(radians), math.cos(radians)
+    local pedX, pedY = playerX + forwardX * 4.0, playerY + forwardY * 4.0
+    local obstacleX, obstacleY = pedX + forwardX * 1.05, pedY + forwardY * 1.05
+    local obstacle = createObject(1422, obstacleX, obstacleY, playerZ - 0.05, 0, 0, heading)
+    if not obstacle then
+        outputChatBox("Could not create the climb-test obstacle", player, 255, 80, 80)
+        return false
+    end
+
+    setElementDimension(obstacle, getElementDimension(player))
+    setElementInterior(obstacle, getElementInterior(player))
+    setElementFrozen(obstacle, true)
+    if type(setObjectBreakable) == "function" then
+        setObjectBreakable(obstacle, false)
+    end
+    setElementData(obstacle, "neon:pedTrafficClimbTestObstacle", true, false)
+
+    nextClimbTestId = nextClimbTestId + 1
+    local test = {
+        nonce = nextClimbTestId,
+        epoch = record.epoch,
+        requester = player,
+        forceHandoff = forceHandoff == true,
+        startedAt = getTickCount(),
+        obstacle = obstacle,
+    }
+    record.climbTest = test
+
+    -- Freeze only during the short placement/streaming window. The owner then
+    -- starts GTA's real jump task against the shared collision object.
+    local placed = setElementFrozen(record.ped, true) and setElementPosition(record.ped, pedX, pedY, playerZ) and
+        setElementRotation(record.ped, 0, 0, heading) and setElementVelocity(record.ped, 0, 0, 0)
+    if not placed then
+        stopClimbTest(record, "placement-refused")
+        outputChatBox("Could not prepare the climb-test ped", player, 255, 80, 80)
+        return false
+    end
+    triggerClientEvent(root, "pedTraffic:climbTestWatch", resourceRoot, record.ped, record.epoch, test.nonce, test.forceHandoff)
+
+    test.prepareTimer = setTimer(function()
+        if record.removing or record.climbTest ~= test or not isElement(record.ped) or not isElement(test.obstacle) or
+            not isElement(record.owner) then
+            stopClimbTest(record, "preparation-invalidated")
+            return
+        end
+        setElementFrozen(record.ped, false)
+        triggerClientEvent(record.owner, "pedTraffic:climbTest", resourceRoot, record.ped, record.epoch, test.nonce)
+    end, 500, 1)
+
+    log(("climbtest-start id=%d epoch=%d nonce=%d owner=%s obstacle=%d pos=(%.2f,%.2f,%.2f) heading=%.1f handoff=%s"):format(
+            record.id, record.epoch, test.nonce, getPlayerName(record.owner), getElementModel(obstacle), obstacleX, obstacleY,
+            playerZ - 0.05, heading, tostring(test.forceHandoff)), true)
+    outputChatBox(("Native climb test started on traffic ped %d%s"):format(
+                      record.id, test.forceHandoff and " with forced handoff" or ""), player, 120, 220, 255)
     return true
 end
 
@@ -605,6 +716,27 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
             triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, phase)
             record.airTest = nil
         end
+    elseif evidence == "climbtest-phase" and record.climbTest and type(data) == "table" and
+        tonumber(data.nonce) == record.climbTest.nonce then
+        local phase = tostring(data.phase or "unknown")
+        local detail = type(data.reason) == "string" and (" reason=" .. data.reason) or ""
+        log(("climbtest-phase id=%d epoch=%d nonce=%d owner=%s phase=%s%s"):format(
+                record.id, epoch, record.climbTest.nonce, getPlayerName(client), phase, detail), true)
+        if record.state == "revoking" and record.climbTest.handoffTriggered then
+            log(("climbtest-phase-ignored id=%d epoch=%d nonce=%d phase=%s reason=handoff-in-progress"):format(
+                    record.id, epoch, record.climbTest.nonce, phase))
+        elseif record.climbTest.forceHandoff and not record.climbTest.handoffTriggered and phase == "climb" then
+            local x, y, z = getElementPosition(record.ped)
+            local newOwner = findClosestPlayer(x, y, z, config.despawnRadius, record.owner)
+            if newOwner then
+                record.climbTest.handoffTriggered = true
+                beginHandoff(record, newOwner, "climbtest-climb")
+            else
+                stopClimbTest(record, "handoff-no-owner")
+            end
+        elseif phase == "complete" or phase == "failed" then
+            stopClimbTest(record, phase)
+        end
     elseif evidence == "failure" then
         log(("client-failure id=%d epoch=%d owner=%s reason=%s"):format(record.id, epoch, getPlayerName(client),
                                                                         type(data) == "table" and tostring(data.reason) or "unknown"), true)
@@ -658,6 +790,15 @@ addEventHandler("onPedWasted", root, function()
 end)
 
 addEventHandler("onElementDestroy", root, function()
+    local record = trafficPeds[source]
+    if record and not record.removing then
+        if record.airTest then
+            triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce,
+                               "ped-destroyed")
+            record.airTest = nil
+        end
+        stopClimbTest(record, "ped-destroyed")
+    end
     trafficPeds[source] = nil
 end)
 
@@ -736,6 +877,13 @@ setTimer(function()
                 log(("airtest-timeout id=%d epoch=%d nonce=%d"):format(record.id, record.epoch, record.airTest.nonce), true)
                 triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce, "timeout")
                 record.airTest = nil
+            elseif record.climbTest and not isElement(record.climbTest.obstacle) then
+                log(("climbtest-failed id=%d epoch=%d nonce=%d reason=obstacle-lost"):format(
+                        record.id, record.epoch, record.climbTest.nonce), true)
+                stopClimbTest(record, "obstacle-lost")
+            elseif record.climbTest and now - record.climbTest.startedAt >= 12000 then
+                log(("climbtest-timeout id=%d epoch=%d nonce=%d"):format(record.id, record.epoch, record.climbTest.nonce), true)
+                stopClimbTest(record, "timeout")
             elseif not isPedDead(record.ped) then
                 local x, y, z = getElementPosition(record.ped)
                 local closest, closestDistanceSquared = findClosestPlayer(x, y, z, config.despawnRadius)
@@ -743,10 +891,10 @@ setTimer(function()
                     removeRecord(record, "outside-residency")
                 elseif not isEligiblePlayer(record.owner) then
                     beginHandoff(record, closest, "owner-ineligible")
-                elseif record.airTest then
+                elseif record.airTest or record.climbTest then
                     -- Keep the deterministic baseline on one owner. The
-                    -- handoff variant transfers only when its owner reports
-                    -- the real SIMPLE_IN_AIR phase above.
+                    -- handoff variants transfer only when their owner reports
+                    -- the requested physical phase above.
                     record.handoffCandidate = nil
                     record.handoffCandidateSince = nil
                 elseif closest ~= record.owner then
@@ -806,6 +954,8 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         createTestVehicle(player, value)
     elseif action == "airtest" and isElement(player) then
         startAirTest(player, tostring(value or ""):lower() == "handoff")
+    elseif action == "climbtest" and isElement(player) then
+        startClimbTest(player, tostring(value or ""):lower() == "handoff")
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do

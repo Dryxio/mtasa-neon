@@ -56,9 +56,17 @@ the synchronized position and velocity and starts GTA's stock
 `CTaskComplexInAirAndLand` at the transferred phase. This avoids depending on
 the new client's local `EVENT_IN_AIR` geometry check while leaving GTA in
 control of `SIMPLE_IN_AIR -> SIMPLE_LAND`. The exact scanner call is fenced on
-observers so they cannot create a competing response. Climbing remains a
-separate checkpoint because it is anchored to a specific world entity and
-surface.
+observers so they cannot create a competing response.
+
+The climb checkpoint completes that physical branch with GTA's stock
+`SIMPLE_CLIMB` task. The owner publishes the selected grab, pull-up or vault
+clip together with its climb phase, heading, handhold, world-space contact and
+the building, object or vehicle used as its anchor. Observers present that
+result without running their own local climb scan. During a handoff, the new
+owner resolves the same synchronized anchor and resumes the complex jump chain
+at the transferred animation phase; if the anchor is no longer valid, it falls
+back through GTA's native in-air/land lifecycle rather than leaving the ped
+latched to stale geometry.
 
 The initial limits are intentionally conservative: 24 peds globally, 12 near a
 player, four per 64 m cell, one candidate request every 500 ms, at least 10 m
@@ -81,6 +89,10 @@ lease before the new epoch is assigned.
   collision testing (default model 560). It is removed on `off`, quit or stop.
 - `/pedtraffic airtest` makes the closest active traffic ped perform a native
   jump; add `handoff` to transfer ownership during the real in-air phase.
+- `/pedtraffic climbtest` places a shared road barrier in front of the closest
+  active ped and makes it enter GTA's native climb/vault task; add `handoff` to
+  transfer ownership while `TASK_SIMPLE_CLIMB` is active. The resource removes
+  the temporary barrier on completion, failure, `off` or resource shutdown.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
 and civilian-only. Ambient vehicle population, cops, gangs, dealers, couples,
@@ -176,10 +188,11 @@ up every resource-owned element.
 
 Current boundaries for this checkpoint are explicit. GTA's rare
 `VEHICLE_COLLISION -> JUMP -> IN_AIR_AND_LAND` branch now uses the shared
-airborne presentation, while climbing and a remote driver's horn-only gesture
-are not bridged. Car-impact fall/get-up is cleared narrowly on the old owner
-during a handoff; bullet, explosion and unrelated physical-response tasks are
-preserved.
+airborne presentation, while the remote driver's horn-only gesture is not
+bridged. Climbing uses the same owner-only physical presentation and transfers
+its synchronized world anchor during a handoff. Car-impact fall/get-up is
+cleared narrowly on the old owner during a handoff; bullet, explosion and
+unrelated physical-response tasks are preserved.
 
 ## Airborne lifecycle checkpoint
 
@@ -197,6 +210,27 @@ preserved.
 `setPedJump(ped [, allowClimb = true])` is the reusable owner-side primitive
 used by this deterministic test. The harness passes `false` so a nearby ledge
 cannot turn the baseline into the separate climb lifecycle.
+
+## Climb/vault lifecycle checkpoint
+
+1. Stand on flat outdoor ground with both clients close together, enable debug
+   traffic, and wait for an active ped within 30 metres.
+2. Run `/pedtraffic climbtest`. The harness moves that ped in front of one
+   resource-owned road barrier, then dispatches `setPedJump(ped, true)` on its
+   owner. Both clients should see the same launch, grab/vault, pull-up and
+   recovery without a duplicate local climb.
+3. Repeat with `/pedtraffic climbtest handoff`. The server transfers ownership
+   only after the old owner reports the real `TASK_SIMPLE_CLIMB` phase. The new
+   owner must remain attached to the same barrier and complete the jump chain
+   without a position, heading or animation reset.
+4. Repeat in both ownership directions. Logs should contain `launch`, `climb`
+   and the subsequent native phase (`in_air`, `land` or completion); a blocked
+   attempt is reported as `blocked`, and a test that never reaches climb fails
+   explicitly with `climb-not-entered`. Completion follows the stable removal
+   of GTA's jump task chain rather than `isPedOnGround`, which remains false on
+   some network objects even after a successful pull-up.
+5. Run `/pedtraffic off` during a prepared or active climb and confirm that the
+   temporary barrier and traffic ped are both removed.
 
 ## Checkpoint evidence
 
@@ -226,3 +260,8 @@ completed without a timeout, script error, crash or observer-side native task;
 two explicitly recorded the new owner's complete `IN_AIR -> LAND` chain. The
 third reached the ground before the next 50 ms diagnostic sample and completed
 without a residual task or velocity.
+
+The climb regression then completed both the uninterrupted and forced-handoff
+barrier cases on two clients. Observers received the native climb animation
+through completion, while the new owner reconstructed `TASK_SIMPLE_CLIMB` on
+the same barrier and finished without a timeout, task failure or crash.

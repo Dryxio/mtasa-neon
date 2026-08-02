@@ -17,6 +17,7 @@
 #include "CVehicle.h"
 #include "CPlayerTasks.h"
 #include <CMatrix.h>
+#include <net/SyncStructures.h>
 
 #define INVALID_VEHICLE_SEAT 0xFF
 #define NUM_PLAYER_STATS     343
@@ -322,8 +323,12 @@ public:
     bool IsReloadingWeapon() const noexcept { return m_reloadingWeapon; }
     void SetReloadingWeapon(bool state) noexcept { m_reloadingWeapon = state; }
 
-    bool IsNativeTaskAirborne() const noexcept { return m_nativeTaskAirborne; }
-    void SetNativeTaskAirborne(bool airborne) noexcept { m_nativeTaskAirborne = airborne; }
+    const SNativeTaskAnimationPresentationSync& GetNativeTaskPhysicalTakeover() const noexcept { return m_nativeTaskPhysicalTakeover; }
+    void                                        SetNativeTaskPhysicalTakeover(const SNativeTaskAnimationPresentationSync& presentation) noexcept
+    {
+        m_nativeTaskPhysicalTakeover =
+            SNativeTaskAnimationPresentationSync::IsPhysicalMode(presentation.data.uiMode) ? presentation : SNativeTaskAnimationPresentationSync{};
+    }
 
     bool GetCollisionEnabled() { return m_bCollisionsEnabled; }
     void SetCollisionEnabled(bool bCollisionEnabled) { m_bCollisionsEnabled = bCollisionEnabled; }
@@ -385,7 +390,7 @@ protected:
     bool                                 m_bFrozen;
     bool                                 m_bStealthAiming;
     bool                                 m_reloadingWeapon{};
-    bool                                 m_nativeTaskAirborne{};
+    SNativeTaskAnimationPresentationSync m_nativeTaskPhysicalTakeover{};
     CVehicle*                            m_pJackingVehicle;
     SPlayerAnimData                      m_animData{};
     float                                m_cameraRotation{};

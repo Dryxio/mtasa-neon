@@ -228,8 +228,9 @@ void CPedSync::Packet_PedStartSync(NetBitStreamInterface& BitStream)
             BitStream.Read(cameraRotation);
             pPed->SetCameraRotation(cameraRotation);
 
-            bool nativeTaskAirborne{};
-            BitStream.ReadBit(nativeTaskAirborne);
+            SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
+            if (!BitStream.Read(&nativeTaskPhysicalTakeover))
+                return;
 
             // Set data
             pPed->SetPosition(vecPosition);
@@ -243,7 +244,7 @@ void CPedSync::Packet_PedStartSync(NetBitStreamInterface& BitStream)
             // Set the new health
             pPed->SetHealth(fHealth);
             pPed->SetArmor(fArmor);
-            pPed->SetNativeTaskAirborneTakeoverState(nativeTaskAirborne);
+            pPed->SetNativeTaskPhysicalTakeoverState(nativeTaskPhysicalTakeover);
 
             AddPed(pPed);
         }
@@ -671,9 +672,9 @@ void CPedSync::UpdateNativeTaskAnimationPresentation()
 
     if (wrotePresentation)
     {
-        // Physical airborne edges seed the server's next-owner state. Send
-        // only those rare semantic transitions reliably; ordinary 100 ms
-        // animation progress remains unreliable and bandwidth-bounded.
+        // Physical mode and climb-phase edges seed the server's next-owner
+        // state. Send only those rare semantic transitions reliably; ordinary
+        // 100 ms animation progress remains unreliable and bandwidth-bounded.
         const NetPacketReliability reliability = reliableSemanticTransition ? PACKET_RELIABILITY_RELIABLE_ORDERED : PACKET_RELIABILITY_UNRELIABLE_SEQUENCED;
         g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, reliability, PACKET_ORDERING_NATIVE_TASK_PRESENTATION);
     }
@@ -687,7 +688,9 @@ bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitS
 
     const SNativeTaskAnimationPresentationResult presentationResult = pPed->GetNativeTaskAnimationPresentation();
     SNativeTaskAnimationPresentationSync         presentation = presentationResult.presentation;
-    if (presentationResult.airborne && SNativeTaskAnimationPresentationSync::IsAnimationMode(presentation.data.uiMode))
+    if (presentationResult.climbing && SNativeTaskAnimationPresentationSync::IsAnimationMode(presentation.data.uiMode))
+        presentation.data.uiMode = SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
+    else if (presentationResult.airborne && SNativeTaskAnimationPresentationSync::IsAnimationMode(presentation.data.uiMode))
         presentation.data.uiMode = SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
     const SNativeTaskAnimationPresentationSync& lastPresentation = pPed->m_LastSyncedData->nativeTaskAnimationPresentation;
     const bool                                  resetPending = pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending;
@@ -709,27 +712,61 @@ bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitS
             // airborne phase. Preserve the terminal clip while still
             // publishing the new physical semantic, so observers launch and
             // land on the same transition as the owner.
-            presentation.data.uiMode =
-                presentationResult.airborne ? SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION : SNativeTaskAnimationPresentationSync::ANIMATION;
+            if (presentationResult.climbing)
+            {
+                // CLIMB requires a validated anchor and phase payload. During
+                // the initial SimpleClimb association gap, keep the previous
+                // terminal jump semantic until the first coherent climb
+                // sample; relabelling that frame would serialize zero anchor
+                // metadata and invalidate the entire packet.
+                if (lastPresentation.data.uiMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION)
+                    presentation.data.uiMode = SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
+            }
+            else
+            {
+                presentation.data.uiMode =
+                    presentationResult.airborne ? SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION : SNativeTaskAnimationPresentationSync::ANIMATION;
+            }
             presentation.data.fProgress = 1.0f;
             presentation.data.fBlendAmount = 1.0f;
             forcePhysicalTransitionHold = true;
         }
     }
 
+    const bool climbStateChanged =
+        presentation.data.uiMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION &&
+        (presentation.data.vecClimbHandhold != lastPresentation.data.vecClimbHandhold ||
+         presentation.data.vecClimbWorldHandhold != lastPresentation.data.vecClimbWorldHandhold ||
+         presentation.data.vecClimbAnchorPosition != lastPresentation.data.vecClimbAnchorPosition ||
+         presentation.data.fClimbHeading != lastPresentation.data.fClimbHeading ||
+         presentation.data.usClimbAnchorModel != lastPresentation.data.usClimbAnchorModel ||
+         presentation.data.ucClimbAnchorType != lastPresentation.data.ucClimbAnchorType ||
+         presentation.data.ucClimbSurfaceType != lastPresentation.data.ucClimbSurfaceType ||
+         presentation.data.ucClimbAnimationPhase != lastPresentation.data.ucClimbAnimationPhase ||
+         presentation.data.ucClimbPositionPhase != lastPresentation.data.ucClimbPositionPhase ||
+         presentation.data.usClimbGetToPositionCounter != lastPresentation.data.usClimbGetToPositionCounter ||
+         presentation.data.bForceClimb != lastPresentation.data.bForceClimb || presentation.data.bInvalidClimb != lastPresentation.data.bInvalidClimb ||
+         presentation.data.bClimbChangePosition != lastPresentation.data.bClimbChangePosition ||
+         presentation.data.bClimbAnimationPlaying != lastPresentation.data.bClimbAnimationPlaying);
     const bool changed = presentation.data.uiMode != lastPresentation.data.uiMode || presentation.data.usAnimGroup != lastPresentation.data.usAnimGroup ||
                          presentation.data.usAnimId != lastPresentation.data.usAnimId || presentation.data.fProgress != lastPresentation.data.fProgress ||
                          presentation.data.fSpeed != lastPresentation.data.fSpeed || presentation.data.fBlendAmount != lastPresentation.data.fBlendAmount ||
-                         presentation.data.fHeading != lastPresentation.data.fHeading;
+                         presentation.data.fHeading != lastPresentation.data.fHeading || climbStateChanged;
     if (!forcePhysicalTransitionHold && presentation.data.uiMode == SNativeTaskAnimationPresentationSync::NONE && !changed &&
         !pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending)
     {
         return false;
     }
 
-    const bool airborne = presentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
-    const bool wasAirborne = lastPresentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
-    reliableSemanticTransition |= airborne != wasAirborne;
+    const bool physical = SNativeTaskAnimationPresentationSync::IsPhysicalMode(presentation.data.uiMode);
+    const bool wasPhysical = SNativeTaskAnimationPresentationSync::IsPhysicalMode(lastPresentation.data.uiMode);
+    const bool climbPhaseChanged = presentation.data.uiMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION &&
+                                   (presentation.data.ucClimbAnimationPhase != lastPresentation.data.ucClimbAnimationPhase ||
+                                    presentation.data.ucClimbPositionPhase != lastPresentation.data.ucClimbPositionPhase ||
+                                    presentation.data.bInvalidClimb != lastPresentation.data.bInvalidClimb ||
+                                    presentation.data.bClimbChangePosition != lastPresentation.data.bClimbChangePosition ||
+                                    presentation.data.bClimbAnimationPlaying != lastPresentation.data.bClimbAnimationPlaying);
+    reliableSemanticTransition |= physical != wasPhysical || (physical && presentation.data.uiMode != lastPresentation.data.uiMode) || climbPhaseChanged;
 
     pBitStream->Write(pPed->GetID());
     pBitStream->Write(pPed->GetSyncTimeContext());

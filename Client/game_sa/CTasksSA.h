@@ -135,6 +135,8 @@ public:
                                                                   float fPositionChangeTolerance);
     CTaskComplex*                CreateTaskComplexJump(bool bAllowClimb = true);
     CTaskComplex*                CreateTaskComplexInAirAndLand(bool bUsingJumpGlide = true, bool bUsingFallGlide = false);
+    CTaskComplex*                CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state);
+    CTaskComplex*                CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true);
 
     static void StaticSetHooks();
 };

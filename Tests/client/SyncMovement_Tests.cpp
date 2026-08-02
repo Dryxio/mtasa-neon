@@ -333,13 +333,73 @@ TEST(SNativeTaskAnimationPresentationSync, AirborneRoundTrip)
     EXPECT_FLOAT_EQ(source.data.fHeading, decoded.data.fHeading);
 }
 
-TEST(SNativeTaskAnimationPresentationSync, RejectsReservedMode)
+TEST(SNativeTaskAnimationPresentationSync, ClimbRoundTrip)
 {
-    MockBitStream bitStream;
-    unsigned int  reservedMode = 3;
-    bitStream.WriteBits(reinterpret_cast<const char*>(&reservedMode), SNativeTaskAnimationPresentationSync::BITCOUNT);
-    bitStream.ResetReadPointer();
+    MockBitStream                        bitStream(static_cast<unsigned short>(eBitStreamVersion::Latest));
+    SNativeTaskAnimationPresentationSync source;
+    source.data.uiMode = SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
+    source.data.usAnimGroup = 0;
+    source.data.usAnimId = 130;
+    source.data.fProgress = 0.45f;
+    source.data.fSpeed = 1.1f;
+    source.data.fBlendAmount = 0.85f;
+    source.data.fHeading = 1.25f;
+    source.data.vecClimbHandhold = CVector(1.0f, 2.0f, 3.0f);
+    source.data.vecClimbWorldHandhold = CVector(101.0f, 202.0f, 13.0f);
+    source.data.vecClimbAnchorPosition = CVector(100.0f, 200.0f, 10.0f);
+    source.data.fClimbHeading = -0.5f;
+    source.data.usClimbAnchorModel = 1422;
+    source.data.ucClimbAnchorType = 4;
+    source.data.ucClimbSurfaceType = 1;
+    source.data.ucClimbAnimationPhase = 2;
+    source.data.ucClimbPositionPhase = 1;
+    source.data.usClimbGetToPositionCounter = 321;
+    source.data.bForceClimb = true;
+    source.data.bInvalidClimb = false;
+    source.data.bClimbChangePosition = true;
+    source.data.bClimbAnimationPlaying = true;
+    bitStream.Write(&source);
 
+    bitStream.ResetReadPointer();
+    SNativeTaskAnimationPresentationSync decoded;
+    ASSERT_TRUE(bitStream.Read(&decoded));
+    EXPECT_EQ(SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION, decoded.data.uiMode);
+    EXPECT_EQ(source.data.usAnimId, decoded.data.usAnimId);
+    EXPECT_EQ(source.data.vecClimbHandhold, decoded.data.vecClimbHandhold);
+    EXPECT_EQ(source.data.vecClimbWorldHandhold, decoded.data.vecClimbWorldHandhold);
+    EXPECT_EQ(source.data.vecClimbAnchorPosition, decoded.data.vecClimbAnchorPosition);
+    EXPECT_FLOAT_EQ(source.data.fClimbHeading, decoded.data.fClimbHeading);
+    EXPECT_EQ(source.data.usClimbAnchorModel, decoded.data.usClimbAnchorModel);
+    EXPECT_EQ(source.data.ucClimbAnchorType, decoded.data.ucClimbAnchorType);
+    EXPECT_EQ(source.data.ucClimbSurfaceType, decoded.data.ucClimbSurfaceType);
+    EXPECT_EQ(source.data.ucClimbAnimationPhase, decoded.data.ucClimbAnimationPhase);
+    EXPECT_EQ(source.data.ucClimbPositionPhase, decoded.data.ucClimbPositionPhase);
+    EXPECT_EQ(source.data.usClimbGetToPositionCounter, decoded.data.usClimbGetToPositionCounter);
+    EXPECT_EQ(source.data.bForceClimb, decoded.data.bForceClimb);
+    EXPECT_EQ(source.data.bInvalidClimb, decoded.data.bInvalidClimb);
+    EXPECT_EQ(source.data.bClimbChangePosition, decoded.data.bClimbChangePosition);
+    EXPECT_EQ(source.data.bClimbAnimationPlaying, decoded.data.bClimbAnimationPlaying);
+}
+
+TEST(SNativeTaskAnimationPresentationSync, RejectsInvalidClimbPhase)
+{
+    MockBitStream                        bitStream;
+    SNativeTaskAnimationPresentationSync source;
+    source.data.uiMode = SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
+    source.data.usAnimGroup = 0;
+    source.data.usAnimId = 130;
+    source.data.fProgress = 0.5f;
+    source.data.fSpeed = 1.0f;
+    source.data.fBlendAmount = 1.0f;
+    source.data.vecClimbHandhold = CVector(1.0f, 2.0f, 3.0f);
+    source.data.vecClimbWorldHandhold = CVector(1.0f, 2.0f, 3.0f);
+    source.data.vecClimbAnchorPosition = CVector(1.0f, 2.0f, 0.0f);
+    source.data.usClimbAnchorModel = 1422;
+    source.data.ucClimbAnchorType = 4;
+    source.data.ucClimbAnimationPhase = 0;
+    bitStream.Write(&source);
+
+    bitStream.ResetReadPointer();
     SNativeTaskAnimationPresentationSync decoded;
     EXPECT_FALSE(bitStream.Read(&decoded));
 }

@@ -435,6 +435,46 @@ CTaskComplex* CTasksSA::CreateTaskComplexInAirAndLand(bool bUsingJumpGlide, bool
     return pTask;
 }
 
+CTaskComplex* CTasksSA::CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state)
+{
+    CEntitySAInterface* pClimbEnt = CTaskSimpleClimbSA::ResolveTakeoverAnchor(pPed, state);
+    if (!pClimbEnt)
+        return nullptr;
+
+    // Always construct GRAB first. GTA's PULLUP branch assumes an existing
+    // animation association and dereferences it before creating CLIMB_PULL.
+    auto* climbTask = NewTask<CTaskSimpleClimbSA>(pClimbEnt, state.handhold, state.handholdHeading, state.surfaceType, CLIMB_GRAB, state.forceClimb);
+    if (!climbTask || !climbTask->PrepareTakeoverState(pPed, state))
+    {
+        if (climbTask)
+            climbTask->Destroy();
+        return nullptr;
+    }
+
+    auto* rootTask = NewTask<CTaskComplexJumpSA>(state.forceClimb ? 1 : 0);
+    if (!rootTask)
+    {
+        climbTask->Destroy();
+        return nullptr;
+    }
+
+    // The leaf cannot safely live directly in CTaskManager: on abort or an
+    // invalid anchor, CTaskComplexJump consumes its invalid-climb state and
+    // continues through InAirAndLand. Preserve that native parent lifecycle
+    // while replacing only the already-completed launch subtask.
+    m_pTaskManagementSystem->AddTask(climbTask);
+    m_pTaskManagementSystem->AddTask(rootTask);
+    rootTask->SetSubTask(climbTask);
+    return rootTask;
+}
+
+CTaskComplex* CTasksSA::CreateTaskComplexJumpForScriptPed(bool bAllowClimb)
+{
+    auto* pTask = NewTask<CTaskComplexJumpSA>(bAllowClimb ? 1 : -1);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
 CTaskSimpleStandStill* CTasksSA::CreateTaskSimpleStandStill(int iDuration)
 {
     auto* pTask = NewTask<CTaskSimpleStandStillSA>(iDuration);

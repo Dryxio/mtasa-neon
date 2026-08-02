@@ -6,6 +6,7 @@ local avoidanceStates = {}
 local threatStates = {}
 local vehicleReactionStates = {}
 local airTestSessions = {}
+local climbTestSessions = {}
 local healthStates = {}
 local observedAimTargets = {}
 local nativeDamageObservations = {}
@@ -184,7 +185,7 @@ local vehicleReactionTaskNames = {
     TASK_SIMPLE_IN_AIR = true,
 }
 
-local airborneTaskNames = {
+local jumpLifecycleTaskNames = {
     TASK_COMPLEX_JUMP = true,
     TASK_SIMPLE_JUMP = true,
     TASK_COMPLEX_IN_AIR_AND_LAND = true,
@@ -193,9 +194,10 @@ local airborneTaskNames = {
     TASK_SIMPLE_HIT_HEAD = true,
     TASK_SIMPLE_FALL = true,
     TASK_SIMPLE_GET_UP = true,
+    TASK_SIMPLE_CLIMB = true,
 }
 
-local function getAirborneState(ped)
+local function getJumpLifecycleState(ped)
     if type(getPedTask) ~= "function" then
         return false, false
     end
@@ -203,7 +205,7 @@ local function getAirborneState(ped)
         local hierarchy = {getPedTask(ped, "primary", slot)}
         if hierarchy[1] ~= false then
             for _, taskName in ipairs(hierarchy) do
-                if airborneTaskNames[taskName] then
+                if jumpLifecycleTaskNames[taskName] then
                     return hierarchy[1], hierarchy[#hierarchy]
                 end
             end
@@ -212,7 +214,7 @@ local function getAirborneState(ped)
     return false, false
 end
 
-local function classifyAirbornePhase(leaf)
+local function classifyJumpLifecyclePhase(leaf)
     if leaf == "TASK_SIMPLE_JUMP" then
         return "launch"
     elseif leaf == "TASK_SIMPLE_IN_AIR" then
@@ -225,8 +227,34 @@ local function classifyAirbornePhase(leaf)
         return "fall"
     elseif leaf == "TASK_SIMPLE_GET_UP" then
         return "get_up"
+    elseif leaf == "TASK_SIMPLE_CLIMB" then
+        return "climb"
     end
     return "none"
+end
+
+local PHYSICAL_LIFECYCLE_CLEAR_GRACE = 250
+
+local function hasJumpLifecycleSettled(state, leaf, sawField, clearSinceField)
+    local now = getTickCount()
+    if leaf then
+        state[sawField] = true
+        state[clearSinceField] = nil
+        return false
+    end
+    if not state[sawField] then
+        return false
+    end
+
+    -- isPedOnGround remains false after a successful climb onto some network
+    -- objects. The native jump chain disappearing is the authoritative end of
+    -- the physical lifecycle; debounce it so a one-frame task transition does
+    -- not restore Wander in the middle of a handoff.
+    if not state[clearSinceField] then
+        state[clearSinceField] = now
+        return false
+    end
+    return now - state[clearSinceField] >= PHYSICAL_LIFECYCLE_CLEAR_GRACE
 end
 
 local function getVehicleReactionState(ped)
@@ -249,12 +277,12 @@ local function getVehicleReactionState(ped)
     return false, false
 end
 
-local function releaseTask(task, killNativeTask, preserveAirborneTask)
+local function releaseTask(task, killNativeTask, preservePhysicalTask)
     clearTimer(task, "retryTimer")
     clearTimer(task, "monitorTimer")
     clearTimer(task, "resumeTimer")
-    clearTimer(task, "airRestoreTimer")
-    if killNativeTask and task.accepted and not preserveAirborneTask and isElement(task.ped) then
+    clearTimer(task, "physicalRestoreTimer")
+    if killNativeTask and task.accepted and not preservePhysicalTask and isElement(task.ped) then
         killPedTask(task.ped, "primary", 3, false)
     end
     if task.lease then
@@ -326,8 +354,8 @@ local function beginAssignment(task)
 
         stats.assignments = stats.assignments + 1
         report(task, "accepted")
-        log(("accepted epoch=%d direction=%d reason=%s resumedAirborne=%s"):format(
-                task.epoch, task.direction, tostring(task.reason), tostring(task.resumeAirborne)))
+        log(("accepted epoch=%d direction=%d reason=%s resumedPhysical=%s"):format(
+                task.epoch, task.direction, tostring(task.reason), tostring(task.resumePhysical)))
         task.monitorTimer = setTimer(function()
             if assignments[task.ped] ~= task then
                 return
@@ -345,38 +373,35 @@ local function beginAssignment(task)
         end, 1000, 0)
     end
 
-    if task.resumeAirborne then
+    if task.resumePhysical then
         -- Assignment retries are normal while the server waits for the
-        -- accepted evidence. Keep exactly one landing waiter per epoch.
+        -- accepted evidence. Keep exactly one physical-completion waiter per
+        -- epoch.
         if task.resumePending then
             return
         end
         task.resumePending = true
         task.resumeStartedAt = getTickCount()
-        local function waitForLanding()
+        local function waitForPhysicalCompletion()
             if assignments[task.ped] ~= task or not isElement(task.ped) or not isElementSyncer(task.ped) then
                 return
             end
 
-            local _, leaf = getAirborneState(task.ped)
+            local _, leaf = getJumpLifecycleState(task.ped)
             local elapsed = getTickCount() - task.resumeStartedAt
-            local grounded = type(isPedOnGround) == "function" and isPedOnGround(task.ped)
-            if leaf or grounded == false then
-                task.resumeSawAirborne = true
-            end
-            if not task.resumeSawAirborne or leaf or grounded == false then
+            if not hasJumpLifecycleSettled(task, leaf, "resumeSawPhysical", "resumeClearSince") then
                 if elapsed >= 6000 then
                     task.resumePending = false
-                    return fail(task, "airborne-resume-timeout")
+                    return fail(task, "physical-resume-timeout")
                 end
                 clearTimer(task, "resumeTimer")
-                task.resumeTimer = setTimer(waitForLanding, 50, 1)
+                task.resumeTimer = setTimer(waitForPhysicalCompletion, 50, 1)
                 return
             end
             task.resumePending = false
             installWander()
         end
-        waitForLanding()
+        waitForPhysicalCompletion()
         return
     end
 
@@ -391,6 +416,7 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
     log("enabled=" .. tostring(enabled))
     if not enabled then
         airTestSessions = {}
+        climbTestSessions = {}
         local current = {}
         for _, task in pairs(assignments) do current[#current + 1] = task end
         for _, task in ipairs(current) do releaseTask(task, true) end
@@ -428,7 +454,7 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId)
 end)
 
 addEvent("pedTraffic:assign", true)
-addEventHandler("pedTraffic:assign", resourceRoot, function(ped, epoch, direction, reason, resumeAirborne)
+addEventHandler("pedTraffic:assign", resourceRoot, function(ped, epoch, direction, reason, resumePhysical)
     if not enabled or not isElement(ped) then
         return
     end
@@ -451,7 +477,7 @@ addEventHandler("pedTraffic:assign", resourceRoot, function(ped, epoch, directio
         reason = reason,
         requestedAt = getTickCount(),
         accepted = false,
-        resumeAirborne = resumeAirborne == true,
+        resumePhysical = resumePhysical == true,
     }
     assignments[ped] = task
     beginAssignment(task)
@@ -464,10 +490,10 @@ addEventHandler("pedTraffic:revoke", resourceRoot, function(ped, epoch, reason)
         return
     end
     log(("revoke epoch=%d reason=%s"):format(epoch, tostring(reason)))
-    -- During the deterministic in-air handoff, the C++ stop-sync transition
+    -- During a deterministic physical handoff, the C++ stop-sync transition
     -- removes the exact jump chain. Killing primary here would publish NONE
-    -- before the reliable airborne edge can seed the new owner.
-    releaseTask(task, true, reason == "airtest-in-air")
+    -- before the reliable physical edge can seed the new owner.
+    releaseTask(task, true, reason == "airtest-in-air" or reason == "climbtest-climb")
     report(task, "released", {reason = reason})
 end)
 
@@ -480,39 +506,38 @@ addEventHandler("pedTraffic:stop", resourceRoot, function(ped, epoch, reason)
     end
 end)
 
-addEvent("pedTraffic:airTestWatch", true)
-addEventHandler("pedTraffic:airTestWatch", resourceRoot, function(ped, epoch, nonce, forceHandoff)
+local function watchPhysicalTest(sessions, kind, ped, epoch, nonce, forceHandoff)
     if not isElement(ped) then
         return
     end
 
-    local previous = airTestSessions[ped]
+    local previous = sessions[ped]
     local sameTest = previous and previous.nonce == nonce
     local continuedAfterHandoff = sameTest and epoch > previous.epoch
-    airTestSessions[ped] = {
+    sessions[ped] = {
         ped = ped,
         epoch = epoch,
         nonce = nonce,
         forceHandoff = forceHandoff == true,
         startedAt = sameTest and previous.startedAt or getTickCount(),
         lastPhase = sameTest and previous.lastPhase or nil,
-        -- A new owner may receive the physical airborne StartSync state without
+        -- A new owner may receive the physical StartSync state without
         -- exposing a local task leaf before contact. Advancing the same nonce
-        -- to a newer epoch proves that the previous owner observed IN_AIR and
-        -- that the server actually committed the forced handoff.
+        -- to a newer epoch proves that the previous owner observed the target
+        -- phase and that the server actually committed the forced handoff.
         sawActive = sameTest and (previous.sawActive or continuedAfterHandoff) or false,
+        sawTarget = sameTest and (previous.sawTarget or continuedAfterHandoff) or false,
         startedLocally = sameTest and previous.startedLocally or false,
     }
-    log(("airtest-watch id=%s epoch=%d nonce=%d handoff=%s"):format(
-            tostring(getElementData(ped, "neon:ambientPedTrafficId")), epoch, nonce, tostring(forceHandoff)))
-end)
+    log(("%stest-watch id=%s epoch=%d nonce=%d handoff=%s"):format(
+            kind, tostring(getElementData(ped, "neon:ambientPedTrafficId")), epoch, nonce, tostring(forceHandoff)))
+end
 
-addEvent("pedTraffic:airTest", true)
-addEventHandler("pedTraffic:airTest", resourceRoot, function(ped, epoch, nonce)
+local function dispatchPhysicalTest(sessions, kind, allowClimb, ped, epoch, nonce)
     local task = assignments[ped]
-    local session = airTestSessions[ped]
+    local session = sessions[ped]
     local function reportFailure(reason)
-        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, epoch, "airtest-phase",
+        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, epoch, kind .. "test-phase",
                            {nonce = nonce, phase = "failed", reason = reason})
     end
     if not task or task.epoch ~= epoch or not session or session.nonce ~= nonce or not isElement(ped) or not isElementSyncer(ped) or
@@ -521,60 +546,92 @@ addEventHandler("pedTraffic:airTest", resourceRoot, function(ped, epoch, nonce)
         return
     end
 
-    local existingRoot = getAirborneState(ped)
+    local existingRoot = getJumpLifecycleState(ped)
     if existingRoot or (type(isPedOnGround) == "function" and not isPedOnGround(ped)) then
         reportFailure("ped-not-grounded")
         return
     end
-    if not setPedJump(ped, false) then
+    if not setPedJump(ped, allowClimb) then
         reportFailure("jump-dispatch-refused")
         return
     end
     session.startedLocally = true
-    log(("airtest-dispatched id=%s epoch=%d nonce=%d"):format(
-            tostring(getElementData(ped, "neon:ambientPedTrafficId")), epoch, nonce), 3)
-end)
+    log(("%stest-dispatched id=%s epoch=%d nonce=%d"):format(
+            kind, tostring(getElementData(ped, "neon:ambientPedTrafficId")), epoch, nonce), 3)
+end
 
-addEvent("pedTraffic:airTestStop", true)
-addEventHandler("pedTraffic:airTestStop", resourceRoot, function(ped, epoch, nonce, reason)
-    local session = airTestSessions[ped]
-    if session and session.nonce == nonce then
-        log(("airtest-stop id=%s epoch=%d nonce=%d reason=%s"):format(
-                tostring(isElement(ped) and getElementData(ped, "neon:ambientPedTrafficId") or false), session.epoch, nonce,
-                tostring(reason)), 3)
-        airTestSessions[ped] = nil
-    end
-
-    if reason ~= "timeout" and reason ~= "failed" and reason ~= "handoff-no-owner" then
-        return
-    end
+local function restoreWanderAfterPhysicalTest(ped, epoch)
     local task = assignments[ped]
-    if not task or task.epoch ~= epoch or task.airRestorePending or not isElement(ped) or not isElementSyncer(ped) then
+    if not task or task.epoch ~= epoch or task.physicalRestorePending or not isElement(ped) or not isElementSyncer(ped) then
         return
     end
 
     -- A stopped diagnostic must not leave its ped idle, but restoring Wander
-    -- while the native jump still owns the body would invalidate the test and
-    -- can cut the landing short. Wait for genuine ground contact first.
-    task.airRestorePending = true
+    -- while the native jump chain still owns the body would invalidate the
+    -- test and can cut the landing short. Wait for genuine ground contact.
+    task.physicalRestorePending = true
     local restoreStartedAt = getTickCount()
     local function restoreWander()
         if assignments[ped] ~= task or not isElement(ped) or not isElementSyncer(ped) then
             return
         end
-        local _, leaf = getAirborneState(ped)
+        local _, leaf = getJumpLifecycleState(ped)
         local grounded = type(isPedOnGround) ~= "function" or isPedOnGround(ped)
         if (leaf or not grounded) and getTickCount() - restoreStartedAt < 6000 then
-            clearTimer(task, "airRestoreTimer")
-            task.airRestoreTimer = setTimer(restoreWander, 50, 1)
+            clearTimer(task, "physicalRestoreTimer")
+            task.physicalRestoreTimer = setTimer(restoreWander, 50, 1)
             return
         end
-        task.airRestorePending = false
+        task.physicalRestorePending = false
         if not leaf and grounded then
             setPedWander(ped, "walk", task.direction, true)
         end
     end
     restoreWander()
+end
+
+local function stopPhysicalTest(sessions, kind, ped, epoch, nonce, reason)
+    local session = sessions[ped]
+    if session and session.nonce == nonce then
+        log(("%stest-stop id=%s epoch=%d nonce=%d reason=%s"):format(
+                kind, tostring(isElement(ped) and getElementData(ped, "neon:ambientPedTrafficId") or false), session.epoch, nonce,
+                tostring(reason)), 3)
+        sessions[ped] = nil
+    end
+
+    if reason ~= "complete" then
+        restoreWanderAfterPhysicalTest(ped, epoch)
+    end
+end
+
+addEvent("pedTraffic:airTestWatch", true)
+addEventHandler("pedTraffic:airTestWatch", resourceRoot, function(ped, epoch, nonce, forceHandoff)
+    watchPhysicalTest(airTestSessions, "air", ped, epoch, nonce, forceHandoff)
+end)
+
+addEvent("pedTraffic:airTest", true)
+addEventHandler("pedTraffic:airTest", resourceRoot, function(ped, epoch, nonce)
+    dispatchPhysicalTest(airTestSessions, "air", false, ped, epoch, nonce)
+end)
+
+addEvent("pedTraffic:airTestStop", true)
+addEventHandler("pedTraffic:airTestStop", resourceRoot, function(ped, epoch, nonce, reason)
+    stopPhysicalTest(airTestSessions, "air", ped, epoch, nonce, reason)
+end)
+
+addEvent("pedTraffic:climbTestWatch", true)
+addEventHandler("pedTraffic:climbTestWatch", resourceRoot, function(ped, epoch, nonce, forceHandoff)
+    watchPhysicalTest(climbTestSessions, "climb", ped, epoch, nonce, forceHandoff)
+end)
+
+addEvent("pedTraffic:climbTest", true)
+addEventHandler("pedTraffic:climbTest", resourceRoot, function(ped, epoch, nonce)
+    dispatchPhysicalTest(climbTestSessions, "climb", true, ped, epoch, nonce)
+end)
+
+addEvent("pedTraffic:climbTestStop", true)
+addEventHandler("pedTraffic:climbTestStop", resourceRoot, function(ped, epoch, nonce, reason)
+    stopPhysicalTest(climbTestSessions, "climb", ped, epoch, nonce, reason)
 end)
 
 addEvent("pedTraffic:gunAimedAt", true)
@@ -722,6 +779,7 @@ addEventHandler("onClientElementDestroy", root, function()
     nativeDamageObservations[source] = nil
     vehicleReactionStates[source] = nil
     airTestSessions[source] = nil
+    climbTestSessions[source] = nil
     local task = assignments[source]
     if task then releaseTask(task, false) end
     releaseTrafficEventProfile(source)
@@ -740,6 +798,7 @@ end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
     airTestSessions = {}
+    climbTestSessions = {}
     local current = {}
     for _, task in pairs(assignments) do current[#current + 1] = task end
     for _, task in ipairs(current) do releaseTask(task, true) end
@@ -758,68 +817,85 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
     triggerServerEvent("pedTraffic:ready", resourceRoot)
 end)
 
-setTimer(function()
-    for ped, session in pairs(airTestSessions) do
-        if not isElement(ped) or getTickCount() - session.startedAt > 8000 then
-            airTestSessions[ped] = nil
+local function monitorPhysicalTestSessions(sessions, kind, targetPhase, maximumAge)
+    for ped, session in pairs(sessions) do
+        if not isElement(ped) or getTickCount() - session.startedAt > maximumAge then
+            sessions[ped] = nil
         else
-            local rootTask, leafTask = getAirborneState(ped)
-            local phase = classifyAirbornePhase(leafTask)
+            local rootTask, leafTask = getJumpLifecycleState(ped)
+            local phase = classifyJumpLifecyclePhase(leafTask)
             local owner = isElementSyncer(ped)
             local grounded = type(isPedOnGround) == "function" and isPedOnGround(ped) or false
             if phase ~= "none" then
                 session.sawActive = true
+                if owner then
+                    session.sawLocalLifecycle = true
+                end
+            end
+            if phase == targetPhase then
+                session.sawTarget = true
             end
 
             if session.lastPhase ~= phase then
                 local x, y, z = getElementPosition(ped)
                 local vx, vy, vz = getElementVelocity(ped)
-                log(("airtest-transition id=%s epoch=%d nonce=%d role=%s phase=%s task=%s/%s grounded=%s pos=(%.3f,%.3f,%.3f) velocity=(%.4f,%.4f,%.4f)"):format(
-                        tostring(getElementData(ped, "neon:ambientPedTrafficId")), session.epoch, session.nonce,
+                log(("%stest-transition id=%s epoch=%d nonce=%d role=%s phase=%s task=%s/%s grounded=%s pos=(%.3f,%.3f,%.3f) velocity=(%.4f,%.4f,%.4f)"):format(
+                        kind, tostring(getElementData(ped, "neon:ambientPedTrafficId")), session.epoch, session.nonce,
                         owner and "owner" or "observer", phase, tostring(rootTask), tostring(leafTask), tostring(grounded), x, y, z, vx, vy, vz), 3)
                 session.lastPhase = phase
 
                 local assignment = assignments[ped]
-                if phase == "in_air" then
-                    session.inAirObservedAt = getTickCount()
-                    session.inAirReported = false
+                if phase == targetPhase then
+                    session.targetObservedAt = getTickCount()
+                    session.targetReported = false
                 elseif owner and assignment and assignment.epoch == session.epoch and phase ~= "none" then
-                    triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, "airtest-phase",
+                    triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, kind .. "test-phase",
                                        {nonce = session.nonce, phase = phase})
                 end
             end
 
-            -- Keep one observation interval between the real IN_AIR edge and
-            -- the forced handoff so the reliable semantic reaches StartSync.
-            -- GTA can enter SIMPLE_LAND after roughly 150 ms while the body is
-            -- still airborne, so that early landing window remains eligible.
-            local handoffWindow = phase == "in_air" or (phase == "land" and not grounded)
-            if owner and handoffWindow and not session.inAirReported and session.inAirObservedAt and
-                getTickCount() - session.inAirObservedAt >= 50 then
+            -- Keep at least one observation interval after the target edge so
+            -- its reliable physical semantic can reach StartSync. GTA may
+            -- enter SIMPLE_LAND quickly, so the airborne test keeps that early
+            -- landing window eligible; climb must still be actively anchored.
+            local handoffWindow = phase == targetPhase or (kind == "air" and phase == "land" and not grounded)
+            local observationDelay = kind == "climb" and 250 or 50
+            if owner and handoffWindow and not session.targetReported and session.targetObservedAt and
+                getTickCount() - session.targetObservedAt >= observationDelay then
                 local assignment = assignments[ped]
                 if assignment and assignment.epoch == session.epoch then
-                    session.inAirReported = true
-                    triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, "airtest-phase",
-                                       {nonce = session.nonce, phase = "in_air"})
+                    session.targetReported = true
+                    triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, kind .. "test-phase",
+                                       {nonce = session.nonce, phase = targetPhase})
                 end
             end
 
-            if owner and session.sawActive and phase == "none" and not session.completeSent and
-                (type(isPedOnGround) ~= "function" or isPedOnGround(ped)) then
+            local lifecycleSettled = hasJumpLifecycleSettled(session, leafTask, "sawLocalLifecycle", "clearSince")
+            if owner and lifecycleSettled and not session.completeSent then
                 local assignment = assignments[ped]
                 if assignment and assignment.epoch == session.epoch and assignment.accepted then
-                    if session.startedLocally and not assignment.resumeAirborne and not setPedWander(ped, "walk", assignment.direction, true) then
-                        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, "airtest-phase",
-                                           {nonce = session.nonce, phase = "failed"})
+                    if kind == "climb" and not session.sawTarget then
+                        session.completeSent = true
+                        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, "climbtest-phase",
+                                           {nonce = session.nonce, phase = "failed", reason = "climb-not-entered"})
+                    elseif session.startedLocally and not assignment.resumePhysical and
+                        not setPedWander(ped, "walk", assignment.direction, true) then
+                        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, kind .. "test-phase",
+                                           {nonce = session.nonce, phase = "failed", reason = "wander-restore-refused"})
                     else
                         session.completeSent = true
-                        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, "airtest-phase",
+                        triggerServerEvent("pedTraffic:evidence", resourceRoot, ped, session.epoch, kind .. "test-phase",
                                            {nonce = session.nonce, phase = "complete"})
                     end
                 end
             end
         end
     end
+end
+
+setTimer(function()
+    monitorPhysicalTestSessions(airTestSessions, "air", "in_air", 8000)
+    monitorPhysicalTestSessions(climbTestSessions, "climb", "climb", 12000)
 end, 50, 0)
 
 setTimer(function()

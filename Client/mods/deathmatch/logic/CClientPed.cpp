@@ -2012,12 +2012,15 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
         return result;
     }
 
-    CTask*      presentationTask = nullptr;
-    const char* selection = "none";
-    bool        physicalPresentation = false;
-    bool        spatialBurstPresentation = false;
-    bool        airbornePresentation = false;
-    const auto  selectSpatialTransientTask = [&](CTask* task)
+    CTask*          presentationTask = nullptr;
+    const char*     selection = "none";
+    bool            physicalPresentation = false;
+    bool            spatialBurstPresentation = false;
+    bool            airbornePresentation = false;
+    bool            climbingPresentation = false;
+    bool            climbStateReady = false;
+    SClimbTaskState climbState;
+    const auto      selectSpatialTransientTask = [&](CTask* task)
     {
         if (!task)
             return false;
@@ -2049,6 +2052,20 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
                 spatialBurstPresentation = true;
                 selection = "hit_head";
                 return true;
+            case TASK_SIMPLE_CLIMB:
+            {
+                auto* climbTask = dynamic_cast<CTaskSimpleClimb*>(task);
+                if (!climbTask)
+                    return false;
+
+                presentationTask = task;
+                physicalPresentation = true;
+                spatialBurstPresentation = true;
+                climbingPresentation = true;
+                climbStateReady = climbTask->GetClimbTaskState(climbState);
+                selection = "climb";
+                return true;
+            }
             case TASK_SIMPLE_EVASIVE_STEP:
                 presentationTask = task;
                 selection = "evasive_step";
@@ -2181,12 +2198,14 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
             TraceNativeTaskAnimationProducer(this, "named_task_cast_failed", selection, presentationTask);
     }
 
-    if (!presentationTask || !presentationTask->GetPresentationAnimation(presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress,
-                                                                         presentation.data.fSpeed, presentation.data.fBlendAmount))
+    if (!presentationTask || (climbingPresentation && !climbStateReady) ||
+        !presentationTask->GetPresentationAnimation(presentation.data.usAnimGroup, presentation.data.usAnimId, presentation.data.fProgress,
+                                                    presentation.data.fSpeed, presentation.data.fBlendAmount))
     {
         if (physicalPresentation)
             result.state = eNativeTaskAnimationPresentationState::HOLD_LAST_PHYSICAL_FRAME;
         result.airborne = airbornePresentation;
+        result.climbing = climbingPresentation;
         result.spatialBurst = spatialBurstPresentation || physicalPresentation;
         TraceNativeTaskAnimationProducer(this, physicalPresentation ? "hold_last_physical_frame" : "task_rejected", selection, presentationTask,
                                          pNamedDiagnostic);
@@ -2200,9 +2219,27 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
     // Sample through the corrected API so viewers reproduce visible facing.
     GetRotationRadiansNew(rotation);
     presentation.data.fHeading = rotation.fZ;
+    if (climbingPresentation)
+    {
+        presentation.data.vecClimbHandhold = climbState.handhold;
+        presentation.data.vecClimbWorldHandhold = climbState.worldHandhold;
+        presentation.data.vecClimbAnchorPosition = climbState.anchorPosition;
+        presentation.data.fClimbHeading = climbState.handholdHeading;
+        presentation.data.usClimbAnchorModel = climbState.anchorModel;
+        presentation.data.ucClimbAnchorType = climbState.anchorType;
+        presentation.data.ucClimbSurfaceType = climbState.surfaceType;
+        presentation.data.ucClimbAnimationPhase = static_cast<unsigned char>(climbState.animationPhase);
+        presentation.data.ucClimbPositionPhase = static_cast<unsigned char>(climbState.positionPhase);
+        presentation.data.usClimbGetToPositionCounter = climbState.getToPositionCounter;
+        presentation.data.bForceClimb = climbState.forceClimb;
+        presentation.data.bInvalidClimb = climbState.invalidClimb;
+        presentation.data.bClimbChangePosition = climbState.changePosition;
+        presentation.data.bClimbAnimationPlaying = climbState.animationPlaying;
+    }
     result.state = eNativeTaskAnimationPresentationState::READY;
     result.physical = physicalPresentation;
     result.airborne = airbornePresentation;
+    result.climbing = climbingPresentation;
     result.spatialBurst = spatialBurstPresentation || physicalPresentation;
     TraceNativeTaskAnimationProducer(this, "emitted", selection, presentationTask, pNamedDiagnostic);
     return result;
@@ -2210,6 +2247,9 @@ SNativeTaskAnimationPresentationResult CClientPed::GetNativeTaskAnimationPresent
 
 void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source)
 {
+    const unsigned int previousMode = m_nativeTaskAnimationPresentation.data.uiMode;
+    const bool         leavingClimb = previousMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION &&
+                              presentation.data.uiMode != SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
     const bool shapeChanged = presentation.data.uiMode != m_nativeTaskAnimationPresentation.data.uiMode ||
                               presentation.data.usAnimGroup != m_nativeTaskAnimationPresentation.data.usAnimGroup ||
                               presentation.data.usAnimId != m_nativeTaskAnimationPresentation.data.usAnimId;
@@ -2225,19 +2265,20 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
 
     m_nativeTaskAnimationPresentation = presentation;
     m_nativeTaskAnimationPresentationReceivedAt = CClientTime::GetTime();
-    const bool airborne = presentation.data.uiMode == SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION;
+    const bool physicalAnchor = SNativeTaskAnimationPresentationSync::IsPhysicalMode(presentation.data.uiMode);
     if (!m_bIsLocalPlayer && !m_bIsSyncing && !HasSyncedAnim() && m_pPlayerPed)
     {
-        if (airborne)
+        if (physicalAnchor)
         {
             m_pPlayerPed->SetNativeTaskAirbornePresentationState(true, true);
             m_nativeTaskAirbornePresentationActive = true;
         }
-        else if (m_nativeTaskAirbornePresentationActive && IsOnGround(true))
+        else if (m_nativeTaskAirbornePresentationActive && (leavingClimb || IsOnGround(true)))
         {
-            // LAND can arrive while the replicated body is still fractionally
-            // above the floor. Keep the observer EVENT_IN_AIR fence until the
-            // synchronized transform confirms real contact.
+            // LAND can arrive while an airborne body is still fractionally
+            // above the floor, so that fence normally waits for contact. A
+            // completed climb can end on a ledge above terrain, however; its
+            // observer fence must be released on the semantic CLIMB edge.
             m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
             m_nativeTaskAirbornePresentationActive = false;
         }
@@ -2258,18 +2299,22 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
         ClearNativeTaskAnimationPresentation("inactive");
 }
 
-void CClientPed::SetNativeTaskAirborneTakeoverState(bool airborne)
+void CClientPed::SetNativeTaskPhysicalTakeoverState(const SNativeTaskAnimationPresentationSync& presentation)
 {
-    m_nativeTaskAirborneTakeoverPending = airborne;
-    m_nativeTaskAirborneTakeoverStartedAt = airborne ? CClientTime::GetTime() : 0;
+    const bool physical = SNativeTaskAnimationPresentationSync::IsPhysicalMode(presentation.data.uiMode);
+    m_nativeTaskPhysicalTakeover = physical ? presentation : SNativeTaskAnimationPresentationSync{};
+    m_nativeTaskPhysicalTakeoverPending = physical;
+    m_nativeTaskPhysicalTakeoverStartedAt = physical ? CClientTime::GetTime() : 0;
     if (m_pPlayerPed)
-        m_pPlayerPed->SetNativeTaskAirbornePresentationState(airborne, false);
+        m_pPlayerPed->SetNativeTaskAirbornePresentationState(physical, false);
 }
 
 void CClientPed::ClearNativeTaskAnimationPresentation(const char* reason)
 {
     const bool preserveAirborneObserverFence = m_nativeTaskAirbornePresentationActive && m_pPlayerPed && !m_bIsLocalPlayer && !m_bIsSyncing && IsStreamedIn() &&
-                                               !HasSyncedAnim() && !GetRealOccupiedVehicle() && !IsDead() && !IsOnGround(true);
+                                               !HasSyncedAnim() && !GetRealOccupiedVehicle() && !IsDead() &&
+                                               m_nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION &&
+                                               !IsOnGround(true);
     if (m_nativeTaskAnimationPresentationActive && m_pPlayerPed)
     {
         auto animation = g_pGame->GetAnimManager()->RpAnimBlendClumpGetAssociation(m_pPlayerPed->GetRpClump(), m_nativeTaskAnimationPresentationAppliedAnimId);
@@ -2341,27 +2386,46 @@ void CClientPed::ApplyNativeTaskAnimationPresentationHeading(float fHeading)
 void CClientPed::UpdateNativeTaskAnimationPresentation()
 {
     if (m_nativeTaskAirbornePresentationActive && m_pPlayerPed && !m_bIsSyncing &&
-        m_nativeTaskAnimationPresentation.data.uiMode != SNativeTaskAnimationPresentationSync::AIRBORNE_ANIMATION && IsOnGround(true))
+        !SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) && IsOnGround(true))
     {
         m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
         m_nativeTaskAirbornePresentationActive = false;
     }
 
-    if (m_bIsSyncing && m_nativeTaskAirborneTakeoverPending)
+    if (m_bIsSyncing && m_nativeTaskPhysicalTakeoverPending)
     {
-        const unsigned long takeoverAge = CClientTime::GetTime() - m_nativeTaskAirborneTakeoverStartedAt;
-        if (m_pTaskManager && m_pTaskManager->FindActiveTaskByType(TASK_COMPLEX_IN_AIR_AND_LAND))
+        const unsigned long takeoverAge = CClientTime::GetTime() - m_nativeTaskPhysicalTakeoverStartedAt;
+        if (m_nativeTaskPhysicalTakeover.data.uiMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION)
+        {
+            CTask* activeClimb = m_pTaskManager ? m_pTaskManager->FindActiveTaskByType(TASK_SIMPLE_CLIMB) : nullptr;
+            auto*  climbTask = dynamic_cast<CTaskSimpleClimb*>(activeClimb);
+            if (climbTask && climbTask->ApplyTakeoverAnimationProgress(m_nativeTaskPhysicalTakeover.data.fProgress))
+            {
+                // The task now owns the anchor, physical flags and remaining
+                // native phase transitions. The synchronized progress is
+                // applied once so normal GTA time advancement can continue.
+                m_nativeTaskPhysicalTakeover = {};
+                m_nativeTaskPhysicalTakeoverPending = false;
+                m_nativeTaskPhysicalTakeoverStartedAt = 0;
+            }
+            else if (takeoverAge >= 2000)
+            {
+                SetNativeTaskPhysicalTakeoverState({});
+            }
+        }
+        else if (m_pTaskManager && m_pTaskManager->FindActiveTaskByType(TASK_COMPLEX_IN_AIR_AND_LAND))
         {
             // The seeded native task has now created its active airborne
             // chain. It owns the physical flags through landing from here.
-            m_nativeTaskAirborneTakeoverPending = false;
-            m_nativeTaskAirborneTakeoverStartedAt = 0;
+            m_nativeTaskPhysicalTakeover = {};
+            m_nativeTaskPhysicalTakeoverPending = false;
+            m_nativeTaskPhysicalTakeoverStartedAt = 0;
         }
         else if (takeoverAge >= 2000 || (takeoverAge >= 250 && IsOnGround(true)))
         {
             // A stale server bit or failed task seed must not suspend the ped
             // forever. Two seconds covers the complete ordinary jump arc.
-            SetNativeTaskAirborneTakeoverState(false);
+            SetNativeTaskPhysicalTakeoverState({});
         }
     }
 
@@ -5462,8 +5526,9 @@ void CClientPed::_DestroyModel()
     if (m_nativeTaskAirbornePresentationActive && m_pPlayerPed)
         m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
     m_nativeTaskAirbornePresentationActive = false;
-    m_nativeTaskAirborneTakeoverPending = false;
-    m_nativeTaskAirborneTakeoverStartedAt = 0;
+    m_nativeTaskPhysicalTakeover = {};
+    m_nativeTaskPhysicalTakeoverPending = false;
+    m_nativeTaskPhysicalTakeoverStartedAt = 0;
     ClearNativeTaskAnimationPresentation("destroy_model");
 
     // Store ped ammo
@@ -9252,18 +9317,19 @@ void CClientPed::SetSyncing(bool bIsSyncing)
         if (!bIsSyncing && m_pTaskManager)
         {
             // The old authority must not keep integrating a native vertical
-            // task after handoff. Remove only the exact jump/in-air chains;
-            // ordinary primary and physical-response tasks are untouched.
-            bool removedAirborneTask = false;
+            // or anchor-authored task after handoff. Remove only the exact
+            // jump/in-air/climb chains; unrelated tasks remain untouched.
+            bool removedPhysicalTask = false;
             for (const int priority : {TASK_PRIORITY_EVENT_RESPONSE_TEMP, TASK_PRIORITY_EVENT_RESPONSE_NONTEMP, TASK_PRIORITY_PRIMARY})
             {
-                if (m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_JUMP) || m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_IN_AIR_AND_LAND))
+                if (m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_JUMP) || m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_IN_AIR_AND_LAND) ||
+                    m_pTaskManager->FindTaskByType(priority, TASK_SIMPLE_CLIMB))
                 {
                     KillTask(priority, true);
-                    removedAirborneTask = true;
+                    removedPhysicalTask = true;
                 }
             }
-            if (removedAirborneTask && m_pPlayerPed)
+            if (removedPhysicalTask && m_pPlayerPed)
                 m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
         }
 
@@ -9272,9 +9338,10 @@ void CClientPed::SetSyncing(bool bIsSyncing)
         // the physical phase while removing the observer-only association.
         // Do not wait for EVENT_IN_AIR here: its geometry gate is intentionally
         // local and can reject an early handoff while the observer transform
-        // is still close to the floor. Install the same native response task
-        // that the event would create and let GTA own InAir -> Land from here.
-        const bool continueAirborne = bIsSyncing && m_nativeTaskAirborneTakeoverPending;
+        // is still close to the floor. Airborne resumes directly in GTA's
+        // response task; climb resumes from its transferred anchor and phase.
+        const bool continuePhysical =
+            bIsSyncing && m_nativeTaskPhysicalTakeoverPending && SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskPhysicalTakeover.data.uiMode);
         if (m_nativeTaskAirbornePresentationActive && m_pPlayerPed)
         {
             m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
@@ -9284,25 +9351,67 @@ void CClientPed::SetSyncing(bool bIsSyncing)
         m_nativeTaskLocomotionAuthoritativeVelocityValid = false;
         ClearNativeTaskWeaponPresentation("syncer_transition");
         ClearNativeTaskAnimationPresentation("syncer_transition");
-        if (continueAirborne && m_pPlayerPed)
+        if (continuePhysical && m_pPlayerPed)
         {
             m_pPlayerPed->SetNativeTaskAirbornePresentationState(true, false);
-            CTaskComplex* airborneTask = g_pGame->GetTasks()->CreateTaskComplexInAirAndLand(true, false);
-            if (airborneTask && SetTask(airborneTask, TASK_PRIORITY_EVENT_RESPONSE_TEMP))
+            CTask* physicalTask = nullptr;
+            if (m_nativeTaskPhysicalTakeover.data.uiMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION)
             {
-                m_nativeTaskAirborneTakeoverPending = true;
+                SClimbTaskState climbState;
+                climbState.handhold = m_nativeTaskPhysicalTakeover.data.vecClimbHandhold;
+                climbState.worldHandhold = m_nativeTaskPhysicalTakeover.data.vecClimbWorldHandhold;
+                climbState.anchorPosition = m_nativeTaskPhysicalTakeover.data.vecClimbAnchorPosition;
+                climbState.handholdHeading = m_nativeTaskPhysicalTakeover.data.fClimbHeading;
+                climbState.anchorModel = m_nativeTaskPhysicalTakeover.data.usClimbAnchorModel;
+                climbState.anchorType = m_nativeTaskPhysicalTakeover.data.ucClimbAnchorType;
+                climbState.surfaceType = m_nativeTaskPhysicalTakeover.data.ucClimbSurfaceType;
+                climbState.animationPhase = static_cast<eClimbHeights>(m_nativeTaskPhysicalTakeover.data.ucClimbAnimationPhase);
+                climbState.positionPhase = static_cast<eClimbHeights>(m_nativeTaskPhysicalTakeover.data.ucClimbPositionPhase);
+                climbState.getToPositionCounter = m_nativeTaskPhysicalTakeover.data.usClimbGetToPositionCounter;
+                climbState.animationGroup = m_nativeTaskPhysicalTakeover.data.usAnimGroup;
+                climbState.animationId = m_nativeTaskPhysicalTakeover.data.usAnimId;
+                climbState.animationProgress = m_nativeTaskPhysicalTakeover.data.fProgress;
+                climbState.animationSpeed = m_nativeTaskPhysicalTakeover.data.fSpeed;
+                climbState.animationBlendAmount = m_nativeTaskPhysicalTakeover.data.fBlendAmount;
+                climbState.forceClimb = m_nativeTaskPhysicalTakeover.data.bForceClimb;
+                climbState.invalidClimb = m_nativeTaskPhysicalTakeover.data.bInvalidClimb;
+                climbState.changePosition = m_nativeTaskPhysicalTakeover.data.bClimbChangePosition;
+                climbState.animationPlaying = m_nativeTaskPhysicalTakeover.data.bClimbAnimationPlaying;
+
+                physicalTask = g_pGame->GetTasks()->CreateTaskSimpleClimbTakeover(m_pPlayerPed, climbState);
+
+                // The matching collision entity can stream a frame later on
+                // the new owner. Continue with GTA's native airborne/landing
+                // chain instead of leaving the ped physically suspended.
+                if (!physicalTask)
+                    physicalTask = g_pGame->GetTasks()->CreateTaskComplexInAirAndLand(true, false);
             }
             else
+                physicalTask = g_pGame->GetTasks()->CreateTaskComplexInAirAndLand(true, false);
+
+            if (!physicalTask || !SetTask(physicalTask, TASK_PRIORITY_EVENT_RESPONSE_TEMP))
             {
-                // Allocation failure must not leave physical flags latched
-                // without a task that can clear them on landing.
-                SetNativeTaskAirborneTakeoverState(false);
+                // Resolution or allocation failure must not leave physical
+                // flags latched without a task that can clear them.
+                SetNativeTaskPhysicalTakeoverState({});
+            }
+            else if (m_nativeTaskPhysicalTakeover.data.uiMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION)
+            {
+                // The climb factory already restored the exact native phase
+                // and association synchronously. A delayed progress replay can
+                // target the next phase if GTA advances before Update(), so
+                // retire only the serialized snapshot and leave task-owned
+                // physical flags intact.
+                m_nativeTaskPhysicalTakeover = {};
+                m_nativeTaskPhysicalTakeoverPending = false;
+                m_nativeTaskPhysicalTakeoverStartedAt = 0;
             }
         }
         else if (!bIsSyncing)
         {
-            m_nativeTaskAirborneTakeoverPending = false;
-            m_nativeTaskAirborneTakeoverStartedAt = 0;
+            m_nativeTaskPhysicalTakeover = {};
+            m_nativeTaskPhysicalTakeoverPending = false;
+            m_nativeTaskPhysicalTakeoverStartedAt = 0;
         }
     }
     m_bIsSyncing = bIsSyncing;

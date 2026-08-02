@@ -44,6 +44,7 @@ class CTaskComplexJumpSA : public virtual CTaskComplexSA
 public:
     CTaskComplexJumpSA() {};
     explicit CTaskComplexJumpSA(bool bAllowClimb);
+    explicit CTaskComplexJumpSA(int iForceClimb);
 };
 
 class CTaskComplexInAirAndLandSAInterface : public CTaskComplexSAInterface
@@ -170,13 +171,19 @@ public:
     eClimbHeights       m_nHeightForPos;
     unsigned char       m_nSurfaceType;
     char                m_nFallAfterVault;
+    std::uint8_t        m_padHeading[3];
     float               m_fHandholdHeading;
     CVector             m_vecHandholdPos;
     CEntitySAInterface* m_pClimbEnt;
 
-    short                  m_nGetToPosCounter;
-    CAnimBlendAssociation* m_pAnim;
+    std::uint16_t                     m_nGetToPosCounter;
+    std::uint8_t                      m_padAnimation[2];
+    CAnimBlendAssociationSAInterface* m_pAnim;
 };
+static_assert(sizeof(CTaskSimpleClimbSAInterface) == 0x30, "Unexpected CTaskSimpleClimbSAInterface size");
+static_assert(offsetof(CTaskSimpleClimbSAInterface, m_fHandholdHeading) == 0x14, "Invalid climb handhold-heading offset");
+static_assert(offsetof(CTaskSimpleClimbSAInterface, m_pClimbEnt) == 0x24, "Invalid climb anchor offset");
+static_assert(offsetof(CTaskSimpleClimbSAInterface, m_pAnim) == 0x2C, "Invalid climb animation offset");
 
 class CTaskSimpleClimbSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleClimb
 {
@@ -186,6 +193,13 @@ public:
                        const bool bForceClimb = false);
 
     eClimbHeights GetHeightForPos() const override { return static_cast<const CTaskSimpleClimbSAInterface*>(GetInterface())->m_nHeightForPos; }
+    bool          GetClimbTaskState(SClimbTaskState& state) const override;
+    bool          ApplyTakeoverAnimationProgress(float progress) override;
+    bool          PrepareTakeoverState(CPed* ped, const SClimbTaskState& state);
+
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
+
+    static CEntitySAInterface* ResolveTakeoverAnchor(CPed* ped, const SClimbTaskState& state);
 };
 
 // ##############################################################################

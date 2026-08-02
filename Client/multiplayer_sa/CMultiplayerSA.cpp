@@ -67,82 +67,88 @@ extern CGame* pGameInterface;
 DWORD RETURN_FxManager_CreateFxSystem = 0x4A9BE8;
 DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 
-#define HOOKPOS_CCam_ProcessFixed                              0x51D470
-#define HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon    0x6859a0
-#define HOOKPOS_CPed_IsPlayer                                  0x5DF8F0
-#define HOOKPOS_CTaskSimpleJump_Launch_PlayerStats             0x679C11
-#define HOOKPOS_CTaskSimpleJump_StartAnim_PlayerStats          0x67D921
-#define HOOKPOS_CPed_KillPedWithCar                            0x5F0360
-#define CALL_CEventGroup_Add_ComputeInformGroup                0x4AB45A
-#define CALL_CEventGroup_Add_ComputeInformRespectedFriends     0x4AB46C
-#define CALL_CEventGroup_Add_ComputeLookAt                     0x4AB480
-#define CALL_CEventGroup_Add_ComputeResponseTaskType           0x4AB491
-#define CALL_CEventScanner_AddInAirEvent                       0x607F0D
-#define FUNC_CEventEditableResponse_ComputeResponseTaskType    0x4B56C0
-#define FUNC_CEventEditableResponse_ComputeResponseTaskOfType  0x4B5730
-#define FUNC_CPedType_GetPedTypeAcquaintances                  0x6089B0
-#define RETURN_CEventDamage_ComputeDamageAnim_Floor_IsPlayer   0x4B415F
-#define RETURN_CEventDamage_ComputeDamageAnim_Pistol_IsPlayer  0x4B41D8
-#define RETURN_CEventDamage_ComputeDamageAnim_Heavy_IsPlayer   0x4B41F3
-#define RETURN_CEventDamage_ComputeDamageAnim_Fight_IsPlayer   0x4B4292
-#define RETURN_CEventDamage_ComputeDamageAnim_BodyA_IsPlayer   0x4B438A
-#define RETURN_CEventDamage_ComputeDamageAnim_BodyB_IsPlayer   0x4B4399
-#define RETURN_CEventDamage_ComputeDamageAnim_Delay_IsPlayer   0x4B43E0
-#define RETURN_CEventDamage_ComputeDamageAnim_Partial_IsPlayer 0x4B4468
-#define RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer         0x4B5005
-#define RETURN_CEventGunAimedAt_AffectsPed_IsPlayer            0x4B4EEF
-#define RETURN_CEventGunShot_AffectsPed_IsPlayer               0x4B2DB7
-#define RETURN_CEventGunShotWhizzedBy_AffectsPed_IsPlayer      0x4B5132
-#define RETURN_CEventHandler_ComputeDamage_Initial_IsPlayer    0x4C0222
-#define RETURN_CEventHandler_ComputeDamage_Final_IsPlayer      0x4C068D
-#define RETURN_CEventHandler_ComputeDamage_Death_IsPlayer      0x4C0A58
-#define RETURN_CEventHandler_ComputeGunAimedAt_IsPlayer        0x4C286A
-#define RETURN_CCollisionEventScanner_VehicleDamage_IsPlayer   0x6046A1
-#define RETURN_CCollisionEventScanner_VehicleEvent_IsPlayer    0x604AD1
-#define RETURN_CPhysical_VehiclePedCollision_IsPlayer          0x54C5A1
-#define RETURN_CEventHandler_VehiclePotential_IsPlayer         0x4C0E26
-#define RETURN_CEventHandler_VehicleCollision_Damage_IsPlayer  0x4BD770
-#define RETURN_CEventHandler_VehicleCollision_Cap_IsPlayer     0x4BD7DE
-#define RETURN_CEventHandler_VehicleCollision_TaskA_IsPlayer   0x4BD889
-#define RETURN_CEventHandler_VehicleCollision_TaskB_IsPlayer   0x4BD8A3
-#define RETURN_CEventHandler_VehicleCollision_Gesture_IsPlayer 0x4BD9A8
-#define RETURN_CTaskHitPedWithCar_Hurts_IsPlayer               0x653AEF
-#define RETURN_CTaskHitPedWithCar_FirstSubTask_IsPlayer        0x656322
-#define RETURN_CPed_KillPedWithCar_Contact_IsPlayer            0x5F03F9
-#define RETURN_CPed_KillPedWithCar_DamageBranch_IsPlayer       0x5F04DF
-#define RETURN_CPed_KillPedWithCar_LowDamage_IsPlayer          0x5F0E53
-#define RETURN_CPed_KillPedWithCar_TrainDamage_IsPlayer        0x5F0EAF
-#define RETURN_CPed_KillPedWithCar_IgnoreCollision_IsPlayer    0x5F0FC6
-#define RETURN_CEventGotKnockedOverByCar_AffectsPed_IsPlayer   0x4B1C88
-#define RETURN_CTaskSimpleGetUp_StartAnim_IsPlayer             0x67C886
-#define RETURN_CTaskSimpleJump_Launch_Force_IsPlayer           0x679BFC
-#define RETURN_CTaskSimpleJump_Launch_MegaJump_IsPlayer        0x679C4A
-#define RETURN_CTaskSimpleJump_StartAnim_IsPlayer              0x67D82E
-#define RETURN_CTaskSimpleJump_Process_Climb_IsPlayer          0x680C92
-#define RETURN_CTaskSimpleJump_Process_BlockedSound_IsPlayer   0x680CFA
-#define RETURN_CTaskSimpleInAir_Process_Voice_IsPlayer         0x680693
-#define RETURN_CTaskSimpleInAir_Process_Climb_IsPlayer         0x680AB5
-#define RETURN_CTaskComplexInAirAndLand_Land_IsPlayer          0x67CF44
-#define RETURN_CTaskSimpleLand_Process_IsPlayer                0x67D4DC
-#define RETURN_CTaskSimpleChoking_ProcessPed_IsPlayer          0x6204B4
-#define RETURN_CTaskSimpleFight_GetStrikeDamage_IsPlayer       0x61C772
-#define RETURN_CTaskSimpleFight_FightHitPed_Victim_IsPlayer    0x61CBC7
-#define RETURN_CTaskSimpleFight_FightHitPed_Attacker_IsPlayer  0x61CEAB
-#define RETURN_CTaskSimpleFight_FindTargetOnGround_IsPlayer    0x61D8D2
-#define RETURN_CTaskSimpleFight_MakeAbortable_IsPlayer         0x623ADE
-#define RETURN_CTaskSimpleFight_StartAnim_Init_IsPlayer        0x623C3C
-#define RETURN_CTaskSimpleFight_StartAnim_ResetMove_IsPlayer   0x623DEA
-#define RETURN_CTaskSimpleFight_StartAnim_Move_IsPlayer        0x623E2C
-#define RETURN_CTaskSimpleFight_FightStrike_Collision_IsPlayer 0x624191
-#define RETURN_CTaskSimpleFight_FightStrike_Event_IsPlayer     0x6245FD
-#define RETURN_CTaskSimpleFight_ProcessPed_Init_IsPlayer       0x629A34
-#define RETURN_CTaskSimpleFight_ProcessPed_Idle_IsPlayer       0x629BC2
-#define RETURN_CTaskSimpleFight_ProcessPed_Attack_IsPlayer     0x629C11
-#define RETURN_CTaskSimpleFight_ProcessPed_Move3_IsPlayer      0x629F3C
-#define RETURN_CTaskSimpleFight_ProcessPed_Transition_IsPlayer 0x629F73
-#define RETURN_CTaskSimpleFight_ProcessPed_ChainA_IsPlayer     0x629FAB
-#define RETURN_CTaskSimpleFight_ProcessPed_ChainB_IsPlayer     0x629FD7
-#define RETURN_CTaskSimpleFight_ProcessPed_Heading_IsPlayer    0x62A035
+#define HOOKPOS_CCam_ProcessFixed                                0x51D470
+#define HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon      0x6859a0
+#define HOOKPOS_CPed_IsPlayer                                    0x5DF8F0
+#define HOOKPOS_CTaskSimpleJump_Launch_PlayerStats               0x679C11
+#define HOOKPOS_CTaskSimpleJump_StartAnim_PlayerStats            0x67D921
+#define HOOKPOS_CPed_KillPedWithCar                              0x5F0360
+#define CALL_CEventGroup_Add_ComputeInformGroup                  0x4AB45A
+#define CALL_CEventGroup_Add_ComputeInformRespectedFriends       0x4AB46C
+#define CALL_CEventGroup_Add_ComputeLookAt                       0x4AB480
+#define CALL_CEventGroup_Add_ComputeResponseTaskType             0x4AB491
+#define CALL_CEventScanner_AddInAirEvent                         0x607F0D
+#define CALL_CEventScanner_AddBuildingCollisionEvent             0x605145
+#define FUNC_CEventEditableResponse_ComputeResponseTaskType      0x4B56C0
+#define FUNC_CEventEditableResponse_ComputeResponseTaskOfType    0x4B5730
+#define FUNC_CPedType_GetPedTypeAcquaintances                    0x6089B0
+#define RETURN_CEventDamage_ComputeDamageAnim_Floor_IsPlayer     0x4B415F
+#define RETURN_CEventDamage_ComputeDamageAnim_Pistol_IsPlayer    0x4B41D8
+#define RETURN_CEventDamage_ComputeDamageAnim_Heavy_IsPlayer     0x4B41F3
+#define RETURN_CEventDamage_ComputeDamageAnim_Fight_IsPlayer     0x4B4292
+#define RETURN_CEventDamage_ComputeDamageAnim_BodyA_IsPlayer     0x4B438A
+#define RETURN_CEventDamage_ComputeDamageAnim_BodyB_IsPlayer     0x4B4399
+#define RETURN_CEventDamage_ComputeDamageAnim_Delay_IsPlayer     0x4B43E0
+#define RETURN_CEventDamage_ComputeDamageAnim_Partial_IsPlayer   0x4B4468
+#define RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer           0x4B5005
+#define RETURN_CEventGunAimedAt_AffectsPed_IsPlayer              0x4B4EEF
+#define RETURN_CEventGunShot_AffectsPed_IsPlayer                 0x4B2DB7
+#define RETURN_CEventGunShotWhizzedBy_AffectsPed_IsPlayer        0x4B5132
+#define RETURN_CEventBuildingCollision_AffectsPed_IsPlayer       0x4AD082
+#define RETURN_CEventHandler_ComputeDamage_Initial_IsPlayer      0x4C0222
+#define RETURN_CEventHandler_ComputeDamage_Final_IsPlayer        0x4C068D
+#define RETURN_CEventHandler_ComputeDamage_Death_IsPlayer        0x4C0A58
+#define RETURN_CEventHandler_ComputeGunAimedAt_IsPlayer          0x4C286A
+#define RETURN_CCollisionEventScanner_VehicleDamage_IsPlayer     0x6046A1
+#define RETURN_CCollisionEventScanner_VehicleEvent_IsPlayer      0x604AD1
+#define RETURN_CPhysical_VehiclePedCollision_IsPlayer            0x54C5A1
+#define RETURN_CEventHandler_VehiclePotential_IsPlayer           0x4C0E26
+#define RETURN_CEventHandler_VehicleCollision_Damage_IsPlayer    0x4BD770
+#define RETURN_CEventHandler_VehicleCollision_Cap_IsPlayer       0x4BD7DE
+#define RETURN_CEventHandler_VehicleCollision_TaskA_IsPlayer     0x4BD889
+#define RETURN_CEventHandler_VehicleCollision_TaskB_IsPlayer     0x4BD8A3
+#define RETURN_CEventHandler_VehicleCollision_Gesture_IsPlayer   0x4BD9A8
+#define RETURN_CTaskHitPedWithCar_Hurts_IsPlayer                 0x653AEF
+#define RETURN_CTaskHitPedWithCar_FirstSubTask_IsPlayer          0x656322
+#define RETURN_CPed_KillPedWithCar_Contact_IsPlayer              0x5F03F9
+#define RETURN_CPed_KillPedWithCar_DamageBranch_IsPlayer         0x5F04DF
+#define RETURN_CPed_KillPedWithCar_LowDamage_IsPlayer            0x5F0E53
+#define RETURN_CPed_KillPedWithCar_TrainDamage_IsPlayer          0x5F0EAF
+#define RETURN_CPed_KillPedWithCar_IgnoreCollision_IsPlayer      0x5F0FC6
+#define RETURN_CEventGotKnockedOverByCar_AffectsPed_IsPlayer     0x4B1C88
+#define RETURN_CTaskSimpleGetUp_StartAnim_IsPlayer               0x67C886
+#define RETURN_CTaskSimpleJump_Launch_Force_IsPlayer             0x679BFC
+#define RETURN_CTaskSimpleJump_Launch_MegaJump_IsPlayer          0x679C4A
+#define RETURN_CTaskSimpleJump_StartAnim_IsPlayer                0x67D82E
+#define RETURN_CTaskSimpleJump_Process_Climb_IsPlayer            0x680C92
+#define RETURN_CTaskSimpleJump_Process_BlockedSound_IsPlayer     0x680CFA
+#define RETURN_CTaskSimpleInAir_Process_Voice_IsPlayer           0x680693
+#define RETURN_CTaskSimpleInAir_Process_Climb_IsPlayer           0x680AB5
+#define RETURN_CTaskComplexInAirAndLand_Land_IsPlayer            0x67CF44
+#define RETURN_CTaskSimpleLand_Process_IsPlayer                  0x67D4DC
+#define RETURN_CTaskSimpleClimb_StartSpeech_IsPlayer             0x67A32F
+#define RETURN_CTaskSimpleClimb_Process_Pad_IsPlayer             0x6813A1
+#define RETURN_CTaskSimpleClimb_Process_CompletionSound_IsPlayer 0x68144A
+#define RETURN_CTaskSimpleChoking_ProcessPed_IsPlayer            0x6204B4
+#define RETURN_CTaskSimpleFight_GetStrikeDamage_IsPlayer         0x61C772
+#define RETURN_CTaskSimpleFight_FightHitPed_Victim_IsPlayer      0x61CBC7
+#define RETURN_CTaskSimpleFight_FightHitPed_Attacker_IsPlayer    0x61CEAB
+#define RETURN_CTaskSimpleFight_FindTargetOnGround_IsPlayer      0x61D8D2
+#define RETURN_CTaskSimpleFight_MakeAbortable_IsPlayer           0x623ADE
+#define RETURN_CTaskSimpleFight_StartAnim_Init_IsPlayer          0x623C3C
+#define RETURN_CTaskSimpleFight_StartAnim_ResetMove_IsPlayer     0x623DEA
+#define RETURN_CTaskSimpleFight_StartAnim_Move_IsPlayer          0x623E2C
+#define RETURN_CTaskSimpleFight_FightStrike_Collision_IsPlayer   0x624191
+#define RETURN_CTaskSimpleFight_FightStrike_Event_IsPlayer       0x6245FD
+#define RETURN_CTaskSimpleFight_ProcessPed_Init_IsPlayer         0x629A34
+#define RETURN_CTaskSimpleFight_ProcessPed_Idle_IsPlayer         0x629BC2
+#define RETURN_CTaskSimpleFight_ProcessPed_Attack_IsPlayer       0x629C11
+#define RETURN_CTaskSimpleFight_ProcessPed_Move3_IsPlayer        0x629F3C
+#define RETURN_CTaskSimpleFight_ProcessPed_Transition_IsPlayer   0x629F73
+#define RETURN_CTaskSimpleFight_ProcessPed_ChainA_IsPlayer       0x629FAB
+#define RETURN_CTaskSimpleFight_ProcessPed_ChainB_IsPlayer       0x629FD7
+#define RETURN_CTaskSimpleFight_ProcessPed_Heading_IsPlayer      0x62A035
+constexpr int EVENT_TYPE_BUILDING_COLLISION = 6;
 constexpr int EVENT_TYPE_DAMAGE = 9;
 constexpr int EVENT_TYPE_POTENTIAL_GET_RUN_OVER = 12;
 constexpr int EVENT_TYPE_POTENTIAL_WALK_INTO_PED = 13;
@@ -594,100 +600,101 @@ static void __declspec(naked) HOOK_CWorld_SprayPaintWorld_FromCShotInfoUpdate()
 CEntitySAInterface* dwSavedPlayerPointer = 0;
 CEntitySAInterface* activeEntityForStreaming = 0;  // the entity that the streaming system considers active
 
-void HOOK_FindPlayerCoors();
-void HOOK_FindPlayerCentreOfWorld();
-void HOOK_FindPlayerHeading();
-void HOOK_CStreaming_Update_Caller();
-void HOOK_CHud_Draw_Caller();
-void HOOK_CRunningScript_Process();
-void HOOK_CExplosion_AddExplosion();
-void HOOK_CCustomRoadsignMgr__RenderRoadsignAtomic();
-void HOOK_Trailer_BreakTowLink();
-void HOOK_CRadar__DrawRadarGangOverlay();
-void HOOK_CTaskComplexJump__CreateSubTask();
-void HOOK_FxManager_CreateFxSystem();
-void HOOK_FxManager_DestroyFxSystem();
-void HOOK_CCam_ProcessFixed();
-void HOOK_Render3DStuff();
-void HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon();
-void HOOK_CPed_IsPlayer();
-void HOOK_CTaskSimpleJump_Launch_PlayerStats();
-void HOOK_CTaskSimpleJump_StartAnim_PlayerStats();
-void HOOK_CPed_KillPedWithCar();
-bool __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, void*, CPedSAInterface* ped, int taskType);
-void __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*, CPedSAInterface* ped, bool decisionMakerTypeInGroup);
+void             HOOK_FindPlayerCoors();
+void             HOOK_FindPlayerCentreOfWorld();
+void             HOOK_FindPlayerHeading();
+void             HOOK_CStreaming_Update_Caller();
+void             HOOK_CHud_Draw_Caller();
+void             HOOK_CRunningScript_Process();
+void             HOOK_CExplosion_AddExplosion();
+void             HOOK_CCustomRoadsignMgr__RenderRoadsignAtomic();
+void             HOOK_Trailer_BreakTowLink();
+void             HOOK_CRadar__DrawRadarGangOverlay();
+void             HOOK_CTaskComplexJump__CreateSubTask();
+void             HOOK_FxManager_CreateFxSystem();
+void             HOOK_FxManager_DestroyFxSystem();
+void             HOOK_CCam_ProcessFixed();
+void             HOOK_Render3DStuff();
+void             HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon();
+void             HOOK_CPed_IsPlayer();
+void             HOOK_CTaskSimpleJump_Launch_PlayerStats();
+void             HOOK_CTaskSimpleJump_StartAnim_PlayerStats();
+void             HOOK_CPed_KillPedWithCar();
+bool __fastcall  HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, void*, CPedSAInterface* ped, int taskType);
+void __fastcall  HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*, CPedSAInterface* ped, bool decisionMakerTypeInGroup);
 void* __fastcall HOOK_CEventScanner_AddInAirEvent(void* eventGroup, void*, void* event, bool valid);
-void HOOK_CTrain_ProcessControl_Derail();
-void HOOK_CVehicle_SetupRender();
-void HOOK_CVehicle_ResetAfterRender();
-void HOOK_CObject_Render();
-void HOOK_EndWorldColors();
-void HOOK_CWorld_ProcessVerticalLineSectorList();
-void HOOK_ComputeDamageResponse_StartChoking();
-void HOOK_ComputeDamageResponse_ChokingGateFallback();
-void HOOK_CEventDamage_Destructor();
-void HOOK_CollisionStreamRead();
-void HOOK_CVehicle_ApplyBoatWaterResistance();
-void HOOK_CPhysical_ApplyGravity();
-void HOOK_VehicleCamStart();
-void HOOK_VehicleCamTargetZTweak();
-void HOOK_VehicleCamLookDir1();
-void HOOK_VehicleCamLookDir2();
-void HOOK_VehicleCamHistory();
-void HOOK_VehicleCamUp();
-void HOOK_VehicleCamEnd();
-void HOOK_VehicleLookBehind();
-void HOOK_VehicleLookAside();
-void HOOK_OccupiedVehicleBurnCheck();
-void HOOK_UnoccupiedVehicleBurnCheck();
-void HOOK_ApplyCarBlowHop();
-void HOOK_CWorld_SetWorldOnFire();
-void HOOK_CTaskSimplePlayerOnFire_ProcessPed();
-void HOOK_CFire_ProcessFire();
-void HOOK_CExplosion_Update();
-void HOOK_CWeapon_FireAreaEffect();
-void HOOK_CGame_Process();
-void HOOK_CWeather_Update();
-void HOOK_Idle();
-void HOOK_RenderScene_Plants();
-void HOOK_RenderScene_end();
-void HOOK_CPlantMgr_Render();
-void HOOK_CEventHandler_ComputeKnockOffBikeResponse();
-void HOOK_CPed_GetWeaponSkill();
-void HOOK_CPed_AddGogglesModel();
-void HOOK_CPhysical_ProcessCollisionSectorList();
-void HOOK_CrashFix_Misc1();
-void HOOK_CrashFix_Misc2();
-void HOOK_CrashFix_Misc4();
-void HOOK_CrashFix_Misc5();
-void HOOK_CrashFix_Misc6();
-void HOOK_CrashFix_Misc7();
-void HOOK_CrashFix_Misc8();
-void HOOK_CrashFix_Misc9();
-void HOOK_CrashFix_Misc10();
-void HOOK_CrashFix_Misc11();
-void HOOK_CrashFix_Misc12();
-void HOOK_CrashFix_Misc13();
-void HOOK_CrashFix_Misc14();
-void HOOK_FreezeFix_Misc15();
-void HOOK_CrashFix_Misc16();
-void HOOK_CrashFix_Misc17();
-void HOOK_CrashFix_Misc18();
-void HOOK_CrashFix_Misc19();
-void HOOK_CrashFix_Misc20();
-void HOOK_CrashFix_Misc21();
-void HOOK_CrashFix_Misc22();
-void HOOK_CrashFix_Misc23();
-void HOOK_CrashFix_Misc24();
-void HOOK_CheckAnimMatrix();
-void HOOK_VehColCB();
-void HOOK_VehCol();
-void HOOK_Transmission_CalculateDriveAcceleration();
-void HOOK_isVehDriveTypeNotRWD();
-void HOOK_isVehDriveTypeNotFWD();
-void HOOK_PreFxRender();
-void HOOK_PostColorFilterRender();
-void HOOK_PreHUDRender();
+void* __fastcall HOOK_CEventScanner_AddBuildingCollisionEvent(void* eventGroup, void*, void* event, bool valid);
+void             HOOK_CTrain_ProcessControl_Derail();
+void             HOOK_CVehicle_SetupRender();
+void             HOOK_CVehicle_ResetAfterRender();
+void             HOOK_CObject_Render();
+void             HOOK_EndWorldColors();
+void             HOOK_CWorld_ProcessVerticalLineSectorList();
+void             HOOK_ComputeDamageResponse_StartChoking();
+void             HOOK_ComputeDamageResponse_ChokingGateFallback();
+void             HOOK_CEventDamage_Destructor();
+void             HOOK_CollisionStreamRead();
+void             HOOK_CVehicle_ApplyBoatWaterResistance();
+void             HOOK_CPhysical_ApplyGravity();
+void             HOOK_VehicleCamStart();
+void             HOOK_VehicleCamTargetZTweak();
+void             HOOK_VehicleCamLookDir1();
+void             HOOK_VehicleCamLookDir2();
+void             HOOK_VehicleCamHistory();
+void             HOOK_VehicleCamUp();
+void             HOOK_VehicleCamEnd();
+void             HOOK_VehicleLookBehind();
+void             HOOK_VehicleLookAside();
+void             HOOK_OccupiedVehicleBurnCheck();
+void             HOOK_UnoccupiedVehicleBurnCheck();
+void             HOOK_ApplyCarBlowHop();
+void             HOOK_CWorld_SetWorldOnFire();
+void             HOOK_CTaskSimplePlayerOnFire_ProcessPed();
+void             HOOK_CFire_ProcessFire();
+void             HOOK_CExplosion_Update();
+void             HOOK_CWeapon_FireAreaEffect();
+void             HOOK_CGame_Process();
+void             HOOK_CWeather_Update();
+void             HOOK_Idle();
+void             HOOK_RenderScene_Plants();
+void             HOOK_RenderScene_end();
+void             HOOK_CPlantMgr_Render();
+void             HOOK_CEventHandler_ComputeKnockOffBikeResponse();
+void             HOOK_CPed_GetWeaponSkill();
+void             HOOK_CPed_AddGogglesModel();
+void             HOOK_CPhysical_ProcessCollisionSectorList();
+void             HOOK_CrashFix_Misc1();
+void             HOOK_CrashFix_Misc2();
+void             HOOK_CrashFix_Misc4();
+void             HOOK_CrashFix_Misc5();
+void             HOOK_CrashFix_Misc6();
+void             HOOK_CrashFix_Misc7();
+void             HOOK_CrashFix_Misc8();
+void             HOOK_CrashFix_Misc9();
+void             HOOK_CrashFix_Misc10();
+void             HOOK_CrashFix_Misc11();
+void             HOOK_CrashFix_Misc12();
+void             HOOK_CrashFix_Misc13();
+void             HOOK_CrashFix_Misc14();
+void             HOOK_FreezeFix_Misc15();
+void             HOOK_CrashFix_Misc16();
+void             HOOK_CrashFix_Misc17();
+void             HOOK_CrashFix_Misc18();
+void             HOOK_CrashFix_Misc19();
+void             HOOK_CrashFix_Misc20();
+void             HOOK_CrashFix_Misc21();
+void             HOOK_CrashFix_Misc22();
+void             HOOK_CrashFix_Misc23();
+void             HOOK_CrashFix_Misc24();
+void             HOOK_CheckAnimMatrix();
+void             HOOK_VehColCB();
+void             HOOK_VehCol();
+void             HOOK_Transmission_CalculateDriveAcceleration();
+void             HOOK_isVehDriveTypeNotRWD();
+void             HOOK_isVehDriveTypeNotFWD();
+void             HOOK_PreFxRender();
+void             HOOK_PostColorFilterRender();
+void             HOOK_PreHUDRender();
 
 void HOOK_CTrafficLights_GetPrimaryLightState();
 void HOOK_CTrafficLights_GetSecondaryLightState();
@@ -836,6 +843,7 @@ void CMultiplayerSA::InitHooks()
     HookInstallCall(CALL_CEventGroup_Add_ComputeLookAt, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
     HookInstallCall(CALL_CEventGroup_Add_ComputeResponseTaskType, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskType);
     HookInstallCall(CALL_CEventScanner_AddInAirEvent, (DWORD)HOOK_CEventScanner_AddInAirEvent);
+    HookInstallCall(CALL_CEventScanner_AddBuildingCollisionEvent, (DWORD)HOOK_CEventScanner_AddBuildingCollisionEvent);
     HookInstall(HOOKPOS_CTrain_ProcessControl_Derail, (DWORD)HOOK_CTrain_ProcessControl_Derail, 6);
     HookInstall(HOOKPOS_CVehicle_SetupRender, (DWORD)HOOK_CVehicle_SetupRender, 5);
     HookInstall(HOOKPOS_CVehicle_ResetAfterRender, (DWORD)HOOK_CVehicle_ResetAfterRender, 5);
@@ -3887,6 +3895,7 @@ static bool IsNativeAmbientWanderProfileEvent(int eventType)
 {
     switch (eventType)
     {
+        case EVENT_TYPE_BUILDING_COLLISION:
         case EVENT_TYPE_DAMAGE:
         case EVENT_TYPE_POTENTIAL_GET_RUN_OVER:
         case EVENT_TYPE_POTENTIAL_WALK_INTO_PED:
@@ -3969,6 +3978,7 @@ static bool IsNativeAmbientBehaviorIsPlayerCallSite(DWORD returnAddress)
         case RETURN_CEventGunAimedAt_AffectsPed_IsPlayer:
         case RETURN_CEventGunShot_AffectsPed_IsPlayer:
         case RETURN_CEventGunShotWhizzedBy_AffectsPed_IsPlayer:
+        case RETURN_CEventBuildingCollision_AffectsPed_IsPlayer:
         case RETURN_CEventHandler_ComputeDamage_Initial_IsPlayer:
         case RETURN_CEventHandler_ComputeDamage_Final_IsPlayer:
         case RETURN_CEventHandler_ComputeDamage_Death_IsPlayer:
@@ -4019,6 +4029,9 @@ static bool IsTaskJumpFallIsPlayerCallSite(DWORD returnAddress)
         case RETURN_CTaskSimpleInAir_Process_Climb_IsPlayer:
         case RETURN_CTaskComplexInAirAndLand_Land_IsPlayer:
         case RETURN_CTaskSimpleLand_Process_IsPlayer:
+        case RETURN_CTaskSimpleClimb_StartSpeech_IsPlayer:
+        case RETURN_CTaskSimpleClimb_Process_Pad_IsPlayer:
+        case RETURN_CTaskSimpleClimb_Process_CompletionSound_IsPlayer:
             return true;
         default:
             return false;
@@ -4442,6 +4455,20 @@ void* __fastcall HOOK_CEventScanner_AddInAirEvent(void* eventGroup, void*, void*
     // owner's authoritative task.
     auto* ped = eventGroup ? *reinterpret_cast<CPedSAInterface**>(static_cast<unsigned char*>(eventGroup) + 4) : nullptr;
     if (IsNativeTaskAirbornePresentationObserver(ped))
+        return nullptr;
+
+    using AddEvent = void*(__thiscall*)(void*, void*, bool);
+    return reinterpret_cast<AddEvent>(0x4AB420)(eventGroup, event, valid);
+}
+
+void* __fastcall HOOK_CEventScanner_AddBuildingCollisionEvent(void* eventGroup, void*, void* event, bool valid)
+{
+    // Building contacts are scanned independently in every process. Once an
+    // ambient profile selects a shared ped, only its syncer may turn that
+    // geometry into WALK_ROUND_BUILDING, HIT_HEAD, JUMP, or CLIMB. Observers
+    // receive the chosen task presentation and transform from the owner.
+    auto* ped = eventGroup ? *reinterpret_cast<CPedSAInterface**>(static_cast<unsigned char*>(eventGroup) + 4) : nullptr;
+    if (HasNativeAmbientWanderEventProfile(ped) && !IsNativeAmbientWanderEventProfileActive(ped))
         return nullptr;
 
     using AddEvent = void*(__thiscall*)(void*, void*, bool);

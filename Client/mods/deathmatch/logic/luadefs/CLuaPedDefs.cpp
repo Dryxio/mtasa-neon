@@ -3067,7 +3067,8 @@ bool CLuaPedDefs::SetPedJump(CClientPed* ped, std::optional<bool> allowClimb)
 
     // Only the simulation owner constructs the native task. GTA then owns the
     // launch, airborne, optional climb, and landing transitions end to end.
-    auto* task = g_pGame->GetTasks()->CreateTaskComplexJump(allowClimb.value_or(true));
+    const bool canClimb = allowClimb.value_or(true);
+    auto* task = ped->IsLocalPlayer() ? g_pGame->GetTasks()->CreateTaskComplexJump(canClimb) : g_pGame->GetTasks()->CreateTaskComplexJumpForScriptPed(canClimb);
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 

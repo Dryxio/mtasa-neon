@@ -148,6 +148,7 @@ struct SNativeTaskAnimationPresentationResult
     // Physical state is semantic task data, not inferred from animation IDs.
     // The sync writer maps this to AIRBORNE_ANIMATION on the existing lane.
     bool airborne{};
+    bool climbing{};
     // Short native reactions with meaningful displacement reuse the bounded
     // ped spatial burst while their animation presentation is active.
     bool spatialBurst{};
@@ -274,7 +275,7 @@ public:
     void                                   NotifyNativeTaskWeaponPresentationFire();
     SNativeTaskAnimationPresentationResult GetNativeTaskAnimationPresentation();
     void SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPresentationSync& presentation, const char* source = "local");
-    void SetNativeTaskAirborneTakeoverState(bool airborne);
+    void SetNativeTaskPhysicalTakeoverState(const SNativeTaskAnimationPresentationSync& presentation);
     bool IsNativeTaskAnimationPresentationActive() const noexcept { return m_nativeTaskAnimationPresentationActive; }
 
     void AddKeysync(unsigned long ulDelay, const CControllerState& ControllerState, bool bDucking);
@@ -872,12 +873,13 @@ public:
     std::optional<float>                     m_nativeTaskAnimationPresentationAppliedHeading;
     bool                                     m_nativeTaskAnimationPresentationActive{false};
     bool                                     m_nativeTaskAirbornePresentationActive{false};
-    // Start-sync can transfer a ped while it is already airborne. Keep that
-    // takeover semantic separate from observer presentation so the ordinary
-    // animation cleanup pulse cannot clear it before the native task is seeded.
-    bool          m_nativeTaskAirborneTakeoverPending{false};
-    unsigned long m_nativeTaskAirborneTakeoverStartedAt{};
-    bool          m_shouldRecreate{false};
+    // Start-sync can transfer a ped while it is airborne or attached to a
+    // climb anchor. Keep takeover state separate from observer presentation
+    // so ordinary animation cleanup cannot erase it before GTA is reseeded.
+    SNativeTaskAnimationPresentationSync m_nativeTaskPhysicalTakeover;
+    bool                                 m_nativeTaskPhysicalTakeoverPending{false};
+    unsigned long                        m_nativeTaskPhysicalTakeoverStartedAt{};
+    bool                                 m_shouldRecreate{false};
 
     bool             m_bBulletImpactData;
     CClientEntityPtr m_pBulletImpactEntity;

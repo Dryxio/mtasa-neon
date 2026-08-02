@@ -1181,9 +1181,14 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
         // ordinary animation. Animation IDs are reused by several GTA task
         // families and cannot safely carry this physical-state semantic.
         AIRBORNE_ANIMATION,
+        // Climbing is anchored physical motion rather than a free airborne
+        // clip. Its native handhold and phase are carried with the animation
+        // so a new owner can reconstruct GTA's task after a handoff.
+        CLIMB_ANIMATION,
     };
 
-    static bool IsAnimationMode(unsigned int mode) { return mode == ANIMATION || mode == AIRBORNE_ANIMATION; }
+    static bool IsAnimationMode(unsigned int mode) { return mode == ANIMATION || mode == AIRBORNE_ANIMATION || mode == CLIMB_ANIMATION; }
+    static bool IsPhysicalMode(unsigned int mode) { return mode == AIRBORNE_ANIMATION || mode == CLIMB_ANIMATION; }
 
     bool Read(NetBitStreamInterface& bitStream)
     {
@@ -1196,9 +1201,38 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
             !bitStream.Read(data.fSpeed) || !bitStream.Read(data.fBlendAmount) || !bitStream.Read(data.fHeading))
             return false;
 
-        return std::isfinite(data.fProgress) && data.fProgress >= 0.0f && data.fProgress <= 1.0f && std::isfinite(data.fSpeed) && data.fSpeed > 0.0f &&
-               data.fSpeed <= 16.0f && std::isfinite(data.fBlendAmount) && data.fBlendAmount >= 0.0f && data.fBlendAmount <= 1.0f &&
-               std::isfinite(data.fHeading) && data.fHeading >= -6.2831855f && data.fHeading <= 6.2831855f;
+        if (!std::isfinite(data.fProgress) || data.fProgress < 0.0f || data.fProgress > 1.0f || !std::isfinite(data.fSpeed) || data.fSpeed <= 0.0f ||
+            data.fSpeed > 16.0f || !std::isfinite(data.fBlendAmount) || data.fBlendAmount < 0.0f || data.fBlendAmount > 1.0f || !std::isfinite(data.fHeading) ||
+            data.fHeading < -6.2831855f || data.fHeading > 6.2831855f)
+        {
+            return false;
+        }
+
+        if (data.uiMode != CLIMB_ANIMATION)
+            return true;
+
+        if (!bitStream.Read(data.vecClimbHandhold.fX) || !bitStream.Read(data.vecClimbHandhold.fY) || !bitStream.Read(data.vecClimbHandhold.fZ) ||
+            !bitStream.Read(data.vecClimbWorldHandhold.fX) || !bitStream.Read(data.vecClimbWorldHandhold.fY) ||
+            !bitStream.Read(data.vecClimbWorldHandhold.fZ) || !bitStream.Read(data.vecClimbAnchorPosition.fX) ||
+            !bitStream.Read(data.vecClimbAnchorPosition.fY) || !bitStream.Read(data.vecClimbAnchorPosition.fZ) || !bitStream.Read(data.fClimbHeading) ||
+            !bitStream.Read(data.usClimbAnchorModel) || !bitStream.Read(data.ucClimbAnchorType) || !bitStream.Read(data.ucClimbSurfaceType) ||
+            !bitStream.Read(data.ucClimbAnimationPhase) || !bitStream.Read(data.ucClimbPositionPhase) || !bitStream.Read(data.usClimbGetToPositionCounter) ||
+            !bitStream.ReadBit(data.bForceClimb) || !bitStream.ReadBit(data.bInvalidClimb) || !bitStream.ReadBit(data.bClimbChangePosition) ||
+            !bitStream.ReadBit(data.bClimbAnimationPlaying))
+        {
+            return false;
+        }
+
+        const auto finiteVector = [](const CVector& value)
+        {
+            return std::isfinite(value.fX) && std::isfinite(value.fY) && std::isfinite(value.fZ) && std::abs(value.fX) <= 100000.0f &&
+                   std::abs(value.fY) <= 100000.0f && std::abs(value.fZ) <= 100000.0f;
+        };
+        const bool supportedAnchorType =
+            data.ucClimbAnchorType == 1 || data.ucClimbAnchorType == 2 || data.ucClimbAnchorType == 4 || data.ucClimbAnchorType == 5;
+        return finiteVector(data.vecClimbHandhold) && finiteVector(data.vecClimbWorldHandhold) && finiteVector(data.vecClimbAnchorPosition) &&
+               std::isfinite(data.fClimbHeading) && data.fClimbHeading >= -6.2831855f && data.fClimbHeading <= 6.2831855f && supportedAnchorType &&
+               data.ucClimbAnimationPhase >= 1 && data.ucClimbAnimationPhase <= 6 && data.ucClimbPositionPhase <= 6;
     }
 
     void Write(NetBitStreamInterface& bitStream) const
@@ -1213,6 +1247,30 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
         bitStream.Write(data.fSpeed);
         bitStream.Write(data.fBlendAmount);
         bitStream.Write(data.fHeading);
+
+        if (data.uiMode != CLIMB_ANIMATION)
+            return;
+
+        bitStream.Write(data.vecClimbHandhold.fX);
+        bitStream.Write(data.vecClimbHandhold.fY);
+        bitStream.Write(data.vecClimbHandhold.fZ);
+        bitStream.Write(data.vecClimbWorldHandhold.fX);
+        bitStream.Write(data.vecClimbWorldHandhold.fY);
+        bitStream.Write(data.vecClimbWorldHandhold.fZ);
+        bitStream.Write(data.vecClimbAnchorPosition.fX);
+        bitStream.Write(data.vecClimbAnchorPosition.fY);
+        bitStream.Write(data.vecClimbAnchorPosition.fZ);
+        bitStream.Write(data.fClimbHeading);
+        bitStream.Write(data.usClimbAnchorModel);
+        bitStream.Write(data.ucClimbAnchorType);
+        bitStream.Write(data.ucClimbSurfaceType);
+        bitStream.Write(data.ucClimbAnimationPhase);
+        bitStream.Write(data.ucClimbPositionPhase);
+        bitStream.Write(data.usClimbGetToPositionCounter);
+        bitStream.WriteBit(data.bForceClimb);
+        bitStream.WriteBit(data.bInvalidClimb);
+        bitStream.WriteBit(data.bClimbChangePosition);
+        bitStream.WriteBit(data.bClimbAnimationPlaying);
     }
 
     struct
@@ -1224,6 +1282,24 @@ struct SNativeTaskAnimationPresentationSync : public ISyncStructure
         float          fSpeed{};
         float          fBlendAmount{};
         float          fHeading{};
+        // CTaskSimpleClimb stores handholds in entity-local space for
+        // physical anchors and world space for static buildings. Retain both
+        // forms: the native constructor needs the first, while the second is
+        // used to resolve and validate the same anchor in another process.
+        CVector        vecClimbHandhold{};
+        CVector        vecClimbWorldHandhold{};
+        CVector        vecClimbAnchorPosition{};
+        float          fClimbHeading{};
+        unsigned short usClimbAnchorModel{};
+        unsigned char  ucClimbAnchorType{};
+        unsigned char  ucClimbSurfaceType{};
+        unsigned char  ucClimbAnimationPhase{};
+        unsigned char  ucClimbPositionPhase{};
+        unsigned short usClimbGetToPositionCounter{};
+        bool           bForceClimb{};
+        bool           bInvalidClimb{};
+        bool           bClimbChangePosition{};
+        bool           bClimbAnimationPlaying{};
     } data{};
 };
 
