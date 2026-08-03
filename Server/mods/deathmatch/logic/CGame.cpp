@@ -803,6 +803,17 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
     if (!m_pMainConfig->Load())
         return false;
 
+    if (m_pMainConfig->GetNeonAuthMode() != ENeonAuthMode::Disabled)
+    {
+        std::string identityError;
+        if (!m_neonIdentityTicketVerifier.Configure(m_pMainConfig->GetNeonAuthIssuer(), m_pMainConfig->GetNeonAuthServerId(), m_pMainConfig->GetNeonAuthKeyId(),
+                                                    m_pMainConfig->GetNeonAuthPublicKey(), identityError))
+        {
+            CLogger::ErrorPrintf("Neon Identity configuration failed: %s\n", identityError.c_str());
+            return false;
+        }
+    }
+
     // Let the main config handle selecting settings from the command line where appropriate
     m_pMainConfig->SetCommandLineParser(&m_CommandLineParser);
 
@@ -1904,6 +1915,15 @@ void CGame::Packet_PlayerJoin(const NetServerPlayerID& Source)
         pBitStream->Write(static_cast<unsigned short>(MTA_DM_BITSTREAM_VERSION));
         pBitStream->WriteString("deathmatch");
 
+        // Advertise Neon Identity before the client loads the game module. A
+        // new client can therefore obtain an audience-bound ticket only for a
+        // registered Neon server, while legacy clients safely ignore these
+        // trailing fields and are still rejected by required-mode servers.
+        const ENeonAuthMode neonAuthMode = m_pMainConfig->GetNeonAuthMode();
+        pBitStream->Write(static_cast<unsigned char>(neonAuthMode));
+        if (neonAuthMode != ENeonAuthMode::Disabled)
+            pBitStream->WriteString(m_pMainConfig->GetNeonAuthServerId());
+
         // Send and destroy the bitstream
         g_pNetServer->SendPacket(PACKET_ID_MOD_NAME, Source, pBitStream, false, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
         g_pNetServer->DeallocateNetServerBitStream(pBitStream);
@@ -1916,6 +1936,27 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
     const char* szNick = Packet.GetNick();
     if (szNick && szNick[0] != 0)
     {
+        SNeonIdentityClaims neonIdentity;
+        const ENeonAuthMode neonAuthMode = m_pMainConfig->GetNeonAuthMode();
+        const bool          hasNeonTicket = !Packet.GetNeonIdentityTicket().empty();
+        if (neonAuthMode == ENeonAuthMode::Required && !hasNeonTicket)
+        {
+            CLogger::LogPrintf("CONNECT: %s refused before player creation (Neon Identity required)\n", szNick);
+            RefusePendingConnection(Packet.GetSourceSocket(), "Sign in to your Neon account before connecting to this server.");
+            return;
+        }
+
+        if (neonAuthMode != ENeonAuthMode::Disabled && hasNeonTicket)
+        {
+            std::string identityError;
+            if (!m_neonIdentityTicketVerifier.VerifyAndConsume(Packet.GetNeonIdentityTicket(), neonIdentity, identityError))
+            {
+                CLogger::LogPrintf("CONNECT: %s refused before player creation (Neon Identity: %s)\n", szNick, identityError.c_str());
+                RefusePendingConnection(Packet.GetSourceSocket(), "Your Neon sign-in ticket is invalid or expired. Please reconnect.");
+                return;
+            }
+        }
+
         // Is the server passworded?
         bool bPasswordIsValid = true;
         if (m_pMainConfig->HasPassword())
@@ -1942,6 +1983,9 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
 
         if (!pPlayer)
             return;
+
+        if (!neonIdentity.accountId.empty())
+            pPlayer->SetNeonIdentity(std::move(neonIdentity.accountId), std::move(neonIdentity.discordId));
 
         if (pPlayer->GetID() == INVALID_ELEMENT_ID)
         {
@@ -2222,6 +2266,21 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
             DisconnectPlayer(this, *pPlayer, CPlayerDisconnectedPacket::INVALID_NICKNAME);
         }
     }
+}
+
+void CGame::RefusePendingConnection(const NetServerPlayerID& source, const char* reason)
+{
+    // Authentication is evaluated before CPlayer allocation, so a rejected
+    // peer cannot become visible to Lua resources or enter any gameplay state.
+    CPlayerDisconnectedPacket packet(reason);
+    NetBitStreamInterface*    bitStream = g_pNetServer->AllocateNetServerBitStream(0);
+    if (bitStream)
+    {
+        if (packet.Write(*bitStream))
+            g_pNetServer->SendPacket(packet.GetPacketID(), source, bitStream, false, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
+        g_pNetServer->DeallocateNetServerBitStream(bitStream);
+    }
+    g_pNetServer->Kick(source);
 }
 
 void CGame::Packet_PedWasted(CPedWastedPacket& Packet)

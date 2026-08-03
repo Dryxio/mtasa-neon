@@ -34,6 +34,7 @@
 #include <SharedUtil.Detours.h>
 #include <ServerBrowser/CServerCache.h>
 #include "CDiscordRichPresence.h"
+#include "CNeonIdentityManager.h"
 #include "CSteamClient.h"
 #include "CCrashDumpWriter.h"
 #include "FastFailCrashHandler/WerCrashHandler.h"
@@ -192,6 +193,7 @@ CCore::CCore()
     // Create interaction objects.
     m_pCommands = new CCommands;
     m_pConnectManager = new CConnectManager;
+    m_pNeonIdentityManager = new CNeonIdentityManager;
 
     // Create the GUI manager and the graphics lib wrapper
     m_pLocalGUI = new CLocalGUI;
@@ -310,6 +312,11 @@ CCore::~CCore()
 
     SAFE_DELETE(m_pModelCacheManager);
 
+    // The identity manager owns callbacks queued on the network HTTP manager,
+    // so cancel them before the network itself is destroyed.
+    delete m_pNeonIdentityManager;
+    m_pNeonIdentityManager = nullptr;
+
     // Destroy early subsystems
     m_bModulesLoaded = false;
     DestroyNetwork();
@@ -361,7 +368,7 @@ CCore::~CCore()
 
 eCoreVersion CCore::GetVersion()
 {
-    return MTACORE_20;
+    return MTACORE_21;
 }
 
 CConsoleInterface* CCore::GetConsole()
@@ -2273,6 +2280,7 @@ void CCore::DoPostFramePulse()
     TIMING_CHECKPOINT("+CorePostFrame2");
     GetMemStats()->Draw();
     GetGraphStats()->Draw();
+    m_pNeonIdentityManager->DoPulse();
     m_pConnectManager->DoPulse();
 
     // Update Discord Rich Presence status
@@ -3323,4 +3331,9 @@ size_t CCore::GetStreamingMemory()
 std::shared_ptr<CDiscordInterface> CCore::GetDiscord()
 {
     return m_pDiscordRichPresence;
+}
+
+std::string CCore::ConsumeNeonConnectionTicket()
+{
+    return m_pNeonIdentityManager ? m_pNeonIdentityManager->ConsumePreparedConnectionTicket() : std::string{};
 }

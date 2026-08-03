@@ -1,0 +1,36 @@
+[Unit]
+Description=Neon Identity OAuth and game-ticket service
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neon-identity
+Group=neon-identity
+WorkingDirectory=/opt/neon-identity/current
+EnvironmentFile=/etc/neon-identity/neon-identity.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# Identity credentials and signing keys make this service a high-value target.
+# It does not need filesystem writes or Linux capabilities at runtime.
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# Node/V8's JIT requires executable memory mappings, so systemd's
+# MemoryDenyWriteExecute sandbox cannot be enabled for this process.
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

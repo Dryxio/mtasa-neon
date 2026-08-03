@@ -21,6 +21,13 @@ class CMainConfig;
 
 #define MAX_MAP_NAME_LENGTH 64
 
+enum class ENeonAuthMode
+{
+    Disabled = 0,
+    Optional = 1,
+    Required = 2,
+};
+
 class CMainConfig;
 class CCommandLineParser;
 class CLuaArguments;
@@ -130,6 +137,11 @@ public:
     bool                              IsElementDataWhitelisted() const { return m_elementDataWhitelisted; }
     bool                              IsCheckDuplicateSerialsEnabled() const noexcept { return m_checkDuplicateSerials; }
     bool                              IsCheckResourceClientFilesEnabled() const noexcept { return m_checkResourceClientFiles != 0; }
+    ENeonAuthMode                     GetNeonAuthMode() const noexcept { return m_neonAuthMode; }
+    const std::string&                GetNeonAuthServerId() const noexcept { return m_neonAuthServerId; }
+    const std::string&                GetNeonAuthIssuer() const noexcept { return m_neonAuthIssuer; }
+    const std::string&                GetNeonAuthKeyId() const noexcept { return m_neonAuthKeyId; }
+    const std::string&                GetNeonAuthPublicKey() const noexcept { return m_neonAuthPublicKey; }
 
     SString GetSetting(const SString& configSetting);
     bool    GetSetting(const SString& configSetting, SString& strValue);
@@ -238,4 +250,9 @@ private:
     bool                       m_checkDuplicateSerials;
     int                        m_checkResourceClientFiles;
     int                        m_allowMultiCommandHandlers;
+    ENeonAuthMode              m_neonAuthMode{ENeonAuthMode::Disabled};
+    std::string                m_neonAuthServerId;
+    std::string                m_neonAuthIssuer;
+    std::string                m_neonAuthKeyId;
+    std::string                m_neonAuthPublicKey;
 };

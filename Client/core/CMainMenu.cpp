@@ -14,6 +14,7 @@
 #include "CNewsBrowser.h"
 #include "CLanguageSelector.h"
 #include "CDiscordRichPresence.h"
+#include "CNeonIdentityManager.h"
 
 #define NATIVE_RES_X 1280.0f
 #define NATIVE_RES_Y 1024.0f
@@ -169,6 +170,22 @@ CMainMenu::CMainMenu(CGUI* pManager)
     m_pVersion->SetPosition(CVector2D(0.855f, 0.512f), true);
     m_pVersion->SetSize(CVector2D((32 / NATIVE_RES_X) * m_iMenuSizeX, (32 / NATIVE_RES_Y) * m_iMenuSizeY), false);
     m_pVersion->SetProperty("InheritsAlpha", "False");
+
+    // Neon Identity is platform-level rather than server-specific, so its
+    // entry point lives in the client menu and the resulting session can be
+    // reused by every Neon server.
+    m_pNeonIdentityButton = reinterpret_cast<CGUIButton*>(pManager->CreateButton(m_pCanvas, _("Connect Discord account")));
+    m_pNeonIdentityButton->SetPosition(CVector2D(0.73f, 0.045f), true);
+    m_pNeonIdentityButton->SetSize(CVector2D(0.22f, 0.034f), true);
+    m_pNeonIdentityButton->SetClickHandler(GUI_CALLBACK(&CMainMenu::OnNeonIdentityButtonClick, this));
+    m_pNeonIdentityButton->SetZOrderingEnabled(false);
+
+    m_pNeonIdentityStatus = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pCanvas, ""));
+    m_pNeonIdentityStatus->SetPosition(CVector2D(0.73f, 0.082f), true);
+    m_pNeonIdentityStatus->SetSize(CVector2D(0.22f, 0.026f), true);
+    m_pNeonIdentityStatus->SetHorizontalAlign(CGUI_ALIGN_HORIZONTALCENTER);
+    m_pNeonIdentityStatus->SetFont("default-small");
+    UpdateNeonIdentityControls();
 
     float fBase = 0.613f;
     float fGap = 0.043f;
@@ -400,6 +417,8 @@ CMainMenu::~CMainMenu()
     m_pNewsBrowser = nullptr;
 
     destroyElement(m_pMenuArea);
+    destroyElement(m_pNeonIdentityButton);
+    destroyElement(m_pNeonIdentityStatus);
     destroyElement(m_pLogo);
     destroyElement(m_pLatestNews);
     destroyElement(m_pVersion);
@@ -454,6 +473,8 @@ void CMainMenu::SetMenuUnhovered()  // Dehighlight all our items
 
 void CMainMenu::Update()
 {
+    UpdateNeonIdentityControls();
+
     if (g_pCore->GetDiagnosticDebug() == EDiagnosticDebug::JOYSTICK_0000)
     {
         m_pFiller->SetVisible(false);
@@ -719,6 +740,46 @@ void CMainMenu::Update()
     m_ServerBrowser.Update();
     m_ServerInfo.DoPulse();
     m_pLanguageSelector->DoPulse();
+}
+
+bool CMainMenu::OnNeonIdentityButtonClick(CGUIElement* pElement)
+{
+    CNeonIdentityManager* identity = g_pCore->GetNeonIdentityManager();
+    if (!identity)
+        return false;
+
+    // A server may be actively consuming the current Neon identity. Keep the
+    // session immutable until the player has returned to the main menu.
+    if (g_pCore->IsConnected())
+        return false;
+
+    if (identity->IsAuthenticated() || identity->IsSigningIn())
+        identity->SignOut();
+    else
+        identity->StartDiscordSignIn();
+
+    UpdateNeonIdentityControls();
+    return true;
+}
+
+void CMainMenu::UpdateNeonIdentityControls()
+{
+    CNeonIdentityManager* identity = g_pCore->GetNeonIdentityManager();
+    if (!identity || !m_pNeonIdentityButton || !m_pNeonIdentityStatus)
+        return;
+
+    // Signing out is a main-menu account action. Hiding the control in-game
+    // avoids invalidating the identity while a server session is active.
+    m_pNeonIdentityButton->SetVisible(!g_pCore->IsConnected());
+
+    if (identity->IsSigningIn())
+        m_pNeonIdentityButton->SetText(_("Cancel Discord sign-in"));
+    else if (identity->IsAuthenticated())
+        m_pNeonIdentityButton->SetText(_("Sign out of Neon"));
+    else
+        m_pNeonIdentityButton->SetText(_("Connect Discord account"));
+
+    m_pNeonIdentityStatus->SetText(_(identity->GetStatusText().c_str()));
 }
 
 void CMainMenu::Show(bool bOverlay)

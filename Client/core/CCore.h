@@ -72,6 +72,7 @@ class CDiscordInterface;
 #define IDT_TIMER1                 1234
 
 class CSteamClient;
+class CNeonIdentityManager;
 
 extern class CCore*         g_pCore;
 extern class CGraphics*     g_pGraphics;
@@ -108,6 +109,8 @@ public:
     CWebCoreInterface*                 GetWebCoreUnchecked() { return m_pWebCore; }  // For cleanup in destructors only - bypasses initialization check
     CTrayIconInterface*                GetTrayIcon() { return m_pTrayIcon; };
     std::shared_ptr<CDiscordInterface> GetDiscord();
+    CNeonIdentityManager*              GetNeonIdentityManager() { return m_pNeonIdentityManager; }
+    std::string                        ConsumeNeonConnectionTicket() override;
     CSteamClient*                      GetSteamClient() { return m_steamClient.get(); }
     FPSLimiter::FPSLimiterInterface*   GetFPSLimiter() const noexcept { return m_pFPSLimiter.get(); }
     unsigned long long                 GetNetworkConnectionGeneration() const override { return m_networkConnectionGeneration; }
@@ -339,13 +342,14 @@ private:
 
 private:
     // Core devices.
-    CXML*               m_pXML;
-    CLocalGUI*          m_pLocalGUI;
-    CGraphics*          m_pGraphics;
-    CCommands*          m_pCommands;
-    CDirect3DData*      m_pDirect3DData;
-    CConnectManager*    m_pConnectManager;
-    CModelCacheManager* m_pModelCacheManager;
+    CXML*                 m_pXML;
+    CLocalGUI*            m_pLocalGUI;
+    CGraphics*            m_pGraphics;
+    CCommands*            m_pCommands;
+    CDirect3DData*        m_pDirect3DData;
+    CConnectManager*      m_pConnectManager;
+    CNeonIdentityManager* m_pNeonIdentityManager;
+    CModelCacheManager*   m_pModelCacheManager;
 
     // Instances (put new classes here!)
     CXMLFile*                               m_pConfigFile;

@@ -20,6 +20,7 @@ class CGame;
 #include "CCommandLineParser.h"
 #include "CConnectHistory.h"
 #include "CElementDeleter.h"
+#include "CNeonIdentityTicket.h"
 
 #include "packets/CCommandPacket.h"
 #include "packets/CExplosionSyncPacket.h"
@@ -494,6 +495,7 @@ private:
 
     void Packet_PlayerJoin(const NetServerPlayerID& Source);
     void Packet_PlayerJoinData(class CPlayerJoinDataPacket& Packet);
+    void RefusePendingConnection(const NetServerPlayerID& source, const char* reason);
     void Packet_PedWasted(class CPedWastedPacket& Packet);
     void Packet_PlayerWasted(class CPlayerWastedPacket& Packet);
     void Packet_PlayerQuit(class CPlayerQuitPacket& Packet);
@@ -535,28 +537,29 @@ private:
     // Technically, this could be put somewhere else.  It's a callback function
     // which the voice server library will call to send out data.
 
-    CEvents                 m_Events;
-    CRemoteCalls*           m_pRemoteCalls;
-    CHTTPD*                 m_pHTTPD;
-    CMainConfig*            m_pMainConfig;
-    CBlipManager*           m_pBlipManager;
-    CGroups*                m_pGroups;
-    CColManager*            m_pColManager;
-    CObjectManager*         m_pObjectManager;
-    CBuildingManager*       m_pBuildingManager;
-    CPickupManager*         m_pPickupManager;
-    CPlayerManager*         m_pPlayerManager;
-    CRadarAreaManager*      m_pRadarAreaManager;
-    CVehicleManager*        m_pVehicleManager;
-    CPacketTranslator*      m_pPacketTranslator;
-    CMapManager*            m_pMapManager;
-    CElementDeleter         m_ElementDeleter;
-    CConnectHistory         m_FloodProtect;
-    CLuaManager*            m_pLuaManager;
-    CScriptDebugging*       m_pScriptDebugging;
-    CConsole*               m_pConsole;
-    CUnoccupiedVehicleSync* m_pUnoccupiedVehicleSync;
-    CPedSync*               m_pPedSync;
+    CEvents                     m_Events;
+    CRemoteCalls*               m_pRemoteCalls;
+    CHTTPD*                     m_pHTTPD;
+    CMainConfig*                m_pMainConfig;
+    CBlipManager*               m_pBlipManager;
+    CGroups*                    m_pGroups;
+    CColManager*                m_pColManager;
+    CObjectManager*             m_pObjectManager;
+    CBuildingManager*           m_pBuildingManager;
+    CPickupManager*             m_pPickupManager;
+    CPlayerManager*             m_pPlayerManager;
+    CRadarAreaManager*          m_pRadarAreaManager;
+    CVehicleManager*            m_pVehicleManager;
+    CPacketTranslator*          m_pPacketTranslator;
+    CMapManager*                m_pMapManager;
+    CElementDeleter             m_ElementDeleter;
+    CConnectHistory             m_FloodProtect;
+    CNeonIdentityTicketVerifier m_neonIdentityTicketVerifier;
+    CLuaManager*                m_pLuaManager;
+    CScriptDebugging*           m_pScriptDebugging;
+    CConsole*                   m_pConsole;
+    CUnoccupiedVehicleSync*     m_pUnoccupiedVehicleSync;
+    CPedSync*                   m_pPedSync;
 #ifdef WITH_OBJECT_SYNC
     CObjectSync* m_pObjectSync;
 #endif

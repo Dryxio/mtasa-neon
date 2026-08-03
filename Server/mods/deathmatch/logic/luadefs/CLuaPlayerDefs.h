@@ -38,6 +38,9 @@ public:
     LUA_DECLARE(GetPlayerNametagColor);
     LUA_DECLARE(IsPlayerNametagShowing);
     LUA_DECLARE(GetPlayerSerial);
+    LUA_DECLARE(IsPlayerNeonAuthenticated);
+    LUA_DECLARE(GetPlayerNeonID);
+    LUA_DECLARE(GetPlayerDiscordID);
     LUA_DECLARE(GetPlayerCommunityID);  // deprecate me
     LUA_DECLARE(GetPlayerUserName);     // deprecate me
     LUA_DECLARE(GetPlayerBlurLevel);

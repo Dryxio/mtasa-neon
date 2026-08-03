@@ -218,6 +218,15 @@ public:
     const std::string& GetSerial(uint uiIndex = 0) { return m_strSerials[uiIndex % NUMELMS(m_strSerials)]; }
     void               SetSerial(const std::string& strSerial, uint uiIndex) { m_strSerials[uiIndex % NUMELMS(m_strSerials)] = strSerial; }
 
+    bool               IsNeonAuthenticated() const noexcept { return !m_neonAccountId.empty(); }
+    const std::string& GetNeonAccountId() const noexcept { return m_neonAccountId; }
+    const std::string& GetDiscordId() const noexcept { return m_discordId; }
+    void               SetNeonIdentity(std::string accountId, std::string discordId)
+    {
+        m_neonAccountId = std::move(accountId);
+        m_discordId = std::move(discordId);
+    }
+
     unsigned char GetBlurLevel() { return m_ucBlurLevel; }
     void          SetBlurLevel(unsigned char ucBlurLevel) { m_ucBlurLevel = ucBlurLevel; }
 
@@ -419,6 +428,8 @@ private:
     bool          m_bNametagShowing;
 
     std::string m_strSerials[2];
+    std::string m_neonAccountId;
+    std::string m_discordId;
 
     unsigned char m_ucBlurLevel;
 

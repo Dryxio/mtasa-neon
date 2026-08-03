@@ -39,6 +39,9 @@ void CLuaPlayerDefs::LoadFunctions()
         {"getPlayerNametagColor", GetPlayerNametagColor},
         {"isPlayerNametagShowing", IsPlayerNametagShowing},
         {"getPlayerSerial", GetPlayerSerial},
+        {"isPlayerNeonAuthenticated", IsPlayerNeonAuthenticated},
+        {"getPlayerNeonID", GetPlayerNeonID},
+        {"getPlayerDiscordID", GetPlayerDiscordID},
         {"getPlayerUserName", GetPlayerUserName},
         {"getPlayerCommunityID", GetPlayerCommunityID},
         {"getPlayerBlurLevel", GetPlayerBlurLevel},
@@ -170,6 +173,9 @@ void CLuaPlayerDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "getAccount", "getPlayerAccount");
     lua_classfunction(luaVM, "getWantedLevel", "getPlayerWantedLevel");
     lua_classfunction(luaVM, "getSerial", "getPlayerSerial");
+    lua_classfunction(luaVM, "isNeonAuthenticated", "isPlayerNeonAuthenticated");
+    lua_classfunction(luaVM, "getNeonID", "getPlayerNeonID");
+    lua_classfunction(luaVM, "getDiscordID", "getPlayerDiscordID");
     lua_classfunction(luaVM, "getIP", "getPlayerIP");
     lua_classfunction(luaVM, "getTeam", "getPlayerTeam");
     lua_classfunction(luaVM, "getBlurLevel", "getPlayerBlurLevel");
@@ -720,6 +726,69 @@ int CLuaPlayerDefs::GetPlayerSerial(lua_State* luaVM)
         if (!strSerial.empty())
         {
             lua_pushstring(luaVM, strSerial);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPlayerDefs::IsPlayerNeonAuthenticated(lua_State* luaVM)
+{
+    CPlayer*         pPlayer = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPlayer);
+
+    if (!argStream.HasErrors())
+    {
+        lua_pushboolean(luaVM, pPlayer->IsNeonAuthenticated());
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPlayerDefs::GetPlayerNeonID(lua_State* luaVM)
+{
+    CPlayer*         pPlayer = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPlayer);
+
+    if (!argStream.HasErrors())
+    {
+        const std::string& accountId = pPlayer->GetNeonAccountId();
+        if (!accountId.empty())
+        {
+            lua_pushlstring(luaVM, accountId.data(), accountId.size());
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPlayerDefs::GetPlayerDiscordID(lua_State* luaVM)
+{
+    CPlayer*         pPlayer = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pPlayer);
+
+    if (!argStream.HasErrors())
+    {
+        const std::string& discordId = pPlayer->GetDiscordId();
+        if (!discordId.empty())
+        {
+            // Discord snowflakes exceed Lua 5.1's exact integer range, so the
+            // public API deliberately returns the identifier as a string.
+            lua_pushlstring(luaVM, discordId.data(), discordId.size());
             return 1;
         }
     }

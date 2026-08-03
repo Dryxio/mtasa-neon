@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CNeonIdentityManager.h"
 #include "net/Packets.h"
 using namespace std;
 
@@ -285,6 +286,9 @@ bool CConnectManager::Abort()
     m_bIsDetectingVersion = false;
     m_tConnectStarted = 0;
     SAFE_DELETE(m_pServerItem);
+    ClearPendingIdentityConnection();
+    if (CNeonIdentityManager* identity = CCore::GetSingleton().GetNeonIdentityManager())
+        identity->CancelTicketPreparation();
 
     // Success
     return true;
@@ -292,6 +296,41 @@ bool CConnectManager::Abort()
 
 void CConnectManager::DoPulse()
 {
+    if (m_bWaitingForNeonTicket)
+    {
+        CNeonIdentityManager* identity = CCore::GetSingleton().GetNeonIdentityManager();
+        if (!identity)
+        {
+            Abort();
+            return;
+        }
+
+        if (!identity->IsTicketPreparationComplete())
+        {
+            // Keep the established transport alive while the short HTTP
+            // request completes. The game join packet has not been sent yet.
+            g_pCore->GetNetwork()->DoPulse();
+            return;
+        }
+
+        if (!identity->DidTicketPreparationSucceed())
+        {
+            const std::string error = identity->GetLastError();
+            ClearPendingIdentityConnection();
+            identity->CancelTicketPreparation();
+            g_pCore->RemoveMessageBox();
+            Abort();
+            g_pCore->ShowMessageBox(_("Neon account"), error.c_str(), MB_BUTTON_OK | MB_ICON_ERROR);
+            return;
+        }
+
+        const std::string modName = m_pendingNeonModName;
+        ClearPendingIdentityConnection();
+        g_pCore->RemoveMessageBox();
+        CompleteConnectionToMod(modName);
+        return;
+    }
+
     // Are we connecting?
     if (m_bIsConnecting)
     {
@@ -416,6 +455,12 @@ void CConnectManager::DoPulse()
     }
 }
 
+void CConnectManager::ClearPendingIdentityConnection()
+{
+    m_bWaitingForNeonTicket = false;
+    m_pendingNeonModName.clear();
+}
+
 bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStreamInterface& BitStream)
 {
     // We're working on connecting?
@@ -433,58 +478,57 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
             SString strModName;
             BitStream.ReadString(strModName);
 
+            unsigned char neonAuthMode = 0;
+            SString       neonServerId;
+            if (BitStream.GetNumberOfUnreadBits() >= static_cast<int>(sizeof(unsigned char) * 8))
+            {
+                if (!BitStream.Read(neonAuthMode) || neonAuthMode > 2 || (neonAuthMode != 0 && !BitStream.ReadString(neonServerId)) ||
+                    neonServerId.length() > 128)
+                {
+                    CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + _E("CC33"), _("Bad server response (1)"));
+                    g_pConnectManager->Abort();
+                    return true;
+                }
+            }
+
             // Process packet data
             CCore::GetSingleton().GetNetwork()->SetServerBitStreamVersion(usServerBitStreamVersion);
 
-            if (strModName == "deathmatch")
+            CNeonIdentityManager* identity = CCore::GetSingleton().GetNeonIdentityManager();
+            if (neonAuthMode == 2 && (!identity || !identity->IsAuthenticated()))
             {
-                // Populate the arguments to pass it (-c host port nick)
-                SString strArguments("%s %s", g_pConnectManager->m_strNick.c_str(), g_pConnectManager->m_strPassword.c_str());
-
-                // Hide the messagebox we're currently showing
                 CCore::GetSingleton().RemoveMessageBox();
-
-                // Save the connection details into the config
-                if (g_pConnectManager->m_bSave)
-                {
-                    CVARS_SET("host", g_pConnectManager->m_strHost);
-                    CVARS_SET("port", g_pConnectManager->m_usPort);
-                    CVARS_SET("password", g_pConnectManager->m_strPassword);
-                }
-
-                SetApplicationSettingInt("last-server-ip", g_pConnectManager->m_Address.s_addr);
-                SetApplicationSettingInt("last-server-port", g_pConnectManager->m_usPort);
-                SetApplicationSettingInt("last-server-time", _time32(NULL));
-
-                // Kevuwk: Forced the config to save here so that the IP/Port isn't lost on crash
-                CCore::GetSingleton().SaveConfig();
-
-                // Reset our variables
-                g_pConnectManager->m_strNick = "";
-                g_pConnectManager->m_strHost = "";
-                g_pConnectManager->m_strPassword = "";
-
-                g_pConnectManager->m_Address.s_addr = 0;
-                g_pConnectManager->m_usPort = 0;
-                g_pConnectManager->m_bIsConnecting = false;
-                g_pConnectManager->m_bIsDetectingVersion = false;
-                g_pConnectManager->m_tConnectStarted = 0;
-
-                // Load the mod
-                if (!CModManager::GetSingleton().Load(strArguments))
-                {
-                    // Failed loading the mod
-                    strArguments.Format(_("No such mod installed (%s)"), strModName.c_str());
-                    CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC31"), strArguments, MB_BUTTON_OK | MB_ICON_ERROR);  // Mod loading failed
-                    g_pConnectManager->Abort();
-                }
-            }
-            else
-            {
-                // Show failed message and abort the attempt
-                CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + _E("CC32"), _("Bad server response (2)"));
                 g_pConnectManager->Abort();
+                CCore::GetSingleton().ShowMessageBox(
+                    _("Neon account"), _("This server requires a linked Discord account. Connect it from the Neon menu first."), MB_BUTTON_OK | MB_ICON_ERROR);
+                return true;
             }
+
+            if (neonAuthMode != 0 && identity && identity->IsAuthenticated())
+            {
+                const std::string serverEndpoint = SString("%s:%u", inet_ntoa(g_pConnectManager->m_Address), g_pConnectManager->m_usPort);
+                const auto        prepareResult = identity->PrepareConnectionTicket(neonServerId, serverEndpoint);
+                if (prepareResult == CNeonIdentityManager::EPrepareResult::Pending)
+                {
+                    g_pConnectManager->m_bWaitingForNeonTicket = true;
+                    g_pConnectManager->m_pendingNeonModName = strModName;
+                    CCore::GetSingleton().ShowMessageBox(_("CONNECTING"), _("Authorizing this server with Neon Identity..."), MB_BUTTON_CANCEL | MB_ICON_INFO,
+                                                         g_pConnectManager->m_pOnCancelClick);
+                    return true;
+                }
+
+                if (prepareResult == CNeonIdentityManager::EPrepareResult::Ready && !identity->DidTicketPreparationSucceed())
+                {
+                    const std::string error = identity->GetLastError();
+                    identity->CancelTicketPreparation();
+                    CCore::GetSingleton().RemoveMessageBox();
+                    g_pConnectManager->Abort();
+                    CCore::GetSingleton().ShowMessageBox(_("Neon account"), error.c_str(), MB_BUTTON_OK | MB_ICON_ERROR);
+                    return true;
+                }
+            }
+
+            g_pConnectManager->CompleteConnectionToMod(strModName);
         }
         else
         {
@@ -501,6 +545,51 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
     }
 
     return false;
+}
+
+void CConnectManager::CompleteConnectionToMod(const std::string& modName)
+{
+    if (modName != "deathmatch")
+    {
+        g_pCore->ShowNetErrorMessageBox(_("Error") + _E("CC32"), _("Bad server response (2)"));
+        Abort();
+        return;
+    }
+
+    // Populate the arguments to pass it (-c host port nick)
+    SString arguments("%s %s", m_strNick.c_str(), m_strPassword.c_str());
+
+    g_pCore->RemoveMessageBox();
+
+    if (m_bSave)
+    {
+        CVARS_SET("host", m_strHost);
+        CVARS_SET("port", m_usPort);
+        CVARS_SET("password", m_strPassword);
+    }
+
+    SetApplicationSettingInt("last-server-ip", m_Address.s_addr);
+    SetApplicationSettingInt("last-server-port", m_usPort);
+    SetApplicationSettingInt("last-server-time", _time32(NULL));
+
+    // Save immediately so a later crash cannot lose the selected server.
+    g_pCore->SaveConfig();
+
+    m_strNick.clear();
+    m_strHost.clear();
+    m_strPassword.clear();
+    m_Address.s_addr = 0;
+    m_usPort = 0;
+    m_bIsConnecting = false;
+    m_bIsDetectingVersion = false;
+    m_tConnectStarted = 0;
+
+    if (!CModManager::GetSingleton().Load(arguments))
+    {
+        arguments.Format(_("No such mod installed (%s)"), modName.c_str());
+        g_pCore->ShowMessageBox(_("Error") + _E("CC31"), arguments, MB_BUTTON_OK | MB_ICON_ERROR);
+        Abort();
+    }
 }
 
 bool CConnectManager::CheckNickProvided(const char* szNick)

@@ -40,6 +40,7 @@ class CLocalizationInterface;
 enum eCoreVersion
 {
     MTACORE_20 = 1,
+    MTACORE_21 = 2,
 };
 
 #ifndef WITH_TIMING_CHECKPOINTS
@@ -225,6 +226,10 @@ public:
     virtual void FailNativeWorldStartupBeforeActive(const std::string& reason) = 0;
     virtual void TerminateNativeWorldStartup(const std::string& reason) = 0;
     virtual bool IsSecondaryClient() const = 0;
+
+    // Append new ABI entries so modules that do not consume this versioned
+    // capability retain the offsets of every pre-existing core method.
+    virtual std::string ConsumeNeonConnectionTicket() = 0;
 };
 
 class CClientTime

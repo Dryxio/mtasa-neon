@@ -1,0 +1,34 @@
+{
+  "name": "@neon/identity-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "generate-key": "node scripts/generate-key.mjs",
+    "migrate": "tsx src/migrate.ts",
+    "start": "node dist/index.js",
+    "test": "tsc -p tsconfig.tests.json --noEmit && vitest run tests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "fastify": "^5.11.2",
+    "jose": "^6.2.8",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/pg": "^8.15.6",
+    "tsx": "^4.23.5",
+    "typescript": "~6.0.2",
+    "vitest": "^4.1.0"
+  }
+}

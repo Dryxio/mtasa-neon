@@ -39,6 +39,8 @@ public:
     const MD5& GetPassword() { return m_Password; };
     void       SetPassword(const MD5& Password) { m_Password = Password; };
 
+    const std::string& GetNeonIdentityTicket() const noexcept { return m_neonIdentityTicket; }
+
     bool IsOptionalUpdateInfoRequired() { return m_bOptionalUpdateInfoRequired; }
 
 private:
@@ -50,4 +52,5 @@ private:
     SString        m_strNick;
     MD5            m_Password;
     CMtaVersion    m_strPlayerVersion;
+    std::string    m_neonIdentityTicket;
 };

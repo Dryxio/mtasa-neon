@@ -98,6 +98,8 @@ private:
     bool OnAboutButtonClick(CGUIElement* pElement);
     bool OnQuitButtonClick(CGUIElement* pElement);
     bool OnNewsButtonClick(CGUIElement* pElement);
+    bool OnNeonIdentityButtonClick(CGUIElement* pElement);
+    void UpdateNeonIdentityControls();
 
     void HideServerInfo();
 
@@ -113,6 +115,8 @@ private:
     CGUIStaticImage* m_pMenuArea;
 
     CGUIScrollPane* m_pCanvas;
+    CGUIButton*     m_pNeonIdentityButton{};
+    CGUILabel*      m_pNeonIdentityStatus{};
 
     std::deque<sMenuItem*> m_menuItems;
     std::set<sMenuItem*>   m_unhoveredItems;

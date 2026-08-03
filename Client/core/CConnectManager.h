@@ -45,6 +45,8 @@ public:
 
 private:
     bool Event_OnCancelClick(CGUIElement* pElement);
+    void ClearPendingIdentityConnection();
+    void CompleteConnectionToMod(const std::string& modName);
 
     in_addr        m_Address;
     std::string    m_strHost;
@@ -57,6 +59,8 @@ private:
     bool           m_bSave;
     time_t         m_tConnectStarted;
     bool           m_bHasTriedSecondConnect;
+    bool           m_bWaitingForNeonTicket{};
+    std::string    m_pendingNeonModName;
 
     GUI_CALLBACK* m_pOnCancelClick;
 

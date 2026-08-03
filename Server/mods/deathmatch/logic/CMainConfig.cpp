@@ -33,6 +33,21 @@ CTickRateSettings   g_TickRateSettings;
 
 using namespace std;
 
+namespace
+{
+    bool IsValidNeonServerId(const std::string& value)
+    {
+        const auto isAsciiAlphaNumeric = [](unsigned char character)
+        { return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9'); };
+
+        if (value.empty() || value.size() > 128 || !isAsciiAlphaNumeric(value.front()))
+            return false;
+
+        return std::all_of(value.begin() + 1, value.end(), [&](unsigned char character)
+                           { return isAsciiAlphaNumeric(character) || character == '.' || character == '_' || character == ':' || character == '-'; });
+    }
+}
+
 // Used to identify <client_file> names
 struct
 {
@@ -363,6 +378,40 @@ bool CMainConfig::Load()
 
     // Grab the server password
     iResult = GetString(m_pRootNode, "password", m_strPassword, 1, 32);
+
+    // Neon Identity is disabled by default so existing MTA servers preserve
+    // their connection policy. Optional and required modes are deliberately
+    // explicit because accepting an invalid verifier configuration would turn
+    // a security control into a silent allow-all.
+    std::string neonAuthMode;
+    GetString(m_pRootNode, "neon_auth", neonAuthMode);
+    if (neonAuthMode.empty() || neonAuthMode == "disabled")
+        m_neonAuthMode = ENeonAuthMode::Disabled;
+    else if (neonAuthMode == "optional")
+        m_neonAuthMode = ENeonAuthMode::Optional;
+    else if (neonAuthMode == "required")
+        m_neonAuthMode = ENeonAuthMode::Required;
+    else
+    {
+        CLogger::ErrorPrintf("Invalid neon_auth value '%s'; expected disabled, optional, or required\n", neonAuthMode.c_str());
+        return false;
+    }
+
+    GetString(m_pRootNode, "neon_auth_server_id", m_neonAuthServerId);
+    GetString(m_pRootNode, "neon_auth_issuer", m_neonAuthIssuer);
+    GetString(m_pRootNode, "neon_auth_key_id", m_neonAuthKeyId);
+    GetString(m_pRootNode, "neon_auth_public_key", m_neonAuthPublicKey);
+    if (m_neonAuthMode != ENeonAuthMode::Disabled &&
+        (m_neonAuthServerId.empty() || m_neonAuthIssuer.empty() || m_neonAuthKeyId.empty() || m_neonAuthPublicKey.empty()))
+    {
+        CLogger::ErrorPrintf("Neon Identity is enabled but its server id, issuer, key id, or public key is missing\n");
+        return false;
+    }
+    if (m_neonAuthMode != ENeonAuthMode::Disabled && !IsValidNeonServerId(m_neonAuthServerId))
+    {
+        CLogger::ErrorPrintf("Neon Identity server id must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}\n");
+        return false;
+    }
 
     // Grab the server fps limit
     int readFps = 0;

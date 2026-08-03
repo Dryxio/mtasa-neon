@@ -821,6 +821,12 @@ bool CClientGame::StartGame(const char* szNick, const char* szPassword, eServerT
             std::string strUser;
             pBitStream->Write(strUser.c_str(), MAX_SERIAL_LENGTH);
 
+            // The Neon ticket is an optional trailing extension. Legacy
+            // servers ignore it, while Neon-enabled servers validate it before
+            // allocating a player object. Consuming it here also guarantees a
+            // prepared ticket cannot be replayed by a later connection.
+            pBitStream->WriteString(g_pCore->ConsumeNeonConnectionTicket());
+
             // Send the packet as joindata
             g_pNet->SendPacket(PACKET_ID_PLAYER_JOINDATA, pBitStream, PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED);
             g_pNet->DeallocateNetBitStream(pBitStream);

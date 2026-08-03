@@ -405,6 +405,15 @@ void CClientVariables::LoadDefaults()
     DEFAULT("allow_discord_rpc", true);                  // Enable Discord Rich Presence
     DEFAULT("discord_rpc_share_data", false);            // Consistent Rich Presence data sharing
     DEFAULT("discord_rpc_share_data_firsttime", false);  // Display the user data sharing consent dialog box - for the first time
+    DEFAULT("neon_identity_url", std::string("https://identity.mta-neon.com"));  // Central OAuth and short-lived connection-ticket service
+    std::string neonIdentityUrl;
+    if (Get("neon_identity_url", neonIdentityUrl) && neonIdentityUrl == "https://identity.neon.mtasa.com")
+    {
+        // Early Neon test builds persisted the provisional mtasa.com host in
+        // user profiles, so changing only the default leaves those clients on
+        // a dead OAuth origin. Migrate that exact legacy value once.
+        Set("neon_identity_url", std::string("https://identity.mta-neon.com"));
+    }
     DEFAULT("browser_enable_gpu", true);                 // Enable GPU in CEF? (allows stuff like WebGL to function)
     DEFAULT("browser_enable_video_acceleration", true);  // Enable hardware video decoding in CEF?
     DEFAULT("process_cpu_affinity", true);               // Set CPU 0 affinity to improve game performance and fix the known issue in single-threaded games
