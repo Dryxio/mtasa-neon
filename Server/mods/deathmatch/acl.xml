@@ -36,10 +36,6 @@
       <acl name="RPC" />
       <object name="resource.ip2c" />
    </group>
-   <group name="BlitzData">
-      <acl name="BlitzData" />
-      <object name="resource.Blitz" />
-   </group>
    <group name="MapEditor">
       <acl name="Default" />
       <acl name="MapEditor" />
@@ -255,10 +251,6 @@
    <acl name="RPC">
       <right name="function.callRemote" access="true" />
       <right name="function.fetchRemote" access="true" />
-   </acl>
-   <acl name="BlitzData">
-      <right name="function.fetchRemote" access="true" />
-      <right name="function.kickPlayer" access="true" />
    </acl>
    <acl name="MapEditor">
       <right name="general.ModifyOtherObjects" access="true" />
