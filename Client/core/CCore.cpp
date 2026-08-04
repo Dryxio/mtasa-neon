@@ -2303,6 +2303,7 @@ void CCore::DoPostFramePulse()
 // Called after MOD is unloaded
 void CCore::OnModUnload()
 {
+    EndConnectionLoading();
     FailNativeWorldStartupBeforeActive("Core began returning to the menu before native-world activation");
 
     // Reset resource-owned state before restoring the player's persistent baselines.
@@ -3234,6 +3235,12 @@ void CCore::UpdateDummyProgress(int iValue, const char* szType)
     {
         m_iDummyProgressValue = iValue;
         m_strDummyProgressType = szType;
+
+        // Entity preparation already reports a real percentage through this
+        // legacy channel. Reuse it without pretending byte/MB counters are a
+        // normalized loading value.
+        if (szType && strcmp(szType, "%") == 0)
+            CGraphics::GetSingleton().UpdateConnectionLoadingProgress(Clamp(0.0f, iValue / 100.0f, 1.0f));
     }
 
     if (m_DummyProgressTimerHandle == NULL)
@@ -3253,6 +3260,21 @@ void CCore::UpdateDummyProgress(int iValue, const char* szType)
         strMessage = SString("%d%s", m_iDummyProgressValue, *m_strDummyProgressType);
 
     CGraphics::GetSingleton().SetProgressMessage(strMessage);
+}
+
+void CCore::BeginConnectionLoading(const char* status)
+{
+    CGraphics::GetSingleton().BeginConnectionLoading(status ? status : "");
+}
+
+void CCore::UpdateConnectionLoading(const char* status, float progress)
+{
+    CGraphics::GetSingleton().UpdateConnectionLoading(status ? status : "", progress);
+}
+
+void CCore::EndConnectionLoading()
+{
+    CGraphics::GetSingleton().EndConnectionLoading();
 }
 
 //

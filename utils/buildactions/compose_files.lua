@@ -35,6 +35,10 @@ newaction {
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.pak")
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.bin")
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.dat")
+			-- The Neon menu is a runtime CEF document, not a compiled binary. Copy
+			-- its complete Vite output explicitly so clean installers do not fall
+			-- back to the legacy CEGUI menu when index.html is absent.
+			os.copydir(BIN_DIR.."/mta/cef/serverbrowser", OUTPUT_DIR.."/MTA/cef/serverbrowser")
 		else
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.so")
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**mta-server*")

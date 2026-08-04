@@ -183,6 +183,7 @@ void CResourceFileDownloadManager::DoPulse()
         g_pCore->GetConsole()->Printf(_("Download error: %s"), *m_strLastHTTPError);
         AddReportLog(7106, SString("Game - HTTPError (%s)", *m_strLastHTTPError));
 
+        g_pClientGame->EndConnectionLoading();
         g_pCore->GetModManager()->RequestUnload();
         g_pCore->ShowMessageBox(_("Error") + _E("CD20"), *m_strLastHTTPError, MB_BUTTON_OK | MB_ICON_ERROR);  // HTTP Error
         m_bIsTransferingFiles = false;
@@ -191,6 +192,9 @@ void CResourceFileDownloadManager::DoPulse()
 
     // Update progress box
     GetTransferBox()->SetDownloadProgress(uiDownloadedSizeTotal);
+    const uint64_t totalSize = GetTransferBox()->GetDownloadTotalSize();
+    const float    progress = totalSize > 0 ? static_cast<float>(static_cast<double>(uiDownloadedSizeTotal) / totalSize) : -1.0f;
+    g_pClientGame->UpdateConnectionLoading(_("Downloading resources"), progress);
     GetTransferBox()->DoPulse();
 
     // Call Lua event 'onClientTransferBoxProgressChange'
@@ -216,6 +220,11 @@ void CResourceFileDownloadManager::DoPulse()
             g_pClientGame->GetRootEntity()->CallEvent("onClientTransferBoxVisibilityChange", arguments, false);
         }
 
+        // Loading scripts/configs can stall after network transfer reaches
+        // 100%, so keep the same native screen and switch to an honest
+        // indeterminate phase before doing that work.
+        g_pClientGame->UpdateConnectionLoading(_("Processing resources"));
+
         // Load our newly ready resources
         g_pClientGame->GetResourceManager()->OnDownloadGroupFinished();
         UpdatePendingDownloads();
@@ -233,6 +242,7 @@ void CResourceFileDownloadManager::AddDownloadSize(int iSize)
 {
     if (!m_bIsTransferingFiles)
     {
+        g_pClientGame->UpdateConnectionLoading(_("Downloading resources"), 0.0f);
         GetTransferBox()->Show();
         m_bIsTransferingFiles = true;
         for (auto serverInfo : m_HttpServerList)

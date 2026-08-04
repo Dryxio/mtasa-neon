@@ -305,6 +305,9 @@ public:
     void        UpdateDummyProgress(int iValue = -1, const char* szType = "");
     void        SetDummyProgressUpdateAlways(bool bAlways) { m_bDummyProgressUpdateAlways = bAlways; }
     bool        GetDummyProgressUpdateAlways() { return m_bDummyProgressUpdateAlways; }
+    void        BeginConnectionLoading(const char* status);
+    void        UpdateConnectionLoading(const char* status, float progress);
+    void        EndConnectionLoading();
 
     void        OnPreCreateDevice(IDirect3D9* pDirect3D, UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD& BehaviorFlags,
                                   D3DPRESENT_PARAMETERS* pPresentationParameters);

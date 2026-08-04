@@ -216,6 +216,10 @@ Section "Data files" SEC01
 	SetOutPath "$INSTDIR\MTA\cgui\images\serverbrowser"
 	File "${FILES_ROOT}\MTA San Andreas\mta\cgui\images\serverbrowser\*.png"
 
+	; Native Neon connection loading screen assets.
+	SetOutPath "$INSTDIR\MTA\cgui\images\loadscreens"
+	File "${FILES_ROOT}\MTA San Andreas\mta\cgui\images\loadscreens\*.jpg"
+
 	SetOutPath "$INSTDIR\server\mods\deathmatch"
 	File "${FILES_ROOT}\MTA San Andreas\server\mods\deathmatch\libmysql.dll"
 

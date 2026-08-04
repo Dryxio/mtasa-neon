@@ -230,6 +230,12 @@ public:
     // Append new ABI entries so modules that do not consume this versioned
     // capability retain the offsets of every pre-existing core method.
     virtual std::string ConsumeNeonConnectionTicket() = 0;
+
+    // Native connection loading remains renderable while GTA or resource
+    // processing stalls the main frame, unlike a CEF or CEGUI-only overlay.
+    virtual void BeginConnectionLoading(const char* status) = 0;
+    virtual void UpdateConnectionLoading(const char* status, float progress) = 0;
+    virtual void EndConnectionLoading() = 0;
 };
 
 class CClientTime

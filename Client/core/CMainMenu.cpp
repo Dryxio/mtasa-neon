@@ -15,6 +15,7 @@
 #include "CLanguageSelector.h"
 #include "CDiscordRichPresence.h"
 #include "CNeonIdentityManager.h"
+#include <ServerBrowser/CServerBrowserWeb.h>
 
 #define NATIVE_RES_X 1280.0f
 #define NATIVE_RES_Y 1024.0f
@@ -337,6 +338,16 @@ CMainMenu::CMainMenu(CGUI* pManager)
     m_ServerBrowser.LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_REC), CONFIG_RECENT_LIST_TAG, m_ServerBrowser.GetRecentList());
     m_ServerBrowser.LoadServerList(pConfig->FindSubNode(CONFIG_NODE_SERVER_HISTORY), CONFIG_HISTORY_LIST_TAG, m_ServerBrowser.GetHistoryList());
 
+    // The web shell owns both the main menu and the server-browser route. If
+    // CEF cannot start or its bundle is absent, the established CEGUI menu
+    // remains intact as a recovery path.
+    m_pServerBrowserWeb = new CServerBrowserWeb(*this, m_ServerBrowser);
+    if (!m_pServerBrowserWeb->Initialise())
+    {
+        delete m_pServerBrowserWeb;
+        m_pServerBrowserWeb = nullptr;
+    }
+
     // Remove unused node
     if (CXMLNode* pOldNode = pConfig->FindSubNode(CONFIG_NODE_SERVER_INT))
         pConfig->DeleteSubNode(pOldNode);
@@ -365,6 +376,9 @@ CMainMenu::CMainMenu(CGUI* pManager)
 
 CMainMenu::~CMainMenu()
 {
+    delete m_pServerBrowserWeb;
+    m_pServerBrowserWeb = nullptr;
+
     auto destroyElement = [this](auto*& element)
     {
         if (!element)
@@ -474,6 +488,11 @@ void CMainMenu::SetMenuUnhovered()  // Dehighlight all our items
 void CMainMenu::Update()
 {
     UpdateNeonIdentityControls();
+
+    // Keep ownership in sync before any early return below. In particular,
+    // F8 can open the console while the menu is in its one-frame transition.
+    if (m_pServerBrowserWeb)
+        m_pServerBrowserWeb->SetNativeDialogVisible(HasNativeInputOwner());
 
     if (g_pCore->GetDiagnosticDebug() == EDiagnosticDebug::JOYSTICK_0000)
     {
@@ -740,6 +759,27 @@ void CMainMenu::Update()
     m_ServerBrowser.Update();
     m_ServerInfo.DoPulse();
     m_pLanguageSelector->DoPulse();
+    if (m_pServerBrowserWeb)
+    {
+        // Keep legacy controls alive for their native dialogs and fallback,
+        // but prevent duplicate menu/language widgets behind the web shell.
+        m_pFiller->SetVisible(false);
+        m_pFiller2->SetVisible(false);
+        m_pCanvas->SetVisible(false);
+        m_pBackground->SetVisible(false);
+        // SetVisible(false) used to activate the legacy browser even while
+        // hiding it. Avoid touching it every frame so native edit boxes and
+        // combo-box drop lists keep their CEGUI focus/capture.
+        if (m_ServerBrowser.IsVisible())
+            m_ServerBrowser.SetVisible(false);
+        m_pServerBrowserWeb->DoPulse();
+    }
+}
+
+bool CMainMenu::HasNativeInputOwner()
+{
+    return m_Settings.IsVisible() || m_Credits.IsVisible() || m_QuestionBox.IsVisible() || m_ServerInfo.IsVisible() ||
+           (m_pNewsBrowser && m_pNewsBrowser->IsVisible()) || g_pCore->GetConsole()->IsVisible() || g_pCore->IsChatInputEnabled();
 }
 
 bool CMainMenu::OnNeonIdentityButtonClick(CGUIElement* pElement)
@@ -843,6 +883,9 @@ void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
     }
 
     m_bHideGame = !bOverlay;
+
+    if (m_pServerBrowserWeb)
+        m_pServerBrowserWeb->SetVisible(bVisible);
 }
 
 bool CMainMenu::IsVisible()

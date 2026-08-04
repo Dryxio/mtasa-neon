@@ -23,9 +23,9 @@ private key outside the distributed MTA client and server binaries.
 5. The client polls `POST /v1/auth/discord/poll`. The successful response
    reveals the opaque Neon session token exactly once.
 6. Before joining a server, the client calls `POST /v1/tickets` with that
-   session. The backend signs only when `server_id` exists in its static V1
-   registry. The returned Ed25519 JWT is audience-bound to that ID and lives for
-   30–60 seconds (45 by default).
+   session. The backend signs only when `server_id` and endpoint exist in its
+   Identity security allowlist. The returned Ed25519 JWT is audience-bound to
+   that ID and lives for 30–60 seconds (45 by default).
 
 The `poll_token`, browser capability, and session token are random 256-bit
 values. Only SHA-256 hashes of poll and session tokens are persisted. SHA-256 is
@@ -111,8 +111,46 @@ HTTP/1.1 403 Forbidden
 Discovery and keys are public:
 
 - `GET /.well-known/neon-identity`
+- `GET /.well-known/neon-server-registry`
 - `GET /.well-known/jwks.json`
 - `GET /healthz`
+
+The identity discovery document includes `server_registry_uri`, which points to
+the public catalogue consumed by the Neon server browser. The catalogue is a
+versioned presentation document rather than an authorization source:
+
+```json
+{
+  "schema_version": 1,
+  "servers": [
+    {
+      "id": "blitz-production",
+      "endpoints": ["213.32.90.138:22004"],
+      "name": "MTA:SA Neon — Blitz",
+      "tagline": "One rival. One city. No route.",
+      "description": "Open-world 1v1 vehicle pursuits: escape your rival or stop them before time runs out.",
+      "countries": ["BR", "GB", "FR", "RU", "PL", "ID", "ES"],
+      "languages": ["Portuguese (Brazil)", "English", "French", "Russian", "Polish", "Indonesian", "Spanish"],
+      "links": []
+    }
+  ]
+}
+```
+
+The catalogue is populated by public Neon server heartbeats. A heartbeat is
+bound to the TCP source address inserted by the trusted reverse proxy, then the
+service probes the corresponding MTA ASE endpoint (`game_port + 123`) and
+requires the current `NeonRegistryProtocol` ASE rule before it publishes
+anything. It expires after five minutes without renewal. This makes
+all public servers running a heartbeat-capable Neon build discoverable without
+manual registration while preventing a server from advertising another public
+IP. It is service verification, not binary attestation: a determined operator
+can modify an open-source build, so abuse still requires moderation controls.
+
+Names and presentation metadata come from `mtaserver.conf`. Live mode, map,
+player count, password state, version, and ping remain sourced from ASE. Public
+catalogue responses allow cross-origin reads and use
+`Cache-Control: public, max-age=30, stale-if-error=300`.
 
 ## Ticket validation contract
 
@@ -170,6 +208,27 @@ getPlayerDiscordID(player)         -- Discord snowflake string or false
 Equivalent player methods are `player:isNeonAuthenticated()`,
 `player:getNeonID()`, and `player:getDiscordID()`.
 
+### Automatic public discovery
+
+Public discovery is enabled by default when ordinary MTA ASE publication is
+enabled. An administrator can opt out or provide richer browser metadata:
+
+```xml
+<neon_registry>1</neon_registry>
+<neon_registry_tagline>One rival. One city. No route.</neon_registry_tagline>
+<neon_registry_description>Open-world vehicle pursuits.</neon_registry_description>
+<neon_registry_countries>GB, ES, BR, FR</neon_registry_countries>
+<neon_registry_languages>English, Spanish, Portuguese (Brazil), French</neon_registry_languages>
+<neon_registry_website>https://mta-neon.com</neon_registry_website>
+<neon_registry_discord>https://discord.gg/example</neon_registry_discord>
+<neon_registry_accent>#9EBCE5</neon_registry_accent>
+```
+
+`countries` contains comma-separated ISO 3166-1 alpha-2 codes. Links must use
+HTTPS. Empty optional fields receive conservative service defaults. The
+official heartbeat URL is compiled as the default; a private deployment can
+override it with `<neon_registry_url>`.
+
 ## Local setup
 
 Requirements: Node.js 22+ and PostgreSQL 15+.
@@ -206,10 +265,10 @@ requests can arrive exclusively through that proxy, and keep request query,
 cookie, and authorization headers out of proxy logs. The service itself omits
 request URLs from structured logs and redacts credential-bearing headers.
 
-## Static V1 server registry
+## Identity security allowlist
 
-`NEON_SERVER_REGISTRY` is a required JSON object mapping every stable server ID
-to one or more canonical endpoints:
+`NEON_SERVER_REGISTRY` remains a required JSON object mapping Identity-enabled
+official server IDs to canonical endpoints:
 
 ```dotenv
 NEON_SERVER_REGISTRY='{"blitz-production":["203.0.113.10:22003","203.0.113.11:22003"],"neon-staging":["127.0.0.1:22003"]}'
@@ -217,11 +276,12 @@ NEON_SERVER_REGISTRY='{"blitz-production":["203.0.113.10:22003","203.0.113.11:22
 
 Every ID must match `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and every endpoint must
 be canonical `IPv4:port` without leading-zero aliases. Empty or invalid
-registries fail service startup. `POST /v1/tickets` authenticates the session,
-then checks the exact pair before calling the signer. Adding or removing a
-server endpoint in V1 requires changing deployment configuration and restarting
-the service. Removal stops new tickets immediately; issued tickets remain valid
-only until their short `exp`.
+allowlists fail service startup. Matching heartbeats retain their official ID;
+other verified public Neon servers receive a stable endpoint-derived community
+ID and appear in discovery, but cannot request Discord Identity tickets.
+`POST /v1/tickets` authenticates the session, then checks the exact official
+pair before calling the signer. Removal stops new tickets immediately; issued
+tickets remain valid only until their short `exp`.
 
 ## Optional Discord guild/role policy
 
@@ -253,7 +313,11 @@ platform-wide identity service and evaluate Blitz policy at Blitz ticket time.
   logout/revocation endpoint is not part of this first native-client checkpoint.
 - Periodically delete expired flows and sessions after retaining any required
   security audit interval.
-- The static allowlist is the V1 server registry. There is not yet a dynamic
-  server-owner registration portal or per-server policy database.
+- The heartbeat-backed public registry is separate from the static Identity
+  allowlist. There is not yet a server-owner portal, moderation console, or
+  per-server policy database.
+- Public server-browser metadata is validated by `src/server-catalog.ts` and
+  persisted from verified heartbeats. Only endpoints in the Identity allowlist
+  may receive signed Discord Identity tickets.
 - Store the signing key and Discord credentials in a secrets manager in
   production, not an environment file on disk.

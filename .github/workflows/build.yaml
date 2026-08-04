@@ -142,6 +142,22 @@ jobs:
             throw $failure
           }
 
+      - uses: actions/setup-node@v6
+        if: matrix.platform == 'win32'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: Tools/server-browser-prototype/package-lock.json
+
+      - name: Build and validate Neon menu frontend
+        if: matrix.platform == 'win32'
+        working-directory: Tools/server-browser-prototype
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          npm run lint
+          npm run build:client
+
       - name: Create build artifacts
         run: utils\premake5 compose_files
 
@@ -169,6 +185,11 @@ jobs:
             'MTA\bootstrapc.exe',
             'MTA\sa.dat',
             'MTA\cgui\unifont.ttf',
+            'MTA\cgui\images\loadscreens\loadsc1.jpg',
+            'MTA\cgui\images\loadscreens\loadsc14.jpg',
+            'MTA\cef\serverbrowser\index.html',
+            'MTA\cef\serverbrowser\loadscreens\loadsc1.webp',
+            'MTA\cef\serverbrowser\loadscreens\loadsc14.webp',
             'mods\deathmatch\client.dll',
             'mods\deathmatch\lua5.1c.dll',
             'mods\deathmatch\pcre2.dll',
@@ -179,6 +200,23 @@ jobs:
             if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
               throw "Installer input is missing: $relativePath"
             }
+          }
+
+          $webAssetsRoot = Join-Path $filesRoot 'MTA\cef\serverbrowser\assets'
+          foreach ($extension in @('js', 'css', 'ttf')) {
+            if (-not (Get-ChildItem -LiteralPath $webAssetsRoot -File -Filter "*.$extension")) {
+              throw "Installer input has no Neon menu *.$extension asset"
+            }
+          }
+
+          $webLoadscreens = @(Get-ChildItem -LiteralPath (Join-Path $filesRoot 'MTA\cef\serverbrowser\loadscreens') -File -Filter 'loadsc*.webp')
+          if ($webLoadscreens.Count -ne 14) {
+            throw "Installer input must contain 14 web load screens, found $($webLoadscreens.Count)"
+          }
+
+          $nativeLoadscreens = @(Get-ChildItem -LiteralPath (Join-Path $filesRoot 'MTA\cgui\images\loadscreens') -File -Filter 'loadsc*.jpg')
+          if ($nativeLoadscreens.Count -ne 14) {
+            throw "Installer input must contain 14 native load screens, found $($nativeLoadscreens.Count)"
           }
 
           New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
@@ -226,6 +264,7 @@ jobs:
             'Path = MTA/bootstrapc.exe',
             'Path = MTA/sa.dat',
             'Path = MTA/cgui/unifont.ttf',
+            'Path = MTA/cef/serverbrowser/index.html',
             'Path = mods/deathmatch/client.dll',
             'Path = mods/deathmatch/lua5.1c.dll',
             'Path = mods/deathmatch/pcre2.dll',
@@ -235,6 +274,27 @@ jobs:
             if ($archiveListing -notcontains $expectedEntry) {
               throw "Built installer is missing: $expectedEntry"
             }
+          }
+
+          $requiredInstallerPatterns = @{
+            'Neon menu JavaScript' = '^Path = MTA/cef/serverbrowser/assets/.+\.js$'
+            'Neon menu CSS' = '^Path = MTA/cef/serverbrowser/assets/.+\.css$'
+            'Neon menu fonts' = '^Path = MTA/cef/serverbrowser/assets/.+\.ttf$'
+          }
+          foreach ($label in $requiredInstallerPatterns.Keys) {
+            if (-not ($archiveListing -match $requiredInstallerPatterns[$label])) {
+              throw "Built installer is missing: $label"
+            }
+          }
+
+          $installedWebLoadscreens = @($archiveListing | Where-Object { $_ -match '^Path = MTA/cef/serverbrowser/loadscreens/loadsc(?:[1-9]|1[0-4])\.webp$' })
+          if ($installedWebLoadscreens.Count -ne 14) {
+            throw "Built installer must contain 14 web load screens, found $($installedWebLoadscreens.Count)"
+          }
+
+          $installedNativeLoadscreens = @($archiveListing | Where-Object { $_ -match '^Path = MTA/cgui/images/loadscreens/loadsc(?:[1-9]|1[0-4])\.jpg$' })
+          if ($installedNativeLoadscreens.Count -ne 14) {
+            throw "Built installer must contain 14 native load screens, found $($installedNativeLoadscreens.Count)"
           }
 
           $installer = Get-Item -LiteralPath $outputPath

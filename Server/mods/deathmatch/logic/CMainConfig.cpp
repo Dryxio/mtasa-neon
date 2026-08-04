@@ -413,6 +413,102 @@ bool CMainConfig::Load()
         return false;
     }
 
+    // A public Neon server announces itself to the Neon registry by default.
+    // The ordinary ASE switch remains the publication boundary: private/LAN
+    // servers never register, and administrators can explicitly opt out here.
+    iResult = GetBoolean(m_pRootNode, "neon_registry", m_neonRegistryEnabled);
+    if (iResult == INVALID_VALUE)
+    {
+        CLogger::LogPrint("WARNING: Invalid neon_registry value; defaulting to 1\n");
+        m_neonRegistryEnabled = true;
+    }
+
+    if (GetString(m_pRootNode, "neon_registry_url", m_neonRegistryUrl, 1, 2048) == INVALID_VALUE)
+    {
+        CLogger::ErrorPrintf("Invalid Neon registry URL\n");
+        return false;
+    }
+    if (m_neonRegistryUrl.empty())
+        m_neonRegistryUrl = "https://identity.mta-neon.com/v1/server-registry/heartbeat";
+    if (!SString(m_neonRegistryUrl).BeginsWith("https://"))
+    {
+        CLogger::ErrorPrintf("Neon registry URL must use HTTPS\n");
+        return false;
+    }
+
+    const auto readOptionalRegistryString = [this](const char* name, std::string& value, int maxLength)
+    {
+        const int result = GetString(m_pRootNode, name, value, 1, maxLength);
+        if (result == INVALID_VALUE)
+        {
+            CLogger::LogPrintf("WARNING: Ignoring invalid %s value\n", name);
+            value.clear();
+        }
+    };
+    readOptionalRegistryString("neon_registry_tagline", m_neonRegistryTagline, 160);
+    readOptionalRegistryString("neon_registry_description", m_neonRegistryDescription, 600);
+    readOptionalRegistryString("neon_registry_website", m_neonRegistryWebsite, 2048);
+    readOptionalRegistryString("neon_registry_discord", m_neonRegistryDiscord, 2048);
+    readOptionalRegistryString("neon_registry_accent", m_neonRegistryAccent, 7);
+
+    const auto validateRegistryUrl = [](const char* name, std::string& value)
+    {
+        if (!value.empty() && !SString(value).BeginsWith("https://"))
+        {
+            CLogger::LogPrintf("WARNING: Ignoring %s because public links must use HTTPS\n", name);
+            value.clear();
+        }
+    };
+    validateRegistryUrl("neon_registry_website", m_neonRegistryWebsite);
+    validateRegistryUrl("neon_registry_discord", m_neonRegistryDiscord);
+
+    if (!m_neonRegistryAccent.empty() &&
+        (m_neonRegistryAccent.size() != 7 || m_neonRegistryAccent.front() != '#' ||
+         !std::all_of(m_neonRegistryAccent.begin() + 1, m_neonRegistryAccent.end(), [](unsigned char c) { return std::isxdigit(c) != 0; })))
+    {
+        CLogger::LogPrint("WARNING: Ignoring neon_registry_accent; expected #RRGGBB\n");
+        m_neonRegistryAccent.clear();
+    }
+
+    SString countries;
+    GetString(m_pRootNode, "neon_registry_countries", countries);
+    ReadCommaSeparatedList(countries, m_neonRegistryCountries);
+    if (m_neonRegistryCountries.size() > 16)
+        m_neonRegistryCountries.resize(16);
+    for (auto iter = m_neonRegistryCountries.begin(); iter != m_neonRegistryCountries.end();)
+    {
+        *iter = iter->ToUpper();
+        if (iter->length() != 2 || !std::all_of(iter->begin(), iter->end(), [](unsigned char c) { return std::isalpha(c) != 0; }))
+        {
+            CLogger::LogPrintf("WARNING: Ignoring invalid Neon registry country '%s'\n", iter->c_str());
+            iter = m_neonRegistryCountries.erase(iter);
+        }
+        else
+            ++iter;
+    }
+    std::set<SString> uniqueCountries;
+    m_neonRegistryCountries.erase(std::remove_if(m_neonRegistryCountries.begin(), m_neonRegistryCountries.end(),
+                                                 [&uniqueCountries](const SString& country) { return !uniqueCountries.emplace(country).second; }),
+                                  m_neonRegistryCountries.end());
+
+    SString languages;
+    GetString(m_pRootNode, "neon_registry_languages", languages);
+    ReadCommaSeparatedList(languages, m_neonRegistryLanguages);
+    if (m_neonRegistryLanguages.size() > 16)
+        m_neonRegistryLanguages.resize(16);
+    for (auto iter = m_neonRegistryLanguages.begin(); iter != m_neonRegistryLanguages.end();)
+    {
+        *iter = iter->TrimStart(" ").TrimEnd(" ");
+        if (iter->empty() || iter->length() > 80)
+            iter = m_neonRegistryLanguages.erase(iter);
+        else
+            ++iter;
+    }
+    std::set<SString> uniqueLanguages;
+    m_neonRegistryLanguages.erase(std::remove_if(m_neonRegistryLanguages.begin(), m_neonRegistryLanguages.end(),
+                                                 [&uniqueLanguages](const SString& language) { return !uniqueLanguages.emplace(language).second; }),
+                                  m_neonRegistryLanguages.end());
+
     // Grab the server fps limit
     int readFps = 0;
     iResult = GetInteger(m_pRootNode, "fpslimit", readFps, FPSLimits::FPS_UNLIMITED, FPSLimits::FPS_MAX);

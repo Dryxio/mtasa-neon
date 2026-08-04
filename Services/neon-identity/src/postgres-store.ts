@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
-import type { DiscordProfile, FlowPollResult, IdentityStore, NeonAccount, OAuthFlow } from "./model.js";
+import type {
+    DiscordProfile,
+    FlowPollResult,
+    IdentityStore,
+    NeonAccount,
+    OAuthFlow,
+    RegisteredServer,
+    RegisteredServerLink,
+} from "./model.js";
 
 interface AccountRow extends QueryResultRow {
     id: string;
@@ -13,6 +21,23 @@ interface AccountRow extends QueryResultRow {
     updated_at: Date;
 }
 
+interface RegisteredServerRow extends QueryResultRow {
+    server_id: string;
+    endpoint: string;
+    registry_protocol: number;
+    http_port: number;
+    server_version: string;
+    name: string;
+    tagline: string;
+    description: string;
+    countries: string[];
+    languages: string[];
+    links: RegisteredServerLink[];
+    accent: string | null;
+    first_seen_at: Date;
+    last_seen_at: Date;
+}
+
 function toAccount(row: AccountRow): NeonAccount {
     return {
         id: row.id,
@@ -22,6 +47,25 @@ function toAccount(row: AccountRow): NeonAccount {
         discordAvatarHash: row.discord_avatar_hash,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+    };
+}
+
+function toRegisteredServer(row: RegisteredServerRow): RegisteredServer {
+    return {
+        id: row.server_id,
+        endpoint: row.endpoint,
+        registryProtocol: row.registry_protocol,
+        httpPort: row.http_port,
+        serverVersion: row.server_version,
+        name: row.name,
+        tagline: row.tagline,
+        description: row.description,
+        countries: row.countries,
+        languages: row.languages,
+        links: row.links,
+        accent: row.accent,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
     };
 }
 
@@ -192,6 +236,56 @@ export class PostgresIdentityStore implements IdentityStore {
             [sessionTokenHash, now],
         );
         return result.rows[0] ? toAccount(result.rows[0]) : null;
+    }
+
+    async upsertRegisteredServer(server: RegisteredServer): Promise<void> {
+        await this.#pool.query(
+            `INSERT INTO neon_registered_servers
+                (server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
+                 countries, languages, links, accent, first_seen_at, last_seen_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
+             ON CONFLICT (server_id) DO UPDATE SET
+                endpoint = EXCLUDED.endpoint,
+                registry_protocol = EXCLUDED.registry_protocol,
+                http_port = EXCLUDED.http_port,
+                server_version = EXCLUDED.server_version,
+                name = EXCLUDED.name,
+                tagline = EXCLUDED.tagline,
+                description = EXCLUDED.description,
+                countries = EXCLUDED.countries,
+                languages = EXCLUDED.languages,
+                links = EXCLUDED.links,
+                accent = EXCLUDED.accent,
+                last_seen_at = EXCLUDED.last_seen_at`,
+            [
+                server.id,
+                server.endpoint,
+                server.registryProtocol,
+                server.httpPort,
+                server.serverVersion,
+                server.name,
+                server.tagline,
+                server.description,
+                JSON.stringify(server.countries),
+                JSON.stringify(server.languages),
+                JSON.stringify(server.links),
+                server.accent,
+                server.firstSeenAt,
+                server.lastSeenAt,
+            ],
+        );
+    }
+
+    async listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]> {
+        const result = await this.#pool.query<RegisteredServerRow>(
+            `SELECT server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
+                    countries, languages, links, accent, first_seen_at, last_seen_at
+               FROM neon_registered_servers
+              WHERE last_seen_at >= $1
+              ORDER BY server_id`,
+            [activeSince],
+        );
+        return result.rows.map(toRegisteredServer);
     }
 
     async close(): Promise<void> {

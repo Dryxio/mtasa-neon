@@ -383,6 +383,8 @@ public:
     bool         IsUpdated() { return m_bUpdated; };
     void         SetUpdated(bool bUpdated) { m_bUpdated = bUpdated; };
     int          GetRevision() { return m_iRevision; }
+    bool         IsRefreshing() const { return m_iPass != 0; }
+    unsigned int GetScannedCount() const { return m_nScanned + m_nSkipped; }
     void         SortByASEVersion();
     void         Sort(unsigned int uiColumn, int direction);
     void         RetryNonRespondingServers();  // Reset no-reply counters for cached servers

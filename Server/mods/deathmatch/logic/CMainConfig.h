@@ -142,6 +142,15 @@ public:
     const std::string&                GetNeonAuthIssuer() const noexcept { return m_neonAuthIssuer; }
     const std::string&                GetNeonAuthKeyId() const noexcept { return m_neonAuthKeyId; }
     const std::string&                GetNeonAuthPublicKey() const noexcept { return m_neonAuthPublicKey; }
+    bool                              GetNeonRegistryEnabled() const noexcept { return m_neonRegistryEnabled; }
+    const std::string&                GetNeonRegistryUrl() const noexcept { return m_neonRegistryUrl; }
+    const std::string&                GetNeonRegistryTagline() const noexcept { return m_neonRegistryTagline; }
+    const std::string&                GetNeonRegistryDescription() const noexcept { return m_neonRegistryDescription; }
+    const std::vector<SString>&       GetNeonRegistryCountries() const noexcept { return m_neonRegistryCountries; }
+    const std::vector<SString>&       GetNeonRegistryLanguages() const noexcept { return m_neonRegistryLanguages; }
+    const std::string&                GetNeonRegistryWebsite() const noexcept { return m_neonRegistryWebsite; }
+    const std::string&                GetNeonRegistryDiscord() const noexcept { return m_neonRegistryDiscord; }
+    const std::string&                GetNeonRegistryAccent() const noexcept { return m_neonRegistryAccent; }
 
     SString GetSetting(const SString& configSetting);
     bool    GetSetting(const SString& configSetting, SString& strValue);
@@ -255,4 +264,13 @@ private:
     std::string                m_neonAuthIssuer;
     std::string                m_neonAuthKeyId;
     std::string                m_neonAuthPublicKey;
+    bool                       m_neonRegistryEnabled{true};
+    std::string                m_neonRegistryUrl;
+    std::string                m_neonRegistryTagline;
+    std::string                m_neonRegistryDescription;
+    std::vector<SString>       m_neonRegistryCountries;
+    std::vector<SString>       m_neonRegistryLanguages;
+    std::string                m_neonRegistryWebsite;
+    std::string                m_neonRegistryDiscord;
+    std::string                m_neonRegistryAccent;
 };

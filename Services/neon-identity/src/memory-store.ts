@@ -1,4 +1,4 @@
-import type { DiscordProfile, FlowPollResult, IdentityStore, NeonAccount, OAuthFlow } from "./model.js";
+import type { DiscordProfile, FlowPollResult, IdentityStore, NeonAccount, OAuthFlow, RegisteredServer } from "./model.js";
 
 interface MemorySession {
     accountId: string;
@@ -14,6 +14,7 @@ export class MemoryIdentityStore implements IdentityStore {
     readonly flows = new Map<string, OAuthFlow>();
     readonly accounts = new Map<string, NeonAccount>();
     readonly sessions: MemorySession[] = [];
+    readonly registeredServers = new Map<string, RegisteredServer>();
 
     async createFlow(flow: OAuthFlow): Promise<void> {
         this.flows.set(flow.id, {
@@ -117,6 +118,22 @@ export class MemoryIdentityStore implements IdentityStore {
         );
         const account = session ? this.accounts.get(session.accountId) : null;
         return account ? structuredClone(account) : null;
+    }
+
+    async upsertRegisteredServer(server: RegisteredServer): Promise<void> {
+        const existing = this.registeredServers.get(server.id);
+        this.registeredServers.set(server.id, {
+            ...structuredClone(server),
+            firstSeenAt: existing?.firstSeenAt ?? new Date(server.firstSeenAt),
+            lastSeenAt: new Date(server.lastSeenAt),
+        });
+    }
+
+    async listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]> {
+        return [...this.registeredServers.values()]
+            .filter((server) => server.lastSeenAt >= activeSince)
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((server) => structuredClone(server));
     }
 
     async close(): Promise<void> {}

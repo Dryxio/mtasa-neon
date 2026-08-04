@@ -966,6 +966,24 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
             SetOutPath "$INSTDIR\MTA\cgui\images\serverbrowser"
             File "${FILES_ROOT}\mta\cgui\images\serverbrowser\*.png"
 
+            ; These JPEGs are consumed by the native connection/resource
+            ; loading renderer before the CEF menu owns the screen.
+            SetOutPath "$INSTDIR\MTA\cgui\images\loadscreens"
+            File "${FILES_ROOT}\mta\cgui\images\loadscreens\*.jpg"
+
+            ; Keep the complete generated document together. Vite gives JS,
+            ; CSS and font assets content-hashed names, so fixed filenames
+            ; would silently omit them after the next frontend build.
+            SetOutPath "$INSTDIR\MTA\cef\serverbrowser"
+            File "${FILES_ROOT}\mta\cef\serverbrowser\index.html"
+            File "${FILES_ROOT}\mta\cef\serverbrowser\favicon.svg"
+
+            SetOutPath "$INSTDIR\MTA\cef\serverbrowser\assets"
+            File "${FILES_ROOT}\mta\cef\serverbrowser\assets\*.*"
+
+            SetOutPath "$INSTDIR\MTA\cef\serverbrowser\loadscreens"
+            File "${FILES_ROOT}\mta\cef\serverbrowser\loadscreens\*.webp"
+
         !endif
 
         SetOutPath "$INSTDIR\MTA\locale\"

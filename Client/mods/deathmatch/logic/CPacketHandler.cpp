@@ -337,6 +337,8 @@ void CPacketHandler::Packet_ServerConnected(NetBitStreamInterface& bitStream)
     if (!g_pGame->VerifyNativeWorldStartupBeforeStartGame())
         return;
 
+    g_pClientGame->BeginConnectionLoading(_("Starting San Andreas"));
+
     // m_Status = CClientGame::STATUS_TRANSFER;
 
     // Tell the core we're finished
@@ -388,6 +390,8 @@ void CPacketHandler::Packet_ServerJoined(NetBitStreamInterface& bitStream)
         RaiseProtocolError(3);
         return;
     }
+
+    g_pClientGame->UpdateConnectionLoading(_("Preparing server data"));
 
     // Read out our local id
     bitStream.Read(g_pClientGame->m_LocalID);
@@ -2929,6 +2933,8 @@ retry:
         return;
     }
 
+    g_pClientGame->UpdateConnectionLoading(_("Preparing world"));
+
     EntityAddDebugBegin(NumEntities, &bitStream);
 
     for (uint EntityIndex = 0; EntityIndex < NumEntities; EntityIndex++)
@@ -5182,6 +5188,8 @@ void CPacketHandler::Packet_LuaEvent(NetBitStreamInterface& bitStream)
 
 void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
 {
+    g_pClientGame->UpdateConnectionLoading(_("Processing resources"));
+
     // Used for dummy progress when a server has over 50MB of client files to process
     static std::uint64_t uiTotalSizeProcessed = 0;
     static CElapsedTime  totalSizeProcessedResetTimer;

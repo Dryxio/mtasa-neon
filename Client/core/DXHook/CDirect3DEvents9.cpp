@@ -677,6 +677,10 @@ void CDirect3DEvents9::OnPresent(IDirect3DDevice9* pDevice, IDirect3DDevice9* pS
 
     RunBorderlessToneMap(pStateDevice);
 
+    // Draw last so the connection transition also covers CEGUI, CEF and the
+    // cursor. The same renderer is used by the stall-safe progress path.
+    CGraphics::GetSingleton().DrawConnectionLoadingScreen();
+
     CGraphics::GetSingleton().DidRenderScene();
 
     CGraphics::GetSingleton().LeavingMTARenderZone();

@@ -74,6 +74,7 @@ public:
     static void CompleteConnect();
 
     CServerList* GetInternetList() { return &m_ServersInternet; };
+    CServerList* GetLanList() { return &m_ServersLAN; };
     CServerList* GetFavouritesList() { return &m_ServersFavourites; };
     CServerList* GetRecentList() { return &m_ServersRecent; };
     CServerList* GetHistoryList() { return &m_ServersHistory; };

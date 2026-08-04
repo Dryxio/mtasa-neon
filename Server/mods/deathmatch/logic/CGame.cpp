@@ -71,6 +71,7 @@
 #include "packets/CLuaPacket.h"
 #include "../utils/COpenPortsTester.h"
 #include "../utils/CMasterServerAnnouncer.h"
+#include "../utils/CNeonServerAnnouncer.h"
 #include "../utils/CHqComms.h"
 #include "../utils/CFunctionUseLogger.h"
 #include "Utils.h"
@@ -215,6 +216,7 @@ CGame::CGame() : m_FloodProtect(4, 30000, 30000)  // Max of 4 connections per 30
     m_pBuildingRemovalManager = NULL;
     m_pCustomWeaponManager = NULL;
     m_pFunctionUseLogger = NULL;
+    m_pNeonServerAnnouncer = nullptr;
 #ifdef WITH_OBJECT_SYNC
     m_pObjectSync = NULL;
 #endif
@@ -404,6 +406,9 @@ CGame::~CGame()
     SAFE_DELETE(m_pScriptDebugging);
     SAFE_DELETE(m_pBanManager);
     SAFE_DELETE(m_pTeamManager);
+    // The registry announcer retains a reference to the parsed configuration,
+    // so cancel its pending HTTP request before releasing that configuration.
+    SAFE_DELETE(m_pNeonServerAnnouncer);
     SAFE_DELETE(m_pMainConfig);
     if (m_pRegistryManager)
         m_pRegistryManager->CloseRegistry(m_pRegistry);
@@ -573,6 +578,9 @@ void CGame::DoPulse()
 
     if (m_pMasterServerAnnouncer)
         m_pMasterServerAnnouncer->Pulse();
+
+    if (m_pNeonServerAnnouncer)
+        m_pNeonServerAnnouncer->Pulse();
 
     if (m_pHqComms)
         m_pHqComms->Pulse();
@@ -1126,6 +1134,7 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
 
     // Init ASE
     m_pASE = new ASE(m_pMainConfig, m_pPlayerManager, static_cast<int>(usServerPort), strServerIPList);
+    m_pASE->SetRuleValue("NeonRegistryProtocol", "1");
     if (m_pMainConfig->GetSerialVerificationEnabled())
         m_pASE->SetRuleValue("SerialVerification", "yes");
 
@@ -1140,6 +1149,11 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
     // Now load the rest of the config
     if (!m_pMainConfig->LoadExtended())
         return false;  // Fail or cancelled
+
+    // Registration starts only after the complete server configuration has
+    // loaded. The registry independently probes ASE before publishing it.
+    m_pNeonServerAnnouncer = new CNeonServerAnnouncer(*m_pMainConfig);
+    m_pNeonServerAnnouncer->Pulse();
 
     // Is the script debug log enabled?
     if (m_pMainConfig->GetScriptDebugLogEnabled())

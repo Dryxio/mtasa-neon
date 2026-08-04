@@ -1134,7 +1134,11 @@ void CServerBrowser::SetVisible(bool bVisible)
 
     m_pTopWindow->SetZOrderingEnabled(true);
     m_pTopWindow->SetVisible(bVisible);
-    m_pTopWindow->BringToFront();
+    // Hiding a CEGUI window must not activate it. Activating this legacy
+    // browser while it is invisible steals focus and mouse capture from
+    // native dialogs such as Settings and the F8 console.
+    if (bVisible)
+        m_pTopWindow->BringToFront();
     m_pTopWindow->SetZOrderingEnabled(false);
 
     // Are we making this window visible?

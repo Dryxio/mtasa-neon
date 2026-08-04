@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "ServerBrowser/CServerBrowserWeb.h"
 #include <game/CGame.h>
 #include <game/CPed.h>
 #include <game/CPedIntelligence.h>
@@ -347,8 +348,16 @@ bool RemoveBindTypeBinds(Container& binds, bool isContainerMutable, KeyBindType 
 
 bool CKeyBinds::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    if (g_pCore->IsWebCoreLoaded() && !m_pCore->IsMenuVisible() && !m_pCore->GetConsole()->IsVisible() && !m_pCore->IsChatInputEnabled())
-        g_pCore->GetWebCore()->ProcessInputMessage(uMsg, wParam, lParam);
+    // The native menu normally owns keyboard input. The Neon shell is itself
+    // that menu, so let CEF receive navigation and text-entry events while it
+    // is the active surface.
+    if (g_pCore->IsWebCoreLoaded() && !m_pCore->GetConsole()->IsVisible() && !m_pCore->IsChatInputEnabled())
+    {
+        if (CServerBrowserWeb::IsInputRoutedToWeb())
+            CServerBrowserWeb::RouteInputMessage(uMsg, wParam, lParam);
+        else if (!m_pCore->IsMenuVisible())
+            g_pCore->GetWebCore()->ProcessInputMessage(uMsg, wParam, lParam);
+    }
 
     // Don't process Shift keys here, we have a hack for that
     if (wParam == 0x10 && (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP))

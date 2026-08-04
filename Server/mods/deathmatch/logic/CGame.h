@@ -113,6 +113,7 @@ class CVehicleSoundSettingsManager;
 class CCustomWeaponManager;
 class COpenPortsTester;
 class CMasterServerAnnouncer;
+class CNeonServerAnnouncer;
 class CHqComms;
 class CFunctionUseLogger;
 
@@ -668,6 +669,7 @@ private:
 
     COpenPortsTester*       m_pOpenPortsTester;
     CMasterServerAnnouncer* m_pMasterServerAnnouncer;
+    CNeonServerAnnouncer*   m_pNeonServerAnnouncer;
     CHqComms*               m_pHqComms;
 
     CLightsyncManager m_lightsyncManager;

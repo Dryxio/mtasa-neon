@@ -22,6 +22,7 @@ class CMainMenu;
 #include <Graphics/CGraphics.h>
 class CNewsBrowser;
 class CLanguageSelector;
+class CServerBrowserWeb;
 
 #define CORE_MTA_NEWS_ITEMS 3
 
@@ -41,6 +42,7 @@ class CMainMenu
     friend class CServerBrowser;
     friend class CSettings;
     friend class CCredits;
+    friend class CServerBrowserWeb;
 
 public:
     CMainMenu(CGUI* pManager);
@@ -62,6 +64,10 @@ public:
     CSettings*      GetSettingsWindow() { return &m_Settings; };
     CQuestionBox*   GetQuestionWindow() { return &m_QuestionBox; };
     CNewsBrowser*   GetNewsBrowser() { return m_pNewsBrowser; };
+
+    // The web shell must yield input to every native dialog, not only the
+    // settings window that originally opened it.
+    bool HasNativeInputOwner();
 
     void SetMenuVerticalPosition(int iPosY);
     void SetMenuUnhovered();
@@ -132,6 +138,7 @@ private:
     CServerBrowser     m_ServerBrowser;
     CServerInfo        m_ServerInfo;
     CLanguageSelector* m_pLanguageSelector;
+    CServerBrowserWeb* m_pServerBrowserWeb{};
 
     // Properties
     bool m_bIsIngame;

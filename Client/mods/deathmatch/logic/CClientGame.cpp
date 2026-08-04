@@ -510,6 +510,10 @@ CClientGame::~CClientGame()
 {
     m_bBeingDeleted = true;
 
+    // Never leave the native overlay above a disconnect/error dialog while
+    // the client module is being torn down.
+    EndConnectionLoading();
+
     // Restore the previews before the client managers they reference are torn down.
     UnloadDroppedIFP(true);
     if (m_pDroppedIFPWindow)
@@ -1489,6 +1493,8 @@ void CClientGame::DoPulses()
         DownloadSingularResourceFiles();
         GetRemoteCalls()->ProcessQueuedFiles();
     }
+
+    PulseConnectionLoading();
 
     // Not waiting for local connect?
     if (!m_bWaitingForLocalConnect)
@@ -3668,6 +3674,50 @@ void CClientGame::Event_OnIngameAndConnected()
 
     // Notify the server telling we're ingame
     m_pNetAPI->RPC(PLAYER_INGAME_NOTICE);
+}
+
+void CClientGame::BeginConnectionLoading(const char* status)
+{
+    m_bConnectionLoadingActive = true;
+    m_ConnectionLoadingActivityTimer.Reset();
+    g_pCore->BeginConnectionLoading(status);
+}
+
+void CClientGame::UpdateConnectionLoading(const char* status, float progress)
+{
+    // Resource starts also happen during normal gameplay. Only the initial
+    // connection window is allowed to take over the whole screen.
+    if (!m_bConnectionLoadingActive)
+        return;
+
+    m_ConnectionLoadingActivityTimer.Reset();
+    g_pCore->UpdateConnectionLoading(status, progress);
+}
+
+void CClientGame::EndConnectionLoading()
+{
+    if (!m_bConnectionLoadingActive)
+        return;
+
+    m_bConnectionLoadingActive = false;
+    g_pCore->EndConnectionLoading();
+}
+
+void CClientGame::PulseConnectionLoading()
+{
+    if (!m_bConnectionLoadingActive || m_Status != STATUS_JOINED || !m_bGameLoaded)
+        return;
+
+    if (m_pResourceFileDownloadManager && m_pResourceFileDownloadManager->IsTransferringInitialFiles())
+        return;
+
+    // There is no protocol-level "all client initialization rendered" packet.
+    // A short quiet window joins consecutive resource/entity packets without
+    // tying the overlay to player spawn, which may be intentionally delayed by
+    // a server-side login flow.
+    constexpr unsigned long CONNECTION_LOADING_QUIET_MS = 1500;
+    if (m_ConnectionLoadingActivityTimer.Get() >= CONNECTION_LOADING_QUIET_MS)
+        EndConnectionLoading();
 }
 
 void CClientGame::SetupGlobalLuaEvents()

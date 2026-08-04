@@ -166,6 +166,7 @@ CGraphics::~CGraphics()
     SAFE_RELEASE(m_pTempBackBufferData);
 
     SAFE_RELEASE(m_ProgressSpinnerTexture);
+    SAFE_RELEASE(m_ConnectionLoadingTexture);
     SAFE_RELEASE(m_RectangleEdgeTexture);
     SAFE_DELETE(m_pRenderItemManager);
     SAFE_DELETE(m_pTileBatcher);
@@ -1670,10 +1671,10 @@ void CGraphics::DrawTextureRaw(IDirect3DTexture9* texture, unsigned int textureW
         return;
 
     BeginDrawBatch();
-    const RECT cutImagePos = {0, 0, static_cast<LONG>(textureWidth), static_cast<LONG>(textureHeight)};
+    const RECT        cutImagePos = {0, 0, static_cast<LONG>(textureWidth), static_cast<LONG>(textureHeight)};
     const D3DXVECTOR2 scaling(fWidth / textureWidth, fHeight / textureHeight);
     const D3DXVECTOR2 position(fX, fY);
-    D3DXMATRIX matrix;
+    D3DXMATRIX        matrix;
     D3DXMatrixTransformation2D(&matrix, nullptr, 0.0f, &scaling, nullptr, 0.0f, &position);
     CheckModes(EDrawMode::DX_SPRITE, m_ActiveBlendMode);
     m_pDXSprite->SetTransform(&matrix);
@@ -2491,6 +2492,148 @@ void CGraphics::DidRenderScene()
 
 ////////////////////////////////////////////////////////////////
 //
+// Connection loading presentation
+//
+// This renderer is deliberately owned by CGraphics. Resource parsing can
+// stall the normal frame and CEF/CEGUI with it, while DrawProgressMessage can
+// still present this same native artwork from the stall-safe path below.
+//
+////////////////////////////////////////////////////////////////
+void CGraphics::EnsureConnectionLoadingTexture()
+{
+    if (m_ConnectionLoadingTexture || !m_pRenderItemManager)
+        return;
+
+    const SString path = CalcMTASAPath(SString("MTA\\cgui\\images\\loadscreens\\loadsc%u.jpg", m_uiConnectionLoadingArtwork));
+    m_ConnectionLoadingTexture = m_pRenderItemManager->CreateTexture(path, nullptr, false, -1, -1, RFORMAT_UNKNOWN, TADDRESS_CLAMP);
+}
+
+void CGraphics::BeginConnectionLoading(const SString& status)
+{
+    m_bConnectionLoadingActive = true;
+    m_fConnectionLoadingProgress = -1.0f;
+    m_strConnectionLoadingStatus = status;
+    m_uiConnectionLoadingArtwork = 1 + static_cast<uint>(GetTickCount64_() % 14);
+    m_ConnectionLoadingAnimTimer.Reset();
+
+    // Select one image per connection and load only that image. Loading all
+    // fourteen would waste a large amount of D3D9 video memory.
+    SAFE_RELEASE(m_ConnectionLoadingTexture);
+    EnsureConnectionLoadingTexture();
+}
+
+void CGraphics::UpdateConnectionLoading(const SString& status, float progress)
+{
+    if (!m_bConnectionLoadingActive)
+        return;
+
+    m_strConnectionLoadingStatus = status;
+    m_fConnectionLoadingProgress = progress < 0.0f ? -1.0f : Clamp(0.0f, progress, 1.0f);
+}
+
+void CGraphics::UpdateConnectionLoadingProgress(float progress)
+{
+    if (m_bConnectionLoadingActive)
+        m_fConnectionLoadingProgress = Clamp(0.0f, progress, 1.0f);
+}
+
+void CGraphics::EndConnectionLoading()
+{
+    m_bConnectionLoadingActive = false;
+    m_fConnectionLoadingProgress = -1.0f;
+    m_strConnectionLoadingStatus.clear();
+    SAFE_RELEASE(m_ConnectionLoadingTexture);
+}
+
+void CGraphics::DrawConnectionLoadingScreen()
+{
+    if (!m_bConnectionLoadingActive || g_pCore->IsWindowMinimized())
+        return;
+
+    EnsureConnectionLoadingTexture();
+
+    const float viewportWidth = static_cast<float>(GetViewportWidth());
+    const float viewportHeight = static_cast<float>(GetViewportHeight());
+    if (viewportWidth <= 0.0f || viewportHeight <= 0.0f)
+        return;
+
+    const EBlendModeType savedBlendMode = m_ActiveBlendMode;
+    m_ActiveBlendMode = EBlendMode::BLEND;
+
+    DrawRectangle(0.0f, 0.0f, viewportWidth, viewportHeight, 0xFF020303);
+
+    if (m_ConnectionLoadingTexture && m_ConnectionLoadingTexture->m_uiSizeX > 0 && m_ConnectionLoadingTexture->m_uiSizeY > 0)
+    {
+        const float textureWidth = static_cast<float>(m_ConnectionLoadingTexture->m_uiSizeX);
+        const float textureHeight = static_cast<float>(m_ConnectionLoadingTexture->m_uiSizeY);
+        const float textureAspect = textureWidth / textureHeight;
+        const float viewportAspect = viewportWidth / viewportHeight;
+        float       u = 0.0f;
+        float       v = 0.0f;
+        float       sizeU = 1.0f;
+        float       sizeV = 1.0f;
+
+        // Aspect-fill without stretching the original San Andreas artwork.
+        if (textureAspect > viewportAspect)
+        {
+            sizeU = viewportAspect / textureAspect;
+            u = (1.0f - sizeU) * 0.5f;
+        }
+        else if (textureAspect < viewportAspect)
+        {
+            sizeV = textureAspect / viewportAspect;
+            v = (1.0f - sizeV) * 0.5f;
+        }
+
+        DrawTexture(m_ConnectionLoadingTexture, 0.0f, 0.0f, viewportWidth / (textureWidth * sizeU), viewportHeight / (textureHeight * sizeV), 0.0f, 0.0f, 0.0f,
+                    0xFFFFFFFF, u, v, sizeU, sizeV, true);
+    }
+
+    // Match the vanilla frontend treatment: the art remains visible but the
+    // lower UI stays readable on both bright and dark loading illustrations.
+    DrawRectangle(0.0f, 0.0f, viewportWidth, viewportHeight, 0x30000000);
+    DrawRectangle(0.0f, viewportHeight * 0.78f, viewportWidth, viewportHeight * 0.22f, 0x78000000);
+
+    const float uiScale = Clamp(0.75f, std::min(viewportWidth / 1920.0f, viewportHeight / 1080.0f), 2.0f);
+    const float barWidth = std::min(viewportWidth * 0.42f, 720.0f * uiScale);
+    const float barHeight = std::max(7.0f, 10.0f * uiScale);
+    const float barX = (viewportWidth - barWidth) * 0.5f;
+    const float barY = viewportHeight - 62.0f * uiScale;
+    const float textScale = 0.68f * uiScale;
+
+    if (!m_strConnectionLoadingStatus.empty())
+    {
+        DrawString(static_cast<int>(barX), static_cast<int>(barY - 34.0f * uiScale), static_cast<int>(barX + barWidth), static_cast<int>(barY), 0xFFE4D29F,
+                   m_strConnectionLoadingStatus, textScale, textScale, DT_LEFT | DT_NOCLIP, GetFont(FONT_BANKGOTHIC), true);
+    }
+
+    DrawRectangle(barX - 2.0f, barY - 2.0f, barWidth + 4.0f, barHeight + 4.0f, 0xD8000000);
+    DrawRectangle(barX, barY, barWidth, barHeight, 0xB04A5A6B);
+
+    if (m_fConnectionLoadingProgress >= 0.0f)
+    {
+        DrawRectangle(barX, barY, barWidth * m_fConnectionLoadingProgress, barHeight, 0xFFACCBF1);
+    }
+    else
+    {
+        // Some native/resource phases expose no meaningful total. A moving
+        // GTA-style segment is honest about that instead of inventing a fake
+        // percentage which can appear stuck near completion.
+        const float segmentWidth = barWidth * 0.22f;
+        const float cycle = std::fmod(static_cast<float>(m_ConnectionLoadingAnimTimer.Get()), 1600.0f) / 1600.0f;
+        const float segmentX = barX - segmentWidth + (barWidth + segmentWidth) * cycle;
+        const float clippedStart = std::max(barX, segmentX);
+        const float clippedEnd = std::min(barX + barWidth, segmentX + segmentWidth);
+        if (clippedEnd > clippedStart)
+            DrawRectangle(clippedStart, barY, clippedEnd - clippedStart, barHeight, 0xFFACCBF1);
+    }
+
+    m_ActiveBlendMode = savedBlendMode;
+    CheckModes(EDrawMode::NONE, EBlendMode::BLEND);
+}
+
+////////////////////////////////////////////////////////////////
+//
 // CGraphics::SetProgressMessage
 //
 // Set (and maybe show) status message used when scene rendering is stalled
@@ -2696,7 +2839,11 @@ void CGraphics::DrawProgressMessage(bool bPreserveBackbuffer)
             const uint uiViewportHeight = GetViewportHeight();
             const uint uiViewportWidth = GetViewportWidth();
 
-            if (!m_strProgressMessage.empty())
+            if (m_bConnectionLoadingActive)
+            {
+                DrawConnectionLoadingScreen();
+            }
+            else if (!m_strProgressMessage.empty())
             {
                 const uint  uiMessageWidth = GetDXTextExtent(m_strProgressMessage);
                 const uint  uiMessagePosX = uiViewportWidth / 2 - uiMessageWidth / 2;
@@ -2704,7 +2851,7 @@ void CGraphics::DrawProgressMessage(bool bPreserveBackbuffer)
                 DrawString(uiMessagePosX, uiViewportHeight - 57, dwMessageColor, 1, "%s", *m_strProgressMessage);
             }
 
-            if (m_ProgressSpinnerTexture)
+            if (!m_bConnectionLoadingActive && m_ProgressSpinnerTexture)
             {
                 const uint  uiNumFrames = 12;
                 const uint  uiFrameWidth = m_ProgressSpinnerTexture->m_uiSizeX / uiNumFrames;

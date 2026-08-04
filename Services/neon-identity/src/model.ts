@@ -35,6 +35,39 @@ export type FlowPollResult =
     | { status: "consumed" }
     | { status: "authorized"; account: NeonAccount };
 
+export type RegisteredServerLinkKind =
+    | "website"
+    | "discord"
+    | "instagram"
+    | "x"
+    | "facebook"
+    | "vk"
+    | "youtube"
+    | "tiktok";
+
+export interface RegisteredServerLink {
+    kind: RegisteredServerLinkKind;
+    label: string;
+    url: string;
+}
+
+export interface RegisteredServer {
+    id: string;
+    endpoint: string;
+    registryProtocol: number;
+    httpPort: number;
+    serverVersion: string;
+    name: string;
+    tagline: string;
+    description: string;
+    countries: string[];
+    languages: string[];
+    links: RegisteredServerLink[];
+    accent: string | null;
+    firstSeenAt: Date;
+    lastSeenAt: Date;
+}
+
 export interface IdentityStore {
     createFlow(flow: OAuthFlow): Promise<void>;
     beginFlow(flowId: string, browserTokenHash: Buffer, oauthStateHash: Buffer, now: Date): Promise<boolean>;
@@ -50,5 +83,7 @@ export interface IdentityStore {
         now: Date,
     ): Promise<NeonAccount | null>;
     findAccountBySession(sessionTokenHash: Buffer, now: Date): Promise<NeonAccount | null>;
+    upsertRegisteredServer(server: RegisteredServer): Promise<void>;
+    listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]>;
     close(): Promise<void>;
 }

@@ -207,6 +207,12 @@ public:
     void DidRenderScene();
     void SetProgressMessage(const SString& strMessage);
     void DrawProgressMessage(bool bPreserveBackbuffer = true);
+    void BeginConnectionLoading(const SString& status);
+    void UpdateConnectionLoading(const SString& status, float progress);
+    void UpdateConnectionLoadingProgress(float progress);
+    void EndConnectionLoading();
+    void DrawConnectionLoadingScreen();
+    bool IsConnectionLoadingActive() const { return m_bConnectionLoadingActive; }
     void DrawRectangleInternal(float fX, float fY, float fWidth, float fHeight, unsigned long ulColor, bool bSubPixelPositioning);
     void MarkViewportRefreshPending();
     void RefreshViewportIfNeeded();
@@ -383,6 +389,7 @@ private:
     void AddQueueRef(IUnknown* pUnknown);
     void RemoveQueueRef(IUnknown* pUnknown);
     void UpdateRenderTargetMatrices(uint uiNewViewportSizeX, uint uiNewViewportSizeY);
+    void EnsureConnectionLoadingTexture();
 
     // Drawing types
     struct ID3DXLine* m_pLineInterface = nullptr;
@@ -401,6 +408,7 @@ private:
     IDirect3DSurface9*                      m_pSavedFrontBufferData = nullptr;
     CRenderTargetItem*                      m_pTempBackBufferData = nullptr;
     CTextureItem*                           m_ProgressSpinnerTexture = nullptr;
+    CTextureItem*                           m_ConnectionLoadingTexture = nullptr;
     CTextureItem*                           m_RectangleEdgeTexture = nullptr;
     SString                                 m_strProgressMessage;
     CElapsedTime                            m_FirstDrawnProgressTimer;
@@ -409,6 +417,11 @@ private:
     bool                                    m_bProgressVisible;
     CElapsedTime                            m_ProgressAnimTimer;
     uint                                    m_uiProgressAnimFrame;
+    bool                                    m_bConnectionLoadingActive = false;
+    float                                   m_fConnectionLoadingProgress = -1.0f;
+    uint                                    m_uiConnectionLoadingArtwork = 1;
+    SString                                 m_strConnectionLoadingStatus;
+    CElapsedTime                            m_ConnectionLoadingAnimTimer;
     std::map<SString, SCustomScaleFontInfo> m_CustomScaleFontMap;
     bool                                    m_bPendingViewportRefresh = false;
     uint                                    m_uiPendingViewportRefreshTries = 0;

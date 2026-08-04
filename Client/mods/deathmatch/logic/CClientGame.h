@@ -257,6 +257,9 @@ public:
     ~CClientGame();
 
     bool StartGame(const char* szNick, const char* szPassword, eServerType Type = SERVER_TYPE_NORMAL);
+    void BeginConnectionLoading(const char* status);
+    void UpdateConnectionLoading(const char* status, float progress = -1.0f);
+    void EndConnectionLoading();
     bool StartLocalGame(eServerType Type, const char* szPassword = NULL);
     void SetupLocalGame(eServerType Type);
     // bool                                    StartGame                       ( void );
@@ -574,6 +577,7 @@ private:
 
     void Event_OnIngame();
     void Event_OnIngameAndConnected();
+    void PulseConnectionLoading();
 
     void SetupGlobalLuaEvents();
 
@@ -834,9 +838,11 @@ private:
     bool             m_bShowRadar;
 
     // Status booleans
-    bool m_bGameLoaded;
-    bool m_bTriggeredIngameAndConnected;
-    bool m_bGracefulDisconnect;
+    bool         m_bGameLoaded;
+    bool         m_bTriggeredIngameAndConnected;
+    bool         m_bConnectionLoadingActive{};
+    CElapsedTime m_ConnectionLoadingActivityTimer;
+    bool         m_bGracefulDisconnect;
 
     CEntity*       m_pTargetedGameEntity;
     CClientEntity* m_pTargetedEntity;

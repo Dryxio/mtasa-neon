@@ -6,14 +6,21 @@ import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { z } from "zod";
 
+import { probeMtaAse, type AseProbe } from "./ase-probe.js";
 import { isCanonicalIpv4Endpoint, SERVER_ID_PATTERN, type ServiceConfig } from "./config.js";
 import { constantTimeStringEqual, hashToken, openJson, pkceChallenge, randomToken, sealJson } from "./crypto.js";
 import type { DiscordClient } from "./discord.js";
 import type { IdentityStore, NeonAccount } from "./model.js";
 import type { DiscordIdentityPolicy } from "./policy.js";
+import {
+    buildPublicServerCatalog,
+    isPublicIpv4Address,
+    serverHeartbeatSchema,
+} from "./server-catalog.js";
 import type { TicketSigner } from "./tickets.js";
 
 const OAUTH_COOKIE_NAME = "neon_oauth_v1";
+const SERVER_REGISTRY_ACTIVE_SECONDS = 5 * 60;
 const serverIdSchema = z.string().regex(SERVER_ID_PATTERN);
 const startAuthorizationSchema = z.object({
     flow_id: z.uuid(),
@@ -41,6 +48,7 @@ export interface AppDependencies {
     discord: DiscordClient;
     policy: DiscordIdentityPolicy;
     ticketSigner: TicketSigner;
+    aseProbe?: AseProbe;
     now?: () => Date;
     logger?: FastifyServerOptions["logger"];
 }
@@ -97,8 +105,22 @@ function extractBearer(value: string | undefined): string | null {
     return match?.[1] ?? null;
 }
 
+function registeredServerId(securityRegistry: ReadonlyMap<string, ReadonlySet<string>>, endpoint: string): string {
+    for (const [serverId, endpoints] of securityRegistry) {
+        if (endpoints.has(endpoint)) return serverId;
+    }
+    return `community-${endpoint.replaceAll(".", "-").replace(":", "-")}`;
+}
+
+function registrationAddress(headers: Record<string, string | string[] | undefined>): string | null {
+    const value = headers["x-real-ip"];
+    if (typeof value !== "string" || !isPublicIpv4Address(value)) return null;
+    return value;
+}
+
 export async function buildApp(dependencies: AppDependencies) {
     const { config, discord, policy, store, ticketSigner } = dependencies;
+    const aseProbe = dependencies.aseProbe ?? probeMtaAse;
     const now = dependencies.now ?? (() => new Date());
     const app = Fastify({
         logger: dependencies.logger ?? false,
@@ -138,8 +160,63 @@ export async function buildApp(dependencies: AppDependencies) {
             discord_start_endpoint: new URL("/v1/auth/discord/start", config.publicBaseUrl).href,
             discord_poll_endpoint: new URL("/v1/auth/discord/poll", config.publicBaseUrl).href,
             ticket_endpoint: new URL("/v1/tickets", config.publicBaseUrl).href,
+            server_registry_uri: new URL("/.well-known/neon-server-registry", config.publicBaseUrl).href,
             ticket_signing_alg_values_supported: ["EdDSA"],
         };
+    });
+
+    app.post(
+        "/v1/server-registry/heartbeat",
+        { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+        async (request, reply) => {
+            const parsed = serverHeartbeatSchema.safeParse(request.body);
+            if (!parsed.success) return reply.code(400).send({ error: "invalid_server_heartbeat" });
+            if (new Set(parsed.data.countries).size !== parsed.data.countries.length ||
+                new Set(parsed.data.languages).size !== parsed.data.languages.length) {
+                return reply.code(400).send({ error: "duplicate_server_metadata" });
+            }
+
+            // Nginx overwrites X-Real-IP with the actual TCP peer. The service
+            // binds to loopback, so accepting only this header prevents a
+            // server from publishing somebody else's public endpoint.
+            const address = registrationAddress(request.headers);
+            if (!address) return reply.code(403).send({ error: "public_ipv4_required" });
+            if (!(await aseProbe(address, parsed.data.game_port, parsed.data.server_version))) {
+                return reply.code(422).send({ error: "ase_verification_failed" });
+            }
+
+            const currentTime = now();
+            const endpoint = `${address}:${parsed.data.game_port}`;
+            const serverId = registeredServerId(config.serverRegistry, endpoint);
+            await store.upsertRegisteredServer({
+                id: serverId,
+                endpoint,
+                registryProtocol: parsed.data.registry_protocol,
+                httpPort: parsed.data.http_port,
+                serverVersion: parsed.data.server_version,
+                name: parsed.data.name,
+                tagline: parsed.data.tagline || "A Neon community server.",
+                description: parsed.data.description || `${parsed.data.name} is powered by MTA:SA Neon.`,
+                countries: parsed.data.countries,
+                languages: parsed.data.languages,
+                links: parsed.data.links,
+                accent: parsed.data.accent ?? null,
+                firstSeenAt: currentTime,
+                lastSeenAt: currentTime,
+            });
+            return reply.code(202).send({ status: "registered", server_id: serverId, endpoint, expires_in: SERVER_REGISTRY_ACTIVE_SECONDS });
+        },
+    );
+
+    app.get("/.well-known/neon-server-registry", async (_request, reply) => {
+        // This document is intentionally readable by the local CEF origin. It
+        // contains only public presentation metadata and approved endpoints.
+        reply
+            .header("cache-control", "public, max-age=30, stale-if-error=300")
+            .header("access-control-allow-origin", "*")
+            .header("cross-origin-resource-policy", "cross-origin");
+        const activeSince = new Date(now().getTime() - SERVER_REGISTRY_ACTIVE_SECONDS * 1_000);
+        return buildPublicServerCatalog(await store.listRegisteredServers(activeSince));
     });
 
     app.get("/.well-known/jwks.json", async (_request, reply) => {

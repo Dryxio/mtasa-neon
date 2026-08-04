@@ -100,11 +100,116 @@ describe("Neon Identity HTTP contract", () => {
             discord,
             policy: new AllowAllDiscordPolicy(),
             ticketSigner: signer,
+            aseProbe: async (address, port, version) =>
+                address === "203.0.113.10" && (port === 22003 || port === 22004) && version === "1.7.0-9.99999",
             now: () => new Date("2026-08-03T12:00:00.000Z"),
         });
     });
 
     afterEach(async () => app?.close());
+
+    it("registers an ASE-verified server and publishes its configured metadata", async () => {
+        const discovery = await app.inject({ method: "GET", url: "/.well-known/neon-identity" });
+        expect(discovery.statusCode).toBe(200);
+        expect(discovery.json()).toMatchObject({
+            server_registry_uri: "http://identity.test/.well-known/neon-server-registry",
+        });
+
+        const empty = await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" });
+        expect(empty.json()).toEqual({ schema_version: 1, servers: [] });
+
+        const heartbeat = await app.inject({
+            method: "POST",
+            url: "/v1/server-registry/heartbeat",
+            headers: { "x-real-ip": "203.0.113.10" },
+            payload: {
+                registry_protocol: 1,
+                game_port: 22003,
+                http_port: 22005,
+                server_version: "1.7.0-9.99999",
+                name: "MTA:SA Neon — Test",
+                tagline: "Test server",
+                description: "Metadata loaded from mtaserver.conf.",
+                countries: ["GB", "FR"],
+                languages: ["English", "French"],
+                links: [{ kind: "website", label: "Website", url: "https://mta-neon.com" }],
+            },
+        });
+        expect(heartbeat.statusCode).toBe(202);
+        expect(heartbeat.json()).toEqual({
+            status: "registered",
+            server_id: "blitz-production",
+            endpoint: "203.0.113.10:22003",
+            expires_in: 300,
+        });
+
+        const response = await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" });
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["cache-control"]).toBe("public, max-age=30, stale-if-error=300");
+        expect(response.headers["access-control-allow-origin"]).toBe("*");
+        expect(response.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+        expect(response.json()).toEqual({
+            schema_version: 1,
+            servers: [
+                {
+                    id: "blitz-production",
+                    endpoints: ["203.0.113.10:22003"],
+                    name: "MTA:SA Neon — Test",
+                    tagline: "Test server",
+                    description: "Metadata loaded from mtaserver.conf.",
+                    countries: ["GB", "FR"],
+                    languages: ["English", "French"],
+                    links: [{ kind: "website", label: "Website", url: "https://mta-neon.com" }],
+                },
+            ],
+        });
+    });
+
+    it("refuses registry claims without the proxy-bound public source address", async () => {
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/server-registry/heartbeat",
+            payload: {
+                registry_protocol: 1,
+                game_port: 22003,
+                http_port: 22005,
+                server_version: "1.7.0-9.99999",
+                name: "Spoofed server",
+            },
+        });
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: "public_ipv4_required" });
+    });
+
+    it("publishes a verified community server without granting an official Identity ID", async () => {
+        const heartbeat = await app.inject({
+            method: "POST",
+            url: "/v1/server-registry/heartbeat",
+            headers: { "x-real-ip": "203.0.113.10" },
+            payload: {
+                registry_protocol: 1,
+                game_port: 22004,
+                http_port: 22006,
+                server_version: "1.7.0-9.99999",
+                name: "Community Neon",
+            },
+        });
+        expect(heartbeat.statusCode).toBe(202);
+        expect(heartbeat.json()).toMatchObject({
+            server_id: "community-203-0-113-10-22004",
+            endpoint: "203.0.113.10:22004",
+        });
+
+        const registry = await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" });
+        expect(registry.json()).toMatchObject({
+            servers: [
+                {
+                    id: "community-203-0-113-10-22004",
+                    name: "Community Neon",
+                },
+            ],
+        });
+    });
 
     it("completes OAuth once and issues a server-bound Ed25519 ticket", async () => {
         const start = await app.inject({ method: "POST", url: "/v1/auth/discord/start" });
