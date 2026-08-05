@@ -35,10 +35,13 @@ newaction {
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.pak")
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.bin")
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.dat")
-			-- The Neon menu is a runtime CEF document, not a compiled binary. Copy
-			-- its complete Vite output explicitly so clean installers do not fall
-			-- back to the legacy CEGUI menu when index.html is absent.
-			os.copydir(BIN_DIR.."/mta/cef/serverbrowser", OUTPUT_DIR.."/MTA/cef/serverbrowser")
+			-- Only the win32 matrix builds the client installer and therefore the
+			-- CEF document. Server-only x64/ARM64 jobs still compose their binary
+			-- artifacts from the same action and must not require this directory.
+			local webMenuDir = BIN_DIR.."/mta/cef/serverbrowser"
+			if os.isdir(webMenuDir) then
+				os.copydir(webMenuDir, OUTPUT_DIR.."/MTA/cef/serverbrowser")
+			end
 		else
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**.so")
 			os.copydir(BIN_DIR, OUTPUT_DIR, "**mta-server*")
