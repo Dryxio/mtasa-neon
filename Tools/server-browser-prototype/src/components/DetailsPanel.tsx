@@ -113,10 +113,10 @@ export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProp
 
       </div>
 
-      <div className="details__footer">
-        <span>Enter the streets</span>
+      <div className="details__footer" key={server.id}>
+        <span>Selected server — ready to join</span>
         <button type="button" className="connect-btn" onClick={() => onConnect(server)}>
-          <IconPlay size={13} />
+          <IconPlay size={18} />
           Join server
         </button>
       </div>

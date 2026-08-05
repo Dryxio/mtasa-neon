@@ -876,10 +876,16 @@ void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
     {
         m_bFrameDelay = bFrameDelay;
         SetMenuUnhovered();
-        m_pFiller->SetVisible(true);
-        m_pFiller2->SetVisible(true);
-        m_pCanvas->SetVisible(true);
-        m_pBackground->SetVisible(true);
+
+        // The web shell owns the main-menu presentation. Showing the legacy
+        // canvas here exposes its MTA banner for one frame before Update()
+        // hides it, which is especially visible when opening the pause menu.
+        // Keep the established widgets available only for the CEF fallback.
+        const bool showLegacyMenu = m_pServerBrowserWeb == nullptr;
+        m_pFiller->SetVisible(showLegacyMenu);
+        m_pFiller2->SetVisible(showLegacyMenu);
+        m_pCanvas->SetVisible(showLegacyMenu);
+        m_pBackground->SetVisible(showLegacyMenu);
     }
 
     m_bHideGame = !bOverlay;

@@ -2585,8 +2585,12 @@ void CGraphics::DrawConnectionLoadingScreen()
             v = (1.0f - sizeV) * 0.5f;
         }
 
-        DrawTexture(m_ConnectionLoadingTexture, 0.0f, 0.0f, viewportWidth / (textureWidth * sizeU), viewportHeight / (textureHeight * sizeV), 0.0f, 0.0f, 0.0f,
-                    0xFFFFFFFF, u, v, sizeU, sizeV, true);
+        // DrawTexture already compensates its transform for the selected UV
+        // rectangle. Scale against the complete source dimensions here so the
+        // cropped artwork lands exactly on the viewport instead of applying
+        // the crop factor twice and appearing over-zoomed.
+        DrawTexture(m_ConnectionLoadingTexture, 0.0f, 0.0f, viewportWidth / textureWidth, viewportHeight / textureHeight, 0.0f, 0.0f, 0.0f, 0xFFFFFFFF, u, v,
+                    sizeU, sizeV, true);
     }
 
     // Match the vanilla frontend treatment: the art remains visible but the

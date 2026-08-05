@@ -721,35 +721,81 @@ a:focus-visible {
 }
 
 .details__footer {
-  padding: 12px 24px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  padding: 13px 18px 18px;
+  display: grid;
+  gap: 8px;
   border-top: 1px solid rgba(228, 210, 159, 0.22);
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.68);
 }
 
 .connect-btn {
+  position: relative;
+  width: 100%;
+  min-height: 66px;
+  padding: 0 52px 0 24px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 13px;
+  overflow: hidden;
+  border: 1px solid rgba(172, 203, 241, 0.72);
+  background:
+    linear-gradient(90deg, rgba(172, 203, 241, 0.2), rgba(172, 203, 241, 0.06) 58%, rgba(228, 210, 159, 0.12)),
+    rgba(3, 5, 6, 0.92);
   color: var(--blue);
   font-family: var(--font-menu);
-  font-size: 20px;
+  font-size: clamp(27px, 2.15vw, 36px);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  text-shadow: 1px 2px 0 #000;
-  transition: color 90ms linear, transform 100ms ease-out;
+  text-shadow: 2px 2px 0 #000;
+  box-shadow:
+    inset 4px 0 0 var(--cream),
+    0 8px 22px rgba(0, 0, 0, 0.34);
+  animation: connect-ready 260ms ease-out both;
+  transition: color 100ms linear, border-color 100ms linear, background 100ms linear, transform 110ms ease-out, box-shadow 110ms ease-out;
+}
+
+.connect-btn::after {
+  content: '›';
+  position: absolute;
+  right: 20px;
+  color: var(--cream);
+  font-family: Arial, sans-serif;
+  font-size: 28px;
+  line-height: 1;
 }
 
 .connect-btn svg {
   color: var(--cream);
 }
 
-.connect-btn:hover {
+.connect-btn:hover,
+.connect-btn:focus-visible {
+  border-color: var(--cream);
+  background:
+    linear-gradient(90deg, rgba(172, 203, 241, 0.32), rgba(172, 203, 241, 0.12) 58%, rgba(228, 210, 159, 0.18)),
+    rgba(3, 5, 6, 0.96);
   color: var(--paper);
-  transform: translateX(5px);
+  box-shadow:
+    inset 6px 0 0 var(--cream),
+    0 10px 28px rgba(0, 0, 0, 0.44),
+    0 0 18px rgba(172, 203, 241, 0.16);
+  transform: translateY(-2px);
+}
+
+.connect-btn:active {
+  transform: translateY(1px);
+}
+
+@keyframes connect-ready {
+  from {
+    opacity: 0.45;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .statusbar {

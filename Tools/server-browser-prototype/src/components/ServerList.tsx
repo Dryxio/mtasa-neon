@@ -41,7 +41,6 @@ const Row = memo(function Row({
       className={`server-row${selected ? ' server-row--selected' : ''}${offline ? ' server-row--offline' : ''}`}
       style={{ top }}
       onClick={() => onSelect(server.id)}
-      onMouseEnter={() => onSelect(server.id)}
       onDoubleClick={() => onJoin(server)}
       role="row"
       aria-selected={selected}
