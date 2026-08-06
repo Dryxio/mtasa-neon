@@ -89,12 +89,20 @@ bool CWebCore::Initialise(bool gpuEnabled)
 
     m_bGPUEnabled = gpuEnabled;
 
+    // The core-owned browser can be initialized before CLocalGUI has created its console. Keep early CEF diagnostics best-effort so a
+    // recoverable warning (for example, running elevated) cannot crash the client during startup.
+    const auto PrintToConsoleIfReady = [](const SString& message)
+    {
+        if (CConsoleInterface* console = g_pCore->GetConsole())
+            console->Print(message);
+    };
+
     // Get MTA base directory
     SString strBaseDir = SharedUtil::GetMTAProcessBaseDir();
 
     if (strBaseDir.empty())
     {
-        g_pCore->GetConsole()->Printf("CEF initialization skipped - Unable to determine MTA base directory");
+        PrintToConsoleIfReady("CEF initialization skipped - Unable to determine MTA base directory");
         AddReportLog(8000, "CEF initialization skipped - Unable to determine MTA base directory");
         m_bInitialised = false;
         return false;
@@ -130,7 +138,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     // Log for debugging
     if (std::getenv("WINE") || std::getenv("WINEPREFIX"))
     {
-        g_pCore->GetConsole()->Printf("DEBUG: CEF library path set via SetDllDirectoryW: %s", strCEFDir.c_str());
+        PrintToConsoleIfReady(SString("DEBUG: CEF library path set via SetDllDirectoryW: %s", strCEFDir.c_str()));
     }
 #endif
 
@@ -167,7 +175,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
 
     if (bIsElevated && !std::getenv("WINE"))
     {
-        g_pCore->GetConsole()->Printf("WARNING: Running as Administrator - browser features may be limited");
+        PrintToConsoleIfReady("WARNING: Running as Administrator - browser features may be limited");
     }
 
     // Verify CEFLauncher can run in current environment
@@ -187,7 +195,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
 
     if (!FileExists(strLauncherPath))
     {
-        g_pCore->GetConsole()->Printf("CEF initialization skipped - CEFLauncher not found: %s", *strLauncherPath);
+        PrintToConsoleIfReady(SString("CEF initialization skipped - CEFLauncher not found: %s", *strLauncherPath));
         AddReportLog(8001, SString("CEF initialization skipped - CEFLauncher not found: %s", *strLauncherPath));
         m_bInitialised = false;
         return false;
@@ -195,7 +203,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
 
     if (!CanExecuteCEFLauncher())
     {
-        g_pCore->GetConsole()->Printf("CEF initialization skipped - Wine/Proton not available");
+        PrintToConsoleIfReady("CEF initialization skipped - Wine/Proton not available");
         AddReportLog(8026, "CEF initialization skipped - Wine/Proton not available or misconfigured");
         m_bInitialised = false;
         return false;
@@ -209,7 +217,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     const SString strLocalesPath = PathJoin(strMTADir, "CEF", "locales");
     if (!DirectoryExists(strLocalesPath))
     {
-        g_pCore->GetConsole()->Printf("CEF initialization skipped - locales directory not found: %s", *strLocalesPath);
+        PrintToConsoleIfReady(SString("CEF initialization skipped - locales directory not found: %s", *strLocalesPath));
         AddReportLog(8002, SString("CEF initialization skipped - locales directory not found: %s", *strLocalesPath));
         m_bInitialised = false;
         return false;
@@ -286,7 +294,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     }
     catch (...)
     {
-        g_pCore->GetConsole()->Printf("CefInitialize threw exception - CEF features will be disabled");
+        PrintToConsoleIfReady("CefInitialize threw exception - CEF features will be disabled");
         AddReportLog(8003, "CefInitialize threw exception - CEF features will be disabled");
         m_bInitialised = false;
     }
@@ -301,7 +309,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     else
     {
         // Log initialization failure
-        g_pCore->GetConsole()->Printf("CefInitialize failed - CEF features will be disabled");
+        PrintToConsoleIfReady("CefInitialize failed - CEF features will be disabled");
         AddReportLog(8004, "CefInitialize failed - CEF features will be disabled");
     }
 
