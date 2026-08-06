@@ -1821,6 +1821,7 @@ void CGame::AddBuiltInEvents()
     m_Events.AddEvent("onPlayerTriggerEventThreshold", "eventName", nullptr, false);
     m_Events.AddEvent("onPlayerTeamChange", "oldTeam, newTeam", nullptr, false);
     m_Events.AddEvent("onPlayerTriggerInvalidEvent", "eventName, isAdded, isRemote", nullptr, false);
+    m_Events.AddEvent("onPlayerInvalidVehicleExplosion", "element, reason", nullptr, false);
     m_Events.AddEvent("onPlayerChangesProtectedData", "element, key, value", nullptr, false);
     m_Events.AddEvent("onPlayerChangesWorldSpecialProperty", "property, enabled", nullptr, false);
     m_Events.AddEvent("onPlayerTeleport", "previousX, previousY, previousZ, currentX, currentY, currentZ", nullptr, false);
@@ -3084,12 +3085,74 @@ void CGame::Packet_ExplosionSync(CExplosionSyncPacket& Packet)
     bool          syncToPlayers = true;
     CVector       explosionPosition = Packet.m_vecPosition;
     CElement*     explosionSource = nullptr;
+    CVehicle*     vehicleExplosionSource = nullptr;
     unsigned char explosionType = Packet.m_ucType;
+
+    // Invalid reports are rejected before they can mutate vehicle state or reach
+    // ordinary explosion handlers. The dedicated event lets resources record or
+    // penalize forged reports without trusting any client-provided reason text.
+    const auto rejectInvalidVehicleExplosion = [clientSource](CElement* element, const char* reason)
+    {
+        CLuaArguments arguments;
+        if (element)
+            arguments.PushElement(element);
+        else
+            arguments.PushNil();
+        arguments.PushString(reason);
+        clientSource->CallEvent("onPlayerInvalidVehicleExplosion", arguments);
+    };
 
     if (ElementID originID = Packet.m_OriginID; originID != INVALID_ELEMENT_ID)
     {
         if (explosionSource = CElementIDs::GetElement(originID); explosionSource != nullptr)
         {
+            const bool isVehicleOrigin = explosionSource->GetType() == CElement::VEHICLE;
+            if (Packet.m_isVehicleResponsible != isVehicleOrigin)
+            {
+                rejectInvalidVehicleExplosion(explosionSource, "vehicle_origin_mismatch");
+                return;
+            }
+
+            if (isVehicleOrigin)
+            {
+                vehicleExplosionSource = static_cast<CVehicle*>(explosionSource);
+
+                if (vehicleExplosionSource->GetDimension() != clientSource->GetDimension())
+                {
+                    rejectInvalidVehicleExplosion(vehicleExplosionSource, "dimension_mismatch");
+                    return;
+                }
+
+                if (vehicleExplosionSource->GetOccupant(0) != clientSource && vehicleExplosionSource->GetSyncer() != clientSource)
+                {
+                    rejectInvalidVehicleExplosion(vehicleExplosionSource, "unauthorized_reporter");
+                    return;
+                }
+
+                switch (explosionType)
+                {
+                    case CExplosionSyncPacket::EXPLOSION_CAR:
+                    case CExplosionSyncPacket::EXPLOSION_CAR_QUICK:
+                    case CExplosionSyncPacket::EXPLOSION_BOAT:
+                    case CExplosionSyncPacket::EXPLOSION_HELI:
+                    case CExplosionSyncPacket::EXPLOSION_TINY:
+                        break;
+                    default:
+                        rejectInvalidVehicleExplosion(vehicleExplosionSource, "invalid_vehicle_explosion_type");
+                        return;
+                }
+
+                // Vehicle-origin positions are relative offsets. A large offset
+                // lets a forged packet authenticate with the reporter's own
+                // vehicle while placing the actual blast on somebody else.
+                constexpr float MAX_VEHICLE_EXPLOSION_OFFSET = 20.0f;
+                if (Packet.m_vecPosition.LengthSquared() > MAX_VEHICLE_EXPLOSION_OFFSET * MAX_VEHICLE_EXPLOSION_OFFSET)
+                {
+                    rejectInvalidVehicleExplosion(vehicleExplosionSource, "vehicle_explosion_offset_too_large");
+                    return;
+                }
+            }
+
             switch (explosionSource->GetType())
             {
                 case CElement::PLAYER:
@@ -3155,6 +3218,11 @@ void CGame::Packet_ExplosionSync(CExplosionSyncPacket& Packet)
                     break;
             }
         }
+        else if (Packet.m_isVehicleResponsible)
+        {
+            rejectInvalidVehicleExplosion(nullptr, "unknown_vehicle_origin");
+            return;
+        }
     }
 
     if (!syncToPlayers)
@@ -3168,8 +3236,10 @@ void CGame::Packet_ExplosionSync(CExplosionSyncPacket& Packet)
     arguments.PushNumber(explosionPosition.fY);
     arguments.PushNumber(explosionPosition.fZ);
     arguments.PushNumber(explosionType);
-    // TODO: The client uses a nearby player as the origin, if there is none, and we don't want that.
-    // arguments.PushElement(explosionSource);
+    if (vehicleExplosionSource)
+        arguments.PushElement(vehicleExplosionSource);
+    else
+        arguments.PushNil();
     syncToPlayers = clientSource->CallEvent("onExplosion", arguments);
 
     if (!syncToPlayers)
@@ -3186,7 +3256,11 @@ void CGame::Packet_ExplosionSync(CExplosionSyncPacket& Packet)
         player->GetCamera()->GetPosition(cameraPosition);
 
         // Is this players camera close enough to send?
-        if (IsPointNearPoint3D(explosionPosition, cameraPosition, MAX_EXPLOSION_SYNC_DISTANCE))
+        // World events must not rely on the receiving client to enforce
+        // dimension isolation. Besides saving bandwidth, this prevents a
+        // forged position from crossing a server-side world boundary.
+        if (player->GetDimension() == clientSource->GetDimension() && player->GetInterior() == clientSource->GetInterior() &&
+            IsPointNearPoint3D(explosionPosition, cameraPosition, MAX_EXPLOSION_SYNC_DISTANCE))
         {
             sendList.push_back(player);
         }
