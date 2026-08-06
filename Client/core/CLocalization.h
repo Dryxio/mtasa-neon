@@ -25,6 +25,7 @@ public:
     ~CLocalization();
 
     SString Translate(const SString& strMessage);
+    SString TranslateInDomain(const SString& strDomain, const SString& strMessage);
     SString TranslateWithContext(const SString& strContext, const SString& strMessage);
     SString TranslatePlural(const SString& strSingular, const SString& strPlural, int iNum);
     SString TranslatePluralWithContext(const SString& strContext, const SString& strSingular, const SString& strPlural, int iNum);
@@ -43,7 +44,9 @@ public:
     static void LogCallback(const std::string& str);
 
 private:
-    DictionaryManager                             m_DictManager;
-    std::map<SString, std::unique_ptr<CLanguage>> m_LanguageMap;
-    CLanguage*                                    m_pCurrentLang{};
+    DictionaryManager                                     m_DictManager;
+    SString                                               m_strLocalePath;
+    std::map<SString, std::unique_ptr<DictionaryManager>> m_DomainDictManagers;
+    std::map<SString, std::unique_ptr<CLanguage>>         m_LanguageMap;
+    CLanguage*                                            m_pCurrentLang{};
 };

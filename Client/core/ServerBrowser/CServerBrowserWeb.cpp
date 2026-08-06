@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <set>
@@ -32,6 +33,119 @@ namespace
 {
     constexpr std::size_t MAX_EVENTS_PER_FRAME = 60;
     constexpr char        WEB_ROOT[] = "MTA\\cef\\serverbrowser";
+
+    enum class EWebTranslationDomain
+    {
+        Client,
+        MainMenu,
+    };
+
+    struct SWebTranslation
+    {
+        const char*           key;
+        const char*           fallback;
+        const char*           source;
+        EWebTranslationDomain domain;
+    };
+
+    // The semantic key is stable for React while source can point at a legacy
+    // MTA message. This lets the new shell reuse mature translations without
+    // forcing its English art direction to copy old CEGUI wording verbatim.
+    constexpr SWebTranslation WEB_TRANSLATIONS[] = {
+        {"route.loadingServerBrowser", _td("Loading server browser"), _td("Loading server browser"), EWebTranslationDomain::Client},
+        {"aria.mainMenu", _td("MTA Neon main menu"), _td("MTA Neon main menu"), EWebTranslationDomain::Client},
+        {"aria.mainNavigation", _td("Main navigation"), _td("Main navigation"), EWebTranslationDomain::Client},
+        {"aria.chooseLanguage", _td("Choose language"), _td("Choose language"), EWebTranslationDomain::Client},
+        {"aria.serverList", _td("Server list"), _td("Server list"), EWebTranslationDomain::Client},
+        {"main.discordConnecting", _td("Connecting Discord"), _td("Connecting Discord"), EWebTranslationDomain::Client},
+        {"main.discordConnected", _td("Discord connected"), _td("Discord connected"), EWebTranslationDomain::Client},
+        {"main.discordLink", _td("Link your Discord"), _td("Link your Discord"), EWebTranslationDomain::Client},
+        {"main.discordSignOut", _td("Sign out"), _td("Sign out"), EWebTranslationDomain::Client},
+        {"main.resumeGame", _td("Resume game"), _td("Resume game"), EWebTranslationDomain::Client},
+        {"main.resumeCaption", _td("Return to the streets."), _td("Return to the streets."), EWebTranslationDomain::Client},
+        {"main.settingsCaption", _td("Video, audio, controls and account preferences."), _td("Video, audio, controls and account preferences."),
+         EWebTranslationDomain::Client},
+        {"main.disconnectCaption", _td("Leave the current server and return to the main menu."), _td("Leave the current server and return to the main menu."),
+         EWebTranslationDomain::Client},
+        {"main.quitInGameCaption", _td("Leave the server and return to the desktop."), _td("Leave the server and return to the desktop."),
+         EWebTranslationDomain::Client},
+        {"main.browseServers", _td("Browse servers"), _td("Server browser"), EWebTranslationDomain::MainMenu},
+        {"main.browseCaption", _td("Find a world and join the streets of San Andreas."), _td("Find a world and join the streets of San Andreas."),
+         EWebTranslationDomain::Client},
+        {"main.quickConnect", _td("Quick connect"), _td("Quick connect"), EWebTranslationDomain::MainMenu},
+        {"main.quickConnectCaption", _td("Reconnect instantly or enter a server address."), _td("Reconnect instantly or enter a server address."),
+         EWebTranslationDomain::Client},
+        {"main.mapEditor", _td("Map editor"), _td("Map editor"), EWebTranslationDomain::MainMenu},
+        {"main.mapEditorCaption", _td("Build your own corner of San Andreas."), _td("Build your own corner of San Andreas."), EWebTranslationDomain::Client},
+        {"main.aboutCaption", _td("Credits, contributors and information about MTA Neon."), _td("Credits, contributors and information about MTA Neon."),
+         EWebTranslationDomain::Client},
+        {"main.quitGame", _td("Quit game"), _td("Quit"), EWebTranslationDomain::MainMenu},
+        {"main.quitCaption", _td("Return to the desktop."), _td("Return to the desktop."), EWebTranslationDomain::Client},
+        {"main.identity", _td("Neon Identity"), _td("Neon Identity"), EWebTranslationDomain::Client},
+        {"main.inGame", _td("MTA Neon — In game"), _td("MTA Neon — In game"), EWebTranslationDomain::Client},
+        {"main.preview", _td("v1.6 — Neon Preview"), _td("v1.6 — Neon Preview"), EWebTranslationDomain::Client},
+        {"common.settings", _td("Settings"), _td("Settings"), EWebTranslationDomain::MainMenu},
+        {"common.disconnect", _td("Disconnect"), _td("Disconnect"), EWebTranslationDomain::MainMenu},
+        {"common.about", _td("About"), _td("About"), EWebTranslationDomain::MainMenu},
+        {"common.cancel", _td("Cancel"), _td("Cancel"), EWebTranslationDomain::Client},
+        {"common.connect", _td("Connect"), _td("Connect"), EWebTranslationDomain::Client},
+        {"common.close", _td("Close"), _td("Close"), EWebTranslationDomain::Client},
+        {"common.retry", _td("Retry"), _td("Retry"), EWebTranslationDomain::Client},
+        {"common.resume", _td("Resume"), _td("Resume"), EWebTranslationDomain::Client},
+        {"common.select", _td("Select"), _td("Select"), EWebTranslationDomain::Client},
+        {"common.confirm", _td("Confirm"), _td("Confirm"), EWebTranslationDomain::Client},
+        {"common.back", _td("Back"), _td("Back"), EWebTranslationDomain::Client},
+        {"common.refresh", _td("Refresh"), _td("Refresh"), EWebTranslationDomain::Client},
+        {"common.filters", _td("Filters"), _td("Filters"), EWebTranslationDomain::Client},
+        {"common.players", _td("Players"), _td("Players"), EWebTranslationDomain::Client},
+        {"common.ping", _td("Ping"), _td("Ping"), EWebTranslationDomain::Client},
+        {"common.mode", _td("Mode"), _td("Gamemode"), EWebTranslationDomain::Client},
+        {"common.navigate", _td("Navigate"), _td("Navigate"), EWebTranslationDomain::Client},
+        {"source.neon", _td("Neon servers"), _td("Neon servers"), EWebTranslationDomain::Client},
+        {"source.local", _td("Local"), _td("Local"), EWebTranslationDomain::Client},
+        {"source.favourites", _td("Favourites"), _td("Favourites"), EWebTranslationDomain::Client},
+        {"source.recent", _td("Recent"), _td("Recent"), EWebTranslationDomain::Client},
+        {"browser.title", _td("Choose your server"), _td("Server browser"), EWebTranslationDomain::MainMenu},
+        {"browser.destinationsCount", _td("{count} destinations"), _td("{count} destinations"), EWebTranslationDomain::Client},
+        {"browser.playersOnlineCount", _td("{count} players online"), _td("{count} players online"), EWebTranslationDomain::Client},
+        {"browser.backToMain", _td("Back to main menu"), _td("Back to main menu"), EWebTranslationDomain::Client},
+        {"browser.searchPlaceholder", _td("Find a Neon server"), _td("Search servers..."), EWebTranslationDomain::Client},
+        {"browser.heading.destinations", _td("Neon destinations"), _td("Neon destinations"), EWebTranslationDomain::Client},
+        {"browser.filter.hideFull", _td("Hide full servers"), _td("Hide full servers"), EWebTranslationDomain::Client},
+        {"browser.filter.hideEmpty", _td("Hide empty servers"), _td("Hide empty servers"), EWebTranslationDomain::Client},
+        {"browser.filter.hideLocked", _td("Hide locked servers"), _td("Hide locked servers"), EWebTranslationDomain::Client},
+        {"browser.filter.hideIncompatible", _td("Hide other versions"), _td("Hide other versions"), EWebTranslationDomain::Client},
+        {"browser.filter.hideOffline", _td("Hide offline servers"), _td("Hide offline servers"), EWebTranslationDomain::Client},
+        {"browser.empty", _td("No servers match your search."), _td("No servers match your search."), EWebTranslationDomain::Client},
+        {"browser.emptyHint", _td("Try clearing filters or refreshing the list."), _td("Try clearing filters or refreshing the list."),
+         EWebTranslationDomain::Client},
+        {"server.passwordProtected", _td("Password protected"), _td("Password protected"), EWebTranslationDomain::Client},
+        {"server.removeFavourite", _td("Remove from favourites"), _td("Remove from favourites"), EWebTranslationDomain::Client},
+        {"server.addFavourite", _td("Add to favourites"), _td("Add Favorite"), EWebTranslationDomain::Client},
+        {"server.playersUnverified", _td("Player count not verified"), _td("Player count not verified"), EWebTranslationDomain::Client},
+        {"server.offline", _td("Offline"), _td("Offline"), EWebTranslationDomain::Client},
+        {"details.selectServer", _td("Select a server to see"), _td("Select a server to see"), EWebTranslationDomain::Client},
+        {"details.selectServerHint", _td("its details here."), _td("its details here."), EWebTranslationDomain::Client},
+        {"details.selectedDestination", _td("Selected destination"), _td("Server information"), EWebTranslationDomain::Client},
+        {"details.copyAddress", _td("Copy {address}"), _td("Copy {address}"), EWebTranslationDomain::Client},
+        {"details.regionsLanguages", _td("Regions & languages"), _td("Regions & languages"), EWebTranslationDomain::Client},
+        {"details.ready", _td("Selected server — ready to join"), _td("Selected server — ready to join"), EWebTranslationDomain::Client},
+        {"details.joinServer", _td("Join server"), _td("Join Game"), EWebTranslationDomain::Client},
+        {"modal.passwordRequired", _td("Password required"), _td("Password required"), EWebTranslationDomain::Client},
+        {"modal.thisServer", _td("This server"), _td("This server"), EWebTranslationDomain::Client},
+        {"modal.protectedServer", _td("{server} is protected. Enter the server password to join."),
+         _td("{server} is protected. Enter the server password to join."), EWebTranslationDomain::Client},
+        {"modal.serverPassword", _td("Server password"), _td("Server password"), EWebTranslationDomain::Client},
+        {"modal.connecting", _td("Connecting…"), _td("Connecting…"), EWebTranslationDomain::Client},
+        {"modal.joining", _td("Joining {server}"), _td("Joining {server}"), EWebTranslationDomain::Client},
+        {"modal.connectionFailed", _td("Connection failed"), _td("Connection failed"), EWebTranslationDomain::Client},
+        {"modal.unknownError", _td("Unknown error."), _td("Unknown error."), EWebTranslationDomain::Client},
+        {"modal.playersCount", _td("Players — {count}"), _td("Players — {count}"), EWebTranslationDomain::Client},
+        {"status.registeredServers", _td("{count} registered servers"), _td("{count} registered servers"), EWebTranslationDomain::Client},
+        {"status.playersOnline", _td("{count} players online."), _td("{count} players online."), EWebTranslationDomain::Client},
+        {"status.scanning", _td("Scanning {scanned} / {total}…"), _td("Scanning {scanned} / {total}…"), EWebTranslationDomain::Client},
+        {"status.joinServer", _td("Join server"), _td("Join Game"), EWebTranslationDomain::Client},
+    };
 
     struct JsonDeleter
     {
@@ -67,6 +181,39 @@ namespace
     void AddBoolean(json_object* object, const char* name, bool value)
     {
         json_object_object_add(object, name, json_object_new_boolean(value));
+    }
+
+    void AddWebTranslations(json_object* init)
+    {
+        json_object* translations = json_object_new_object();
+        for (const SWebTranslation& entry : WEB_TRANSLATIONS)
+        {
+            SString translated = entry.domain == EWebTranslationDomain::MainMenu ? g_pLocalization->TranslateInDomain("main_menu", entry.source)
+                                                                                 : g_pLocalization->Translate(entry.source);
+
+            // Some semantic keys deliberately have newer English copy than
+            // the legacy msgid. Use that copy only when the selected catalogue
+            // had no translation for the legacy source.
+            if (translated.empty() || (translated == entry.source && std::strcmp(entry.source, entry.fallback) != 0))
+                translated = entry.fallback;
+            AddString(translations, entry.key, translated);
+        }
+        json_object_object_add(init, "translations", translations);
+    }
+
+    std::string TranslateIdentityStatus(const std::string& status)
+    {
+        if (status == "Not signed in")
+            return _("Not signed in");
+        if (status == "Neon account connected")
+            return _("Neon account connected");
+        if (status == "Opening Discord...")
+            return _("Opening Discord...");
+        if (status == "Complete sign-in in your browser")
+            return _("Complete sign-in in your browser");
+        if (status == "Discord sign-in failed")
+            return _("Discord sign-in failed");
+        return status;
     }
 
     unsigned short ParsePort(const std::string& text)
@@ -979,13 +1126,14 @@ void CServerBrowserWeb::QueueMenuInit()
     AddString(init.get(), "type", "init");
     AddBoolean(init.get(), "inGame", m_mainMenu.GetIsIngame());
     AddString(init.get(), "locale", g_pCore->GetLocalization()->GetLanguageCode());
+    AddWebTranslations(init.get());
 
     CNeonIdentityManager* identity = g_pCore->GetNeonIdentityManager();
     json_object*          identityValue = json_object_new_object();
     AddBoolean(identityValue, "authenticated", identity && identity->IsAuthenticated());
     AddBoolean(identityValue, "signingIn", identity && identity->IsSigningIn());
     AddString(identityValue, "displayName", "");
-    AddString(identityValue, "status", identity ? identity->GetStatusText() : "Not signed in");
+    AddString(identityValue, "status", TranslateIdentityStatus(identity ? identity->GetStatusText() : "Not signed in"));
     json_object_object_add(init.get(), "identity", identityValue);
 
     json_object* availableLocales = json_object_new_array();
@@ -1021,7 +1169,7 @@ void CServerBrowserWeb::QueueIdentity(bool force)
     CNeonIdentityManager* identity = g_pCore->GetNeonIdentityManager();
     const bool            authenticated = identity && identity->IsAuthenticated();
     const bool            signingIn = identity && identity->IsSigningIn();
-    const std::string     status = identity ? identity->GetStatusText() : "Not signed in";
+    const std::string     status = TranslateIdentityStatus(identity ? identity->GetStatusText() : "Not signed in");
     const std::string     signature = SString("%d|%d|%s", authenticated, signingIn, status.c_str());
     if (!force && signature == m_lastIdentitySignature)
         return;
@@ -1265,7 +1413,7 @@ void CServerBrowserWeb::Connect(const std::string& host, unsigned short port, co
         JsonPtr event = MakeObject();
         AddString(event.get(), "type", "connect-failed");
         AddString(event.get(), "code", "invalid-nick");
-        AddString(event.get(), "message", "Invalid nickname. Change it in Settings before connecting.");
+        AddString(event.get(), "message", _("Invalid nickname. Change it in Settings before connecting."));
         QueueEvent("server", ToJson(event.get()));
         return;
     }
@@ -1278,7 +1426,7 @@ void CServerBrowserWeb::Connect(const std::string& host, unsigned short port, co
         JsonPtr event = MakeObject();
         AddString(event.get(), "type", "connect-failed");
         AddString(event.get(), "code", "connection-start-failed");
-        AddString(event.get(), "message", "The client could not start the connection.");
+        AddString(event.get(), "message", _("The client could not start the connection."));
         QueueEvent("server", ToJson(event.get()));
     }
 }

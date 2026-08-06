@@ -23,13 +23,6 @@ export const ALL_SOURCES: readonly ServerSource[] = [
   ServerSource.Recent,
 ]
 
-export const SOURCE_LABELS: Record<ServerSource, string> = {
-  internet: 'Neon servers',
-  lan: 'Local',
-  favourites: 'Favourites',
-  recent: 'Recent',
-}
-
 /** Progression du scan ASE d'un serveur, agrégée pour l'UI. */
 export type ServerScanState = 'queued' | 'querying' | 'online' | 'offline'
 
@@ -122,15 +115,4 @@ export function parseServerAddress(raw: string): ServerAddress | null {
 
 export function serverKey(ip: string, port: number): string {
   return `${ip}:${port}`
-}
-
-/** 12348 → "12.348" (séparateur point, comme la maquette). */
-export function formatThousands(n: number): string {
-  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
-}
-
-/** 13421 → "13.4 K" */
-export function formatCompact(n: number): string {
-  if (n < 1000) return String(n)
-  return `${(n / 1000).toFixed(1).replace('.', ',').replace(',0', '')} K`.replace(',', '.')
 }

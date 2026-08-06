@@ -33,7 +33,8 @@ CLocalization::CLocalization(const SString& strLocale, const SString& strLocaleP
     Log::set_log_error_callback(LogCallback);
 
     // Setup our dictionary manager
-    m_DictManager.add_directory(strLocalePath.empty() ? CalcMTASAPath(MTA_LOCALE_DIR) : strLocalePath);
+    m_strLocalePath = strLocalePath.empty() ? CalcMTASAPath(MTA_LOCALE_DIR) : strLocalePath;
+    m_DictManager.add_directory(m_strLocalePath);
 
     // Initialize our language
     SetCurrentLanguage(strLocale);
@@ -161,6 +162,37 @@ SString CLocalization::Translate(const SString& strMessage)
         return strMessage;
 
     return m_pCurrentLang->Translate(strMessage);
+}
+
+SString CLocalization::TranslateInDomain(const SString& strDomain, const SString& strMessage)
+{
+    const Language language = Language::from_name(ValidateLocale(GetLanguageCode()));
+    try
+    {
+        auto& manager = m_DomainDictManagers[strDomain];
+        if (!manager)
+        {
+            // tinygettext caches dictionaries by language only, so using the
+            // client manager for another textdomain would silently return the
+            // already-loaded client catalogue. Each optional domain therefore
+            // needs an isolated manager while still sharing the locale files.
+            manager = std::make_unique<DictionaryManager>();
+            manager->add_directory(m_strLocalePath);
+        }
+        return manager->get_dictionary(language, strDomain).translate(strMessage);
+    }
+    catch (const std::exception& ex)
+    {
+        // Web surfaces reuse both the client and legacy main-menu catalogues.
+        // A missing optional domain must never prevent the native menu opening.
+        WriteDebugEvent(SString("Localization failed to translate from '%s': %s", strDomain.c_str(), ex.what()));
+        return strMessage;
+    }
+    catch (...)
+    {
+        WriteDebugEvent(SString("Localization failed to translate from '%s': unknown error", strDomain.c_str()));
+        return strMessage;
+    }
 }
 
 SString CLocalization::TranslateWithContext(const SString& strContext, const SString& strMessage)

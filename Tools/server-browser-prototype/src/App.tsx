@@ -10,8 +10,10 @@ import { actions, useBrowserState } from './store'
 import { chooseLaunchLoadscreen } from './loadscreen'
 import { parseServerAddress } from './types'
 import { playUiSound } from './uiSound'
+import { useI18n } from './i18n'
 
 export function App() {
+  const { t } = useI18n()
   const state = useBrowserState()
   const searchRef = useRef<HTMLInputElement>(null)
   const hasInitialSelection = useRef(false)
@@ -111,6 +113,10 @@ export function App() {
           onConnect={connectFromToolbar}
         />
         <div className="list-zone">
+          <div className="list-zone__headings" aria-hidden="true">
+            <span>{t('browser.heading.destinations')}</span>
+            <span>{t('common.players')} &nbsp; {t('common.ping')}</span>
+          </div>
           <ServerList
             servers={servers}
             selectedId={state.selectedId}

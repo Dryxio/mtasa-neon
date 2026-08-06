@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { useI18n, type TranslationKey } from '../i18n'
 import type { BrowserFilters } from '../search'
-import { ALL_SOURCES, SOURCE_LABELS, type ServerSource } from '../types'
+import { ALL_SOURCES, type ServerSource } from '../types'
 import { playUiSound } from '../uiSound'
 import {
   IconCheck,
@@ -24,12 +25,19 @@ interface ToolbarProps {
   onConnect: () => void
 }
 
-const FILTER_LABELS: Record<keyof BrowserFilters, string> = {
-  hideFull: 'Hide full servers',
-  hideEmpty: 'Hide empty servers',
-  hideLocked: 'Hide locked servers',
-  hideIncompatible: 'Hide other versions',
-  hideOffline: 'Hide offline servers',
+const SOURCE_LABEL_KEYS: Record<ServerSource, TranslationKey> = {
+  internet: 'source.neon',
+  lan: 'source.local',
+  favourites: 'source.favourites',
+  recent: 'source.recent',
+}
+
+const FILTER_LABEL_KEYS: Record<keyof BrowserFilters, TranslationKey> = {
+  hideFull: 'browser.filter.hideFull',
+  hideEmpty: 'browser.filter.hideEmpty',
+  hideLocked: 'browser.filter.hideLocked',
+  hideIncompatible: 'browser.filter.hideIncompatible',
+  hideOffline: 'browser.filter.hideOffline',
 }
 
 /** Ferme le menu au clic hors de l'ancre. */
@@ -47,6 +55,7 @@ function useClickOutside(open: boolean, close: () => void) {
 }
 
 export function Toolbar(props: ToolbarProps) {
+  const { t } = useI18n()
   const [sourceOpen, setSourceOpen] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const sourceRef = useClickOutside(sourceOpen, () => setSourceOpen(false))
@@ -65,7 +74,7 @@ export function Toolbar(props: ToolbarProps) {
             setSourceOpen((v) => !v)
           }}
         >
-          {SOURCE_LABELS[props.source]}
+          {t(SOURCE_LABEL_KEYS[props.source])}
           <span className="chevron">
             <IconChevronDown size={14} />
           </span>
@@ -84,7 +93,7 @@ export function Toolbar(props: ToolbarProps) {
                   props.onSource(source)
                 }}
               >
-                {SOURCE_LABELS[source]}
+                {t(SOURCE_LABEL_KEYS[source])}
                 {source === props.source && (
                   <span className="check">
                     <IconCheck size={14} />
@@ -99,7 +108,7 @@ export function Toolbar(props: ToolbarProps) {
       <button
         type="button"
         className={`tool-btn tool-btn--icon${props.refreshing ? ' tool-btn--refreshing' : ''}`}
-        title="Refresh"
+        title={t('common.refresh')}
         onClick={() => {
           playUiSound('select')
           props.onRefresh()
@@ -114,7 +123,7 @@ export function Toolbar(props: ToolbarProps) {
           ref={props.searchRef}
           value={props.query}
           onChange={(e) => props.onQuery(e.target.value)}
-          placeholder="Find a Neon server"
+          placeholder={t('browser.searchPlaceholder')}
           spellCheck={false}
         />
       </div>
@@ -128,7 +137,7 @@ export function Toolbar(props: ToolbarProps) {
         }}
       >
         <IconPlay size={12} />
-        Connect
+        {t('common.connect')}
       </button>
 
       <div className="menu-anchor" ref={filtersRef}>
@@ -140,14 +149,14 @@ export function Toolbar(props: ToolbarProps) {
             setFiltersOpen((v) => !v)
           }}
         >
-          Filters{activeFilters > 0 ? ` · ${activeFilters}` : ''}
+          {t('common.filters')}{activeFilters > 0 ? ` · ${activeFilters}` : ''}
           <span className="chevron" style={{ color: 'var(--accent)' }}>
             <IconFilter size={13} />
           </span>
         </button>
         {filtersOpen && (
           <div className="menu menu--right" role="menu">
-            {(Object.keys(FILTER_LABELS) as (keyof BrowserFilters)[]).map((key) => {
+            {(Object.keys(FILTER_LABEL_KEYS) as (keyof BrowserFilters)[]).map((key) => {
               const on = props.filters[key]
               return (
                 <button
@@ -163,7 +172,7 @@ export function Toolbar(props: ToolbarProps) {
                   <span className={`menu__toggle-box${on ? ' menu__toggle-box--on' : ''}`}>
                     {on && <IconCheck size={11} />}
                   </span>
-                  {FILTER_LABELS[key]}
+                  {t(FILTER_LABEL_KEYS[key])}
                 </button>
               )
             })}

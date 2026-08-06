@@ -1,4 +1,4 @@
-import { formatThousands } from '../types'
+import { useI18n } from '../i18n'
 import type { NetworkStats } from '../store'
 import { IconArrowDown, IconArrowUp, IconEnter } from './Icons'
 
@@ -9,14 +9,18 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ stats, progress, notice }: StatusBarProps) {
+  const { formatNumber, t } = useI18n()
   return (
     <footer className="statusbar">
       <span>
-        Neon Network — {formatThousands(stats.serverCount)} registered servers ·{' '}
-        {formatThousands(stats.playersOnline)} players online.
+        Neon Network — {t('status.registeredServers', { count: formatNumber(stats.serverCount) })} ·{' '}
+        {t('status.playersOnline', { count: formatNumber(stats.playersOnline) })}
         {progress && (
           <span className="statusbar__progress">
-            {'  '}Scanning {progress.scanned} / {progress.total}…
+            {'  '}{t('status.scanning', {
+              scanned: formatNumber(progress.scanned),
+              total: formatNumber(progress.total),
+            })}
           </span>
         )}
         {notice && <span className="statusbar__notice"> {notice}</span>}
@@ -29,13 +33,13 @@ export function StatusBar({ stats, progress, notice }: StatusBarProps) {
           <span className="statusbar__key">
             <IconArrowDown size={13} />
           </span>
-          Navigate
+          {t('common.navigate')}
         </span>
         <span className="statusbar__hint">
           <span className="statusbar__key">
             <IconEnter size={13} />
           </span>
-          Join Server
+          {t('status.joinServer')}
         </span>
       </div>
     </footer>

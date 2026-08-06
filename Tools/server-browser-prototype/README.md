@@ -110,5 +110,6 @@ au master public MTA si le registre est indisponible.
 - Les serveurs peuvent annoncer une région principale (`country`) ou plusieurs
   régions d'accueil (`countries`).
 - Le sélecteur expose les locales natives de MTA et applique réellement la
-  langue choisie. Les chaînes propres au shell sont encore en anglais et
-  devront être raccordées au gettext du client.
+  langue choisie. Le shell reçoit son dictionnaire depuis les catalogues
+  gettext `client` / `main_menu` ; les nouvelles clés sans traduction utilisent
+  leur fallback anglais embarqué.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import languageIcon from '../../../../Shared/data/MTA San Andreas/MTA/cgui/images/the_language_icon.png'
+import { useI18n } from '../i18n'
 import type { MenuLanguage } from '../menuBridge'
 import { playUiSound } from '../uiSound'
 
@@ -10,6 +11,7 @@ interface LanguageSelectorProps {
 }
 
 export function LanguageSelector({ locale, languages, onSelect }: LanguageSelectorProps) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const current = languages.find((language) => language.locale === locale) ?? languages[0]
@@ -28,7 +30,7 @@ export function LanguageSelector({ locale, languages, onSelect }: LanguageSelect
   return (
     <div className="language-selector" ref={rootRef}>
       {open && (
-        <div className="language-selector__list" role="menu" aria-label="Choose language">
+        <div className="language-selector__list" role="menu" aria-label={t('aria.chooseLanguage')}>
           {languages.map((language) => (
             <button
               key={language.locale}

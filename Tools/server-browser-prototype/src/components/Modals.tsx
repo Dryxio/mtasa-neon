@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useI18n } from '../i18n'
 import type { ConnectFlow } from '../store'
 import type { ServerItem } from '../types'
 import { playUiSound } from '../uiSound'
@@ -15,6 +16,7 @@ interface ConnectModalsProps {
 export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }: ConnectModalsProps) {
   const [password, setPassword] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const { t } = useI18n()
 
   useEffect(() => {
     if (connect.phase === 'password') {
@@ -41,10 +43,10 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }:
         >
           <div className="modal__title">
             <IconLock size={16} />
-            Password required
+            {t('modal.passwordRequired')}
           </div>
           <p className="modal__text">
-            {connect.serverName ?? 'This server'} is protected. Enter the server password to join.
+            {t('modal.protectedServer', { server: connect.serverName ?? t('modal.thisServer') })}
           </p>
           {connect.error?.code === 'bad-password' && (
             <p className="modal__error">{connect.error.message}</p>
@@ -55,14 +57,14 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }:
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Server password"
+            placeholder={t('modal.serverPassword')}
           />
           <div className="modal__actions">
             <button type="button" className="modal__btn" onClick={onDismiss}>
-              Cancel
+              {t('common.cancel')}
             </button>
             <button type="submit" className="modal__btn modal__btn--primary">
-              Connect
+              {t('common.connect')}
             </button>
           </div>
         </form>
@@ -72,15 +74,17 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }:
         <div className="modal">
           <div className="modal__title">
             <IconPlay size={14} />
-            Connecting…
+            {t('modal.connecting')}
           </div>
           <div className="connecting__spinner" />
           <p className="modal__text" style={{ textAlign: 'center' }}>
-            Joining {connect.serverName ?? `${connect.address?.ip}:${connect.address?.port}`}
+            {t('modal.joining', {
+              server: connect.serverName ?? `${connect.address?.ip}:${connect.address?.port}`,
+            })}
           </p>
           <div className="modal__actions">
             <button type="button" className="modal__btn" onClick={onDismiss}>
-              Cancel
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -90,15 +94,15 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }:
         <div className="modal">
           <div className="modal__title">
             <IconClose size={16} />
-            Connection failed
+            {t('modal.connectionFailed')}
           </div>
-          <p className="modal__error">{connect.error?.message ?? 'Unknown error.'}</p>
+          <p className="modal__error">{connect.error?.message ?? t('modal.unknownError')}</p>
           <div className="modal__actions">
             <button type="button" className="modal__btn" onClick={onDismiss}>
-              Close
+              {t('common.close')}
             </button>
             <button type="button" className="modal__btn modal__btn--primary" onClick={onRetry}>
-              Retry
+              {t('common.retry')}
             </button>
           </div>
         </div>
@@ -113,12 +117,13 @@ interface PlayersModalProps {
 }
 
 export function PlayersModal({ server, onClose }: PlayersModalProps) {
+  const { formatNumber, t } = useI18n()
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal--players">
         <div className="modal__title">
           <IconAt size={16} />
-          Players — {server.players}
+          {t('modal.playersCount', { count: formatNumber(server.players) })}
         </div>
         <div className="modal__players">
           {server.playerList.map((player, i) => (
@@ -129,7 +134,7 @@ export function PlayersModal({ server, onClose }: PlayersModalProps) {
         </div>
         <div className="modal__actions">
           <button type="button" className="modal__btn" onClick={onClose}>
-            Close
+            {t('common.close')}
           </button>
         </div>
       </div>

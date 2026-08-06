@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useI18n } from '../i18n'
 import type { ServerItem } from '../types'
 import { playUiSound } from '../uiSound'
 import {
@@ -19,13 +20,14 @@ interface DetailsPanelProps {
 
 export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProps) {
   const [copied, setCopied] = useState(false)
+  const { formatNumber, t } = useI18n()
 
   if (!server) {
     return (
       <aside className="details-empty">
-        Select a server to see
+        {t('details.selectServer')}
         <br />
-        its details here.
+        {t('details.selectServerHint')}
       </aside>
     )
   }
@@ -40,13 +42,13 @@ export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProp
   return (
     <aside className="details">
       <div className="details__scroll">
-        <span className="details__kicker">Selected destination</span>
+        <span className="details__kicker">{t('details.selectedDestination')}</span>
         <div className="details__name">
           <span>{shortName(server.name)}</span>
           <button
             type="button"
             className="details__copy"
-            title={`Copy mtasa://${server.ip}:${server.gamePort}`}
+            title={t('details.copyAddress', { address: `mtasa://${server.ip}:${server.gamePort}` })}
             onClick={copyAddress}
           >
             {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
@@ -57,15 +59,15 @@ export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProp
 
         <div className="details__facts">
           <div>
-            <span>Players</span>
-            <strong>{server.players} / {server.maxPlayers}</strong>
+            <span>{t('common.players')}</span>
+            <strong>{formatNumber(server.players)} / {formatNumber(server.maxPlayers)}</strong>
           </div>
           <div>
-            <span>Ping</span>
+            <span>{t('common.ping')}</span>
             <strong>{server.ping !== undefined ? `${server.ping} ms` : '—'}</strong>
           </div>
           <div>
-            <span>Mode</span>
+            <span>{t('common.mode')}</span>
             <strong>{server.gameMode}</strong>
           </div>
         </div>
@@ -97,7 +99,7 @@ export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProp
         <section className="details__section">
           <div className="details__section-head">
             <IconGlobe size={14} />
-            Regions & languages
+            {t('details.regionsLanguages')}
           </div>
           <div className="details__chips">
             {(server.countries?.length ? server.countries : server.country ? [server.country] : []).map(
@@ -114,10 +116,10 @@ export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProp
       </div>
 
       <div className="details__footer" key={server.id}>
-        <span>Selected server — ready to join</span>
+        <span>{t('details.ready')}</span>
         <button type="button" className="connect-btn" onClick={() => onConnect(server)}>
           <IconPlay size={18} />
-          Join server
+          {t('details.joinServer')}
         </button>
       </div>
     </aside>

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import { I18nProvider, useI18n } from './i18n'
 import { MainMenu } from './MainMenu'
 import { useMenuBridge } from './menuBridge'
 
@@ -27,32 +28,39 @@ export function Experience() {
     return () => window.removeEventListener('hashchange', syncView)
   }, [])
 
-  if (view === 'server-browser') {
-    return (
-      <Suspense fallback={<div className="route-loading" aria-label="Loading server browser" />}>
-        <ServerBrowser />
-      </Suspense>
-    )
-  }
-
   return (
-    <MainMenu
-      inGame={menu.state.inGame}
-      identity={menu.state.identity}
-      locale={menu.state.locale}
-      languages={menu.state.languages}
-      onBrowseServers={() => {
-        window.location.hash = '/servers'
-      }}
-      onResume={() => menu.command('menu:resume')}
-      onDisconnect={() => menu.command('menu:disconnect')}
-      onQuickConnect={() => menu.command('menu:quickConnect', () => { window.location.hash = '/servers' })}
-      onMapEditor={() => menu.command('menu:mapEditor')}
-      onSettings={() => menu.command('menu:settings')}
-      onAbout={() => menu.command('menu:about')}
-      onIdentity={() => menu.command('menu:identity')}
-      onLanguage={menu.setLanguage}
-      onQuit={() => menu.command('menu:quit', () => window.close())}
-    />
+    <I18nProvider locale={menu.state.locale} translations={menu.state.translations}>
+      {view === 'server-browser' ? (
+        <ServerBrowserRoute />
+      ) : (
+        <MainMenu
+          inGame={menu.state.inGame}
+          identity={menu.state.identity}
+          locale={menu.state.locale}
+          languages={menu.state.languages}
+          onBrowseServers={() => {
+            window.location.hash = '/servers'
+          }}
+          onResume={() => menu.command('menu:resume')}
+          onDisconnect={() => menu.command('menu:disconnect')}
+          onQuickConnect={() => menu.command('menu:quickConnect', () => { window.location.hash = '/servers' })}
+          onMapEditor={() => menu.command('menu:mapEditor')}
+          onSettings={() => menu.command('menu:settings')}
+          onAbout={() => menu.command('menu:about')}
+          onIdentity={() => menu.command('menu:identity')}
+          onLanguage={menu.setLanguage}
+          onQuit={() => menu.command('menu:quit', () => window.close())}
+        />
+      )}
+    </I18nProvider>
+  )
+}
+
+function ServerBrowserRoute() {
+  const { t } = useI18n()
+  return (
+    <Suspense fallback={<div className="route-loading" aria-label={t('route.loadingServerBrowser')} />}>
+      <ServerBrowser />
+    </Suspense>
   )
 }

@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react'
+import { useI18n } from '../i18n'
 import type { ServerItem } from '../types'
 import { Flag, IconLock, IconStar, IconStarFilled } from './Icons'
 
@@ -35,6 +36,7 @@ const Row = memo(function Row({
   onJoin: (server: ServerItem) => void
   onToggleFavourite: (server: ServerItem) => void
 }) {
+  const { formatNumber, t } = useI18n()
   const offline = server.scanState === 'offline'
   return (
     <div
@@ -54,7 +56,7 @@ const Row = memo(function Row({
       </div>
       <div className="server-row__side">
         {server.passworded && (
-          <span className="server-row__lock" title="Password protected">
+          <span className="server-row__lock" title={t('server.passwordProtected')}>
             <IconLock size={13} />
           </span>
         )}
@@ -66,7 +68,7 @@ const Row = memo(function Row({
         <button
           type="button"
           className={`server-row__star${server.isFavourite ? ' server-row__star--active' : ''}`}
-          title={server.isFavourite ? 'Remove from favourites' : 'Add to favourites'}
+          title={server.isFavourite ? t('server.removeFavourite') : t('server.addFavourite')}
           onClick={(e) => {
             e.stopPropagation()
             onToggleFavourite(server)
@@ -77,12 +79,14 @@ const Row = memo(function Row({
         <div className="server-row__meta">
           <span
             className={`server-row__players${server.isStatusVerified ? '' : ' server-row__players--unverified'}`}
-            title={server.isStatusVerified ? undefined : 'Player count not verified'}
+            title={server.isStatusVerified ? undefined : t('server.playersUnverified')}
           >
-            {offline ? '—' : `${server.players} / ${server.maxPlayers}${server.isStatusVerified ? '' : ' *'}`}
+            {offline
+              ? '—'
+              : `${formatNumber(server.players)} / ${formatNumber(server.maxPlayers)}${server.isStatusVerified ? '' : ' *'}`}
           </span>
           <span className="server-row__ping">
-            {offline ? 'offline' : server.ping !== undefined ? `${server.ping} ms` : '…'}
+            {offline ? t('server.offline') : server.ping !== undefined ? `${server.ping} ms` : '…'}
           </span>
         </div>
       </div>
@@ -91,6 +95,7 @@ const Row = memo(function Row({
 })
 
 export function ServerList(props: ServerListProps) {
+  const { t } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewport, setViewport] = useState(600)
@@ -124,9 +129,9 @@ export function ServerList(props: ServerListProps) {
     return (
       <div className="server-list">
         <div className="list-empty">
-          No servers match your search.
+          {t('browser.empty')}
           <br />
-          Try clearing filters or refreshing the list.
+          {t('browser.emptyHint')}
         </div>
       </div>
     )
@@ -144,7 +149,7 @@ export function ServerList(props: ServerListProps) {
       ref={scrollRef}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       role="grid"
-      aria-label="Server list"
+      aria-label={t('aria.serverList')}
     >
       <div className="server-list__spacer" style={{ height: props.servers.length * STRIDE - ROW_GAP }}>
         {props.servers.slice(first, last).map((server, i) => (

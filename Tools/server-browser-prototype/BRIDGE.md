@@ -39,9 +39,12 @@ l'URL — permet de développer/tester sans le client).
 | `menu:quit` | — | Déclenche la fermeture native du client. |
 
 Le canal `window.__neonMenu` reçoit `init` (`inGame`, `locale`, `languages[]`,
-`identity`), puis les mises à jour incrémentales `context` (`inGame`) et
-`identity`. Le contexte en jeu affiche uniquement Resume, Settings, Disconnect
-et Quit au-dessus du monde assombri.
+`identity`, `translations`), puis les mises à jour incrémentales `context`
+(`inGame`) et `identity`. `translations` associe les clés sémantiques React aux
+catalogues natifs `client` et `main_menu` ; une clé absente conserve son texte
+anglais embarqué. Les noms, descriptions et langues déclarés par les serveurs
+ne sont volontairement pas traduits. Le contexte en jeu affiche uniquement
+Resume, Settings, Disconnect et Quit au-dessus du monde assombri.
 
 Le code du Server Browser est chargé dynamiquement à l'ouverture de sa route.
 Avant ce premier accès, `CefBackend` n'existe pas, le registre n'est pas chargé
@@ -108,5 +111,3 @@ panne du service ne provoque jamais un fallback vers le master public MTA.
 
 - Router les erreurs de connexion réseau (mauvais mdp en cours de connexion,
   file d'attente serveur plein) vers la page au lieu des popups CEGUI.
-- Localisation de toutes les chaînes React : le sélecteur change déjà la
-  locale native MTA, mais le texte propre au shell reste en anglais.

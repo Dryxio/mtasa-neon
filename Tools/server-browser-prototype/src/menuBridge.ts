@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { normalizeTranslations, type TranslationMap } from './i18n'
 
 export interface MenuLanguage {
   locale: string
@@ -17,10 +18,11 @@ interface MenuState {
   locale: string
   languages: MenuLanguage[]
   identity: MenuIdentity
+  translations: TranslationMap
 }
 
 type NativeMenuEvent =
-  | ({ type: 'init' } & MenuState)
+  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations'>)
   | { type: 'context'; inGame: boolean }
   | { type: 'identity'; identity: MenuIdentity }
 
@@ -52,6 +54,7 @@ const INITIAL_STATE: MenuState = {
     displayName: 'Dryxio',
     status: 'Neon ID connected',
   },
+  translations: {},
 }
 
 function send(name: string, ...args: string[]): boolean {
@@ -88,7 +91,7 @@ export function useMenuBridge() {
         for (const event of events) {
           if (event.type === 'init') {
             enforceInGameMenuRoute(event.inGame)
-            setState(event)
+            setState({ ...event, translations: normalizeTranslations(event.translations) })
           }
           else if (event.type === 'context') {
             enforceInGameMenuRoute(event.inGame)

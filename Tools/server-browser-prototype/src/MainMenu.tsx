@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { LanguageSelector } from './components/LanguageSelector'
+import { useI18n } from './i18n'
 import { chooseLaunchLoadscreen } from './loadscreen'
 import { notifyMenuVisualReady, type MenuIdentity, type MenuLanguage } from './menuBridge'
 import { playUiSound } from './uiSound'
@@ -38,89 +39,90 @@ function DiscordIcon() {
 }
 
 export function MainMenu(props: MainMenuProps) {
+  const { t } = useI18n()
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loadscreen] = useState(chooseLaunchLoadscreen)
   const [artReady, setArtReady] = useState(false)
   const previousSelectedIndex = useRef(selectedIndex)
   const visualReadySent = useRef(false)
   const discordTitle = props.identity.signingIn
-    ? 'Connecting Discord'
+    ? t('main.discordConnecting')
     : props.identity.authenticated
-      ? (props.identity.displayName || 'Discord connected')
-      : 'Link your Discord'
+      ? (props.identity.displayName || t('main.discordConnected'))
+      : t('main.discordLink')
   const discordAction = props.identity.signingIn
-    ? 'Cancel'
+    ? t('common.cancel')
     : props.identity.authenticated
-      ? 'Sign out'
-      : 'Connect'
+      ? t('main.discordSignOut')
+      : t('common.connect')
 
   const items = useMemo<MenuItem[]>(
     () => props.inGame
       ? [
           {
             id: 'resume',
-            label: 'Resume game',
-            caption: 'Return to the streets.',
+            label: t('main.resumeGame'),
+            caption: t('main.resumeCaption'),
             action: props.onResume,
           },
           {
             id: 'settings',
-            label: 'Settings',
-            caption: 'Video, audio, controls and account preferences.',
+            label: t('common.settings'),
+            caption: t('main.settingsCaption'),
             action: props.onSettings,
           },
           {
             id: 'disconnect',
-            label: 'Disconnect',
-            caption: 'Leave the current server and return to the main menu.',
+            label: t('common.disconnect'),
+            caption: t('main.disconnectCaption'),
             action: props.onDisconnect,
           },
           {
             id: 'quit',
-            label: 'Quit game',
-            caption: 'Leave the server and return to the desktop.',
+            label: t('main.quitGame'),
+            caption: t('main.quitInGameCaption'),
             action: props.onQuit,
           },
         ]
       : [
           {
             id: 'play',
-            label: 'Browse servers',
-            caption: 'Find a world and join the streets of San Andreas.',
+            label: t('main.browseServers'),
+            caption: t('main.browseCaption'),
             action: props.onBrowseServers,
           },
           {
             id: 'quick-connect',
-            label: 'Quick connect',
-            caption: 'Reconnect instantly or enter a server address.',
+            label: t('main.quickConnect'),
+            caption: t('main.quickConnectCaption'),
             action: props.onQuickConnect,
           },
           {
             id: 'map-editor',
-            label: 'Map editor',
-            caption: 'Build your own corner of San Andreas.',
+            label: t('main.mapEditor'),
+            caption: t('main.mapEditorCaption'),
             action: props.onMapEditor,
           },
           {
             id: 'settings',
-            label: 'Settings',
-            caption: 'Video, audio, controls and account preferences.',
+            label: t('common.settings'),
+            caption: t('main.settingsCaption'),
             action: props.onSettings,
           },
           {
             id: 'about',
-            label: 'About',
-            caption: 'Credits, contributors and information about MTA Neon.',
+            label: t('common.about'),
+            caption: t('main.aboutCaption'),
             action: props.onAbout,
           },
           {
             id: 'quit',
-            label: 'Quit game',
-            caption: 'Return to the desktop.',
+            label: t('main.quitGame'),
+            caption: t('main.quitCaption'),
             action: props.onQuit,
           },
         ],
-    [props],
+    [props, t],
   )
 
   useEffect(() => {
@@ -204,7 +206,7 @@ export function MainMenu(props: MainMenuProps) {
       )}
       <div className="main-menu__wash" aria-hidden="true" />
 
-      <section className="main-menu__content" aria-label="MTA Neon main menu">
+      <section className="main-menu__content" aria-label={t('aria.mainMenu')}>
         <header className="main-menu__brand">
           <h1>
             <span>MTA:SA</span>
@@ -212,7 +214,7 @@ export function MainMenu(props: MainMenuProps) {
           </h1>
         </header>
 
-        <nav className="main-menu__nav" aria-label="Main navigation">
+        <nav className="main-menu__nav" aria-label={t('aria.mainNavigation')}>
           {items.map((item, index) => {
             const isSelected = index === selectedIndex
             return (
@@ -253,7 +255,7 @@ export function MainMenu(props: MainMenuProps) {
             <DiscordIcon />
           </span>
           <span className="main-menu__profile-copy">
-            <span className="main-menu__profile-kicker">Neon Identity</span>
+            <span className="main-menu__profile-kicker">{t('main.identity')}</span>
             <strong>{discordTitle}</strong>
             <span className="main-menu__profile-meta">
               <span className="main-menu__online">
@@ -266,10 +268,10 @@ export function MainMenu(props: MainMenuProps) {
       )}
 
       <footer className="main-menu__footer">
-        <span>{props.inGame ? 'MTA Neon — In game' : 'v1.6 — Neon Preview'}</span>
+        <span>{props.inGame ? t('main.inGame') : t('main.preview')}</span>
         <span className="main-menu__controls">
-          {props.inGame && <><kbd>Esc</kbd> Resume&nbsp;&nbsp; </>}
-          <kbd>↑</kbd><kbd>↓</kbd> Select&nbsp;&nbsp; <kbd>Enter</kbd> Confirm
+          {props.inGame && <><kbd>Esc</kbd> {t('common.resume')}&nbsp;&nbsp; </>}
+          <kbd>↑</kbd><kbd>↓</kbd> {t('common.select')}&nbsp;&nbsp; <kbd>Enter</kbd> {t('common.confirm')}
         </span>
       </footer>
 

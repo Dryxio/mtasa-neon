@@ -346,24 +346,17 @@ a:focus-visible {
   padding-top: 24px;
 }
 
-.list-zone::before,
-.list-zone::after {
+.list-zone__headings {
   position: absolute;
   top: 0;
+  right: 20px;
+  left: 30px;
+  display: flex;
+  justify-content: space-between;
   color: #7f8d97;
   font-family: var(--font-small);
   font-size: 10px;
   letter-spacing: 0.19em;
-}
-
-.list-zone::before {
-  content: 'NEON DESTINATIONS';
-  left: 30px;
-}
-
-.list-zone::after {
-  content: 'PLAYERS   PING';
-  right: 20px;
 }
 
 .server-list {
