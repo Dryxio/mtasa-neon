@@ -77,7 +77,7 @@
   opacity: 0.96;
   filter: saturate(0.9) contrast(1.04) brightness(0.88);
   transform: scale(1.02);
-  animation: sa-scene-enter 900ms cubic-bezier(0.18, 0.72, 0.26, 1) both;
+  animation: sa-scene-enter 180ms cubic-bezier(0.18, 0.72, 0.26, 1) both;
   user-select: none;
 }
 
@@ -97,7 +97,7 @@
   top: 8.5vh;
   left: clamp(44px, 6.4vw, 124px);
   width: min(570px, 43vw);
-  animation: sa-menu-enter 560ms 100ms cubic-bezier(0.18, 0.72, 0.26, 1) both;
+  animation: sa-menu-enter 180ms cubic-bezier(0.18, 0.72, 0.26, 1) both;
 }
 
 .main-menu__brand {
@@ -116,7 +116,7 @@
   font-size: clamp(74px, 8.8vw, 150px);
   font-weight: 400;
   line-height: 0.75;
-  letter-spacing: -0.045em;
+  letter-spacing: 0.018em;
   text-transform: none;
   white-space: nowrap;
   color: #f0f0ea;
@@ -129,6 +129,7 @@
 }
 
 .main-menu__brand h1 strong {
+  margin-left: 0.035em;
   color: var(--sa-blue);
   font-weight: 400;
 }
@@ -423,8 +424,7 @@
 
 @keyframes sa-menu-enter {
   from {
-    opacity: 0;
-    transform: translateX(-22px);
+    transform: translateX(-8px);
   }
   to {
     opacity: 1;
@@ -434,8 +434,7 @@
 
 @keyframes sa-scene-enter {
   from {
-    opacity: 0;
-    transform: scale(1.08);
+    transform: scale(1.035);
   }
   to {
     opacity: 1;

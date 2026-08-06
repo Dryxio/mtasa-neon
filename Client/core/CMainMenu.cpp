@@ -505,6 +505,8 @@ void CMainMenu::Update()
     if (m_bFrameDelay)
     {
         m_bFrameDelay = false;
+        if (m_pServerBrowserWeb)
+            m_pServerBrowserWeb->DrawLoadingPlaceholder();
         return;
     }
 
@@ -520,6 +522,8 @@ void CMainMenu::Update()
 
     if (m_bHideGame)
         m_pGraphics->DrawRectangle(0, 0, m_ScreenSize.fX, m_ScreenSize.fY, 0xFF000000);
+    if (m_pServerBrowserWeb)
+        m_pServerBrowserWeb->DrawLoadingPlaceholder();
 
     if (m_bIsIngame)  // CEGUI hack
     {
@@ -772,7 +776,17 @@ void CMainMenu::Update()
         // combo-box drop lists keep their CEGUI focus/capture.
         if (m_ServerBrowser.IsVisible())
             m_ServerBrowser.SetVisible(false);
-        m_pServerBrowserWeb->DoPulse();
+        if (!m_pServerBrowserWeb->DoPulse())
+        {
+            // A deferred CEF startup failure must restore the established
+            // menu instead of leaving the native placeholder on screen.
+            delete m_pServerBrowserWeb;
+            m_pServerBrowserWeb = nullptr;
+            m_pFiller->SetVisible(m_bIsVisible);
+            m_pFiller2->SetVisible(m_bIsVisible);
+            m_pCanvas->SetVisible(m_bIsVisible);
+            m_pBackground->SetVisible(m_bIsVisible);
+        }
     }
 }
 

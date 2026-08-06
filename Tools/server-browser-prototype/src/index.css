@@ -391,6 +391,8 @@ a:focus-visible {
   background: linear-gradient(90deg, rgba(0, 0, 0, 0.58), rgba(0, 0, 0, 0.18) 78%, transparent);
   cursor: pointer;
   transition: background 100ms linear, padding-left 110ms ease-out;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .server-row::before {

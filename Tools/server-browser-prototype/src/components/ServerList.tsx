@@ -40,6 +40,7 @@ const Row = memo(function Row({
     <div
       className={`server-row${selected ? ' server-row--selected' : ''}${offline ? ' server-row--offline' : ''}`}
       style={{ top }}
+      onMouseEnter={() => onSelect(server.id)}
       onClick={() => onSelect(server.id)}
       onDoubleClick={() => onJoin(server)}
       role="row"

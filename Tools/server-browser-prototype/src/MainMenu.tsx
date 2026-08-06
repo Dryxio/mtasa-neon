@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { LanguageSelector } from './components/LanguageSelector'
 import { chooseLaunchLoadscreen } from './loadscreen'
-import type { MenuIdentity, MenuLanguage } from './menuBridge'
+import { notifyMenuVisualReady, type MenuIdentity, type MenuLanguage } from './menuBridge'
 import { playUiSound } from './uiSound'
 import './MainMenu.css'
 
@@ -40,7 +40,9 @@ function DiscordIcon() {
 export function MainMenu(props: MainMenuProps) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loadscreen] = useState(chooseLaunchLoadscreen)
+  const [artReady, setArtReady] = useState(false)
   const previousSelectedIndex = useRef(selectedIndex)
+  const visualReadySent = useRef(false)
   const discordTitle = props.identity.signingIn
     ? 'Connecting Discord'
     : props.identity.authenticated
@@ -130,6 +132,38 @@ export function MainMenu(props: MainMenuProps) {
     previousSelectedIndex.current = selectedIndex
   }, [selectedIndex])
 
+  useEffect(() => {
+    if (visualReadySent.current || (!props.inGame && !artReady)) return
+
+    let cancelled = false
+    let firstFrame = 0
+    let secondFrame = 0
+    let animationTimer = 0
+    const notifyAfterPaint = () => {
+      firstFrame = window.requestAnimationFrame(() => {
+        secondFrame = window.requestAnimationFrame(() => {
+          if (cancelled || visualReadySent.current) return
+          visualReadySent.current = true
+          notifyMenuVisualReady()
+        })
+      })
+    }
+
+    const fontsReady = document.fonts.ready.then(() => undefined, () => undefined)
+    const animationReady = props.inGame
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          animationTimer = window.setTimeout(resolve, 190)
+        })
+    void Promise.all([fontsReady, animationReady]).then(notifyAfterPaint)
+    return () => {
+      cancelled = true
+      window.clearTimeout(animationTimer)
+      window.cancelAnimationFrame(firstFrame)
+      window.cancelAnimationFrame(secondFrame)
+    }
+  }, [artReady, props.inGame])
+
   const activate = (item: MenuItem) => {
     playUiSound('select')
     item.action?.()
@@ -163,6 +197,8 @@ export function MainMenu(props: MainMenuProps) {
             alt=""
             draggable={false}
             fetchPriority="high"
+            onLoad={() => setArtReady(true)}
+            onError={() => setArtReady(true)}
           />
         </div>
       )}
@@ -172,7 +208,7 @@ export function MainMenu(props: MainMenuProps) {
         <header className="main-menu__brand">
           <h1>
             <span>MTA:SA</span>
-            <strong>&nbsp;Neon</strong>
+            <strong>Neon</strong>
           </h1>
         </header>
 

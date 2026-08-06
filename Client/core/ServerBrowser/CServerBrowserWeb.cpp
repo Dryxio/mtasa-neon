@@ -484,6 +484,8 @@ CServerBrowserWeb::~CServerBrowserWeb()
         m_widget = nullptr;
     }
 
+    SAFE_RELEASE(m_loadingTexture);
+
     if (m_webView)
     {
         m_webView->ClearWebBrowserEvents(this);
@@ -495,7 +497,8 @@ CServerBrowserWeb::~CServerBrowserWeb()
 
 bool CServerBrowserWeb::IsInputRoutedToWeb()
 {
-    if (!ms_instance || !ms_instance->m_visible || ms_instance->m_nativeDialogVisible || !ms_instance->m_widget || !ms_instance->m_webView)
+    if (!ms_instance || !ms_instance->m_visible || !ms_instance->m_visualReady || ms_instance->m_nativeDialogVisible || !ms_instance->m_widget ||
+        !ms_instance->m_webView)
         return false;
 
     CWebCoreInterface* webCore = g_pCore->GetWebCoreUnchecked();
@@ -525,13 +528,79 @@ bool CServerBrowserWeb::RouteInputMessage(UINT message, WPARAM wParam, LPARAM lP
 
 bool CServerBrowserWeb::Initialise()
 {
-    // LoadURL is asynchronous; verify the entrypoint first so a broken or
-    // missing installation reliably falls back to the established CEGUI UI.
+    // Prepare a native first frame before starting CEF. CefInitialize is
+    // synchronous and can take several seconds on a cold start; deferring it
+    // by two pulses lets this artwork reach the screen before that work blocks
+    // the render thread.
     if (!FileExists(CalcMTASAPath(PathJoin(WEB_ROOT, "index.html"))))
         return false;
 
+    m_loadscreenIndex = 1 + GetTickCount32() % 14;
+    const SString loadscreenPath = CalcMTASAPath(SString("MTA\\cgui\\images\\loadscreens\\loadsc%u.jpg", m_loadscreenIndex));
+    m_loadingTexture = g_pCore->GetGraphics()->GetRenderItemManager()->CreateTexture(loadscreenPath, nullptr, false, -1, -1, RFORMAT_UNKNOWN, TADDRESS_CLAMP);
+    if (!m_loadingTexture)
+        return false;
+    return true;
+}
+
+void CServerBrowserWeb::DrawLoadingPlaceholder()
+{
+    if (!m_visible || m_visualReady || m_nativeDialogVisible || !m_loadingTexture || g_pCore->IsWindowMinimized())
+        return;
+
+    CGraphicsInterface* graphics = g_pCore->GetGraphics();
+    const float         viewportWidth = static_cast<float>(graphics->GetViewportWidth());
+    const float         viewportHeight = static_cast<float>(graphics->GetViewportHeight());
+    const float         textureWidth = static_cast<float>(m_loadingTexture->m_uiSizeX);
+    const float         textureHeight = static_cast<float>(m_loadingTexture->m_uiSizeY);
+    if (viewportWidth < 1.0f || viewportHeight < 1.0f || textureWidth < 1.0f || textureHeight < 1.0f)
+        return;
+
+    constexpr float WEB_SCENE_SCALE = 1.02f;
+    const float     coverScale = std::max(viewportWidth / textureWidth, viewportHeight / textureHeight);
+    const float     coverWidth = textureWidth * coverScale;
+    const float     coverHeight = textureHeight * coverScale;
+    const float     coverX = (viewportWidth - coverWidth) * 0.35f;
+    const float     coverY = (viewportHeight - coverHeight) * 0.5f;
+    const float     sourceCenterX = (viewportWidth * 0.5f - coverX) / coverScale;
+    const float     sourceCenterY = (viewportHeight * 0.5f - coverY) / coverScale;
+    const float     sourceWidth = viewportWidth / (coverScale * WEB_SCENE_SCALE);
+    const float     sourceHeight = viewportHeight / (coverScale * WEB_SCENE_SCALE);
+    const float     u = (sourceCenterX - sourceWidth * 0.5f) / textureWidth;
+    const float     v = (sourceCenterY - sourceHeight * 0.5f) / textureHeight;
+
+    // CEGUI can keep a narrower logical root while a Parallels window is
+    // resized. Draw against the real D3D viewport so no uncovered strip can
+    // remain, while preserving the web menu's object-position and 2% zoom.
+    graphics->DrawRectangle(0.0f, 0.0f, viewportWidth, viewportHeight, 0xFF020303);
+    graphics->DrawTexture(m_loadingTexture, 0.0f, 0.0f, viewportWidth / textureWidth, viewportHeight / textureHeight, 0.0f, 0.0f, 0.0f, 0xFFFFFFFF, u, v,
+                          sourceWidth / textureWidth, sourceHeight / textureHeight, true);
+
+    // CefInitialize blocks the render thread on a cold start, so a smoothly
+    // animated percentage would be misleading. Show genuine startup
+    // milestones instead: native shell, Chromium created, then document
+    // ready. The bar disappears only after React confirms that its artwork,
+    // fonts and opening transition are fully painted.
+    float progress = 0.18f;
+    if (m_webView)
+        progress = 0.62f;
+    if (m_documentReady)
+        progress = 0.88f;
+
+    const float uiScale = Clamp(0.75f, std::min(viewportWidth / 1920.0f, viewportHeight / 1080.0f), 2.0f);
+    const float barWidth = std::min(viewportWidth * 0.32f, 560.0f * uiScale);
+    const float barHeight = std::max(5.0f, 7.0f * uiScale);
+    const float barX = (viewportWidth - barWidth) * 0.5f;
+    const float barY = viewportHeight - 48.0f * uiScale;
+    graphics->DrawRectangle(barX - 2.0f, barY - 2.0f, barWidth + 4.0f, barHeight + 4.0f, 0xD8000000);
+    graphics->DrawRectangle(barX, barY, barWidth, barHeight, 0xB04A5A6B);
+    graphics->DrawRectangle(barX, barY, barWidth * progress, barHeight, 0xFFACCBF1);
+}
+
+bool CServerBrowserWeb::InitialiseWebView()
+{
     CWebCoreInterface* webCore = g_pCore->GetWebCore();
-    CVector2D          resolution = g_pCore->GetGUI()->GetResolution();
+    const CVector2D    resolution = g_pCore->GetGUI()->GetResolution();
     if (!webCore || resolution.fX < 1 || resolution.fY < 1)
         return false;
 
@@ -565,16 +634,16 @@ bool CServerBrowserWeb::Initialise()
 
     // The core-owned local page is served through a narrowly scoped resolver
     // below; it never inherits access to a game resource directory.
-    return m_webView->LoadURL("http://mta/local/index.html", false);
+    return m_webView->LoadURL(SString("http://mta/local/index.html?loadscreen=%u", m_loadscreenIndex), false);
 }
 
 void CServerBrowserWeb::SetVisible(bool visible)
 {
     m_visible = visible;
+    const bool show = visible && !m_nativeDialogVisible;
     if (!m_widget)
         return;
 
-    const bool show = visible && !m_nativeDialogVisible;
     if (show)
     {
         m_webView->SetRenderingPaused(false);
@@ -590,6 +659,9 @@ void CServerBrowserWeb::SetVisible(bool visible)
         }
 
         m_widget->SetEnabled(true);
+        // Keep Chromium awake and painting behind the native D3D placeholder
+        // without exposing a partial document during its cold start.
+        m_widget->SetAlpha(m_visualReady ? 1.0f : 0.0f);
         m_widget->SetVisible(true);
         m_widget->BringToFront();
         m_widget->Activate();
@@ -627,10 +699,30 @@ void CServerBrowserWeb::SetNativeDialogVisible(bool visible)
     SetVisible(m_visible);
 }
 
-void CServerBrowserWeb::DoPulse()
+bool CServerBrowserWeb::DoPulse()
 {
+    if (m_initialisationFailed)
+        return false;
+
+    if (!m_webView)
+    {
+        if (m_initialisationDelayPulses > 0)
+        {
+            --m_initialisationDelayPulses;
+            return true;
+        }
+
+        if (!InitialiseWebView())
+        {
+            m_initialisationFailed = true;
+            return false;
+        }
+
+        SetVisible(m_visible);
+    }
+
     if (!m_documentReady)
-        return;
+        return true;
 
     QueueIdentity(false);
     QueueMenuContext(false);
@@ -687,6 +779,7 @@ void CServerBrowserWeb::DoPulse()
     }
 
     FlushEvents();
+    return true;
 }
 
 void CServerBrowserWeb::Events_OnCreated()
@@ -699,7 +792,7 @@ void CServerBrowserWeb::Events_OnLoadingStart(const SString&, bool)
 
 void CServerBrowserWeb::Events_OnDocumentReady(const SString& url)
 {
-    if (url != "http://mta/local/index.html")
+    if (!url.BeginsWith("http://mta/local/index.html"))
         return;
 
     m_documentReady = true;
@@ -778,6 +871,12 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
     {
         QueueMenuInit();
         QueueIdentity(true);
+    }
+    else if (eventName == "menu:visualReady")
+    {
+        m_visualReady = true;
+        if (m_widget)
+            m_widget->SetAlpha(1.0f);
     }
     else if (eventName == "menu:quickConnect")
         m_mainMenu.OnQuickConnectButtonClick(nullptr, true);

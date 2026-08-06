@@ -19,6 +19,7 @@ class CMainMenu;
 class CServerBrowser;
 class CServerList;
 class CServerListItem;
+class CTextureItem;
 class CWebBrowserItem;
 class CWebViewInterface;
 class CGUIWebBrowser;
@@ -37,7 +38,8 @@ public:
     static bool IsInputRoutedToWeb();
     static bool RouteInputMessage(UINT message, WPARAM wParam, LPARAM lParam);
     bool        IsAvailable() const { return m_webView != nullptr && m_widget != nullptr; }
-    void        DoPulse();
+    bool        DoPulse();
+    void        DrawLoadingPlaceholder();
 
     void Events_OnCreated() override;
     void Events_OnLoadingStart(const SString& url, bool mainFrame) override;
@@ -66,6 +68,7 @@ private:
 
     void HandleMenuEvent(const SString& eventName, const std::vector<std::string>& arguments);
     void HandleServerBrowserEvent(const SString& eventName, const std::vector<std::string>& arguments);
+    bool InitialiseWebView();
     void PlayUiSound(const std::string& soundName);
     void QueueMenuInit();
     void QueueMenuContext(bool force);
@@ -89,9 +92,14 @@ private:
     CMainMenu&                           m_mainMenu;
     CServerBrowser&                      m_serverBrowser;
     std::unique_ptr<CNeonServerRegistry> m_registry;
+    CTextureItem*                        m_loadingTexture{};
     CGUIWebBrowser*                      m_widget{};
     CWebViewInterface*                   m_webView{};
+    unsigned int                         m_loadscreenIndex{1};
+    unsigned int                         m_initialisationDelayPulses{2};
     bool                                 m_documentReady{};
+    bool                                 m_visualReady{};
+    bool                                 m_initialisationFailed{};
     bool                                 m_visible{};
     bool                                 m_nativeDialogVisible{};
     bool                                 m_serverBrowserReady{};

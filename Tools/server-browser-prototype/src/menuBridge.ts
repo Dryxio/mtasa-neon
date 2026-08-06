@@ -60,6 +60,10 @@ function send(name: string, ...args: string[]): boolean {
   return true
 }
 
+export function notifyMenuVisualReady(): void {
+  send('menu:visualReady')
+}
+
 function enforceInGameMenuRoute(inGame: boolean): void {
   if (!inGame || window.location.hash !== '#/servers') return
 
