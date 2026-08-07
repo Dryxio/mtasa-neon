@@ -68,14 +68,16 @@ CClientManager::~CClientManager()
 {
     m_bBeingDeleted = true;
 
-    delete m_pVehicleSoundManager;
-    m_pVehicleSoundManager = nullptr;
-
     delete m_pPacketRecorder;
     m_pPacketRecorder = NULL;
 
+    // Resource stop handlers can still call the vehicle-audio Lua API, and CResourceManager also releases any remaining native audio lease. Keep the
+    // subsystem alive until every resource has finished its teardown.
     delete m_pResourceManager;
     m_pResourceManager = NULL;
+
+    delete m_pVehicleSoundManager;
+    m_pVehicleSoundManager = nullptr;
 
     // We need to call this after deleting resources but before deleting entities
     g_pClientGame->GetElementDeleter()->DoDeleteAll();

@@ -258,14 +258,16 @@ int CLuaEngineDefs::EngineLoadVehicleAudioConfig(lua_State* luaVM)
 
     if (!argStream.HasErrors() && !input.empty())
     {
-        CLuaMain*        pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
-        CResource* const callerResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
-        CResource*       fileResource = callerResource;
-        SString          filePath;
+        CLuaMain*             pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* const      callerResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+        CVehicleSoundManager* vehicleSoundManager = m_pManager ? m_pManager->GetVehicleSoundManager() : nullptr;
+        CResource*            fileResource = callerResource;
+        SString               filePath;
         // Keep the lease tied to the calling resource. Cross-resource paths would otherwise replace the owner pointer during path resolution and leave
-        // the caller unable to reload or unload the native subsystem.
-        if (callerResource && CResourceManager::ParseResourcePathInput(input, fileResource, &filePath) && fileResource == callerResource &&
-            m_pManager->GetVehicleSoundManager()->LoadServerConfig(callerResource, filePath))
+        // the caller unable to reload or unload the native subsystem. The sound manager can be absent while the client manager graph is being torn down,
+        // so Lua calls fail cleanly instead of dereferencing a released subsystem.
+        if (callerResource && vehicleSoundManager && CResourceManager::ParseResourcePathInput(input, fileResource, &filePath) &&
+            fileResource == callerResource && vehicleSoundManager->LoadServerConfig(callerResource, filePath))
         {
             lua_pushboolean(luaVM, true);
             return 1;
@@ -282,17 +284,19 @@ int CLuaEngineDefs::EngineLoadVehicleAudioConfig(lua_State* luaVM)
 
 int CLuaEngineDefs::EngineReloadVehicleAudioConfig(lua_State* luaVM)
 {
-    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
-    CResource* resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
-    lua_pushboolean(luaVM, resource && m_pManager->GetVehicleSoundManager()->ReloadServerConfig(resource));
+    CLuaMain*             pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource*            resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    CVehicleSoundManager* vehicleSoundManager = m_pManager ? m_pManager->GetVehicleSoundManager() : nullptr;
+    lua_pushboolean(luaVM, resource && vehicleSoundManager && vehicleSoundManager->ReloadServerConfig(resource));
     return 1;
 }
 
 int CLuaEngineDefs::EngineUnloadVehicleAudioConfig(lua_State* luaVM)
 {
-    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
-    CResource* resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
-    lua_pushboolean(luaVM, resource && m_pManager->GetVehicleSoundManager()->UnloadServerConfig(resource));
+    CLuaMain*             pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource*            resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    CVehicleSoundManager* vehicleSoundManager = m_pManager ? m_pManager->GetVehicleSoundManager() : nullptr;
+    lua_pushboolean(luaVM, resource && vehicleSoundManager && vehicleSoundManager->UnloadServerConfig(resource));
     return 1;
 }
 
@@ -306,9 +310,10 @@ int CLuaEngineDefs::EnginePlayVehicleAudioBackfire(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
-        CResource* resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
-        if (resource && m_pManager->GetVehicleSoundManager()->PlayBackfire(resource, vehicle, mode))
+        CLuaMain*             pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource*            resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+        CVehicleSoundManager* vehicleSoundManager = m_pManager ? m_pManager->GetVehicleSoundManager() : nullptr;
+        if (resource && vehicleSoundManager && vehicleSoundManager->PlayBackfire(resource, vehicle, mode))
         {
             lua_pushboolean(luaVM, true);
             return 1;
