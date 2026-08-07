@@ -568,6 +568,15 @@ Function .onInstSuccess
         WriteRegStr HKCR "mtasa\shell\open\command" "" '"$INSTDIR\Multi Theft Auto.exe"%1'
     ${EndIf}
 
+    !ifdef MTA_NEON
+        ; Neon owns a separate protocol so one-click joins never replace or
+        ; depend on an official MTA installation's mtasa:// association.
+        WriteRegStr HKCR "mtaneon" "" "URL:MTA Neon Protocol"
+        WriteRegStr HKCR "mtaneon" "URL Protocol" ""
+        WriteRegStr HKCR "mtaneon\DefaultIcon" "" "$INSTDIR\Multi Theft Auto.exe"
+        WriteRegStr HKCR "mtaneon\shell\open\command" "" '"$INSTDIR\Multi Theft Auto.exe" "%1"'
+    !endif
+
     ;UAC::Unload ;Must call unload!
     ${LogText} "-Function end - .onInstSuccess"
 FunctionEnd
@@ -1347,6 +1356,13 @@ Section Uninstall
         ${If} $0 == "$INSTDIR\Multi Theft Auto.exe"
             DeleteRegKey HKCR "mtasa"
         ${EndIf}
+
+        !ifdef MTA_NEON
+            ReadRegStr $0 HKLM "Software\Classes\mtaneon\DefaultIcon" ""
+            ${If} $0 == "$INSTDIR\Multi Theft Auto.exe"
+                DeleteRegKey HKCR "mtaneon"
+            ${EndIf}
+        !endif
 
         !ifndef MTA_NEON
             # Remove 'MaxLoaderThreads' DWORD value for gta_sa.exe.

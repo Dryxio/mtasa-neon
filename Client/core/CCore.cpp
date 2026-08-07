@@ -94,12 +94,31 @@ static HMODULE WINAPI SkipDirectPlay_LoadLibraryA(LPCSTR fileName)
 
 namespace
 {
+    constexpr char  kMtaConnectScheme[] = "mtasa://";
+    constexpr char  kNeonConnectScheme[] = "mtaneon://";
     constexpr int   kDistantLightsDrawDistanceMin = 300;
     constexpr int   kDistantLightsDrawDistanceMax = 5000;
     constexpr float kDistantLightsCoronaRadiusMultiplierMin = 0.1f;
     constexpr float kDistantLightsCoronaRadiusMultiplierMax = 1.0f;
     constexpr int   kExtendedWorldDrawDistanceMin = 300;
     constexpr int   kExtendedWorldDrawDistanceMax = 5000;
+
+    const char* GetConnectUriEndpoint(const char* uri)
+    {
+        if (!uri)
+            return nullptr;
+        if (strnicmp(uri, kMtaConnectScheme, sizeof(kMtaConnectScheme) - 1) == 0)
+            return uri + sizeof(kMtaConnectScheme) - 1;
+        if (strnicmp(uri, kNeonConnectScheme, sizeof(kNeonConnectScheme) - 1) == 0)
+            return uri + sizeof(kNeonConnectScheme) - 1;
+        return nullptr;
+    }
+
+    SString NormalizeConnectUri(const char* uri)
+    {
+        const char* endpoint = GetConnectUriEndpoint(uri);
+        return endpoint ? SString("%s%s", kMtaConnectScheme, endpoint) : SString();
+    }
 
     void ApplyDistantLightPreferences(CGame* game, bool resetRuntimeState = false)
     {
@@ -128,11 +147,9 @@ namespace
 
     bool ParseClosedNativeWorldEndpoint(const char* arguments, std::array<unsigned char, 4>& ipv4, unsigned short& port)
     {
-        constexpr char SCHEME[] = "mtasa://";
-        if (!arguments || strncmp(arguments, SCHEME, sizeof(SCHEME) - 1) != 0)
+        const char* cursor = GetConnectUriEndpoint(arguments);
+        if (!cursor)
             return false;
-
-        const char* cursor = arguments + sizeof(SCHEME) - 1;
         for (size_t octetIndex = 0; octetIndex < ipv4.size(); ++octetIndex)
         {
             const char*  start = cursor;
@@ -2229,11 +2246,13 @@ void CCore::DoPostFramePulse()
         {
             m_isNetworkReady = true;
 
-            // Parse the command line
-            // Does it begin with mtasa://?
-            if (m_szCommandLineArgs && strnicmp(m_szCommandLineArgs, "mtasa://", 8) == 0)
+            // Normalize the Neon-only browser scheme before using the existing
+            // MTA connection parser. This keeps the network command and its
+            // validation identical for browser and in-client connections.
+            const SString connectUri = NormalizeConnectUri(m_szCommandLineArgs);
+            if (!connectUri.empty())
             {
-                SString strArguments = GetConnectCommandFromURI(m_szCommandLineArgs);
+                SString strArguments = GetConnectCommandFromURI(connectUri);
                 // Run the connect command
                 if (strArguments.length() > 0 && !m_pCommands->Execute(strArguments))
                 {
@@ -2466,9 +2485,7 @@ void CCore::Quit(bool bInstantly)
 
 bool CCore::WasLaunchedWithConnectURI()
 {
-    if (m_szCommandLineArgs && strnicmp(m_szCommandLineArgs, "mtasa://", 8) == 0)
-        return true;
-    return false;
+    return !NormalizeConnectUri(m_szCommandLineArgs).empty();
 }
 
 void CCore::ParseCommandLine(std::map<std::string, std::string>& options, const char*& szArgs, const char** pszNoValOptions)
@@ -2575,9 +2592,13 @@ const char* CCore::GetCommandLineOption(const char* szOption)
 
 SString CCore::GetConnectCommandFromURI(const char* szURI)
 {
+    const SString normalizedUri = NormalizeConnectUri(szURI);
+    if (normalizedUri.empty())
+        return {};
+
     unsigned short usPort;
     std::string    strHost, strNick, strPassword;
-    GetConnectParametersFromURI(szURI, strHost, usPort, strNick, strPassword);
+    GetConnectParametersFromURI(normalizedUri, strHost, usPort, strNick, strPassword);
 
     // Generate a string with the arguments to send to the mod IF we got a host
     SString strDest;

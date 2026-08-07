@@ -270,9 +270,10 @@ void CCommandFuncs::Connect(const char* szParameters)
     if (szParameters)
         STRNCPY(szBuffer, szParameters, NUMELMS(szBuffer));
 
-    if (!strncmp(szBuffer, "mtasa://", 8))
+    if (!strncmp(szBuffer, "mtasa://", 8) || !strncmp(szBuffer, "mtaneon://", 10))
     {
-        // Using a mtasa:// URI to connect
+        // Browser launch URIs use either the shared MTA scheme or Neon's
+        // dedicated scheme. The core normalizes both before parsing.
         SString strArguments = g_pCore->GetConnectCommandFromURI(szBuffer);
 
         if (strArguments.length() > 0 && g_pCore->GetCommands()->Execute(strArguments))

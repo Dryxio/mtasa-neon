@@ -1153,11 +1153,14 @@ void HandleDuplicateLaunching()
                         if (!aCommandLineArgs[i])
                             continue;
 
-                        WString wideArg = aCommandLineArgs[i];
-                        if (wideArg.length() > 8 && wideArg.length() < 2048 &&  // Max MTA connect URI length
-                            WStringX(wideArg).BeginsWith(L"mtasa://"))
+                        WString    wideArg = aCommandLineArgs[i];
+                        const bool isMtaUri = WStringX(wideArg).BeginsWith(L"mtasa://");
+                        const bool isNeonUri = WStringX(wideArg).BeginsWith(L"mtaneon://");
+                        if (wideArg.length() > 8 && wideArg.length() < 2048 && (isMtaUri || isNeonUri))  // Max MTA connect URI length
                         {
                             SString strConnectInfo = ToUTF8(wideArg);
+                            if (isNeonUri)
+                                strConnectInfo = SString("mtasa://%s", strConnectInfo.c_str() + 10);
                             // Check for null bytes and validate content
                             if (strConnectInfo.find('\0') != SString::npos)
                                 continue;
