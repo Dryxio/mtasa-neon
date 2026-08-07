@@ -42,14 +42,17 @@ static_assert(offsetof(CCheckpointSAInterface, m_multiSize) == 0x34, "Invalid CC
 class CCheckpointSA : public CCheckpoint
 {
 private:
-    CCheckpointSAInterface* internalInterface;
+    CCheckpointSAInterface* internalInterface{};
     SColor                  m_targetArrowColor{0xFFFF4040};
     float                   m_targetArrowSize{0.625f};
 
 public:
+    CCheckpointSA() = default;
     CCheckpointSA(CCheckpointSAInterface* checkpointInterface) { internalInterface = checkpointInterface; };
 
-    CCheckpointSAInterface* GetInterface() { return internalInterface; }
+    CCheckpointSAInterface*       GetInterface() { return internalInterface; }
+    const CCheckpointSAInterface* GetInterface() const { return internalInterface; }
+    void                          SetInterface(CCheckpointSAInterface* checkpointInterface) { internalInterface = checkpointInterface; }
 
     static void StaticSetHooks();
 

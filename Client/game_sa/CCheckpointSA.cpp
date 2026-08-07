@@ -10,13 +10,8 @@
  *****************************************************************************/
 
 #include "StdInc.h"
-#include "C3DMarkerSA.h"
-#include "C3DMarkersSA.h"
 #include "CCheckpointSA.h"
 #include "CCheckpointsSA.h"
-#include "CGameSA.h"
-
-extern CGameSA* pGame;
 
 void CCheckpointSA::SetPosition(CVector* vecPosition)
 {
@@ -145,7 +140,7 @@ void CCheckpointSA::SetTargetArrowData(const SColor color, float size) noexcept
 
 static void __cdecl RenderTargetArrow(CCheckpointSAInterface* pCheckpoint)
 {
-    CCheckpoint* checkpoint = pGame->GetCheckpoints()->FindMarker(pCheckpoint->m_nIdentifier);
+    CCheckpointSA* checkpoint = CCheckpointsSA::FromInterface(pCheckpoint);
     if (!checkpoint)
         return;
 
@@ -153,7 +148,7 @@ static void __cdecl RenderTargetArrow(CCheckpointSAInterface* pCheckpoint)
     CVector* direction = checkpoint->GetPointDirection();
     SColor   color = checkpoint->GetTargetArrowColor();
 
-    ((void(__cdecl*)(float, float, float, float, std::uint8_t, std::uint8_t, std::uint8_t, std::uint8_t, float, float, float))C3dMarkers_DirectionArrowSet)(
+    ((void(__cdecl*)(float, float, float, float, DWORD, DWORD, DWORD, DWORD, float, float, float))C3dMarkers_DirectionArrowSet)(
         position->fX, position->fY, position->fZ, checkpoint->GetTargetArrowSize(), color.R, color.G, color.B, color.A, -direction->fX, -direction->fY,
         -direction->fZ);
 }

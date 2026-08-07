@@ -27,14 +27,17 @@ end
 
 local function formatStats(stats)
     return string.format(
-        "streamed=%d/%d, 3D=%d/%d, checkpoints=%d/%d, direction-arrows=%d",
+        "streamed=%d/%d, 3D=%d/%d scan=%d, checkpoints=%d/%d scan=%d, direction-arrows=%d scan=%d",
         stats.streamedMarkers,
         stats.streamedMarkerLimit,
         stats.allocated3DMarkers,
         stats.marker3DLimit,
+        stats.marker3DProcessLimit,
         stats.activeCheckpoints,
         stats.checkpointLimit,
-        stats.directionArrowLimit
+        stats.checkpointProcessLimit,
+        stats.directionArrowLimit,
+        stats.directionArrowProcessLimit
     )
 end
 

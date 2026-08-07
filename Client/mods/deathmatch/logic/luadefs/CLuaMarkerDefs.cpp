@@ -172,9 +172,12 @@ int CLuaMarkerDefs::GetMarkerLimitStats(lua_State* luaVM)
     setField("streamedMarkerLimit", CClientMarker::STREAMED_MARKER_LIMIT);
     setField("allocated3DMarkers", g_pGame->Get3DMarkers()->GetCount());
     setField("marker3DLimit", g_pGame->Get3DMarkers()->GetCapacity());
+    setField("marker3DProcessLimit", g_pGame->Get3DMarkers()->GetProcessLimit());
     setField("activeCheckpoints", g_pGame->GetCheckpoints()->GetCount());
     setField("checkpointLimit", g_pGame->GetCheckpoints()->GetCapacity());
+    setField("checkpointProcessLimit", g_pGame->GetCheckpoints()->GetProcessLimit());
     setField("directionArrowLimit", g_pGame->Get3DMarkers()->GetCapacity());
+    setField("directionArrowProcessLimit", g_pGame->Get3DMarkers()->GetDirectionArrowProcessLimit());
 
     return 1;
 }

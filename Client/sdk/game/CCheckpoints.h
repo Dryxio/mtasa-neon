@@ -21,6 +21,9 @@ public:
                                           const SharedUtil::SColor color) = 0;
     virtual CCheckpoint* FindFreeMarker() = 0;
     virtual CCheckpoint* FindMarker(DWORD identifier) = 0;
+    virtual void         BeginFrame() = 0;
     virtual unsigned int GetCount() const = 0;
     virtual unsigned int GetCapacity() const = 0;
+    virtual unsigned int GetProcessLimit() const = 0;
+    virtual unsigned int GetRequired3DMarkerSlots() const = 0;
 };

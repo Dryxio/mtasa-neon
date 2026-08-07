@@ -12,8 +12,9 @@
 #pragma once
 
 #include <game/CCheckpoints.h>
+#include <array>
+#include "CCheckpointSA.h"
 
-class CCheckpointSA;
 class CCheckpointSAInterface;
 class CVector;
 
@@ -27,19 +28,24 @@ class CVector;
 class CCheckpointsSA : public CCheckpoints
 {
 private:
-    CCheckpointSA* Checkpoints[MAX_CHECKPOINTS]{};
+    std::array<CCheckpointSA, MAX_CHECKPOINTS> Checkpoints{};
 
     static CCheckpointSAInterface* GetCheckpointArray();
     static void                    RelocateCheckpointArray();
 
 public:
     CCheckpointsSA();
-    ~CCheckpointsSA();
+    ~CCheckpointsSA() = default;
+
+    static CCheckpointSA* FromInterface(CCheckpointSAInterface* checkpointInterface);
 
     CCheckpoint* CreateCheckpoint(DWORD Identifier, WORD wType, CVector* vecPosition, CVector* vecPointDir, float fSize, float fPulseFraction,
                                   const SharedUtil::SColor color);
     CCheckpoint* FindFreeMarker();
     CCheckpoint* FindMarker(DWORD identifier);
+    void         BeginFrame() override;
     unsigned int GetCount() const override;
     unsigned int GetCapacity() const override { return MAX_CHECKPOINTS; }
+    unsigned int GetProcessLimit() const override;
+    unsigned int GetRequired3DMarkerSlots() const override;
 };

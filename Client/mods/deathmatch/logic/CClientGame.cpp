@@ -14,6 +14,7 @@
 #include <shellapi.h>
 #include <net/SyncStructures.h>
 #include <game/C3DMarkers.h>
+#include <game/CCheckpoints.h>
 #include <game/CAnimBlendAssocGroup.h>
 #include <game/CAnimBlendAssociation.h>
 #include <game/CAnimBlendHierarchy.h>
@@ -4153,7 +4154,16 @@ void CClientGame::PreWorldProcessHandler()
 void CClientGame::PostWorldProcessHandler()
 {
     TIMING_CHECKPOINT("+MTA_PostWorldManagers");
+    // Native marker storage remains large enough for the public 4096-element
+    // limit, but its per-frame GTA loops follow only the occupied working set.
+    // Refresh the bounds before MTA submits this frame's streamed markers.
+    g_pGame->Get3DMarkers()->BeginFrame();
+    g_pGame->GetCheckpoints()->BeginFrame();
     m_pManager->GetMarkerManager()->DoPulse();
+    // Checkpoints submit their underlying 3D markers later in GTA's render
+    // pass, outside the MTA marker manager. Keep exactly that expected budget
+    // visible to the native allocator and to next frame's update.
+    g_pGame->Get3DMarkers()->ReservePlaceMarkerSlots(g_pGame->GetCheckpoints()->GetRequired3DMarkerSlots());
     g_pGame->GetCoronas()->DoPulseDistantLights();
     m_pManager->GetPointLightsManager()->DoPulse();
     TIMING_CHECKPOINT("+MTA_ObjectManager");

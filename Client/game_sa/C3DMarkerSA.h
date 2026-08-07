@@ -55,12 +55,15 @@ static_assert(offsetof(C3DMarkerSAInterface, m_OnScreenTestTime) == 0x9C, "Inval
 class C3DMarkerSA : public C3DMarker
 {
 private:
-    C3DMarkerSAInterface* internalInterface;
+    C3DMarkerSAInterface* internalInterface{};
 
 public:
+    C3DMarkerSA() = default;
     C3DMarkerSA(C3DMarkerSAInterface* markerInterface) { internalInterface = markerInterface; };
 
-    C3DMarkerSAInterface* GetInterface() { return internalInterface; }
+    C3DMarkerSAInterface*       GetInterface() { return internalInterface; }
+    const C3DMarkerSAInterface* GetInterface() const { return internalInterface; }
+    void                        SetInterface(C3DMarkerSAInterface* markerInterface) { internalInterface = markerInterface; }
 
     void               GetMatrix(CMatrix* pMatrix);
     void               SetMatrix(CMatrix* pMatrix);

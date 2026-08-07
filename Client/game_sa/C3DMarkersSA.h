@@ -12,6 +12,7 @@
 #pragma once
 
 #include <game/C3DMarkers.h>
+#include <array>
 #include "C3DMarkerSA.h"
 
 #define FUNC_PlaceMarker            0x725120
@@ -25,20 +26,26 @@
 class C3DMarkersSA : public C3DMarkers
 {
 private:
-    C3DMarkerSA* Markers[MAX_3D_MARKERS]{};
+    std::array<C3DMarkerSA, MAX_3D_MARKERS> Markers{};
 
     static C3DMarkerSAInterface* GetMarkerArray();
     static void                  RelocateMarkerArrays();
 
 public:
     C3DMarkersSA();
-    ~C3DMarkersSA();
+    ~C3DMarkersSA() = default;
+
+    static void SetExpectedDirectionArrowCount(std::size_t count);
 
     C3DMarker*   CreateMarker(DWORD Identifier, T3DMarkerType dwType, CVector* vecPosition, float fSize, float fPulseFraction, BYTE r, BYTE g, BYTE b, BYTE a);
     C3DMarker*   FindFreeMarker();
     C3DMarker*   FindMarker(DWORD Identifier) override;
     void         RenderScriptImportantArea(DWORD identifier, const CVector& center, float radiusX, float radiusY) override;
+    void         BeginFrame() override;
+    void         ReservePlaceMarkerSlots(unsigned int additionalSlots) override;
     void         ReinitMarkers();
     unsigned int GetCount() const override;
     unsigned int GetCapacity() const override { return MAX_3D_MARKERS; }
+    unsigned int GetProcessLimit() const override;
+    unsigned int GetDirectionArrowProcessLimit() const override;
 };
