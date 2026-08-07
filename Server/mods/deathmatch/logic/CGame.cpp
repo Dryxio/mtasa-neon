@@ -2178,6 +2178,20 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
                                 return;
                             }
 
+                            // Serial bans created for authenticated players also carry their
+                            // stable Neon identity, closing the serial-rotation bypass.
+                            if (CBan* pBan = m_pBanManager->GetBanFromNeonAccountId(pPlayer->GetNeonAccountId().c_str()))
+                            {
+                                SString strBanMessage = "Neon account is banned";
+                                SString strDurationDesc = pBan->GetDurationDesc();
+                                if (strDurationDesc.length())
+                                    strBanMessage += " (" + strDurationDesc + ")";
+
+                                CLogger::LogPrintf("CONNECT: %s failed to connect (%s) (%s)\n", szNick, strBanMessage.c_str(), strIPAndSerial.c_str());
+                                DisconnectPlayer(this, *pPlayer, CPlayerDisconnectedPacket::BANNED_ACCOUNT, pBan->GetReason().c_str());
+                                return;
+                            }
+
                             // Check the ip for banness
                             if (CBan* pBan = m_pBanManager->GetBanFromIP(strIP))
                             {

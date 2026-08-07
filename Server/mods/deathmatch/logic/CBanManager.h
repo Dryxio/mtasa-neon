@@ -37,6 +37,7 @@ public:
     void RemoveBan(CBan* pBan);
 
     CBan* GetBanFromSerial(const char* szSerial);
+    CBan* GetBanFromNeonAccountId(const char* szNeonAccountId);
     CBan* GetBanFromIP(const char* szIP);
 
     unsigned int GetBansWithNick(const char* szNick);

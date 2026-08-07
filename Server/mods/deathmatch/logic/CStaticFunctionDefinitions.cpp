@@ -12179,6 +12179,10 @@ CBan* CStaticFunctionDefinitions::BanPlayer(CPlayer* pTargetPlayer, bool bIP, bo
         {
             pBan->SetSerial(pTargetPlayer->GetSerial());
             pBan->SetNick(pTargetPlayer->GetNick());
+            // Couple a live serial ban to the verified platform identity so a
+            // serial rotation does not silently evade the administrator's ban.
+            if (!pTargetPlayer->GetNeonAccountId().empty())
+                pBan->SetNeonAccountId(pTargetPlayer->GetNeonAccountId());
         }
 
         // Check if we passed a responsible player
@@ -12228,6 +12232,11 @@ CBan* CStaticFunctionDefinitions::BanPlayer(CPlayer* pTargetPlayer, bool bIP, bo
                 const std::string& strPlayerSerial = pPlayer->GetSerial();
                 bBan = stricmp(strPlayerSerial.c_str(), pBan->GetSerial().c_str()) == 0;
             }
+
+            // A serial ban may also identify other authenticated sessions for
+            // the same Neon account, even when their hardware serial differs.
+            if (!bBan && bSerial && !pBan->GetNeonAccountId().empty())
+                bBan = pPlayer->GetNeonAccountId() == pBan->GetNeonAccountId();
 
             // If either the IP, serial or username matched
             if (bBan)

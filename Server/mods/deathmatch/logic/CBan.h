@@ -70,6 +70,13 @@ public:
         m_strSerial = strSerial;
     };
 
+    const std::string& GetNeonAccountId() const { return m_strNeonAccountId; }
+    void               SetNeonAccountId(const std::string& neonAccountId)
+    {
+        CBanManager::SetBansModified();
+        m_strNeonAccountId = neonAccountId;
+    }
+
     time_t  GetBanTimeRemaining();
     SString GetDurationDesc();
     SString GetReasonText() const;
@@ -83,6 +90,7 @@ private:
     std::string m_strBanner;
     std::string m_strReason;
     std::string m_strSerial;
+    std::string m_strNeonAccountId;
     time_t      m_tTimeOfBan;
     time_t      m_tTimeOfUnban;
     uint        m_uiScriptID;

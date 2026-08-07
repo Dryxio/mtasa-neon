@@ -122,6 +122,10 @@ CBan* CBanManager::AddSerialBan(CPlayer* pPlayer, CClient* pBanner, const SStrin
             CBan* pBan = AddBan(pBanner->GetNick(), strReason, tTimeOfUnban);
             pBan->SetNick(pPlayer->GetNick());
             pBan->SetSerial(pPlayer->GetSerial());
+            // A verified Neon account survives serial changes, so retain it as
+            // a second key on the same ban instead of creating two lifecycles.
+            if (!pPlayer->GetNeonAccountId().empty())
+                pBan->SetNeonAccountId(pPlayer->GetNeonAccountId());
             return pBan;
         }
     }
@@ -255,6 +259,20 @@ CBan* CBanManager::GetBanFromSerial(const char* szSerial)
     return NULL;
 }
 
+CBan* CBanManager::GetBanFromNeonAccountId(const char* szNeonAccountId)
+{
+    if (!szNeonAccountId || !szNeonAccountId[0])
+        return NULL;
+
+    list<CBan*>::const_iterator iter = m_BanManager.begin();
+    for (; iter != m_BanManager.end(); iter++)
+    {
+        if ((*iter)->GetNeonAccountId() == szNeonAccountId)
+            return *iter;
+    }
+    return NULL;
+}
+
 unsigned int CBanManager::GetBansWithNick(const char* szNick)
 {
     unsigned int                uiOccurrances = 0;
@@ -333,7 +351,8 @@ bool CBanManager::LoadBanList()
             if (pNode->GetTagName().compare("ban") == 0)
             {
                 std::string strIP = SafeGetValue(pNode, "ip"), strSerial = SafeGetValue(pNode, "serial");
-                if (!strIP.empty() || !strSerial.empty())
+                std::string strNeonAccountId = SafeGetValue(pNode, "neon_id");
+                if (!strIP.empty() || !strSerial.empty() || !strNeonAccountId.empty())
                 {
                     CBan* pBan = AddBan();
                     if (IsValidIP(strIP.c_str()))
@@ -341,6 +360,7 @@ bool CBanManager::LoadBanList()
                         pBan->SetIP(strIP);
                     }
                     pBan->SetSerial(strSerial);
+                    pBan->SetNeonAccountId(strNeonAccountId);
                     pBan->SetBanner(SafeGetValue(pNode, "banner"));
                     pBan->SetNick(SafeGetValue(pNode, "nick"));
                     pBan->SetReason(SafeGetValue(pNode, "reason"));
@@ -409,6 +429,7 @@ void CBanManager::SaveBanList()
                     SafeSetValue(pNode, "nick", (*iter)->GetNick());
                     SafeSetValue(pNode, "ip", (*iter)->GetIP());
                     SafeSetValue(pNode, "serial", (*iter)->GetSerial());
+                    SafeSetValue(pNode, "neon_id", (*iter)->GetNeonAccountId());
                     SafeSetValue(pNode, "banner", (*iter)->GetBanner());
                     SafeSetValue(pNode, "reason", (*iter)->GetReason());
                     SafeSetValue(pNode, "time", (unsigned int)(*iter)->GetTimeOfBan());
