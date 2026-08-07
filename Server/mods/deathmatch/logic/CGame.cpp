@@ -2195,6 +2195,21 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
                                 return;
                             }
 
+                            // The Discord subject is another independently signed stable
+                            // identity, so recreating a Neon account on the same Discord
+                            // account cannot evade an existing ban.
+                            if (CBan* pBan = m_pBanManager->GetBanFromDiscordId(pPlayer->GetDiscordId().c_str()))
+                            {
+                                SString strBanMessage = "Discord account is banned";
+                                SString strDurationDesc = pBan->GetDurationDesc();
+                                if (strDurationDesc.length())
+                                    strBanMessage += " (" + strDurationDesc + ")";
+
+                                CLogger::LogPrintf("CONNECT: %s failed to connect (%s) (%s)\n", szNick, strBanMessage.c_str(), strIPAndSerial.c_str());
+                                DisconnectPlayer(this, *pPlayer, CPlayerDisconnectedPacket::BANNED_ACCOUNT, pBan->GetReason().c_str());
+                                return;
+                            }
+
                             // Check the ip for banness
                             if (CBan* pBan = m_pBanManager->GetBanFromIP(strIP))
                             {

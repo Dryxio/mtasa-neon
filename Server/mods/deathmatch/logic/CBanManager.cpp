@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CBanManager.h"
+#include "CNeonIdentityTicket.h"
 #include "CBan.h"
 #include "CGame.h"
 #include "CMapManager.h"
@@ -117,7 +118,7 @@ CBan* CBanManager::AddSerialBan(CPlayer* pPlayer, CClient* pBanner, const SStrin
 {
     if (pPlayer)
     {
-        if (!pPlayer->GetSerial().empty() && !IsSerialBanned(pPlayer->GetSerial().c_str()))
+        if (IsValidSerial(pPlayer->GetSerial().c_str()) && !IsSerialBanned(pPlayer->GetSerial().c_str()))
         {
             CBan* pBan = AddBan(pBanner->GetNick(), strReason, tTimeOfUnban);
             pBan->SetNick(pPlayer->GetNick());
@@ -126,6 +127,8 @@ CBan* CBanManager::AddSerialBan(CPlayer* pPlayer, CClient* pBanner, const SStrin
             // a second key on the same ban instead of creating two lifecycles.
             if (!pPlayer->GetNeonAccountId().empty())
                 pBan->SetNeonAccountId(pPlayer->GetNeonAccountId());
+            if (!pPlayer->GetDiscordId().empty())
+                pBan->SetDiscordId(pPlayer->GetDiscordId());
             return pBan;
         }
     }
@@ -135,7 +138,7 @@ CBan* CBanManager::AddSerialBan(CPlayer* pPlayer, CClient* pBanner, const SStrin
 
 CBan* CBanManager::AddSerialBan(const SString& strSerial, CClient* pBanner, const SString& strReason, time_t tTimeOfUnban)
 {
-    if (/*IsValidSerial ( szSerial ) &&*/ !IsSerialBanned(strSerial.c_str()))
+    if (IsValidSerial(strSerial.c_str()) && !IsSerialBanned(strSerial.c_str()))
     {
         CBan* pBan = AddBan(pBanner->GetNick(), strReason, tTimeOfUnban);
         pBan->SetSerial(strSerial);
@@ -273,6 +276,20 @@ CBan* CBanManager::GetBanFromNeonAccountId(const char* szNeonAccountId)
     return NULL;
 }
 
+CBan* CBanManager::GetBanFromDiscordId(const char* szDiscordId)
+{
+    if (!szDiscordId || !szDiscordId[0])
+        return NULL;
+
+    list<CBan*>::const_iterator iter = m_BanManager.begin();
+    for (; iter != m_BanManager.end(); iter++)
+    {
+        if ((*iter)->GetDiscordId() == szDiscordId)
+            return *iter;
+    }
+    return NULL;
+}
+
 unsigned int CBanManager::GetBansWithNick(const char* szNick)
 {
     unsigned int                uiOccurrances = 0;
@@ -352,8 +369,41 @@ bool CBanManager::LoadBanList()
             {
                 std::string strIP = SafeGetValue(pNode, "ip"), strSerial = SafeGetValue(pNode, "serial");
                 std::string strNeonAccountId = SafeGetValue(pNode, "neon_id");
-                if (!strIP.empty() || !strSerial.empty() || !strNeonAccountId.empty())
+                std::string strDiscordId = SafeGetValue(pNode, "discord_id");
+                std::transform(strSerial.begin(), strSerial.end(), strSerial.begin(), [](unsigned char character) { return std::toupper(character); });
+                if (!strIP.empty() && !IsValidIP(strIP.c_str()))
                 {
+                    CLogger::ErrorPrintf("Ignoring invalid IP identifier in banlist entry\n");
+                    strIP.clear();
+                }
+                if (!strSerial.empty() && !IsValidSerial(strSerial.c_str()))
+                {
+                    CLogger::ErrorPrintf("Ignoring invalid serial identifier in banlist entry\n");
+                    strSerial.clear();
+                }
+                if (!CNeonIdentityTicketVerifier::IsValidAccountId(strNeonAccountId))
+                {
+                    if (!strNeonAccountId.empty())
+                        CLogger::ErrorPrintf("Ignoring invalid Neon identifier in banlist entry\n");
+                    strNeonAccountId.clear();
+                }
+                if (!CNeonIdentityTicketVerifier::IsValidDiscordId(strDiscordId))
+                {
+                    if (!strDiscordId.empty())
+                        CLogger::ErrorPrintf("Ignoring invalid Discord identifier in banlist entry\n");
+                    strDiscordId.clear();
+                }
+
+                if (!strIP.empty() || !strSerial.empty() || !strNeonAccountId.empty() || !strDiscordId.empty())
+                {
+                    if ((!strIP.empty() && IsSpecificallyBanned(strIP.c_str())) || (!strSerial.empty() && GetBanFromSerial(strSerial.c_str())) ||
+                        (!strNeonAccountId.empty() && GetBanFromNeonAccountId(strNeonAccountId.c_str())) ||
+                        (!strDiscordId.empty() && GetBanFromDiscordId(strDiscordId.c_str())))
+                    {
+                        CLogger::ErrorPrintf("Ignoring banlist entry with an identifier already owned by an earlier ban\n");
+                        continue;
+                    }
+
                     CBan* pBan = AddBan();
                     if (IsValidIP(strIP.c_str()))
                     {
@@ -361,6 +411,7 @@ bool CBanManager::LoadBanList()
                     }
                     pBan->SetSerial(strSerial);
                     pBan->SetNeonAccountId(strNeonAccountId);
+                    pBan->SetDiscordId(strDiscordId);
                     pBan->SetBanner(SafeGetValue(pNode, "banner"));
                     pBan->SetNick(SafeGetValue(pNode, "nick"));
                     pBan->SetReason(SafeGetValue(pNode, "reason"));
@@ -430,6 +481,7 @@ void CBanManager::SaveBanList()
                     SafeSetValue(pNode, "ip", (*iter)->GetIP());
                     SafeSetValue(pNode, "serial", (*iter)->GetSerial());
                     SafeSetValue(pNode, "neon_id", (*iter)->GetNeonAccountId());
+                    SafeSetValue(pNode, "discord_id", (*iter)->GetDiscordId());
                     SafeSetValue(pNode, "banner", (*iter)->GetBanner());
                     SafeSetValue(pNode, "reason", (*iter)->GetReason());
                     SafeSetValue(pNode, "time", (unsigned int)(*iter)->GetTimeOfBan());
@@ -504,6 +556,19 @@ bool CBanManager::IsValidIP(const char* szIP)
     }
 
     return false;
+}
+
+bool CBanManager::IsValidSerial(const char* szSerial)
+{
+    if (!szSerial || strlen(szSerial) != 32)
+        return false;
+
+    for (const unsigned char* character = reinterpret_cast<const unsigned char*>(szSerial); *character; ++character)
+    {
+        if (!std::isdigit(*character) && (*character < 'A' || *character > 'F'))
+            return false;
+    }
+    return true;
 }
 
 bool CBanManager::IsValidIPPart(const char* szIP)

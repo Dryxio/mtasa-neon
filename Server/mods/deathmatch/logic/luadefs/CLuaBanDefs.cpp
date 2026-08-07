@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "CLuaBanDefs.h"
 #include "CBan.h"
+#include "CNeonIdentityTicket.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
 
@@ -26,6 +27,8 @@ void CLuaBanDefs::LoadFunctions()
 
         {"getBanIP", GetBanIP},
         {"getBanSerial", GetBanSerial},
+        {"getBanNeonID", GetBanNeonID},
+        {"getBanDiscordID", GetBanDiscordID},
         {"getBanUsername", GetBanUsername},
         {"getBanNick", GetBanNick},
         {"getBanTime", GetBanTime},
@@ -59,6 +62,8 @@ void CLuaBanDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "getNick", "getBanNick");
     lua_classfunction(luaVM, "getReason", "getBanReason");
     lua_classfunction(luaVM, "getSerial", "getBanSerial");
+    lua_classfunction(luaVM, "getNeonID", "getBanNeonID");
+    lua_classfunction(luaVM, "getDiscordID", "getBanDiscordID");
     lua_classfunction(luaVM, "getTime", "getBanTime");
     lua_classfunction(luaVM, "getUnbanTime", "getUnbanTime");
 
@@ -70,6 +75,8 @@ void CLuaBanDefs::AddClass(lua_State* luaVM)
     lua_classvariable(luaVM, "admin", "setBanAdmin", "getBanAdmin");
     lua_classvariable(luaVM, "ip", NULL, "getBanIP");
     lua_classvariable(luaVM, "serial", NULL, "getBanSerial");
+    lua_classvariable(luaVM, "neonID", NULL, "getBanNeonID");
+    lua_classvariable(luaVM, "discordID", NULL, "getBanDiscordID");
     lua_classvariable(luaVM, "time", NULL, "getBanTime");
     lua_classvariable(luaVM, "unbanTime", "setUnbanTime", "getUnbanTime");
     lua_classvariable(luaVM, "reason", "setBanReason", "getBanReason");
@@ -85,13 +92,16 @@ void CLuaBanDefs::AddClass(lua_State* luaVM)
 
 int CLuaBanDefs::AddBan(lua_State* luaVM)
 {
-    //  ban addBan ( [ string IP, string Username, string Serial, player responsibleElement, string reason, int seconds = 0 ] )
+    //  ban addBan ( [ string IP, string Username, string Serial, player responsibleElement, string reason, int seconds = 0,
+    //                 string neonAccountId = "", string discordId = "" ] )
     SString  strIP = "";
     SString  strUsername = "";
     SString  strSerial = "";
     SString  strResponsible = "Console";
     CPlayer* pResponsible = NULL;
     SString  strReason = "";
+    SString  strNeonAccountId = "";
+    SString  strDiscordId = "";
     time_t   tUnban;
 
     CScriptArgReader argStream(luaVM);
@@ -124,10 +134,19 @@ int CLuaBanDefs::AddBan(lua_State* luaVM)
     if (tUnban > 0)
         tUnban += time(NULL);
 
+    argStream.ReadString(strNeonAccountId, "");
+    argStream.ReadString(strDiscordId, "");
+
+    if (!strNeonAccountId.empty() && !CNeonIdentityTicketVerifier::IsValidAccountId(strNeonAccountId))
+        argStream.SetCustomError("Invalid Neon account ID");
+    else if (!strDiscordId.empty() && !CNeonIdentityTicketVerifier::IsValidDiscordId(strDiscordId))
+        argStream.SetCustomError("Invalid Discord ID");
+
     if (!argStream.HasErrors())
     {
         CBan* pBan = NULL;
-        if ((pBan = CStaticFunctionDefinitions::AddBan(strIP, strUsername, strSerial, pResponsible, strResponsible, strReason, tUnban)))
+        if ((pBan = CStaticFunctionDefinitions::AddBan(strIP, strUsername, strSerial, pResponsible, strResponsible, strReason, tUnban, strNeonAccountId,
+                                                       strDiscordId)))
         {
             lua_pushban(luaVM, pBan);
             return 1;
@@ -232,6 +251,52 @@ int CLuaBanDefs::GetBanSerial(lua_State* luaVM)
         if (CStaticFunctionDefinitions::GetBanSerial(pBan, strSerial))
         {
             lua_pushstring(luaVM, strSerial);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaBanDefs::GetBanNeonID(lua_State* luaVM)
+{
+    CBan* pBan;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pBan);
+
+    if (!argStream.HasErrors())
+    {
+        SString strNeonAccountId;
+        if (CStaticFunctionDefinitions::GetBanNeonAccountId(pBan, strNeonAccountId))
+        {
+            lua_pushstring(luaVM, strNeonAccountId);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaBanDefs::GetBanDiscordID(lua_State* luaVM)
+{
+    CBan* pBan;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pBan);
+
+    if (!argStream.HasErrors())
+    {
+        SString strDiscordId;
+        if (CStaticFunctionDefinitions::GetBanDiscordId(pBan, strDiscordId))
+        {
+            lua_pushstring(luaVM, strDiscordId);
             return 1;
         }
     }

@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CStaticFunctionDefinitions.h"
+#include "CNeonIdentityTicket.h"
 #include "lua/CLuaMain.h"
 #include "CGame.h"
 #include "ASE.h"
@@ -12183,6 +12184,8 @@ CBan* CStaticFunctionDefinitions::BanPlayer(CPlayer* pTargetPlayer, bool bIP, bo
             // serial rotation does not silently evade the administrator's ban.
             if (!pTargetPlayer->GetNeonAccountId().empty())
                 pBan->SetNeonAccountId(pTargetPlayer->GetNeonAccountId());
+            if (!pTargetPlayer->GetDiscordId().empty())
+                pBan->SetDiscordId(pTargetPlayer->GetDiscordId());
         }
 
         // Check if we passed a responsible player
@@ -12238,6 +12241,11 @@ CBan* CStaticFunctionDefinitions::BanPlayer(CPlayer* pTargetPlayer, bool bIP, bo
             if (!bBan && bSerial && !pBan->GetNeonAccountId().empty())
                 bBan = pPlayer->GetNeonAccountId() == pBan->GetNeonAccountId();
 
+            // The Discord subject is independently signed into the Neon ticket.
+            // Keeping it on the ban closes account recreation under the same Discord identity.
+            if (!bBan && bSerial && !pBan->GetDiscordId().empty())
+                bBan = pPlayer->GetDiscordId() == pBan->GetDiscordId();
+
             // If either the IP, serial or username matched
             if (bBan)
             {
@@ -12292,26 +12300,43 @@ CBan* CStaticFunctionDefinitions::BanPlayer(CPlayer* pTargetPlayer, bool bIP, bo
 }
 
 CBan* CStaticFunctionDefinitions::AddBan(SString strIP, SString strUsername, SString strSerial, CPlayer* pResponsible, SString strResponsible,
-                                         SString strReason, time_t tUnban)
+                                         SString strReason, time_t tUnban, SString strNeonAccountId, SString strDiscordId)
 {
     CBan* pBan = NULL;
 
     // Check if the IP, username or serial are specified
+    strSerial = strSerial.ToUpper();
     bool bIPSpecified = strIP.length() > 0;
     bool bUsernameSpecified = strUsername.length() > 0;
-    bool bSerialSpecified = strSerial.length() == 32;
+    bool bSerialSpecified = m_pBanManager->IsValidSerial(strSerial);
+    bool bNeonAccountIdSpecified = !strNeonAccountId.empty();
+    bool bDiscordIdSpecified = !strDiscordId.empty();
+
+    // Offline identity bans are script-provided, so apply the same constraints
+    // as cryptographically verified connection tickets before persisting them.
+    if ((bIPSpecified && !m_pBanManager->IsValidIP(strIP.c_str())) || (!strSerial.empty() && !bSerialSpecified) ||
+        (bNeonAccountIdSpecified && !CNeonIdentityTicketVerifier::IsValidAccountId(strNeonAccountId)) ||
+        (bDiscordIdSpecified && !CNeonIdentityTicketVerifier::IsValidDiscordId(strDiscordId)))
+        return NULL;
 
     // Crop the responsible string if too long
     if (strResponsible.length() > MAX_BAN_RESPONSIBLE_LENGTH)
         strResponsible = strResponsible.substr(0, MAX_BAN_RESPONSIBLE_LENGTH - 3) + "...";
 
+    // A ban is one atomic set of identifiers. Refusing any overlap avoids
+    // silently merging an unrelated account into a pre-existing serial/IP ban.
+    if ((bIPSpecified && m_pBanManager->IsSpecificallyBanned(strIP)) || (bSerialSpecified && m_pBanManager->IsSerialBanned(strSerial)) ||
+        (bNeonAccountIdSpecified && m_pBanManager->GetBanFromNeonAccountId(strNeonAccountId)) ||
+        (bDiscordIdSpecified && m_pBanManager->GetBanFromDiscordId(strDiscordId)))
+        return NULL;
+
     // Got an IP?
-    if (bIPSpecified && !m_pBanManager->IsSpecificallyBanned(strIP))
+    if (bIPSpecified)
     {
         pBan = m_pBanManager->AddBan(strIP, strResponsible, strReason, tUnban);
     }
-    // If not IP provided make sure a username or serial are there
-    else if (bSerialSpecified && !m_pBanManager->IsSerialBanned(strSerial))
+    // If no IP was provided, serial and identity-only bans share the generic record.
+    else if (bSerialSpecified || bNeonAccountIdSpecified || bDiscordIdSpecified)
     {
         pBan = m_pBanManager->AddBan(strResponsible, strReason, tUnban);
     }
@@ -12352,6 +12377,10 @@ CBan* CStaticFunctionDefinitions::AddBan(SString strIP, SString strUsername, SSt
         // Set the account or serial if either one is set to be banned
         if (bSerialSpecified)
             pBan->SetSerial(strSerial);
+        if (bNeonAccountIdSpecified)
+            pBan->SetNeonAccountId(strNeonAccountId);
+        if (bDiscordIdSpecified)
+            pBan->SetDiscordId(strDiscordId);
 
         // Check if we passed a responsible player
         if (pResponsible)
@@ -12378,8 +12407,10 @@ CBan* CStaticFunctionDefinitions::AddBan(SString strIP, SString strUsername, SSt
             CLogger::LogPrintf("BAN: %s was banned by %s%s\n", strIP.c_str(), strResponsible.c_str(), strDetails.c_str());
         else if (bUsernameSpecified)
             CLogger::LogPrintf("BAN: %s was banned by %s%s\n", strUsername.c_str(), strResponsible.c_str(), strDetails.c_str());
-        else
+        else if (bSerialSpecified)
             CLogger::LogPrintf("BAN: Serial ban was added by %s%s\n", strResponsible.c_str(), strDetails.c_str());
+        else
+            CLogger::LogPrintf("BAN: Identity ban was added by %s%s\n", strResponsible.c_str(), strDetails.c_str());
 
         // Initialize a variable to indicate whether the ban's nick has been set
         bool bNickSet = false;
@@ -12405,6 +12436,12 @@ CBan* CStaticFunctionDefinitions::AddBan(SString strIP, SString strUsername, SSt
                 const std::string& strPlayerSerial = pPlayer->GetSerial();
                 bBan = stricmp(strPlayerSerial.c_str(), strSerial.c_str()) == 0;
             }
+
+            if (!bBan && bNeonAccountIdSpecified)
+                bBan = pPlayer->GetNeonAccountId() == strNeonAccountId;
+
+            if (!bBan && bDiscordIdSpecified)
+                bBan = pPlayer->GetDiscordId() == strDiscordId;
 
             // If either the IP, serial or username matched
             if (bBan)
@@ -12507,6 +12544,26 @@ bool CStaticFunctionDefinitions::GetBanSerial(CBan* pBan, SString& strOutSerial)
     if (!pBan->GetSerial().empty())
     {
         strOutSerial = pBan->GetSerial();
+        return true;
+    }
+    return false;
+}
+
+bool CStaticFunctionDefinitions::GetBanNeonAccountId(CBan* pBan, SString& strOutNeonAccountId)
+{
+    if (!pBan->GetNeonAccountId().empty())
+    {
+        strOutNeonAccountId = pBan->GetNeonAccountId();
+        return true;
+    }
+    return false;
+}
+
+bool CStaticFunctionDefinitions::GetBanDiscordId(CBan* pBan, SString& strOutDiscordId)
+{
+    if (!pBan->GetDiscordId().empty())
+    {
+        strOutDiscordId = pBan->GetDiscordId();
         return true;
     }
     return false;

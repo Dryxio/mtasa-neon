@@ -733,7 +733,7 @@ public:
                            SString strReason = "", time_t tUnban = 0);
 
     static CBan* AddBan(SString strIP, SString strUsername, SString strSerial, CPlayer* pResponsible = NULL, SString strResponsible = "Console",
-                        SString strReason = "", time_t tUnban = 0);
+                        SString strReason = "", time_t tUnban = 0, SString strNeonAccountId = "", SString strDiscordId = "");
     static bool  RemoveBan(CBan* pBan, CPlayer* pResponsible = NULL);
 
     static bool GetBans(lua_State* luaVM);
@@ -741,6 +741,8 @@ public:
 
     static bool GetBanIP(CBan* pBan, SString& strOutIP);
     static bool GetBanSerial(CBan* pBan, SString& strOutSerial);
+    static bool GetBanNeonAccountId(CBan* pBan, SString& strOutNeonAccountId);
+    static bool GetBanDiscordId(CBan* pBan, SString& strOutDiscordId);
     static bool GetBanUsername(CBan* pBan, SString& strOutUsername);
     static bool GetBanNick(CBan* pBan, SString& strOutNick);
     static bool GetBanReason(CBan* pBan, SString& strOutReason);

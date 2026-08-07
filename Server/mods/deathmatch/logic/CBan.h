@@ -77,6 +77,13 @@ public:
         m_strNeonAccountId = neonAccountId;
     }
 
+    const std::string& GetDiscordId() const { return m_strDiscordId; }
+    void               SetDiscordId(const std::string& discordId)
+    {
+        CBanManager::SetBansModified();
+        m_strDiscordId = discordId;
+    }
+
     time_t  GetBanTimeRemaining();
     SString GetDurationDesc();
     SString GetReasonText() const;
@@ -91,6 +98,7 @@ private:
     std::string m_strReason;
     std::string m_strSerial;
     std::string m_strNeonAccountId;
+    std::string m_strDiscordId;
     time_t      m_tTimeOfBan;
     time_t      m_tTimeOfUnban;
     uint        m_uiScriptID;

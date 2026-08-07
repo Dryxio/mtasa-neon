@@ -139,12 +139,6 @@ namespace
         return true;
     }
 
-    bool IsDiscordSnowflake(const std::string& value)
-    {
-        return value.size() >= 17 && value.size() <= 20 &&
-               std::all_of(value.begin(), value.end(), [](unsigned char character) { return std::isdigit(character); });
-    }
-
     bool IsCanonicalIpv4Endpoint(const std::string& value)
     {
         const std::size_t separator = value.find(':');
@@ -186,6 +180,30 @@ namespace
         }
         return start == address.size() + 1;
     }
+}
+
+bool CNeonIdentityTicketVerifier::IsValidAccountId(const std::string& accountId) noexcept
+{
+    if (accountId.size() != 36)
+        return false;
+
+    for (std::size_t index = 0; index < accountId.size(); ++index)
+    {
+        if (index == 8 || index == 13 || index == 18 || index == 23)
+        {
+            if (accountId[index] != '-')
+                return false;
+        }
+        else if (!std::isdigit(static_cast<unsigned char>(accountId[index])) && (accountId[index] < 'a' || accountId[index] > 'f'))
+            return false;
+    }
+    return true;
+}
+
+bool CNeonIdentityTicketVerifier::IsValidDiscordId(const std::string& discordId) noexcept
+{
+    return discordId.size() >= 17 && discordId.size() <= 20 &&
+           std::all_of(discordId.begin(), discordId.end(), [](unsigned char character) { return std::isdigit(character); });
 }
 
 bool CNeonIdentityTicketVerifier::Configure(const std::string& issuer, const std::string& audience, const std::string& keyId,
@@ -295,7 +313,8 @@ bool CNeonIdentityTicketVerifier::VerifyAndConsume(const std::string& ticket, SN
         !ReadStringClaim(payload.Get(), "sub", claims.accountId) || !ReadStringClaim(payload.Get(), "discord_id", claims.discordId) ||
         !ReadStringClaim(payload.Get(), "server_endpoint", claims.serverEndpoint) || !ReadStringClaim(payload.Get(), "jti", claims.ticketId) ||
         !ReadTimeClaim(payload.Get(), "iat", issuedAt) || !ReadTimeClaim(payload.Get(), "nbf", notBefore) ||
-        !ReadTimeClaim(payload.Get(), "exp", claims.expiresAt) || !IsDiscordSnowflake(claims.discordId) || !IsCanonicalIpv4Endpoint(claims.serverEndpoint))
+        !ReadTimeClaim(payload.Get(), "exp", claims.expiresAt) || !IsValidAccountId(claims.accountId) || !IsValidDiscordId(claims.discordId) ||
+        !IsCanonicalIpv4Endpoint(claims.serverEndpoint))
     {
         error = "Neon Identity ticket claims are invalid";
         return false;

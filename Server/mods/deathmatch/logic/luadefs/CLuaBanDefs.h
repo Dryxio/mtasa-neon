@@ -27,6 +27,8 @@ public:
 
     LUA_DECLARE(GetBanIP);
     LUA_DECLARE(GetBanSerial);
+    LUA_DECLARE(GetBanNeonID);
+    LUA_DECLARE(GetBanDiscordID);
     LUA_DECLARE(GetBanUsername);
     LUA_DECLARE(GetBanNick);
     LUA_DECLARE(GetBanTime);

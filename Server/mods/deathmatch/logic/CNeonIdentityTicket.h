@@ -27,6 +27,9 @@ struct SNeonIdentityClaims
 class CNeonIdentityTicketVerifier
 {
 public:
+    static bool IsValidAccountId(const std::string& accountId) noexcept;
+    static bool IsValidDiscordId(const std::string& discordId) noexcept;
+
     bool Configure(const std::string& issuer, const std::string& audience, const std::string& keyId, const std::string& publicKeyBase64Url, std::string& error);
     bool VerifyAndConsume(const std::string& ticket, SNeonIdentityClaims& claims, std::string& error);
 

@@ -34,10 +34,12 @@ public:
 
     bool IsSpecificallyBanned(const char* szIP);
     bool IsSerialBanned(const char* szSerial);
+    bool IsValidSerial(const char* szSerial);
     void RemoveBan(CBan* pBan);
 
     CBan* GetBanFromSerial(const char* szSerial);
     CBan* GetBanFromNeonAccountId(const char* szNeonAccountId);
+    CBan* GetBanFromDiscordId(const char* szDiscordId);
     CBan* GetBanFromIP(const char* szIP);
 
     unsigned int GetBansWithNick(const char* szNick);
