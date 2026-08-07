@@ -552,6 +552,9 @@ public:
     const CVehicleAudioSettingsEntry& GetAudioSettings() const noexcept;
     CVehicleAudioSettingsEntry&       GetOrCreateAudioSettings();
 
+    bool GetLiveNativeEngineVolumeOffset(float& volumeOffset) const;
+    bool SetLiveNativeEngineVolumeOffset(float volumeOffset);
+
     void ApplyAudioSettings();
     void ResetAudioSettings();
 

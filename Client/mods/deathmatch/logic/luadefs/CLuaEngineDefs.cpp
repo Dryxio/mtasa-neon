@@ -18,6 +18,7 @@
 #include <game/CPtrNodeSingleLinkPool.h>
 #include <lua/CLuaFunctionParser.h>
 #include "CLuaEngineDefs.h"
+#include "CVehicleSoundManager.h"
 #include <enums/VehicleType.h>
 
 namespace
@@ -40,8 +41,7 @@ namespace
         return ResolveEngineModelID(CModelNames::ResolveModelID(suppliedModel), runtimeModelId);
     }
 
-    bool ResolveEngineOrClothesID(std::uint32_t suppliedModelId, std::uint16_t clothesFirst, std::uint16_t clothesLast,
-                                  std::uint16_t& runtimeModelId)
+    bool ResolveEngineOrClothesID(std::uint32_t suppliedModelId, std::uint16_t clothesFirst, std::uint16_t clothesLast, std::uint16_t& runtimeModelId)
     {
         // Clothes IDs are API aliases rather than GTA ModelInfo slots. Keep
         // their historical meaning only in the two replacement APIs that
@@ -55,8 +55,7 @@ namespace
         return ResolveEngineModelID(suppliedModelId, runtimeModelId);
     }
 
-    bool ResolveEngineOrClothesID(const SString& suppliedModel, std::uint16_t clothesFirst, std::uint16_t clothesLast,
-                                  std::uint16_t& runtimeModelId)
+    bool ResolveEngineOrClothesID(const SString& suppliedModel, std::uint16_t clothesFirst, std::uint16_t clothesLast, std::uint16_t& runtimeModelId)
     {
         const std::uint32_t suppliedModelId = CModelNames::ResolveModelID(suppliedModel);
         if (suppliedModelId >= clothesFirst && suppliedModelId <= clothesLast)
@@ -141,6 +140,10 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineLoadCOL", EngineLoadCOL},
         {"engineLoadDFF", EngineLoadDFF},
         {"engineLoadIFP", EngineLoadIFP},
+        {"engineLoadVehicleAudioConfig", EngineLoadVehicleAudioConfig},
+        {"engineReloadVehicleAudioConfig", EngineReloadVehicleAudioConfig},
+        {"engineUnloadVehicleAudioConfig", EngineUnloadVehicleAudioConfig},
+        {"enginePlayVehicleAudioBackfire", EnginePlayVehicleAudioBackfire},
         {"engineImportTXD", EngineImportTXD},
         {"engineSetRadarMapTile", EngineSetRadarMapTile},
         {"engineResetRadarMapTile", EngineResetRadarMapTile},
@@ -245,6 +248,77 @@ void CLuaEngineDefs::LoadFunctions()
     // Add functions
     for (const auto& [name, func] : functions)
         CLuaCFunctions::AddFunction(name, func);
+}
+
+int CLuaEngineDefs::EngineLoadVehicleAudioConfig(lua_State* luaVM)
+{
+    SString          input;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadString(input);
+
+    if (!argStream.HasErrors() && !input.empty())
+    {
+        CLuaMain*        pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* const callerResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+        CResource*       fileResource = callerResource;
+        SString          filePath;
+        // Keep the lease tied to the calling resource. Cross-resource paths would otherwise replace the owner pointer during path resolution and leave
+        // the caller unable to reload or unload the native subsystem.
+        if (callerResource && CResourceManager::ParseResourcePathInput(input, fileResource, &filePath) && fileResource == callerResource &&
+            m_pManager->GetVehicleSoundManager()->LoadServerConfig(callerResource, filePath))
+        {
+            lua_pushboolean(luaVM, true);
+            return 1;
+        }
+        argStream.SetCustomError(input, "Unable to load vehicle audio configuration");
+    }
+    else if (!argStream.HasErrors())
+        argStream.SetCustomError(input, "Expected a non-empty vehicle audio configuration path");
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineReloadVehicleAudioConfig(lua_State* luaVM)
+{
+    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, resource && m_pManager->GetVehicleSoundManager()->ReloadServerConfig(resource));
+    return 1;
+}
+
+int CLuaEngineDefs::EngineUnloadVehicleAudioConfig(lua_State* luaVM)
+{
+    CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource* resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, resource && m_pManager->GetVehicleSoundManager()->UnloadServerConfig(resource));
+    return 1;
+}
+
+int CLuaEngineDefs::EnginePlayVehicleAudioBackfire(lua_State* luaVM)
+{
+    CClientVehicle*  vehicle = nullptr;
+    unsigned int     mode = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(vehicle);
+    argStream.ReadNumber(mode);
+
+    if (!argStream.HasErrors())
+    {
+        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* resource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+        if (resource && m_pManager->GetVehicleSoundManager()->PlayBackfire(resource, vehicle, mode))
+        {
+            lua_pushboolean(luaVM, true);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
 }
 
 void CLuaEngineDefs::AddClass(lua_State* luaVM)
@@ -1925,7 +1999,7 @@ bool CLuaEngineDefs::EngineSetModelTXDID(uint uiModelID, unsigned short usTxdId)
         throw std::invalid_argument("Expected a valid model ID at argument 1");
     uiModelID = runtimeModelId;
 
-    CModelInfo* pModelInfo = g_pGame->GetModelInfo(uiModelID);
+    CModelInfo*         pModelInfo = g_pGame->GetModelInfo(uiModelID);
     const std::uint32_t txdCount = g_pGame->GetBaseIDforCOL() - g_pGame->GetBaseIDforTXD();
 
     if (uiModelID >= g_pGame->GetBaseIDforTXD() || !pModelInfo || usTxdId >= txdCount)

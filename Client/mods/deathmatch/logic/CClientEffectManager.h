@@ -21,6 +21,7 @@ class CClientEffectManager
 
 public:
     CClientEffect* Create(const SString& strEffectName, const CVector& vecPosition, ElementID ID, bool bSoundEnable);
+    void           DoPulse();
     void           SAEffectDestroyed(void* pFxSAInterface);
     void           DeleteAll();
 

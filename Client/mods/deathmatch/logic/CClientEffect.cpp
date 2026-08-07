@@ -59,6 +59,39 @@ bool CClientEffect::SetMatrix(const CMatrix& matrix)
     return true;
 }
 
+void CClientEffect::SetAttachedMatrixOffset(const CMatrix& matrix)
+{
+    m_AttachedMatrixOffset = matrix;
+    m_bUseAttachedMatrixOffset = true;
+}
+
+void CClientEffect::DoAttaching()
+{
+    if (!m_bUseAttachedMatrixOffset)
+    {
+        CClientEntity::DoAttaching();
+        return;
+    }
+
+    CClientEntity* parent = GetAttachedTo();
+    if (!parent || !m_pFxSystem)
+        return;
+
+    CMatrix parentMatrix;
+    if (!parent->GetMatrix(parentMatrix))
+        parent->GetPosition(parentMatrix.vPos);
+
+    // A native vehicle CMatrix is laid out as RenderWare right/up/at, while CFxSystemSA's public CMatrix adapter maps front to at and up to up. Compose in
+    // native field order, then swap the two public axes so the resulting raw FX matrix matches GTA's tagged-parent transform.
+    const CMatrix nativeComposite = m_AttachedMatrixOffset * parentMatrix;
+    CMatrix       effectMatrix;
+    effectMatrix.vRight = nativeComposite.vRight;
+    effectMatrix.vFront = nativeComposite.vUp;
+    effectMatrix.vUp = nativeComposite.vFront;
+    effectMatrix.vPos = nativeComposite.vPos;
+    SetMatrix(effectMatrix);
+}
+
 void CClientEffect::SetEffectSpeed(float fSpeed)
 {
     m_pFxSystem->SetEffectSpeed(fSpeed);

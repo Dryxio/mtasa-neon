@@ -231,6 +231,14 @@ void CResourceManager::Remove(CResource* pResource)
     // Triggger the onStop event, and set resource state to 'stopping'
     pResource->Stop();
 
+    // Vehicle audio owns native FMOD state outside the Lua VM and element tree. Release its lease before the CResource identity can become dangling or
+    // be reused by a later resource allocation, even if the resource did not run its Lua stop handler cleanly.
+    if (g_pClientGame && g_pClientGame->GetManager())
+    {
+        if (CVehicleSoundManager* vehicleSoundManager = g_pClientGame->GetManager()->GetVehicleSoundManager())
+            vehicleSoundManager->UnloadServerConfig(pResource);
+    }
+
     // Delete the resource
     m_resources.remove(pResource);
     assert(MapContains(m_NetIdResourceMap, pResource->GetNetID()));

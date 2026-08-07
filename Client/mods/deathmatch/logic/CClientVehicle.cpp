@@ -5147,6 +5147,33 @@ CVehicleAudioSettingsEntry& CClientVehicle::GetOrCreateAudioSettings()
     return *m_pSoundSettingsEntry.get();
 }
 
+bool CClientVehicle::GetLiveNativeEngineVolumeOffset(float& volumeOffset) const
+{
+    auto* vehicle = dynamic_cast<CVehicleSA*>(m_pVehicle);
+    auto* audioEntity = vehicle ? vehicle->GetVehicleAudioEntity() : nullptr;
+    auto* audioInterface = audioEntity ? audioEntity->GetInterface() : nullptr;
+    if (!audioInterface)
+        return false;
+
+    // GTA uses the final vehicle-audio settings field as an additive engine-volume offset in dB. MTA's historical public name for the same field is
+    // horn-volume-delta, so keep this correction behind an accurately named vehicle method.
+    volumeOffset = audioInterface->m_nSettings.m_fHornVolumeDelta;
+    return true;
+}
+
+bool CClientVehicle::SetLiveNativeEngineVolumeOffset(float volumeOffset)
+{
+    auto* vehicle = dynamic_cast<CVehicleSA*>(m_pVehicle);
+    auto* audioEntity = vehicle ? vehicle->GetVehicleAudioEntity() : nullptr;
+    auto* audioInterface = audioEntity ? audioEntity->GetInterface() : nullptr;
+    if (!audioInterface)
+        return false;
+
+    // Changing the live copy avoids reinitializing GTA's engine loops every frame while the competitive mix follows distance.
+    audioInterface->m_nSettings.m_fHornVolumeDelta = volumeOffset;
+    return true;
+}
+
 bool CClientVehicle::GetDummyPosition(VehicleDummies dummy, CVector& position) const
 {
     if (dummy < VehicleDummies::LIGHT_FRONT_MAIN || dummy >= VehicleDummies::VEHICLE_DUMMY_COUNT)

@@ -55,6 +55,7 @@ CClientManager::CClientManager()
     m_pPacketRecorder = new CClientPacketRecorder(this);
     m_pImgManager = new CClientIMGManager(this);
     m_pBuildingManager = new CClientBuildingManager(this);
+    m_pVehicleSoundManager = new CVehicleSoundManager(this);
 
     m_bBeingDeleted = false;
     m_bGameUnloadedFlag = false;
@@ -66,6 +67,9 @@ CClientManager::CClientManager()
 CClientManager::~CClientManager()
 {
     m_bBeingDeleted = true;
+
+    delete m_pVehicleSoundManager;
+    m_pVehicleSoundManager = nullptr;
 
     delete m_pPacketRecorder;
     m_pPacketRecorder = NULL;
@@ -210,6 +214,7 @@ void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse
         {
             TIMING_CHECKPOINT("+MTA_VehicleManager");
             m_pVehicleManager->DoPulse();
+            m_pVehicleSoundManager->DoPulse();
             TIMING_CHECKPOINT("-MTA_VehicleManager");
         }
 

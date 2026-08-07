@@ -44,6 +44,7 @@ class CClientManager;
 #include "CClientModelManager.h"
 #include "CClientIMGManager.h"
 #include "CClientBuildingManager.h"
+#include "CVehicleSoundManager.h"
 
 class CClientProjectileManager;
 class CClientExplosionManager;
@@ -98,6 +99,7 @@ public:
     CClientPointLightsManager*   GetPointLightsManager() { return m_pPointLightsManager; }
     CClientIMGManager*           GetIMGManager() { return m_pImgManager; }
     CClientBuildingManager*      GetBuildingManager() const noexcept { return m_pBuildingManager; }
+    CVehicleSoundManager*        GetVehicleSoundManager() const noexcept { return m_pVehicleSoundManager; }
 
     bool IsGameLoaded()
     {
@@ -154,6 +156,7 @@ private:
     CClientIMGManager*           m_pImgManager;
     CClientPacketRecorder*       m_pPacketRecorder;
     CClientBuildingManager*      m_pBuildingManager;
+    CVehicleSoundManager*        m_pVehicleSoundManager;
     bool                         m_bBeingDeleted;
     bool                         m_bGameUnloadedFlag;
     int                          m_iNumLowLODElements;

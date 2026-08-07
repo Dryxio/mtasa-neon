@@ -39,10 +39,18 @@ CClientEffect* CClientEffectManager::Create(const SString& strEffectName, const 
     if (pFxSA == NULL)
         return NULL;  // GTA was unable to create the effect (e.g. wrong effect name)
 
-    CClientEffect* pFx = new CClientEffect(m_pManager, pFxSA, strEffectName, ID);
-    m_Effects.push_back(pFx);
+    // CClientEffect registers itself in its constructor. Registering it again here leaves duplicate pointers that can be deleted twice during shutdown.
+    return new CClientEffect(m_pManager, pFxSA, strEffectName, ID);
+}
 
-    return pFx;
+void CClientEffectManager::DoPulse()
+{
+    // GTA updates PlayAndKill particles independently, but their emitter matrix must keep following an attached MTA element until the effect expires.
+    for (CClientEffect* effect : m_Effects)
+    {
+        if (effect->GetFxSystem())
+            effect->DoAttaching();
+    }
 }
 
 void CClientEffectManager::RemoveFromList(CClientEffect* pEffect)

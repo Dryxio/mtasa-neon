@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <CMatrix.h>
 #include <game/CFxSystem.h>
 #include "CClientEntity.h"
 
@@ -30,6 +31,8 @@ public:
 
     bool  GetMatrix(CMatrix& matrix) const;
     bool  SetMatrix(const CMatrix& matrix);
+    void  SetAttachedMatrixOffset(const CMatrix& matrix);
+    void  DoAttaching() override;
     void  SetEffectSpeed(float fSpeed);
     float GetEffectSpeed() const;
     bool  SetEffectDensity(float fDensity);
@@ -49,4 +52,6 @@ private:
     CFxSystem*      m_pFxSystem;
     SString         m_strEffectName;
     float           m_fMaxDensity;
+    bool            m_bUseAttachedMatrixOffset = false;
+    CMatrix         m_AttachedMatrixOffset;
 };

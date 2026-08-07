@@ -23,6 +23,10 @@ public:
     LUA_DECLARE(EngineLoadTXD);
     LUA_DECLARE(EngineLoadCOL);
     LUA_DECLARE(EngineLoadIFP);
+    LUA_DECLARE(EngineLoadVehicleAudioConfig);
+    LUA_DECLARE(EngineReloadVehicleAudioConfig);
+    LUA_DECLARE(EngineUnloadVehicleAudioConfig);
+    LUA_DECLARE(EnginePlayVehicleAudioBackfire);
     LUA_DECLARE(EngineImportTXD);
     LUA_DECLARE(EngineSetRadarMapTile);
     LUA_DECLARE(EngineResetRadarMapTile);
