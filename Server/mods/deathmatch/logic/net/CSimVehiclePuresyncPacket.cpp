@@ -7,13 +7,24 @@
 
 #include "StdInc.h"
 #include "SimHeaders.h"
+#include "CTickRateSettings.h"
 #include "Utils.h"
 #include "CVehicleManager.h"
 #include "CWeaponNames.h"
 
+namespace
+{
+    bool IsFiniteVector(const CVector& vector)
+    {
+        return std::isfinite(vector.fX) && std::isfinite(vector.fY) && std::isfinite(vector.fZ);
+    }
+}  // namespace
+
 CSimVehiclePuresyncPacket::CSimVehiclePuresyncPacket(ElementID PlayerID, ushort usPlayerLatency, uchar ucPlayerSyncTimeContext, bool bPlayerHasOccupiedVehicle,
                                                      ushort usVehicleGotModel, uchar ucPlayerGotOccupiedVehicleSeat, uchar ucPlayerGotWeaponType,
-                                                     float fPlayerGotWeaponRange, CControllerState& sharedControllerState, uint uiDamageInfoSendPhase,
+                                                     float fPlayerGotWeaponRange, CControllerState& sharedControllerState,
+                                                     const CVector& authoritativeVehiclePosition, float authoritativeVehicleHealth,
+                                                     float authoritativePlayerHealth, float authoritativePlayerArmor, uint uiDamageInfoSendPhase,
                                                      const SSimVehicleDamageInfo& damageInfo)
     : m_PlayerID(PlayerID),
       m_usPlayerLatency(usPlayerLatency),
@@ -24,6 +35,10 @@ CSimVehiclePuresyncPacket::CSimVehiclePuresyncPacket(ElementID PlayerID, ushort 
       m_ucPlayerGotWeaponType(ucPlayerGotWeaponType),
       m_fPlayerGotWeaponRange(fPlayerGotWeaponRange),
       m_sharedControllerState(sharedControllerState),
+      m_authoritativeVehiclePosition(authoritativeVehiclePosition),
+      m_authoritativeVehicleHealth(authoritativeVehicleHealth),
+      m_authoritativePlayerHealth(authoritativePlayerHealth),
+      m_authoritativePlayerArmor(authoritativePlayerArmor),
       m_uiDamageInfoSendPhase(uiDamageInfoSendPhase),
       m_DamageInfo(damageInfo)
 {
@@ -50,8 +65,11 @@ bool CSimVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
         if (!CanUpdateSync(m_Cache.ucTimeContext))
             return false;
 
-        // Read out the keysync data
-        if (!ReadFullKeysync(m_sharedControllerState, BitStream))
+        // Keep the shared controller state unchanged until every security check
+        // has passed. Otherwise a rejected teleport can still alter the inputs
+        // relayed by the sync thread.
+        CControllerState controllerState;
+        if (!ReadFullKeysync(controllerState, BitStream))
             return false;
 
         // Read out the remote model
@@ -94,6 +112,15 @@ bool CSimVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
             return false;
         }
 
+        // The main thread owns the decision whether a vehicle teleport event is
+        // cancelled. The sync thread cannot call Lua, so it must conservatively
+        // suppress the fast relay until that authoritative decision is made.
+        if (m_ucPlayerGotOccupiedVehicleSeat == 0 &&
+            DistanceBetweenPoints3D(m_authoritativeVehiclePosition, position.data.vecPosition) >= g_TickRateSettings.playerTeleportAlert)
+        {
+            return false;
+        }
+
         // Read out the vehicle matrix only if he's the driver
         const unsigned int uiSeat = m_ucPlayerGotOccupiedVehicleSeat;
         if (uiSeat == 0)
@@ -120,12 +147,16 @@ bool CSimVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                 return false;
 
             m_Cache.VehTurnSpeed = turnSpeed.data.vecVelocity;
+            if (!IsFiniteVector(m_Cache.BothVelocity) || !IsFiniteVector(m_Cache.VehTurnSpeed))
+                return false;
 
             // Health
             SVehicleHealthSync health;
             if (!BitStream.Read(&health))
                 return false;
             m_Cache.fVehHealth = health.data.fValue;
+            if (m_Cache.fVehHealth > m_authoritativeVehicleHealth + 0.5f)
+                m_Cache.fVehHealth = m_authoritativeVehicleHealth;
 
             // Trailer chain
             bool bHasTrailer;
@@ -183,12 +214,16 @@ bool CSimVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
         if (!BitStream.Read(&health))
             return false;
         m_Cache.fPlrHealth = health.data.fValue;
+        if (m_Cache.fPlrHealth > m_authoritativePlayerHealth + 1.0f)
+            m_Cache.fPlrHealth = m_authoritativePlayerHealth;
 
         // Armor
         SPlayerArmorSync armor;
         if (!BitStream.Read(&armor))
             return false;
         m_Cache.fArmor = armor.data.fValue;
+        if (m_Cache.fArmor > m_authoritativePlayerArmor + 1.0f)
+            m_Cache.fArmor = m_authoritativePlayerArmor;
 
         // Flags
         if (!BitStream.Read(&m_Cache.flags))
@@ -240,11 +275,13 @@ bool CSimVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
         // if it's an aircraft.
         if (m_Cache.flags.data.bIsAircraft)
         {
-            m_sharedControllerState.LeftShoulder2 = BitStream.ReadBit() * 255;
-            m_sharedControllerState.RightShoulder2 = BitStream.ReadBit() * 255;
+            controllerState.LeftShoulder2 = BitStream.ReadBit() * 255;
+            controllerState.RightShoulder2 = BitStream.ReadBit() * 255;
         }
 
         m_Cache.isOnFire = BitStream.ReadBit();
+
+        m_sharedControllerState.Copy(controllerState);
 
         // Success
         return true;

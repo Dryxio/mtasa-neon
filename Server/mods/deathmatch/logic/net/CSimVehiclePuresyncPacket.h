@@ -26,7 +26,9 @@ public:
     ZERO_ON_NEW
     CSimVehiclePuresyncPacket(ElementID PlayerID, ushort usPlayerLatency, uchar ucPlayerSyncTimeContext, bool bPlayerHasOccupiedVehicle,
                               ushort usVehicleGotModel, uchar ucPlayerGotOccupiedVehicleSeat, uchar ucPlayerGotWeaponType, float fPlayerGotWeaponRange,
-                              CControllerState& sharedControllerState, uint m_uiDamageInfoSendPhase, const SSimVehicleDamageInfo& damageInfo);
+                              CControllerState& sharedControllerState, const CVector& authoritativeVehiclePosition, float authoritativeVehicleHealth,
+                              float authoritativePlayerHealth, float authoritativePlayerArmor, uint m_uiDamageInfoSendPhase,
+                              const SSimVehicleDamageInfo& damageInfo);
 
     ePacketID     GetPacketID() const { return PACKET_ID_PLAYER_VEHICLE_PURESYNC; };
     unsigned long GetFlags() const { return PACKET_MEDIUM_PRIORITY | PACKET_SEQUENCED; };
@@ -55,6 +57,10 @@ private:
     const uchar                  m_ucPlayerGotWeaponType;
     const float                  m_fPlayerGotWeaponRange;
     CControllerState&            m_sharedControllerState;
+    const CVector                m_authoritativeVehiclePosition;
+    const float                  m_authoritativeVehicleHealth;
+    const float                  m_authoritativePlayerHealth;
+    const float                  m_authoritativePlayerArmor;
     const uint                   m_uiDamageInfoSendPhase;
     const SSimVehicleDamageInfo& m_DamageInfo;
 

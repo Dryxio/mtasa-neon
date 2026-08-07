@@ -1822,6 +1822,11 @@ void CGame::AddBuiltInEvents()
     m_Events.AddEvent("onPlayerTeamChange", "oldTeam, newTeam", nullptr, false);
     m_Events.AddEvent("onPlayerTriggerInvalidEvent", "eventName, isAdded, isRemote", nullptr, false);
     m_Events.AddEvent("onPlayerInvalidVehicleExplosion", "element, reason", nullptr, false);
+    m_Events.AddEvent("onPlayerInvalidVehicleSync", "vehicle, reason", nullptr, false);
+    m_Events.AddEvent("onPlayerVehicleTeleport", "vehicle, previousX, previousY, previousZ, currentX, currentY, currentZ", nullptr, false);
+    m_Events.AddEvent("onPlayerVehicleHealthSyncIncrease", "vehicle, currentHealth, reportedHealth", nullptr, false);
+    m_Events.AddEvent("onPlayerHealthSyncIncrease", "currentHealth, reportedHealth", nullptr, false);
+    m_Events.AddEvent("onPlayerArmorSyncIncrease", "currentArmor, reportedArmor", nullptr, false);
     m_Events.AddEvent("onPlayerChangesProtectedData", "element, key, value", nullptr, false);
     m_Events.AddEvent("onPlayerChangesWorldSpecialProperty", "property, enabled", nullptr, false);
     m_Events.AddEvent("onPlayerTeleport", "previousX, previousY, previousZ, currentX, currentY, currentZ", nullptr, false);

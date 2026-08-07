@@ -11,15 +11,31 @@
 
 #include "StdInc.h"
 #include "CVehiclePuresyncPacket.h"
+#include "CVehicleResyncPacket.h"
 #include "CVehicleManager.h"
 #include "CGame.h"
 #include "CTrainTrackManager.h"
+#include "CTickRateSettings.h"
 #include "CWeaponNames.h"
 #include "Utils.h"
 #include "lua/CLuaFunctionParseHelpers.h"
 #include "net/SyncStructures.h"
 
 extern CGame* g_pGame;
+
+namespace
+{
+    bool IsFiniteVector(const CVector& vector)
+    {
+        return std::isfinite(vector.fX) && std::isfinite(vector.fY) && std::isfinite(vector.fZ);
+    }
+
+    float RotationDifference(float first, float second)
+    {
+        const float difference = std::fmod(std::abs(first - second), 360.0f);
+        return std::min(difference, 360.0f - difference);
+    }
+}  // namespace
 
 CVehiclePuresyncPacket::CVehiclePuresyncPacket(CPlayer* pPlayer)
 {
@@ -40,6 +56,13 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
         CVehicle* pVehicle = pSourcePlayer->GetOccupiedVehicle();
         if (pVehicle)
         {
+            const bool      bVehicleFrozen = pVehicle->IsFrozen();
+            const ElementID vehicleID = pVehicle->GetID();
+            bool            bRejectVehicleState = bVehicleFrozen;
+            bool            bNeedsVehicleResync = false;
+            bool            bSignificantFrozenAttempt = false;
+            const CVector   vecAuthoritativePosition = pVehicle->GetPosition();
+
             // Read out the time context
             unsigned char ucTimeContext = 0;
             if (!BitStream.Read(ucTimeContext))
@@ -68,34 +91,26 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
             SPositionSync position(false);
             if (!BitStream.Read(&position))
                 return false;
-            pSourcePlayer->SetPosition(position.data.vecPosition);
+
+            bool         bHasTrainSync = false;
+            float        fTrainPosition = 0.0f;
+            bool         bTrainDirection = false;
+            CTrainTrack* pTrainTrack = nullptr;
+            float        fTrainSpeed = 0.0f;
 
             // If the remote vehicle is a train, we want to read special train-specific data
             if (remoteVehicleType == VEHICLE_TRAIN)
             {
-                float        fPosition;
-                bool         bDirection;
-                CTrainTrack* pTrainTrack;
-                float        fSpeed;
-
-                BitStream.Read(fPosition);
-                BitStream.ReadBit(bDirection);
-                BitStream.Read(fSpeed);
+                if (!BitStream.Read(fTrainPosition) || !BitStream.ReadBit(bTrainDirection) || !BitStream.Read(fTrainSpeed))
+                    return false;
 
                 // TODO(qaisjp, feature/custom-train-tracks): this needs to be changed to an ElementID when the time is right (in a backwards compatible manner)
                 // Note: here we use a uchar, in the CTT branch this is a uint. Just don't forget that, it might be important
                 uchar trackIndex;
-                BitStream.Read(trackIndex);
+                if (!BitStream.Read(trackIndex))
+                    return false;
                 pTrainTrack = g_pGame->GetTrainTrackManager()->GetDefaultTrackByIndex(trackIndex);
-
-                // But we should only actually apply that train-specific data if that vehicle is train on our side
-                if (vehicleType == VEHICLE_TRAIN)
-                {
-                    pVehicle->SetTrainPosition(fPosition);
-                    pVehicle->SetTrainDirection(bDirection);
-                    pVehicle->SetTrainTrack(pTrainTrack);
-                    pVehicle->SetTrainSpeed(fSpeed);
-                }
+                bHasTrainSync = true;
             }
 
             // Read the camera orientation
@@ -123,35 +138,112 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                 if (!BitStream.Read(&rotation))
                     return false;
 
-                // Set it
-                pVehicle->SetPosition(position.data.vecPosition);
-                pVehicle->SetRotationDegrees(rotation.data.vecRotation);
-
                 // Move speed vector
                 SVelocitySync velocity;
                 if (!BitStream.Read(&velocity))
                     return false;
 
-                pVehicle->SetVelocity(velocity.data.vecVelocity);
-                pSourcePlayer->SetVelocity(velocity.data.vecVelocity);
-
                 // Turn speed vector
                 SVelocitySync turnSpeed;
                 if (!BitStream.Read(&turnSpeed))
                     return false;
-
-                pVehicle->SetTurnSpeed(turnSpeed.data.vecVelocity);
+                if (!IsFiniteVector(velocity.data.vecVelocity) || !IsFiniteVector(turnSpeed.data.vecVelocity))
+                    return false;
 
                 // Health
                 SVehicleHealthSync health;
                 if (!BitStream.Read(&health))
                     return false;
 
-                float fPreviousHealth = pVehicle->GetLastSyncedHealth();
-                float fHealth = health.data.fValue;
+                const float fPreviousHealth = pVehicle->GetLastSyncedHealth();
+                const float fCurrentHealth = pVehicle->GetHealth();
+                const float fHealth = health.data.fValue;
+
+                if (bVehicleFrozen)
+                {
+                    CVector vecAuthoritativeRotation;
+                    pVehicle->GetRotationDegrees(vecAuthoritativeRotation);
+                    const float rotationDifference = std::max({RotationDifference(rotation.data.vecRotation.fX, vecAuthoritativeRotation.fX),
+                                                               RotationDifference(rotation.data.vecRotation.fY, vecAuthoritativeRotation.fY),
+                                                               RotationDifference(rotation.data.vecRotation.fZ, vecAuthoritativeRotation.fZ)});
+                    // Frozen clients still emit small physics jitter. Only report motion
+                    // large enough to represent a useful local unfreeze attempt.
+                    bSignificantFrozenAttempt = DistanceBetweenPoints3D(vecAuthoritativePosition, position.data.vecPosition) > 0.5f ||
+                                                rotationDifference > 3.0f || (velocity.data.vecVelocity - pVehicle->GetVelocity()).Length() > 0.03f ||
+                                                (turnSpeed.data.vecVelocity - pVehicle->GetTurnSpeed()).Length() > 0.05f || fHealth > fCurrentHealth + 0.5f;
+                    bNeedsVehicleResync = bSignificantFrozenAttempt;
+                }
+                else if (DistanceBetweenPoints3D(vecAuthoritativePosition, position.data.vecPosition) >= g_TickRateSettings.playerTeleportAlert)
+                {
+                    CLuaArguments arguments;
+                    arguments.PushElement(pVehicle);
+                    arguments.PushNumber(vecAuthoritativePosition.fX);
+                    arguments.PushNumber(vecAuthoritativePosition.fY);
+                    arguments.PushNumber(vecAuthoritativePosition.fZ);
+                    arguments.PushNumber(position.data.vecPosition.fX);
+                    arguments.PushNumber(position.data.vecPosition.fY);
+                    arguments.PushNumber(position.data.vecPosition.fZ);
+                    const bool bAccepted = pSourcePlayer->CallEvent("onPlayerVehicleTeleport", arguments, nullptr);
+                    pVehicle = GetElementFromId<CVehicle>(vehicleID);
+                    if (!pVehicle || pSourcePlayer->GetOccupiedVehicle() != pVehicle)
+                        return false;
+
+                    if (!bAccepted || pVehicle->IsFrozen())
+                    {
+                        bRejectVehicleState = true;
+                        bNeedsVehicleResync = true;
+                    }
+                }
+
+                bool bApplyVehicleHealth = !bRejectVehicleState;
+                if (bApplyVehicleHealth && fHealth > fCurrentHealth + 0.5f)
+                {
+                    CLuaArguments arguments;
+                    arguments.PushElement(pVehicle);
+                    arguments.PushNumber(fCurrentHealth);
+                    arguments.PushNumber(fHealth);
+                    const bool bAccepted = pSourcePlayer->CallEvent("onPlayerVehicleHealthSyncIncrease", arguments, nullptr);
+                    pVehicle = GetElementFromId<CVehicle>(vehicleID);
+                    if (!pVehicle || pSourcePlayer->GetOccupiedVehicle() != pVehicle)
+                        return false;
+
+                    if (!bAccepted || pVehicle->IsFrozen())
+                    {
+                        bApplyVehicleHealth = false;
+                        bNeedsVehicleResync = true;
+                    }
+                    if (pVehicle->IsFrozen())
+                        bRejectVehicleState = true;
+                }
+
+                if (!bRejectVehicleState)
+                {
+                    pVehicle->SetPosition(position.data.vecPosition);
+                    pVehicle->SetRotationDegrees(rotation.data.vecRotation);
+                    pVehicle->SetVelocity(velocity.data.vecVelocity);
+                    pSourcePlayer->SetPosition(position.data.vecPosition);
+                    pSourcePlayer->SetVelocity(velocity.data.vecVelocity);
+                    pVehicle->SetTurnSpeed(turnSpeed.data.vecVelocity);
+
+                    // Train data is parsed before the occupied seat. Defer its
+                    // application until the same authorization decision as the
+                    // rest of the driver-controlled vehicle state.
+                    if (bHasTrainSync && vehicleType == VEHICLE_TRAIN)
+                    {
+                        pVehicle->SetTrainPosition(fTrainPosition);
+                        pVehicle->SetTrainDirection(bTrainDirection);
+                        pVehicle->SetTrainTrack(pTrainTrack);
+                        pVehicle->SetTrainSpeed(fTrainSpeed);
+                    }
+                }
+                else
+                {
+                    pSourcePlayer->SetPosition(vecAuthoritativePosition);
+                    pSourcePlayer->SetVelocity(pVehicle->GetVelocity());
+                }
 
                 // Less than last time?
-                if (fHealth < fPreviousHealth)
+                if (bApplyVehicleHealth && fHealth < fPreviousHealth)
                 {
                     // Grab the delta health
                     float fDeltaHealth = fPreviousHealth - fHealth;
@@ -164,11 +256,14 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                         pVehicle->CallEvent("onVehicleDamage", Arguments);
                     }
                 }
-                pVehicle->SetHealth(fHealth);
-                // Stops sync + fixVehicle/setElementHealth conflicts triggering onVehicleDamage by having a separate stored float keeping track of ONLY what
-                // comes in via sync
-                // - Caz
-                pVehicle->SetLastSyncedHealth(fHealth);
+                if (bApplyVehicleHealth)
+                {
+                    pVehicle->SetHealth(fHealth);
+                    // Stops sync + fixVehicle/setElementHealth conflicts triggering onVehicleDamage by having a separate stored float keeping track of ONLY
+                    // what comes in via sync
+                    // - Caz
+                    pVehicle->SetLastSyncedHealth(fHealth);
+                }
 
                 // Trailer chain
                 CVehicle* pTowedByVehicle = pVehicle;
@@ -190,6 +285,16 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                     SRotationDegreesSync trailerRotation;
                     if (!BitStream.Read(&trailerRotation))
                         return false;
+
+                    // Rejected driver state must still be consumed completely
+                    // so the following player fields remain aligned, but it may
+                    // not move or relink any trailer named by the client.
+                    if (bRejectVehicleState)
+                    {
+                        if (!BitStream.ReadBit(bHasTrailer))
+                            return false;
+                        continue;
+                    }
 
                     // If we found the trailer
                     if (pTrailer)
@@ -258,7 +363,7 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                 }
 
                 // If there was a trailer before
-                CVehicle* pCurrentTrailer = pTowedByVehicle->GetTowedVehicle();
+                CVehicle* pCurrentTrailer = !bRejectVehicleState ? pTowedByVehicle->GetTowedVehicle() : nullptr;
                 if (pCurrentTrailer)
                 {
                     pTowedByVehicle->SetTowedVehicle(NULL);
@@ -273,6 +378,10 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                     Arguments.PushElement(pTowedByVehicle);
                     pCurrentTrailer->CallEvent("onTrailerDetach", Arguments);
                 }
+            }
+            else
+            {
+                pSourcePlayer->SetPosition(bVehicleFrozen ? vecAuthoritativePosition : position.data.vecPosition);
             }
 
             if (BitStream.ReadBit())
@@ -300,9 +409,32 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
 
             float fOldHealth = pSourcePlayer->GetHealth();
             float fHealthLoss = fOldHealth - fHealth;
+            bool  bApplyPlayerHealth = true;
+
+            if (fHealth > fOldHealth + 1.0f)
+            {
+                CLuaArguments arguments;
+                arguments.PushNumber(fOldHealth);
+                arguments.PushNumber(fHealth);
+                const bool bAccepted = pSourcePlayer->CallEvent("onPlayerHealthSyncIncrease", arguments, nullptr);
+                pVehicle = GetElementFromId<CVehicle>(vehicleID);
+                if (!pVehicle || pSourcePlayer->GetOccupiedVehicle() != pVehicle)
+                    return false;
+
+                if (!bAccepted)
+                {
+                    bApplyPlayerHealth = false;
+                    bNeedsVehicleResync = true;
+                }
+                if (pVehicle->IsFrozen())
+                {
+                    bRejectVehicleState = true;
+                    bNeedsVehicleResync = true;
+                }
+            }
 
             // Less than last packet's frame?
-            if (fHealth < fOldHealth && fHealthLoss > 0)
+            if (bApplyPlayerHealth && fHealth < fOldHealth && fHealthLoss > 0)
             {
                 // Call the onPlayerDamage event
                 CLuaArguments Arguments;
@@ -317,7 +449,8 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                 Arguments.PushNumber(fHealthLoss);
                 pSourcePlayer->CallEvent("onPlayerDamage", Arguments);
             }
-            pSourcePlayer->SetHealth(fHealth);
+            if (bApplyPlayerHealth)
+                pSourcePlayer->SetHealth(fHealth);
 
             // Armor
             SPlayerArmorSync armor;
@@ -327,9 +460,32 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
 
             float fOldArmor = pSourcePlayer->GetArmor();
             float fArmorLoss = fOldArmor - fArmor;
+            bool  bApplyPlayerArmor = true;
+
+            if (fArmor > fOldArmor + 1.0f)
+            {
+                CLuaArguments arguments;
+                arguments.PushNumber(fOldArmor);
+                arguments.PushNumber(fArmor);
+                const bool bAccepted = pSourcePlayer->CallEvent("onPlayerArmorSyncIncrease", arguments, nullptr);
+                pVehicle = GetElementFromId<CVehicle>(vehicleID);
+                if (!pVehicle || pSourcePlayer->GetOccupiedVehicle() != pVehicle)
+                    return false;
+
+                if (!bAccepted)
+                {
+                    bApplyPlayerArmor = false;
+                    bNeedsVehicleResync = true;
+                }
+                if (pVehicle->IsFrozen())
+                {
+                    bRejectVehicleState = true;
+                    bNeedsVehicleResync = true;
+                }
+            }
 
             // Less than last packet's frame?
-            if (fArmor < fOldArmor && fArmorLoss > 0)
+            if (bApplyPlayerArmor && fArmor < fOldArmor && fArmorLoss > 0)
             {
                 // Call the onPlayerDamage event
                 CLuaArguments Arguments;
@@ -344,7 +500,8 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                 Arguments.PushNumber(fArmorLoss);
                 pSourcePlayer->CallEvent("onPlayerDamage", Arguments);
             }
-            pSourcePlayer->SetArmor(fArmor);
+            if (bApplyPlayerArmor)
+                pSourcePlayer->SetArmor(fArmor);
 
             // Flags
             SVehiclePuresyncFlags flags;
@@ -395,16 +552,19 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
             // Vehicle specific data if he's the driver
             if (uiSeat == 0)
             {
-                ReadVehicleSpecific(pVehicle, BitStream, iRemoteModelID);
+                ReadVehicleSpecific(pVehicle, BitStream, iRemoteModelID, !bRejectVehicleState);
 
                 // Set vehicle specific stuff if he's the driver
-                pVehicle->SetSirenActive(flags.data.bIsSirenOrAlarmActive);
-                pVehicle->SetSmokeTrailEnabled(flags.data.bIsSmokeTrailEnabled);
-                pVehicle->SetLandingGearDown(flags.data.bIsLandingGearDown);
-                pVehicle->SetOnGround(flags.data.bIsOnGround);
-                pVehicle->SetInWater(flags.data.bIsInWater);
-                pVehicle->SetDerailed(flags.data.bIsDerailed);
-                pVehicle->SetHeliSearchLightVisible(flags.data.bIsHeliSearchLightVisible);
+                if (!bRejectVehicleState)
+                {
+                    pVehicle->SetSirenActive(flags.data.bIsSirenOrAlarmActive);
+                    pVehicle->SetSmokeTrailEnabled(flags.data.bIsSmokeTrailEnabled);
+                    pVehicle->SetLandingGearDown(flags.data.bIsLandingGearDown);
+                    pVehicle->SetOnGround(flags.data.bIsOnGround);
+                    pVehicle->SetInWater(flags.data.bIsInWater);
+                    pVehicle->SetDerailed(flags.data.bIsDerailed);
+                    pVehicle->SetHeliSearchLightVisible(flags.data.bIsHeliSearchLightVisible);
+                }
             }
 
             // Read the vehicle_look_left and vehicle_look_right control states
@@ -415,9 +575,30 @@ bool CVehiclePuresyncPacket::Read(NetBitStreamInterface& BitStream)
                 ControllerState.RightShoulder2 = BitStream.ReadBit() * 255;
             }
 
-            pSourcePlayer->GetPad()->NewControllerState(ControllerState);
+            // A locally-unfrozen or teleported vehicle must not smuggle throttle
+            // or steering into the authoritative server controller state.
+            if (!bRejectVehicleState)
+                pSourcePlayer->GetPad()->NewControllerState(ControllerState);
+            else
+                pSourcePlayer->GetPad()->NewControllerState(CControllerState());
 
-            pVehicle->SetOnFire(BitStream.ReadBit());
+            const bool bReportedOnFire = BitStream.ReadBit();
+            if (!bRejectVehicleState)
+                pVehicle->SetOnFire(bReportedOnFire);
+
+            if (bNeedsVehicleResync)
+            {
+                if (CVehicle* pCurrentVehicle = GetElementFromId<CVehicle>(vehicleID))
+                    pSourcePlayer->Send(CVehicleResyncPacket(pCurrentVehicle));
+            }
+
+            if (bSignificantFrozenAttempt)
+            {
+                CLuaArguments arguments;
+                arguments.PushElement(pVehicle);
+                arguments.PushString("frozen_transform");
+                pSourcePlayer->CallEvent("onPlayerInvalidVehicleSync", arguments, nullptr);
+            }
 
             // Success
             return true;
@@ -648,7 +829,7 @@ bool CVehiclePuresyncPacket::Write(NetBitStreamInterface& BitStream) const
     return false;
 }
 
-void CVehiclePuresyncPacket::ReadVehicleSpecific(CVehicle* pVehicle, NetBitStreamInterface& BitStream, int iRemoteModel)
+void CVehiclePuresyncPacket::ReadVehicleSpecific(CVehicle* pVehicle, NetBitStreamInterface& BitStream, int iRemoteModel, bool bApply)
 {
     // Turret data
     unsigned short usModel = pVehicle->GetModel();
@@ -660,7 +841,7 @@ void CVehiclePuresyncPacket::ReadVehicleSpecific(CVehicle* pVehicle, NetBitStrea
             return;
 
         // Set the data
-        if (CVehicleManager::HasTurret(usModel))
+        if (bApply && CVehicleManager::HasTurret(usModel))
             pVehicle->SetTurretPosition(vehicle.data.fTurretX, vehicle.data.fTurretY);
     }
 
@@ -668,7 +849,7 @@ void CVehiclePuresyncPacket::ReadVehicleSpecific(CVehicle* pVehicle, NetBitStrea
     if (CVehicleManager::HasAdjustableProperty(iRemoteModel))
     {
         unsigned short usAdjustableProperty;
-        if (BitStream.Read(usAdjustableProperty) && CVehicleManager::HasAdjustableProperty(usModel))
+        if (BitStream.Read(usAdjustableProperty) && bApply && CVehicleManager::HasAdjustableProperty(usModel))
         {
             pVehicle->SetAdjustableProperty(usAdjustableProperty);
         }
@@ -684,7 +865,7 @@ void CVehiclePuresyncPacket::ReadVehicleSpecific(CVehicle* pVehicle, NetBitStrea
             if (!BitStream.Read(&door))
                 return;
 
-            if (CVehicleManager::HasDoors(usModel))
+            if (bApply && CVehicleManager::HasDoors(usModel))
                 pVehicle->SetDoorOpenRatio(i, door.data.fRatio);
         }
     }

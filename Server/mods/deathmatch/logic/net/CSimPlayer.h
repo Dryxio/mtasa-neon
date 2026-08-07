@@ -55,6 +55,11 @@ public:
     ushort                m_usVehicleModel;
     uchar                 m_ucOccupiedVehicleSeat;
     float                 m_fWeaponRange;
+    bool                  m_bVehicleIsFrozen;
+    CVector               m_vecVehiclePosition;
+    float                 m_fVehicleHealth;
+    float                 m_fPlayerHealth;
+    float                 m_fPlayerArmor;
     uint                  m_uiVehicleDamageInfoSendPhase;
     SSimVehicleDamageInfo m_VehicleDamageInfo;
 

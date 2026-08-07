@@ -141,6 +141,11 @@ void CSimPlayerManager::UpdateSimPlayer(CPlayer* pPlayer)
         pSim->m_ucOccupiedVehicleSeat = uiSeat <= 0xFF ? static_cast<unsigned char>(uiSeat) : 0xFF;
     }
     pSim->m_fWeaponRange = pPlayer->GetWeaponRangeFromSlot();
+    pSim->m_bVehicleIsFrozen = pVehicle ? pVehicle->IsFrozen() : false;
+    pSim->m_vecVehiclePosition = pVehicle ? pVehicle->GetPosition() : CVector();
+    pSim->m_fVehicleHealth = pVehicle ? pVehicle->GetHealth() : 0.0f;
+    pSim->m_fPlayerHealth = pPlayer->GetHealth();
+    pSim->m_fPlayerArmor = pPlayer->GetArmor();
     pSim->m_bVehicleHasHydraulics = pVehicle ? pVehicle->GetUpgrades()->HasUpgrade(1087) : false;
     pSim->m_bVehicleIsPlaneOrHeli = pVehicle ? pVehicle->GetVehicleType() == VEHICLE_PLANE || pVehicle->GetVehicleType() == VEHICLE_HELI : false;
     pSim->m_sharedControllerState.Copy(pPlayer->GetPad()->GetCurrentControllerState());
@@ -277,11 +282,23 @@ bool CSimPlayerManager::HandleVehiclePureSync(const NetServerPlayerID& Socket, N
     // Check is good for vehicle pure sync
     if (pSourceSimPlayer && pSourceSimPlayer->IsJoined() && pSourceSimPlayer->m_bHasOccupiedVehicle)
     {
+        // A frozen vehicle is server-authoritative. Do not let the sync thread
+        // relay a locally-unfrozen vehicle before the main thread can sanitize
+        // the packet; CNetServerBuffer resets the stream for that main-thread
+        // pass immediately after this handler returns.
+        if (pSourceSimPlayer->m_bVehicleIsFrozen)
+        {
+            UnlockSimSystem();
+            return true;
+        }
+
         // Read the incoming packet data
         CSimVehiclePuresyncPacket* pPacket = new CSimVehiclePuresyncPacket(
             pSourceSimPlayer->m_PlayerID, pSourceSimPlayer->m_usLatency, pSourceSimPlayer->m_ucSyncTimeContext, pSourceSimPlayer->m_bHasOccupiedVehicle,
             pSourceSimPlayer->m_usVehicleModel, pSourceSimPlayer->m_ucOccupiedVehicleSeat, pSourceSimPlayer->m_ucWeaponType, pSourceSimPlayer->m_fWeaponRange,
-            pSourceSimPlayer->m_sharedControllerState, pSourceSimPlayer->m_uiVehicleDamageInfoSendPhase, pSourceSimPlayer->m_VehicleDamageInfo);
+            pSourceSimPlayer->m_sharedControllerState, pSourceSimPlayer->m_vecVehiclePosition, pSourceSimPlayer->m_fVehicleHealth,
+            pSourceSimPlayer->m_fPlayerHealth, pSourceSimPlayer->m_fPlayerArmor, pSourceSimPlayer->m_uiVehicleDamageInfoSendPhase,
+            pSourceSimPlayer->m_VehicleDamageInfo);
         if (pPacket->Read(*BitStream))
         {
             // Relay it to nearbyers
