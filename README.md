@@ -75,7 +75,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 
 These are capacity increases, not forced visual defaults. Distant lights and extended world draw distance are disabled by default, so a clean Neon installation retains GTA's ordinary rendering distances. Players can opt in through the Neon settings tab, while servers and client resources can still apply temporary runtime overrides. Legacy network connections retain MTA:SA's original position formats. The CULL relocation and Lua lifecycle have been exercised in game; dedicated tunnel and mirror capacity-boundary tests remain follow-up validation.
 
-Project2DFX support currently covers distant static coronas and timed traffic lights from the complete IPL catalogue captured at startup, using Neon's private 25,000-entry render queue. Searchlight cones are recorded for future work; distant cars, static shadows, and the other Project2DFX modules are not included. The drag-and-drop skin and animation previews are intentionally insecure local development prototypes, not production or competitive-client features. Drop one IFP onto the game window to load its animation list; a one-animation file starts immediately, while multi-animation files can be searched and played from the in-game preview window with loop, freeze-last-frame, root-motion, speed, and blend controls. Technical design, executable address inventories, validation results, and reproducible limit-test resources are documented in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md). Dense-entity profiling methodology and results are documented separately in [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md). The extended native minimap design and Lua API are documented in [EXTENDED_RADAR.md](./EXTENDED_RADAR.md). The current server-authoritative story runtime, reusable native task API, SCM compatibility layer, and co-op roadmap are documented in [STORY_RUNTIME.md](./STORY_RUNTIME.md).
+Project2DFX support currently covers distant static coronas and timed traffic lights from the complete IPL source set observed at startup. Its DAT catalogue and private 25,000-entry render queue are allocated lazily on first activation, then the compact startup records are released. Searchlight cones are recorded for future work; distant cars, static shadows, and the other Project2DFX modules are not included. The drag-and-drop skin and animation previews are intentionally insecure local development prototypes, not production or competitive-client features. Drop one IFP onto the game window to load its animation list; a one-animation file starts immediately, while multi-animation files can be searched and played from the in-game preview window with loop, freeze-last-frame, root-motion, speed, and blend controls. Technical design, executable address inventories, validation results, and reproducible limit-test resources are documented in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md). Dense-entity profiling methodology and results are documented separately in [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md). The extended native minimap design and Lua API are documented in [EXTENDED_RADAR.md](./EXTENDED_RADAR.md). The current server-authoritative story runtime, reusable native task API, SCM compatibility layer, and co-op roadmap are documented in [STORY_RUNTIME.md](./STORY_RUNTIME.md).
 
 ### Neon visual settings
 
@@ -85,9 +85,9 @@ preferences:
 - **Extended world draw distance** raises both GTA's far clip and the authored
   LOD distances of stock-world models from 300 to 5,000 units. Fog distance
   remains independent and can still hide distant geometry.
-- **Project2DFX distant lights** enables the static-light catalogue, selects a
-  300-to-5,000-unit light range, adjusts Neon's global distant-corona radius,
-  and can rebuild the cached catalogue on demand.
+- **Project2DFX distant lights** lazily builds the static-light catalogue on
+  first activation, selects a 300-to-5,000-unit light range, adjusts Neon's
+  global distant-corona radius, and can rebuild the cached catalogue on demand.
 
 Both features remain off on a clean installation. Resource or server overrides
 take priority while connected; the player's saved baseline is restored when

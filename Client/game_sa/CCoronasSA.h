@@ -18,6 +18,7 @@ class CRegisteredCorona;
 class CRegisteredCoronaSA;
 class CRegisteredCoronaSAInterface;
 class CEntitySAInterface;
+struct SFileObjectInstance;
 struct RwTexture;
 
 #define FUNC_DoSunAndMoon 0x6FC5A0
@@ -61,8 +62,8 @@ public:
     void               RenderDistantLights() override;
 
     // GTA creates every static IPL entity once while calculating the world
-    // bounds, before streaming most of them back out. Capture lights during
-    // that pass so the distant-light catalogue is independent of player
-    // position and of which sectors happen to be resident later.
-    void CaptureDistantLight(CEntitySAInterface* entity);
+    // bounds, before streaming most of them back out. Preserve only the raw
+    // instance while Project2DFX has never been enabled; the expensive DAT
+    // lookup and light catalogue are built lazily on the first activation.
+    void CaptureDistantLight(const SFileObjectInstance& instance, CEntitySAInterface* entity);
 };

@@ -301,14 +301,17 @@ runs a single stage, and `/project2dfxbenchcancel` safely stops either test.
 
 Project2DFX's `SALodLights.dat` is installed as
 `MTA/data/SALodLights.dat`. MTA resolves each model-name section against GTA's
-model table and captures static IPL instances while GTA performs its startup
-world-bounds pass. Neon already neutralizes `CINFO.BIN` because its relocated
-IPL and collision stores cannot consume GTA's fixed-size cache, so that native
-pass visits every binary IPL sequentially before distant sectors are streamed
-out. Text IPL instances and the current building and dummy pools supplement the
-same deduplicated catalogue. MTA transforms local light offsets into world
-coordinates, selects the closest 25000 eligible coronas every frame, and
-renders them through a preallocated private queue. Because the stock San
+model table only when the feature is first enabled. While it remains disabled,
+the startup world-bounds pass retains compact position, rotation, and model-ID
+records instead of loading the DAT, hashing lights, or allocating the 25000-entry
+selection and render queues. Neon already neutralizes `CINFO.BIN` because its
+relocated IPL and collision stores cannot consume GTA's fixed-size cache, so
+that native pass visits every binary IPL sequentially before distant sectors
+are streamed out. On first activation, MTA consumes those records to build the
+complete deduplicated catalogue, then releases them; text IPL instances and the
+current building and dummy pools supplement it. MTA transforms local light
+offsets into world coordinates, selects the closest 25000 eligible coronas
+every frame, and renders them through its private queue. Because the stock San
 Andreas catalogue contains 20363 accepted definitions, the entire catalogue
 can now remain eligible simultaneously; the nearest-light selection is kept
 for future maps that exceed 25000 entries. The data and the adapted behavior

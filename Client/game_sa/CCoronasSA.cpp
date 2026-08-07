@@ -15,6 +15,7 @@
 #include "CBuildingSA.h"
 #include "CDummyPoolSA.h"
 #include "CEntitySA.h"
+#include "CFileLoaderSA.h"
 #include "CGameSA.h"
 #include "CModelInfoSA.h"
 #include "CPoolsSA.h"
@@ -24,6 +25,7 @@
 #include <game/CWorld.h>
 #include <game/RenderWare.h>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -58,6 +60,7 @@ namespace
     constexpr DWORD EFFECT_LIGHT = 0;
     constexpr WORD  LIGHT_FLAG_WITHOUT_CORONA = 1 << 3;
     constexpr WORD  LIGHT_FLAG_AT_NIGHT = 1 << 6;
+    constexpr DWORD IPL_INSTANCE_DONT_STREAM = 1 << 9;
 
     constexpr DWORD FUNC_CSPRITE_FLUSH_BUFFER = 0x70CF20;
     constexpr DWORD FUNC_CSPRITE_RENDER_BUFFERED_XLU = 0x70E780;
@@ -195,6 +198,15 @@ namespace
         BYTE       alpha;
     };
 
+    struct SDistantLightSourceInstance
+    {
+        CVector   position;
+        CVector4D rotation;
+        int       modelId;
+    };
+
+    static_assert(sizeof(SDistantLightSourceInstance) == 0x20, "Unexpected deferred Project2DFX source size");
+
     bool                                                       g_bDistantLightsEnabled = false;
     bool                                                       g_bDistantLightsNeedRebuild = true;
     float                                                      g_fDistantLightsDrawDistance = 2000.0f;
@@ -202,6 +214,7 @@ namespace
     std::vector<SDistantLight>                                 g_DistantLights;
     std::vector<SDistantLightCandidate>                        g_DistantLightCandidates;
     std::vector<SDistantLightRenderInstance>                   g_DistantLightRenderQueue;
+    std::vector<SDistantLightSourceInstance>                   g_DistantLightSourceInstances;
     std::unordered_set<SDistantLightKey, SDistantLightKeyHash> g_DistantLightKeys;
     DWORD                                                      g_dwDistantLightEntitiesScanned = 0;
     DWORD                                                      g_dwDistantLightEffectsScanned = 0;
@@ -214,6 +227,18 @@ namespace
     bool                                 g_bDistantLightDefinitionsLoaded = false;
     bool                                 g_bDistantLightDefinitionsLoadAttempted = false;
     bool                                 g_bAdditionalDistantLightsRegistered = false;
+    bool                                 g_bDistantLightStorageAllocated = false;
+
+    void EnsureDistantLightStorageAllocated()
+    {
+        if (g_bDistantLightStorageAllocated)
+            return;
+
+        g_DistantLightKeys.reserve(24000);
+        g_DistantLightCandidates.reserve(MAX_DISTANT_LIGHT_CORONAS);
+        g_DistantLightRenderQueue.reserve(MAX_DISTANT_LIGHT_CORONAS);
+        g_bDistantLightStorageAllocated = true;
+    }
 
     CBaseModelInfoSAInterface* GetModelInfoByName(const char* name, int* index)
     {
@@ -495,13 +520,86 @@ namespace
         }
     }
 
-    void AddNativeDistantLightsForEntity(CEntitySAInterface* entity, std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
+    CVector TransformDistantLightOffset(const SDistantLightSourceInstance& instance, const CVector& localPosition)
+    {
+        float       x = instance.rotation.fX;
+        float       y = instance.rotation.fY;
+        float       z = instance.rotation.fZ;
+        float       w = instance.rotation.fW;
+        const float lengthSquared = x * x + y * y + z * z + w * w;
+        if (lengthSquared <= std::numeric_limits<float>::epsilon())
+        {
+            x = 0.0f;
+            y = 0.0f;
+            z = 0.0f;
+            w = 1.0f;
+        }
+        else if (std::abs(lengthSquared - 1.0f) > std::numeric_limits<float>::epsilon())
+        {
+            const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+            x *= inverseLength;
+            y *= inverseLength;
+            z *= inverseLength;
+            w *= inverseLength;
+        }
+
+        const CVector right(1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + w * z), 2.0f * (x * z - w * y));
+        const CVector front(2.0f * (x * y - w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + w * x));
+        const CVector up(2.0f * (x * z + w * y), 2.0f * (y * z - w * x), 1.0f - 2.0f * (x * x + y * y));
+        return instance.position + right * localPosition.fX + front * localPosition.fY + up * localPosition.fZ;
+    }
+
+    CVector4D GetDistantLightSourceRotation(const SFileObjectInstance& instance)
+    {
+        const CVector4D& rotation = instance.rotation;
+        const bool       useFullQuaternion = std::abs(rotation.fX) > 0.05f || std::abs(rotation.fY) > 0.05f ||
+                                       ((static_cast<DWORD>(instance.interiorID) & IPL_INSTANCE_DONT_STREAM) && rotation.fX != 0.0f && rotation.fY != 0.0f);
+
+        // CFileLoader::LoadObjectInstance conjugates tilted quaternions before
+        // CMatrix::SetRotate. Its common Z-only path instead derives a heading
+        // with the opposite sign. Store one canonical final quaternion so the
+        // deferred transform matches the entity path in both cases.
+        if (useFullQuaternion)
+            return {-rotation.fX, -rotation.fY, -rotation.fZ, rotation.fW};
+
+        const float multiplier = rotation.fZ < 0.0f ? 2.0f : -2.0f;
+        const float halfHeading = std::acos(rotation.fW) * multiplier * 0.5f;
+        return {0.0f, 0.0f, std::sin(halfHeading), std::cos(halfHeading)};
+    }
+
+    void AddDatDistantLightsForSourceInstance(const SDistantLightSourceInstance& instance, const SDistantLightDefinitions& modelDefinitions,
+                                              std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
     {
         ++g_dwDistantLightEntitiesScanned;
-        if (!entity || entity->m_areaCode != 0 || entity->m_nModelIndex >= pGame->GetBaseIDforTXD())
+        if (instance.modelId < 0 || static_cast<DWORD>(instance.modelId) >= pGame->GetBaseIDforTXD())
             return;
 
-        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs)[entity->m_nModelIndex];
+        const auto definitions = modelDefinitions.find(static_cast<WORD>(instance.modelId));
+        if (definitions == modelDefinitions.end())
+            return;
+
+        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs)[instance.modelId];
+        if (!modelInfo)
+            return;
+
+        for (const SDistantLightDefinition& definition : definitions->second)
+        {
+            const CVector worldPosition = TransformDistantLightOffset(instance, definition.localPosition);
+            const CVector worldOffset = worldPosition - instance.position;
+            const float   configuredDrawDistance = definition.drawDistance > 0.0f ? definition.drawDistance : modelInfo->fLodDistanceUnscaled;
+            AddDistantLight(worldPosition, definition, std::min(configuredDrawDistance, modelInfo->fLodDistanceUnscaled),
+                            std::abs(worldOffset.fX) > std::abs(worldOffset.fY), seen);
+        }
+    }
+
+    template <class TTransform>
+    void AddNativeDistantLightsForInstance(int modelId, TTransform transformPosition, std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
+    {
+        ++g_dwDistantLightEntitiesScanned;
+        if (modelId < 0 || static_cast<DWORD>(modelId) >= pGame->GetBaseIDforTXD())
+            return;
+
+        auto* modelInfo = reinterpret_cast<CBaseModelInfoSAInterface**>(CModelInfoSAInterface::ms_modelInfoPtrs)[modelId];
         if (!modelInfo || !modelInfo->ucNumOf2DEffects)
             return;
 
@@ -523,8 +621,7 @@ namespace
             if (!(effect->light.flags & LIGHT_FLAG_AT_NIGHT) || effect->light.flashType == 7 || effect->light.flashType == 8 || effect->light.flashType == 10)
                 continue;
 
-            CVector worldPosition;
-            entity->TransformFromObjectSpace(worldPosition, effect->position);
+            const CVector worldPosition = transformPosition(effect->position);
             if (worldPosition.fZ < -15.0f || worldPosition.fZ > 1030.0f)
                 continue;
 
@@ -555,6 +652,41 @@ namespace
                 false,
             });
         }
+    }
+
+    void AddNativeDistantLightsForEntity(CEntitySAInterface* entity, std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
+    {
+        if (!entity || entity->m_areaCode != 0)
+            return;
+
+        AddNativeDistantLightsForInstance(
+            entity->m_nModelIndex,
+            [entity](const CVector& localPosition)
+            {
+                CVector worldPosition;
+                entity->TransformFromObjectSpace(worldPosition, localPosition);
+                return worldPosition;
+            },
+            seen);
+    }
+
+    void AddNativeDistantLightsForSourceInstance(const SDistantLightSourceInstance& instance, std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
+    {
+        AddNativeDistantLightsForInstance(
+            instance.modelId, [&instance](const CVector& localPosition) { return TransformDistantLightOffset(instance, localPosition); }, seen);
+    }
+
+    void ConsumeDeferredDistantLightSources(bool loadedDat)
+    {
+        for (const SDistantLightSourceInstance& instance : g_DistantLightSourceInstances)
+        {
+            if (loadedDat)
+                AddDatDistantLightsForSourceInstance(instance, g_DistantLightDefinitions, g_DistantLightKeys);
+            else
+                AddNativeDistantLightsForSourceInstance(instance, g_DistantLightKeys);
+        }
+
+        std::vector<SDistantLightSourceInstance>().swap(g_DistantLightSourceInstances);
     }
 
     template <class T>
@@ -667,9 +799,6 @@ void CCoronasSA::RelocateCoronaArray()
 CCoronasSA::CCoronasSA()
 {
     RelocateCoronaArray();
-    g_DistantLightKeys.reserve(24000);
-    g_DistantLightCandidates.reserve(MAX_DISTANT_LIGHT_CORONAS);
-    g_DistantLightRenderQueue.reserve(MAX_DISTANT_LIGHT_CORONAS);
 
     for (int i = 0; i < MAX_CORONAS; i++)
     {
@@ -684,12 +813,15 @@ CCoronasSA::~CCoronasSA()
     ClearActiveDistantLights();
     g_DistantLights.clear();
     g_DistantLightCandidates.clear();
+    g_DistantLightRenderQueue.clear();
+    g_DistantLightSourceInstances.clear();
     g_DistantLightKeys.clear();
     g_DistantLightDefinitions.clear();
     g_AdditionalDistantLightDefinitions.clear();
     g_bDistantLightDefinitionsLoaded = false;
     g_bDistantLightDefinitionsLoadAttempted = false;
     g_bAdditionalDistantLightsRegistered = false;
+    g_bDistantLightStorageAllocated = false;
     g_dwDistantLightEntitiesScanned = 0;
     g_dwDistantLightEffectsScanned = 0;
     g_dwDistantLightEffectsFound = 0;
@@ -863,8 +995,14 @@ bool CCoronasSA::SetDistantLightsCoronaRadiusMultiplier(float multiplier)
 
 void CCoronasSA::RebuildDistantLights()
 {
+    if (!g_bDistantLightsEnabled)
+        return;
+
+    EnsureDistantLightStorageAllocated();
     ClearActiveDistantLights();
     const bool loadedDat = EnsureDistantLightDefinitionsLoaded();
+    if (!g_DistantLightSourceInstances.empty())
+        ConsumeDeferredDistantLightSources(loadedDat);
 
     bool buildingPoolReady = false;
     bool dummyPoolReady = false;
@@ -887,10 +1025,28 @@ void CCoronasSA::RebuildDistantLights()
         g_pCore->ChatEcho(message, false);
 }
 
-void CCoronasSA::CaptureDistantLight(CEntitySAInterface* entity)
+void CCoronasSA::CaptureDistantLight(const SFileObjectInstance& instance, CEntitySAInterface* entity)
 {
     if (!entity)
         return;
+
+    // The startup world-bounds pass observes every binary IPL even though most
+    // instances are streamed out afterwards. Retaining its compact source
+    // records is what lets the first opt-in build the complete catalogue
+    // without paying DAT parsing, hashing, trigonometry, or render-queue
+    // allocations for players who leave Project2DFX disabled.
+    if (!g_bDistantLightsEnabled && !g_bDistantLightDefinitionsLoadAttempted)
+    {
+        // m_nInstanceType packs the area code into its low byte and keeps
+        // tunnel, underwater, and streaming flags above it. The created entity
+        // is the authoritative area-code result and avoids rejecting flagged
+        // exterior instances.
+        if (entity->m_areaCode == 0 && instance.modelID >= 0 && static_cast<DWORD>(instance.modelID) < pGame->GetBaseIDforTXD())
+            g_DistantLightSourceInstances.push_back({instance.position, GetDistantLightSourceRotation(instance), instance.modelID});
+        return;
+    }
+
+    EnsureDistantLightStorageAllocated();
 
     if (EnsureDistantLightDefinitionsLoaded())
         AddDatDistantLightsForEntity(entity, g_DistantLightDefinitions, g_DistantLightKeys);

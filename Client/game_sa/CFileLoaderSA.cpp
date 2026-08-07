@@ -22,17 +22,24 @@ namespace
     constexpr DWORD CALL_LoadIplBoundingBoxBinaryInstance = 0x405C99;
     constexpr DWORD FUNC_LoadObjectInstanceBinary = 0x538090;
 
-    void CaptureDistantLight(CEntitySAInterface* entity)
+    void CaptureDistantLight(const SFileObjectInstance& instance, CEntitySAInterface* entity)
     {
         if (entity && pGame && pGame->GetCoronas())
-            static_cast<CCoronasSA*>(pGame->GetCoronas())->CaptureDistantLight(entity);
+            static_cast<CCoronasSA*>(pGame->GetCoronas())->CaptureDistantLight(instance, entity);
     }
 
     CEntitySAInterface* __cdecl LoadIplBoundingBoxBinaryInstance(SFileObjectInstance* instance, const char* modelName)
     {
         auto loadObjectInstance = reinterpret_cast<CEntitySAInterface*(__cdecl*)(SFileObjectInstance*, const char*)>(FUNC_LoadObjectInstanceBinary);
-        CEntitySAInterface* entity = loadObjectInstance(instance, modelName);
-        CaptureDistantLight(entity);
+        if (!instance)
+            return loadObjectInstance(instance, modelName);
+
+        // GTA conjugates some source quaternions in place while loading the
+        // entity. Keep the original IPL representation so deferred lights can
+        // reproduce the same conversion for every rotation path.
+        const SFileObjectInstance sourceInstance = *instance;
+        CEntitySAInterface*       entity = loadObjectInstance(instance, modelName);
+        CaptureDistantLight(sourceInstance, entity);
         return entity;
     }
 }  // namespace
@@ -309,7 +316,8 @@ CEntitySAInterface* CFileLoader_LoadObjectInstance(const char* szLine)
         inst.rotation.fW = 1.0f;
     }
 
-    CEntitySAInterface* entity = ((CEntitySAInterface * (__cdecl*)(SFileObjectInstance*))0x538090)(&inst);
-    CaptureDistantLight(entity);
+    const SFileObjectInstance sourceInstance = inst;
+    CEntitySAInterface*       entity = ((CEntitySAInterface * (__cdecl*)(SFileObjectInstance*))0x538090)(&inst);
+    CaptureDistantLight(sourceInstance, entity);
     return entity;
 }
