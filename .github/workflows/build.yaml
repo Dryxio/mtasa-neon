@@ -20,6 +20,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
+env:
+  # The bridge is a separate Dryxio project, so public client builds must not
+  # silently move when its repository advances.
+  SKYGFX_BRIDGE_COMMIT: 05d94a62868bd6fc2f47408767b5581eb67179e3
+
 jobs:
   windows:
     strategy:
@@ -29,6 +34,15 @@ jobs:
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v6
+
+      - name: Check out pinned SkyGfx MTA bridge
+        if: matrix.platform == 'win32'
+        uses: actions/checkout@v6
+        with:
+          repository: Dryxio/skygfx
+          ref: ${{ env.SKYGFX_BRIDGE_COMMIT }}
+          path: SkyGfxBridge
+          persist-credentials: false
 
       # Public player builds must use MTA's anti-cheat and service checks. The
       # checked-in default remains CUSTOM so a local clone can run without an
@@ -83,6 +97,15 @@ jobs:
         env:
           DXSDK_DIR: './utils/DXFiles/'
           CI: 'true'
+
+      - name: Build and stage pinned SkyGfx MTA bridge
+        if: matrix.platform == 'win32'
+        shell: powershell
+        run: |
+          $sourceRoot = (Resolve-Path 'SkyGfxBridge').Path
+          .\utils\build-skygfx-bridge.ps1 `
+            -SourceRoot $sourceRoot `
+            -ExpectedCommit $env:SKYGFX_BRIDGE_COMMIT
 
       - name: Install Windows server resources
         if: matrix.platform == 'x64'
@@ -201,7 +224,12 @@ jobs:
           $requiredInputs = @(
             'Multi Theft Auto.exe',
             'MTA\core.dll',
+            'MTA\skygfx_mta.dll',
             'MTA\netc.dll',
+            'MTA\vehicle-sounds\runtime\fmod.dll',
+            'MTA\vehicle-sounds\runtime\fmodstudio.dll',
+            'MTA\vehicle-sounds\runtime\plugins\fmod_distance_filter.dll',
+            'MTA\vehicle-sounds\runtime\plugins\fmod_gain.dll',
             'MTA\bootstrap.exe',
             'MTA\bootstrapc.exe',
             'MTA\sa.dat',
@@ -220,6 +248,19 @@ jobs:
             $inputPath = Join-Path $filesRoot $relativePath
             if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
               throw "Installer input is missing: $relativePath"
+            }
+          }
+
+          $expectedFmodHashes = @{
+            'MTA\vehicle-sounds\runtime\fmod.dll' = 'CC352E54516D87840A6D6F49B650ADB54BA68C08EAE23C862CF87C34C304D966'
+            'MTA\vehicle-sounds\runtime\fmodstudio.dll' = '266660E7DC5DE42AD0535CDF386348AADE6E7315CC8BEC36471A9A322079C599'
+            'MTA\vehicle-sounds\runtime\plugins\fmod_distance_filter.dll' = '25AB3894BF4430AAF3D4AD356D554DD6CDEB216A9E1575F3225AE4DEE0F9BAB8'
+            'MTA\vehicle-sounds\runtime\plugins\fmod_gain.dll' = '075B058F2F56C710102873DF490A2D0E5417D6B518D0C123560F84A34CE37B18'
+          }
+          foreach ($relativePath in $expectedFmodHashes.Keys) {
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $filesRoot $relativePath)).Hash
+            if ($actualHash -ne $expectedFmodHashes[$relativePath]) {
+              throw "Installer FMOD runtime hash mismatch: $relativePath"
             }
           }
 
@@ -280,7 +321,13 @@ jobs:
           $requiredInstallerContents = @(
             'Path = Multi Theft Auto.exe',
             'Path = MTA/core.dll',
+            'Path = MTA/skygfx_mta.dll',
             'Path = MTA/netc.dll',
+            'Path = MTA/vehicle-sounds/runtime/fmod.dll',
+            'Path = MTA/vehicle-sounds/runtime/fmodstudio.dll',
+            'Path = MTA/vehicle-sounds/runtime/FMOD-NOTICE.txt',
+            'Path = MTA/vehicle-sounds/runtime/plugins/fmod_distance_filter.dll',
+            'Path = MTA/vehicle-sounds/runtime/plugins/fmod_gain.dll',
             'Path = MTA/bootstrap.exe',
             'Path = MTA/bootstrapc.exe',
             'Path = MTA/sa.dat',

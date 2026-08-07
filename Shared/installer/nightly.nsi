@@ -813,6 +813,10 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
         SetOutPath "$INSTDIR\MTA"
         File "${FILES_ROOT}\mta\cgui.dll"
         File "${FILES_ROOT}\mta\core.dll"
+        !ifdef MTA_NEON
+            ; SkyGfx is a Neon-owned optional renderer bridge, not an upstream MTA runtime file.
+            File "${FILES_ROOT}\mta\skygfx_mta.dll"
+        !endif
         File "${FILES_ROOT}\mta\xmll.dll"
         File "${FILES_ROOT}\mta\game_sa.dll"
         File "${FILES_ROOT}\mta\multiplayer_sa.dll"
@@ -823,6 +827,20 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
         File "${FILES_ROOT}\mta\cefweb.dll"
         File "${FILES_ROOT}\mta\bootstrap.exe"
         File "${FILES_ROOT}\mta\bootstrapc.exe"
+
+        !ifdef MTA_NEON
+            ; Vehicle audio uses the pinned x86 FMOD 2.02.26 runtime. Banks remain server-owned resource files.
+            SetOutPath "$INSTDIR\MTA\vehicle-sounds\runtime"
+            File "${FILES_ROOT}\mta\vehicle-sounds\runtime\fmod.dll"
+            File "${FILES_ROOT}\mta\vehicle-sounds\runtime\fmodstudio.dll"
+            File /oname=FMOD-NOTICE.txt "fmod-notice.txt"
+
+            SetOutPath "$INSTDIR\MTA\vehicle-sounds\runtime\plugins"
+            File "${FILES_ROOT}\mta\vehicle-sounds\runtime\plugins\fmod_distance_filter.dll"
+            File "${FILES_ROOT}\mta\vehicle-sounds\runtime\plugins\fmod_gain.dll"
+
+            SetOutPath "$INSTDIR\MTA"
+        !endif
 
         File "${FILES_ROOT}\mta\bass.dll"
         File "${FILES_ROOT}\mta\bass_aac.dll"
@@ -1326,6 +1344,9 @@ Section Uninstall
         RmDir /r "$INSTDIR\MTA\data"
         RmDir /r "$INSTDIR\MTA\CEF"
         RmDir /r "$INSTDIR\MTA\locale"
+        !ifdef MTA_NEON
+            RmDir /r "$INSTDIR\MTA\vehicle-sounds"
+        !endif
         Delete "$INSTDIR\MTA\*.dll"
         Delete "$INSTDIR\MTA\*.exe"
         Delete "$INSTDIR\MTA\*.dmp"

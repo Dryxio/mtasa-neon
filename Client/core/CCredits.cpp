@@ -281,6 +281,7 @@ CCredits::CCredits()
         "Discord (https://discord.com/)\n"
         "Docker (https://www.docker.com/)\n"
         "Embedded HTTP Server (https://ehs.fritz-elfert.de/)\n"
+        "FMOD by Firelight Technologies Pty Ltd. (https://www.fmod.com/)\n"
         "FreeType (https://freetype.org/)\n"
         "GNU Unifont (https://unifoundry.com/unifont/index.html)\n"
         "inspect.lua by kikito (https://github.com/kikito/inspect.lua)\n"

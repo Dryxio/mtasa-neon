@@ -1,0 +1,20 @@
+MTA Neon uses FMOD Engine 2.02.26 by Firelight Technologies Pty Ltd.
+
+Only the FMOD runtime libraries required by MTA Neon are redistributed. FMOD
+Studio, SDK headers, examples and example media are not included.
+
+FMOD legal information and licensing terms:
+https://www.fmod.com/legal
+
+Runtime SHA-256 checksums:
+fmod.dll
+CC352E54516D87840A6D6F49B650ADB54BA68C08EAE23C862CF87C34C304D966
+
+fmodstudio.dll
+266660E7DC5DE42AD0535CDF386348AADE6E7315CC8BEC36471A9A322079C599
+
+plugins/fmod_distance_filter.dll
+25AB3894BF4430AAF3D4AD356D554DD6CDEB216A9E1575F3225AE4DEE0F9BAB8
+
+plugins/fmod_gain.dll
+075B058F2F56C710102873DF490A2D0E5417D6B518D0C123560F84A34CE37B18
