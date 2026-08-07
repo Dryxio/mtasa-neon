@@ -1,11 +1,24 @@
 name: Build
 
-# Trigger the workflow on any pull request, push or manual dispatch
-on: [pull_request, push, workflow_dispatch]
+# Pull requests and pushes build and test artifacts only. A public release is
+# an explicit maintainer action from master.
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish this successful master build as the public Neon update
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A push must not cancel a release which is already compiling. Concurrent
+  # manual runs queue behind one another, while superseded push/PR builds can
+  # still be cancelled normally.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   windows:
@@ -26,13 +39,21 @@ jobs:
       - name: Configure public Neon build
         shell: powershell
         run: |
-          @'
-          #pragma once
+          $ErrorActionPreference = 'Stop'
+          $buildNumber = [int]$env:GITHUB_RUN_NUMBER
+          if ($buildNumber -lt 1 -or $buildNumber -gt 99999) {
+            throw "GITHUB_RUN_NUMBER must be between 1 and 99999, got $buildNumber"
+          }
 
-          #undef MTASA_VERSION_TYPE
-          #define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE
-          #define MTASA_SKIP_VERSION_CHECKS
-          '@ | Set-Content -LiteralPath 'Shared\build_overrides.h' -Encoding ascii
+          @(
+            '#pragma once'
+            ''
+            '#undef MTASA_VERSION_TYPE'
+            '#define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE'
+            '#undef MTASA_VERSION_BUILD'
+            "#define MTASA_VERSION_BUILD $buildNumber"
+            '#define MTASA_SKIP_VERSION_CHECKS'
+          ) | Set-Content -LiteralPath 'Shared\build_overrides.h' -Encoding ascii
 
       - uses: actions/cache@v5
         id: cache-dxfiles
@@ -370,11 +391,20 @@ jobs:
       # enforces the network module ABI through CheckCompatibility.
       - name: Configure public Neon server build
         run: |
+          set -eu
+
+          if [[ ! "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "GITHUB_RUN_NUMBER must be between 1 and 99999, got $GITHUB_RUN_NUMBER" >&2
+            exit 1
+          fi
+
           printf '%s\n' \
             '#pragma once' \
             '' \
             '#undef MTASA_VERSION_TYPE' \
             '#define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE' \
+            '#undef MTASA_VERSION_BUILD' \
+            "#define MTASA_VERSION_BUILD $GITHUB_RUN_NUMBER" \
             '#define MTASA_SKIP_VERSION_CHECKS' \
             > Shared/build_overrides.h
 
@@ -503,10 +533,23 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  neon-updater-manifest:
+    name: Test Neon update manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run strict manifest tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -m unittest discover -s utils/neon-updater -p 'test_*.py' -v
+          python3 utils/neon-updater/manifest.py --help >/dev/null
+
   publish-latest:
-    name: Publish dated Neon release
-    if: github.repository == 'Dryxio/mtasa-neon' && github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [windows, macOS, linux]
+    name: Publish approved Neon release
+    if: github.repository == 'Dryxio/mtasa-neon' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.publish_release == true
+    needs: [windows, macOS, linux, neon-updater-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -556,12 +599,23 @@ jobs:
             sha256sum "${required_assets[@]}" > SHA256SUMS.txt
           )
 
+          if [[ ! "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "GITHUB_RUN_NUMBER must be between 1 and 99999, got $GITHUB_RUN_NUMBER" >&2
+            exit 1
+          fi
+
           short_sha="${GITHUB_SHA:0:9}"
           build_date="$(date -u +'%Y-%m-%d %H:%M UTC')"
-          release_tag="neon-build-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
-          release_title="MTA:SA Neon — ${build_date} · ${short_sha}"
+          version_date="$(date -u +'%Y.%m.%d')"
+          display_version="${version_date}.${GITHUB_RUN_NUMBER}"
+          printf -v padded_build '%05d' "$GITHUB_RUN_NUMBER"
+          technical_version="1.7.0-5.${padded_build}"
+          release_tag="neon-${display_version}"
+          release_title="MTA:SA Neon — ${display_version}"
           printf 'tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           printf 'title=%s\n' "$release_title" >> "$GITHUB_OUTPUT"
+          printf 'display_version=%s\n' "$display_version" >> "$GITHUB_OUTPUT"
+          printf 'technical_version=%s\n' "$technical_version" >> "$GITHUB_OUTPUT"
 
           cat > ReleaseNotes.md <<EOF
           ## 🎮 Windows player
@@ -580,11 +634,99 @@ jobs:
           ## Build information
 
           - Built: $build_date
+          - Public version: \`Neon $display_version\`
+          - Technical client version: \`$technical_version\`
           - Commit: [\`$short_sha\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)
           - Workflow run: [#$GITHUB_RUN_NUMBER](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
 
           Neon is experimental and is not affiliated with or endorsed by the Multi Theft Auto team. SHA-256 hashes are provided in \`SHA256SUMS.txt\`.
           EOF
+
+      - name: Refuse a duplicate release identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Refusing to replace existing tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to replace existing release: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Create and verify signed Neon update manifest
+        shell: bash
+        env:
+          NEON_UPDATE_SIGNING_KEY_B64: ${{ secrets.NEON_UPDATE_SIGNING_KEY_B64 }}
+          PYTHONDONTWRITEBYTECODE: '1'
+          RELEASE_TAG: ${{ steps.release_metadata.outputs.tag }}
+          DISPLAY_VERSION: ${{ steps.release_metadata.outputs.display_version }}
+          TECHNICAL_VERSION: ${{ steps.release_metadata.outputs.technical_version }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$NEON_UPDATE_SIGNING_KEY_B64" ]]; then
+            echo 'NEON_UPDATE_SIGNING_KEY_B64 is required to publish an update.' >&2
+            exit 1
+          fi
+
+          : "${RUNNER_TEMP:?RUNNER_TEMP must identify the GitHub temporary directory}"
+          if [[ ! -d "$RUNNER_TEMP" || -L "$RUNNER_TEMP" ]]; then
+            echo 'RUNNER_TEMP must be an existing directory, not a symbolic link.' >&2
+            exit 1
+          fi
+          runner_temp="$(realpath -e -- "$RUNNER_TEMP")"
+          signing_key="${runner_temp}/neon-update-signing-key.pem"
+          expected_signing_key="${runner_temp}/neon-update-signing-key.pem"
+          if [[ "$signing_key" != "$expected_signing_key" || -e "$signing_key" || -L "$signing_key" ]]; then
+            echo 'Refusing an unexpected or pre-existing signing key path.' >&2
+            exit 1
+          fi
+          cleanup() {
+            if [[ "$signing_key" != "$expected_signing_key" || -L "$signing_key" ]]; then
+              echo 'Refusing to clean an unexpected or symbolic-link signing key path.' >&2
+              return
+            fi
+            rm -f -- "$signing_key"
+          }
+          trap cleanup EXIT
+          umask 077
+          if ! printf '%s' "$NEON_UPDATE_SIGNING_KEY_B64" | base64 --decode > "$signing_key"; then
+            echo 'NEON_UPDATE_SIGNING_KEY_B64 is not valid base64.' >&2
+            exit 1
+          fi
+          if [[ ! -s "$signing_key" ]]; then
+            echo 'Decoded Neon update signing key is empty.' >&2
+            exit 1
+          fi
+
+          python3 utils/neon-updater/manifest.py create \
+            --private-key "$signing_key" \
+            --expected-public-key-base64url 'oc55WO1PYJFiyipKMTAoDR-nVPLgUZ7bgyDfvl3WhsI' \
+            --repository "$GITHUB_REPOSITORY" \
+            --build "$GITHUB_RUN_NUMBER" \
+            --display-version "$DISPLAY_VERSION" \
+            --technical-version "$TECHNICAL_VERSION" \
+            --release-tag "$RELEASE_TAG" \
+            --key-id 'neon-release-2026-01' \
+            --asset ReleaseAssets/MTA-Neon-Setup.exe \
+            --output ReleaseAssets/MTA-Neon-Update.xml
+
+          python3 utils/neon-updater/manifest.py verify \
+            --public-key-base64url 'oc55WO1PYJFiyipKMTAoDR-nVPLgUZ7bgyDfvl3WhsI' \
+            --repository "$GITHUB_REPOSITORY" \
+            --manifest ReleaseAssets/MTA-Neon-Update.xml \
+            --asset ReleaseAssets/MTA-Neon-Setup.exe
+
+          (
+            cd ReleaseAssets
+            sha256sum MTA-Neon-Update.xml >> SHA256SUMS.txt
+          )
 
       - name: Publish unique Neon release
         shell: bash
@@ -601,10 +743,11 @@ jobs:
             'ReleaseAssets/MTA-Neon-Server-Windows-x64.zip#HOST ON WINDOWS - x64 server package'
             'ReleaseAssets/MTA-Neon-Linux-Server-x64.tar.gz#HOST ON LINUX - x64 server package'
             'ReleaseAssets/MTA-Neon-Linux-Server-arm64.tar.gz#HOST ON LINUX - ARM64 server package'
+            'ReleaseAssets/MTA-Neon-Update.xml#SIGNED AUTO-UPDATER MANIFEST - do not install manually'
             'ReleaseAssets/SHA256SUMS.txt#OPTIONAL - SHA-256 checksums'
           )
 
-          if [[ ! "$release_tag" =~ ^neon-build-[0-9]+\.[0-9]+-[0-9a-f]{9}$ ]]; then
+          if [[ ! "$release_tag" =~ ^neon-[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]{0,4}$ ]]; then
             echo "Refusing unexpected release tag: $release_tag" >&2
             exit 1
           fi
@@ -629,14 +772,14 @@ jobs:
 
           mapfile -t build_tags < <(
             gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[] | select(.tag_name | test("^neon-build-[0-9]+\\.[0-9]+-[0-9a-f]{9}$")) | [.published_at, .tag_name] | @tsv' \
+              --jq '.[] | select(.tag_name | test("^neon-[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[1-9][0-9]{0,4}$")) | [.published_at, .tag_name] | @tsv' \
               | sort --reverse \
               | cut -f2
           )
 
           stale_tags=("${build_tags[@]:10}")
           for stale_tag in "${stale_tags[@]}"; do
-            if [[ -z "$stale_tag" || "$stale_tag" == "$RELEASE_TAG" || ! "$stale_tag" =~ ^neon-build-[0-9]+\.[0-9]+-[0-9a-f]{9}$ ]]; then
+            if [[ -z "$stale_tag" || "$stale_tag" == "$RELEASE_TAG" || ! "$stale_tag" =~ ^neon-[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]{0,4}$ ]]; then
               echo "Refusing unexpected cleanup target: $stale_tag" >&2
               exit 1
             fi

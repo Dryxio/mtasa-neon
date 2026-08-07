@@ -28,6 +28,12 @@ The repository preserves the complete upstream history and adds proof-of-concept
 
 Readers familiar with the historical [MTA:Eir](https://wiki.multitheftauto.com/wiki/MTA:Eir) project may recognize a related ambition: using an independent MTA:BLUE-derived codebase as a laboratory for deeper GTA:SA engine integration, expanded streaming and IMG workflows, reverse-engineered native features, and new scripting APIs. Neon is not a continuation of or affiliated with MTA:Eir; the comparison is about scope and experimental spirit.
 
+## Updates and releases
+
+Players install MTA Neon once. On every normal launch, the client checks Neon's latest signed GitHub release manifest and offers any newer build as an optional update. If accepted, Neon downloads and verifies the installer, closes cleanly, and opens the installer; declining simply postpones the offer until a later launch. Servers can still require or recommend a published client build through `minclientversion` and `recommendedclientversion` in `mtaserver.conf`.
+
+Repository pushes and ordinary CI builds do not publish updates. A maintainer deliberately starts the GitHub **Build** workflow on `master` with **Publish release** enabled after the accumulated changes are ready. Public versions use `YYYY.MM.DD.BUILD` for people (for example `2026.08.07.170`) and MTA's technical `1.7.0-5.00BUILD` form for server settings (for example `1.7.0-5.00170`). Neon disables MTA's upstream `minclientversion_auto_update` policy by default so it cannot replace a server owner's explicit Neon requirement.
+
 ## GTA:SA's native AI, synchronized for multiplayer
 
 **MTA:SA Neon brings GTA:SA's single-player NPCs, traffic, vehicles, and native AI into one shared, synchronized multiplayer world.** The system is still growing, with more of the original solo behavior becoming available over time. [Learn more on the Neon wiki.](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai)

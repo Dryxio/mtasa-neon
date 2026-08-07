@@ -2052,10 +2052,12 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
             strExtra = SStringX(strExtraTemp);
             strPlayerVersion = SStringX(strPlayerVersionTemp);
         }
-#if MTASA_VERSION_TYPE < VERSION_TYPE_UNSTABLE
+#if defined(MTA_NEON) || MTASA_VERSION_TYPE < VERSION_TYPE_UNSTABLE
         if (atoi(ExtractVersionStringBuildNumber(Packet.GetPlayerVersion())) != 0)
         {
-            // Use player version from packet if it contains a valid build number
+            // Neon owns its release build number while the bundled MTA network
+            // module has an independent upstream version. Use the validated
+            // connection-packet version so server minimums target Neon releases.
             strPlayerVersion = Packet.GetPlayerVersion();
         }
 #endif

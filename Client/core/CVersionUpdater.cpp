@@ -16,7 +16,16 @@
 #include "CFilePathTranslator.h"
 #include "SharedUtil.Thread.h"
 #include <MultiClient.h>
+#include <algorithm>
 #include <charconv>
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
+#ifdef MTA_NEON
+    #include <cryptopp/base64.h>
+    #include <cryptopp/filters.h>
+    #include <cryptopp/xed25519.h>
+#endif
 
 namespace
 {
@@ -36,6 +45,257 @@ namespace
         return false;
 #endif
     }
+
+#ifdef MTA_NEON
+    constexpr const char*   NEON_UPDATE_MANIFEST_URL = "https://github.com/Dryxio/mtasa-neon/releases/latest/download/MTA-Neon-Update.xml?current=%VERSION%";
+    constexpr const char*   NEON_UPDATE_KEY_ID = "neon-release-2026-01";
+    constexpr const char*   NEON_UPDATE_PUBLIC_KEY_BASE64URL = "oc55WO1PYJFiyipKMTAoDR-nVPLgUZ7bgyDfvl3WhsI";
+    constexpr const char*   NEON_UPDATE_ASSET_NAME = "MTA-Neon-Setup.exe";
+    constexpr std::uint32_t NEON_UPDATE_MIN_INSTALLER_SIZE = 16U * 1024U * 1024U;
+    constexpr std::uint32_t NEON_UPDATE_MAX_INSTALLER_SIZE = 512U * 1024U * 1024U;
+    constexpr std::size_t   NEON_UPDATE_MAX_MANIFEST_SIZE = 64U * 1024U;
+
+    struct SNeonUpdateManifest
+    {
+        std::uint32_t build{};
+        std::uint32_t assetSize{};
+        SString       displayVersion;
+        SString       technicalVersion;
+        SString       releaseTag;
+        SString       assetUrl;
+        SString       assetSha256;
+    };
+
+    CXMLNode* FindUniqueChild(CXMLNode* parent, const char* name)
+    {
+        if (!parent)
+            return nullptr;
+
+        CXMLNode* result = nullptr;
+        for (uint index = 0; index < parent->GetSubNodeCount(); ++index)
+        {
+            CXMLNode* child = parent->GetSubNode(index);
+            if (child && child->GetTagName() == name)
+            {
+                if (result)
+                    return nullptr;
+                result = child;
+            }
+        }
+        return result;
+    }
+
+    bool ReadLeaf(CXMLNode* parent, const char* name, SString& value)
+    {
+        CXMLNode* child = FindUniqueChild(parent, name);
+        if (!child || child->GetSubNodeCount() != 0 || child->GetAttributes().Count() != 0)
+            return false;
+
+        value = child->GetTagContent();
+        return !value.empty();
+    }
+
+    bool ParseCanonicalUint(const SString& text, std::uint32_t maximum, std::uint32_t& value)
+    {
+        if (text.empty() || (text.length() > 1 && text.front() == '0'))
+            return false;
+
+        std::uint64_t parsed = 0;
+        for (unsigned char character : text)
+        {
+            if (!std::isdigit(character))
+                return false;
+            parsed = parsed * 10U + (character - '0');
+            if (parsed > maximum)
+                return false;
+        }
+        value = static_cast<std::uint32_t>(parsed);
+        return true;
+    }
+
+    bool IsLowerHexSha256(const SString& value)
+    {
+        return value.length() == 64 && std::all_of(value.begin(), value.end(),
+                                                   [](unsigned char character) { return std::isdigit(character) || (character >= 'a' && character <= 'f'); });
+    }
+
+    bool DecodeBase64Url(const SString& encoded, std::string& decoded)
+    {
+        if (encoded.empty() || encoded.length() % 4 == 1 ||
+            !std::all_of(encoded.begin(), encoded.end(),
+                         [](unsigned char character) { return std::isalnum(character) || character == '-' || character == '_'; }))
+            return false;
+
+        try
+        {
+            decoded.clear();
+            CryptoPP::StringSource source(encoded, true, new CryptoPP::Base64URLDecoder(new CryptoPP::StringSink(decoded)));
+            return true;
+        }
+        catch (const CryptoPP::Exception&)
+        {
+            decoded.clear();
+            return false;
+        }
+    }
+
+    bool DecodeSignature(const SString& encoded, std::string& decoded)
+    {
+        if (encoded.length() != 88 || !encoded.EndsWith("=="))
+            return false;
+
+        for (std::size_t index = 0; index < encoded.length() - 2; ++index)
+        {
+            const unsigned char character = encoded[index];
+            if (!std::isalnum(character) && character != '+' && character != '/')
+                return false;
+        }
+
+        try
+        {
+            decoded.clear();
+            CryptoPP::StringSource source(encoded, true, new CryptoPP::Base64Decoder(new CryptoPP::StringSink(decoded)));
+            return decoded.size() == CryptoPP::ed25519Verifier::SIGNATURE_LENGTH;
+        }
+        catch (const CryptoPP::Exception&)
+        {
+            decoded.clear();
+            return false;
+        }
+    }
+
+    bool ParseNeonUpdateManifest(CXMLNode* root, SNeonUpdateManifest& manifest, SString& error)
+    {
+        if (!root || root->GetTagName() != "neon_update" || root->GetSubNodeCount() != 6 || root->GetAttributes().Count() != 1 ||
+            root->GetAttributeValue("schema") != "1")
+        {
+            error = "unexpected root schema";
+            return false;
+        }
+
+        CXMLAttribute* schemaAttribute = root->GetAttributes().Get(0);
+        if (!schemaAttribute || schemaAttribute->GetName() != "schema")
+        {
+            error = "unexpected root attribute";
+            return false;
+        }
+
+        SString buildText;
+        SString assetSizeText;
+        SString assetName;
+        if (!ReadLeaf(root, "build", buildText) || !ReadLeaf(root, "display_version", manifest.displayVersion) ||
+            !ReadLeaf(root, "technical_version", manifest.technicalVersion) || !ReadLeaf(root, "release_tag", manifest.releaseTag))
+        {
+            error = "missing release identity";
+            return false;
+        }
+
+        CXMLNode* asset = FindUniqueChild(root, "asset");
+        if (!asset || asset->GetAttributes().Count() != 0 || asset->GetSubNodeCount() != 4 || !ReadLeaf(asset, "name", assetName) ||
+            !ReadLeaf(asset, "url", manifest.assetUrl) || !ReadLeaf(asset, "size", assetSizeText) || !ReadLeaf(asset, "sha256", manifest.assetSha256))
+        {
+            error = "invalid asset description";
+            return false;
+        }
+
+        CXMLNode* signatureNode = FindUniqueChild(root, "signature");
+        if (!signatureNode || signatureNode->GetSubNodeCount() != 0 || signatureNode->GetAttributes().Count() != 3 ||
+            signatureNode->GetAttributeValue("key_id") != NEON_UPDATE_KEY_ID || signatureNode->GetAttributeValue("algorithm") != "ed25519" ||
+            signatureNode->GetAttributeValue("encoding") != "base64")
+        {
+            error = "unsupported signature metadata";
+            return false;
+        }
+
+        for (uint index = 0; index < signatureNode->GetAttributes().Count(); ++index)
+        {
+            const std::string name = signatureNode->GetAttributes().Get(index)->GetName();
+            if (name != "key_id" && name != "algorithm" && name != "encoding")
+            {
+                error = "unexpected signature attribute";
+                return false;
+            }
+        }
+
+        if (!ParseCanonicalUint(buildText, 99999, manifest.build) || manifest.build == 0 ||
+            !ParseCanonicalUint(assetSizeText, NEON_UPDATE_MAX_INSTALLER_SIZE, manifest.assetSize) || manifest.assetSize < NEON_UPDATE_MIN_INSTALLER_SIZE ||
+            assetName != NEON_UPDATE_ASSET_NAME || !IsLowerHexSha256(manifest.assetSha256))
+        {
+            error = "invalid build or asset values";
+            return false;
+        }
+
+        unsigned int major = 0;
+        unsigned int minor = 0;
+        unsigned int maintenance = 0;
+        unsigned int type = 0;
+        unsigned int technicalBuild = 0;
+        int          consumed = 0;
+        if (std::sscanf(manifest.technicalVersion.c_str(), "%u.%u.%u-%u.%u%n", &major, &minor, &maintenance, &type, &technicalBuild, &consumed) != 5 ||
+            consumed != static_cast<int>(manifest.technicalVersion.length()) || major != MTASA_VERSION_MAJOR || minor != MTASA_VERSION_MINOR ||
+            maintenance != MTASA_VERSION_MAINTENANCE || type != VERSION_TYPE_UNSTABLE || technicalBuild != manifest.build ||
+            manifest.technicalVersion != SString("%u.%u.%u-%u.%05u", major, minor, maintenance, type, technicalBuild))
+        {
+            error = "invalid technical version";
+            return false;
+        }
+
+        unsigned int year = 0;
+        unsigned int month = 0;
+        unsigned int day = 0;
+        unsigned int displayBuild = 0;
+        consumed = 0;
+        if (std::sscanf(manifest.displayVersion.c_str(), "%u.%u.%u.%u%n", &year, &month, &day, &displayBuild, &consumed) != 4 ||
+            consumed != static_cast<int>(manifest.displayVersion.length()) || year < 2026 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31 ||
+            displayBuild != manifest.build || manifest.displayVersion != SString("%04u.%02u.%02u.%u", year, month, day, displayBuild) ||
+            manifest.releaseTag != SString("neon-%s", manifest.displayVersion.c_str()))
+        {
+            error = "invalid public version";
+            return false;
+        }
+
+        const SString expectedUrl =
+            SString("https://github.com/Dryxio/mtasa-neon/releases/download/%s/%s", manifest.releaseTag.c_str(), NEON_UPDATE_ASSET_NAME);
+        if (manifest.assetUrl != expectedUrl)
+        {
+            error = "asset URL is outside the Neon release allowlist";
+            return false;
+        }
+
+        const SString canonicalPayload = SString(
+            "mta-neon-update-v1\nbuild=%u\ndisplay_version=%s\ntechnical_version=%s\nrelease_tag=%s\nasset_name=%s\nasset_url=%s\nasset_size=%u\n"
+            "asset_sha256=%s\nkey_id=%s\n",
+            manifest.build, manifest.displayVersion.c_str(), manifest.technicalVersion.c_str(), manifest.releaseTag.c_str(), NEON_UPDATE_ASSET_NAME,
+            manifest.assetUrl.c_str(), manifest.assetSize, manifest.assetSha256.c_str(), NEON_UPDATE_KEY_ID);
+
+        std::string publicKey;
+        std::string signature;
+        if (!DecodeBase64Url(NEON_UPDATE_PUBLIC_KEY_BASE64URL, publicKey) || publicKey.size() != CryptoPP::ed25519Verifier::PUBLIC_KEYLENGTH ||
+            !DecodeSignature(signatureNode->GetTagContent(), signature))
+        {
+            error = "invalid signature encoding";
+            return false;
+        }
+
+        try
+        {
+            const CryptoPP::ed25519Verifier verifier(reinterpret_cast<const CryptoPP::byte*>(publicKey.data()));
+            if (!verifier.VerifyMessage(reinterpret_cast<const CryptoPP::byte*>(canonicalPayload.data()), canonicalPayload.length(),
+                                        reinterpret_cast<const CryptoPP::byte*>(signature.data()), signature.size()))
+            {
+                error = "signature verification failed";
+                return false;
+            }
+        }
+        catch (const CryptoPP::Exception&)
+        {
+            error = "signature verification error";
+            return false;
+        }
+
+        return true;
+    }
+#endif
 }
 
 ///////////////////////////////////////////////////////////////
@@ -516,6 +776,12 @@ void CVersionUpdater::DoPulse()
     {
         m_bCheckedTimeForVersionCheck = true;
 
+#ifdef MTA_NEON
+        // A declined Neon update stays optional, but it is offered again on the
+        // next normal launch. This avoids leaving public players on an old build
+        // because an upstream cached interval postponed the fork's own check.
+        RunProgram(EUpdaterProgramType::VersionCheck);
+#else
         // Do update check now if game did not stop cleanly last time
         if (WatchDogWasUncleanStop())
             m_VarConfig.version_lastCheckTime.SetFromSeconds(0);
@@ -529,6 +795,7 @@ void CVersionUpdater::DoPulse()
         {
             RunProgram(EUpdaterProgramType::VersionCheck);
         }
+#endif
     }
 
     //
@@ -2029,7 +2296,11 @@ void CVersionUpdater::_DialogUpdateQueryError()
     // Display message
     GetQuestionBox().Reset();
     GetQuestionBox().SetTitle(_("UPDATE CHECK"));
+#ifdef MTA_NEON
+    GetQuestionBox().SetMessage("The MTA Neon update service is currently unavailable.\n\nPlease try again later.");
+#else
     GetQuestionBox().SetMessage(_("An update is currently not available.\n\nPlease check www.multitheftauto.com"));
+#endif
     GetQuestionBox().SetButton(0, _("OK"));
     GetQuestionBox().Show();
     _PollAnyButton();
@@ -2291,7 +2562,13 @@ void CVersionUpdater::_DialogExeFilesResult()
 void CVersionUpdater::_UseVersionQueryURLs()
 {
     m_JobInfo = SJobInfo();
+#ifdef MTA_NEON
+    // Never accept a cached upstream master-config redirect for Neon releases.
+    // Servers only supply a required version, never an update URL.
+    m_JobInfo.serverList.push_back(NEON_UPDATE_MANIFEST_URL);
+#else
     m_JobInfo.serverList = MakeServerList(m_MasterConfig.version.serverInfoMap);
+#endif
     m_JobInfo.bShowDownloadPercent = false;
 }
 
@@ -2342,8 +2619,53 @@ void CVersionUpdater::_ProcessPatchFileQuery()
         return;
     }
 
+#ifdef MTA_NEON
+    if (m_JobInfo.downloadBuffer.size() > NEON_UPDATE_MAX_MANIFEST_SIZE)
+    {
+        OutputDebugLine("[Updater] Rejected oversized Neon update manifest");
+        m_JobInfo = SJobInfo();
+        return;
+    }
+#endif
+
     CXMLBuffer XMLBuffer;
     CXMLNode*  pRoot = XMLBuffer.SetFromData(&m_JobInfo.downloadBuffer[0], m_JobInfo.downloadBuffer.size());
+
+#ifdef MTA_NEON
+    SNeonUpdateManifest manifest;
+    SString             manifestError;
+    if (!ParseNeonUpdateManifest(pRoot, manifest, manifestError))
+    {
+        OutputDebugLine(SString("[Updater] Rejected Neon update manifest: %s", manifestError.c_str()));
+        m_JobInfo = SJobInfo();
+        return;
+    }
+
+    m_JobInfo = SJobInfo();
+    if (manifest.build <= MTASA_VERSION_BUILD)
+    {
+        m_JobInfo.strStatus = "noupdate";
+        m_ConditionMap.SetCondition("ProcessResponse", m_JobInfo.strStatus);
+        return;
+    }
+
+    m_JobInfo.strStatus = "update";
+    m_JobInfo.strTitle = "MTA NEON UPDATE";
+    m_JobInfo.strMsg = SString("A new MTA Neon update is available.\n\nInstalled build: %u\nAvailable: %s\n\nDownload and install it now?", MTASA_VERSION_BUILD,
+                               manifest.displayVersion.c_str());
+    m_JobInfo.strMsg2 = "The MTA Neon update has been downloaded.\n\nThe installer will open after MTA closes.";
+    m_JobInfo.strYes = "Update";
+    m_JobInfo.strNo = "Later";
+    m_JobInfo.strFilename = NEON_UPDATE_ASSET_NAME;
+    m_JobInfo.iFilesize = manifest.assetSize;
+    m_JobInfo.strMD5 = "none";
+    m_JobInfo.strSHA256 = manifest.assetSha256;
+    m_JobInfo.strTechnicalVersion = manifest.technicalVersion;
+    m_JobInfo.strDisplayVersion = manifest.displayVersion;
+    m_JobInfo.serverList.push_back(manifest.assetUrl);
+    m_ConditionMap.SetCondition("ProcessResponse", m_JobInfo.strStatus);
+    return;
+#endif
 
     // Try to parse download info
     m_JobInfo = SJobInfo();
@@ -2622,6 +2944,13 @@ void CVersionUpdater::_UseNewsUpdateURLs()
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::_UseProvidedURLs()
 {
+#ifdef MTA_NEON
+    // A verified Neon manifest already supplied one exact, tag-specific URL.
+    // Do not replace it with the legacy XML mirror map.
+    if (!m_JobInfo.strSHA256.empty())
+        return;
+#endif
+
     if (m_JobInfo.slim.iFilesize > 0)
     {
         // Check if files not included in the smaller archive are already installed
@@ -2683,33 +3012,51 @@ void CVersionUpdater::_ProcessPatchFileDownload()
     unsigned int uiSize = m_JobInfo.downloadBuffer.size();
     char*        pData = &m_JobInfo.downloadBuffer[0];
 
-    // Check MD5
-    if (m_JobInfo.strMD5 != "none")
+#ifdef MTA_NEON
+    if (!m_JobInfo.strSHA256.empty())
     {
-        // Hash data
-        MD5 md5Result;
-        CMD5Hasher().Calculate(pData, uiSize, md5Result);
-        char szMD5[33];
-        CMD5Hasher::ConvertToHex(md5Result, szMD5);
-
-        if (m_JobInfo.strMD5 != szMD5)
+        const SString actualSha256 = SharedUtil::GenerateSha256HexString(pData, uiSize).ToLower();
+        if (uiSize != static_cast<unsigned int>(m_JobInfo.iFilesize) || actualSha256 != m_JobInfo.strSHA256)
         {
-            // If MD5 error, remove this server from the list
-            if (m_JobInfo.serverList.size())
+            if (!m_JobInfo.serverList.empty())
                 ListRemoveIndex(m_JobInfo.serverList, m_JobInfo.iCurrent--);
             m_ConditionMap.SetCondition("Download", "Fail", "Checksum");
-            AddReportLog(5003, SString("DoPollDownload: Checksum wrong for %s (Want:%d-%s Got:%d-%s)", m_JobInfo.strFilename.c_str(), (int)m_JobInfo.iFilesize,
-                                       m_JobInfo.strMD5.c_str(), uiSize, szMD5));
+            AddReportLog(5003, SString("DoPollDownload: Neon SHA-256 wrong for %s (Want:%d-%s Got:%u-%s)", m_JobInfo.strFilename.c_str(),
+                                       static_cast<int>(m_JobInfo.iFilesize), m_JobInfo.strSHA256.c_str(), uiSize, actualSha256.c_str()));
             return;
         }
     }
-
-    // Check signature
-    if (!CCore::GetSingleton().GetNetwork()->VerifySignature(pData, uiSize))
+    else
+#endif
     {
-        AddReportLog(5006, SString("DoPollDownload: Signature wrong for %s (MD5: %s)", m_JobInfo.strFilename.c_str(), m_JobInfo.strMD5.c_str()));
-        m_ConditionMap.SetCondition("Download", "Fail", "Checksum");
-        return;
+        // Check MD5
+        if (m_JobInfo.strMD5 != "none")
+        {
+            // Hash data
+            MD5 md5Result;
+            CMD5Hasher().Calculate(pData, uiSize, md5Result);
+            char szMD5[33];
+            CMD5Hasher::ConvertToHex(md5Result, szMD5);
+
+            if (m_JobInfo.strMD5 != szMD5)
+            {
+                // If MD5 error, remove this server from the list
+                if (m_JobInfo.serverList.size())
+                    ListRemoveIndex(m_JobInfo.serverList, m_JobInfo.iCurrent--);
+                m_ConditionMap.SetCondition("Download", "Fail", "Checksum");
+                AddReportLog(5003, SString("DoPollDownload: Checksum wrong for %s (Want:%d-%s Got:%d-%s)", m_JobInfo.strFilename.c_str(),
+                                           (int)m_JobInfo.iFilesize, m_JobInfo.strMD5.c_str(), uiSize, szMD5));
+                return;
+            }
+        }
+
+        // Check signature
+        if (!CCore::GetSingleton().GetNetwork()->VerifySignature(pData, uiSize))
+        {
+            AddReportLog(5006, SString("DoPollDownload: Signature wrong for %s (MD5: %s)", m_JobInfo.strFilename.c_str(), m_JobInfo.strMD5.c_str()));
+            m_ConditionMap.SetCondition("Download", "Fail", "Checksum");
+            return;
+        }
     }
 
     ////////////////////////
@@ -2787,23 +3134,38 @@ void CVersionUpdater::_StartDownload()
                     CBuffer buffer;
                     buffer.LoadFromFile(strPathFilename);
 
-                    // Check MD5
-                    // Hash data
-                    MD5 md5Result;
-                    CMD5Hasher().Calculate(buffer.GetData(), buffer.GetSize(), md5Result);
-                    char szMD5[33];
-                    CMD5Hasher::ConvertToHex(md5Result, szMD5);
-                    if (m_JobInfo.strMD5 != szMD5)
+#ifdef MTA_NEON
+                    if (!m_JobInfo.strSHA256.empty())
                     {
-                        AddReportLog(5807, SString("StartDownload: Cached file reuse - Size correct, but md5 did not match (%s)", *strPathFilename));
-                        continue;
+                        const SString actualSha256 = SharedUtil::GenerateSha256HexString(buffer.GetData(), buffer.GetSize()).ToLower();
+                        if (actualSha256 != m_JobInfo.strSHA256)
+                        {
+                            AddReportLog(
+                                5807, SString("StartDownload: Cached Neon installer reuse - Size correct, but SHA-256 did not match (%s)", *strPathFilename));
+                            continue;
+                        }
                     }
-
-                    // Check signature
-                    if (!CCore::GetSingleton().GetNetwork()->VerifySignature(buffer.GetData(), buffer.GetSize()))
+                    else
+#endif
                     {
-                        AddReportLog(5808, SString("StartDownload: Cached file reuse - Size and md5 correct, but signature incorrect (%s)", *strPathFilename));
-                        continue;
+                        // Check MD5
+                        MD5 md5Result;
+                        CMD5Hasher().Calculate(buffer.GetData(), buffer.GetSize(), md5Result);
+                        char szMD5[33];
+                        CMD5Hasher::ConvertToHex(md5Result, szMD5);
+                        if (m_JobInfo.strMD5 != szMD5)
+                        {
+                            AddReportLog(5807, SString("StartDownload: Cached file reuse - Size correct, but md5 did not match (%s)", *strPathFilename));
+                            continue;
+                        }
+
+                        // Check signature
+                        if (!CCore::GetSingleton().GetNetwork()->VerifySignature(buffer.GetData(), buffer.GetSize()))
+                        {
+                            AddReportLog(5808,
+                                         SString("StartDownload: Cached file reuse - Size and md5 correct, but signature incorrect (%s)", *strPathFilename));
+                            continue;
+                        }
                     }
 
                     // Reuse file now
@@ -3804,7 +4166,8 @@ int CVersionUpdater::DoSendDownloadRequestToNextServer()
     // See if this download qualifies for using a resumable file
     if (!m_JobInfo.strFilename.empty() && strQueryURL.EndsWith(m_JobInfo.strFilename))
     {
-        m_JobInfo.strResumableSaveLocation = GetResumableSaveLocation(m_JobInfo.strFilename, m_JobInfo.strMD5, m_JobInfo.iFilesize);
+        const SString& resumableChecksum = m_JobInfo.strSHA256.empty() ? m_JobInfo.strMD5 : m_JobInfo.strSHA256;
+        m_JobInfo.strResumableSaveLocation = GetResumableSaveLocation(m_JobInfo.strFilename, resumableChecksum, m_JobInfo.iFilesize);
     }
     else
     {

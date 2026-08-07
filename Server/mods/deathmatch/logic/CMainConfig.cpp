@@ -1656,8 +1656,10 @@ const std::vector<SIntSetting>& CMainConfig::GetIntSettingList()
 {
 #ifdef MTA_NEON
     static constexpr int CRASH_DUMP_UPLOAD_DEFAULT = 0;
+    static constexpr int MIN_CLIENT_VERSION_AUTO_UPDATE_DEFAULT = 0;
 #else
     static constexpr int CRASH_DUMP_UPLOAD_DEFAULT = 1;
+    static constexpr int MIN_CLIENT_VERSION_AUTO_UPDATE_DEFAULT = 1;
 #endif
     static const SIntSetting settings[] = {
         // Set,  save,   min,    def,    max,    name,                                   variable,                                   callback
@@ -1684,7 +1686,7 @@ const std::vector<SIntSetting>& CMainConfig::GetIntSettingList()
         {true, true, 0, 30, 130, "vehicle_contact_sync_radius", &g_TickRateSettings.iVehicleContactSyncRadius, &CMainConfig::OnTickRateChange},
         {true, true, 5, 100, 500, "player_teleport_alert", &g_TickRateSettings.playerTeleportAlert, &CMainConfig::OnTickRateChange},
         {false, false, 0, 1, 2, "compact_internal_databases", &m_iCompactInternalDatabases, NULL},
-        {true, true, 0, 1, 2, "minclientversion_auto_update", &m_iMinClientVersionAutoUpdate, NULL},
+        {true, true, 0, MIN_CLIENT_VERSION_AUTO_UPDATE_DEFAULT, 2, "minclientversion_auto_update", &m_iMinClientVersionAutoUpdate, NULL},
         {true, true, 0, 0, 100, "server_logic_fps_limit", &m_iServerLogicFpsLimit, NULL},
         {true, true, 0, CRASH_DUMP_UPLOAD_DEFAULT, 1, "crash_dump_upload", &m_bCrashDumpUploadEnabled, NULL},
         {true, true, 0, 1, 1, "filter_duplicate_log_lines", &m_bFilterDuplicateLogLinesEnabled, NULL},

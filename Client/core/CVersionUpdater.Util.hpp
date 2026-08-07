@@ -825,6 +825,9 @@ namespace
         CValueInt         iFilesize;
         CDataInfoSet      serverInfoMap;
         SString           strMD5;
+        SString           strSHA256;
+        SString           strTechnicalVersion;
+        SString           strDisplayVersion;
         SString           strSaveLocation;
 
         struct
