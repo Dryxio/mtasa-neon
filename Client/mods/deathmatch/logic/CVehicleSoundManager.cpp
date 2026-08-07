@@ -24,9 +24,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <fstream>
 #include <filesystem>
-#include <iomanip>
 #include <map>
 #include <set>
 #include <sstream>
@@ -625,7 +623,6 @@ struct CVehicleSoundManager::Impl
         unsigned long long       gearChangeTick = 0;
         unsigned long long       lastBackfireTick = 0;
         unsigned long long       afterfireUntilTick = 0;
-        unsigned long long       nextTelemetryTick = 0;
     };
 
     struct BankAsset
@@ -768,8 +765,6 @@ struct CVehicleSoundManager::Impl
         RestoreCompetitiveNativeDuck();
         StopAll();
         backend.Shutdown();
-        if (telemetry.is_open())
-            telemetry.close();
         ready = false;
         nextInitializationTick = 0;
         owner = nullptr;
@@ -781,39 +776,6 @@ struct CVehicleSoundManager::Impl
         competitiveRivalVehicle = nullptr;
         competitiveMixAmount = 0.0f;
         competitiveMixTick = 0;
-    }
-
-    void InitializeTelemetry()
-    {
-        const SString   telemetryPath = CalcMTASAPath(PathJoin("MTA", "logs", "vehicle-audio.csv"));
-        std::error_code error;
-        std::filesystem::create_directories(std::filesystem::path(telemetryPath.c_str()).parent_path(), error);
-        telemetry.open(telemetryPath.c_str(), std::ios::out | std::ios::trunc);
-        if (!telemetry)
-        {
-            g_pCore->GetConsole()->Printf("Vehicle audio: could not create telemetry at %s", telemetryPath.c_str());
-            return;
-        }
-
-        telemetry << "tick_ms,model,speed_kmh,raw_gear,pending_gear,committed_gear,gear_max_kmh,gear_ratio,raw_throttle,audio_throttle,shift_phase,"
-                     "shift_elapsed_ms,shift_duration_ms,target_rpm,rpm,gear_commit,backfire,backfire_reason\n";
-        telemetry.flush();
-        g_pCore->GetConsole()->Printf("Vehicle audio: telemetry enabled at %s", telemetryPath.c_str());
-    }
-
-    void LogTelemetry(CClientVehicle& vehicle, VehicleState& state, unsigned long long now, float speedKmh, int rawGear, float gearMaximum, float gearRatio,
-                      float rawThrottle, float audioThrottle, const char* shiftPhase, unsigned long long shiftElapsed, unsigned int shiftDuration,
-                      float targetRpm, bool gearCommitted, bool backfire, const char* backfireReason)
-    {
-        if (!telemetry || (now < state.nextTelemetryTick && !gearCommitted && !backfire))
-            return;
-
-        state.nextTelemetryTick = now + 100;
-        telemetry << now << ',' << vehicle.GetModel() << ',' << std::fixed << std::setprecision(2) << speedKmh << ',' << rawGear << ',' << state.pendingGear
-                  << ',' << state.committedGear << ',' << gearMaximum << ',' << gearRatio << ',' << rawThrottle << ',' << audioThrottle << ',' << shiftPhase
-                  << ',' << shiftElapsed << ',' << shiftDuration << ',' << targetRpm << ',' << state.rpm << ',' << (gearCommitted ? 1 : 0) << ','
-                  << (backfire ? 1 : 0) << ',' << backfireReason << '\n';
-        telemetry.flush();
     }
 
     bool TriggerBackfire(VehicleState& state, unsigned long long now, unsigned int cooldownMs)
@@ -1188,7 +1150,6 @@ struct CVehicleSoundManager::Impl
             gearCommitted = true;
         }
 
-        const char* shiftPhase = shiftCut ? "cut" : shiftElapsed < shiftDuration ? "recover" : "steady";
         if (shiftCut)
             state.smoothedThrottle = 0.0f;
         else
@@ -1244,9 +1205,8 @@ struct CVehicleSoundManager::Impl
         backend.SetParameter(state.engineEvent, metadata.gearParameter, static_cast<float>(state.committedGear));
         backend.SetParameter(state.engineEvent, metadata.turboBoostParameter, state.turboBoost);
 
-        bool        backfire = false;
-        bool        highBackfire = false;
-        const char* backfireReason = "none";
+        bool backfire = false;
+        bool highBackfire = false;
 
         if (localDriver && audioMode >= 1 && definition.backfireTimeMs > 0 && (definition.flags & 1) != 0)
         {
@@ -1255,7 +1215,6 @@ struct CVehicleSoundManager::Impl
                 if (audioThrottle != state.previousThrottle && TriggerBackfire(state, now, definition.backfireTimeMs))
                 {
                     backfire = true;
-                    backfireReason = "release";
                     // The original requests RandomInt(1, 2), whose upper bound is exclusive, so the divisor is always one.
                     state.afterfireUntilTick = now + definition.backfireTimeMs;
                 }
@@ -1265,7 +1224,6 @@ struct CVehicleSoundManager::Impl
                 {
                     backfire = true;
                     highBackfire = true;
-                    backfireReason = "afterfire";
                 }
             }
             else
@@ -1280,10 +1238,6 @@ struct CVehicleSoundManager::Impl
                 backend.PlayOneShot(gearEvent, attributes, definition.volume * gearVolume * competitiveGain * masterVolume * sfxVolume, metadata, state.rpm,
                                     audioThrottle, 1.0f, state.turboBoost);
         }
-
-        if (interior)
-            LogTelemetry(vehicle, state, now, speedKmh, rawGear, gearMaximum, gearRevsRatio, rawThrottle, audioThrottle, shiftPhase, shiftElapsed,
-                         shiftDuration, targetRpm, gearCommitted, backfire, backfireReason);
 
         state.previousThrottle = audioThrottle;
         if (backfire)
@@ -1453,7 +1407,6 @@ struct CVehicleSoundManager::Impl
     float                                   competitiveOriginalEngineVolumeOffset = 0.0f;
     float                                   competitiveMixAmount = 0.0f;
     unsigned long long                      competitiveMixTick = 0;
-    std::ofstream                           telemetry;
 };
 
 CVehicleSoundManager::CVehicleSoundManager(CClientManager* clientManager) : m_impl(std::make_unique<Impl>(clientManager))
