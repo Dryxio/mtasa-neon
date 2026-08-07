@@ -1664,6 +1664,9 @@ void CClientPed::SetNativeTaskWeaponPresentation(const SNativeTaskWeaponPresenta
 
 void CClientPed::ClearNativeTaskWeaponPresentation(const char* reason)
 {
+    if (!HasNativeTaskWeaponPresentationState())
+        return;
+
     if (m_pTaskManager && m_pPlayerPed)
     {
         CTask*     primaryTask = m_pTaskManager->GetTask(TASK_PRIORITY_PRIMARY);
@@ -1711,6 +1714,13 @@ void CClientPed::ClearNativeTaskWeaponPresentation(const char* reason)
     m_nativeTaskWeaponPresentationPreviousAttackTask = nullptr;
     m_nativeTaskWeaponPresentation = {};
     m_nativeTaskWeaponPresentationAppliedTarget = {};
+}
+
+bool CClientPed::HasNativeTaskWeaponPresentationState() const noexcept
+{
+    return m_nativeTaskWeaponPresentationActive || m_nativeTaskWeaponPresentation.data.uiMode != SNativeTaskWeaponPresentationSync::NONE ||
+           m_nativeTaskWeaponPresentationFireCount != 0 || m_nativeTaskWeaponPresentationPrimaryTask || m_nativeTaskWeaponPresentationAttackTask ||
+           m_nativeTaskWeaponPresentationPreviousAttackTask || m_nativeTaskWeaponPresentationPreviousShootingRate.has_value();
 }
 
 bool CClientPed::PresentNativeTaskWeaponShot()
@@ -1834,6 +1844,12 @@ void CClientPed::NotifyNativeTaskWeaponPresentationFire()
 
 void CClientPed::UpdateNativeTaskWeaponPresentation()
 {
+    // Most streamed peds never receive this optional presentation. Avoid task
+    // manager lookups until there is viewer-owned state that actually needs to
+    // be applied, validated, or released.
+    if (!HasNativeTaskWeaponPresentationState())
+        return;
+
     const unsigned long presentationLease = std::max(500UL, static_cast<unsigned long>(g_TickRateSettings.iPedSync) * 3);
     const unsigned long sampleAge = CClientTime::GetTime() - m_nativeTaskWeaponPresentationReceivedAt;
     const bool          occupied = GetRealOccupiedVehicle() != nullptr;

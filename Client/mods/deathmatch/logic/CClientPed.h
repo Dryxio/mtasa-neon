@@ -656,6 +656,7 @@ protected:
     void ApplyNativeTaskLocomotionPresentation(CControllerState& ControllerState);
     void UpdateNativeTaskWeaponPresentation();
     void ClearNativeTaskWeaponPresentation(const char* reason);
+    bool HasNativeTaskWeaponPresentationState() const noexcept;
     void UpdateNativeTaskAnimationPresentation();
     void ClearNativeTaskAnimationPresentation(const char* reason);
     void ApplyNativeTaskAnimationPresentationHeading(float fHeading);
