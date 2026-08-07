@@ -402,9 +402,10 @@ void CClientVariables::LoadDefaults()
     DEFAULT("browser_remote_javascript", true);          // Execute javascript on remote websites?
     DEFAULT("filter_duplicate_log_lines", true);         // Filter duplicate log lines for debug view and clientscript.log
     DEFAULT("always_show_transferbox", false);           // Should the transfer box always be visible for downloads? (and ignore scripted control)
-    DEFAULT("allow_discord_rpc", true);                  // Enable Discord Rich Presence
-    DEFAULT("discord_rpc_share_data", false);            // Consistent Rich Presence data sharing
-    DEFAULT("discord_rpc_share_data_firsttime", false);  // Display the user data sharing consent dialog box - for the first time
+    DEFAULT("allow_discord_rpc", true);  // Enable Discord Rich Presence
+    // Sharing a stable Discord identifier with servers is a privacy-sensitive legacy opt-in,
+    // not first-run setup.
+    DEFAULT("discord_rpc_share_data", false);
     DEFAULT("neon_identity_url", std::string("https://identity.mta-neon.com"));  // Central OAuth and short-lived connection-ticket service
     std::string neonIdentityUrl;
     if (Get("neon_identity_url", neonIdentityUrl) && neonIdentityUrl == "https://identity.neon.mtasa.com")
