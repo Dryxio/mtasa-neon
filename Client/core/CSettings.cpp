@@ -19,6 +19,7 @@
 #include <game/CSettings.h>
 #include "CSteamClient.h"
 #include "DXHook/CProxyDirect3DDevice9.h"
+#include "SkyGfx/CSkyGfxManager.h"
 
 using namespace std;
 
@@ -225,6 +226,7 @@ void CSettings::ResetGuiPointers()
     m_pTabMultiplayer = NULL;
     m_pTabVideo = NULL;
     m_pTabNeon = NULL;
+    m_pTabSkyGfx = NULL;
     m_pTabInterface = NULL;
     m_pTabBrowser = NULL;
     m_pTabPostFX = NULL;
@@ -293,6 +295,22 @@ void CSettings::ResetGuiPointers()
     m_pDistantLightsCoronaSizeValueLabel = NULL;
     m_pDistantLightsDescriptionLabel = NULL;
     m_pRebuildDistantLightsButton = NULL;
+    m_pSkyGfxIntegrationLabel = NULL;
+    m_pSkyGfxStatusLabel = NULL;
+    m_pCheckBoxSkyGfxEnabled = NULL;
+    m_pSkyGfxPlayStation2Label = NULL;
+    m_pCheckBoxSkyGfxColorFilter = NULL;
+    m_pCheckBoxSkyGfxColorFilterBlur = NULL;
+    m_pCheckBoxSkyGfxPcTimecycle = NULL;
+    m_pCheckBoxSkyGfxDepthBias = NULL;
+    m_pCheckBoxSkyGfxRadiosity = NULL;
+    m_pSkyGfxRadiosityIntensityLabel = NULL;
+    m_pSkyGfxRadiosityIntensityCombo = NULL;
+    m_pSkyGfxRadiosityFilterPassesLabel = NULL;
+    m_pSkyGfxRadiosityFilterPassesCombo = NULL;
+    m_pSkyGfxRadiosityRenderPassesLabel = NULL;
+    m_pSkyGfxRadiosityRenderPassesCombo = NULL;
+    m_pSkyGfxDescriptionLabel = NULL;
     m_pBrightnessLabel = NULL;
     m_pBrightness = NULL;
     m_pBrightnessValueLabel = NULL;
@@ -642,6 +660,7 @@ void CSettings::CreateGUI()
     pTabMultiplayer = m_pTabMultiplayer = m_pTabs->CreateTab(_("Multiplayer"));
     pTabVideo = m_pTabVideo = m_pTabs->CreateTab(_("Video"));
     CGUITab* pTabNeon = m_pTabNeon = m_pTabs->CreateTab("Neon");
+    m_pTabSkyGfx = m_pTabs->CreateTab("SkyGfx");
     pTabPostFX = m_pTabPostFX = m_pTabs->CreateTab(_("PostFX"));
     pTabAudio = m_pTabAudio = m_pTabs->CreateTab(_("Audio"));
     pTabBinds = m_pTabBinds = m_pTabs->CreateTab(_("Binds"));
@@ -1632,6 +1651,8 @@ void CSettings::CreateGUI()
     m_pRebuildDistantLightsButton->AutoSize(nullptr, 24.0f, 12.0f);
     m_pRebuildDistantLightsButton->SetZOrderingEnabled(false);
 
+    CreateSkyGfxTabGUI(tabPanelSize);
+
     /**
      *  PostFX tab
      **/
@@ -2140,6 +2161,9 @@ void CSettings::CreateGUI()
     m_pDistantLightsDrawDistance->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnDistantLightsDrawDistanceChanged, this));
     m_pDistantLightsCoronaSize->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnDistantLightsCoronaSizeChanged, this));
     m_pRebuildDistantLightsButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnRebuildDistantLightsClick, this));
+    m_pCheckBoxSkyGfxEnabled->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
+    m_pCheckBoxSkyGfxColorFilter->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
+    m_pCheckBoxSkyGfxRadiosity->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
     m_pBrightness->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnBrightnessChanged, this));
     m_pBorderlessGamma->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnBorderlessGammaChanged, this));
     m_pBorderlessBrightness->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnBorderlessBrightnessChanged, this));
@@ -2576,6 +2600,198 @@ void CSettings::UpdateNeonTab()
     m_pDistantLightsCoronaSize->SetEnabled(distantLightsEnabled);
     m_pDistantLightsCoronaSizeValueLabel->SetEnabled(distantLightsEnabled);
     m_pRebuildDistantLightsButton->SetEnabled(distantLightsEnabled && m_bIsModLoaded);
+}
+
+void CSettings::CreateSkyGfxTabGUI(const CVector2D& tabPanelSize)
+{
+    CGUI*     manager = g_pCore->GetGUI();
+    CVector2D position(16.0f, 16.0f);
+
+    m_pSkyGfxIntegrationLabel = reinterpret_cast<CGUILabel*>(manager->CreateLabel(m_pTabSkyGfx, _("SkyGfx integration")));
+    m_pSkyGfxIntegrationLabel->SetPosition(position);
+    m_pSkyGfxIntegrationLabel->AutoSize(nullptr, 20.0f);
+    m_pSkyGfxIntegrationLabel->SetFont("default-bold-small");
+
+    position.fY += 30.0f;
+    m_pSkyGfxStatusLabel = reinterpret_cast<CGUILabel*>(manager->CreateLabel(m_pTabSkyGfx, ""));
+    m_pSkyGfxStatusLabel->SetPosition(position);
+    m_pSkyGfxStatusLabel->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 32.0f), 22.0f));
+
+    position.fY += 32.0f;
+    m_pCheckBoxSkyGfxEnabled = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("Enable SkyGfx"), true));
+    m_pCheckBoxSkyGfxEnabled->SetPosition(position);
+    m_pCheckBoxSkyGfxEnabled->AutoSize(nullptr, 20.0f);
+
+    position.fY += 42.0f;
+    m_pSkyGfxPlayStation2Label = reinterpret_cast<CGUILabel*>(manager->CreateLabel(m_pTabSkyGfx, _("PlayStation 2 rendering")));
+    m_pSkyGfxPlayStation2Label->SetPosition(position);
+    m_pSkyGfxPlayStation2Label->AutoSize(nullptr, 20.0f);
+    m_pSkyGfxPlayStation2Label->SetFont("default-bold-small");
+
+    position.fX += 18.0f;
+    position.fY += 32.0f;
+    m_pCheckBoxSkyGfxColorFilter = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("PS2 color filter"), true));
+    m_pCheckBoxSkyGfxColorFilter->SetPosition(position);
+    m_pCheckBoxSkyGfxColorFilter->AutoSize(nullptr, 20.0f);
+
+    position.fY += 28.0f;
+    m_pCheckBoxSkyGfxColorFilterBlur = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("Soft color-filter blur"), true));
+    m_pCheckBoxSkyGfxColorFilterBlur->SetPosition(position);
+    m_pCheckBoxSkyGfxColorFilterBlur->AutoSize(nullptr, 20.0f);
+
+    position.fY += 28.0f;
+    m_pCheckBoxSkyGfxPcTimecycle = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("Adapt PC timecycle color values"), true));
+    m_pCheckBoxSkyGfxPcTimecycle->SetPosition(position);
+    m_pCheckBoxSkyGfxPcTimecycle->AutoSize(nullptr, 20.0f);
+
+    position.fY += 28.0f;
+    m_pCheckBoxSkyGfxDepthBias = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("PS2 depth-bias precision"), true));
+    m_pCheckBoxSkyGfxDepthBias->SetPosition(position);
+    m_pCheckBoxSkyGfxDepthBias->AutoSize(nullptr, 20.0f);
+
+    position.fY += 28.0f;
+    m_pCheckBoxSkyGfxRadiosity = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("PS2 radiosity glow"), true));
+    m_pCheckBoxSkyGfxRadiosity->SetPosition(position);
+    m_pCheckBoxSkyGfxRadiosity->AutoSize(nullptr, 20.0f);
+
+    position.fY += 30.0f;
+    m_pSkyGfxRadiosityIntensityLabel = reinterpret_cast<CGUILabel*>(manager->CreateLabel(m_pTabSkyGfx, _("Glow intensity:")));
+    m_pSkyGfxRadiosityIntensityLabel->SetPosition(position);
+    m_pSkyGfxRadiosityIntensityLabel->AutoSize();
+    m_pSkyGfxRadiosityIntensityCombo = reinterpret_cast<CGUIComboBox*>(manager->CreateComboBox(m_pTabSkyGfx, ""));
+    m_pSkyGfxRadiosityIntensityCombo->SetPosition(CVector2D(position.fX + 190.0f, position.fY - 1.0f));
+    m_pSkyGfxRadiosityIntensityCombo->SetSize(CVector2D(135.0f, 110.0f));
+    m_pSkyGfxRadiosityIntensityCombo->AddItem(_("Soft (24)"))->SetData((void*)24);
+    m_pSkyGfxRadiosityIntensityCombo->AddItem(_("PS2 default (35)"))->SetData((void*)35);
+    m_pSkyGfxRadiosityIntensityCombo->AddItem(_("Strong (48)"))->SetData((void*)48);
+    m_pSkyGfxRadiosityIntensityCombo->AddItem(_("Very strong (64)"))->SetData((void*)64);
+    m_pSkyGfxRadiosityIntensityCombo->SetReadOnly(true);
+
+    position.fY += 30.0f;
+    m_pSkyGfxRadiosityFilterPassesLabel = reinterpret_cast<CGUILabel*>(manager->CreateLabel(m_pTabSkyGfx, _("Blur passes:")));
+    m_pSkyGfxRadiosityFilterPassesLabel->SetPosition(position);
+    m_pSkyGfxRadiosityFilterPassesLabel->AutoSize();
+    m_pSkyGfxRadiosityFilterPassesCombo = reinterpret_cast<CGUIComboBox*>(manager->CreateComboBox(m_pTabSkyGfx, ""));
+    m_pSkyGfxRadiosityFilterPassesCombo->SetPosition(CVector2D(position.fX + 190.0f, position.fY - 1.0f));
+    m_pSkyGfxRadiosityFilterPassesCombo->SetSize(CVector2D(80.0f, 100.0f));
+    for (int passes = 1; passes <= 4; ++passes)
+        m_pSkyGfxRadiosityFilterPassesCombo->AddItem(SString("%d", passes))->SetData((void*)passes);
+    m_pSkyGfxRadiosityFilterPassesCombo->SetReadOnly(true);
+
+    position.fY += 30.0f;
+    m_pSkyGfxRadiosityRenderPassesLabel = reinterpret_cast<CGUILabel*>(manager->CreateLabel(m_pTabSkyGfx, _("Composite passes:")));
+    m_pSkyGfxRadiosityRenderPassesLabel->SetPosition(position);
+    m_pSkyGfxRadiosityRenderPassesLabel->AutoSize();
+    m_pSkyGfxRadiosityRenderPassesCombo = reinterpret_cast<CGUIComboBox*>(manager->CreateComboBox(m_pTabSkyGfx, ""));
+    m_pSkyGfxRadiosityRenderPassesCombo->SetPosition(CVector2D(position.fX + 190.0f, position.fY - 1.0f));
+    m_pSkyGfxRadiosityRenderPassesCombo->SetSize(CVector2D(80.0f, 100.0f));
+    for (int passes = 1; passes <= 4; ++passes)
+        m_pSkyGfxRadiosityRenderPassesCombo->AddItem(SString("%d", passes))->SetData((void*)passes);
+    m_pSkyGfxRadiosityRenderPassesCombo->SetReadOnly(true);
+
+    position.fX -= 18.0f;
+    position.fY += 38.0f;
+    m_pSkyGfxDescriptionLabel = reinterpret_cast<CGUILabel*>(manager->CreateLabel(
+        m_pTabSkyGfx, _("Only effects already integrated with MTA are exposed here. Changes apply immediately after pressing OK; future rendering "
+                        "features will appear as their MTA-compatible ports become available.")));
+    m_pSkyGfxDescriptionLabel->SetPosition(position);
+    m_pSkyGfxDescriptionLabel->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 32.0f), 60.0f));
+    m_pSkyGfxDescriptionLabel->SetHorizontalAlign(CGUI_ALIGN_LEFT_WORDWRAP);
+}
+
+void CSettings::UpdateSkyGfxTab()
+{
+    const SkyGfx::CManager&         manager = SkyGfx::CManager::Get();
+    const SkyGfxMTAConfigV1&        config = manager.GetConfig();
+    const SkyGfx::IntegrationStatus status = manager.GetStatus();
+
+    m_pCheckBoxSkyGfxEnabled->SetSelected(config.enabled != 0);
+    m_pCheckBoxSkyGfxColorFilter->SetSelected(config.ps2ColorFilter != 0);
+    m_pCheckBoxSkyGfxColorFilterBlur->SetSelected(config.ps2ColorFilterBlur != 0);
+    m_pCheckBoxSkyGfxPcTimecycle->SetSelected(config.ps2ColorFilterPcTimecycle != 0);
+    m_pCheckBoxSkyGfxDepthBias->SetSelected(config.ps2DepthBias != 0);
+    m_pCheckBoxSkyGfxRadiosity->SetSelected(config.ps2Radiosity != 0);
+    m_pSkyGfxRadiosityFilterPassesCombo->SetSelectedItemByIndex(static_cast<int>(config.ps2RadiosityFilterPasses) - 1);
+    m_pSkyGfxRadiosityRenderPassesCombo->SetSelectedItemByIndex(static_cast<int>(config.ps2RadiosityRenderPasses) - 1);
+
+    constexpr std::uint32_t intensityValues[] = {24, 35, 48, 64};
+    int                     intensityIndex = 0;
+    std::uint32_t           nearestDistance = UINT32_MAX;
+    for (int index = 0; index < NUMELMS(intensityValues); ++index)
+    {
+        const std::uint32_t value = intensityValues[index];
+        const std::uint32_t distance = value > config.ps2RadiosityIntensity ? value - config.ps2RadiosityIntensity : config.ps2RadiosityIntensity - value;
+        if (distance < nearestDistance)
+        {
+            nearestDistance = distance;
+            intensityIndex = index;
+        }
+    }
+    m_pSkyGfxRadiosityIntensityCombo->SetSelectedItemByIndex(intensityIndex);
+
+    switch (status)
+    {
+        case SkyGfx::IntegrationStatus::Disabled:
+            m_pSkyGfxStatusLabel->SetText(_("Bridge status: Disabled"));
+            break;
+        case SkyGfx::IntegrationStatus::ModuleMissing:
+            m_pSkyGfxStatusLabel->SetText(_("Bridge status: skygfx_mta.dll was not found"));
+            break;
+        case SkyGfx::IntegrationStatus::ApiMismatch:
+            m_pSkyGfxStatusLabel->SetText(_("Bridge status: Incompatible API version"));
+            break;
+        case SkyGfx::IntegrationStatus::BridgeReady:
+            m_pSkyGfxStatusLabel->SetText(_("Bridge status: Active"));
+            break;
+        case SkyGfx::IntegrationStatus::Failed:
+            m_pSkyGfxStatusLabel->SetText(_("Bridge status: Initialization failed"));
+            break;
+    }
+
+    UpdateSkyGfxControls();
+}
+
+void CSettings::UpdateSkyGfxControls()
+{
+    const bool enabled = m_pCheckBoxSkyGfxEnabled->GetSelected();
+    const bool colorFilterEnabled = enabled && m_pCheckBoxSkyGfxColorFilter->GetSelected();
+    const bool radiosityEnabled = enabled && m_pCheckBoxSkyGfxRadiosity->GetSelected();
+
+    m_pSkyGfxPlayStation2Label->SetEnabled(enabled);
+    m_pCheckBoxSkyGfxColorFilter->SetEnabled(enabled);
+    m_pCheckBoxSkyGfxColorFilterBlur->SetEnabled(colorFilterEnabled);
+    m_pCheckBoxSkyGfxPcTimecycle->SetEnabled(colorFilterEnabled);
+    m_pCheckBoxSkyGfxDepthBias->SetEnabled(enabled);
+    m_pCheckBoxSkyGfxRadiosity->SetEnabled(enabled);
+    m_pSkyGfxRadiosityIntensityLabel->SetEnabled(radiosityEnabled);
+    m_pSkyGfxRadiosityIntensityCombo->SetEnabled(radiosityEnabled);
+    m_pSkyGfxRadiosityFilterPassesLabel->SetEnabled(radiosityEnabled);
+    m_pSkyGfxRadiosityFilterPassesCombo->SetEnabled(radiosityEnabled);
+    m_pSkyGfxRadiosityRenderPassesLabel->SetEnabled(radiosityEnabled);
+    m_pSkyGfxRadiosityRenderPassesCombo->SetEnabled(radiosityEnabled);
+}
+
+void CSettings::SaveSkyGfxSettings()
+{
+    SkyGfxMTAConfigV1 config = SkyGfx::CManager::Get().GetConfig();
+    config.enabled = m_pCheckBoxSkyGfxEnabled->GetSelected() ? 1u : 0u;
+    config.preset = SkyGfxMTAPreset::PlayStation2;
+    config.ps2ColorFilter = m_pCheckBoxSkyGfxColorFilter->GetSelected() ? 1u : 0u;
+    config.ps2ColorFilterBlur = m_pCheckBoxSkyGfxColorFilterBlur->GetSelected() ? 1u : 0u;
+    config.ps2ColorFilterPcTimecycle = m_pCheckBoxSkyGfxPcTimecycle->GetSelected() ? 1u : 0u;
+    config.ps2DepthBias = m_pCheckBoxSkyGfxDepthBias->GetSelected() ? 1u : 0u;
+    config.ps2Radiosity = m_pCheckBoxSkyGfxRadiosity->GetSelected() ? 1u : 0u;
+    if (CGUIListItem* selected = m_pSkyGfxRadiosityIntensityCombo->GetSelectedItem())
+        config.ps2RadiosityIntensity = static_cast<std::uint32_t>((int)selected->GetData());
+    if (CGUIListItem* selected = m_pSkyGfxRadiosityFilterPassesCombo->GetSelectedItem())
+        config.ps2RadiosityFilterPasses = static_cast<std::uint32_t>((int)selected->GetData());
+    if (CGUIListItem* selected = m_pSkyGfxRadiosityRenderPassesCombo->GetSelectedItem())
+        config.ps2RadiosityRenderPasses = static_cast<std::uint32_t>((int)selected->GetData());
+
+    // The manager owns both persistence and the live hook transition, keeping
+    // GUI code away from DLL lifetime and executable patching details.
+    if (!SkyGfx::CManager::Get().SetConfig(config, true))
+        WriteDebugEvent("SkyGfx: settings could not activate the optional bridge");
 }
 
 struct ResolutionData
@@ -4239,6 +4455,7 @@ void CSettings::LoadData()
 
     UpdateVideoTab();
     UpdateNeonTab();
+    UpdateSkyGfxTab();
 
     // Locale
     SString strLocale;
@@ -4479,6 +4696,8 @@ void CSettings::SaveData()
 {
     std::string    strVar;
     CGameSettings* gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
+
+    SaveSkyGfxSettings();
 
     // Set and save our settings
     if (CModManager::GetSingleton().IsLoaded())
@@ -5557,6 +5776,12 @@ bool CSettings::OnRebuildDistantLightsClick(CGUIElement* pElement)
         return true;
 
     CCore::GetSingleton().GetGame()->GetCoronas()->RebuildDistantLights();
+    return true;
+}
+
+bool CSettings::OnSkyGfxOptionClick(CGUIElement* pElement)
+{
+    UpdateSkyGfxControls();
     return true;
 }
 

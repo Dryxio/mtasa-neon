@@ -132,6 +132,7 @@ protected:
     CGUITab*         m_pTabMultiplayer;
     CGUITab*         m_pTabVideo;
     CGUITab*         m_pTabNeon;
+    CGUITab*         m_pTabSkyGfx;
     CGUITab*         m_pTabInterface;
     CGUITab*         m_pTabBrowser;
     CGUITab*         m_pTabPostFX;
@@ -200,6 +201,22 @@ protected:
     CGUILabel*     m_pDistantLightsCoronaSizeValueLabel;
     CGUILabel*     m_pDistantLightsDescriptionLabel;
     CGUIButton*    m_pRebuildDistantLightsButton;
+    CGUILabel*     m_pSkyGfxIntegrationLabel;
+    CGUILabel*     m_pSkyGfxStatusLabel;
+    CGUICheckBox*  m_pCheckBoxSkyGfxEnabled;
+    CGUILabel*     m_pSkyGfxPlayStation2Label;
+    CGUICheckBox*  m_pCheckBoxSkyGfxColorFilter;
+    CGUICheckBox*  m_pCheckBoxSkyGfxColorFilterBlur;
+    CGUICheckBox*  m_pCheckBoxSkyGfxPcTimecycle;
+    CGUICheckBox*  m_pCheckBoxSkyGfxDepthBias;
+    CGUICheckBox*  m_pCheckBoxSkyGfxRadiosity;
+    CGUILabel*     m_pSkyGfxRadiosityIntensityLabel;
+    CGUIComboBox*  m_pSkyGfxRadiosityIntensityCombo;
+    CGUILabel*     m_pSkyGfxRadiosityFilterPassesLabel;
+    CGUIComboBox*  m_pSkyGfxRadiosityFilterPassesCombo;
+    CGUILabel*     m_pSkyGfxRadiosityRenderPassesLabel;
+    CGUIComboBox*  m_pSkyGfxRadiosityRenderPassesCombo;
+    CGUILabel*     m_pSkyGfxDescriptionLabel;
     CGUILabel*     m_pBrightnessLabel;
     CGUIScrollBar* m_pBrightness;
     CGUILabel*     m_pBrightnessValueLabel;
@@ -409,6 +426,7 @@ protected:
     bool OnDistantLightsDrawDistanceChanged(CGUIElement* pElement);
     bool OnDistantLightsCoronaSizeChanged(CGUIElement* pElement);
     bool OnRebuildDistantLightsClick(CGUIElement* pElement);
+    bool OnSkyGfxOptionClick(CGUIElement* pElement);
     bool OnBrightnessChanged(CGUIElement* pElement);
     bool OnBorderlessGammaChanged(CGUIElement* pElement);
     bool OnBorderlessBrightnessChanged(CGUIElement* pElement);
@@ -478,7 +496,11 @@ protected:
 
 private:
     void CreateInterfaceTabGUI();
+    void CreateSkyGfxTabGUI(const CVector2D& tabPanelSize);
     void UpdateChatColorPreview(eChatColorType eType);
+    void UpdateSkyGfxTab();
+    void UpdateSkyGfxControls();
+    void SaveSkyGfxSettings();
 
     void ProcessKeyBinds();
     void ProcessJoypad();

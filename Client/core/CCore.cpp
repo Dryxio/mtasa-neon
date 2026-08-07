@@ -38,6 +38,7 @@
 #include "CSteamClient.h"
 #include "CCrashDumpWriter.h"
 #include "FastFailCrashHandler/WerCrashHandler.h"
+#include "SkyGfx/CSkyGfxManager.h"
 
 using SharedUtil::CalcMTASAPath;
 using namespace std;
@@ -269,6 +270,7 @@ CCore::~CCore()
 {
     WriteDebugEvent("CCore::~CCore");
     NativeWorldAuthorizationStore::CancelActiveStartup();
+    SkyGfx::CManager::Get().Shutdown();
 
     if constexpr (bFreezeWatchdogEnabled)
         StopWatchdogThread();
@@ -1740,6 +1742,7 @@ void CCore::ApplyHooks2()
             CCore::GetSingleton().CreateMultiplayer();
             CCore::GetSingleton().CreateXML();
             CCore::GetSingleton().CreateGUI();
+            SkyGfx::CManager::Get().Initialize();
         }
     }
 }
