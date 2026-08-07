@@ -330,6 +330,35 @@ every frame. The stock 20363-light workload remained smooth in the runtime test
 below, so frame slicing is a future optimization for larger custom catalogues
 rather than a correctness requirement for the San Andreas map.
 
+### Project2DFX remaining roadmap
+
+The next parity work, in priority order, is:
+
+1. Audit corona size and perceived intensity at matched camera positions,
+   resolutions, times, ranges, and radius multipliers. Isolate geometric size,
+   additive saturation, far-alpha boost, radius growth, the native-to-distant
+   transition, and overlapping multi-corona lamps before introducing any
+   model-specific exception. Candidate player controls are a global alpha
+   multiplier, a configurable far-alpha boost cap, and a radius-growth toggle
+   or strength.
+2. Render the recorded searchlight cones, which account for approximately 6500
+   map instances.
+3. Port Project2DFX's pool of up to 2000 animated distant-car headlight and
+   taillight impostors.
+4. Add the short-range local point lights emitted by eligible definitions.
+5. Add optional static LOD shadows; Project2DFX supports these but disables
+   them in its shipped San Andreas configuration.
+6. If larger custom catalogues make CPU time measurable, amortize updates for
+   lights beyond 260 units across four frames as Project2DFX does.
+7. Revisit native traffic-controller state and the remaining independent
+   lighting modules, including extended vehicle or pedestrian shadows.
+8. Redesign extended world draw distance around an optional Project2DFX-style
+   adaptive mode: expose a target frame rate, minimum and maximum far-clip
+   multipliers, separate distances for LOD objects, vegetation, generic and
+   timed objects, and optional LOD preloading. Keep Neon's current fixed
+   absolute-distance mode as an explicit high-load advanced override, and keep
+   fog distance independent.
+
 The same Neon settings tab also exposes an independent extended-world draw
 distance preference. It raises GTA's far clip and stock-world model LOD
 distances together, while leaving fog distance untouched. Player preferences
@@ -338,6 +367,18 @@ authoritative until the normal MTA reset path clears its override, after which
 Neon reapplies the saved player baseline. This prevents a resource stop,
 reconnect, or individual `engineResetModelLODDistance` call from accidentally
 discarding the player's choice.
+
+This preference is not a direct port of Project2DFX's draw-distance system.
+Neon applies one fixed absolute distance to the far clip and to every eligible
+stock-world model whose authored LOD distance is lower. Project2DFX instead
+multiplies the current timecycle far clip, optionally adapts that multiplier to
+a target frame rate and camera height, and applies separate IDE values to LOD
+objects, generic objects, timed objects, vegetation, and other categories. Its
+shipped San Andreas configuration uses a dynamic 2x-to-4x far-clip multiplier,
+1300 units for LOD objects, 800 for vegetation, 300 for generic objects, and
+preloads LOD models. Consequently, Neon's 5000-unit option is substantially
+more aggressive than the default Project2DFX profile and should be treated as
+a high-load fixed override rather than an equivalent preset.
 
 ### Project2DFX phase-1 validation
 
