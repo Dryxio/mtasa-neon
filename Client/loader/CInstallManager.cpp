@@ -743,7 +743,7 @@ SString CInstallManager::_CheckForWerCrash()
             {
                 SetApplicationSetting("diagnostics", "last-dump-save", renamedDumpPath);
                 SetApplicationSetting("diagnostics", "last-dump-complete", "1");
-                WriteDebugEvent(SString("Failfast crash dump queued for upload: %s", ExtractFilename(renamedDumpPath).c_str()));
+                WriteDebugEvent(SString("Failfast crash dump saved for diagnostics: %s", ExtractFilename(renamedDumpPath).c_str()));
             }
 
             FILE* pFile = File::Fopen(CalcMTASAPath("mta\\core.log"), "a");
@@ -899,7 +899,7 @@ SString CInstallManager::_CheckForWerCrash()
                 {
                     SetApplicationSetting("diagnostics", "last-dump-save", renamedDumpPath);
                     SetApplicationSetting("diagnostics", "last-dump-complete", "1");
-                    WriteDebugEvent(SString("WER dump (direct) queued for upload: %s", ExtractFilename(renamedDumpPath).c_str()));
+                    WriteDebugEvent(SString("WER dump (direct) saved for diagnostics: %s", ExtractFilename(renamedDumpPath).c_str()));
                 }
 
                 FILE* pFile = File::Fopen(CalcMTASAPath("mta\\core.log"), "a");
@@ -964,7 +964,7 @@ SString CInstallManager::_CheckForWerCrash()
     {
         SetApplicationSetting("diagnostics", "last-dump-save", dumpResult.path);
         SetApplicationSetting("diagnostics", "last-dump-complete", "1");
-        WriteDebugEvent(SString("WER crash dump queued for upload: %s", ExtractFilename(dumpResult.path).c_str()));
+        WriteDebugEvent(SString("WER crash dump saved for diagnostics: %s", ExtractFilename(dumpResult.path).c_str()));
     }
 
     if (!dumpResult.sourceFilename.empty())

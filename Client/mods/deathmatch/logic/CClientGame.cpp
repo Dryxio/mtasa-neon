@@ -85,83 +85,6 @@ CVector             g_vecBulletFireEndPosition;
 
 static constexpr long long TIME_DISCORD_UPDATE_RATE = 15000;
 
-namespace
-{
-    struct SNativePoolHeader
-    {
-        void*         objects;
-        std::uint8_t* flags;
-        int           capacity;
-        int           firstFree;
-    };
-
-    struct SNativePoolHighWater
-    {
-        const char*    name;
-        std::uintptr_t pointerAddress;
-        int            expectedCapacity;
-        int            peakOccupied{};
-        int            peakHighestSlot{-1};
-        bool           sampled{};
-    };
-
-    void SampleNativeStorePoolHighWater()
-    {
-        static std::array<SNativePoolHighWater, 6> pools = {
-            SNativePoolHighWater{"txd", 0x00C8800C, 8000},       SNativePoolHighWater{"col", 0x00965560, 512},
-            SNativePoolHighWater{"ipl", 0x008E3FB0, 1024},       SNativePoolHighWater{"building", 0x00B74498, 32000},
-            SNativePoolHighWater{"colModel", 0x00B744A4, 30000}, SNativePoolHighWater{"quadTreeNode", 0x00B745BC, 2048},
-        };
-        static unsigned long long lastSample{};
-        static bool               unavailableLogged{};
-
-        const unsigned long long now = GetTickCount64_();
-        if (now - lastSample < 1000)
-            return;
-        lastSample = now;
-
-        bool    changed = false;
-        SString line = "[NativeStorePools] state=sample";
-        for (SNativePoolHighWater& metric : pools)
-        {
-            const auto* pool = *reinterpret_cast<SNativePoolHeader* const*>(metric.pointerAddress);
-            if (!pool || !pool->objects || !pool->flags || pool->capacity != metric.expectedCapacity)
-            {
-                if (!unavailableLogged)
-                {
-                    WriteDebugEvent(SString("[NativeStorePools] state=unavailable name=%s actualCapacity=%d expectedCapacity=%d", metric.name,
-                                            pool ? pool->capacity : -1, metric.expectedCapacity));
-                    unavailableLogged = true;
-                }
-                return;
-            }
-
-            int occupied = 0;
-            int highestSlot = -1;
-            for (int slot = 0; slot < pool->capacity; ++slot)
-            {
-                // MSVC lays GTA's seven-bit ID first and bEmpty in the high
-                // bit, matching tPoolObjectFlags in game_sa.
-                if ((pool->flags[slot] & 0x80) == 0)
-                {
-                    ++occupied;
-                    highestSlot = slot;
-                }
-            }
-
-            if (!metric.sampled || occupied > metric.peakOccupied || highestSlot > metric.peakHighestSlot)
-                changed = true;
-            metric.sampled = true;
-            metric.peakOccupied = std::max(metric.peakOccupied, occupied);
-            metric.peakHighestSlot = std::max(metric.peakHighestSlot, highestSlot);
-            line += SString(" %s=%d/%d peak=%d highSlot=%d peakHighSlot=%d", metric.name, occupied, pool->capacity, metric.peakOccupied, highestSlot,
-                            metric.peakHighestSlot);
-        }
-        if (changed)
-            WriteDebugEvent(line);
-    }
-}  // namespace
-
 CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
 {
     // Init the global var with ourself
@@ -1256,9 +1179,6 @@ void CClientGame::DoPulses()
     TIMING_CHECKPOINT("+CClientGame::DoPulses");
 
     m_BuiltCollisionMapThisFrame = false;
-
-    if (m_pManager->IsGameLoaded())
-        SampleNativeStorePoolHighWater();
 
     if (m_bIsPlayingBack && m_bFirstPlaybackFrame && m_pManager->IsGameLoaded())
     {

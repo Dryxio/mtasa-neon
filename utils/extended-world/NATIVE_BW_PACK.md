@@ -443,9 +443,9 @@ static grammar.
 
 Bullworth's compiled policy now requires the runtime pools to be exactly
 8,000 TXD, 512 COL and 1,024 IPL entries while retaining the reviewed stock
-occupancy profiles. `[NativeStorePools]` supplies numerical current/peak and
-highest-slot telemetry for those stores plus buildings, ColModels and
-QuadTreeNodes.
+occupancy profiles. The development-only high-water sampler that supplied
+numerical occupancy evidence was removed before the public release so normal
+gameplay performs no periodic pool scan or telemetry logging.
 
 The current Bullworth plan stays below slot 255 for both COL and IPL. The
 separate opt-in startup harness, enabled only by

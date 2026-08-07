@@ -53,6 +53,16 @@ namespace
     inline constexpr std::wstring_view DEFAULT_ERROR_MSG = L"An error occurred. No details available.";
     inline constexpr size_t            MAX_CRASH_MESSAGE_LENGTH = 65536;
     static_assert(ERROR_MSG_PREFIX.size() <= INT_MAX, "ERROR_MSG_PREFIX too long for int cast");
+
+    constexpr const char* ResolveCrashDumpUploadSetting(bool requested)
+    {
+#ifdef MTA_NEON
+        // No Neon dialog path may restore stale upstream upload consent.
+        return "no";
+#else
+        return requested ? "yes" : "no";
+#endif
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -83,8 +93,13 @@ const SDialogItemInfo g_ProgressDialogItems[] = {
 const SDialogItemInfo g_CrashedDialogItems[] = {
     {0, 0, _td("MTA: San Andreas has encountered a problem")},
     {IDC_CRASH_HEAD, 0, _td("Crash information")},
+#ifdef MTA_NEON
+    {IDC_SEND_DUMP_CHECK, 0, ""},
+    {IDC_SEND_DESC_STATIC, 0, _td("Crash details are saved locally and are not uploaded.")},
+#else
     {IDC_SEND_DUMP_CHECK, 0, _td("Tick the check box to send this crash info to MTA devs using the 'internet'")},
     {IDC_SEND_DESC_STATIC, 0, _td("Doing so will increase the chance of this crash being fixed.")},
+#endif
     {IDC_RESTART_QUESTION_STATIC, 1, _td("Do you want to restart MTA: San Andreas ?")},
     {IDCANCEL, 0, dialogStringsNo},
     {IDOK, 0, dialogStringsYes},
@@ -371,7 +386,7 @@ int CALLBACK DialogProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             LRESULT res = SendMessageA(hwndCheck, BM_GETCHECK, 0, 0);
                             try
                             {
-                                SetApplicationSetting("diagnostics", "send-dumps", (res == BST_CHECKED) ? "yes" : "no");
+                                SetApplicationSetting("diagnostics", "send-dumps", ResolveCrashDumpUploadSetting(res == BST_CHECKED));
                             }
                             catch (...)
                             {
@@ -389,7 +404,7 @@ int CALLBACK DialogProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             LRESULT res = SendMessageA(hwndCheck, BM_GETCHECK, 0, 0);
                             try
                             {
-                                SetApplicationSetting("diagnostics", "send-dumps", (res == BST_CHECKED) ? "yes" : "no");
+                                SetApplicationSetting("diagnostics", "send-dumps", ResolveCrashDumpUploadSetting(res == BST_CHECKED));
                             }
                             catch (...)
                             {
@@ -626,7 +641,7 @@ void StopPseudoProgress()
                 {
                     try
                     {
-                        SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), "yes"sv.data());
+                        SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), ResolveCrashDumpUploadSetting(true));
                     }
                     catch (...)
                     {
@@ -691,6 +706,13 @@ void StopPseudoProgress()
             {
                 try
                 {
+#ifdef MTA_NEON
+                    // Upload is unavailable in Neon, so do not present an
+                    // inert consent control or retain an affirmative choice.
+                    SendDlgItemMessage(hwndCrashedDialog, IDC_SEND_DUMP_CHECK, BM_SETCHECK, BST_UNCHECKED, 0);
+                    ShowWindow(hwndCheckbox, SW_HIDE);
+                    SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), "no"sv.data());
+#else
                     const auto settingValue = std::invoke(
                         []() noexcept -> SString
                         {
@@ -700,13 +722,14 @@ void StopPseudoProgress()
                             }
                             catch (...)
                             {
-                                return "yes";
+                                return ResolveCrashDumpUploadSetting(true);
                             }
                         });
 
                     const std::array<UINT, 2> checkStates = {BST_UNCHECKED, BST_CHECKED};
                     const auto                shouldCheck = !std::empty(settingValue) && settingValue != "no"sv.data();
                     SendDlgItemMessage(hwndCrashedDialog, IDC_SEND_DUMP_CHECK, BM_SETCHECK, checkStates[shouldCheck], 0);
+#endif
                 }
                 catch (...)
                 {
@@ -737,7 +760,7 @@ void StopPseudoProgress()
         {
             try
             {
-                SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), "yes"sv.data());
+                SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), ResolveCrashDumpUploadSetting(true));
             }
             catch (...)
             {
@@ -759,7 +782,7 @@ void StopPseudoProgress()
         {
             try
             {
-                SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), "yes"sv.data());
+                SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), ResolveCrashDumpUploadSetting(true));
             }
             catch (...)
             {
@@ -849,7 +872,7 @@ void StopPseudoProgress()
     {
         try
         {
-            SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), "yes"sv.data());
+            SetApplicationSetting("diagnostics"sv.data(), "send-dumps"sv.data(), ResolveCrashDumpUploadSetting(true));
         }
         catch (...)
         {

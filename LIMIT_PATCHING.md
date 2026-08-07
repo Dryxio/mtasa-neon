@@ -1358,13 +1358,12 @@ or QuadTree allocation immediates now refuse any value other than the installed
 transactional capacity. Building growth is capped at 32,000 because native IPL
 building range endpoints remain signed 16-bit.
 
-`[NativeStorePools]` samples the TXD, COL, IPL, building, ColModel and
-QuadTreeNode pools once per second and logs current occupancy, capacity, peak
-occupancy, highest occupied slot and peak highest slot whenever a high-water
-mark advances. The off-game validator proves 1,464 disjoint native
-writes (1,427 FileID plus 37 store/field/cache/cargen sites), exact executable bytes,
-the final boundary layout and the absence of raw MTA reads of the extended
-byte fields.
+The pool high-water sampler used during capacity validation is intentionally
+absent from public builds; it no longer scans or logs the native pools during
+gameplay. The off-game validator proves 1,464 disjoint native writes (1,427
+FileID plus 37 store/field/cache/cargen sites), exact executable bytes, the
+final boundary layout and the absence of raw MTA reads of the extended byte
+fields.
 
 Bullworth is a lifecycle and compatibility gate, not a proof of the new upper
 slot boundaries: its current plan remains below COL/IPL slot 255. The opt-in

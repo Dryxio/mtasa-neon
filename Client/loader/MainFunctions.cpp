@@ -147,7 +147,7 @@ using WerDumpResult = WerCrash::WerDumpResult;
     {
         SetApplicationSetting("diagnostics", "last-dump-save", result.path);
         SetApplicationSetting("diagnostics", "last-dump-complete", "1");
-        WriteDebugEvent(SString("WER crash dump queued for upload: %s", ExtractFilename(result.path).c_str()));
+        WriteDebugEvent(SString("WER crash dump saved for diagnostics: %s", ExtractFilename(result.path).c_str()));
     }
 
     if (!result.sourceFilename.empty())

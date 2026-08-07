@@ -13,9 +13,11 @@
 
 #include <game/CWeaponStatManager.h>
 
-#include "../game_sa/CColModelSA.h"
-#include "../game_sa/CColPointSA.h"
-#include "../game_sa/CPhysicalSA.h"
+#ifdef MTA_DEBUG
+    #include "../game_sa/CColModelSA.h"
+    #include "../game_sa/CColPointSA.h"
+    #include "../game_sa/CPhysicalSA.h"
+#endif
 
 extern CMultiplayerSA* pMultiplayer;
 extern CCoreInterface* g_pCore;
@@ -50,6 +52,9 @@ extern PostContextSwitchHandler* m_pPostContextSwitchHandler;
 
 namespace
 {
+#ifdef MTA_DEBUG
+    // Dense collision attribution is intentionally absent from public binaries:
+    // its extra hooks and per-frame containers exist only for developer builds.
     enum class EEntityPerformanceType : uint8
     {
         NONE,
@@ -248,6 +253,7 @@ namespace
                     stats.broadPhaseSpherePasses, stats.processEntityCalls, static_cast<unsigned long long>(stats.processEntityTimeUs), stats.contactsProduced,
                     stats.processColModelsCalls, static_cast<unsigned long long>(stats.processColModelsTimeUs), stats.repeatedProcessColModelsQueries));
     }
+#endif
 
     void BeginPlayerPedProcessControlTiming()
     {
@@ -257,14 +263,22 @@ namespace
     {
         TIMING_CHECKPOINT("-GTA_PlayerPedProcessControl");
     }
+#ifdef MTA_DEBUG
     void BeginPlayerPedProcessCollisionTiming(CPhysicalSAInterface* pPhysical)
+#else
+    void BeginPlayerPedProcessCollisionTiming()
+#endif
     {
         TIMING_CHECKPOINT("+GTA_PlayerPedProcessCollision");
+#ifdef MTA_DEBUG
         BeginCollisionAttempt(pPhysical, EEntityPerformanceType::PED);
+#endif
     }
     void EndPlayerPedProcessCollisionTiming()
     {
+#ifdef MTA_DEBUG
         EndCollisionAttempt();
+#endif
         TIMING_CHECKPOINT("-GTA_PlayerPedProcessCollision");
     }
     void BeginPlayerPedPreRenderTiming()
@@ -283,14 +297,22 @@ namespace
     {
         TIMING_CHECKPOINT("-GTA_AutomobileProcessControl");
     }
+#ifdef MTA_DEBUG
     void BeginAutomobileProcessCollisionTiming(CPhysicalSAInterface* pPhysical)
+#else
+    void BeginAutomobileProcessCollisionTiming()
+#endif
     {
         TIMING_CHECKPOINT("+GTA_AutomobileProcessCollision");
+#ifdef MTA_DEBUG
         BeginCollisionAttempt(pPhysical, EEntityPerformanceType::VEHICLE);
+#endif
     }
     void EndAutomobileProcessCollisionTiming()
     {
+#ifdef MTA_DEBUG
         EndCollisionAttempt();
+#endif
         TIMING_CHECKPOINT("-GTA_AutomobileProcessCollision");
     }
     void BeginAutomobilePreRenderTiming()
@@ -302,6 +324,7 @@ namespace
         TIMING_CHECKPOINT("-GTA_AutomobilePreRender");
     }
 
+#ifdef MTA_DEBUG
     int32 __fastcall ProcessEntityCollisionWithTiming(CPhysicalSAInterface* pPhysical, void*, CEntitySAInterface* pEntity, CColPointSAInterface* pColPoints,
                                                       EEntityPerformanceType type, DWORD functionAddress)
     {
@@ -488,6 +511,7 @@ namespace
         pStats->processColModelsTimeUs += GetTimeUs() - startUs;
         return contacts;
     }
+#endif
 
     // These virtual hooks aggregate native work by entity category in the
     // opt-in timing log. Calling the verified GTA functions directly preserves
@@ -500,9 +524,13 @@ namespace
         __asm
         {
             pushad
+#ifdef MTA_DEBUG
             push    ecx
+#endif
             call    BeginPlayerPedProcessCollisionTiming
+#ifdef MTA_DEBUG
             add     esp, 4
+#endif
             popad
             mov     eax, FUNC_CPlayerPed__ProcessCollision
             call    eax
@@ -542,9 +570,13 @@ namespace
         __asm
         {
             pushad
+#ifdef MTA_DEBUG
             push    ecx
+#endif
             call    BeginAutomobileProcessCollisionTiming
+#ifdef MTA_DEBUG
             add     esp, 4
+#endif
             popad
             mov     eax, FUNC_CAutomobile__ProcessCollision
             call    eax
@@ -604,6 +636,7 @@ namespace
     }
 }
 
+#ifdef MTA_DEBUG
 void EntityPerformanceBeginWorldFrame()
 {
     g_entityPerformanceFrameActive = IS_TIMING_CHECKPOINTS();
@@ -653,6 +686,7 @@ void EntityPerformanceRecordBroadPhaseCandidate(CPhysicalSAInterface* pPhysical,
     if (SEntityPerformanceStats* pStats = GetEntityPerformanceStats(g_activeEntityPerformanceType))
         pStats->broadPhaseEntries++;
 }
+#endif
 
 VOID InitKeysyncHooks()
 {
@@ -672,6 +706,7 @@ VOID InitKeysyncHooks()
     HookInstallMethod(VTBL_CPlayerPed__PreRender, (DWORD)HOOK_CPlayerPed__PreRenderTiming);
     HookInstallMethod(VTBL_CAutomobile__ProcessCollision, (DWORD)HOOK_CAutomobile__ProcessCollisionTiming);
     HookInstallMethod(VTBL_CAutomobile__PreRender, (DWORD)HOOK_CAutomobile__PreRenderTiming);
+#ifdef MTA_DEBUG
     HookInstallMethod(0x86D198, (DWORD)HOOK_CPlayerPed__ProcessShiftTiming);
     HookInstallMethod(0x871150, (DWORD)HOOK_CAutomobile__ProcessShiftTiming);
     HookInstallMethod(0x86D1A8, (DWORD)HOOK_CPlayerPed__CollisionStepsTiming);
@@ -687,6 +722,7 @@ VOID InitKeysyncHooks()
     HookInstallCall(0x546D56, (DWORD)HOOK_CCollision__ProcessColModelsTiming);
     HookInstallCall(0x5E2837, (DWORD)HOOK_CCollision__ProcessColModelsTiming);
     HookInstallCall(0x5E3127, (DWORD)HOOK_CCollision__ProcessColModelsTiming);
+#endif
 
     // not strictly for keysync, to make CPlayerPed::GetPlayerInfoForThisPlayerPed always return the local playerinfo
     // 00609FF2     EB 1F          JMP SHORT gta_sa_u.0060A013

@@ -60,8 +60,8 @@ matrix and does not replace the 33-stage regression profile.
 six-stage collision attribution matrix with homogeneous and varied models,
 respectively. They include separated and touching populations, deep contact,
 the collision-off control, and near moving peds. Run both with `timingdebug on`
-after a build containing the internal collision counters; keep their model sets
-separate so streaming and warm-up state do not contaminate the comparison.
+from a Debug build containing the internal collision counters; keep their model
+sets separate so streaming and warm-up state do not contaminate the comparison.
 
 `hidden` keeps the entities near the camera but points the camera away. This
 preserves near-entity simulation while removing most entity rendering. `far`
@@ -144,8 +144,9 @@ mode; use a run with timing disabled for authoritative FPS distributions. Keep
 the client in the foreground so a long Present gap is not aggregated as one
 artificial multi-second frame.
 
-Builds with deep collision instrumentation also write one `Entity collision`
-detail line per category and snapshot. It includes unique entities, retries,
+Debug builds with deep collision instrumentation also write one
+`Entity collision` detail line per category and snapshot. It includes unique
+entities, retries,
 unsafe counts after attempts one through six, sector and shift work,
 broad-phase candidates, `ProcessEntityCollision`, returned contacts,
 `ProcessColModels`, and exact repeated query counts. These fields are

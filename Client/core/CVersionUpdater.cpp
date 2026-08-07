@@ -549,6 +549,10 @@ void CVersionUpdater::DoPulse()
         }
     }
 
+#ifndef MTA_NEON
+    // Neon keeps crash artifacts and diagnostics local until the fork owns an
+    // explicit-consent upload service. Do not send them to upstream MTA merely
+    // because the updater received upstream endpoints in its master config.
     //
     // Should send previous crash dump?
     //
@@ -566,6 +570,7 @@ void CVersionUpdater::DoPulse()
         m_bSentReportLog = true;
         RunProgram(EUpdaterProgramType::SendReportLog);
     }
+#endif
 
     //
     // Give updater thread some time if it is doing something
@@ -1415,6 +1420,12 @@ error1:
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::Program_SendCrashDump()
 {
+#ifdef MTA_NEON
+    // Keep this worker entry point inert as a second boundary in case a future
+    // caller bypasses the automatic scheduling guard in DoPulse.
+    return;
+#else
+
     bool bUploadSuccess = false;  // Declare before any goto targets
 
     _ShouldSendCrashDump();  // Have we already sent a matching dump?
@@ -1491,6 +1502,7 @@ end:
         }
     }
     return;
+#endif
 }
 
 ///////////////////////////////////////////////////////////////
@@ -1502,9 +1514,15 @@ end:
 ///////////////////////////////////////////////////////////////
 void CVersionUpdater::Program_SendReportLog()
 {
+#ifdef MTA_NEON
+    // Report logs may contain fork-specific state which has no reason to be
+    // submitted to infrastructure operated by the upstream project.
+    return;
+#else
     _UseReportLogURLs();         // Use REPORT_LOG_URL*
     _UseReportLogPostContent();  // Use report log source
     _StartSendPost();            // Send data
+#endif
 }
 
 ///////////////////////////////////////////////////////////////

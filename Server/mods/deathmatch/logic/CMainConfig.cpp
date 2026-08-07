@@ -1654,6 +1654,11 @@ bool CMainConfig::SetSetting(const SString& strName, const SString& strValue, bo
 //////////////////////////////////////////////////////////////////////
 const std::vector<SIntSetting>& CMainConfig::GetIntSettingList()
 {
+#ifdef MTA_NEON
+    static constexpr int CRASH_DUMP_UPLOAD_DEFAULT = 0;
+#else
+    static constexpr int CRASH_DUMP_UPLOAD_DEFAULT = 1;
+#endif
     static const SIntSetting settings[] = {
         // Set,  save,   min,    def,    max,    name,                                   variable,                                   callback
         {true, true, 50, 100, 4000, "player_sync_interval", &g_TickRateSettings.iPureSync, &CMainConfig::OnTickRateChange},
@@ -1681,7 +1686,7 @@ const std::vector<SIntSetting>& CMainConfig::GetIntSettingList()
         {false, false, 0, 1, 2, "compact_internal_databases", &m_iCompactInternalDatabases, NULL},
         {true, true, 0, 1, 2, "minclientversion_auto_update", &m_iMinClientVersionAutoUpdate, NULL},
         {true, true, 0, 0, 100, "server_logic_fps_limit", &m_iServerLogicFpsLimit, NULL},
-        {true, true, 0, 1, 1, "crash_dump_upload", &m_bCrashDumpUploadEnabled, NULL},
+        {true, true, 0, CRASH_DUMP_UPLOAD_DEFAULT, 1, "crash_dump_upload", &m_bCrashDumpUploadEnabled, NULL},
         {true, true, 0, 1, 1, "filter_duplicate_log_lines", &m_bFilterDuplicateLogLinesEnabled, NULL},
         {false, false, 0, 1, 1, "database_credentials_protection", &m_bDatabaseCredentialsProtectionEnabled, NULL},
         {false, false, 0, 0, 1, "fakelag", &m_bFakeLagCommandEnabled, NULL},

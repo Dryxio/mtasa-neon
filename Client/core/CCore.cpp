@@ -2236,11 +2236,16 @@ void CCore::DoPostFramePulse()
             m_pGame->DisableVSync();
         }
 
+#ifndef MTA_NEON
+        // Encryption only prepares crash dumps for the upstream upload path.
+        // Neon retains the original private dumps and avoids the startup scan,
+        // encryption and duplicate public copy when uploads are unavailable.
         if (!m_bCrashDumpEncryptionDone && m_menuFrame >= 5 && m_pNet && m_pNet->IsReady())
         {
             m_bCrashDumpEncryptionDone = true;
             HandleCrashDumpEncryption();
         }
+#endif
 
         if (m_menuFrame >= 5 && !m_isNetworkReady && m_pNet->IsReady())
         {

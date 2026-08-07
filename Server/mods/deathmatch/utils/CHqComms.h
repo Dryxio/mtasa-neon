@@ -62,11 +62,16 @@ public:
             bitStream->Write(g_pGame->GetConfig()->GetAseInternetListenEnabled() ? 1 : 0);
 
             SString strCrashLog;
+#ifndef MTA_NEON
             FileLoad(m_strCrashLogFilename, strCrashLog, 50000);
+#endif
             bitStream->WriteStr(strCrashLog);
 
             // Latest crash dump
             SString strCrashDumpFilename, strCrashDumpContent;
+#ifndef MTA_NEON
+            // Neon keeps server crash diagnostics local. The surrounding HQ
+            // query remains available for server-list and version services.
             if (FileExists(m_strCrashDumpMeta))
             {
                 if (g_pGame->GetConfig()->GetCrashDumpUploadEnabled())
@@ -78,6 +83,7 @@ public:
                 FileDelete(m_strCrashDumpMeta);
                 m_strCrashDumpMeta = "";
             }
+#endif
             bitStream->WriteStr(ExtractFilename(strCrashDumpFilename));
             bitStream->WriteStr(strCrashDumpContent);
 
@@ -212,10 +218,16 @@ public:
     {
         int iGotCrashInfo = 0;
         bitStream->Read(iGotCrashInfo);
+#ifndef MTA_NEON
         if (iGotCrashInfo)
         {
             FileDelete(m_strCrashLogFilename);
         }
+#else
+        // Consume the protocol field, but never let an HQ receipt delete a
+        // crash log that Neon deliberately retained locally.
+        (void)iGotCrashInfo;
+#endif
     }
 
     // Extra ASE servers

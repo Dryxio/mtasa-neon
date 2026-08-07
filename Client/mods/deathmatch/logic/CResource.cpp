@@ -635,14 +635,12 @@ bool CResource::VerifyNativeWorldTransportReady()
                 "[NativeWorldTransport] state=refused resource=%s reason=async-start-failed detail=%s activation=no lease=no "
                 "stock-behavior=preserved",
                 *m_strResourceName, exception.what());
-            AddReportLog(7472, message);
             WriteDebugEvent(message);
             return true;
         }
         const SString message("[NativeWorldTransport] state=audit-started resource=%s format=%u manifest=%s files=%u activation=no lease=no",
                               *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath,
                               static_cast<unsigned int>(m_nativeWorldTransport.files.size()));
-        AddReportLog(7470, message);
         WriteDebugEvent(message);
         return false;
     }
@@ -708,7 +706,6 @@ bool CResource::VerifyNativeWorldTransportReady()
                     "[NativeWorldAuthorization] state=runtime-wait resource=%s contentId=%s ticket=%s reason=stock-streaming-io-busy "
                     "activation=no lease=no restart-required=no",
                     *m_strResourceName, result.contentId.c_str(), authorizationResult.ticketId.substr(0, 8).c_str());
-                AddReportLog(7473, authorizationMessage);
                 WriteDebugEvent(authorizationMessage);
                 g_pCore->GetConsole()->Printf("%s", *authorizationMessage);
             }
@@ -730,7 +727,6 @@ bool CResource::VerifyNativeWorldTransportReady()
                               authorizationResult.attached     ? "attached"
                               : authorizationResult.idempotent ? "idempotent"
                                                                : "published");
-                AddReportLog(7473, authorizationMessage);
                 WriteDebugEvent(authorizationMessage);
                 g_pCore->GetConsole()->Printf("%s", *authorizationMessage);
             }
@@ -754,7 +750,6 @@ bool CResource::VerifyNativeWorldTransportReady()
                               "[NativeWorldAuthorization] state=refused resource=%s contentId=%s reason=%s activation=no lease=no restart-required=no "
                               "stock-behavior=preserved",
                               *m_strResourceName, result.contentId.c_str(), authorizationResult.error.c_str());
-                AddReportLog(7474, authorizationMessage);
                 WriteDebugEvent(authorizationMessage);
                 g_pCore->GetConsole()->Printf("%s", *authorizationMessage);
             }
@@ -767,7 +762,6 @@ bool CResource::VerifyNativeWorldTransportReady()
             result.cacheHit ? "hit" : "published", result.publishedDirectory.c_str(), result.auditProfile.c_str(), authorizationResult.claimed ? "yes" : "no",
             authorizationResult.claimed ? "process" : "no",
             m_nativeWorldTransport.authorizationRecordPublished && !m_nativeWorldTransport.authorizationRuntimeDeferred ? "yes" : "no");
-        AddReportLog(7471, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
     }
@@ -780,7 +774,6 @@ bool CResource::VerifyNativeWorldTransportReady()
                               *m_strResourceName, m_nativeWorldTransport.format, *m_nativeWorldTransport.manifestPath,
                               static_cast<unsigned int>(m_nativeWorldTransport.files.size()), result.error.c_str(), activationState, leaseState,
                               preservedState);
-        AddReportLog(7472, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
         if (m_nativeWorldTransport.authorizationRequested)
@@ -788,7 +781,6 @@ bool CResource::VerifyNativeWorldTransportReady()
             const SString authorizationMessage(
                 "[NativeWorldAuthorization] state=refused resource=%s reason=transport-publication-failed activation=%s lease=%s restart-required=no %s",
                 *m_strResourceName, activationState, leaseState, preservedState);
-            AddReportLog(7474, authorizationMessage);
             WriteDebugEvent(authorizationMessage);
         }
     }
@@ -821,7 +813,6 @@ void CResource::PulseNativeWorldRuntimeAdmission()
             "restart-required=no stock-behavior=preserved",
             *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(),
             m_nativeWorldTransport.authorizationPersistedResult.ticketId.substr(0, 8).c_str(), result.success ? "complete" : "ambiguous");
-        AddReportLog(result.success ? 7475 : 7474, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
         return;
@@ -842,7 +833,6 @@ void CResource::PulseNativeWorldRuntimeAdmission()
             "[NativeWorldAuthorization] state=pending resource=%s contentId=%s ticket=%s issued=%llu expires=%llu disposition=published "
             "activation=no lease=no restart-required=yes action=nativeworldauth-restart reason=runtime-foundation-ineligible",
             *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.ticketId.substr(0, 8).c_str(), result.issuedAt, result.expiresAt);
-        AddReportLog(7473, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
         return;
@@ -855,7 +845,6 @@ void CResource::PulseNativeWorldRuntimeAdmission()
         const SString message(
             "[NativeWorldAuthorization] state=runtime-active resource=%s contentId=%s ticket=%s activation=yes lease=process restart-required=no",
             *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.ticketId.substr(0, 8).c_str());
-        AddReportLog(7473, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
         return;
@@ -872,7 +861,6 @@ void CResource::PulseNativeWorldRuntimeAdmission()
                                       "[NativeWorldAuthorization] state=refused resource=%s contentId=%s reason=%s activation=no lease=no restart-required=no "
                                       "stock-behavior=preserved",
                                       *m_strResourceName, m_nativeWorldTransport.authorizationContentId.c_str(), result.error.c_str());
-    AddReportLog(7474, message);
     WriteDebugEvent(message);
     g_pCore->GetConsole()->Printf("%s", *message);
 }
@@ -890,7 +878,6 @@ void CResource::RevokeNativeWorldStartupAuthorization()
                                  *m_strResourceName, result.ticketId.substr(0, 8).c_str())
                        : SString("[NativeWorldAuthorization] state=revocation-refused resource=%s reason=%s activation=no lease=no restart-required=no",
                                  *m_strResourceName, result.error.c_str());
-    AddReportLog(result.success ? 7475 : 7474, message);
     WriteDebugEvent(message);
     g_pCore->GetConsole()->Printf("%s", *message);
     if (result.success)

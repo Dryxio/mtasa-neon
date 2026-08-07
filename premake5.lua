@@ -63,6 +63,9 @@ workspace "MTASA"
 		"_CRT_SECURE_NO_WARNINGS",
 		"_SCL_SECURE_NO_WARNINGS",
 		"_CRT_NONSTDC_NO_DEPRECATE",
+		-- Keep fork-specific privacy and service boundaries explicit in every
+		-- Neon binary; installer defines are not propagated to C++ compilation.
+		"MTA_NEON",
 		"NOMINMAX",
 		"_TIMESPEC_DEFINED"
 	}

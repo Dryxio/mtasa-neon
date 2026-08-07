@@ -36,7 +36,6 @@ CResourceManager::~CResourceManager()
         const SString message(
             "[NativeWorldAuthorization] state=revocation-abandoned pending=%u activation=no lease=no restart-required=no manual-clear-required=yes",
             static_cast<unsigned int>(m_retiredNativeWorldAuthorizationRevocations.size()));
-        AddReportLog(7474, message);
         WriteDebugEvent(message);
     }
 }
@@ -208,7 +207,6 @@ void CResourceManager::PulseNativeWorldAuthorizationRevocations(bool force)
         }
         const SString message("[NativeWorldAuthorization] state=revoked-detached resource=%s ticket=%s activation=no lease=no restart-required=no",
                               iter->resourceName.c_str(), result.ticketId.substr(0, 8).c_str());
-        AddReportLog(7475, message);
         WriteDebugEvent(message);
         g_pCore->GetConsole()->Printf("%s", *message);
         iter = m_retiredNativeWorldAuthorizationRevocations.erase(iter);

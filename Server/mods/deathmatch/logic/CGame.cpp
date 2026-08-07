@@ -828,8 +828,11 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
     // Do basic backup
     HandleBackup();
 
-    // Encrypt crash dumps for uploading
+#ifndef MTA_NEON
+    // Public encrypted copies only exist for the upstream upload path. Neon
+    // retains the original private dumps locally without duplicating them.
     HandleCrashDumpEncryption();
+#endif
 
 // Check Windows server is using correctly compiled Lua dll
 #ifndef MTA_DEBUG

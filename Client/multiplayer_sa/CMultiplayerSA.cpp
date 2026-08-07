@@ -6199,7 +6199,9 @@ static void __declspec(naked) HOOK_CWeather_Update()
 static void Pre_CGame_Process()
 {
     TIMING_CHECKPOINT("+CWorld_Process");
+#ifdef MTA_DEBUG
     EntityPerformanceBeginWorldFrame();
+#endif
 
     if (m_pPreWorldProcessHandler)
         m_pPreWorldProcessHandler();
@@ -6210,7 +6212,9 @@ static void Post_CGame_Process()
     if (m_pPostWorldProcessHandler)
         m_pPostWorldProcessHandler();
 
+#ifdef MTA_DEBUG
     EntityPerformanceEndWorldFrame();
+#endif
     TIMING_CHECKPOINT("-CWorld_Process");
 }
 
@@ -7197,7 +7201,9 @@ bool                  CPhysical_ProcessCollisionSectorList()
 {
     if (pCollisionPhysicalThis && pCollisionPhysical)
     {
+#ifdef MTA_DEBUG
         EntityPerformanceRecordBroadPhaseCandidate(pCollisionPhysicalThis, pCollisionPhysical);
+#endif
         if (m_pProcessCollisionHandler && !m_pProcessCollisionHandler(pCollisionPhysicalThis, pCollisionPhysical))
         {
             return false;
@@ -7479,7 +7485,11 @@ void SetModelSuspensionLines(CVehicleSAInterface* pVehicleIntf, void* pSuspensio
     pModelInfo->SetVehicleSuspensionData(pSuspensionLines);
 }
 // Some variables.
-DWORD                dwSuspensionChangedJump = reinterpret_cast<DWORD>(EntityPerformanceProcessColModels);
+#ifdef MTA_DEBUG
+DWORD dwSuspensionChangedJump = reinterpret_cast<DWORD>(EntityPerformanceProcessColModels);
+#else
+DWORD dwSuspensionChangedJump = 0x4185C0;
+#endif
 bool                 bSuspensionChanged = false;
 CVehicleSAInterface* pSuspensionInterface = NULL;
 bool                 CheckHasSuspensionChanged()
@@ -7537,7 +7547,11 @@ static void __declspec(naked) HOOK_ProcessVehicleCollision()
                 push dword ptr [esp+0x18+0xC]
                 push dword ptr [esp+0x1C+8]
                 push dword ptr [esp+0x20+4]
+#ifdef MTA_DEBUG
                 mov eax, EntityPerformanceProcessColModels
+#else
+                mov eax, 0x4185C0       // CCollision::ProcessColModels
+#endif
                 call eax
                 add esp, 0x20
 
