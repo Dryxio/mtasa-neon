@@ -57,7 +57,8 @@ et aucun scan ASE n'est lancé.
 | `sb:ready` | — | La page est chargée. Le natif charge le dernier registre valide, actualise le manifeste HTTPS, répond `init`/`favourites`, puis scanne uniquement ses endpoints. |
 | `sb:setSource` | `source` | Change de vue (`internet`/`favourites`/`recent`) : `list-reset` + snapshot filtré du registre. |
 | `sb:refresh` | — | Re-scanne la source courante. |
-| `sb:connect` | `host`, `port`, `password` | Connexion. Serveur verrouillé sans mot de passe → `connect-password-required`. Sinon flux natif (boîte CONNECTING, erreurs, file d'attente en CEGUI par-dessus la vue). |
+| `sb:connect` | `host`, `port`, `password` | Connexion possédée par le shell : mot de passe, progression, autorisation Neon Identity et erreurs restent dans le CEF. |
+| `sb:cancelConnect` | — | Annule uniquement une tentative de connexion lancée depuis le shell. |
 | `sb:favourite` | `host`, `port`, `"1"`/`"0"` | Ajoute/retire des favoris (persisté en coreconfig) → `favourites`. |
 | `sb:openExternal` | `url` | Demande d'ouvrir un lien http(s) dans le navigateur système (confirmation native). |
 | `sb:close` | — | Ferme le navigateur, retour au menu. |
@@ -73,7 +74,10 @@ et aucun scan ASE n'est lancé.
 | `refresh-finished` | `source` | Scan terminé. |
 | `favourites` | `keys[]` | Clés `"ip:port"` des favoris (état complet). |
 | `connect-password-required` | `host`, `port`, `name` | Ouvrir la modale mot de passe (sans message d'erreur). |
-| `connect-failed` | `code`, `message` | Échec pré-connexion (nick invalide, serials requis, adresse invalide). Les échecs réseau restent affichés par les dialogues natifs. |
+| `connect-started` | `host`, `port`, `name?` | Le transport réseau a démarré ; afficher le panneau de connexion. |
+| `connect-progress` | `stage`, `message?` | Étape `contacting`, `authorizing` ou `joining`. |
+| `connect-failed` | `code`, `message` | Échec pré-connexion, réseau, mot de passe, serveur plein, version ou identité. |
+| `connect-succeeded` | — | Le mod a accepté la connexion et prend le relais. |
 
 ### Forme d'un `server`
 
@@ -81,6 +85,8 @@ et aucun scan ASE n'est lancé.
 {
   "id": "141.94.26.7:22003", "ip": "141.94.26.7", "port": 22003, "httpPort": 22005,
   "serverId": "blitz-production", "name": "MTA:SA Neon — Blitz",
+  "logoUrl": "https://identity.mta-neon.com/v1/server-registry/assets/example.webp",
+  "bannerUrl": "https://identity.mta-neon.com/v1/server-registry/assets/example.webp",
   "tagline": "Open-world 1v1 vehicle pursuits",
   "description": "Escape your rival or stop them before time runs out.",
   "gameMode": "Blitz", "map": "San Andreas",
@@ -107,7 +113,6 @@ adresse arbitraire n'y apparaît jamais, mais Quick Connect reste libre. Le
 dernier manifeste strictement valide est conservé dans le profil client ; une
 panne du service ne provoque jamais un fallback vers le master public MTA.
 
-## Reste à faire (hors phase 1)
-
-- Router les erreurs de connexion réseau (mauvais mdp en cours de connexion,
-  file d'attente serveur plein) vers la page au lieu des popups CEGUI.
+Les connexions issues de Quick Connect ou de l'ancien navigateur conservent le
+flux CEGUI historique. Cette séparation empêche le shell web de capturer une
+tentative qu'il n'a pas initiée.

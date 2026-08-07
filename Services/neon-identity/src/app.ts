@@ -12,6 +12,7 @@ import { constantTimeStringEqual, hashToken, openJson, pkceChallenge, randomToke
 import type { DiscordClient } from "./discord.js";
 import type { IdentityStore, NeonAccount } from "./model.js";
 import type { DiscordIdentityPolicy } from "./policy.js";
+import { fetchServerAsset, type ServerAssetFetcher } from "./server-assets.js";
 import {
     buildPublicServerCatalog,
     isPublicIpv4Address,
@@ -21,6 +22,8 @@ import type { TicketSigner } from "./tickets.js";
 
 const OAUTH_COOKIE_NAME = "neon_oauth_v1";
 const SERVER_REGISTRY_ACTIVE_SECONDS = 5 * 60;
+const SERVER_ASSET_REFRESH_SECONDS = 6 * 60 * 60;
+const serverAssetHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const serverIdSchema = z.string().regex(SERVER_ID_PATTERN);
 const startAuthorizationSchema = z.object({
     flow_id: z.uuid(),
@@ -49,6 +52,7 @@ export interface AppDependencies {
     policy: DiscordIdentityPolicy;
     ticketSigner: TicketSigner;
     aseProbe?: AseProbe;
+    serverAssetFetcher?: ServerAssetFetcher;
     now?: () => Date;
     logger?: FastifyServerOptions["logger"];
 }
@@ -121,6 +125,7 @@ function registrationAddress(headers: Record<string, string | string[] | undefin
 export async function buildApp(dependencies: AppDependencies) {
     const { config, discord, policy, store, ticketSigner } = dependencies;
     const aseProbe = dependencies.aseProbe ?? probeMtaAse;
+    const serverAssetFetcher = dependencies.serverAssetFetcher ?? fetchServerAsset;
     const now = dependencies.now ?? (() => new Date());
     const app = Fastify({
         logger: dependencies.logger ?? false,
@@ -141,7 +146,9 @@ export async function buildApp(dependencies: AppDependencies) {
 
     app.addHook("onClose", async () => store.close());
     app.addHook("onSend", async (request, reply, payload) => {
-        if (request.url.startsWith("/v1/")) reply.header("cache-control", "no-store");
+        if (request.url.startsWith("/v1/") && !request.url.startsWith("/v1/server-registry/assets/")) {
+            reply.header("cache-control", "no-store");
+        }
         return payload;
     });
     app.setErrorHandler((error, request, reply) => {
@@ -151,6 +158,20 @@ export async function buildApp(dependencies: AppDependencies) {
     });
 
     app.get("/healthz", async () => ({ status: "ok" }));
+
+    app.get("/v1/server-registry/assets/:hash", async (request, reply) => {
+        const parsed = serverAssetHashSchema.safeParse((request.params as { hash?: unknown }).hash);
+        if (!parsed.success) return reply.code(404).send({ error: "server_asset_not_found" });
+        const asset = await store.findServerAssetByHash(parsed.data);
+        if (!asset) return reply.code(404).send({ error: "server_asset_not_found" });
+        reply
+            .header("cache-control", "public, max-age=31536000, immutable")
+            .header("access-control-allow-origin", "*")
+            .header("cross-origin-resource-policy", "cross-origin")
+            .header("x-content-type-options", "nosniff")
+            .type(asset.mimeType);
+        return asset.bytes;
+    });
 
     app.get("/.well-known/neon-identity", async (_request, reply) => {
         reply.header("cache-control", "public, max-age=300");
@@ -188,6 +209,30 @@ export async function buildApp(dependencies: AppDependencies) {
             const currentTime = now();
             const endpoint = `${address}:${parsed.data.game_port}`;
             const serverId = registeredServerId(config.serverRegistry, endpoint);
+
+            const resolveAsset = async (sourceUrl: string | undefined) => {
+                if (!sourceUrl) return null;
+                const freshSince = new Date(currentTime.getTime() - SERVER_ASSET_REFRESH_SECONDS * 1_000);
+                const cached = await store.findServerAssetSource(sourceUrl, freshSince);
+                if (cached) return cached.assetHash;
+                try {
+                    const asset = await serverAssetFetcher(sourceUrl, currentTime);
+                    await store.putServerAsset(asset, { sourceUrl, assetHash: asset.hash, fetchedAt: currentTime });
+                    return asset.hash;
+                } catch (error) {
+                    // Artwork is presentation-only. A broken host must not make
+                    // an otherwise healthy game server disappear from Neon.
+                    request.log.warn(
+                        { err: error, serverId, sourceHost: new URL(sourceUrl).hostname },
+                        "Neon server artwork could not be refreshed",
+                    );
+                    return (await store.findServerAssetSource(sourceUrl, new Date(0)))?.assetHash ?? null;
+                }
+            };
+            const [logoAssetHash, bannerAssetHash] = await Promise.all([
+                resolveAsset(parsed.data.logo_url),
+                resolveAsset(parsed.data.banner_url),
+            ]);
             await store.upsertRegisteredServer({
                 id: serverId,
                 endpoint,
@@ -201,6 +246,8 @@ export async function buildApp(dependencies: AppDependencies) {
                 languages: parsed.data.languages,
                 links: parsed.data.links,
                 accent: parsed.data.accent ?? null,
+                logoAssetHash,
+                bannerAssetHash,
                 firstSeenAt: currentTime,
                 lastSeenAt: currentTime,
             });
@@ -216,7 +263,8 @@ export async function buildApp(dependencies: AppDependencies) {
             .header("access-control-allow-origin", "*")
             .header("cross-origin-resource-policy", "cross-origin");
         const activeSince = new Date(now().getTime() - SERVER_REGISTRY_ACTIVE_SECONDS * 1_000);
-        return buildPublicServerCatalog(await store.listRegisteredServers(activeSince));
+        const assetUrl = (hash: string) => new URL(`/v1/server-registry/assets/${hash}`, config.publicBaseUrl).href;
+        return buildPublicServerCatalog(await store.listRegisteredServers(activeSince), assetUrl);
     });
 
     app.get("/.well-known/jwks.json", async (_request, reply) => {

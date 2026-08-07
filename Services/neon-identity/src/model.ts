@@ -64,8 +64,25 @@ export interface RegisteredServer {
     languages: string[];
     links: RegisteredServerLink[];
     accent: string | null;
+    logoAssetHash: string | null;
+    bannerAssetHash: string | null;
     firstSeenAt: Date;
     lastSeenAt: Date;
+}
+
+export interface ServerAsset {
+    hash: string;
+    mimeType: "image/png" | "image/jpeg" | "image/webp";
+    width: number;
+    height: number;
+    bytes: Buffer;
+    createdAt: Date;
+}
+
+export interface ServerAssetSource {
+    sourceUrl: string;
+    assetHash: string;
+    fetchedAt: Date;
 }
 
 export interface IdentityStore {
@@ -85,5 +102,8 @@ export interface IdentityStore {
     findAccountBySession(sessionTokenHash: Buffer, now: Date): Promise<NeonAccount | null>;
     upsertRegisteredServer(server: RegisteredServer): Promise<void>;
     listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]>;
+    findServerAssetSource(sourceUrl: string, freshSince: Date): Promise<ServerAssetSource | null>;
+    putServerAsset(asset: ServerAsset, source: ServerAssetSource): Promise<void>;
+    findServerAssetByHash(hash: string): Promise<ServerAsset | null>;
     close(): Promise<void>;
 }

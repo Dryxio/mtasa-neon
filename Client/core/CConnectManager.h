@@ -21,11 +21,13 @@ public:
     CConnectManager();
     ~CConnectManager();
 
-    bool Connect(const char* szHost, unsigned short usPort, const char* szNick, const char* szPassword, bool bNotifyServerBrowser = false);
+    bool Connect(const char* szHost, unsigned short usPort, const char* szNick, const char* szPassword, bool bNotifyServerBrowser = false,
+                 bool bUseWebConnectionUi = false);
     bool Reconnect(const char* szHost, unsigned short usPort, const char* szPassword, bool bSave = true);
     bool ValidateConnectionTarget(const char* szHost, unsigned short usPort, in_addr* pResolvedAddress = nullptr) const;
 
     bool Abort();
+    bool CancelWebConnection();
 
     bool WasQuickConnect() const noexcept { return m_quickConnect; }
 
@@ -47,6 +49,7 @@ private:
     bool Event_OnCancelClick(CGUIElement* pElement);
     void ClearPendingIdentityConnection();
     void CompleteConnectionToMod(const std::string& modName);
+    bool UsesWebConnectionUi() const;
 
     in_addr        m_Address;
     std::string    m_strHost;
@@ -66,6 +69,7 @@ private:
 
     CServerListItem* m_pServerItem;
     bool             m_bNotifyServerBrowser;
+    bool             m_bUseWebConnectionUi{};
 
     bool CheckNickProvided(const char* szNick);
     bool m_quickConnect{false};

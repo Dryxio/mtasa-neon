@@ -37,6 +37,12 @@ public:
     void        SetNativeDialogVisible(bool visible);
     static bool IsInputRoutedToWeb();
     static bool RouteInputMessage(UINT message, WPARAM wParam, LPARAM lParam);
+    static bool CanHandleConnectionUi();
+    static bool OwnsConnectionUi();
+    static bool NotifyConnectionStarted(const std::string& host, unsigned short port);
+    static bool NotifyConnectionProgress(const std::string& stage, const std::string& message);
+    static bool NotifyConnectionFailed(const std::string& code, const std::string& message);
+    static bool NotifyConnectionSucceeded();
     bool        IsAvailable() const { return m_webView != nullptr && m_widget != nullptr; }
     bool        DoPulse();
     void        DrawLoadingPlaceholder();
@@ -77,6 +83,7 @@ private:
     void QueueListReset();
     void QueueServer(const CServerListItem& server);
     void QueueEvent(const std::string& channel, const std::string& json);
+    void QueueConnectionEvent(const std::string& json);
     void FlushEvents();
     void SelectSource(const std::string& sourceName, bool refresh);
     void RefreshCurrentSource();
@@ -103,6 +110,7 @@ private:
     bool                                 m_visible{};
     bool                                 m_nativeDialogVisible{};
     bool                                 m_serverBrowserReady{};
+    bool                                 m_connectionUiActive{};
     bool                                 m_refreshing{};
     bool                                 m_sentRefreshFinished{};
     Source                               m_source{Source::Internet};

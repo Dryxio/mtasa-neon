@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n'
 import type { ServerItem } from '../types'
 import { playUiSound } from '../uiSound'
@@ -42,17 +42,34 @@ export function DetailsPanel({ server, onConnect, onOpenLink }: DetailsPanelProp
   return (
     <aside className="details">
       <div className="details__scroll">
-        <span className="details__kicker">{t('details.selectedDestination')}</span>
-        <div className="details__name">
-          <span>{shortName(server.name)}</span>
-          <button
-            type="button"
-            className="details__copy"
-            title={t('details.copyAddress', { address: `mtasa://${server.ip}:${server.gamePort}` })}
-            onClick={copyAddress}
+        {server.bannerUrl && (
+          <div className="details__banner" aria-hidden="true">
+            <img src={server.bannerUrl} alt="" draggable={false} referrerPolicy="no-referrer" />
+          </div>
+        )}
+        <div className="details__identity">
+          <span
+            className="details__logo"
+            style={{ '--server-accent': server.accent ?? '#accbf1' } as CSSProperties}
+            aria-hidden="true"
           >
-            {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-          </button>
+            <span>{serverInitials(server.name)}</span>
+            {server.logoUrl && <img src={server.logoUrl} alt="" draggable={false} referrerPolicy="no-referrer" />}
+          </span>
+          <div className="details__heading">
+            <span className="details__kicker">{t('details.selectedDestination')}</span>
+            <div className="details__name">
+              <span>{shortName(server.name)}</span>
+              <button
+                type="button"
+                className="details__copy"
+                title={t('details.copyAddress', { address: `mtasa://${server.ip}:${server.gamePort}` })}
+                onClick={copyAddress}
+              >
+                {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+              </button>
+            </div>
+          </div>
         </div>
 
         <p className="details__desc">{server.description}</p>
@@ -133,4 +150,9 @@ function shortName(name: string): string {
     .replace(/\s+/g, ' ')
     .trim()
   return cleaned.length > 26 ? `${cleaned.slice(0, 26)}…` : cleaned
+}
+
+function serverInitials(name: string): string {
+  const words = name.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/)
+  return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'N'
 }

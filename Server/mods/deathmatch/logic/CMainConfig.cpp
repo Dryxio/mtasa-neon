@@ -450,6 +450,8 @@ bool CMainConfig::Load()
     readOptionalRegistryString("neon_registry_website", m_neonRegistryWebsite, 2048);
     readOptionalRegistryString("neon_registry_discord", m_neonRegistryDiscord, 2048);
     readOptionalRegistryString("neon_registry_accent", m_neonRegistryAccent, 7);
+    readOptionalRegistryString("neon_registry_logo", m_neonRegistryLogo, 2048);
+    readOptionalRegistryString("neon_registry_banner", m_neonRegistryBanner, 2048);
 
     const auto validateRegistryUrl = [](const char* name, std::string& value)
     {
@@ -461,6 +463,10 @@ bool CMainConfig::Load()
     };
     validateRegistryUrl("neon_registry_website", m_neonRegistryWebsite);
     validateRegistryUrl("neon_registry_discord", m_neonRegistryDiscord);
+    // Artwork is fetched and sanitized by the registry. Requiring HTTPS here
+    // prevents server operators from directing that service to plaintext URLs.
+    validateRegistryUrl("neon_registry_logo", m_neonRegistryLogo);
+    validateRegistryUrl("neon_registry_banner", m_neonRegistryBanner);
 
     if (!m_neonRegistryAccent.empty() &&
         (m_neonRegistryAccent.size() != 7 || m_neonRegistryAccent.front() != '#' ||

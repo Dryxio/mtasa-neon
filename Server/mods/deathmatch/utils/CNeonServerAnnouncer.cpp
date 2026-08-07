@@ -135,6 +135,10 @@ SString CNeonServerAnnouncer::BuildHeartbeatBody() const
     json_object_object_add(root, "links", links);
     if (!m_config.GetNeonRegistryAccent().empty())
         AddString(root, "accent", m_config.GetNeonRegistryAccent());
+    if (!m_config.GetNeonRegistryLogo().empty())
+        AddString(root, "logo_url", m_config.GetNeonRegistryLogo());
+    if (!m_config.GetNeonRegistryBanner().empty())
+        AddString(root, "banner_url", m_config.GetNeonRegistryBanner());
 
     const SString body = json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN);
     json_object_put(root);

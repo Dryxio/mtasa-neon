@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CNeonIdentityManager.h"
+#include "ServerBrowser/CServerBrowserWeb.h"
 #include "net/Packets.h"
 using namespace std;
 
@@ -69,7 +70,8 @@ bool CConnectManager::ValidateConnectionTarget(const char* szHost, unsigned shor
     {
         CCore::GetSingleton().FailNativeWorldStartupBeforeActive("startup target is not a resolvable IPv4 endpoint");
         SString strBuffer = _("Connecting failed. Invalid host provided!");
-        CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC21"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid host provided
+        if (!UsesWebConnectionUi())
+            CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC21"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid host provided
         return false;
     }
 
@@ -78,16 +80,24 @@ bool CConnectManager::ValidateConnectionTarget(const char* szHost, unsigned shor
     return true;
 }
 
-bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const char* szNick, const char* szPassword, bool bNotifyServerBrowser)
+bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const char* szNick, const char* szPassword, bool bNotifyServerBrowser,
+                              bool bUseWebConnectionUi)
 {
     assert(szHost);
     assert(szNick);
     assert(szPassword);
 
+    // The initiating entry point owns the complete presentation. Do not
+    // reclassify a web attempt as legacy when the menu becomes temporarily
+    // hidden during connection setup.
+    m_bUseWebConnectionUi = bUseWebConnectionUi;
+
     if (!CCore::GetSingleton().IsNetworkReady())
     {
         CCore::GetSingleton().FailNativeWorldStartupBeforeActive("network module is unavailable before the pinned connection");
-        CCore::GetSingleton().GetLocalGUI()->GetMainMenu()->ShowNetworkNotReadyWindow();
+        if (!UsesWebConnectionUi())
+            CCore::GetSingleton().GetLocalGUI()->GetMainMenu()->ShowNetworkNotReadyWindow();
+        m_bUseWebConnectionUi = false;
         return false;
     }
 
@@ -95,7 +105,10 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     // before the current mod, network generation, or credentials are touched.
     in_addr targetAddress{};
     if (!ValidateConnectionTarget(szHost, usPort, &targetAddress))
+    {
+        m_bUseWebConnectionUi = false;
         return false;
+    }
 
     m_bNotifyServerBrowser = bNotifyServerBrowser;
 
@@ -123,7 +136,9 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     {
         CCore::GetSingleton().FailNativeWorldStartupBeforeActive("nickname validation failed before the pinned connection");
         SString strBuffer = _("Connecting failed. Invalid nick provided!");
-        CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC20"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid nick provided
+        if (!UsesWebConnectionUi())
+            CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC20"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid nick provided
+        m_bUseWebConnectionUi = false;
         return false;
     }
 
@@ -171,6 +186,7 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     if (!CCore::GetSingleton().CheckDiskSpace())
     {
         CCore::GetSingleton().FailNativeWorldStartupBeforeActive("disk-space validation failed before the pinned connection");
+        m_bUseWebConnectionUi = false;
         return false;
     }
 
@@ -184,7 +200,9 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
         CCore::GetSingleton().AdvanceNetworkConnectionGeneration();
         CCore::GetSingleton().FailNativeWorldStartupBeforeActive("StartNetwork failed for the pinned endpoint");
         SString strBuffer(_("Connecting to %s at port %u failed!"), m_strHost.c_str(), m_usPort);
-        CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC22"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Failed to connect
+        if (!UsesWebConnectionUi())
+            CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC22"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Failed to connect
+        m_bUseWebConnectionUi = false;
         return false;
     }
 
@@ -203,12 +221,18 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     m_bIsDetectingVersion = true;
     OpenServerFirewall(m_Address, CServerBrowser::GetSingletonPtr()->FindServerHttpPort(m_strHost, m_usPort), true);
 
-    // Display the status box
-    SString strBuffer(_("Connecting to %s:%u ..."), m_strHost.c_str(), m_usPort);
-    if (m_bReconnect)
-        strBuffer = SString(_("Reconnecting to %s:%u ..."), m_strHost.c_str(), m_usPort);
-    CCore::GetSingleton().ShowMessageBox(_("CONNECTING"), strBuffer, MB_BUTTON_CANCEL | MB_ICON_INFO, m_pOnCancelClick);
-    WriteDebugEvent(SString("Connecting to %s:%u ...", m_strHost.c_str(), m_usPort));
+    // Web-owned attempts stay inside the GTA-style Neon shell. Other entry
+    // points retain the established native CEGUI flow.
+    if (UsesWebConnectionUi())
+        CServerBrowserWeb::NotifyConnectionStarted(m_strHost, m_usPort);
+    else
+    {
+        SString strBuffer(_("Connecting to %s:%u ..."), m_strHost.c_str(), m_usPort);
+        if (m_bReconnect)
+            strBuffer = SString(_("Reconnecting to %s:%u ..."), m_strHost.c_str(), m_usPort);
+        CCore::GetSingleton().ShowMessageBox(_("CONNECTING"), strBuffer, MB_BUTTON_CANCEL | MB_ICON_INFO, m_pOnCancelClick);
+    }
+    WriteDebugEvent(SString("Connecting to %s:%u ... [connection-ui=%s]", m_strHost.c_str(), m_usPort, UsesWebConnectionUi() ? "web" : "legacy"));
 
     return true;
 }
@@ -285,6 +309,7 @@ bool CConnectManager::Abort()
     m_bIsConnecting = false;
     m_bIsDetectingVersion = false;
     m_tConnectStarted = 0;
+    m_bUseWebConnectionUi = false;
     SAFE_DELETE(m_pServerItem);
     ClearPendingIdentityConnection();
     if (CNeonIdentityManager* identity = CCore::GetSingleton().GetNeonIdentityManager())
@@ -294,6 +319,19 @@ bool CConnectManager::Abort()
     return true;
 }
 
+bool CConnectManager::CancelWebConnection()
+{
+    if (!UsesWebConnectionUi() || (!m_bIsConnecting && !m_bWaitingForNeonTicket))
+        return false;
+
+    return Abort();
+}
+
+bool CConnectManager::UsesWebConnectionUi() const
+{
+    return m_bUseWebConnectionUi || CServerBrowserWeb::OwnsConnectionUi();
+}
+
 void CConnectManager::DoPulse()
 {
     if (m_bWaitingForNeonTicket)
@@ -301,6 +339,8 @@ void CConnectManager::DoPulse()
         CNeonIdentityManager* identity = CCore::GetSingleton().GetNeonIdentityManager();
         if (!identity)
         {
+            if (UsesWebConnectionUi())
+                CServerBrowserWeb::NotifyConnectionFailed("identity-failed", _("Neon Identity is unavailable."));
             Abort();
             return;
         }
@@ -318,15 +358,24 @@ void CConnectManager::DoPulse()
             const std::string error = identity->GetLastError();
             ClearPendingIdentityConnection();
             identity->CancelTicketPreparation();
-            g_pCore->RemoveMessageBox();
-            Abort();
-            g_pCore->ShowMessageBox(_("Neon account"), error.c_str(), MB_BUTTON_OK | MB_ICON_ERROR);
+            if (UsesWebConnectionUi())
+            {
+                CServerBrowserWeb::NotifyConnectionFailed("identity-failed", error);
+                Abort();
+            }
+            else
+            {
+                g_pCore->RemoveMessageBox();
+                Abort();
+                g_pCore->ShowMessageBox(_("Neon account"), error.c_str(), MB_BUTTON_OK | MB_ICON_ERROR);
+            }
             return;
         }
 
         const std::string modName = m_pendingNeonModName;
         ClearPendingIdentityConnection();
-        g_pCore->RemoveMessageBox();
+        if (!UsesWebConnectionUi())
+            g_pCore->RemoveMessageBox();
         CompleteConnectionToMod(modName);
         return;
     }
@@ -370,7 +419,10 @@ void CConnectManager::DoPulse()
         if (iConnectTimeDelta >= 8)
         {
             // Show a message that the connection timed out and abort
-            g_pCore->ShowNetErrorMessageBox(_("Error") + _E("CC23"), _("Connection timed out"), "connect-timed-out", true);
+            if (UsesWebConnectionUi())
+                CServerBrowserWeb::NotifyConnectionFailed("timeout", _("Connection timed out"));
+            else
+                g_pCore->ShowNetErrorMessageBox(_("Error") + _E("CC23"), _("Connection timed out"), "connect-timed-out", true);
             Abort();
         }
         else
@@ -381,41 +433,61 @@ void CConnectManager::DoPulse()
             {
                 SString strError;
                 SString strErrorCode;
+                SString strWebErrorCode = "refused";
                 switch (ucError)
                 {
                     case RID_RSA_PUBLIC_KEY_MISMATCH:
                         strError = _("Disconnected: unknown protocol error");
                         strErrorCode = _E("CC24");  // encryption key mismatch
+                        strWebErrorCode = "version-mismatch";
                         break;
                     case RID_INCOMPATIBLE_PROTOCOL_VERSION:
                         strError = _("Disconnected: unknown protocol error");
                         strErrorCode = _E("CC34");  // old raknet version
+                        strWebErrorCode = "version-mismatch";
                         break;
                     case RID_REMOTE_DISCONNECTION_NOTIFICATION:
                         strError = _("Disconnected: disconnected remotely");
                         strErrorCode = _E("CC25");
+                        strWebErrorCode = "disconnected";
                         break;
                     case RID_REMOTE_CONNECTION_LOST:
                         strError = _("Disconnected: connection lost remotely");
                         strErrorCode = _E("CC26");
+                        strWebErrorCode = "disconnected";
                         break;
                     case RID_CONNECTION_BANNED:
                         strError = _("Disconnected: you are banned from this server");
                         strErrorCode = _E("CC27");
+                        strWebErrorCode = "banned";
                         break;
                     case RID_NO_FREE_INCOMING_CONNECTIONS:
-                        CServerInfo::GetSingletonPtr()->Show(eWindowTypes::SERVER_INFO_QUEUE, m_strHost.c_str(), m_usPort, m_strPassword.c_str());
+                        if (UsesWebConnectionUi())
+                        {
+                            strError = _("Server is full");
+                            strWebErrorCode = "server-full";
+                        }
+                        else
+                            CServerInfo::GetSingletonPtr()->Show(eWindowTypes::SERVER_INFO_QUEUE, m_strHost.c_str(), m_usPort, m_strPassword.c_str());
                         break;
                     case RID_DISCONNECTION_NOTIFICATION:
                         strError = _("Disconnected: disconnected from the server");
                         strErrorCode = _E("CC28");
+                        strWebErrorCode = "disconnected";
                         break;
                     case RID_CONNECTION_LOST:
                         strError = _("Disconnected: connection to the server was lost");
                         strErrorCode = _E("CC29");
+                        strWebErrorCode = "disconnected";
                         break;
                     case RID_INVALID_PASSWORD:
-                        CServerInfo::GetSingletonPtr()->Show(eWindowTypes::SERVER_INFO_PASSWORD, m_strHost.c_str(), m_usPort, m_strPassword.c_str());
+                        if (UsesWebConnectionUi())
+                        {
+                            strError = _("Invalid password");
+                            strWebErrorCode = "bad-password";
+                        }
+                        else
+                            CServerInfo::GetSingletonPtr()->Show(eWindowTypes::SERVER_INFO_PASSWORD, m_strHost.c_str(), m_usPort, m_strPassword.c_str());
                         break;
                     default:
                         strError = _("Disconnected: connection was refused");
@@ -428,7 +500,10 @@ void CConnectManager::DoPulse()
                 // Only display the error if we set one
                 if (strError.length() > 0)
                 {
-                    CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + strErrorCode, strError);
+                    if (UsesWebConnectionUi())
+                        CServerBrowserWeb::NotifyConnectionFailed(strWebErrorCode, strError);
+                    else
+                        CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + strErrorCode, strError);
                 }
                 else  // Otherwise, remove the message box and hide quick connect
                 {
@@ -449,7 +524,12 @@ void CConnectManager::DoPulse()
         {
             std::string strNick;
             CVARS_GET("nick", strNick);
-            Connect(m_strHost.c_str(), m_usPort, strNick.c_str(), m_strPassword.c_str(), false);
+            // Reconnect is deferred by one pulse and re-enters Connect. Carry
+            // the original presentation owner across that boundary so a web
+            // connection cannot silently fall back to a CEGUI status box.
+            const bool useWebConnectionUi = UsesWebConnectionUi();
+            WriteDebugEvent(SString("Deferred reconnect [connection-ui=%s]", useWebConnectionUi ? "web" : "legacy"));
+            Connect(m_strHost.c_str(), m_usPort, strNick.c_str(), m_strPassword.c_str(), false, useWebConnectionUi);
             m_bReconnect = false;
         }
     }
@@ -485,7 +565,10 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
                 if (!BitStream.Read(neonAuthMode) || neonAuthMode > 2 || (neonAuthMode != 0 && !BitStream.ReadString(neonServerId)) ||
                     neonServerId.length() > 128)
                 {
-                    CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + _E("CC33"), _("Bad server response (1)"));
+                    if (g_pConnectManager->UsesWebConnectionUi())
+                        CServerBrowserWeb::NotifyConnectionFailed("bad-response", _("Bad server response (1)"));
+                    else
+                        CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + _E("CC33"), _("Bad server response (1)"));
                     g_pConnectManager->Abort();
                     return true;
                 }
@@ -497,10 +580,20 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
             CNeonIdentityManager* identity = CCore::GetSingleton().GetNeonIdentityManager();
             if (neonAuthMode == 2 && (!identity || !identity->IsAuthenticated()))
             {
-                CCore::GetSingleton().RemoveMessageBox();
-                g_pConnectManager->Abort();
-                CCore::GetSingleton().ShowMessageBox(
-                    _("Neon account"), _("This server requires a linked Discord account. Connect it from the Neon menu first."), MB_BUTTON_OK | MB_ICON_ERROR);
+                if (g_pConnectManager->UsesWebConnectionUi())
+                {
+                    CServerBrowserWeb::NotifyConnectionFailed("identity-required",
+                                                              _("This server requires a linked Discord account. Connect it from the Neon menu first."));
+                    g_pConnectManager->Abort();
+                }
+                else
+                {
+                    CCore::GetSingleton().RemoveMessageBox();
+                    g_pConnectManager->Abort();
+                    CCore::GetSingleton().ShowMessageBox(_("Neon account"),
+                                                         _("This server requires a linked Discord account. Connect it from the Neon menu first."),
+                                                         MB_BUTTON_OK | MB_ICON_ERROR);
+                }
                 return true;
             }
 
@@ -512,8 +605,11 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
                 {
                     g_pConnectManager->m_bWaitingForNeonTicket = true;
                     g_pConnectManager->m_pendingNeonModName = strModName;
-                    CCore::GetSingleton().ShowMessageBox(_("CONNECTING"), _("Authorizing this server with Neon Identity..."), MB_BUTTON_CANCEL | MB_ICON_INFO,
-                                                         g_pConnectManager->m_pOnCancelClick);
+                    if (g_pConnectManager->UsesWebConnectionUi())
+                        CServerBrowserWeb::NotifyConnectionProgress("authorizing", _("Authorizing this server with Neon Identity..."));
+                    else
+                        CCore::GetSingleton().ShowMessageBox(_("CONNECTING"), _("Authorizing this server with Neon Identity..."),
+                                                             MB_BUTTON_CANCEL | MB_ICON_INFO, g_pConnectManager->m_pOnCancelClick);
                     return true;
                 }
 
@@ -521,9 +617,17 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
                 {
                     const std::string error = identity->GetLastError();
                     identity->CancelTicketPreparation();
-                    CCore::GetSingleton().RemoveMessageBox();
-                    g_pConnectManager->Abort();
-                    CCore::GetSingleton().ShowMessageBox(_("Neon account"), error.c_str(), MB_BUTTON_OK | MB_ICON_ERROR);
+                    if (g_pConnectManager->UsesWebConnectionUi())
+                    {
+                        CServerBrowserWeb::NotifyConnectionFailed("identity-failed", error);
+                        g_pConnectManager->Abort();
+                    }
+                    else
+                    {
+                        CCore::GetSingleton().RemoveMessageBox();
+                        g_pConnectManager->Abort();
+                        CCore::GetSingleton().ShowMessageBox(_("Neon account"), error.c_str(), MB_BUTTON_OK | MB_ICON_ERROR);
+                    }
                     return true;
                 }
             }
@@ -536,7 +640,11 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
             if (ucPacketID != PACKET_ID_SERVER_JOIN && ucPacketID != PACKET_ID_SERVER_JOIN_DATA)
             {
                 // Show failed message and abort the attempt
-                CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + _E("CC33"), _("Bad server response (1)") + SString(" [%d]", ucPacketID));
+                const SString responseError = _("Bad server response (1)") + SString(" [%d]", ucPacketID);
+                if (g_pConnectManager->UsesWebConnectionUi())
+                    CServerBrowserWeb::NotifyConnectionFailed("bad-response", responseError);
+                else
+                    CCore::GetSingleton().ShowNetErrorMessageBox(_("Error") + _E("CC33"), responseError);
                 g_pConnectManager->Abort();
             }
         }
@@ -549,9 +657,17 @@ bool CConnectManager::StaticProcessPacket(unsigned char ucPacketID, NetBitStream
 
 void CConnectManager::CompleteConnectionToMod(const std::string& modName)
 {
+    // Loading the mod is synchronous, but it creates one legacy status box
+    // internally. Keep ownership stable until Load returns so that box can be
+    // removed before the frame is presented.
+    const bool useWebConnectionUi = UsesWebConnectionUi();
+
     if (modName != "deathmatch")
     {
-        g_pCore->ShowNetErrorMessageBox(_("Error") + _E("CC32"), _("Bad server response (2)"));
+        if (useWebConnectionUi)
+            CServerBrowserWeb::NotifyConnectionFailed("bad-response", _("Bad server response (2)"));
+        else
+            g_pCore->ShowNetErrorMessageBox(_("Error") + _E("CC32"), _("Bad server response (2)"));
         Abort();
         return;
     }
@@ -559,7 +675,10 @@ void CConnectManager::CompleteConnectionToMod(const std::string& modName)
     // Populate the arguments to pass it (-c host port nick)
     SString arguments("%s %s", m_strNick.c_str(), m_strPassword.c_str());
 
-    g_pCore->RemoveMessageBox();
+    if (useWebConnectionUi)
+        CServerBrowserWeb::NotifyConnectionProgress("joining", _("Connection accepted. Entering the game..."));
+    else
+        g_pCore->RemoveMessageBox();
 
     if (m_bSave)
     {
@@ -587,8 +706,24 @@ void CConnectManager::CompleteConnectionToMod(const std::string& modName)
     if (!CModManager::GetSingleton().Load(arguments))
     {
         arguments.Format(_("No such mod installed (%s)"), modName.c_str());
-        g_pCore->ShowMessageBox(_("Error") + _E("CC31"), arguments, MB_BUTTON_OK | MB_ICON_ERROR);
+        if (useWebConnectionUi)
+            CServerBrowserWeb::NotifyConnectionFailed("mod-unavailable", arguments);
+        else
+            g_pCore->ShowMessageBox(_("Error") + _E("CC31"), arguments, MB_BUTTON_OK | MB_ICON_ERROR);
         Abort();
+    }
+    else if (useWebConnectionUi)
+    {
+        // CClientGame::StartGame creates "Entering the game ..." during the
+        // synchronous Load call. It has not rendered yet, so removing it here
+        // prevents a one-frame CEGUI flash while preserving legacy callers.
+        g_pCore->RemoveMessageBox();
+        CServerBrowserWeb::NotifyConnectionSucceeded();
+        // Keep the session origin after the first mod load. Servers may force
+        // a bootstrap reconnect (for example after publishing native-world
+        // data); that continuation must reopen the same web-owned UI instead
+        // of being reclassified as a fresh legacy connection. A genuinely new
+        // Connect call still replaces this flag with its own explicit owner.
     }
 }
 

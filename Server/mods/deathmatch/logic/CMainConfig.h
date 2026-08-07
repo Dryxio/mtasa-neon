@@ -151,6 +151,8 @@ public:
     const std::string&                GetNeonRegistryWebsite() const noexcept { return m_neonRegistryWebsite; }
     const std::string&                GetNeonRegistryDiscord() const noexcept { return m_neonRegistryDiscord; }
     const std::string&                GetNeonRegistryAccent() const noexcept { return m_neonRegistryAccent; }
+    const std::string&                GetNeonRegistryLogo() const noexcept { return m_neonRegistryLogo; }
+    const std::string&                GetNeonRegistryBanner() const noexcept { return m_neonRegistryBanner; }
 
     SString GetSetting(const SString& configSetting);
     bool    GetSetting(const SString& configSetting, SString& strValue);
@@ -273,4 +275,6 @@ private:
     std::string                m_neonRegistryWebsite;
     std::string                m_neonRegistryDiscord;
     std::string                m_neonRegistryAccent;
+    std::string                m_neonRegistryLogo;
+    std::string                m_neonRegistryBanner;
 };

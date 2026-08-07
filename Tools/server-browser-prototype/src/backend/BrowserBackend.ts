@@ -12,13 +12,32 @@ import type { ServerAddress, ServerItem, ServerSource } from '../types'
  * donc l'UI s'abonne plutôt que d'attendre une réponse unique.
  */
 
+export type ConnectErrorCode =
+  | 'timeout'
+  | 'refused'
+  | 'bad-password'
+  | 'password-required'
+  | 'server-full'
+  | 'version-mismatch'
+  | 'banned'
+  | 'disconnected'
+  | 'identity-required'
+  | 'identity-failed'
+  | 'bad-response'
+  | 'mod-unavailable'
+  | 'invalid-nick'
+  | 'connection-start-failed'
+  | 'unknown'
+
+export type ConnectStage = 'contacting' | 'authorizing' | 'joining'
+
 export interface ConnectError {
   address: ServerAddress
   /**
    * `password-required` : le serveur est protégé et aucun mot de passe n'a
    * été fourni — l'UI ouvre sa modale sans afficher d'erreur.
    */
-  code: 'timeout' | 'refused' | 'bad-password' | 'password-required' | 'server-full' | 'version-mismatch' | 'unknown'
+  code: ConnectErrorCode
   message: string
 }
 
@@ -29,6 +48,7 @@ export type BackendEvent =
   | { type: 'refresh-finished'; source: ServerSource }
   | { type: 'refresh-failed'; source: ServerSource; message: string }
   | { type: 'connect-started'; address: ServerAddress; serverName?: string }
+  | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; error: ConnectError }
   | { type: 'connect-succeeded'; address: ServerAddress }
   | { type: 'favourites-changed'; servers: ServerItem[] }

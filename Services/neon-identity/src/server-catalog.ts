@@ -4,9 +4,13 @@ import { isCanonicalIpv4Endpoint, SERVER_ID_PATTERN } from "./config.js";
 import type { RegisteredServer } from "./model.js";
 
 const countryCodeSchema = z.string().regex(/^[A-Z]{2}$/);
-const publicUrlSchema = z.url().refine((value) => new URL(value).protocol === "https:", {
+const publicUrlSchema = z.url().max(2_048).refine((value) => new URL(value).protocol === "https:", {
     message: "Public server links must use HTTPS",
 });
+const artworkSourceUrlSchema = publicUrlSchema.refine((value) => {
+    const url = new URL(value);
+    return !url.username && !url.password && !url.hash && (!url.port || url.port === "443");
+}, { message: "Server artwork must use a standard HTTPS URL without credentials or fragments" });
 const publicServerLinkSchema = z
     .object({
         kind: z.enum(["website", "discord", "instagram", "x", "facebook", "vk", "youtube", "tiktok"]),
@@ -25,6 +29,8 @@ const publicServerSchema = z
         languages: z.array(z.string().trim().min(1).max(80)).max(16),
         links: z.array(publicServerLinkSchema).max(12),
         accent: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+        logo_url: artworkSourceUrlSchema.optional(),
+        banner_url: artworkSourceUrlSchema.optional(),
     })
     .strict();
 const publicServerCatalogSchema = z
@@ -47,6 +53,8 @@ export const serverHeartbeatSchema = z
         languages: z.array(z.string().trim().min(1).max(80)).max(16).default([]),
         links: z.array(publicServerLinkSchema).max(12).default([]),
         accent: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+        logo_url: artworkSourceUrlSchema.optional(),
+        banner_url: artworkSourceUrlSchema.optional(),
     })
     .strict();
 
@@ -102,7 +110,10 @@ export function validatePublicServerCatalog(input: unknown): PublicServerCatalog
     return parsed.data;
 }
 
-export function buildPublicServerCatalog(servers: RegisteredServer[]): PublicServerCatalog {
+export function buildPublicServerCatalog(
+    servers: RegisteredServer[],
+    assetUrl: (hash: string) => string = (hash) => `https://invalid.example/v1/server-registry/assets/${hash}`,
+): PublicServerCatalog {
     return validatePublicServerCatalog({
         schema_version: 1,
         servers: servers.map((server) => ({
@@ -115,6 +126,8 @@ export function buildPublicServerCatalog(servers: RegisteredServer[]): PublicSer
             languages: server.languages,
             links: server.links,
             ...(server.accent ? { accent: server.accent } : {}),
+            ...(server.logoAssetHash ? { logo_url: assetUrl(server.logoAssetHash) } : {}),
+            ...(server.bannerAssetHash ? { banner_url: assetUrl(server.bannerAssetHash) } : {}),
         })),
     });
 }

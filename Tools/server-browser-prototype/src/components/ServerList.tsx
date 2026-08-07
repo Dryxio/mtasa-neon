@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n'
 import type { ServerItem } from '../types'
 import { Flag, IconLock, IconStar, IconStarFilled } from './Icons'
@@ -48,6 +48,14 @@ const Row = memo(function Row({
       role="row"
       aria-selected={selected}
     >
+      <span
+        className="server-row__logo"
+        style={{ '--server-accent': server.accent ?? '#accbf1' } as CSSProperties}
+        aria-hidden="true"
+      >
+        <span>{serverInitials(server.name)}</span>
+        {server.logoUrl && <img src={server.logoUrl} alt="" draggable={false} referrerPolicy="no-referrer" />}
+      </span>
       <div className="server-row__body">
         <div className="server-row__top">
           <span className="server-row__name">{server.name}</span>
@@ -93,6 +101,11 @@ const Row = memo(function Row({
     </div>
   )
 })
+
+function serverInitials(name: string): string {
+  const words = name.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/)
+  return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'N'
+}
 
 export function ServerList(props: ServerListProps) {
   const { t } = useI18n()

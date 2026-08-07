@@ -1,4 +1,13 @@
-import type { DiscordProfile, FlowPollResult, IdentityStore, NeonAccount, OAuthFlow, RegisteredServer } from "./model.js";
+import type {
+    DiscordProfile,
+    FlowPollResult,
+    IdentityStore,
+    NeonAccount,
+    OAuthFlow,
+    RegisteredServer,
+    ServerAsset,
+    ServerAssetSource,
+} from "./model.js";
 
 interface MemorySession {
     accountId: string;
@@ -15,6 +24,8 @@ export class MemoryIdentityStore implements IdentityStore {
     readonly accounts = new Map<string, NeonAccount>();
     readonly sessions: MemorySession[] = [];
     readonly registeredServers = new Map<string, RegisteredServer>();
+    readonly serverAssets = new Map<string, ServerAsset>();
+    readonly serverAssetSources = new Map<string, ServerAssetSource>();
 
     async createFlow(flow: OAuthFlow): Promise<void> {
         this.flows.set(flow.id, {
@@ -134,6 +145,21 @@ export class MemoryIdentityStore implements IdentityStore {
             .filter((server) => server.lastSeenAt >= activeSince)
             .sort((left, right) => left.id.localeCompare(right.id))
             .map((server) => structuredClone(server));
+    }
+
+    async findServerAssetSource(sourceUrl: string, freshSince: Date): Promise<ServerAssetSource | null> {
+        const source = this.serverAssetSources.get(sourceUrl);
+        return source && source.fetchedAt >= freshSince ? structuredClone(source) : null;
+    }
+
+    async putServerAsset(asset: ServerAsset, source: ServerAssetSource): Promise<void> {
+        this.serverAssets.set(asset.hash, structuredClone(asset));
+        this.serverAssetSources.set(source.sourceUrl, structuredClone(source));
+    }
+
+    async findServerAssetByHash(hash: string): Promise<ServerAsset | null> {
+        const asset = this.serverAssets.get(hash);
+        return asset ? structuredClone(asset) : null;
     }
 
     async close(): Promise<void> {}

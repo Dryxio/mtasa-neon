@@ -1,5 +1,5 @@
 import type { ServerAddress, ServerItem, ServerLink, ServerSource } from '../../types'
-import type { BackendEvent, BackendListener, BrowserBackend, Unsubscribe } from '../BrowserBackend'
+import type { BackendEvent, BackendListener, BrowserBackend, ConnectErrorCode, ConnectStage, Unsubscribe } from '../BrowserBackend'
 
 /**
  * Backend réel : parle au bridge C++ de CServerBrowserWeb (Client/core).
@@ -31,7 +31,10 @@ type NativeEvent =
   | { type: 'registry-error'; message: string }
   | { type: 'favourites'; keys: string[] }
   | { type: 'connect-password-required'; host: string; port: number; name?: string }
+  | { type: 'connect-started'; host: string; port: number; name?: string }
+  | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; code: string; message: string }
+  | { type: 'connect-succeeded' }
 
 interface NativeServer {
   id: string
@@ -59,6 +62,8 @@ interface NativeServer {
   languages?: string[]
   links?: ServerLink[]
   accent?: string
+  logoUrl?: string
+  bannerUrl?: string
 }
 
 export function isCefEnvironment(): boolean {
@@ -72,6 +77,7 @@ export class CefBackend implements BrowserBackend {
   private clientVersion = ''
   private currentSource: ServerSource = 'internet'
   private peakPlayers = 0
+  private activeConnection: ServerAddress | null = null
 
   constructor() {
     window.__neonSB = { emit: (events) => events.forEach((e) => this.onNativeEvent(e)) }
@@ -122,6 +128,8 @@ export class CefBackend implements BrowserBackend {
       tags: [],
       links: native.links ?? [],
       accent: native.accent,
+      logoUrl: native.logoUrl || undefined,
+      bannerUrl: native.bannerUrl || undefined,
     }
   }
 
@@ -165,6 +173,7 @@ export class CefBackend implements BrowserBackend {
         break
       }
       case 'connect-password-required':
+        this.activeConnection = { ip: event.host, port: event.port }
         this.emit({
           type: 'connect-failed',
           error: {
@@ -174,15 +183,26 @@ export class CefBackend implements BrowserBackend {
           },
         })
         break
+      case 'connect-started':
+        this.activeConnection = { ip: event.host, port: event.port }
+        this.emit({ type: 'connect-started', address: this.activeConnection, serverName: event.name })
+        break
+      case 'connect-progress':
+        this.emit({ type: 'connect-progress', stage: event.stage, message: event.message })
+        break
       case 'connect-failed':
         this.emit({
           type: 'connect-failed',
           error: {
-            address: { ip: '', port: 0 },
-            code: event.code === 'bad-password' ? 'bad-password' : 'unknown',
+            address: this.activeConnection ?? { ip: '', port: 0 },
+            code: normalizeConnectErrorCode(event.code),
             message: event.message,
           },
         })
+        break
+      case 'connect-succeeded':
+        if (this.activeConnection) this.emit({ type: 'connect-succeeded', address: this.activeConnection })
+        this.activeConnection = null
         break
     }
   }
@@ -204,12 +224,14 @@ export class CefBackend implements BrowserBackend {
   }
 
   connect(address: ServerAddress, password?: string): Promise<void> {
+    this.activeConnection = address
     this.send('sb:connect', address.ip, String(address.port), password ?? '')
     return Promise.resolve()
   }
 
   cancelConnect(): void {
-    // La connexion native affiche sa propre boîte "CONNECTING" avec Annuler.
+    this.send('sb:cancelConnect')
+    this.activeConnection = null
   }
 
   addFavourite(address: ServerAddress): Promise<void> {
@@ -243,4 +265,26 @@ export class CefBackend implements BrowserBackend {
   close(): void {
     this.send('sb:close')
   }
+}
+
+const CONNECT_ERROR_CODES = new Set<ConnectErrorCode>([
+  'timeout',
+  'refused',
+  'bad-password',
+  'password-required',
+  'server-full',
+  'version-mismatch',
+  'banned',
+  'disconnected',
+  'identity-required',
+  'identity-failed',
+  'bad-response',
+  'mod-unavailable',
+  'invalid-nick',
+  'connection-start-failed',
+  'unknown',
+])
+
+function normalizeConnectErrorCode(code: string): ConnectErrorCode {
+  return CONNECT_ERROR_CODES.has(code as ConnectErrorCode) ? (code as ConnectErrorCode) : 'unknown'
 }

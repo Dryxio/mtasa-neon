@@ -442,6 +442,22 @@
   }
 }
 
+/*
+ * Keep the deliberately right-shifted 16:9 composition, but reduce that bias
+ * when aspect-fill has to crop increasingly large strips from a squarer view.
+ */
+@media (max-aspect-ratio: 16 / 10) {
+  .main-menu__scene {
+    object-position: 42% center;
+  }
+}
+
+@media (max-aspect-ratio: 4 / 3) {
+  .main-menu__scene {
+    object-position: center;
+  }
+}
+
 @media (max-width: 900px), (max-aspect-ratio: 5 / 4) {
   .main-menu__art {
     inset: 0;

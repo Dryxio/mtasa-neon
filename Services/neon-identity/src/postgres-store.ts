@@ -9,6 +9,8 @@ import type {
     OAuthFlow,
     RegisteredServer,
     RegisteredServerLink,
+    ServerAsset,
+    ServerAssetSource,
 } from "./model.js";
 
 interface AccountRow extends QueryResultRow {
@@ -34,8 +36,19 @@ interface RegisteredServerRow extends QueryResultRow {
     languages: string[];
     links: RegisteredServerLink[];
     accent: string | null;
+    logo_asset_hash: string | null;
+    banner_asset_hash: string | null;
     first_seen_at: Date;
     last_seen_at: Date;
+}
+
+interface ServerAssetRow extends QueryResultRow {
+    hash: string;
+    mime_type: ServerAsset["mimeType"];
+    width: number;
+    height: number;
+    bytes: Buffer;
+    created_at: Date;
 }
 
 function toAccount(row: AccountRow): NeonAccount {
@@ -64,8 +77,21 @@ function toRegisteredServer(row: RegisteredServerRow): RegisteredServer {
         languages: row.languages,
         links: row.links,
         accent: row.accent,
+        logoAssetHash: row.logo_asset_hash,
+        bannerAssetHash: row.banner_asset_hash,
         firstSeenAt: row.first_seen_at,
         lastSeenAt: row.last_seen_at,
+    };
+}
+
+function toServerAsset(row: ServerAssetRow): ServerAsset {
+    return {
+        hash: row.hash,
+        mimeType: row.mime_type,
+        width: row.width,
+        height: row.height,
+        bytes: row.bytes,
+        createdAt: row.created_at,
     };
 }
 
@@ -242,8 +268,8 @@ export class PostgresIdentityStore implements IdentityStore {
         await this.#pool.query(
             `INSERT INTO neon_registered_servers
                 (server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
-                 countries, languages, links, accent, first_seen_at, last_seen_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14)
+                 countries, languages, links, accent, logo_asset_hash, banner_asset_hash, first_seen_at, last_seen_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16)
              ON CONFLICT (server_id) DO UPDATE SET
                 endpoint = EXCLUDED.endpoint,
                 registry_protocol = EXCLUDED.registry_protocol,
@@ -256,6 +282,8 @@ export class PostgresIdentityStore implements IdentityStore {
                 languages = EXCLUDED.languages,
                 links = EXCLUDED.links,
                 accent = EXCLUDED.accent,
+                logo_asset_hash = EXCLUDED.logo_asset_hash,
+                banner_asset_hash = EXCLUDED.banner_asset_hash,
                 last_seen_at = EXCLUDED.last_seen_at`,
             [
                 server.id,
@@ -270,6 +298,8 @@ export class PostgresIdentityStore implements IdentityStore {
                 JSON.stringify(server.languages),
                 JSON.stringify(server.links),
                 server.accent,
+                server.logoAssetHash,
+                server.bannerAssetHash,
                 server.firstSeenAt,
                 server.lastSeenAt,
             ],
@@ -279,13 +309,49 @@ export class PostgresIdentityStore implements IdentityStore {
     async listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]> {
         const result = await this.#pool.query<RegisteredServerRow>(
             `SELECT server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
-                    countries, languages, links, accent, first_seen_at, last_seen_at
+                    countries, languages, links, accent, logo_asset_hash, banner_asset_hash, first_seen_at, last_seen_at
                FROM neon_registered_servers
               WHERE last_seen_at >= $1
               ORDER BY server_id`,
             [activeSince],
         );
         return result.rows.map(toRegisteredServer);
+    }
+
+    async findServerAssetSource(sourceUrl: string, freshSince: Date): Promise<ServerAssetSource | null> {
+        const result = await this.#pool.query<{ source_url: string; asset_hash: string; fetched_at: Date }>(
+            `SELECT source_url, asset_hash, fetched_at
+               FROM neon_server_asset_sources
+              WHERE source_url = $1 AND fetched_at >= $2`,
+            [sourceUrl, freshSince],
+        );
+        const row = result.rows[0];
+        return row ? { sourceUrl: row.source_url, assetHash: row.asset_hash, fetchedAt: row.fetched_at } : null;
+    }
+
+    async putServerAsset(asset: ServerAsset, source: ServerAssetSource): Promise<void> {
+        await inTransaction(this.#pool, async (client) => {
+            await client.query(
+                `INSERT INTO neon_server_assets (hash, mime_type, width, height, bytes, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (hash) DO NOTHING`,
+                [asset.hash, asset.mimeType, asset.width, asset.height, asset.bytes, asset.createdAt],
+            );
+            await client.query(
+                `INSERT INTO neon_server_asset_sources (source_url, asset_hash, fetched_at)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (source_url) DO UPDATE SET asset_hash = EXCLUDED.asset_hash, fetched_at = EXCLUDED.fetched_at`,
+                [source.sourceUrl, source.assetHash, source.fetchedAt],
+            );
+        });
+    }
+
+    async findServerAssetByHash(hash: string): Promise<ServerAsset | null> {
+        const result = await this.#pool.query<ServerAssetRow>(
+            `SELECT hash, mime_type, width, height, bytes, created_at FROM neon_server_assets WHERE hash = $1`,
+            [hash],
+        );
+        return result.rows[0] ? toServerAsset(result.rows[0]) : null;
     }
 
     async close(): Promise<void> {

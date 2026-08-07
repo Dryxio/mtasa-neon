@@ -131,7 +131,9 @@ versioned presentation document rather than an authorization source:
       "description": "Open-world 1v1 vehicle pursuits: escape your rival or stop them before time runs out.",
       "countries": ["BR", "GB", "FR", "RU", "PL", "ID", "ES"],
       "languages": ["Portuguese (Brazil)", "English", "French", "Russian", "Polish", "Indonesian", "Spanish"],
-      "links": []
+      "links": [],
+      "logo_url": "https://identity.example.com/v1/server-registry/assets/0123456789abcdef...",
+      "banner_url": "https://identity.example.com/v1/server-registry/assets/fedcba9876543210..."
     }
   ]
 }
@@ -151,6 +153,15 @@ Names and presentation metadata come from `mtaserver.conf`. Live mode, map,
 player count, password state, version, and ping remain sourced from ASE. Public
 catalogue responses allow cross-origin reads and use
 `Cache-Control: public, max-age=30, stale-if-error=300`.
+
+Optional `logo_url` and `banner_url` heartbeat fields are fetched by Identity,
+not exposed directly to players. Every hop must resolve exclusively to public
+IP addresses and use HTTPS on the standard port. Redirects, timeouts, response
+size, MIME magic, and dimensions are validated. PNG, JPEG, and WebP files up to
+2 MiB and 4096×4096 (at most 16 megapixels) are accepted. Valid assets are
+content-addressed in PostgreSQL and published through immutable, same-origin
+HTTPS URLs. A failed refresh retains an older cached copy when possible and
+never removes an otherwise healthy server from discovery.
 
 ## Ticket validation contract
 
@@ -222,10 +233,13 @@ enabled. An administrator can opt out or provide richer browser metadata:
 <neon_registry_website>https://mta-neon.com</neon_registry_website>
 <neon_registry_discord>https://discord.gg/example</neon_registry_discord>
 <neon_registry_accent>#9EBCE5</neon_registry_accent>
+<neon_registry_logo>https://cdn.example.com/neon/logo.webp</neon_registry_logo>
+<neon_registry_banner>https://cdn.example.com/neon/banner.webp</neon_registry_banner>
 ```
 
 `countries` contains comma-separated ISO 3166-1 alpha-2 codes. Links must use
-HTTPS. Empty optional fields receive conservative service defaults. The
+HTTPS. Artwork is optional and its source URL is replaced by the cached
+Identity URL before publication. Empty optional fields receive conservative service defaults. The
 official heartbeat URL is compiled as the default; a private deployment can
 override it with `<neon_registry_url>`.
 

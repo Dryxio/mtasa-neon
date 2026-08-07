@@ -19,4 +19,4 @@ if (typeof window !== 'undefined' && new URLSearchParams(window.location.search)
 
 export const backend: BrowserBackend = isCefEnvironment() ? new CefBackend() : new MockBackend()
 
-export type { BackendEvent, BrowserBackend, ConnectError } from './BrowserBackend'
+export type { BackendEvent, BrowserBackend, ConnectError, ConnectStage } from './BrowserBackend'

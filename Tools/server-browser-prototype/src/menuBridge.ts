@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { ConnectErrorCode, ConnectStage } from './backend/BrowserBackend'
 import { normalizeTranslations, type TranslationMap } from './i18n'
+import type { ConnectFlow } from './store'
 
 export interface MenuLanguage {
   locale: string
@@ -19,12 +21,18 @@ interface MenuState {
   languages: MenuLanguage[]
   identity: MenuIdentity
   translations: TranslationMap
+  connect: ConnectFlow
 }
 
 type NativeMenuEvent =
-  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations'>)
+  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations' | 'connect'>)
   | { type: 'context'; inGame: boolean }
   | { type: 'identity'; identity: MenuIdentity }
+  | { type: 'connect-password-required'; host: string; port: number; name?: string }
+  | { type: 'connect-started'; host: string; port: number; name?: string }
+  | { type: 'connect-progress'; stage: ConnectStage; message?: string }
+  | { type: 'connect-failed'; code: string; message: string }
+  | { type: 'connect-succeeded' }
 
 declare global {
   interface Window {
@@ -55,6 +63,29 @@ const INITIAL_STATE: MenuState = {
     status: 'Neon ID connected',
   },
   translations: {},
+  connect: { phase: 'idle', address: null },
+}
+
+function normalizeConnectErrorCode(code: string): ConnectErrorCode {
+  switch (code) {
+    case 'timeout':
+    case 'refused':
+    case 'bad-password':
+    case 'password-required':
+    case 'server-full':
+    case 'version-mismatch':
+    case 'banned':
+    case 'disconnected':
+    case 'identity-required':
+    case 'identity-failed':
+    case 'bad-response':
+    case 'mod-unavailable':
+    case 'invalid-nick':
+    case 'connection-start-failed':
+      return code
+    default:
+      return 'unknown'
+  }
 }
 
 function send(name: string, ...args: string[]): boolean {
@@ -91,7 +122,7 @@ export function useMenuBridge() {
         for (const event of events) {
           if (event.type === 'init') {
             enforceInGameMenuRoute(event.inGame)
-            setState({ ...event, translations: normalizeTranslations(event.translations) })
+            setState((current) => ({ ...current, ...event, translations: normalizeTranslations(event.translations) }))
           }
           else if (event.type === 'context') {
             enforceInGameMenuRoute(event.inGame)
@@ -99,6 +130,67 @@ export function useMenuBridge() {
           }
           else if (event.type === 'identity') {
             setState((current) => ({ ...current, identity: event.identity }))
+          }
+          else if (event.type === 'connect-password-required') {
+            setState((current) => ({
+              ...current,
+              connect: {
+                phase: 'password',
+                address: { ip: event.host, port: event.port },
+                serverName: event.name,
+              },
+            }))
+          }
+          else if (event.type === 'connect-started') {
+            setState((current) => ({
+              ...current,
+              connect: {
+                phase: 'connecting',
+                address: { ip: event.host, port: event.port },
+                serverName: event.name,
+                stage: 'contacting',
+              },
+            }))
+          }
+          else if (event.type === 'connect-progress') {
+            setState((current) => ({
+              ...current,
+              connect:
+                current.connect.phase === 'connecting'
+                  ? { ...current.connect, stage: event.stage, statusMessage: event.message }
+                  : current.connect,
+            }))
+          }
+          else if (event.type === 'connect-failed') {
+            setState((current) => {
+              const code = normalizeConnectErrorCode(event.code)
+              const needsPassword = code === 'bad-password' || code === 'password-required'
+              return {
+                ...current,
+                connect: {
+                  phase: needsPassword ? 'password' : 'failed',
+                  address: current.connect.address,
+                  serverName: current.connect.serverName,
+                  error:
+                    code === 'password-required' || !current.connect.address
+                      ? undefined
+                      : { address: current.connect.address, code, message: event.message },
+                },
+              }
+            })
+          }
+          else if (event.type === 'connect-succeeded') {
+            setState((current) => ({
+              ...current,
+              connect: { ...current.connect, phase: 'connecting', stage: 'joining' },
+            }))
+            window.setTimeout(() => {
+              setState((current) =>
+                current.connect.stage === 'joining'
+                  ? { ...current, connect: { phase: 'idle', address: null } }
+                  : current,
+              )
+            }, 900)
           }
         }
       },
@@ -118,5 +210,20 @@ export function useMenuBridge() {
     send('menu:setLanguage', locale)
   }, [])
 
-  return { state, command, setLanguage }
+  const submitConnectionPassword = useCallback((password: string) => {
+    if (!state.connect.address) return
+    send('sb:connect', state.connect.address.ip, String(state.connect.address.port), password)
+  }, [state.connect.address])
+
+  const retryConnection = useCallback(() => {
+    if (!state.connect.address) return
+    send('sb:connect', state.connect.address.ip, String(state.connect.address.port), '')
+  }, [state.connect.address])
+
+  const dismissConnection = useCallback(() => {
+    send('sb:cancelConnect')
+    setState((current) => ({ ...current, connect: { phase: 'idle', address: null } }))
+  }, [])
+
+  return { state, command, setLanguage, submitConnectionPassword, retryConnection, dismissConnection }
 }

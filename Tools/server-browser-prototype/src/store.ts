@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { backend } from './backend'
-import type { ConnectError } from './backend'
+import type { ConnectError, ConnectStage } from './backend'
 import { DEFAULT_FILTERS, type BrowserFilters } from './search'
 import type { ServerAddress, ServerItem, ServerSource } from './types'
 import { serverKey } from './types'
@@ -15,6 +15,8 @@ export interface ConnectFlow {
   phase: 'idle' | 'password' | 'connecting' | 'failed'
   address: ServerAddress | null
   serverName?: string
+  stage?: ConnectStage
+  statusMessage?: string
   error?: ConnectError
 }
 
@@ -109,8 +111,13 @@ backend.subscribe((event) => {
       break
     case 'connect-started':
       setState({
-        connect: { phase: 'connecting', address: event.address, serverName: event.serverName },
+        connect: { phase: 'connecting', address: event.address, serverName: event.serverName, stage: 'contacting' },
       })
+      break
+    case 'connect-progress':
+      if (state.connect.phase === 'connecting') {
+        setState({ connect: { ...state.connect, stage: event.stage, statusMessage: event.message } })
+      }
       break
     case 'connect-failed': {
       const needsPassword = event.error.code === 'bad-password' || event.error.code === 'password-required'
@@ -126,8 +133,14 @@ backend.subscribe((event) => {
       break
     }
     case 'connect-succeeded':
-      // Côté natif : bascule dans le jeu. Côté proto : on ferme le flux.
-      setState({ connect: { phase: 'idle', address: null } })
+      // Keep the accepted state long enough to be painted in the simulator.
+      // In-client, the mod normally replaces the menu before this timer ends.
+      setState({ connect: { ...state.connect, phase: 'connecting', address: event.address, stage: 'joining' } })
+      setTimeout(() => {
+        if (state.connect.address?.ip === event.address.ip && state.connect.address.port === event.address.port && state.connect.stage === 'joining') {
+          setState({ connect: { phase: 'idle', address: null } })
+        }
+      }, 900)
       break
     case 'favourites-changed':
       if (state.source === 'favourites') {

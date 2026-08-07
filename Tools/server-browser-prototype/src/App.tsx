@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DetailsPanel } from './components/DetailsPanel'
 import { Header } from './components/Header'
-import { ConnectModals } from './components/Modals'
 import { ServerList } from './components/ServerList'
 import { StatusBar } from './components/StatusBar'
 import { Toolbar } from './components/Toolbar'
@@ -144,21 +143,6 @@ export function App() {
       </div>
       <StatusBar stats={state.stats} progress={state.progress} notice={state.notice} />
 
-      <ConnectModals
-        connect={state.connect}
-        onSubmitPassword={(password) => {
-          playUiSound('select')
-          actions.submitPassword(password)
-        }}
-        onRetry={() => {
-          playUiSound('select')
-          actions.retryConnect()
-        }}
-        onDismiss={() => {
-          playUiSound('back')
-          actions.dismissConnect()
-        }}
-      />
     </div>
   )
 }

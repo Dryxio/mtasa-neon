@@ -132,14 +132,52 @@ namespace
         {"details.ready", _td("Selected server — ready to join"), _td("Selected server — ready to join"), EWebTranslationDomain::Client},
         {"details.joinServer", _td("Join server"), _td("Join Game"), EWebTranslationDomain::Client},
         {"modal.passwordRequired", _td("Password required"), _td("Password required"), EWebTranslationDomain::Client},
+        {"modal.connectionKicker", _td("Neon network // connection"), _td("Neon network // connection"), EWebTranslationDomain::Client},
+        {"modal.restrictedServer", _td("Restricted server"), _td("Restricted server"), EWebTranslationDomain::Client},
         {"modal.thisServer", _td("This server"), _td("This server"), EWebTranslationDomain::Client},
         {"modal.protectedServer", _td("{server} is protected. Enter the server password to join."),
          _td("{server} is protected. Enter the server password to join."), EWebTranslationDomain::Client},
         {"modal.serverPassword", _td("Server password"), _td("Server password"), EWebTranslationDomain::Client},
         {"modal.connecting", _td("Connecting…"), _td("Connecting…"), EWebTranslationDomain::Client},
         {"modal.joining", _td("Joining {server}"), _td("Joining {server}"), EWebTranslationDomain::Client},
+        {"modal.enteringSanAndreas", _td("Entering San Andreas"), _td("Entering San Andreas"), EWebTranslationDomain::Client},
+        {"modal.contactingServer", _td("Contacting the server and checking its version…"), _td("Contacting the server and checking its version…"),
+         EWebTranslationDomain::Client},
+        {"modal.authorizingIdentity", _td("Neon Identity"), _td("Neon Identity"), EWebTranslationDomain::Client},
+        {"modal.authorizingHint", _td("Authorizing this server with your linked Discord identity…"),
+         _td("Authorizing this server with your linked Discord identity…"), EWebTranslationDomain::Client},
+        {"modal.connectionAccepted", _td("Welcome to the streets"), _td("Welcome to the streets"), EWebTranslationDomain::Client},
+        {"modal.enteringGame", _td("Connection accepted. Preparing the game…"), _td("Connection accepted. Preparing the game…"), EWebTranslationDomain::Client},
         {"modal.connectionFailed", _td("Connection failed"), _td("Connection failed"), EWebTranslationDomain::Client},
         {"modal.unknownError", _td("Unknown error."), _td("Unknown error."), EWebTranslationDomain::Client},
+        {"modal.serverFull", _td("Server is full"), _td("Server is full"), EWebTranslationDomain::Client},
+        {"modal.serverFullHint", _td("No free slot is available. Try again in a moment."), _td("No free slot is available. Try again in a moment."),
+         EWebTranslationDomain::Client},
+        {"modal.connectionTimedOut", _td("No answer from the streets"), _td("No answer from the streets"), EWebTranslationDomain::Client},
+        {"modal.connectionTimedOutHint", _td("The server did not answer in time. Check your connection and try again."),
+         _td("The server did not answer in time. Check your connection and try again."), EWebTranslationDomain::Client},
+        {"modal.passwordRejected", _td("Wrong password"), _td("Wrong password"), EWebTranslationDomain::Client},
+        {"modal.passwordRejectedHint", _td("Enter the server password again."), _td("Enter the server password again."), EWebTranslationDomain::Client},
+        {"modal.identityRequired", _td("Neon Identity required"), _td("Neon Identity required"), EWebTranslationDomain::Client},
+        {"modal.identityRequiredHint", _td("Return to the main menu and link Discord before joining this server."),
+         _td("Return to the main menu and link Discord before joining this server."), EWebTranslationDomain::Client},
+        {"modal.identityFailed", _td("Identity check failed"), _td("Identity check failed"), EWebTranslationDomain::Client},
+        {"modal.identityFailedHint", _td("Neon could not authorize this connection. Try again in a moment."),
+         _td("Neon could not authorize this connection. Try again in a moment."), EWebTranslationDomain::Client},
+        {"modal.versionMismatch", _td("Different game version"), _td("Different game version"), EWebTranslationDomain::Client},
+        {"modal.versionMismatchHint", _td("This server requires another MTA version."), _td("This server requires another MTA version."),
+         EWebTranslationDomain::Client},
+        {"modal.connectionDenied", _td("Access denied"), _td("Access denied"), EWebTranslationDomain::Client},
+        {"modal.connectionDeniedHint", _td("This server refused the connection."), _td("This server refused the connection."), EWebTranslationDomain::Client},
+        {"modal.serverError", _td("Server response error"), _td("Server response error"), EWebTranslationDomain::Client},
+        {"modal.serverErrorHint", _td("The server returned data this client cannot use."), _td("The server returned data this client cannot use."),
+         EWebTranslationDomain::Client},
+        {"modal.playerNameInvalid", _td("Player name invalid"), _td("Player name invalid"), EWebTranslationDomain::Client},
+        {"modal.playerNameInvalidHint", _td("Change your nickname in Settings before connecting."), _td("Change your nickname in Settings before connecting."),
+         EWebTranslationDomain::Client},
+        {"modal.connectionLost", _td("Connection lost"), _td("Connection lost"), EWebTranslationDomain::Client},
+        {"modal.connectionLostHint", _td("The server closed the connection. You can try again."), _td("The server closed the connection. You can try again."),
+         EWebTranslationDomain::Client},
         {"modal.playersCount", _td("Players — {count}"), _td("Players — {count}"), EWebTranslationDomain::Client},
         {"status.registeredServers", _td("{count} registered servers"), _td("{count} registered servers"), EWebTranslationDomain::Client},
         {"status.playersOnline", _td("{count} players online."), _td("{count} players online."), EWebTranslationDomain::Client},
@@ -334,6 +372,8 @@ struct SNeonServerMetadata
     std::string                  tagline;
     std::string                  description;
     std::string                  accent;
+    std::string                  logoUrl;
+    std::string                  bannerUrl;
     std::vector<std::string>     countries;
     std::vector<std::string>     languages;
     std::vector<SNeonServerLink> links;
@@ -550,6 +590,19 @@ private:
                     return false;
             }
 
+            const auto readOptionalArtworkUrl = [server](const char* name, std::string& value)
+            {
+                json_object* field = nullptr;
+                if (!json_object_object_get_ex(server, name, &field))
+                    return true;
+
+                // Artwork must come from the registry's HTTPS cache, never
+                // directly from an arbitrary game server or local address.
+                return ReadJsonString(server, name, value, 2048) && value.rfind("https://", 0) == 0;
+            };
+            if (!readOptionalArtworkUrl("logo_url", metadata.logoUrl) || !readOptionalArtworkUrl("banner_url", metadata.bannerUrl))
+                return false;
+
             for (std::string& country : metadata.countries)
             {
                 if (country.size() != 2 || !std::all_of(country.begin(), country.end(), [](unsigned char c) { return std::isalpha(c) != 0; }))
@@ -656,6 +709,89 @@ bool CServerBrowserWeb::IsInputRoutedToWeb()
     // modal can be opened from the Windows message loop between menu pulses.
     return !ms_instance->m_mainMenu.HasNativeInputOwner() && ms_instance->m_widget->IsVisible() && ms_instance->m_widget->IsEnabled() &&
            ms_instance->m_widget->IsActive() && webCore->GetFocusedWebView() == ms_instance->m_webView;
+}
+
+bool CServerBrowserWeb::CanHandleConnectionUi()
+{
+    // A connection can hide the menu before its asynchronous network states
+    // arrive. Ownership therefore follows the live web document, not the
+    // widget's transient visibility or the lazy Server Browser route.
+    return ms_instance && ms_instance->m_documentReady;
+}
+
+bool CServerBrowserWeb::OwnsConnectionUi()
+{
+    return ms_instance && ms_instance->m_connectionUiActive;
+}
+
+bool CServerBrowserWeb::NotifyConnectionStarted(const std::string& host, unsigned short port)
+{
+    if (!CanHandleConnectionUi())
+        return false;
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "connect-started");
+    AddString(event.get(), "host", host);
+    AddInteger(event.get(), "port", port);
+
+    CServerListItem* server = ms_instance->m_registry ? ms_instance->m_registry->Find(host, port) : nullptr;
+    if (!server)
+        server = ms_instance->m_serverBrowser.FindServer(host, port);
+    if (server)
+    {
+        const SNeonServerMetadata* metadata = ms_instance->m_registry ? ms_instance->m_registry->FindMetadata(*server) : nullptr;
+        AddString(event.get(), "name", metadata ? metadata->name : server->strName);
+    }
+
+    ms_instance->QueueConnectionEvent(ToJson(event.get()));
+    return true;
+}
+
+bool CServerBrowserWeb::NotifyConnectionProgress(const std::string& stage, const std::string& message)
+{
+    if (!CanHandleConnectionUi())
+        return false;
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "connect-progress");
+    AddString(event.get(), "stage", stage);
+    AddString(event.get(), "message", message);
+    ms_instance->QueueConnectionEvent(ToJson(event.get()));
+    return true;
+}
+
+bool CServerBrowserWeb::NotifyConnectionFailed(const std::string& code, const std::string& message)
+{
+    if (!CanHandleConnectionUi())
+    {
+        if (ms_instance)
+            ms_instance->m_connectionUiActive = false;
+        return false;
+    }
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "connect-failed");
+    AddString(event.get(), "code", code);
+    AddString(event.get(), "message", message);
+    ms_instance->QueueConnectionEvent(ToJson(event.get()));
+    ms_instance->m_connectionUiActive = false;
+    return true;
+}
+
+bool CServerBrowserWeb::NotifyConnectionSucceeded()
+{
+    if (!CanHandleConnectionUi())
+    {
+        if (ms_instance)
+            ms_instance->m_connectionUiActive = false;
+        return false;
+    }
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "connect-succeeded");
+    ms_instance->QueueConnectionEvent(ToJson(event.get()));
+    ms_instance->m_connectionUiActive = false;
+    return true;
 }
 
 bool CServerBrowserWeb::RouteInputMessage(UINT message, WPARAM wParam, LPARAM lParam)
@@ -964,6 +1100,9 @@ void CServerBrowserWeb::Events_OnChangeCursor(unsigned char)
 
 void CServerBrowserWeb::Events_OnTriggerEvent(const SString& eventName, const std::vector<std::string>& arguments)
 {
+    if (eventName == "sb:connect" || eventName == "menu:quickConnect")
+        WriteDebugEvent(SString("Neon menu connection request event=%s args=%u", eventName.c_str(), static_cast<unsigned>(arguments.size())));
+
     if (eventName.BeginsWith("menu:"))
         HandleMenuEvent(eventName, arguments);
     else if (eventName.BeginsWith("sb:"))
@@ -1026,7 +1165,14 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
             m_widget->SetAlpha(1.0f);
     }
     else if (eventName == "menu:quickConnect")
-        m_mainMenu.OnQuickConnectButtonClick(nullptr, true);
+    {
+        // The always-mounted menu shell owns the lightweight connection modal,
+        // so Quick Connect can remain immediate without loading server data or
+        // starting the lazy Server Browser scan.
+        m_connectionUiActive = true;
+        if (!m_mainMenu.OnQuickConnectButtonClick(nullptr, true))
+            m_connectionUiActive = false;
+    }
     else if (eventName == "menu:resume" && m_mainMenu.GetIsIngame())
         m_mainMenu.OnResumeButtonClick(nullptr);
     else if (eventName == "menu:disconnect" && g_pCore->IsConnected())
@@ -1108,6 +1254,11 @@ void CServerBrowserWeb::HandleServerBrowserEvent(const SString& eventName, const
         RefreshCurrentSource();
     else if (eventName == "sb:connect" && arguments.size() == 3)
         Connect(arguments[0], ParsePort(arguments[1]), arguments[2]);
+    else if (eventName == "sb:cancelConnect")
+    {
+        g_pCore->GetConnectManager()->CancelWebConnection();
+        m_connectionUiActive = false;
+    }
     else if (eventName == "sb:favourite" && arguments.size() == 3)
         SetFavourite(arguments[0], ParsePort(arguments[1]), arguments[2] == "1");
     else if (eventName == "sb:openExternal" && arguments.size() == 1)
@@ -1228,6 +1379,8 @@ void CServerBrowserWeb::QueueServer(const CServerListItem& server)
     AddString(value, "tagline", metadata->tagline);
     AddString(value, "description", metadata->description);
     AddString(value, "accent", metadata->accent);
+    AddString(value, "logoUrl", metadata->logoUrl);
+    AddString(value, "bannerUrl", metadata->bannerUrl);
     AddString(value, "gameMode", server.strGameMode);
     AddString(value, "map", server.strMap);
     AddString(value, "version", server.strVersion);
@@ -1271,6 +1424,16 @@ void CServerBrowserWeb::QueueServer(const CServerListItem& server)
 void CServerBrowserWeb::QueueEvent(const std::string& channel, const std::string& json)
 {
     (channel == "menu" ? m_menuEvents : m_serverEvents).push_back(json);
+}
+
+void CServerBrowserWeb::QueueConnectionEvent(const std::string& json)
+{
+    // The menu channel is always mounted and handles Quick Connect without
+    // importing the heavy server list. Mirror into the server channel only
+    // after its lazy bridge exists so direct joins keep their store in sync.
+    QueueEvent("menu", json);
+    if (m_serverBrowserReady)
+        QueueEvent("server", json);
 }
 
 void CServerBrowserWeb::FlushEvents()
@@ -1402,9 +1565,15 @@ void CServerBrowserWeb::Connect(const std::string& host, unsigned short port, co
         AddInteger(event.get(), "port", port);
         const SNeonServerMetadata* metadata = m_registry ? m_registry->FindMetadata(*server) : nullptr;
         AddString(event.get(), "name", metadata ? metadata->name : server->strName);
-        QueueEvent("server", ToJson(event.get()));
+        QueueConnectionEvent(ToJson(event.get()));
         return;
     }
+
+    // Publish the target before native validation begins. This gives the
+    // always-mounted shell enough context to present even an immediate local
+    // failure (for example an invalid nickname or unavailable network module).
+    m_connectionUiActive = true;
+    NotifyConnectionStarted(host, port);
 
     std::string nick;
     CVARS_GET("nick", nick);
@@ -1414,21 +1583,17 @@ void CServerBrowserWeb::Connect(const std::string& host, unsigned short port, co
         AddString(event.get(), "type", "connect-failed");
         AddString(event.get(), "code", "invalid-nick");
         AddString(event.get(), "message", _("Invalid nickname. Change it in Settings before connecting."));
-        QueueEvent("server", ToJson(event.get()));
+        QueueConnectionEvent(ToJson(event.get()));
         return;
     }
 
     if (!password.empty())
         m_serverBrowser.SetServerPassword(host + ":" + std::to_string(port), password);
 
-    if (!g_pCore->GetConnectManager()->Connect(host.c_str(), port, nick.c_str(), password.c_str(), true))
-    {
-        JsonPtr event = MakeObject();
-        AddString(event.get(), "type", "connect-failed");
-        AddString(event.get(), "code", "connection-start-failed");
-        AddString(event.get(), "message", _("The client could not start the connection."));
-        QueueEvent("server", ToJson(event.get()));
-    }
+    // Ownership lives on the bridge as well as the current native attempt so
+    // a reconnect cannot silently fall back to CEGUI mid-handoff.
+    if (!g_pCore->GetConnectManager()->Connect(host.c_str(), port, nick.c_str(), password.c_str(), true, true))
+        NotifyConnectionFailed("connection-start-failed", _("The client could not start the connection."));
 }
 
 CServerList* CServerBrowserWeb::GetCurrentList() const

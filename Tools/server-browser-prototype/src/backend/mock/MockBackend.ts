@@ -22,6 +22,7 @@ export class MockBackend implements BrowserBackend {
   private history: Map<string, number>
   private refreshTimer: ReturnType<typeof setInterval> | null = null
   private connectTimer: ReturnType<typeof setTimeout> | null = null
+  private connectProgressTimer: ReturnType<typeof setTimeout> | null = null
   private connectAttempts = new Map<string, number>()
 
   constructor() {
@@ -103,6 +104,10 @@ export class MockBackend implements BrowserBackend {
     const id = serverKey(address.ip, address.port)
     const server = this.internet.get(id) ?? this.lan.get(id)
     this.emit({ type: 'connect-started', address, serverName: server?.name })
+    this.connectProgressTimer = setTimeout(() => {
+      this.emit({ type: 'connect-progress', stage: 'authorizing' })
+      this.connectProgressTimer = null
+    }, 550)
 
     this.connectTimer = setTimeout(() => {
       this.connectTimer = null
@@ -140,7 +145,9 @@ export class MockBackend implements BrowserBackend {
 
   cancelConnect(): void {
     if (this.connectTimer) clearTimeout(this.connectTimer)
+    if (this.connectProgressTimer) clearTimeout(this.connectProgressTimer)
     this.connectTimer = null
+    this.connectProgressTimer = null
   }
 
   addFavourite(address: ServerAddress): Promise<void> {

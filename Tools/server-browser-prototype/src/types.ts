@@ -89,6 +89,9 @@ export interface ServerItem {
   links: ServerLink[]
   /** Couleur de marque pour l'icône/bannière générée. */
   accent?: string
+  /** Visuels contrôlés et mis en cache par le registre Neon. */
+  logoUrl?: string
+  bannerUrl?: string
 }
 
 export interface ServerAddress {

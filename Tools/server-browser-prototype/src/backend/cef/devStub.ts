@@ -10,8 +10,7 @@
  *  - sb:ready       → init + favourites + list-reset + vagues de serveurs
  *  - sb:setSource   → list-reset + snapshot de la source
  *  - sb:refresh     → re-scan avec progression
- *  - sb:connect     → connect-password-required si verrouillé sans mdp ;
- *                     sinon rien (le natif affiche sa boîte CONNECTING)
+ *  - sb:connect     → mot de passe ou séquence started/progress/succeeded
  *  - sb:favourite   → favourites (clés mises à jour)
  *  - sb:close       → console.log (le natif masque la vue)
  */
@@ -55,6 +54,7 @@ export function installCefDevStub(): void {
   const favourites = new Set<string>(['178.32.220.100:22003'])
   const inGame = new URLSearchParams(window.location.search).has('ingame')
   let scanTimer: ReturnType<typeof setInterval> | null = null
+  let connectTimers: ReturnType<typeof setTimeout>[] = []
 
   const emit = (events: unknown[]) => {
     // Différé pour imiter ExecuteJavascript (jamais synchrone avec l'appel)
@@ -155,15 +155,26 @@ export function installCefDevStub(): void {
         case 'sb:connect': {
           const [host, port, password] = args
           const server = STUB_SERVERS.find((s) => s.ip === host)
+          connectTimers.forEach(clearTimeout)
+          connectTimers = []
           if (server?.passworded && !password) {
             emit([{ type: 'connect-password-required', host, port: Number(port), name: server.name }])
-          } else if (password && password !== 'neon') {
-            emit([{ type: 'connect-failed', code: 'bad-password', message: 'Incorrect server password.' }])
           } else {
-            console.log('[cefsim] CONNECTING… (le natif affiche sa boîte de dialogue ici)')
+            emit([{ type: 'connect-started', host, port: Number(port), name: server?.name }])
+            if (password && password !== 'neon') {
+              connectTimers.push(setTimeout(() => emit([{ type: 'connect-failed', code: 'bad-password', message: 'Incorrect server password.' }]), 750))
+            } else {
+              connectTimers.push(setTimeout(() => emit([{ type: 'connect-progress', stage: 'authorizing', message: 'Authorizing this server with Neon Identity...' }]), 650))
+              connectTimers.push(setTimeout(() => emit([{ type: 'connect-progress', stage: 'joining', message: 'Connection accepted. Entering the game...' }]), 1350))
+              connectTimers.push(setTimeout(() => emit([{ type: 'connect-succeeded' }]), 2050))
+            }
           }
           break
         }
+        case 'sb:cancelConnect':
+          connectTimers.forEach(clearTimeout)
+          connectTimers = []
+          break
         case 'sb:favourite': {
           const [host, port, on] = args
           const key = `${host}:${port}`

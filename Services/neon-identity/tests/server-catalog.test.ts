@@ -46,6 +46,8 @@ describe("dynamic Neon server catalogue", () => {
             languages: ["English", "French"],
             links: [],
             accent: null,
+            logoAssetHash: null,
+            bannerAssetHash: null,
             firstSeenAt: now,
             lastSeenAt: now,
         };
@@ -84,6 +86,16 @@ describe("dynamic Neon server catalogue", () => {
                 server_version: "1.7.0-9.99999",
                 name: "Community Neon",
                 links: [{ kind: "website", label: "Unsafe", url: "http://example.com" }],
+            }).success,
+        ).toBe(false);
+        expect(
+            serverHeartbeatSchema.safeParse({
+                registry_protocol: 1,
+                game_port: 22003,
+                http_port: 22005,
+                server_version: "1.7.0-9.99999",
+                name: "Community Neon",
+                logo_url: "http://example.com/logo.png",
             }).success,
         ).toBe(false);
     });

@@ -46,13 +46,13 @@ function testConfig(privateJwk: JsonWebKey): ServiceConfig {
         nodeEnv: "test",
         host: "127.0.0.1",
         port: 8080,
-        publicBaseUrl: new URL("http://identity.test"),
+        publicBaseUrl: new URL("https://identity.test"),
         databaseUrl: "postgres://unused",
         databaseSsl: false,
         discord: {
             clientId: "123456789012345678",
             clientSecret: "not-used-by-the-fake-client",
-            redirectUri: "http://identity.test/v1/auth/discord/callback",
+            redirectUri: "https://identity.test/v1/auth/discord/callback",
             apiBaseUrl: "https://discord.test/api/v10",
             requiredGuildId: null,
             requiredRoleIds: [],
@@ -102,6 +102,14 @@ describe("Neon Identity HTTP contract", () => {
             ticketSigner: signer,
             aseProbe: async (address, port, version) =>
                 address === "203.0.113.10" && (port === 22003 || port === 22004) && version === "1.7.0-9.99999",
+            serverAssetFetcher: async (sourceUrl, createdAt) => ({
+                hash: sourceUrl.includes("banner") ? "b".repeat(64) : "a".repeat(64),
+                mimeType: "image/png",
+                width: sourceUrl.includes("banner") ? 1920 : 512,
+                height: sourceUrl.includes("banner") ? 1080 : 512,
+                bytes: Buffer.from(sourceUrl.includes("banner") ? "fake-banner" : "fake-logo"),
+                createdAt,
+            }),
             now: () => new Date("2026-08-03T12:00:00.000Z"),
         });
     });
@@ -112,7 +120,7 @@ describe("Neon Identity HTTP contract", () => {
         const discovery = await app.inject({ method: "GET", url: "/.well-known/neon-identity" });
         expect(discovery.statusCode).toBe(200);
         expect(discovery.json()).toMatchObject({
-            server_registry_uri: "http://identity.test/.well-known/neon-server-registry",
+            server_registry_uri: "https://identity.test/.well-known/neon-server-registry",
         });
 
         const empty = await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" });
@@ -133,6 +141,8 @@ describe("Neon Identity HTTP contract", () => {
                 countries: ["GB", "FR"],
                 languages: ["English", "French"],
                 links: [{ kind: "website", label: "Website", url: "https://mta-neon.com" }],
+                logo_url: "https://assets.example.com/logo.png",
+                banner_url: "https://assets.example.com/banner.png",
             },
         });
         expect(heartbeat.statusCode).toBe(202);
@@ -160,9 +170,21 @@ describe("Neon Identity HTTP contract", () => {
                     countries: ["GB", "FR"],
                     languages: ["English", "French"],
                     links: [{ kind: "website", label: "Website", url: "https://mta-neon.com" }],
+                    logo_url: `https://identity.test/v1/server-registry/assets/${"a".repeat(64)}`,
+                    banner_url: `https://identity.test/v1/server-registry/assets/${"b".repeat(64)}`,
                 },
             ],
         });
+
+        const logo = await app.inject({
+            method: "GET",
+            url: `/v1/server-registry/assets/${"a".repeat(64)}`,
+        });
+        expect(logo.statusCode).toBe(200);
+        expect(logo.headers["content-type"]).toBe("image/png");
+        expect(logo.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+        expect(logo.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+        expect(logo.rawPayload).toEqual(Buffer.from("fake-logo"));
     });
 
     it("refuses registry claims without the proxy-bound public source address", async () => {
