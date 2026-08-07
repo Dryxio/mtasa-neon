@@ -22,6 +22,7 @@ namespace SkyGfx
         void Shutdown();
         bool RenderColorFilter(std::uint32_t primaryRgba, std::uint32_t secondaryRgba);
         bool RenderRadiosity(int intensityLimit, int filterPasses, int renderPasses, int intensity);
+        bool RenderYCbCrCorrection();
 
         const SkyGfxMTAConfigV1& GetConfig() const noexcept { return m_config; }
         bool                     SetConfig(const SkyGfxMTAConfigV1& config, bool persist);
@@ -29,6 +30,7 @@ namespace SkyGfx
         std::uint32_t            GetCapabilities() const noexcept { return m_capabilities; }
         bool                     IsColorFilterActive() const noexcept;
         bool                     IsRadiosityActive() const noexcept;
+        bool                     IsYCbCrCorrectionActive() const noexcept;
 
     private:
         CManager() = default;
@@ -54,10 +56,12 @@ namespace SkyGfx
         SkyGfxMTAApplyConfig       m_applyConfig{};
         SkyGfxMTARenderColorFilter m_renderColorFilter{};
         SkyGfxMTARenderRadiosity   m_renderRadiosity{};
+        SkyGfxMTARenderYCbCr       m_renderYCbCr{};
         SkyGfxMTAShutdown          m_shutdown{};
         bool                       m_colorFilterDispatchInstalled{};
         bool                       m_colorFilterFailureLogged{};
         bool                       m_radiosityDispatchInstalled{};
         bool                       m_radiosityFailureLogged{};
+        bool                       m_ycbcrFailureLogged{};
     };
 }

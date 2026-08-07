@@ -2915,6 +2915,11 @@ void CCore::OnPreHUDRender()
         m_uiNextRenderTargetRetryTime = uiNow + 250;
     }
 
+    // SkyGfx applies YCbCr grading as the final world-space post effect. Doing
+    // it here preserves GTA's complete post-FX chain while keeping MTA's HUD,
+    // browser and CEGUI layers crisp and ungraded, matching upstream ordering.
+    SkyGfx::CManager::Get().RenderYCbCrCorrection();
+
     CGraphics::GetSingleton().EnteringMTARenderZone();
 
     // Maybe capture screen and other stuff

@@ -304,6 +304,7 @@ void CSettings::ResetGuiPointers()
     m_pCheckBoxSkyGfxPcTimecycle = NULL;
     m_pCheckBoxSkyGfxDepthBias = NULL;
     m_pCheckBoxSkyGfxRadiosity = NULL;
+    m_pCheckBoxSkyGfxYCbCrCorrection = NULL;
     m_pSkyGfxRadiosityIntensityLabel = NULL;
     m_pSkyGfxRadiosityIntensityCombo = NULL;
     m_pSkyGfxRadiosityFilterPassesLabel = NULL;
@@ -2164,6 +2165,7 @@ void CSettings::CreateGUI()
     m_pCheckBoxSkyGfxEnabled->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
     m_pCheckBoxSkyGfxColorFilter->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
     m_pCheckBoxSkyGfxRadiosity->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
+    m_pCheckBoxSkyGfxYCbCrCorrection->SetClickHandler(GUI_CALLBACK(&CSettings::OnSkyGfxOptionClick, this));
     m_pBrightness->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnBrightnessChanged, this));
     m_pBorderlessGamma->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnBorderlessGammaChanged, this));
     m_pBorderlessBrightness->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnBorderlessBrightnessChanged, this));
@@ -2650,6 +2652,11 @@ void CSettings::CreateSkyGfxTabGUI(const CVector2D& tabPanelSize)
     m_pCheckBoxSkyGfxDepthBias->AutoSize(nullptr, 20.0f);
 
     position.fY += 28.0f;
+    m_pCheckBoxSkyGfxYCbCrCorrection = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("Console YCbCr color correction"), true));
+    m_pCheckBoxSkyGfxYCbCrCorrection->SetPosition(position);
+    m_pCheckBoxSkyGfxYCbCrCorrection->AutoSize(nullptr, 20.0f);
+
+    position.fY += 28.0f;
     m_pCheckBoxSkyGfxRadiosity = reinterpret_cast<CGUICheckBox*>(manager->CreateCheckBox(m_pTabSkyGfx, _("PS2 radiosity glow"), true));
     m_pCheckBoxSkyGfxRadiosity->SetPosition(position);
     m_pCheckBoxSkyGfxRadiosity->AutoSize(nullptr, 20.0f);
@@ -2710,6 +2717,7 @@ void CSettings::UpdateSkyGfxTab()
     m_pCheckBoxSkyGfxColorFilterBlur->SetSelected(config.ps2ColorFilterBlur != 0);
     m_pCheckBoxSkyGfxPcTimecycle->SetSelected(config.ps2ColorFilterPcTimecycle != 0);
     m_pCheckBoxSkyGfxDepthBias->SetSelected(config.ps2DepthBias != 0);
+    m_pCheckBoxSkyGfxYCbCrCorrection->SetSelected(config.ycbcrCorrection != 0);
     m_pCheckBoxSkyGfxRadiosity->SetSelected(config.ps2Radiosity != 0);
     m_pSkyGfxRadiosityFilterPassesCombo->SetSelectedItemByIndex(static_cast<int>(config.ps2RadiosityFilterPasses) - 1);
     m_pSkyGfxRadiosityRenderPassesCombo->SetSelectedItemByIndex(static_cast<int>(config.ps2RadiosityRenderPasses) - 1);
@@ -2762,6 +2770,7 @@ void CSettings::UpdateSkyGfxControls()
     m_pCheckBoxSkyGfxColorFilterBlur->SetEnabled(colorFilterEnabled);
     m_pCheckBoxSkyGfxPcTimecycle->SetEnabled(colorFilterEnabled);
     m_pCheckBoxSkyGfxDepthBias->SetEnabled(enabled);
+    m_pCheckBoxSkyGfxYCbCrCorrection->SetEnabled(enabled);
     m_pCheckBoxSkyGfxRadiosity->SetEnabled(enabled);
     m_pSkyGfxRadiosityIntensityLabel->SetEnabled(radiosityEnabled);
     m_pSkyGfxRadiosityIntensityCombo->SetEnabled(radiosityEnabled);
@@ -2780,6 +2789,7 @@ void CSettings::SaveSkyGfxSettings()
     config.ps2ColorFilterBlur = m_pCheckBoxSkyGfxColorFilterBlur->GetSelected() ? 1u : 0u;
     config.ps2ColorFilterPcTimecycle = m_pCheckBoxSkyGfxPcTimecycle->GetSelected() ? 1u : 0u;
     config.ps2DepthBias = m_pCheckBoxSkyGfxDepthBias->GetSelected() ? 1u : 0u;
+    config.ycbcrCorrection = m_pCheckBoxSkyGfxYCbCrCorrection->GetSelected() ? 1u : 0u;
     config.ps2Radiosity = m_pCheckBoxSkyGfxRadiosity->GetSelected() ? 1u : 0u;
     if (CGUIListItem* selected = m_pSkyGfxRadiosityIntensityCombo->GetSelectedItem())
         config.ps2RadiosityIntensity = static_cast<std::uint32_t>((int)selected->GetData());

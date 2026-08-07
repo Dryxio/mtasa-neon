@@ -2,6 +2,8 @@
 #include "CSkyGfxManager.h"
 #include <game/RenderWare.h>
 #include <game/RenderWareD3D.h>
+#include <cmath>
+#include <cstdlib>
 
 namespace
 {
@@ -24,6 +26,25 @@ namespace
     {
         const SString value = GetApplicationSetting(SETTINGS_SECTION, key);
         return value.empty() ? defaultValue : GetApplicationSettingInt(SETTINGS_SECTION, key) != 0;
+    }
+
+    float ReadFloatSetting(const char* key, float defaultValue)
+    {
+        const SString value = GetApplicationSetting(SETTINGS_SECTION, key);
+        if (value.empty())
+            return defaultValue;
+
+        char*       end = nullptr;
+        const float parsed = std::strtof(value.c_str(), &end);
+        return end && end != value.c_str() && *end == '\0' && std::isfinite(parsed) ? parsed : defaultValue;
+    }
+
+    bool IsValidYCbCrConfig(const SkyGfxMTAConfigV1& config)
+    {
+        const auto validScale = [](float value) { return std::isfinite(value) && value >= 0.0f && value <= 10.0f; };
+        const auto validOffset = [](float value) { return std::isfinite(value) && value >= -1.0f && value <= 1.0f; };
+        return config.ycbcrCorrection <= 1 && validScale(config.lumaScale) && validOffset(config.lumaOffset) && validScale(config.cbScale) &&
+               validOffset(config.cbOffset) && validScale(config.crScale) && validOffset(config.crOffset);
     }
 
     void __cdecl LogFromSkyGfx(const char* message)
@@ -128,6 +149,13 @@ namespace SkyGfx
         m_config.ps2RadiosityRenderPasses =
             static_cast<std::uint32_t>(std::clamp(GetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-render-passes"), 1, 4));
         m_config.ps2RadiosityIntensity = static_cast<std::uint32_t>(std::clamp(GetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-intensity"), 1, 255));
+        m_config.ycbcrCorrection = ReadBooleanSetting("ycbcr-correction", false) ? 1u : 0u;
+        m_config.lumaScale = ReadFloatSetting("ycbcr-luma-scale", 219.0f / 255.0f);
+        m_config.lumaOffset = ReadFloatSetting("ycbcr-luma-offset", 16.0f / 255.0f);
+        m_config.cbScale = ReadFloatSetting("ycbcr-cb-scale", 1.23f);
+        m_config.cbOffset = ReadFloatSetting("ycbcr-cb-offset", 0.0f);
+        m_config.crScale = ReadFloatSetting("ycbcr-cr-scale", 1.23f);
+        m_config.crOffset = ReadFloatSetting("ycbcr-cr-offset", 0.0f);
 
         if (GetApplicationSetting(SETTINGS_SECTION, "ps2-radiosity-filter-passes").empty())
             m_config.ps2RadiosityFilterPasses = 2;
@@ -135,6 +163,17 @@ namespace SkyGfx
             m_config.ps2RadiosityRenderPasses = 1;
         if (GetApplicationSetting(SETTINGS_SECTION, "ps2-radiosity-intensity").empty())
             m_config.ps2RadiosityIntensity = 35;
+
+        if (!IsValidYCbCrConfig(m_config))
+        {
+            m_config.ycbcrCorrection = 0;
+            m_config.lumaScale = 219.0f / 255.0f;
+            m_config.lumaOffset = 16.0f / 255.0f;
+            m_config.cbScale = 1.23f;
+            m_config.cbOffset = 0.0f;
+            m_config.crScale = 1.23f;
+            m_config.crOffset = 0.0f;
+        }
 
         const int preset = GetApplicationSettingInt(SETTINGS_SECTION, "preset");
         if (preset >= 0 && preset < static_cast<int>(SkyGfxMTAPreset::Count))
@@ -150,8 +189,9 @@ namespace SkyGfx
         m_applyConfig = ResolveExport<SkyGfxMTAApplyConfig>(m_module, "SkyGfxMTA_ApplyConfig");
         m_renderColorFilter = ResolveExport<SkyGfxMTARenderColorFilter>(m_module, "SkyGfxMTA_RenderColorFilter");
         m_renderRadiosity = ResolveExport<SkyGfxMTARenderRadiosity>(m_module, "SkyGfxMTA_RenderRadiosity");
+        m_renderYCbCr = ResolveExport<SkyGfxMTARenderYCbCr>(m_module, "SkyGfxMTA_RenderYCbCr");
         m_shutdown = ResolveExport<SkyGfxMTAShutdown>(m_module, "SkyGfxMTA_Shutdown");
-        return m_getApiVersion && m_getCapabilities && m_initialize && m_applyConfig && m_renderColorFilter && m_renderRadiosity && m_shutdown;
+        return m_getApiVersion && m_getCapabilities && m_initialize && m_applyConfig && m_renderColorFilter && m_renderRadiosity && m_renderYCbCr && m_shutdown;
     }
 
     bool CManager::Initialize()
@@ -215,6 +255,9 @@ namespace SkyGfx
             return false;
         }
 
+        if (!IsValidYCbCrConfig(config))
+            return false;
+
         m_config = config;
         m_configurationLoaded = true;
         if (persist)
@@ -230,6 +273,13 @@ namespace SkyGfx
             SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-filter-passes", static_cast<int>(m_config.ps2RadiosityFilterPasses));
             SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-render-passes", static_cast<int>(m_config.ps2RadiosityRenderPasses));
             SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-intensity", static_cast<int>(m_config.ps2RadiosityIntensity));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ycbcr-correction", static_cast<int>(m_config.ycbcrCorrection));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-luma-scale", SString("%.9g", m_config.lumaScale));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-luma-offset", SString("%.9g", m_config.lumaOffset));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cb-scale", SString("%.9g", m_config.cbScale));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cb-offset", SString("%.9g", m_config.cbOffset));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cr-scale", SString("%.9g", m_config.crScale));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cr-offset", SString("%.9g", m_config.crOffset));
         }
 
         if (!m_config.enabled)
@@ -262,6 +312,12 @@ namespace SkyGfx
     {
         return m_status == IntegrationStatus::BridgeReady && m_config.enabled != 0 && m_config.ps2Radiosity != 0 &&
                m_config.preset == SkyGfxMTAPreset::PlayStation2 && (m_capabilities & SKY_GFX_MTA_CAPABILITY_PS2_RADIOSITY) != 0 && m_radiosityDispatchInstalled;
+    }
+
+    bool CManager::IsYCbCrCorrectionActive() const noexcept
+    {
+        return m_status == IntegrationStatus::BridgeReady && m_config.enabled != 0 && m_config.ycbcrCorrection != 0 &&
+               m_config.preset == SkyGfxMTAPreset::PlayStation2 && (m_capabilities & SKY_GFX_MTA_CAPABILITY_YCBCR_CORRECTION) != 0;
     }
 
     bool CManager::InstallColorFilterDispatch()
@@ -486,6 +542,43 @@ namespace SkyGfx
         return false;
     }
 
+    bool CManager::RenderYCbCrCorrection()
+    {
+        if (!IsYCbCrCorrectionActive() || !m_renderYCbCr)
+            return false;
+
+        IDirect3DDevice9* device = CGraphics::GetSingleton().GetDevice();
+        RwRaster*         frontBuffer = *reinterpret_cast<RwRaster**>(POST_EFFECTS_FRONT_BUFFER);
+        RwCamera*         camera = *reinterpret_cast<RwCamera**>(SCENE_CAMERA);
+        if (!device || !frontBuffer || !camera || !camera->bufferColor)
+            return false;
+
+        auto* d3dRaster = reinterpret_cast<RwD3D9Raster*>(&frontBuffer->renderResource);
+        if (!d3dRaster->texture)
+            return false;
+
+        IDirect3DBaseTexture9* sourceTexture = CDirect3DEvents9::GetRealTexture(d3dRaster->texture);
+        if (!sourceTexture)
+            return false;
+
+        SkyGfxMTAYCbCrFrameV1 frame{};
+        frame.d3dDevice = device;
+        frame.sourceTexture = sourceTexture;
+        frame.cameraWidth = static_cast<std::uint32_t>(camera->bufferColor->width);
+        frame.cameraHeight = static_cast<std::uint32_t>(camera->bufferColor->height);
+
+        const SkyGfxMTAResult result = m_renderYCbCr(&frame);
+        if (result == SkyGfxMTAResult::Success)
+            return true;
+
+        if (!m_ycbcrFailureLogged)
+        {
+            WriteDebugEvent(SString("SkyGfx: YCbCr correction render failed (%u); effect skipped for this frame", static_cast<unsigned int>(result)));
+            m_ycbcrFailureLogged = true;
+        }
+        return false;
+    }
+
     void CManager::UnloadModule()
     {
         RemoveColorFilterDispatch();
@@ -501,9 +594,11 @@ namespace SkyGfx
         m_applyConfig = nullptr;
         m_renderColorFilter = nullptr;
         m_renderRadiosity = nullptr;
+        m_renderYCbCr = nullptr;
         m_shutdown = nullptr;
         m_colorFilterFailureLogged = false;
         m_radiosityFailureLogged = false;
+        m_ycbcrFailureLogged = false;
     }
 
     void CManager::Shutdown()

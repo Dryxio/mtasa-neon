@@ -210,6 +210,7 @@ protected:
     CGUICheckBox*  m_pCheckBoxSkyGfxPcTimecycle;
     CGUICheckBox*  m_pCheckBoxSkyGfxDepthBias;
     CGUICheckBox*  m_pCheckBoxSkyGfxRadiosity;
+    CGUICheckBox*  m_pCheckBoxSkyGfxYCbCrCorrection;
     CGUILabel*     m_pSkyGfxRadiosityIntensityLabel;
     CGUIComboBox*  m_pSkyGfxRadiosityIntensityCombo;
     CGUILabel*     m_pSkyGfxRadiosityFilterPassesLabel;

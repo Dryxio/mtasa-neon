@@ -4,7 +4,7 @@
 
 // Keep this ABI synchronized with Dryxio/skygfx src/mta/SkyGfxMTA.h. A C ABI
 // prevents compiler-specific C++ types from coupling the optional DLL to core.
-constexpr std::uint32_t SKY_GFX_MTA_API_VERSION = 3;
+constexpr std::uint32_t SKY_GFX_MTA_API_VERSION = 4;
 
 enum class SkyGfxMTAResult : std::uint32_t
 {
@@ -23,6 +23,7 @@ enum SkyGfxMTACapability : std::uint32_t
     SKY_GFX_MTA_CAPABILITY_PS2_DEPTH_BIAS = 1 << 2,
     SKY_GFX_MTA_CAPABILITY_PS2_COLOR_FILTER = 1 << 3,
     SKY_GFX_MTA_CAPABILITY_PS2_RADIOSITY = 1 << 4,
+    SKY_GFX_MTA_CAPABILITY_YCBCR_CORRECTION = 1 << 5,
 };
 
 enum class SkyGfxMTAIntegrationPhase : std::uint32_t
@@ -54,8 +55,15 @@ struct SkyGfxMTAConfigV1
     std::uint32_t   ps2RadiosityFilterPasses = 2;
     std::uint32_t   ps2RadiosityRenderPasses = 1;
     std::uint32_t   ps2RadiosityIntensity = 35;
+    std::uint32_t   ycbcrCorrection = 0;
+    float           lumaScale = 219.0f / 255.0f;
+    float           lumaOffset = 16.0f / 255.0f;
+    float           cbScale = 1.23f;
+    float           cbOffset = 0.0f;
+    float           crScale = 1.23f;
+    float           crOffset = 0.0f;
 };
-static_assert(sizeof(SkyGfxMTAConfigV1) == 48, "SkyGfx MTA config ABI changed without an API version bump");
+static_assert(sizeof(SkyGfxMTAConfigV1) == 76, "SkyGfx MTA config ABI changed without an API version bump");
 
 struct SkyGfxMTAColorV1
 {
@@ -85,6 +93,15 @@ struct SkyGfxMTARadiosityFrameV1
     std::uint32_t cameraHeight = 0;
 };
 
+struct SkyGfxMTAYCbCrFrameV1
+{
+    std::uint32_t structSize = sizeof(SkyGfxMTAYCbCrFrameV1);
+    void*         d3dDevice = nullptr;
+    void*         sourceTexture = nullptr;
+    std::uint32_t cameraWidth = 0;
+    std::uint32_t cameraHeight = 0;
+};
+
 using SkyGfxMTALogCallback = void(__cdecl*)(const char* message);
 
 struct SkyGfxMTAHostV1
@@ -101,4 +118,5 @@ using SkyGfxMTAInitialize = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAHostV1* hos
 using SkyGfxMTAApplyConfig = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAConfigV1* config);
 using SkyGfxMTARenderColorFilter = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAColorFilterFrameV1* frame);
 using SkyGfxMTARenderRadiosity = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTARadiosityFrameV1* frame);
+using SkyGfxMTARenderYCbCr = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAYCbCrFrameV1* frame);
 using SkyGfxMTAShutdown = void(__cdecl*)();
