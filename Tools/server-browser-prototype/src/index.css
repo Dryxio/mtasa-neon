@@ -446,8 +446,9 @@ a:focus-visible {
 }
 
 .server-row__logo {
-  width: 84px;
-  height: 58px;
+  width: 64px;
+  height: 64px;
+  aspect-ratio: 1;
   font-size: 17px;
   letter-spacing: 0.03em;
 }
@@ -635,8 +636,9 @@ a:focus-visible {
 }
 
 .details__logo {
-  width: 96px;
+  width: 64px;
   height: 64px;
+  aspect-ratio: 1;
   font-size: 18px;
   letter-spacing: 0.04em;
 }

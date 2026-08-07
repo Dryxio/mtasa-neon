@@ -274,6 +274,7 @@ namespace
 
     constexpr std::size_t MAX_REGISTRY_RESPONSE_BYTES = 256 * 1024;
     constexpr std::size_t MAX_REGISTRY_SERVERS = 256;
+    constexpr std::size_t MAX_REGISTRY_ARTWORK_BYTES = 2 * 1024 * 1024;
 
     bool ReadJsonString(json_object* object, const char* name, std::string& value, std::size_t maxLength, bool allowEmpty = false)
     {
@@ -356,6 +357,83 @@ namespace
 
         return url.rfind("http://127.0.0.1", 0) == 0 || url.rfind("http://localhost", 0) == 0;
     }
+
+    std::string GetRegistryBaseUrl()
+    {
+        std::string baseUrl = CVARS_GET_VALUE<std::string>("neon_identity_url");
+        while (!baseUrl.empty() && baseUrl.back() == '/')
+            baseUrl.pop_back();
+        return baseUrl;
+    }
+
+    SString GetRegistryArtworkCacheRoot()
+    {
+        const SString relativePath = g_pCore ? g_pCore->GetClientProfilePath("mta/cache/neon/server-artwork") : SStringX("mta/cache/neon/server-artwork");
+        return CalcMTASAPath(relativePath);
+    }
+
+    bool ExtractRegistryArtworkHash(const std::string& url, std::string& hash)
+    {
+        const std::string baseUrl = GetRegistryBaseUrl();
+        if (!IsAcceptedRegistryBaseUrl(baseUrl))
+            return false;
+
+        const std::string prefix = baseUrl + "/v1/server-registry/assets/";
+        if (url.size() != prefix.size() + 64 || url.compare(0, prefix.size(), prefix) != 0)
+            return false;
+
+        hash = url.substr(prefix.size());
+        return std::all_of(hash.begin(), hash.end(), [](unsigned char c) { return std::isdigit(c) || (c >= 'a' && c <= 'f'); });
+    }
+
+    bool ResolveRegistryArtworkRequest(const SString& requestPath, SString& fullPath)
+    {
+        std::string normalized = requestPath;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+
+        constexpr char prefix[] = "registry-assets/";
+        if (normalized.rfind(prefix, 0) != 0)
+            return false;
+
+        const std::string fileName = normalized.substr(sizeof(prefix) - 1);
+        if (fileName.size() < 68 || fileName[64] != '.' || fileName.find('/', 0) != std::string::npos)
+            return false;
+
+        const std::string hash = fileName.substr(0, 64);
+        const std::string extension = fileName.substr(65);
+        if (!std::all_of(hash.begin(), hash.end(), [](unsigned char c) { return std::isdigit(c) || (c >= 'a' && c <= 'f'); }) ||
+            (extension != "png" && extension != "jpg" && extension != "webp"))
+            return false;
+
+        fullPath = PathJoin(GetRegistryArtworkCacheRoot(), fileName.c_str());
+        return true;
+    }
+
+    const char* DetectRegistryArtworkExtension(const char* data, std::size_t size)
+    {
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(data);
+        if (size >= 8 && std::memcmp(bytes, "\x89PNG\r\n\x1a\n", 8) == 0)
+            return "png";
+        if (size >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+            return "jpg";
+        if (size >= 12 && std::memcmp(bytes, "RIFF", 4) == 0 && std::memcmp(bytes + 8, "WEBP", 4) == 0)
+            return "webp";
+        return nullptr;
+    }
+
+    bool FindCachedRegistryArtwork(const std::string& hash, std::string& localUrl)
+    {
+        for (const char* extension : {"png", "jpg", "webp"})
+        {
+            const std::string fileName = hash + "." + extension;
+            if (!FileExists(PathJoin(GetRegistryArtworkCacheRoot(), fileName.c_str())))
+                continue;
+
+            localUrl = "http://mta/local/registry-assets/" + fileName;
+            return true;
+        }
+        return false;
+    }
 }
 
 struct SNeonServerLink
@@ -372,6 +450,8 @@ struct SNeonServerMetadata
     std::string                  tagline;
     std::string                  description;
     std::string                  accent;
+    std::string                  logoSourceUrl;
+    std::string                  bannerSourceUrl;
     std::string                  logoUrl;
     std::string                  bannerUrl;
     std::vector<std::string>     countries;
@@ -388,6 +468,8 @@ public:
         CNetHTTPDownloadManagerInterface* http = network ? network->GetHTTPDownloadManager(EDownloadMode::WEBBROWSER_LISTS) : nullptr;
         if (http && m_requestPending)
             http->CancelDownload(this, StaticDownloadFinished);
+        if (http && m_artworkRequestPending)
+            http->CancelDownload(this, StaticArtworkDownloadFinished);
     }
 
     void Start()
@@ -417,9 +499,7 @@ public:
         if (m_requestPending)
             return;
 
-        std::string baseUrl = CVARS_GET_VALUE<std::string>("neon_identity_url");
-        while (!baseUrl.empty() && baseUrl.back() == '/')
-            baseUrl.pop_back();
+        const std::string baseUrl = GetRegistryBaseUrl();
         if (!IsAcceptedRegistryBaseUrl(baseUrl))
         {
             SetError("The Neon registry URL must use HTTPS");
@@ -526,7 +606,10 @@ private:
 
         const std::string payload(data, size);
         if (payload == m_manifestPayload)
+        {
+            RefreshArtworkPaths();
             return true;
+        }
 
         m_servers.SuspendActivity();
         m_servers.Clear();
@@ -536,6 +619,7 @@ private:
             m_servers.AddUnique(parsed.address, parsed.port);
             m_metadata.emplace(parsed.endpoint, std::move(parsed.metadata));
         }
+        RefreshArtworkPaths();
         m_servers.Refresh();
         m_manifestPayload = payload;
         m_changed = true;
@@ -600,7 +684,7 @@ private:
                 // directly from an arbitrary game server or local address.
                 return ReadJsonString(server, name, value, 2048) && value.rfind("https://", 0) == 0;
             };
-            if (!readOptionalArtworkUrl("logo_url", metadata.logoUrl) || !readOptionalArtworkUrl("banner_url", metadata.bannerUrl))
+            if (!readOptionalArtworkUrl("logo_url", metadata.logoSourceUrl) || !readOptionalArtworkUrl("banner_url", metadata.bannerSourceUrl))
                 return false;
 
             for (std::string& country : metadata.countries)
@@ -650,6 +734,94 @@ private:
         WriteDebugEvent(SString("Neon server registry: %s", error.c_str()));
     }
 
+    static void StaticArtworkDownloadFinished(const SHttpDownloadResult& result)
+    {
+        if (result.pObj)
+            static_cast<CNeonServerRegistry*>(result.pObj)->ArtworkDownloadFinished(result);
+    }
+
+    void RefreshArtworkPaths()
+    {
+        for (auto& [endpoint, metadata] : m_metadata)
+        {
+            const auto resolveArtwork = [this](const std::string& sourceUrl, std::string& localUrl)
+            {
+                localUrl.clear();
+                if (sourceUrl.empty())
+                    return;
+
+                std::string hash;
+                if (!ExtractRegistryArtworkHash(sourceUrl, hash))
+                    return;
+
+                if (FindCachedRegistryArtwork(hash, localUrl))
+                    return;
+
+                if (m_knownArtworkUrls.emplace(sourceUrl).second)
+                    m_pendingArtworkUrls.emplace_back(sourceUrl);
+            };
+
+            resolveArtwork(metadata.logoSourceUrl, metadata.logoUrl);
+            resolveArtwork(metadata.bannerSourceUrl, metadata.bannerUrl);
+        }
+        StartNextArtworkDownload();
+    }
+
+    void StartNextArtworkDownload()
+    {
+        if (m_artworkRequestPending || m_pendingArtworkUrls.empty())
+            return;
+
+        CNet*                             network = g_pCore ? g_pCore->GetNetwork() : nullptr;
+        CNetHTTPDownloadManagerInterface* http = network ? network->GetHTTPDownloadManager(EDownloadMode::WEBBROWSER_LISTS) : nullptr;
+        if (!http)
+            return;
+
+        m_activeArtworkUrl = std::move(m_pendingArtworkUrls.front());
+        m_pendingArtworkUrls.erase(m_pendingArtworkUrls.begin());
+
+        SHttpRequestOptions options;
+        options.strRequestMethod = "GET";
+        options.uiConnectionAttempts = 1;
+        options.uiConnectTimeoutMs = 10000;
+        options.uiMaxRedirects = 0;
+        options.requestHeaders["Accept"] = "image/png,image/jpeg,image/webp";
+        if (!http->QueueFile(m_activeArtworkUrl.c_str(), nullptr, this, StaticArtworkDownloadFinished, options))
+        {
+            m_knownArtworkUrls.erase(m_activeArtworkUrl);
+            m_activeArtworkUrl.clear();
+            StartNextArtworkDownload();
+            return;
+        }
+        m_artworkRequestPending = true;
+    }
+
+    void ArtworkDownloadFinished(const SHttpDownloadResult& result)
+    {
+        const std::string sourceUrl = std::exchange(m_activeArtworkUrl, std::string{});
+        m_artworkRequestPending = false;
+
+        std::string hash;
+        const char* extension = nullptr;
+        const bool  valid = result.bSuccess && result.iErrorCode >= 200 && result.iErrorCode < 300 && result.pData && result.dataSize > 0 &&
+                           result.dataSize <= MAX_REGISTRY_ARTWORK_BYTES && ExtractRegistryArtworkHash(sourceUrl, hash) &&
+                           (extension = DetectRegistryArtworkExtension(result.pData, result.dataSize));
+
+        if (!valid || !FileSave(PathJoin(GetRegistryArtworkCacheRoot(), (hash + "." + (extension ? extension : "")).c_str()), result.pData,
+                                static_cast<unsigned long>(result.dataSize)))
+        {
+            m_knownArtworkUrls.erase(sourceUrl);
+            StartNextArtworkDownload();
+            return;
+        }
+
+        // The web view is intentionally local and may not load remote URLs.
+        // Re-resolve the new file through mta/local, then refresh React without
+        // weakening CEF's network isolation.
+        RefreshArtworkPaths();
+        m_changed = true;
+    }
+
     std::string GetCachePath() const
     {
         const SString relativePath = g_pCore ? g_pCore->GetClientProfilePath("mta/config/neon_servers_v1.json") : SStringX("mta/config/neon_servers_v1.json");
@@ -660,8 +832,12 @@ private:
     std::map<std::string, SNeonServerMetadata> m_metadata;
     std::string                                m_manifestPayload;
     std::string                                m_error;
+    std::vector<std::string>                   m_pendingArtworkUrls;
+    std::set<std::string>                      m_knownArtworkUrls;
+    std::string                                m_activeArtworkUrl;
     bool                                       m_started{};
     bool                                       m_requestPending{};
+    bool                                       m_artworkRequestPending{};
     bool                                       m_changed{};
 };
 
@@ -1122,6 +1298,13 @@ bool CServerBrowserWeb::Events_OnResourcePathCheck(SString& url)
     if (!IsSafeRelativePath(url))
         return false;
 
+    SString artworkPath;
+    if (ResolveRegistryArtworkRequest(url, artworkPath))
+    {
+        url = artworkPath;
+        return FileExists(url);
+    }
+
     std::replace(url.begin(), url.end(), '/', '\\');
     url = CalcMTASAPath(PathJoin(WEB_ROOT, url));
     return FileExists(url);
@@ -1130,7 +1313,24 @@ bool CServerBrowserWeb::Events_OnResourcePathCheck(SString& url)
 bool CServerBrowserWeb::Events_OnResourceFileCheck(const SString& path, CBuffer& outFileData)
 {
     const SString root = CalcMTASAPath(WEB_ROOT);
-    if (!path.BeginsWith(root) || !FileExists(path))
+    bool          allowed = path.BeginsWith(root);
+    if (!allowed)
+    {
+        SString cacheRoot = GetRegistryArtworkCacheRoot();
+        std::replace(cacheRoot.begin(), cacheRoot.end(), '/', '\\');
+
+        SString normalizedPath = path;
+        std::replace(normalizedPath.begin(), normalizedPath.end(), '/', '\\');
+        const SString cachePrefix = cacheRoot + "\\";
+        if (normalizedPath.BeginsWith(cachePrefix))
+        {
+            const SString fileName = normalizedPath.substr(cachePrefix.length());
+            SString       expectedPath;
+            allowed = ResolveRegistryArtworkRequest("registry-assets/" + fileName, expectedPath) && normalizedPath == expectedPath;
+        }
+    }
+
+    if (!allowed || !FileExists(path))
         return false;
 
     return outFileData.LoadFromFile(path);
