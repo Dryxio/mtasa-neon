@@ -2,7 +2,7 @@
  *
  *  PROJECT:     Multi Theft Auto: Neon
  *  LICENSE:     See LICENSE in the top level directory
- *  PURPOSE:     Native Soundize-compatible vehicle audio and backfire manager
+ *  PURPOSE:     Native server-configured HD vehicle audio and backfire manager
  *
  *****************************************************************************/
 
@@ -112,8 +112,8 @@ namespace
 
     float CalculateGearMaximum(float maximumSpeed, int numberOfGears, int gear)
     {
-        // Soundize reads GTA's generated transmission gear maximum. Rebuilding it from the public handling values keeps this backend independent from
-        // game_sa's private transmission layout while producing the same ratio for forward gears.
+        // The reference audio behavior reads GTA's generated transmission gear maximum. Rebuilding it from the public handling values keeps this backend
+        // independent from game_sa's private transmission layout while producing the same ratio for forward gears.
         const float halfFirstGear = 0.5f * maximumSpeed / static_cast<float>(numberOfGears);
         const float gearStep = (maximumSpeed - halfFirstGear) / static_cast<float>(numberOfGears);
         return std::max(0.01f, std::clamp(gear, 1, numberOfGears) * gearStep + halfFirstGear);
@@ -640,7 +640,7 @@ struct CVehicleSoundManager::Impl
 
     void DoPulse()
     {
-        // Servers opt in by loading a resource-owned Soundize configuration. Without one this is the only work performed per vehicle pulse: no FMOD,
+        // Servers opt in by loading a resource-owned vehicle-audio configuration. Without one this is the only work performed per vehicle pulse: no FMOD,
         // filesystem scan, listener update or streamed-vehicle iteration occurs.
         if (!owner)
             return;
@@ -715,7 +715,7 @@ struct CVehicleSoundManager::Impl
         contentRoot = std::filesystem::path(path.c_str()).parent_path().string().c_str();
         definitions = std::move(newDefinitions);
         IndexBanks();
-        g_pCore->GetConsole()->Printf("Vehicle audio: server resource registered %u Soundize vehicle definitions",
+        g_pCore->GetConsole()->Printf("Vehicle audio: server resource registered %u HD vehicle-audio definitions",
                                       static_cast<unsigned int>(definitions.size()));
         return true;
     }
@@ -818,8 +818,8 @@ struct CVehicleSoundManager::Impl
 
     bool TriggerBackfire(VehicleState& state, unsigned long long now, unsigned int cooldownMs)
     {
-        // Soundize uses one strict RPM/cooldown gate for release, afterfire and free-rev limiter events. Keeping it centralized prevents the visual and
-        // FMOD backfire states from drifting apart again.
+        // The reference behavior uses one strict RPM/cooldown gate for release, afterfire and free-rev limiter events. Keeping it centralized prevents the
+        // visual and FMOD backfire states from drifting apart again.
         if (state.rpm <= 5000.0f || now <= state.lastBackfireTick + cooldownMs)
             return false;
         state.lastBackfireTick = now;
@@ -877,7 +877,7 @@ struct CVehicleSoundManager::Impl
         float           targetAmount = 0.0f;
 
         // The showcase mix is deliberately asymmetric: a non-VIP driver hears a nearby VIP rival more clearly. VIP-vs-VIP keeps the authored
-        // Soundize balance unchanged instead of making both clients fight their own mix.
+        // HD engine-audio balance unchanged instead of making both clients fight their own mix.
         if (localVehicle && UsesCompetitiveMix(*localVehicle) && !GetVehicleAudioMode(*localVehicle))
         {
             CVector localPosition;
@@ -1142,7 +1142,7 @@ struct CVehicleSoundManager::Impl
         if (!EnsureEngineEvent(vehicle, state, interior))
             return;
 
-        // Mode 3 keeps Soundize simulation and event generation alive for recording/network observers, while the controlling client hears GTA's native
+        // Mode 3 keeps HD engine-audio simulation and event generation alive for recording/network observers, while the controlling client hears GTA's native
         // engine instead. Other clients resolve the same vehicle as a normal full-output source because they are not its local driver.
         if (localOutputMuted)
             RestoreNativeAudio(vehicle, state);

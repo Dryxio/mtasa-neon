@@ -2,7 +2,7 @@
  *
  *  PROJECT:     Multi Theft Auto: Neon
  *  LICENSE:     See LICENSE in the top level directory
- *  PURPOSE:     Native Soundize-compatible vehicle audio and backfire manager
+ *  PURPOSE:     Native server-configured HD vehicle audio and backfire manager
  *
  *****************************************************************************/
 
