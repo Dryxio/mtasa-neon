@@ -126,9 +126,9 @@ versioned presentation document rather than an authorization source:
     {
       "id": "blitz-production",
       "endpoints": ["213.32.90.138:22004"],
-      "name": "MTA:SA Neon — Blitz",
-      "tagline": "One rival. One city. No route.",
-      "description": "Open-world 1v1 vehicle pursuits: escape your rival or stop them before time runs out.",
+      "name": "MTA:SA Neon - BUST",
+      "tagline": "Competitive 1v1 Pursuits - Ranked ON",
+      "description": "Ranked 1v1 vehicle pursuits across the open world of San Andreas. Hunt your rival or escape until time runs out, then climb the leaderboard. Every street, shortcut and stunt can decide the match.",
       "countries": ["BR", "GB", "FR", "RU", "PL", "ID", "ES"],
       "languages": ["Portuguese (Brazil)", "English", "French", "Russian", "Polish", "Indonesian", "Spanish"],
       "links": [],
@@ -226,8 +226,8 @@ enabled. An administrator can opt out or provide richer browser metadata:
 
 ```xml
 <neon_registry>1</neon_registry>
-<neon_registry_tagline>One rival. One city. No route.</neon_registry_tagline>
-<neon_registry_description>Open-world vehicle pursuits.</neon_registry_description>
+<neon_registry_tagline>Competitive 1v1 Pursuits - Ranked ON</neon_registry_tagline>
+<neon_registry_description>Ranked 1v1 vehicle pursuits across the open world of San Andreas. Hunt your rival or escape until time runs out, then climb the leaderboard. Every street, shortcut and stunt can decide the match.</neon_registry_description>
 <neon_registry_countries>GB, ES, BR, FR</neon_registry_countries>
 <neon_registry_languages>English, Spanish, Portuguese (Brazil), French</neon_registry_languages>
 <neon_registry_website>https://mta-neon.com</neon_registry_website>

@@ -15,11 +15,22 @@ export interface MenuIdentity {
   status: string
 }
 
+export interface MenuFeaturedServer {
+  serverId: string
+  host: string
+  port: number
+  name: string
+  tagline: string
+  logoUrl: string
+  bannerUrl: string
+}
+
 interface MenuState {
   inGame: boolean
   locale: string
   languages: MenuLanguage[]
   identity: MenuIdentity
+  featuredServer: MenuFeaturedServer | null
   translations: TranslationMap
   connect: ConnectFlow
   hibernateGeneration: number | null
@@ -29,6 +40,7 @@ type NativeMenuEvent =
   | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations' | 'connect' | 'hibernateGeneration'>)
   | { type: 'context'; inGame: boolean }
   | { type: 'identity'; identity: MenuIdentity }
+  | { type: 'featured-server'; server: MenuFeaturedServer | null }
   | { type: 'connect-password-required'; host: string; port: number; name?: string }
   | { type: 'connect-started'; host: string; port: number; name?: string }
   | { type: 'connect-progress'; stage: ConnectStage; message?: string }
@@ -64,6 +76,17 @@ const INITIAL_STATE: MenuState = {
     displayName: 'Dryxio',
     status: 'Neon ID connected',
   },
+  featuredServer: typeof window.mta?.triggerEvent === 'function'
+    ? null
+    : {
+        serverId: 'blitz-production',
+        host: '213.32.90.138',
+        port: 22004,
+        name: 'MTA:SA Neon - BUST',
+        tagline: 'Competitive 1v1 Pursuits - Ranked ON',
+        logoUrl: 'https://identity.mta-neon.com/v1/server-registry/assets/fbb84b984b9417e04af995e0984b04fff76f152aab66dc0bedab1f2c61c0a0fa',
+        bannerUrl: 'https://identity.mta-neon.com/v1/server-registry/assets/b884ecc5c538e248772a1c2e00b41f06ed9b0d7cb5952093f40ccd2d87a1ab47',
+      },
   translations: {},
   connect: { phase: 'idle', address: null },
   hibernateGeneration: null,
@@ -137,6 +160,9 @@ export function useMenuBridge() {
           }
           else if (event.type === 'identity') {
             setState((current) => ({ ...current, identity: event.identity }))
+          }
+          else if (event.type === 'featured-server') {
+            setState((current) => ({ ...current, featuredServer: event.server }))
           }
           else if (event.type === 'connect-password-required') {
             setState((current) => ({

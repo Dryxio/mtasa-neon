@@ -77,6 +77,8 @@ export interface ServerItem {
   playerList: ServerPlayer[]
 
   isFavourite: boolean
+  /** Mise en avant éditoriale contrôlée par le registre Neon. */
+  isFeatured: boolean
   lastPlayedAt?: number
 
   /** Code pays ISO 3166-1 alpha-2 annoncé par le serveur. */

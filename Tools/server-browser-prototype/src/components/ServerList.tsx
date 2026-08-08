@@ -40,9 +40,8 @@ const Row = memo(function Row({
   const offline = server.scanState === 'offline'
   return (
     <div
-      className={`server-row${selected ? ' server-row--selected' : ''}${offline ? ' server-row--offline' : ''}`}
+      className={`server-row${selected ? ' server-row--selected' : ''}${server.isFeatured ? ' server-row--featured' : ''}${offline ? ' server-row--offline' : ''}`}
       style={{ top }}
-      onMouseEnter={() => onSelect(server.id)}
       onClick={() => onSelect(server.id)}
       onDoubleClick={() => onJoin(server)}
       role="row"
@@ -59,6 +58,7 @@ const Row = memo(function Row({
       <div className="server-row__body">
         <div className="server-row__top">
           <span className="server-row__name">{server.name}</span>
+          {server.isFeatured && <span className="server-row__featured">{t('server.featured')}</span>}
         </div>
         <span className="server-row__tagline">{server.tagline}</span>
       </div>

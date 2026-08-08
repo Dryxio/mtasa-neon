@@ -197,6 +197,148 @@
   text-transform: uppercase;
 }
 
+.main-menu__featured {
+  position: absolute;
+  z-index: 2;
+  left: clamp(44px, 6.4vw, 124px);
+  bottom: clamp(64px, 10vh, 112px);
+  width: clamp(330px, 31vw, 520px);
+  min-height: clamp(88px, 10vh, 112px);
+  padding: 12px 16px 12px 12px;
+  display: grid;
+  grid-template-columns: clamp(58px, 4.2vw, 72px) minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  align-items: center;
+  gap: 3px 15px;
+  overflow: hidden;
+  border: 1px solid rgba(228, 210, 159, 0.48);
+  border-left: 4px solid var(--sa-cream);
+  background: #060808;
+  box-shadow: 9px 10px 0 rgba(0, 0, 0, 0.48);
+  color: var(--sa-white);
+  text-align: left;
+  text-shadow: 1px 2px 0 #000;
+  transition: border-color 100ms linear, color 100ms linear, transform 110ms ease-out, box-shadow 110ms ease-out;
+}
+
+.main-menu__featured-banner,
+.main-menu__featured-shade {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.main-menu__featured-banner {
+  object-fit: cover;
+  object-position: center;
+  opacity: 0.5;
+  filter: saturate(0.82) contrast(1.08) brightness(0.72);
+  transition: opacity 120ms linear, filter 120ms linear, transform 160ms ease-out;
+}
+
+.main-menu__featured-shade {
+  background:
+    linear-gradient(90deg, rgba(2, 3, 3, 0.96) 0%, rgba(2, 3, 3, 0.75) 58%, rgba(2, 3, 3, 0.46)),
+    linear-gradient(0deg, rgba(2, 3, 3, 0.9), transparent 64%);
+}
+
+.main-menu__featured-logo,
+.main-menu__featured-copy,
+.main-menu__featured-action {
+  position: relative;
+  z-index: 1;
+}
+
+.main-menu__featured-logo {
+  grid-row: 1 / 3;
+  width: clamp(58px, 4.2vw, 72px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(172, 203, 241, 0.52);
+  background: rgba(3, 5, 6, 0.88);
+  box-shadow: 4px 5px 0 rgba(0, 0, 0, 0.42);
+  color: var(--sa-blue);
+  font-family: 'SA Pricedown', Impact, sans-serif;
+  font-size: 38px;
+}
+
+.main-menu__featured-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.main-menu__featured-copy {
+  min-width: 0;
+  align-self: end;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-menu__featured-kicker {
+  color: var(--sa-cream);
+  font-size: 9px;
+  letter-spacing: 0.25em;
+}
+
+.main-menu__featured-copy strong {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--sa-white);
+  font-size: clamp(15px, 1.05vw, 19px);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main-menu__featured-tagline {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #b5bec4;
+  font-family: Arial, 'Noto Sans', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.main-menu__featured-action {
+  grid-column: 2;
+  align-self: end;
+  color: var(--sa-blue);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+}
+
+.main-menu__featured:hover,
+.main-menu__featured:focus-visible {
+  border-color: var(--sa-blue);
+  border-left-color: var(--sa-blue);
+  outline: none;
+  transform: translateX(8px);
+  box-shadow: 11px 12px 0 rgba(0, 0, 0, 0.52), 0 0 24px rgba(172, 203, 241, 0.12);
+}
+
+.main-menu__featured:hover .main-menu__featured-banner,
+.main-menu__featured:focus-visible .main-menu__featured-banner {
+  opacity: 0.64;
+  filter: saturate(0.96) contrast(1.08) brightness(0.82);
+  transform: scale(1.025);
+}
+
+.main-menu__featured:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .main-menu__profile {
   position: absolute;
   z-index: 2;
@@ -513,8 +655,20 @@
     margin-top: 18px;
   }
 
+  .main-menu__featured {
+    bottom: 52px;
+    min-height: 84px;
+    padding-block: 9px;
+  }
+
   .language-selector__list {
     max-height: 54vh;
+  }
+}
+
+@media (max-height: 510px) {
+  .main-menu__featured {
+    display: none;
   }
 }
 
@@ -525,7 +679,9 @@
   }
 
   .main-menu__item,
-  .main-menu__marker {
+  .main-menu__marker,
+  .main-menu__featured,
+  .main-menu__featured-banner {
     transition: none;
   }
 }

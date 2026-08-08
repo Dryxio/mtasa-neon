@@ -35,6 +35,7 @@ export function Experience() {
           <MainMenu
             inGame={menu.state.inGame}
             identity={menu.state.identity}
+            featuredServer={menu.state.featuredServer}
             locale={menu.state.locale}
             languages={menu.state.languages}
             onBrowseServers={() => {
@@ -47,6 +48,7 @@ export function Experience() {
             onSettings={() => menu.command('menu:settings')}
             onAbout={() => menu.command('menu:about')}
             onIdentity={() => menu.command('menu:identity')}
+            onPlayFeatured={() => menu.command('menu:playFeatured')}
             onLanguage={menu.setLanguage}
             onQuit={() => menu.command('menu:quit', () => window.close())}
           />
@@ -56,6 +58,13 @@ export function Experience() {
         onSubmitPassword={menu.submitConnectionPassword}
         onRetry={menu.retryConnection}
         onDismiss={menu.dismissConnection}
+        onLinkIdentity={() => {
+          // Identity is linked from the main-menu profile. Take the player
+          // there before opening Discord so the return path is unambiguous.
+          menu.dismissConnection()
+          window.location.hash = ''
+          menu.command('menu:identity')
+        }}
       />
     </I18nProvider>
   )

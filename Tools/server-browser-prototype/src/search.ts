@@ -75,6 +75,7 @@ export function visibleServers(
     return matchesQuery(server, query)
   })
   result.sort((a, b) => {
+    if (a.isFeatured !== b.isFeatured) return a.isFeatured ? -1 : 1
     const aOffline = a.scanState === 'offline' ? 1 : 0
     const bOffline = b.scanState === 'offline' ? 1 : 0
     if (aOffline !== bOffline) return aOffline - bOffline

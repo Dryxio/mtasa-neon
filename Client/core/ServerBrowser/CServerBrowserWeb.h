@@ -84,6 +84,7 @@ private:
     void QueueMenuInit();
     void QueueMenuContext(bool force);
     void QueueIdentity(bool force);
+    void QueueFeaturedServer();
     void QueueFavourites();
     void QueueListReset();
     void QueueServer(const CServerListItem& server);

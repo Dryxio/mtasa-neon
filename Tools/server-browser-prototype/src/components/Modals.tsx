@@ -10,10 +10,11 @@ interface ConnectModalsProps {
   onSubmitPassword: (password: string) => void
   onRetry: () => void
   onDismiss: () => void
+  onLinkIdentity: () => void
 }
 
 /** Flux de connexion intégré au shell, inspiré des écrans frontend de GTA SA. */
-export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }: ConnectModalsProps) {
+export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss, onLinkIdentity }: ConnectModalsProps) {
   const [password, setPassword] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const { t } = useI18n()
@@ -126,6 +127,18 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss }:
             {failure.retry && (
               <button type="button" className="modal__btn modal__btn--primary" onClick={onRetry}>
                 {t('common.retry')}
+              </button>
+            )}
+            {connect.error?.code === 'identity-required' && (
+              <button
+                type="button"
+                className="modal__btn modal__btn--primary"
+                onClick={() => {
+                  playUiSound('select')
+                  onLinkIdentity()
+                }}
+              >
+                {t('main.discordLink')}
               </button>
             )}
           </div>

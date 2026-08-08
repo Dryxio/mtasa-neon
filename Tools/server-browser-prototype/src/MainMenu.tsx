@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { LanguageSelector } from './components/LanguageSelector'
 import { useI18n } from './i18n'
 import { chooseLaunchLoadscreen } from './loadscreen'
-import { notifyMenuVisualReady, type MenuIdentity, type MenuLanguage } from './menuBridge'
+import { notifyMenuVisualReady, type MenuFeaturedServer, type MenuIdentity, type MenuLanguage } from './menuBridge'
 import { playUiSound } from './uiSound'
 import './MainMenu.css'
 
 interface MainMenuProps {
   inGame: boolean
   identity: MenuIdentity
+  featuredServer: MenuFeaturedServer | null
   locale: string
   languages: readonly MenuLanguage[]
   onBrowseServers: () => void
@@ -19,6 +20,7 @@ interface MainMenuProps {
   onSettings: () => void
   onAbout: () => void
   onIdentity: () => void
+  onPlayFeatured: () => void
   onLanguage: (locale: string) => void
   onQuit: () => void
 }
@@ -55,6 +57,11 @@ export function MainMenu(props: MainMenuProps) {
     : props.identity.authenticated
       ? t('main.discordSignOut')
       : t('common.connect')
+  const featuredAction = props.identity.signingIn
+    ? t('main.discordConnecting')
+    : props.identity.authenticated
+      ? t('main.playFeatured')
+      : t('main.linkDiscordToPlay')
 
   const items = useMemo<MenuItem[]>(
     () => props.inGame
@@ -240,6 +247,35 @@ export function MainMenu(props: MainMenuProps) {
           {selected.caption}
         </p>
       </section>
+
+      {!props.inGame && props.featuredServer && (
+        <button
+          type="button"
+          className="main-menu__featured"
+          disabled={props.identity.signingIn}
+          aria-label={`${props.featuredServer.name}. ${featuredAction}`}
+          onClick={() => {
+            playUiSound('select')
+            props.onPlayFeatured()
+          }}
+        >
+          {props.featuredServer.bannerUrl && (
+            <img className="main-menu__featured-banner" src={props.featuredServer.bannerUrl} alt="" draggable={false} />
+          )}
+          <span className="main-menu__featured-shade" aria-hidden="true" />
+          <span className="main-menu__featured-logo">
+            {props.featuredServer.logoUrl
+              ? <img src={props.featuredServer.logoUrl} alt="" draggable={false} />
+              : <span>B</span>}
+          </span>
+          <span className="main-menu__featured-copy">
+            <span className="main-menu__featured-kicker">{t('main.featuredServer')}</span>
+            <strong>{props.featuredServer.name}</strong>
+            <span className="main-menu__featured-tagline">{props.featuredServer.tagline}</span>
+          </span>
+          <span className="main-menu__featured-action">{featuredAction} &#9656;</span>
+        </button>
+      )}
 
       {!props.inGame && (
         <button

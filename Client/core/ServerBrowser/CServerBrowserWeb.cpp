@@ -35,6 +35,7 @@ namespace
 {
     constexpr std::size_t MAX_EVENTS_PER_FRAME = 60;
     constexpr char        WEB_ROOT[] = "MTA\\cef\\serverbrowser";
+    constexpr char        FEATURED_SERVER_ID[] = "blitz-production";
 
     enum class EWebTranslationDomain
     {
@@ -63,6 +64,9 @@ namespace
         {"main.discordConnected", _td("Discord connected"), _td("Discord connected"), EWebTranslationDomain::Client},
         {"main.discordLink", _td("Link your Discord"), _td("Link your Discord"), EWebTranslationDomain::Client},
         {"main.discordSignOut", _td("Sign out"), _td("Sign out"), EWebTranslationDomain::Client},
+        {"main.featuredServer", _td("Neon featured"), _td("Neon featured"), EWebTranslationDomain::Client},
+        {"main.playFeatured", _td("Play now"), _td("Play now"), EWebTranslationDomain::Client},
+        {"main.linkDiscordToPlay", _td("Link Discord to play"), _td("Link Discord to play"), EWebTranslationDomain::Client},
         {"main.resumeGame", _td("Resume game"), _td("Resume game"), EWebTranslationDomain::Client},
         {"main.resumeCaption", _td("Return to the streets."), _td("Return to the streets."), EWebTranslationDomain::Client},
         {"main.settingsCaption", _td("Video, audio, controls and account preferences."), _td("Video, audio, controls and account preferences."),
@@ -126,6 +130,7 @@ namespace
         {"server.addFavourite", _td("Add to favourites"), _td("Add Favorite"), EWebTranslationDomain::Client},
         {"server.playersUnverified", _td("Player count not verified"), _td("Player count not verified"), EWebTranslationDomain::Client},
         {"server.offline", _td("Offline"), _td("Offline"), EWebTranslationDomain::Client},
+        {"server.featured", _td("Neon featured"), _td("Neon featured"), EWebTranslationDomain::Client},
         {"details.selectServer", _td("Select a server to see"), _td("Select a server to see"), EWebTranslationDomain::Client},
         {"details.selectServerHint", _td("its details here."), _td("its details here."), EWebTranslationDomain::Client},
         {"details.selectedDestination", _td("Selected destination"), _td("Server information"), EWebTranslationDomain::Client},
@@ -474,12 +479,20 @@ public:
             http->CancelDownload(this, StaticArtworkDownloadFinished);
     }
 
-    void Start()
+    void Start(bool refreshStatuses)
     {
         if (m_started)
+        {
+            if (refreshStatuses && !m_refreshStatuses)
+            {
+                m_refreshStatuses = true;
+                m_servers.Refresh();
+            }
             return;
+        }
 
         m_started = true;
+        m_refreshStatuses = refreshStatuses;
         std::vector<char> cached;
         if (FileLoad(GetCachePath(), cached, static_cast<int>(MAX_REGISTRY_RESPONSE_BYTES)) && !cached.empty())
             ApplyManifest(cached.data(), cached.size());
@@ -539,6 +552,18 @@ public:
         {
             CServerListItem* server = *it;
             if (server && server->usGamePort == port && server->strHost == host)
+                return server;
+        }
+        return nullptr;
+    }
+
+    CServerListItem* FindByServerId(const std::string& serverId)
+    {
+        for (auto it = m_servers.IteratorBegin(); it != m_servers.IteratorEnd(); ++it)
+        {
+            CServerListItem*           server = *it;
+            const SNeonServerMetadata* metadata = server ? FindMetadata(*server) : nullptr;
+            if (metadata && metadata->serverId == serverId)
                 return server;
         }
         return nullptr;
@@ -622,7 +647,11 @@ private:
             m_metadata.emplace(parsed.endpoint, std::move(parsed.metadata));
         }
         RefreshArtworkPaths();
-        m_servers.Refresh();
+        // The main menu only needs the small trusted catalogue and its
+        // artwork. Defer ASE status queries until the server browser opens so
+        // the featured card does not start a background server scan.
+        if (m_refreshStatuses)
+            m_servers.Refresh();
         m_manifestPayload = payload;
         m_changed = true;
         m_error.clear();
@@ -806,8 +835,8 @@ private:
         std::string hash;
         const char* extension = nullptr;
         const bool  valid = result.bSuccess && result.iErrorCode >= 200 && result.iErrorCode < 300 && result.pData && result.dataSize > 0 &&
-                           result.dataSize <= MAX_REGISTRY_ARTWORK_BYTES && ExtractRegistryArtworkHash(sourceUrl, hash) &&
-                           (extension = DetectRegistryArtworkExtension(result.pData, result.dataSize));
+                            result.dataSize <= MAX_REGISTRY_ARTWORK_BYTES && ExtractRegistryArtworkHash(sourceUrl, hash) &&
+                            (extension = DetectRegistryArtworkExtension(result.pData, result.dataSize));
 
         if (!valid || !FileSave(PathJoin(GetRegistryArtworkCacheRoot(), (hash + "." + (extension ? extension : "")).c_str()), result.pData,
                                 static_cast<unsigned long>(result.dataSize)))
@@ -841,6 +870,7 @@ private:
     bool                                       m_requestPending{};
     bool                                       m_artworkRequestPending{};
     bool                                       m_changed{};
+    bool                                       m_refreshStatuses{};
 };
 
 CServerBrowserWeb* CServerBrowserWeb::ms_instance = nullptr;
@@ -1266,6 +1296,7 @@ bool CServerBrowserWeb::DoPulse()
         m_registry->DoPulse();
         if (m_registry->ConsumeChanged())
         {
+            QueueFeaturedServer();
             m_sentRevisions.clear();
             QueueListReset();
             m_refreshing = true;
@@ -1281,6 +1312,14 @@ bool CServerBrowserWeb::DoPulse()
             AddString(error.get(), "message", registryError);
             QueueEvent("server", ToJson(error.get()));
         }
+    }
+    else if (m_registry)
+    {
+        // Keep the lightweight catalogue/artwork request alive on the main
+        // menu without starting ASE status queries for the full list.
+        m_registry->DoPulse();
+        if (m_registry->ConsumeChanged())
+            QueueFeaturedServer();
     }
 
     CServerList* list = GetCurrentList();
@@ -1446,6 +1485,11 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
     {
         QueueMenuInit();
         QueueIdentity(true);
+        if (m_registry)
+        {
+            m_registry->Start(false);
+            QueueFeaturedServer();
+        }
     }
     else if (eventName == "menu:visualReady")
     {
@@ -1505,6 +1549,21 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
         m_mainMenu.OnQuitButtonClick(nullptr);
     else if (eventName == "menu:identity")
         m_mainMenu.OnNeonIdentityButtonClick(nullptr);
+    else if (eventName == "menu:playFeatured" && m_registry)
+    {
+        CServerListItem* server = m_registry->FindByServerId(FEATURED_SERVER_ID);
+        if (!server)
+            return;
+
+        CNeonIdentityManager* identity = g_pCore->GetNeonIdentityManager();
+        if (!identity || !identity->IsAuthenticated())
+        {
+            if (!identity || !identity->IsSigningIn())
+                m_mainMenu.OnNeonIdentityButtonClick(nullptr);
+            return;
+        }
+        Connect(server->strHost, server->usGamePort, "");
+    }
     else if (eventName == "menu:sound" && arguments.size() == 1)
         PlayUiSound(arguments[0]);
     else if (eventName == "menu:setLanguage" && arguments.size() == 1)
@@ -1542,7 +1601,7 @@ void CServerBrowserWeb::HandleServerBrowserEvent(const SString& eventName, const
     {
         m_serverBrowserReady = true;
         if (m_registry)
-            m_registry->Start();
+            m_registry->Start(true);
         JsonPtr init = MakeObject();
         AddString(init.get(), "type", "init");
         AddString(init.get(), "version", g_pCore->GetProductVersion());
@@ -1641,6 +1700,32 @@ void CServerBrowserWeb::QueueIdentity(bool force)
     QueueEvent("menu", ToJson(event.get()));
 }
 
+void CServerBrowserWeb::QueueFeaturedServer()
+{
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "featured-server");
+
+    CServerListItem*           server = m_registry ? m_registry->FindByServerId(FEATURED_SERVER_ID) : nullptr;
+    const SNeonServerMetadata* metadata = server && m_registry ? m_registry->FindMetadata(*server) : nullptr;
+    if (!server || !metadata)
+    {
+        json_object_object_add(event.get(), "server", json_object_new_null());
+        QueueEvent("menu", ToJson(event.get()));
+        return;
+    }
+
+    json_object* value = json_object_new_object();
+    AddString(value, "serverId", metadata->serverId);
+    AddString(value, "host", server->strHost);
+    AddInteger(value, "port", server->usGamePort);
+    AddString(value, "name", metadata->name);
+    AddString(value, "tagline", metadata->tagline);
+    AddString(value, "logoUrl", metadata->logoUrl);
+    AddString(value, "bannerUrl", metadata->bannerUrl);
+    json_object_object_add(event.get(), "server", value);
+    QueueEvent("menu", ToJson(event.get()));
+}
+
 void CServerBrowserWeb::QueueFavourites()
 {
     JsonPtr event = MakeObject();
@@ -1680,6 +1765,7 @@ void CServerBrowserWeb::QueueServer(const CServerListItem& server)
     AddInteger(value, "port", server.usGamePort);
     AddInteger(value, "httpPort", server.m_usHttpPort);
     AddString(value, "name", metadata->name);
+    AddBoolean(value, "featured", metadata->serverId == FEATURED_SERVER_ID);
     AddString(value, "tagline", metadata->tagline);
     AddString(value, "description", metadata->description);
     AddString(value, "accent", metadata->accent);

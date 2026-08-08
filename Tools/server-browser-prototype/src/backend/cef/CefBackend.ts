@@ -57,6 +57,7 @@ interface NativeServer {
   verified: boolean
   state: 'queued' | 'online' | 'offline'
   favourite: boolean
+  featured: boolean
   playerList: string[]
   countries?: string[]
   languages?: string[]
@@ -123,6 +124,7 @@ export class CefBackend implements BrowserBackend {
       scanState: native.state,
       playerList: native.playerList.map((name) => ({ name })),
       isFavourite: native.favourite || this.favouriteKeys.has(native.id),
+      isFeatured: native.featured,
       countries: native.countries ?? [],
       languages: native.languages ?? [],
       tags: [],

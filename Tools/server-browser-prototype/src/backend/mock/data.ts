@@ -57,12 +57,28 @@ interface HeroSpec {
   maxPlayers: number
   ping: number
   passworded?: boolean
+  featured?: boolean
   version?: string
   accent: string
+  logoUrl?: string
+  bannerUrl?: string
   links?: ServerLink[]
 }
 
 const HEROES: HeroSpec[] = [
+  {
+    ip: '213.32.90.138',
+    name: 'MTA:SA Neon - BUST',
+    tagline: 'Competitive 1v1 Pursuits - Ranked ON',
+    description: 'Ranked 1v1 vehicle pursuits across the open world of San Andreas. Hunt your rival or escape until time runs out, then climb the leaderboard. Every street, shortcut and stunt can decide the match.',
+    gameMode: 'BUST', map: 'San Andreas', country: 'FR',
+    countries: ['BR', 'GB', 'FR', 'RU', 'TR', 'PL', 'ID', 'ES'],
+    languages: ['Portuguese (Brazil)', 'English', 'French', 'Russian', 'Turkish', 'Polish', 'Indonesian', 'Spanish'],
+    tags: ['neon', 'bust', '1v1', 'pursuit'],
+    players: 4, maxPlayers: 32, ping: 32, accent: '#e4d29f', featured: true,
+    logoUrl: 'https://identity.mta-neon.com/v1/server-registry/assets/fbb84b984b9417e04af995e0984b04fff76f152aab66dc0bedab1f2c61c0a0fa',
+    bannerUrl: 'https://identity.mta-neon.com/v1/server-registry/assets/b884ecc5c538e248772a1c2e00b41f06ed9b0d7cb5952093f40ccd2d87a1ab47',
+  },
   {
     ip: '146.59.208.11',
     name: 'Los Santos Stories',
@@ -205,12 +221,15 @@ function heroToServer(spec: HeroSpec): ServerItem {
     scanState: 'queued',
     playerList: makePlayers(spec.players),
     isFavourite: false,
+    isFeatured: spec.featured ?? false,
     country: spec.country,
     countries: spec.countries,
     languages: spec.languages,
     tags: spec.tags,
     links: spec.links ?? [],
     accent: spec.accent,
+    logoUrl: spec.logoUrl,
+    bannerUrl: spec.bannerUrl,
   }
 }
 
