@@ -126,8 +126,8 @@ namespace
 
     constexpr float COMPETITIVE_MIX_NEAR_DISTANCE = 25.0f;
     constexpr float COMPETITIVE_MIX_FAR_DISTANCE = 100.0f;
-    constexpr float COMPETITIVE_RIVAL_ENGINE_GAIN = 1.7782794f;    // +5 dB
-    constexpr float COMPETITIVE_RIVAL_BACKFIRE_GAIN = 2.2387211f;  // +7 dB
+    constexpr float COMPETITIVE_RIVAL_ENGINE_GAIN = 2.0f;    // +6.02 dB
+    constexpr float COMPETITIVE_RIVAL_BACKFIRE_GAIN = 3.0f;  // +9.54 dB
     constexpr float COMPETITIVE_LOCAL_ENGINE_VOLUME_OFFSET = -3.0f;
     constexpr float COMPETITIVE_MIX_ATTACK_MS = 150.0f;
     constexpr float COMPETITIVE_MIX_RELEASE_MS = 500.0f;
