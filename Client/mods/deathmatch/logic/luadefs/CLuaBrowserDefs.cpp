@@ -19,6 +19,7 @@ void CLuaBrowserDefs::LoadFunctions()
     constexpr static const std::pair<const char*, lua_CFunction> functions[]{
         {"createBrowser", CreateBrowser},
         {"requestBrowserDomains", RequestBrowserDomains},
+        {"openExternalURL", OpenExternalURL},
         {"loadBrowserURL", LoadBrowserURL},
         {"isBrowserLoading", IsBrowserLoading},
         {"injectBrowserMouseMove", InjectBrowserMouseMove},
@@ -244,6 +245,39 @@ int CLuaBrowserDefs::RequestBrowserDomains(lua_State* luaVM)
         pWebCore->RequestPages(pages, VERIFY_FUNCTION(callbackFunction) ? &callback : nullptr);
         lua_pushboolean(luaVM, true);
         return 1;
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaBrowserDefs::OpenExternalURL(lua_State* luaVM)
+{
+    //  bool openExternalURL ( string url )
+    SString url;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadString(url);
+
+    if (!argStream.HasErrors())
+    {
+        const bool validHttpsUrl = url.BeginsWith("https://") && url.length() <= 4096;
+        // These are immutable first-party BUST purchase/onboarding routes. They
+        // match Neon Identity's system-browser flow and intentionally skip the
+        // generic CEF-domain prompt without granting that privilege to arbitrary
+        // server-provided URLs.
+        const bool    trustedBustUrl = validHttpsUrl && (url == "https://discord.gg/gtabust" || url.BeginsWith("https://buymeacoffee.com/southlandfr/") ||
+                                                      url.BeginsWith("https://www.buymeacoffee.com/southlandfr/"));
+        auto          webCore = g_pCore->GetWebCore();
+        const SString domain = validHttpsUrl && webCore ? webCore->GetDomainFromURL(url) : SString();
+        const bool    domainAllowed = !domain.empty() && webCore->GetDomainState(domain) == eURLState::WEBPAGE_ALLOWED;
+        if (trustedBustUrl || domainAllowed)
+        {
+            lua_pushboolean(luaVM, ShellExecuteNonBlocking("open", url));
+            return 1;
+        }
     }
     else
         m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
