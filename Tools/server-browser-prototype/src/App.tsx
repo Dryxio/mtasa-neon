@@ -68,10 +68,6 @@ export function App() {
           playUiSound('select')
           actions.connectTo(selected)
         }
-      } else if (e.key === 'Escape' && inSearch) {
-        playUiSound('back')
-        actions.setQuery('')
-        searchRef.current?.blur()
       } else if (e.key === 'Escape') {
         playUiSound('back')
         actions.closeBrowser()

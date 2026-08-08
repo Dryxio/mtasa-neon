@@ -35,6 +35,7 @@ public:
     bool        Initialise();
     void        SetVisible(bool visible);
     void        SetNativeDialogVisible(bool visible);
+    static bool HandleEscapeKey();
     static bool IsInputRoutedToWeb();
     static bool RouteInputMessage(UINT message, WPARAM wParam, LPARAM lParam);
     static bool CanHandleConnectionUi();
@@ -75,6 +76,10 @@ private:
     void HandleMenuEvent(const SString& eventName, const std::vector<std::string>& arguments);
     void HandleServerBrowserEvent(const SString& eventName, const std::vector<std::string>& arguments);
     bool InitialiseWebView();
+    bool CanHibernate() const;
+    void CancelHibernateRequest();
+    void QueueHibernateRequest();
+    void UpdateRenderingPauseState();
     void PlayUiSound(const std::string& soundName);
     void QueueMenuInit();
     void QueueMenuContext(bool force);
@@ -113,6 +118,9 @@ private:
     bool                                 m_connectionUiActive{};
     bool                                 m_refreshing{};
     bool                                 m_sentRefreshFinished{};
+    unsigned int                         m_hibernateGeneration{};
+    unsigned int                         m_pendingHibernateGeneration{};
+    unsigned int                         m_hibernatePauseDelayPulses{};
     Source                               m_source{Source::Internet};
     std::map<std::string, unsigned int>  m_sentRevisions;
     std::vector<std::string>             m_serverEvents;

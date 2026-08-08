@@ -22,7 +22,9 @@
 #include <json.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -887,6 +889,18 @@ bool CServerBrowserWeb::IsInputRoutedToWeb()
            ms_instance->m_widget->IsActive() && webCore->GetFocusedWebView() == ms_instance->m_webView;
 }
 
+bool CServerBrowserWeb::HandleEscapeKey()
+{
+    if (!ms_instance || !ms_instance->m_visible || !ms_instance->m_documentReady || ms_instance->m_nativeDialogVisible || !ms_instance->m_webView)
+        return false;
+
+    // Escape is owned by the always-mounted menu shell while it is visible.
+    // Dispatch it directly into the document instead of depending on CEGUI's
+    // transient active/focused state, which can change after mouse input.
+    ms_instance->m_webView->ExecuteJavascript("window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}));");
+    return true;
+}
+
 bool CServerBrowserWeb::CanHandleConnectionUi()
 {
     // A connection can hide the menu before its asynchronous network states
@@ -904,6 +918,12 @@ bool CServerBrowserWeb::NotifyConnectionStarted(const std::string& host, unsigne
 {
     if (!CanHandleConnectionUi())
         return false;
+
+    // A reconnect can start while the gameplay-owned menu is paused. Wake it
+    // before publishing progress so Chromium can settle the next frozen frame.
+    ms_instance->m_connectionUiActive = true;
+    ms_instance->CancelHibernateRequest();
+    ms_instance->UpdateRenderingPauseState();
 
     JsonPtr event = MakeObject();
     AddString(event.get(), "type", "connect-started");
@@ -1105,7 +1125,9 @@ void CServerBrowserWeb::SetVisible(bool visible)
 
     if (show)
     {
-        m_webView->SetRenderingPaused(false);
+        CancelHibernateRequest();
+        if (m_webView->GetRenderingPaused())
+            m_webView->SetRenderingPaused(false);
 
         // A hidden CEF browser is heavily throttled by Chromium. Push the
         // authoritative native context after waking it and before exposing
@@ -1138,15 +1160,67 @@ void CServerBrowserWeb::SetVisible(bool visible)
         if (m_webView)
         {
             m_webView->Focus(false);
-
-            // Keep the lightweight main-menu document alive while gameplay
-            // owns the screen. It has no server backend until the browser
-            // route is opened, and staying awake lets connection-context
-            // events settle before the next Escape press. Native dialogs can
-            // still pause it because their context cannot change underneath.
-            m_webView->SetRenderingPaused(m_nativeDialogVisible);
+            UpdateRenderingPauseState();
         }
     }
+}
+
+void CServerBrowserWeb::UpdateRenderingPauseState()
+{
+    if (!m_webView)
+        return;
+
+    if (m_nativeDialogVisible)
+    {
+        CancelHibernateRequest();
+        if (!m_webView->GetRenderingPaused())
+            m_webView->SetRenderingPausedPreservingLastFrame(true);
+        return;
+    }
+
+    // Connections and context transitions need a live renderer. The hidden
+    // in-game steady state is paused only by the paint acknowledgement below.
+    if (!CanHibernate())
+    {
+        CancelHibernateRequest();
+        if (m_webView->GetRenderingPaused())
+            m_webView->SetRenderingPaused(false);
+    }
+    else if (m_webView->GetRenderingPaused() && m_pendingHibernateGeneration == 0)
+    {
+        // A native dialog may have paused and invalidated an in-flight paint
+        // request. Wake once so the next pulse can request a fresh confirmed
+        // snapshot instead of treating the dialog-era texture as current.
+        m_webView->SetRenderingPaused(false);
+    }
+}
+
+bool CServerBrowserWeb::CanHibernate() const
+{
+    return m_webView && m_documentReady && m_visualReady && !m_visible && !m_nativeDialogVisible && !m_connectionUiActive && m_mainMenu.GetIsIngame();
+}
+
+void CServerBrowserWeb::CancelHibernateRequest()
+{
+    m_pendingHibernateGeneration = 0;
+    m_hibernatePauseDelayPulses = 0;
+}
+
+void CServerBrowserWeb::QueueHibernateRequest()
+{
+    if (!CanHibernate() || m_pendingHibernateGeneration != 0 || m_webView->GetRenderingPaused())
+        return;
+
+    // Zero is reserved for "no request". Wrapping is harmless as stale
+    // acknowledgements must also match the currently pending generation.
+    if (++m_hibernateGeneration == 0)
+        ++m_hibernateGeneration;
+    m_pendingHibernateGeneration = m_hibernateGeneration;
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "hibernate-request");
+    AddInteger(event.get(), "generation", m_pendingHibernateGeneration);
+    QueueEvent("menu", ToJson(event.get()));
 }
 
 void CServerBrowserWeb::SetNativeDialogVisible(bool visible)
@@ -1185,6 +1259,7 @@ bool CServerBrowserWeb::DoPulse()
 
     QueueIdentity(false);
     QueueMenuContext(false);
+    UpdateRenderingPauseState();
 
     if (m_serverBrowserReady && m_registry)
     {
@@ -1237,7 +1312,21 @@ bool CServerBrowserWeb::DoPulse()
         }
     }
 
+    QueueHibernateRequest();
     FlushEvents();
+
+    if (m_hibernatePauseDelayPulses > 0 && --m_hibernatePauseDelayPulses == 0)
+    {
+        if (CanHibernate() && m_pendingHibernateGeneration != 0)
+        {
+            // Preserve the last CPU frame as well as the D3D texture. This is
+            // a small menu-specific cost that lets a device reset restore the
+            // frozen frame without waiting for Chromium's first repaint.
+            m_webView->SetRenderingPausedPreservingLastFrame(true);
+        }
+        else
+            CancelHibernateRequest();
+    }
     return true;
 }
 
@@ -1363,6 +1452,21 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
         m_visualReady = true;
         if (m_widget)
             m_widget->SetAlpha(1.0f);
+    }
+    else if (eventName == "menu:hibernateReady" && arguments.size() == 1)
+    {
+        const char* text = arguments[0].c_str();
+        char*       end = nullptr;
+        errno = 0;
+        unsigned long generation = std::strtoul(text, &end, 10);
+        if (errno == 0 && end != text && *end == '\0' && generation <= std::numeric_limits<unsigned int>::max() && generation == m_pendingHibernateGeneration &&
+            CanHibernate())
+        {
+            // requestAnimationFrame callbacks run before paint. Leave one
+            // complete client pulse alive after the acknowledgement so CEF can
+            // publish the confirmed frame before its external clock stops.
+            m_hibernatePauseDelayPulses = 2;
+        }
     }
     else if (eventName == "menu:quickConnect")
     {
@@ -1779,11 +1883,7 @@ void CServerBrowserWeb::Connect(const std::string& host, unsigned short port, co
     CVARS_GET("nick", nick);
     if (!g_pCore->IsValidNick(nick.c_str()))
     {
-        JsonPtr event = MakeObject();
-        AddString(event.get(), "type", "connect-failed");
-        AddString(event.get(), "code", "invalid-nick");
-        AddString(event.get(), "message", _("Invalid nickname. Change it in Settings before connecting."));
-        QueueConnectionEvent(ToJson(event.get()));
+        NotifyConnectionFailed("invalid-nick", _("Invalid nickname. Change it in Settings before connecting."));
         return;
     }
 

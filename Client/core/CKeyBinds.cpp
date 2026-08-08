@@ -348,6 +348,11 @@ bool RemoveBindTypeBinds(Container& binds, bool isContainerMutable, KeyBindType 
 
 bool CKeyBinds::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    // The native message loop consumes Escape before CEF can always observe
+    // it. Give the visible Neon shell a direct, focus-independent route.
+    if (uMsg == WM_KEYDOWN && wParam == VK_ESCAPE && CServerBrowserWeb::HandleEscapeKey())
+        return true;
+
     // The native menu normally owns keyboard input. The Neon shell is itself
     // that menu, so let CEF receive navigation and text-entry events while it
     // is the active surface.

@@ -1,6 +1,6 @@
 import { useI18n } from '../i18n'
 import type { NetworkStats } from '../store'
-import { IconClose } from './Icons'
+import { IconArrowLeft } from './Icons'
 
 export function Header({ stats, onClose }: { stats: NetworkStats; onClose: () => void }) {
   const { formatNumber, t } = useI18n()
@@ -16,8 +16,8 @@ export function Header({ stats, onClose }: { stats: NetworkStats; onClose: () =>
           <strong>{t('browser.playersOnlineCount', { count: formatNumber(stats.playersOnline) })}</strong>
         </div>
         <button type="button" className="header__close" title={t('browser.backToMain')} onClick={onClose}>
-          <IconClose size={17} />
-          <span>{t('common.back')}</span>
+          <IconArrowLeft size={18} />
+          <span>{t('browser.backToMain')}</span>
         </button>
       </div>
     </header>

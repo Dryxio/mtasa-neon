@@ -284,6 +284,16 @@ const SString& CWebView::GetTitle()
 
 void CWebView::SetRenderingPaused(bool bPaused)
 {
+    ApplyRenderingPaused(bPaused, false);
+}
+
+void CWebView::SetRenderingPausedPreservingLastFrame(bool bPaused)
+{
+    ApplyRenderingPaused(bPaused, true);
+}
+
+void CWebView::ApplyRenderingPaused(bool bPaused, bool preserveLastFrame)
+{
     // Store pause state even when the host is not created yet so async
     // browser creation cannot lose the requested visibility state.
     m_bIsRenderingPaused = bPaused;
@@ -292,7 +302,7 @@ void CWebView::SetRenderingPaused(bool bPaused)
     {
         m_pWebView->GetHost()->WasHidden(bPaused);
 
-        if (bPaused)
+        if (bPaused && !preserveLastFrame)
         {
             // Free memory held by render data when paused
             std::lock_guard<std::mutex> lock{m_RenderData.dataMutex};

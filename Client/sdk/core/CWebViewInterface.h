@@ -69,4 +69,9 @@ public:
     virtual bool GoBack() = 0;
     virtual bool GoForward() = 0;
     virtual void Refresh(bool bIgnoreCache) = 0;
+
+    // Appended to preserve the established interface layout for existing
+    // consumers while allowing a UI that needs instant wake-up to survive a
+    // D3D device reset with its last CPU frame intact.
+    virtual void SetRenderingPausedPreservingLastFrame(bool bPaused) = 0;
 };

@@ -22,10 +22,11 @@ interface MenuState {
   identity: MenuIdentity
   translations: TranslationMap
   connect: ConnectFlow
+  hibernateGeneration: number | null
 }
 
 type NativeMenuEvent =
-  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations' | 'connect'>)
+  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations' | 'connect' | 'hibernateGeneration'>)
   | { type: 'context'; inGame: boolean }
   | { type: 'identity'; identity: MenuIdentity }
   | { type: 'connect-password-required'; host: string; port: number; name?: string }
@@ -33,6 +34,7 @@ type NativeMenuEvent =
   | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; code: string; message: string }
   | { type: 'connect-succeeded' }
+  | { type: 'hibernate-request'; generation: number }
 
 declare global {
   interface Window {
@@ -64,6 +66,7 @@ const INITIAL_STATE: MenuState = {
   },
   translations: {},
   connect: { phase: 'idle', address: null },
+  hibernateGeneration: null,
 }
 
 function normalizeConnectErrorCode(code: string): ConnectErrorCode {
@@ -96,6 +99,10 @@ function send(name: string, ...args: string[]): boolean {
 
 export function notifyMenuVisualReady(): void {
   send('menu:visualReady')
+}
+
+function notifyMenuHibernateReady(generation: number): void {
+  send('menu:hibernateReady', String(generation))
 }
 
 function enforceInGameMenuRoute(inGame: boolean): void {
@@ -192,6 +199,9 @@ export function useMenuBridge() {
               )
             }, 900)
           }
+          else if (event.type === 'hibernate-request') {
+            setState((current) => ({ ...current, hibernateGeneration: event.generation }))
+          }
         }
       },
     }
@@ -200,6 +210,24 @@ export function useMenuBridge() {
       delete window.__neonMenu
     }
   }, [])
+
+  useEffect(() => {
+    if (!state.inGame || state.connect.phase !== 'idle' || state.hibernateGeneration === null) return
+    const generation = state.hibernateGeneration
+
+    // CEF may be hidden by the time a successful connection reaches React.
+    // Two animation frames guarantee that the pause-menu tree has committed
+    // before native code freezes the browser after one final client pulse.
+    let firstFrame = 0
+    let secondFrame = 0
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => notifyMenuHibernateReady(generation))
+    })
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      window.cancelAnimationFrame(secondFrame)
+    }
+  }, [state.connect.phase, state.hibernateGeneration, state.inGame])
 
   const command = useCallback((name: string, fallback?: () => void) => {
     if (!send(name)) fallback?.()

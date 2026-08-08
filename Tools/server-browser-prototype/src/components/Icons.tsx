@@ -138,6 +138,13 @@ export const IconArrowDown = icon(
   </>,
 )
 
+export const IconArrowLeft = icon(
+  <>
+    <line x1="19" y1="12" x2="5" y2="12" />
+    <polyline points="12 19 5 12 12 5" />
+  </>,
+)
+
 export const IconEnter = icon(
   <>
     <polyline points="9 10 4 15 9 20" />
