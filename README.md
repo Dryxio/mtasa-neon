@@ -11,7 +11,7 @@
   <a href="https://github.com/Dryxio/mtasa-neon/releases/latest/download/MTA-Neon-Server-Windows-x64.zip"><img alt="Download the latest MTA Neon server for Windows x64" src="https://img.shields.io/badge/WINDOWS_SERVER-DOWNLOAD_X64_ZIP-F28C18?style=for-the-badge&amp;logo=windows&amp;logoColor=F28C18&amp;labelColor=0A0908" height="40"></a>
 </p>
 
-<p align="center"><strong>Players only need the Windows client installer. Server owners should use the separate server package. Both links always track the latest successful build.</strong></p>
+<p align="center"><strong>Players only need the Windows client installer. Server owners should use the separate server package. Both links track the latest explicitly published Neon release.</strong></p>
 
 <p align="center"><strong>New to Neon? Start with the documentation, feature guides, and complete Lua API.</strong></p>
 
@@ -23,6 +23,8 @@
 <p align="center"><strong>An independent MTA:BLUE-derived playground for deeper GTA:SA engine work.</strong></p>
 
 MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) that pushes beyond standard MTA with larger worlds, higher engine limits, deeper access to GTA:SA's native systems, and new scripting APIs. One of its flagship systems brings FiveM-style shared NPCs and traffic into MTA, powered by the original single-player AI.
+
+Beyond synchronization, Neon includes opt-in PS2-style visuals through its selected SkyGFX integration, a GTA:SA-inspired client experience, optional shared identity, and resource-controlled custom vehicle audio.
 
 The repository preserves the complete upstream history and adds proof-of-concept work on top of it. Neon is not affiliated with or endorsed by the Multi Theft Auto team.
 
@@ -68,6 +70,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Custom-water block grid | 12 x 12 (144 blocks) | 40 x 40 (1,600 blocks) |
 | Custom-water XY | Approximately -3,000 to +3,000 | -10,000 to +9,999 |
 | Procedural seabed boundary | Unlimited | Server-configurable from 3,000 to 10,000, or unlimited |
+| PS2-style visual options | Not built in | Selected opt-in SkyGFX effects, including color filtering, soft blur, radiosity, and YCbCr correction |
 | Project2DFX distant static lights | Not integrated | Native, player- and resource-controlled implementation with a 25,000-light buffered renderer and 300-5,000 draw-distance range |
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
@@ -94,14 +97,20 @@ preferences:
 - **Project2DFX distant lights** lazily builds the static-light catalogue on
   first activation, selects a 300-to-5,000-unit light range, adjusts Neon's
   global distant-corona radius, and can rebuild the cached catalogue on demand.
+- **SkyGFX PS2-style effects** provide an optional, MTA-compatible selection of
+  color filtering, soft blur, timecycle adaptation, depth-bias correction,
+  radiosity, and YCbCr color correction. This is not the complete SkyGFX
+  renderer or a claim of full PS2 parity.
 
-Both features remain off on a clean installation. Resource or server overrides
-take priority while connected; the player's saved baseline is restored when
-those runtime overrides are reset or the mod unloads. The corona-radius control
-scales every Neon Project2DFX distant corona, but does not resize GTA's ordinary
-nearby coronas. It tunes Neon's private renderer, which follows Project2DFX's
-square, buffered sprite projection without consuming GTA/MTA's shared corona
-pool.
+All three feature groups remain off on a clean installation. Resource or server
+overrides for extended draw distance and Project2DFX take priority while
+connected; the player's saved baseline is restored when those runtime overrides
+are reset or the mod unloads. The corona-radius control scales every Neon
+Project2DFX distant corona, but does not resize GTA's ordinary nearby coronas.
+It tunes Neon's private renderer, which follows Project2DFX's square, buffered
+sprite projection without consuming GTA/MTA's shared corona pool.
+
+<!-- MEDIA PLACEHOLDER: SkyGFX before/after comparison. Suggested files: docs/media/skygfx-off.webp and docs/media/skygfx-on.webp. Use the same scene, weather, time, camera, and resolution; label both states and add concise alt text. A short MP4/WebM toggle clip can accompany the stills, but keep still images for GitHub readers. -->
 
 ### Extended-world validation examples
 
@@ -111,6 +120,12 @@ These maps are test cases, not built-in Neon worlds or engine dependencies. Thei
 
 ## Demos and media
 
+<!-- MEDIA PLACEHOLDER: Synchronized NPC traffic. Suggested file: docs/media/synchronized-ai-handoff.webp or a YouTube thumbnail/link. Show at least two players observing the same peds, ideally around a syncer handoff rather than an isolated single-client scene. -->
+
+<!-- MEDIA PLACEHOLDER: Neon client experience. Suggested files: docs/media/neon-main-menu.webp and docs/media/neon-server-browser.webp. Show the GTA:SA-inspired shell and a populated server list without private server details. -->
+
+<!-- MEDIA PLACEHOLDER: Vehicle audio. Prefer a short captioned video/GIF demonstrating configured engine audio and a backfire; audio should also be available in the linked video rather than relying on an animated image alone. -->
+
 ### Native CULL-zone editing
 
 An in-game demonstration of Neon's resource-controlled native CULL-zone editing workflow.
@@ -119,9 +134,9 @@ An in-game demonstration of Neon's resource-controlled native CULL-zone editing 
 
 [Watch on YouTube](https://www.youtube.com/watch?v=17QrE21uDgM)
 
-## Neon Lua API additions
+## Selected Neon Lua API additions
 
-Neon exposes the Lua additions documented below, including server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
+Neon exposes the representative Lua additions below, including server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. The [Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions) is the complete reference for current signatures, lifecycle rules, source commits, and test evidence. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
 
 ### Extended native radar
 
