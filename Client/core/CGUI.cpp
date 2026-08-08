@@ -160,7 +160,8 @@ void CLocalGUI::CreateWindows(bool bGameIsAlreadyLoaded)
 
     // Create the overlayed version labels
     CVector2D ScreenSize = pGUI->GetResolution();
-    SString   strText = "MTA:SA " MTA_DM_BUILDTAG_SHORT;
+    // The public workflow assigns MTASA_VERSION_BUILD from GITHUB_RUN_NUMBER, so this label matches the corresponding Neon release.
+    SString strText = SString("MTA:SA Neon - Build %u", MTASA_VERSION_BUILD);
     if (_NETCODE_VERSION_BRANCH_ID != 0x04)
         strText += SString(" (%X)", _NETCODE_VERSION_BRANCH_ID);
     m_pLabelVersionTag = reinterpret_cast<CGUILabel*>(pGUI->CreateLabel(strText));
