@@ -218,6 +218,12 @@ function FlagArtwork({ code }: { code: string }) {
       return <><rect width="24" height="8" fill="#d73b45" /><rect y="8" width="24" height="8" fill="#f3f0e8" /></>
     case 'ES':
       return <><rect width="24" height="4" fill="#b9323b" /><rect y="4" width="24" height="8" fill="#e5bd3d" /><rect y="12" width="24" height="4" fill="#b9323b" /></>
+    case 'IR':
+      return <><rect width="24" height="5.34" fill="#23945b" /><rect y="5.33" width="24" height="5.34" fill="#f3f0e8" /><rect y="10.66" width="24" height="5.34" fill="#ce3f47" /><path d="M12 5.9c-.9 1.05-1.35 1.8-1.35 2.55 0 .95.55 1.65 1.35 1.65s1.35-.7 1.35-1.65c0-.75-.45-1.5-1.35-2.55Zm0 .8v2.55" fill="none" stroke="#ce3f47" strokeWidth=".65" strokeLinecap="round" /></>
+    case 'MA':
+      return <><rect width="24" height="16" fill="#bd303b" /><path d="m12 4.1 2.3 7.05-6-4.35h7.4l-6 4.35Z" fill="none" stroke="#1d7b50" strokeWidth=".8" strokeLinejoin="round" /></>
+    case 'HU':
+      return <><rect width="24" height="5.34" fill="#ce3f47" /><rect y="5.33" width="24" height="5.34" fill="#f3f0e8" /><rect y="10.66" width="24" height="5.34" fill="#308b5b" /></>
     default:
       return <><rect width="24" height="16" fill="#151a1d" /><text x="12" y="11.3" textAnchor="middle" fill="#d9d4c7" fontSize="7" fontFamily="Arial, sans-serif">{code}</text></>
   }
