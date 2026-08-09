@@ -3107,11 +3107,11 @@ bool CSettings::OnVideoDefaultClick(CGUIElement* pElement)
     CVARS_SET("anisotropic", 0);
     CVARS_SET("volumetric_shadows", false);
     CVARS_SET("grass", true);
-    CVARS_SET("heat_haze", true);
+    CVARS_SET("heat_haze", false);
     CVARS_SET("tyre_smoke_enabled", true);
     CVARS_SET("high_detail_vehicles", false);
     CVARS_SET("high_detail_peds", false);
-    CVARS_SET("blur", true);
+    CVARS_SET("blur", false);
     CVARS_SET("corona_reflections", false);
     CVARS_SET("dynamic_ped_shadows", false);
     CVARS_SET("borderless_gamma_power", kBorderlessGammaDefault);

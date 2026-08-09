@@ -23,7 +23,7 @@ concurrency:
 env:
   # The bridge is a separate Dryxio project, so public client builds must not
   # silently move when its repository advances.
-  SKYGFX_BRIDGE_COMMIT: 05d94a62868bd6fc2f47408767b5581eb67179e3
+  SKYGFX_BRIDGE_COMMIT: 5daf7f63f15a33cbde3f917c65dd5fce6fb498b9
 
 jobs:
   windows:

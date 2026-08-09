@@ -23,6 +23,7 @@
 #include "CProxyDirect3DVertexDeclaration.h"
 #include "Graphics/CVideoModeManager.h"
 #include "Graphics/CRenderItem.EffectTemplate.h"
+#include "SkyGfx/CSkyGfxManager.h"
 
 std::atomic<bool>             g_bInMTAScene{false};
 extern std::atomic<bool>      g_bInGTAScene;
@@ -551,6 +552,11 @@ void CDirect3DEvents9::OnInvalidate(IDirect3DDevice9* pDevice)
     g_bInMTAScene.store(false, std::memory_order_release);
     ResetGTASceneState();
 
+    // Release SkyGfx-owned default-pool resources before the real D3D9 Reset.
+    // Borderless mode normally avoids this lifecycle, while exclusive
+    // fullscreen Alt-Tab requires every such resource to be gone first.
+    SkyGfx::CManager::Get().OnDeviceInvalidate();
+
     // Invalidate the VMR9 Manager
     // CVideoManager::GetSingleton ().OnLostDevice ();
 
@@ -573,6 +579,9 @@ void CDirect3DEvents9::OnRestore(IDirect3DDevice9* pDevice)
 
     // Restore the graphics manager
     CGraphics::GetSingleton().OnDeviceRestore(pDevice);
+
+    // SkyGfx recreates device objects lazily on the first post-reset frame.
+    SkyGfx::CManager::Get().OnDeviceRestore();
 
     CCore::GetSingleton().OnDeviceRestore();
 }

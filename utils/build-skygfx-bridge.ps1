@@ -185,6 +185,8 @@ $requiredExports = @(
     'SkyGfxMTA_RenderColorFilter',
     'SkyGfxMTA_RenderRadiosity',
     'SkyGfxMTA_RenderYCbCr',
+    'SkyGfxMTA_InvalidateDeviceResources',
+    'SkyGfxMTA_RestoreDeviceResources',
     'SkyGfxMTA_Shutdown'
 )
 foreach ($exportName in $requiredExports)

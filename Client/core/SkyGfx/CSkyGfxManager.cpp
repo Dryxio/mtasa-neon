@@ -7,6 +7,12 @@
 
 namespace
 {
+    // API 5 added explicit D3D device lifecycle callbacks. API 4 remains
+    // compatible for legacy color processing, but release builds must bundle
+    // API 5 before exposing radiosity because its default-pool work buffer must
+    // be released around a device reset.
+    constexpr std::uint32_t SKY_GFX_MTA_OLDEST_COMPATIBLE_API_VERSION = 4;
+
     constexpr const char*    SETTINGS_SECTION = "skygfx";
     constexpr std::uintptr_t COLOR_FILTER_CALL = 0x704D1E;
     constexpr std::uintptr_t COLOR_FILTER_ORIGINAL = 0x703650;
@@ -137,19 +143,19 @@ namespace SkyGfx
     void CManager::LoadConfiguration()
     {
         m_config = {};
-        m_config.enabled = ReadBooleanSetting("enabled", false) ? 1u : 0u;
+        m_config.enabled = ReadBooleanSetting("enabled", true) ? 1u : 0u;
         m_config.dualPass = ReadBooleanSetting("dual-pass", true) ? 1u : 0u;
         m_config.ps2ColorFilter = ReadBooleanSetting("ps2-color-filter", true) ? 1u : 0u;
-        m_config.ps2ColorFilterBlur = ReadBooleanSetting("ps2-color-filter-blur", true) ? 1u : 0u;
+        m_config.ps2ColorFilterBlur = ReadBooleanSetting("ps2-color-filter-blur", false) ? 1u : 0u;
         m_config.ps2ColorFilterPcTimecycle = ReadBooleanSetting("ps2-color-filter-pc-timecycle", true) ? 1u : 0u;
         m_config.ps2DepthBias = ReadBooleanSetting("ps2-depth-bias", true) ? 1u : 0u;
-        m_config.ps2Radiosity = ReadBooleanSetting("ps2-radiosity", true) ? 1u : 0u;
+        m_config.ps2Radiosity = ReadBooleanSetting("ps2-radiosity", false) ? 1u : 0u;
         m_config.ps2RadiosityFilterPasses =
             static_cast<std::uint32_t>(std::clamp(GetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-filter-passes"), 1, 4));
         m_config.ps2RadiosityRenderPasses =
             static_cast<std::uint32_t>(std::clamp(GetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-render-passes"), 1, 4));
         m_config.ps2RadiosityIntensity = static_cast<std::uint32_t>(std::clamp(GetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-intensity"), 1, 255));
-        m_config.ycbcrCorrection = ReadBooleanSetting("ycbcr-correction", false) ? 1u : 0u;
+        m_config.ycbcrCorrection = ReadBooleanSetting("ycbcr-correction", true) ? 1u : 0u;
         m_config.lumaScale = ReadFloatSetting("ycbcr-luma-scale", 219.0f / 255.0f);
         m_config.lumaOffset = ReadFloatSetting("ycbcr-luma-offset", 16.0f / 255.0f);
         m_config.cbScale = ReadFloatSetting("ycbcr-cb-scale", 1.23f);
@@ -178,7 +184,34 @@ namespace SkyGfx
         const int preset = GetApplicationSettingInt(SETTINGS_SECTION, "preset");
         if (preset >= 0 && preset < static_cast<int>(SkyGfxMTAPreset::Count))
             m_config.preset = static_cast<SkyGfxMTAPreset>(preset);
+        m_userConfig = m_config;
         m_configurationLoaded = true;
+    }
+
+    SkyGfxMTAConfigV1 CManager::BuildEffectiveConfig() const
+    {
+        SkyGfxMTAConfigV1 effective = m_userConfig;
+        if (m_runtimeOverrideMask & OverrideEnabled)
+            effective.enabled = m_runtimeConfig.enabled;
+        if (m_runtimeOverrideMask & OverrideColorFilter)
+            effective.ps2ColorFilter = m_runtimeConfig.ps2ColorFilter;
+        if (m_runtimeOverrideMask & OverrideColorFilterBlur)
+            effective.ps2ColorFilterBlur = m_runtimeConfig.ps2ColorFilterBlur;
+        if (m_runtimeOverrideMask & OverridePcTimecycle)
+            effective.ps2ColorFilterPcTimecycle = m_runtimeConfig.ps2ColorFilterPcTimecycle;
+        if (m_runtimeOverrideMask & OverrideDepthBias)
+            effective.ps2DepthBias = m_runtimeConfig.ps2DepthBias;
+        if (m_runtimeOverrideMask & OverrideYCbCr)
+            effective.ycbcrCorrection = m_runtimeConfig.ycbcrCorrection;
+        if (m_runtimeOverrideMask & OverrideRadiosity)
+            effective.ps2Radiosity = m_runtimeConfig.ps2Radiosity;
+        if (m_runtimeOverrideMask & OverrideRadiosityIntensity)
+            effective.ps2RadiosityIntensity = m_runtimeConfig.ps2RadiosityIntensity;
+        if (m_runtimeOverrideMask & OverrideRadiosityFilterPasses)
+            effective.ps2RadiosityFilterPasses = m_runtimeConfig.ps2RadiosityFilterPasses;
+        if (m_runtimeOverrideMask & OverrideRadiosityRenderPasses)
+            effective.ps2RadiosityRenderPasses = m_runtimeConfig.ps2RadiosityRenderPasses;
+        return effective;
     }
 
     bool CManager::ResolveApi()
@@ -190,6 +223,8 @@ namespace SkyGfx
         m_renderColorFilter = ResolveExport<SkyGfxMTARenderColorFilter>(m_module, "SkyGfxMTA_RenderColorFilter");
         m_renderRadiosity = ResolveExport<SkyGfxMTARenderRadiosity>(m_module, "SkyGfxMTA_RenderRadiosity");
         m_renderYCbCr = ResolveExport<SkyGfxMTARenderYCbCr>(m_module, "SkyGfxMTA_RenderYCbCr");
+        m_invalidateDeviceResources = ResolveExport<SkyGfxMTAInvalidateDeviceResources>(m_module, "SkyGfxMTA_InvalidateDeviceResources");
+        m_restoreDeviceResources = ResolveExport<SkyGfxMTARestoreDeviceResources>(m_module, "SkyGfxMTA_RestoreDeviceResources");
         m_shutdown = ResolveExport<SkyGfxMTAShutdown>(m_module, "SkyGfxMTA_Shutdown");
         return m_getApiVersion && m_getCapabilities && m_initialize && m_applyConfig && m_renderColorFilter && m_renderRadiosity && m_renderYCbCr && m_shutdown;
     }
@@ -218,7 +253,7 @@ namespace SkyGfx
             return false;
         }
 
-        if (!ResolveApi() || m_getApiVersion() != SKY_GFX_MTA_API_VERSION)
+        if (!ResolveApi())
         {
             m_status = IntegrationStatus::ApiMismatch;
             WriteDebugEvent("SkyGfx: bridge API is missing or incompatible");
@@ -226,7 +261,19 @@ namespace SkyGfx
             return false;
         }
 
+        const std::uint32_t bridgeApiVersion = m_getApiVersion();
+        const bool          compatibleVersion = bridgeApiVersion >= SKY_GFX_MTA_OLDEST_COMPATIBLE_API_VERSION && bridgeApiVersion <= SKY_GFX_MTA_API_VERSION;
+        const bool          hasRequiredLifecycle = bridgeApiVersion < 5 || (m_invalidateDeviceResources && m_restoreDeviceResources);
+        if (!compatibleVersion || !hasRequiredLifecycle)
+        {
+            m_status = IntegrationStatus::ApiMismatch;
+            WriteDebugEvent(SString("SkyGfx: bridge API %u is incompatible with host API %u", bridgeApiVersion, SKY_GFX_MTA_API_VERSION));
+            UnloadModule();
+            return false;
+        }
+
         SkyGfxMTAHostV1 host{};
+        host.apiVersion = bridgeApiVersion;
         host.phase = SkyGfxMTAIntegrationPhase::PostMTAModules;
         host.log = LogFromSkyGfx;
         if (m_initialize(&host, &m_config) != SkyGfxMTAResult::Success)
@@ -250,7 +297,8 @@ namespace SkyGfx
         if (config.structSize < sizeof(SkyGfxMTAConfigV1) || config.enabled > 1 || config.dualPass > 1 || config.ps2ColorFilter > 1 ||
             config.ps2ColorFilterBlur > 1 || config.ps2ColorFilterPcTimecycle > 1 || config.ps2DepthBias > 1 || config.ps2Radiosity > 1 ||
             config.ps2RadiosityFilterPasses < 1 || config.ps2RadiosityFilterPasses > 4 || config.ps2RadiosityRenderPasses < 1 ||
-            config.ps2RadiosityRenderPasses > 4 || config.ps2RadiosityIntensity > 255 || config.preset >= SkyGfxMTAPreset::Count)
+            config.ps2RadiosityRenderPasses > 4 || config.ps2RadiosityIntensity < 1 || config.ps2RadiosityIntensity > 255 ||
+            config.preset >= SkyGfxMTAPreset::Count)
         {
             return false;
         }
@@ -258,29 +306,31 @@ namespace SkyGfx
         if (!IsValidYCbCrConfig(config))
             return false;
 
-        m_config = config;
         m_configurationLoaded = true;
         if (persist)
         {
-            SetApplicationSettingInt(SETTINGS_SECTION, "enabled", static_cast<int>(m_config.enabled));
-            SetApplicationSettingInt(SETTINGS_SECTION, "preset", static_cast<int>(m_config.preset));
-            SetApplicationSettingInt(SETTINGS_SECTION, "dual-pass", static_cast<int>(m_config.dualPass));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-color-filter", static_cast<int>(m_config.ps2ColorFilter));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-color-filter-blur", static_cast<int>(m_config.ps2ColorFilterBlur));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-color-filter-pc-timecycle", static_cast<int>(m_config.ps2ColorFilterPcTimecycle));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-depth-bias", static_cast<int>(m_config.ps2DepthBias));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity", static_cast<int>(m_config.ps2Radiosity));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-filter-passes", static_cast<int>(m_config.ps2RadiosityFilterPasses));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-render-passes", static_cast<int>(m_config.ps2RadiosityRenderPasses));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-intensity", static_cast<int>(m_config.ps2RadiosityIntensity));
-            SetApplicationSettingInt(SETTINGS_SECTION, "ycbcr-correction", static_cast<int>(m_config.ycbcrCorrection));
-            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-luma-scale", SString("%.9g", m_config.lumaScale));
-            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-luma-offset", SString("%.9g", m_config.lumaOffset));
-            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cb-scale", SString("%.9g", m_config.cbScale));
-            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cb-offset", SString("%.9g", m_config.cbOffset));
-            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cr-scale", SString("%.9g", m_config.crScale));
-            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cr-offset", SString("%.9g", m_config.crOffset));
+            m_userConfig = config;
+            SetApplicationSettingInt(SETTINGS_SECTION, "enabled", static_cast<int>(m_userConfig.enabled));
+            SetApplicationSettingInt(SETTINGS_SECTION, "preset", static_cast<int>(m_userConfig.preset));
+            SetApplicationSettingInt(SETTINGS_SECTION, "dual-pass", static_cast<int>(m_userConfig.dualPass));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-color-filter", static_cast<int>(m_userConfig.ps2ColorFilter));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-color-filter-blur", static_cast<int>(m_userConfig.ps2ColorFilterBlur));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-color-filter-pc-timecycle", static_cast<int>(m_userConfig.ps2ColorFilterPcTimecycle));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-depth-bias", static_cast<int>(m_userConfig.ps2DepthBias));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity", static_cast<int>(m_userConfig.ps2Radiosity));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-filter-passes", static_cast<int>(m_userConfig.ps2RadiosityFilterPasses));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-render-passes", static_cast<int>(m_userConfig.ps2RadiosityRenderPasses));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ps2-radiosity-intensity", static_cast<int>(m_userConfig.ps2RadiosityIntensity));
+            SetApplicationSettingInt(SETTINGS_SECTION, "ycbcr-correction", static_cast<int>(m_userConfig.ycbcrCorrection));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-luma-scale", SString("%.9g", m_userConfig.lumaScale));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-luma-offset", SString("%.9g", m_userConfig.lumaOffset));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cb-scale", SString("%.9g", m_userConfig.cbScale));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cb-offset", SString("%.9g", m_userConfig.cbOffset));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cr-scale", SString("%.9g", m_userConfig.crScale));
+            SetApplicationSetting(SETTINGS_SECTION, "ycbcr-cr-offset", SString("%.9g", m_userConfig.crOffset));
         }
+
+        m_config = persist && m_runtimeOverrideMask ? BuildEffectiveConfig() : config;
 
         if (!m_config.enabled)
         {
@@ -299,6 +349,65 @@ namespace SkyGfx
         UpdateColorFilterDispatch();
         UpdateRadiosityDispatch();
         return true;
+    }
+
+    bool CManager::SetRuntimeOverrides(const SkyGfxMTAConfigV1& config, std::uint32_t mask)
+    {
+        if (mask & ~OverrideAll)
+            return false;
+
+        const SkyGfxMTAConfigV1 previousConfig = m_runtimeConfig;
+        const std::uint32_t     previousMask = m_runtimeOverrideMask;
+        m_runtimeConfig = config;
+        m_runtimeOverrideMask = mask;
+        if (SetConfig(BuildEffectiveConfig(), false))
+            return true;
+
+        m_runtimeConfig = previousConfig;
+        m_runtimeOverrideMask = previousMask;
+        SetConfig(BuildEffectiveConfig(), false);
+        return false;
+    }
+
+    bool CManager::ClearRuntimeOverrides()
+    {
+        m_runtimeOverrideMask = 0;
+        if (SetConfig(m_userConfig, false))
+            return true;
+
+        // The resource owner is going away, so retaining its previous mask is
+        // never a valid rollback. Fail closed by unloading the bridge and keep
+        // the user profile as the next initialization target.
+        Shutdown();
+        m_config = m_userConfig;
+        return !m_config.enabled || Initialize();
+    }
+
+    void CManager::OnDeviceInvalidate()
+    {
+        if (m_status != IntegrationStatus::BridgeReady || !m_invalidateDeviceResources)
+            return;
+
+        // Exclusive fullscreen loses the D3D9 device on Alt-Tab. The bridge
+        // must release its default-pool radiosity target before Reset or the
+        // driver rejects the reset with D3DERR_INVALIDCALL.
+        if (m_invalidateDeviceResources() != SkyGfxMTAResult::Success)
+            WriteDebugEvent("SkyGfx: device resources could not be invalidated");
+    }
+
+    void CManager::OnDeviceRestore()
+    {
+        if (m_status != IntegrationStatus::BridgeReady || !m_restoreDeviceResources)
+            return;
+
+        if (m_restoreDeviceResources() != SkyGfxMTAResult::Success)
+            WriteDebugEvent("SkyGfx: device resources could not be restored");
+
+        // A reset starts a new rendering lifetime. Allow a fresh diagnostic if
+        // a later frame fails instead of suppressing it because of the old device.
+        m_colorFilterFailureLogged = false;
+        m_radiosityFailureLogged = false;
+        m_ycbcrFailureLogged = false;
     }
 
     bool CManager::IsColorFilterActive() const noexcept
@@ -595,6 +704,8 @@ namespace SkyGfx
         m_renderColorFilter = nullptr;
         m_renderRadiosity = nullptr;
         m_renderYCbCr = nullptr;
+        m_invalidateDeviceResources = nullptr;
+        m_restoreDeviceResources = nullptr;
         m_shutdown = nullptr;
         m_colorFilterFailureLogged = false;
         m_radiosityFailureLogged = false;

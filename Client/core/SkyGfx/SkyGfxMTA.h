@@ -4,7 +4,7 @@
 
 // Keep this ABI synchronized with Dryxio/skygfx src/mta/SkyGfxMTA.h. A C ABI
 // prevents compiler-specific C++ types from coupling the optional DLL to core.
-constexpr std::uint32_t SKY_GFX_MTA_API_VERSION = 4;
+constexpr std::uint32_t SKY_GFX_MTA_API_VERSION = 5;
 
 enum class SkyGfxMTAResult : std::uint32_t
 {
@@ -44,18 +44,18 @@ enum class SkyGfxMTAPreset : std::uint32_t
 struct SkyGfxMTAConfigV1
 {
     std::uint32_t   structSize = sizeof(SkyGfxMTAConfigV1);
-    std::uint32_t   enabled = 0;
+    std::uint32_t   enabled = 1;
     SkyGfxMTAPreset preset = SkyGfxMTAPreset::PlayStation2;
     std::uint32_t   dualPass = 1;
     std::uint32_t   ps2ColorFilter = 1;
-    std::uint32_t   ps2ColorFilterBlur = 1;
+    std::uint32_t   ps2ColorFilterBlur = 0;
     std::uint32_t   ps2ColorFilterPcTimecycle = 1;
     std::uint32_t   ps2DepthBias = 1;
-    std::uint32_t   ps2Radiosity = 1;
+    std::uint32_t   ps2Radiosity = 0;
     std::uint32_t   ps2RadiosityFilterPasses = 2;
     std::uint32_t   ps2RadiosityRenderPasses = 1;
     std::uint32_t   ps2RadiosityIntensity = 35;
-    std::uint32_t   ycbcrCorrection = 0;
+    std::uint32_t   ycbcrCorrection = 1;
     float           lumaScale = 219.0f / 255.0f;
     float           lumaOffset = 16.0f / 255.0f;
     float           cbScale = 1.23f;
@@ -119,4 +119,6 @@ using SkyGfxMTAApplyConfig = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAConfigV1* 
 using SkyGfxMTARenderColorFilter = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAColorFilterFrameV1* frame);
 using SkyGfxMTARenderRadiosity = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTARadiosityFrameV1* frame);
 using SkyGfxMTARenderYCbCr = SkyGfxMTAResult(__cdecl*)(const SkyGfxMTAYCbCrFrameV1* frame);
+using SkyGfxMTAInvalidateDeviceResources = SkyGfxMTAResult(__cdecl*)();
+using SkyGfxMTARestoreDeviceResources = SkyGfxMTAResult(__cdecl*)();
 using SkyGfxMTAShutdown = void(__cdecl*)();
