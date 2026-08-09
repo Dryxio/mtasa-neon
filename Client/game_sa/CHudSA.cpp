@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CDefinitiveRadarSA.h"
 #include "CHudSA.h"
 #include "CGameSA.h"
 #include "CCameraSA.h"
@@ -165,6 +166,15 @@ void CHudSA::SetComponentVisible(eHudComponent component, bool bVisible)
         return;
     }
 
+    // CHud::DrawRadar is permanently routed through the style dispatcher.
+    // Writing C3/CC to its first byte would destroy that validated hook, so
+    // HUD_RADAR visibility is represented explicitly by the dispatcher.
+    if (component == HUD_RADAR)
+    {
+        SetDefinitiveRadarVisible(bVisible);
+        return;
+    }
+
     // Set visiblity of one component
     SHudComponent* pComponent = MapFind(m_HudComponentMap, component);
     if (pComponent)
@@ -194,6 +204,9 @@ void CHudSA::SetComponentVisible(eHudComponent component, bool bVisible)
 //
 bool CHudSA::IsComponentVisible(eHudComponent component)
 {
+    if (component == HUD_RADAR)
+        return IsDefinitiveRadarVisible();
+
     SHudComponent* pComponent = MapFind(m_HudComponentMap, component);
     if (pComponent)
     {

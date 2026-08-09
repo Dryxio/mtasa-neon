@@ -21,6 +21,9 @@
 #define FUNC_DrawAreaOnRadar 0x5853d0
 #define FUNC_SetCoordBlip    0x583820
 
+// Re-applies the client-owned vanilla radar layout after aspect-ratio or CVar changes.
+void UpdateRadarLayoutFromCVars();
+
 class CRadarSA : public CRadar
 {
 public:
@@ -38,7 +41,8 @@ public:
     bool               IsMapTileRegistered(unsigned int column, unsigned int row) const override;
     void               PrepareMapTileTextures(const unsigned int* columns, const unsigned int* rows, std::size_t count) override;
     IDirect3DTexture9* AcquireMapTileTexture(unsigned int column, unsigned int row, bool& unloadAfterUse) override;
-    void ReleaseMapTileTexture(unsigned int column, unsigned int row, IDirect3DTexture9* texture, bool unloadAfterUse) override;
+    void               ReleaseMapTileTexture(unsigned int column, unsigned int row, IDirect3DTexture9* texture, bool unloadAfterUse) override;
+    bool               GetLayout(CVector2D& position, CVector2D& size) const override;
 
     // Internal entry points used by the validated GTA call-site hooks.
     void DrawMapSection(int x, int y);

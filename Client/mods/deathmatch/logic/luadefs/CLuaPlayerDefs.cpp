@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "lua/CLuaFunctionParser.h"
 #include <CResource.h>
+#include <game/CRadar.h>
 
 namespace
 {
@@ -1121,7 +1122,21 @@ bool CLuaPlayerDefs::ResetPlayerHudComponentProperty(eHudComponent component, eH
 std::variant<float, bool, std::string, CLuaMultiReturn<float, float>, CLuaMultiReturn<std::uint8_t, std::uint8_t, std::uint8_t, std::uint8_t>>
 CLuaPlayerDefs::GetPlayerHudComponentProperty(eHudComponent component, eHudComponentProperty property)
 {
-    if (component == HUD_ALL || component == HUD_CROSSHAIR || component == HUD_VITAL_STATS || component == HUD_HELP_TEXT || component == HUD_RADAR)
+    if (component == HUD_RADAR)
+    {
+        CVector2D position;
+        CVector2D size;
+        if (!g_pGame->GetRadar()->GetLayout(position, size))
+            return false;
+
+        if (property == eHudComponentProperty::POSITION)
+            return CLuaMultiReturn<float, float>{position.fX, position.fY};
+        if (property == eHudComponentProperty::SIZE)
+            return CLuaMultiReturn<float, float>{size.fX, size.fY};
+        return false;
+    }
+
+    if (component == HUD_ALL || component == HUD_CROSSHAIR || component == HUD_VITAL_STATS || component == HUD_HELP_TEXT)
         return false;
 
     CHud* hud = g_pGame->GetHud();

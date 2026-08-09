@@ -147,6 +147,9 @@ public:
     bool TryReleaseDetachedNativeWorldSessionAfterModUnload();
 
     void SaveConfig(bool bWaitUntilFinished = false);
+    bool GetNeonClientSetting(const SString& name, SString& type, SString& value) override;
+    bool SetNeonClientSettingOverride(const SString& owner, const SString& name, const SString& type, const SString& value) override;
+    void ClearNeonClientSettingOverrides(const SString& owner) override;
 
     // Debug
     void DebugEcho(const char* szText);
@@ -342,6 +345,16 @@ public:
 
 private:
     void ApplyCoreInitSettings();
+    bool ApplyNeonClientSettingOverrides(const std::string& name);
+    bool ApplySkyGfxClientSettingOverrides();
+
+    struct SNeonClientSettingOverride
+    {
+        std::string        owner;
+        std::string        type;
+        std::string        value;
+        unsigned long long sequence{};
+    };
 
 private:
     // Core devices.
@@ -435,13 +448,15 @@ private:
     HANDLE  m_DummyProgressTimerHandle;
     SString m_strDummyProgressType;
     bool    m_bDummyProgressUpdateAlways;
-    bool    m_bIsRenderingGrass;
+    bool    m_bIsRenderingGrass{};
     bool    m_bFakeLagCommandEnabled;
 
-    SString            m_strLastConnectedServerName{};
-    uint               m_uiCurrentRefreshRate{};
-    unsigned long long m_networkConnectionGeneration{};
-    unsigned long long m_nativeWorldAuthorizationEpoch{1};
+    SString                                                        m_strLastConnectedServerName{};
+    uint                                                           m_uiCurrentRefreshRate{};
+    unsigned long long                                             m_networkConnectionGeneration{};
+    unsigned long long                                             m_nativeWorldAuthorizationEpoch{1};
+    unsigned long long                                             m_neonClientSettingOverrideSequence{};
+    std::map<std::string, std::vector<SNeonClientSettingOverride>> m_neonClientSettingOverrides;
 
     enum class ENativeWorldStartupPhase
     {

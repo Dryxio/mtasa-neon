@@ -12,6 +12,8 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
+#include <variant>
 #include "CSingleton.h"
 #include <core/CCVarsInterface.h>
 #include <xml/CXMLNode.h>
@@ -42,30 +44,40 @@ public:
     // Get queries
     bool Get(const std::string& strVariable, bool& val)
     {
+        if (GetOverride(strVariable, val))
+            return true;
         SANGET;
         Node(strVariable)->GetTagContent(val);
         return true;
     };
     bool Get(const std::string& strVariable, std::string& val)
     {
+        if (GetOverride(strVariable, val))
+            return true;
         SANGET;
         val = Node(strVariable)->GetTagContent();
         return !val.empty();
     };
     bool Get(const std::string& strVariable, int& val)
     {
+        if (GetOverride(strVariable, val))
+            return true;
         SANGET;
         Node(strVariable)->GetTagContent(val);
         return true;
     };
     bool Get(const std::string& strVariable, unsigned int& val)
     {
+        if (GetOverride(strVariable, val))
+            return true;
         SANGET;
         Node(strVariable)->GetTagContent(val);
         return true;
     };
     bool Get(const std::string& strVariable, float& val)
     {
+        if (GetOverride(strVariable, val))
+            return true;
         SANGET;
         Node(strVariable)->GetTagContent(val);
         return true;
@@ -122,16 +134,47 @@ public:
 
     bool Exists(const std::string& strVariable);
 
+    template <class T>
+    void SetRuntimeOverride(const std::string& strVariable, T value)
+    {
+        m_RuntimeOverrides[strVariable] = value;
+        m_iRevision++;
+    }
+    void ClearRuntimeOverride(const std::string& strVariable)
+    {
+        if (m_RuntimeOverrides.erase(strVariable))
+            m_iRevision++;
+    }
+    bool HasRuntimeOverride(const std::string& strVariable) const { return m_RuntimeOverrides.find(strVariable) != m_RuntimeOverrides.end(); }
+
     bool Load();
     bool IsLoaded() { return m_bLoaded; }
     int  GetRevision() { return m_iRevision; }
     void ValidateValues();
 
 private:
+    using RuntimeOverride = std::variant<bool, int, unsigned int, float, std::string>;
+
+    template <class T>
+    bool GetOverride(const std::string& strVariable, T& value) const
+    {
+        const auto iter = m_RuntimeOverrides.find(strVariable);
+        if (iter == m_RuntimeOverrides.end())
+            return false;
+
+        const T* typedValue = std::get_if<T>(&iter->second);
+        if (!typedValue)
+            return false;
+
+        value = *typedValue;
+        return true;
+    }
+
     CXMLNode* Node(const std::string& strVariable);
     void      LoadDefaults();
 
-    bool      m_bLoaded;
-    CXMLNode* m_pStorage;
-    int       m_iRevision;
+    bool                                             m_bLoaded;
+    CXMLNode*                                        m_pStorage;
+    int                                              m_iRevision;
+    std::unordered_map<std::string, RuntimeOverride> m_RuntimeOverrides;
 };

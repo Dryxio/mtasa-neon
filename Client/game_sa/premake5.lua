@@ -33,8 +33,11 @@ project "Game SA"
 	includedirs {
 		"../../Shared/sdk",
 		"../sdk/",
+		"../../vendor/",
 		"../../vendor/sparsehash/src/"
 	}
+
+	links { "unrar" }
 
 	files {
 		"premake5.lua",

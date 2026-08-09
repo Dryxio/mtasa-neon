@@ -1044,6 +1044,10 @@ void CResource::Stop()
     Arguments.PushResource(this);
     m_pResourceEntity->CallEvent("onClientResourceStop", Arguments, true);
 
+    // Server visual settings are session-scoped. Release them after the stop
+    // event so its handlers still observe the resource's effective profile.
+    g_pCore->ClearNeonClientSettingOverrides(m_strResourceName);
+
     if (g_pGame && g_pGame->GetWorld())
         g_pGame->GetWorld()->RemoveCullZoneChangesByOwner(this);
 

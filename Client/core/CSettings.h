@@ -134,6 +134,7 @@ protected:
     CGUITab*         m_pTabNeon;
     CGUITab*         m_pTabSkyGfx;
     CGUITab*         m_pTabInterface;
+    CGUITab*         m_pTabRadar;
     CGUITab*         m_pTabBrowser;
     CGUITab*         m_pTabPostFX;
     CGUITab*         m_pTabAudio;
@@ -349,6 +350,20 @@ protected:
     CGUIComboBox* m_pInterfaceSkinSelector;
     CGUIButton*   m_pInterfaceLoadSkin;
 
+    CGUIScrollBar* m_pRadarPositionX;
+    CGUIScrollBar* m_pRadarPositionY;
+    CGUIScrollBar* m_pRadarWidth;
+    CGUIScrollBar* m_pRadarHeight;
+    CGUILabel*     m_pRadarPositionXValue;
+    CGUILabel*     m_pRadarPositionYValue;
+    CGUILabel*     m_pRadarWidthValue;
+    CGUILabel*     m_pRadarHeightValue;
+    CGUILabel*     m_pRadarManagedLabel;
+    CGUIComboBox*  m_pRadarStyle;
+    CGUICheckBox*  m_pRadarWidescreenSafe;
+    CGUIButton*    m_pRadarDefaultButton;
+    CGUIButton*    m_pRadarVanillaButton;
+
     CGUIComboBox* m_pChatPresets;
     CGUIButton*   m_pChatLoadPreset;
 
@@ -474,6 +489,10 @@ protected:
     bool OnMouseDoubleClick(CGUIMouseEventArgs Args);
 
     bool OnChatLoadPresetClick(CGUIElement* pElement);
+    bool OnRadarLayoutChanged(CGUIElement* pElement);
+    bool OnRadarStyleChanged(CGUIElement* pElement);
+    bool OnRadarDefaultClick(CGUIElement* pElement);
+    bool OnRadarVanillaClick(CGUIElement* pElement);
 
     bool OnLanguageChanged(CGUIElement* pElement);
     bool OnSkinChanged(CGUIElement* pElement);
@@ -497,11 +516,16 @@ protected:
 
 private:
     void CreateInterfaceTabGUI();
+    void CreateRadarTabGUI(const CVector2D& tabPanelSize);
     void CreateSkyGfxTabGUI(const CVector2D& tabPanelSize);
+    void RefreshRadarTabFromConfig();
+    void UpdateRadarTab();
     void UpdateChatColorPreview(eChatColorType eType);
     void UpdateSkyGfxTab();
     void UpdateSkyGfxControls();
     void SaveSkyGfxSettings();
+
+    bool m_bRefreshingRadarTab{};
 
     void ProcessKeyBinds();
     void ProcessJoypad();

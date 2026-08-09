@@ -37,6 +37,7 @@
 *.out       binary
 *.app       binary
 *.dat       binary
+*.rar       binary
 *.ttf       binary
 
 # Ignored files by `git archive`

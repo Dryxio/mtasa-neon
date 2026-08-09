@@ -12,6 +12,7 @@
 #pragma once
 
 #include "CLuaDefs.h"
+#include <variant>
 
 class CLuaClientDefs : public CLuaDefs
 {
@@ -19,13 +20,16 @@ public:
     static void LoadFunctions();
 
 private:
-    static bool SetTransferBoxVisible(bool visible);
-    static bool IsTransferBoxVisible();
-    static bool IsTransferBoxAlwaysVisible();
-    static bool ShowChat(bool bVisible, std::optional<bool> optInputBlocked);
-    static bool IsChatVisible();
-    static bool IsChatInputBlocked();
-    static bool ClearDebug();
-    static bool IsMTAWindowFocused();
-    static bool IsCapsLockEnabled();
+    static bool                                    SetTransferBoxVisible(bool visible);
+    static bool                                    IsTransferBoxVisible();
+    static bool                                    IsTransferBoxAlwaysVisible();
+    static bool                                    ShowChat(bool bVisible, std::optional<bool> optInputBlocked);
+    static bool                                    IsChatVisible();
+    static bool                                    IsChatInputBlocked();
+    static bool                                    ClearDebug();
+    static bool                                    IsMTAWindowFocused();
+    static bool                                    IsCapsLockEnabled();
+    static std::variant<bool, double, std::string> GetNeonClientSetting(std::string name);
+    static bool                                    SetNeonClientSetting(lua_State* luaVM, std::string name, std::variant<bool, double, std::string> value);
+    static bool                                    ResetNeonClientSettings(lua_State* luaVM);
 };

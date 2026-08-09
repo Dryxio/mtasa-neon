@@ -12,18 +12,22 @@
 #include "StdInc.h"
 #include <CRect.h>
 #include <CVector2D.h>
+#include <core/CCoreInterface.h>
 #include <game/CRenderWare.h>
 #include <game/RenderWare.h>
 #include <game/RenderWareD3D.h>
+#include "CDefinitiveRadarSA.h"
 #include "CGameSA.h"
 #include "CRadarSA.h"
 #include "gamesa_renderware.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 
-extern CGameSA* pGame;
+extern CGameSA*        pGame;
+extern CCoreInterface* g_pCore;
 
 CMarkerSA* Markers[MAX_MARKERS];
 
@@ -54,6 +58,47 @@ namespace
     constexpr DWORD VAR_RadarRange = 0xBA8314;
     constexpr DWORD VAR_RadarOrigin = 0xBAA248;
     constexpr DWORD VAR_RadarTextures = 0xBA8478;
+    constexpr DWORD VAR_HudScaleX = 0x859520;
+    constexpr DWORD VAR_HudScaleY = 0x859524;
+    constexpr DWORD VAR_RadarPositionX = 0x858A10;
+    constexpr DWORD VAR_RadarPositionY = 0x866B70;
+    constexpr DWORD VAR_RadarWidth = 0x866B78;
+    constexpr DWORD VAR_RadarHeight = 0x866B74;
+    constexpr DWORD VAR_ScreenWidth = 0xC17044;
+    constexpr DWORD VAR_ScreenHeight = 0xC17048;
+
+    constexpr float DEFINITIVE_REFERENCE_WIDTH = 1920.0f;
+    constexpr float DEFINITIVE_REFERENCE_HEIGHT = 1080.0f;
+    constexpr float DEFINITIVE_RADAR_SIZE = 265.0f;
+    constexpr float DEFINITIVE_OFFSET_X = 85.0f;
+    constexpr float DEFINITIVE_OFFSET_Y = 55.0f;
+    constexpr float NEON_RADAR_POSITION_X = 40.0f;
+    constexpr float NEON_RADAR_POSITION_Y = 104.0f;
+    constexpr float NEON_RADAR_WIDTH = 85.5f;
+    constexpr float NEON_RADAR_HEIGHT = 78.0f;
+
+    constexpr std::array<DWORD, 23> RADAR_SCALE_X_REFS = {
+        0x58A441, 0x58A791, 0x58A82E, 0x58A8DF, 0x58A982, 0x58A5D8, 0x58A6DE, 0x5834BA, 0x58603F, 0x5886CC, 0x58439C, 0x584434,
+        0x58410B, 0x584190, 0x584249, 0x5842E6, 0x5876D4, 0x58774B, 0x58780A, 0x58788F, 0x58792E, 0x587A1A, 0x587AAA,
+    };
+
+    constexpr std::array<DWORD, 21> RADAR_SCALE_Y_REFS = {
+        0x58A473, 0x58A600, 0x58A69E, 0x58A704, 0x58A7B9, 0x58A85A, 0x58A909, 0x58A9BD, 0x5834EC, 0x586058, 0x584346,
+        0x58440C, 0x58412B, 0x5841B0, 0x584207, 0x5842C6, 0x5876BC, 0x587733, 0x587916, 0x587A02, 0x587A92,
+    };
+
+    constexpr std::array<DWORD, 8> RADAR_POSITION_X_REFS = {0x5834D2, 0x58A467, 0x58A5E0, 0x58A6E4, 0x58A799, 0x58A834, 0x58A8E7, 0x58A988};
+    constexpr std::array<DWORD, 8> RADAR_POSITION_Y_REFS = {0x5834FE, 0x58A497, 0x58A60C, 0x58A71C, 0x58A7C5, 0x58A866, 0x58A911, 0x58A9C5};
+    constexpr std::array<DWORD, 7> RADAR_WIDTH_REFS = {0x5834C0, 0x587819, 0x58A447, 0x58A7E7, 0x58A83E, 0x58A941, 0x58A99B};
+    constexpr std::array<DWORD, 9> RADAR_HEIGHT_REFS = {0x5834F4, 0x58A47B, 0x58A630, 0x58A6A9, 0x58A70C, 0x58A7FF, 0x58A8A9, 0x58A91F, 0x58A9D3};
+
+    std::array<float, RADAR_SCALE_X_REFS.size()> g_RadarScaleXValues{};
+    std::array<float, RADAR_SCALE_Y_REFS.size()> g_RadarScaleYValues{};
+    float                                        g_RadarPositionX = 40.0f;
+    float                                        g_RadarPositionY = 104.0f;
+    float                                        g_RadarWidth = 94.0f;
+    float                                        g_RadarHeight = 76.0f;
+    bool                                         g_RadarLayoutInstalled = false;
 
     struct SRadarColor
     {
@@ -147,6 +192,53 @@ namespace
         return std::memcmp(reinterpret_cast<const void*>(address), expectedBytes.data(), expectedBytes.size()) == 0;
     }
 
+    template <std::size_t Size>
+    bool VerifyFloatReferences(const std::array<DWORD, Size>& instructionAddresses, DWORD expectedTarget)
+    {
+        for (DWORD address : instructionAddresses)
+        {
+            if (*reinterpret_cast<const DWORD*>(address + 2) != expectedTarget)
+                return false;
+        }
+        return true;
+    }
+
+    bool InstallRadarLayoutReferences()
+    {
+        if (pGame->GetGameVersion() != VERSION_US_10)
+        {
+            OutputReleaseLine("[Radar] Custom vanilla layout disabled: unsupported GTA executable");
+            return false;
+        }
+
+        if (!VerifyFloatReferences(RADAR_SCALE_X_REFS, VAR_HudScaleX) || !VerifyFloatReferences(RADAR_SCALE_Y_REFS, VAR_HudScaleY) ||
+            !VerifyFloatReferences(RADAR_POSITION_X_REFS, VAR_RadarPositionX) || !VerifyFloatReferences(RADAR_POSITION_Y_REFS, VAR_RadarPositionY) ||
+            !VerifyFloatReferences(RADAR_WIDTH_REFS, VAR_RadarWidth) || !VerifyFloatReferences(RADAR_HEIGHT_REFS, VAR_RadarHeight))
+        {
+            OutputReleaseLine("[Radar] Custom vanilla layout disabled: reference validation failed");
+            return false;
+        }
+
+        // Keep all layout values radar-private because GTA shares the original constants with unrelated HUD elements.
+        for (DWORD address : RADAR_POSITION_X_REFS)
+            MemPut<DWORD>(address + 2, reinterpret_cast<DWORD>(&g_RadarPositionX));
+        for (DWORD address : RADAR_POSITION_Y_REFS)
+            MemPut<DWORD>(address + 2, reinterpret_cast<DWORD>(&g_RadarPositionY));
+        for (DWORD address : RADAR_WIDTH_REFS)
+            MemPut<DWORD>(address + 2, reinterpret_cast<DWORD>(&g_RadarWidth));
+        for (DWORD address : RADAR_HEIGHT_REFS)
+            MemPut<DWORD>(address + 2, reinterpret_cast<DWORD>(&g_RadarHeight));
+
+        for (std::size_t i = 0; i < RADAR_SCALE_X_REFS.size(); ++i)
+            MemPut<DWORD>(RADAR_SCALE_X_REFS[i] + 2, reinterpret_cast<DWORD>(&g_RadarScaleXValues[i]));
+        for (std::size_t i = 0; i < RADAR_SCALE_Y_REFS.size(); ++i)
+            MemPut<DWORD>(RADAR_SCALE_Y_REFS[i] + 2, reinterpret_cast<DWORD>(&g_RadarScaleYValues[i]));
+
+        g_RadarLayoutInstalled = true;
+        OutputReleaseLine("[Radar] Configurable vanilla radar layout enabled");
+        return true;
+    }
+
     RwRenderStateSet_t GetRenderStateSetter()
     {
         const DWORD engine = *reinterpret_cast<const DWORD*>(VAR_RwEngineInstance);
@@ -158,6 +250,54 @@ namespace
     void __cdecl DrawExtendedRadarSection(int x, int y);
     void __cdecl StreamExtendedRadarSections(int x, int y);
     void __cdecl StreamExtendedRadarSections(const CVector& position);
+}
+
+void UpdateRadarLayoutFromCVars()
+{
+    if (!g_RadarLayoutInstalled || !g_pCore)
+        return;
+
+    float positionX = 40.0f;
+    float positionY = 104.0f;
+    float width = 94.0f;
+    float height = 76.0f;
+    bool  widescreenSafe = false;
+    g_pCore->GetCVars()->Get("radar_position_x", positionX);
+    g_pCore->GetCVars()->Get("radar_position_y", positionY);
+    g_pCore->GetCVars()->Get("radar_width", width);
+    g_pCore->GetCVars()->Get("radar_height", height);
+    g_pCore->GetCVars()->Get("radar_widescreen_safe", widescreenSafe);
+
+    positionX = std::clamp(positionX, 0.0f, 640.0f);
+    positionY = std::clamp(positionY, 0.0f, 448.0f);
+    width = std::clamp(width, 40.0f, 200.0f);
+    height = std::clamp(height, 40.0f, 200.0f);
+
+    g_RadarPositionX = positionX;
+    g_RadarPositionY = positionY;
+    g_RadarWidth = width;
+    g_RadarHeight = height;
+
+    const float hudScaleX = *reinterpret_cast<const float*>(VAR_HudScaleX);
+    const float hudScaleY = *reinterpret_cast<const float*>(VAR_HudScaleY);
+    g_RadarScaleXValues.fill(hudScaleX);
+    g_RadarScaleYValues.fill(hudScaleY);
+
+    if (widescreenSafe)
+    {
+        const float screenWidth = static_cast<float>(*reinterpret_cast<const int*>(VAR_ScreenWidth));
+        const float screenHeight = static_cast<float>(*reinterpret_cast<const int*>(VAR_ScreenHeight));
+        if (screenWidth > 0.0f && screenHeight > 0.0f)
+        {
+            const float aspectRatio = screenWidth / screenHeight;
+            const float safeScaleX = (1.0f / 640.0f) / (aspectRatio / (4.0f / 3.0f));
+            const float safeScaleY = 1.0f / 448.0f;
+
+            // Match Widescreen Fix's split: radar geometry follows screen height while blip glyph sizes keep the normal HUD scale.
+            std::fill_n(g_RadarScaleXValues.begin(), 8, safeScaleX);
+            std::fill_n(g_RadarScaleYValues.begin(), 9, safeScaleY);
+        }
+    }
 }
 
 struct CRadarSA::SExtendedRadar
@@ -174,7 +314,7 @@ struct CRadarSA::SExtendedRadar
     };
 
     std::array<STile, RADAR_MAP_SIZE * RADAR_MAP_SIZE> tiles;
-    std::array<bool, 12 * 12>                           gtaAtlasLoads{};
+    std::array<bool, 12 * 12>                          gtaAtlasLoads{};
     bool                                               hooksInstalled = false;
     std::uint32_t                                      revision = 1;
 
@@ -383,6 +523,7 @@ namespace
 
     void __cdecl DrawExtendedRadarSection(int x, int y)
     {
+        UpdateRadarLayoutFromCVars();
         if (IsGtaTile(x, y) || !IsExtendedWorldTile(x, y) || !g_pExtendedRadar)
         {
             DrawRadarSection(x, y);
@@ -417,16 +558,69 @@ CRadarSA::CRadarSA() : m_ExtendedRadar(std::make_unique<SExtendedRadar>())
 
     g_pExtendedRadar = this;
     m_ExtendedRadar->hooksInstalled = InstallExtendedRadarHooks();
+    if (InstallRadarLayoutReferences())
+        UpdateRadarLayoutFromCVars();
+    InstallDefinitiveRadarRenderer();
 }
 
 CRadarSA::~CRadarSA()
 {
+    ShutdownDefinitiveRadarRenderer();
     g_pExtendedRadar = nullptr;
     for (int i = 0; i < MAX_MARKERS; i++)
     {
         if (Markers[i])
             delete Markers[i];
     }
+}
+
+bool CRadarSA::GetLayout(CVector2D& position, CVector2D& size) const
+{
+    if (!g_RadarLayoutInstalled)
+        return false;
+
+    const float screenWidth = static_cast<float>(*reinterpret_cast<const int*>(VAR_ScreenWidth));
+    const float screenHeight = static_cast<float>(*reinterpret_cast<const int*>(VAR_ScreenHeight));
+    if (screenWidth <= 0.0f || screenHeight <= 0.0f)
+        return false;
+
+    int radarStyle = 0;
+    g_pCore->GetCVars()->Get("radar_style", radarStyle);
+    if (radarStyle == 1)
+    {
+        float positionX = NEON_RADAR_POSITION_X;
+        float positionY = NEON_RADAR_POSITION_Y;
+        float width = NEON_RADAR_WIDTH;
+        float height = NEON_RADAR_HEIGHT;
+        g_pCore->GetCVars()->Get("radar_position_x", positionX);
+        g_pCore->GetCVars()->Get("radar_position_y", positionY);
+        g_pCore->GetCVars()->Get("radar_width", width);
+        g_pCore->GetCVars()->Get("radar_height", height);
+
+        // Radar Trilogy SA defines its defaults in 1920x1080 pixels and uses
+        // the mean of the horizontal and vertical screen ratios. Keep that
+        // exact 265/85/55 baseline while treating NEON's shared sliders as
+        // relative customisation around the Definitive preset.
+        const float scaleX = screenWidth / DEFINITIVE_REFERENCE_WIDTH;
+        const float scaleY = screenHeight / DEFINITIVE_REFERENCE_HEIGHT;
+        const float baseScale = (scaleX + scaleY) * 0.5f;
+        const float customSizeScale = ((width / NEON_RADAR_WIDTH) + (height / NEON_RADAR_HEIGHT)) * 0.5f;
+        const float radarSize = std::max(1.0f, DEFINITIVE_RADAR_SIZE * baseScale * customSizeScale);
+        const float customOffsetX = (positionX - NEON_RADAR_POSITION_X) * (screenHeight / 480.0f);
+        const float customOffsetY = (positionY - NEON_RADAR_POSITION_Y) * (screenHeight / 448.0f);
+        const float left = DEFINITIVE_OFFSET_X * scaleX + customOffsetX;
+        const float bottom = DEFINITIVE_OFFSET_Y * scaleY + customOffsetY;
+
+        position = CVector2D(left, screenHeight - bottom - radarSize);
+        size = CVector2D(radarSize, radarSize);
+        return true;
+    }
+
+    const float scaleX = screenWidth * g_RadarScaleXValues.front();
+    const float scaleY = screenHeight * g_RadarScaleYValues.front();
+    position = CVector2D(scaleX * g_RadarPositionX, screenHeight - scaleY * g_RadarPositionY);
+    size = CVector2D(scaleX * g_RadarWidth, scaleY * g_RadarHeight);
+    return true;
 }
 
 bool CRadarSA::SetMapTile(unsigned int column, unsigned int row, const void* owner, const void* source, const char* data, std::size_t size,

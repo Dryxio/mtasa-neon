@@ -22,6 +22,8 @@
 #include <fstream>
 #include <array>
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <limits>
 #include "Userenv.h"  // This will enable SharedUtil::ExpandEnvString
 #define ALLOC_STATS_MODULE_NAME "core"
@@ -102,6 +104,43 @@ namespace
     constexpr float kDistantLightsCoronaRadiusMultiplierMax = 1.0f;
     constexpr int   kExtendedWorldDrawDistanceMin = 300;
     constexpr int   kExtendedWorldDrawDistanceMax = 5000;
+
+    bool ParseNeonBoolean(const SString& type, const SString& value, bool& result)
+    {
+        if (type != "boolean" || (value != "0" && value != "1"))
+            return false;
+        result = value == "1";
+        return true;
+    }
+
+    bool ParseNeonNumber(const SString& type, const SString& value, double& result)
+    {
+        if (type != "number")
+            return false;
+
+        errno = 0;
+        char* end = nullptr;
+        result = std::strtod(value.c_str(), &end);
+        return errno != ERANGE && end && end != value.c_str() && *end == '\0' && std::isfinite(result);
+    }
+
+    const char* GetSkyGfxStatusName(SkyGfx::IntegrationStatus status)
+    {
+        switch (status)
+        {
+            case SkyGfx::IntegrationStatus::Disabled:
+                return "disabled";
+            case SkyGfx::IntegrationStatus::ModuleMissing:
+                return "module_missing";
+            case SkyGfx::IntegrationStatus::ApiMismatch:
+                return "api_mismatch";
+            case SkyGfx::IntegrationStatus::BridgeReady:
+                return "active";
+            case SkyGfx::IntegrationStatus::Failed:
+                return "failed";
+        }
+        return "failed";
+    }
 
     const char* GetConnectUriEndpoint(const char* uri)
     {
@@ -1140,6 +1179,245 @@ void CCore::SaveConfig(bool bWaitUntilFinished)
         m_pConfigFile->Write();
         GetServerCache()->SaveServerCache(bWaitUntilFinished);
     }
+}
+
+bool CCore::GetNeonClientSetting(const SString& name, SString& type, SString& value)
+{
+    const auto setBoolean = [&](bool setting)
+    {
+        type = "boolean";
+        value = setting ? "1" : "0";
+        return true;
+    };
+    const auto setNumber = [&](double setting)
+    {
+        type = "number";
+        value = SString("%.9g", setting);
+        return true;
+    };
+
+    if (name == "radar.style")
+    {
+        type = "string";
+        value = m_ClientVariables.GetValue<int>("radar_style") == 1 ? "definitive" : "vanilla";
+        return true;
+    }
+    if (name == "radar.position_x")
+        return setNumber(m_ClientVariables.GetValue<float>("radar_position_x"));
+    if (name == "radar.position_y")
+        return setNumber(m_ClientVariables.GetValue<float>("radar_position_y"));
+    if (name == "radar.width")
+        return setNumber(m_ClientVariables.GetValue<float>("radar_width"));
+    if (name == "radar.height")
+        return setNumber(m_ClientVariables.GetValue<float>("radar_height"));
+    if (name == "radar.widescreen_safe")
+        return setBoolean(m_ClientVariables.GetValue<bool>("radar_widescreen_safe"));
+
+    const SkyGfx::CManager&  manager = SkyGfx::CManager::Get();
+    const SkyGfxMTAConfigV1& config = manager.GetConfig();
+    if (name == "skygfx.status")
+    {
+        type = "string";
+        value = GetSkyGfxStatusName(manager.GetStatus());
+        return true;
+    }
+    if (name == "skygfx.enabled")
+        return setBoolean(config.enabled != 0);
+    if (name == "skygfx.color_filter")
+        return setBoolean(config.ps2ColorFilter != 0);
+    if (name == "skygfx.color_filter_blur")
+        return setBoolean(config.ps2ColorFilterBlur != 0);
+    if (name == "skygfx.pc_timecycle")
+        return setBoolean(config.ps2ColorFilterPcTimecycle != 0);
+    if (name == "skygfx.depth_bias")
+        return setBoolean(config.ps2DepthBias != 0);
+    if (name == "skygfx.ycbcr")
+        return setBoolean(config.ycbcrCorrection != 0);
+    if (name == "skygfx.radiosity")
+        return setBoolean(config.ps2Radiosity != 0);
+    if (name == "skygfx.radiosity_intensity")
+        return setNumber(config.ps2RadiosityIntensity);
+    if (name == "skygfx.radiosity_filter_passes")
+        return setNumber(config.ps2RadiosityFilterPasses);
+    if (name == "skygfx.radiosity_render_passes")
+        return setNumber(config.ps2RadiosityRenderPasses);
+    return false;
+}
+
+bool CCore::ApplySkyGfxClientSettingOverrides()
+{
+    SkyGfx::CManager& manager = SkyGfx::CManager::Get();
+    SkyGfxMTAConfigV1 config = manager.GetUserConfig();
+    std::uint32_t     mask = 0;
+
+    const auto applyBoolean = [&](const char* name, std::uint32_t& setting, std::uint32_t settingMask)
+    {
+        const auto iter = m_neonClientSettingOverrides.find(name);
+        if (iter == m_neonClientSettingOverrides.end() || iter->second.empty())
+            return;
+        setting = iter->second.back().value == "1" ? 1u : 0u;
+        mask |= settingMask;
+    };
+    const auto applyNumber = [&](const char* name, std::uint32_t& setting, std::uint32_t settingMask)
+    {
+        const auto iter = m_neonClientSettingOverrides.find(name);
+        if (iter == m_neonClientSettingOverrides.end() || iter->second.empty())
+            return;
+        setting = static_cast<std::uint32_t>(std::strtoul(iter->second.back().value.c_str(), nullptr, 10));
+        mask |= settingMask;
+    };
+
+    applyBoolean("skygfx.enabled", config.enabled, SkyGfx::CManager::OverrideEnabled);
+    applyBoolean("skygfx.color_filter", config.ps2ColorFilter, SkyGfx::CManager::OverrideColorFilter);
+    applyBoolean("skygfx.color_filter_blur", config.ps2ColorFilterBlur, SkyGfx::CManager::OverrideColorFilterBlur);
+    applyBoolean("skygfx.pc_timecycle", config.ps2ColorFilterPcTimecycle, SkyGfx::CManager::OverridePcTimecycle);
+    applyBoolean("skygfx.depth_bias", config.ps2DepthBias, SkyGfx::CManager::OverrideDepthBias);
+    applyBoolean("skygfx.ycbcr", config.ycbcrCorrection, SkyGfx::CManager::OverrideYCbCr);
+    applyBoolean("skygfx.radiosity", config.ps2Radiosity, SkyGfx::CManager::OverrideRadiosity);
+    applyNumber("skygfx.radiosity_intensity", config.ps2RadiosityIntensity, SkyGfx::CManager::OverrideRadiosityIntensity);
+    applyNumber("skygfx.radiosity_filter_passes", config.ps2RadiosityFilterPasses, SkyGfx::CManager::OverrideRadiosityFilterPasses);
+    applyNumber("skygfx.radiosity_render_passes", config.ps2RadiosityRenderPasses, SkyGfx::CManager::OverrideRadiosityRenderPasses);
+    return mask ? manager.SetRuntimeOverrides(config, mask) : manager.ClearRuntimeOverrides();
+}
+
+bool CCore::ApplyNeonClientSettingOverrides(const std::string& name)
+{
+    if (name.rfind("skygfx.", 0) == 0)
+        return ApplySkyGfxClientSettingOverrides();
+
+    const auto iter = m_neonClientSettingOverrides.find(name);
+    if (iter == m_neonClientSettingOverrides.end() || iter->second.empty())
+    {
+        if (name == "radar.style")
+            m_ClientVariables.ClearRuntimeOverride("radar_style");
+        else if (name == "radar.position_x")
+            m_ClientVariables.ClearRuntimeOverride("radar_position_x");
+        else if (name == "radar.position_y")
+            m_ClientVariables.ClearRuntimeOverride("radar_position_y");
+        else if (name == "radar.width")
+            m_ClientVariables.ClearRuntimeOverride("radar_width");
+        else if (name == "radar.height")
+            m_ClientVariables.ClearRuntimeOverride("radar_height");
+        else if (name == "radar.widescreen_safe")
+            m_ClientVariables.ClearRuntimeOverride("radar_widescreen_safe");
+        else
+            return false;
+        return true;
+    }
+
+    const SNeonClientSettingOverride& setting = iter->second.back();
+    if (name == "radar.style")
+        m_ClientVariables.SetRuntimeOverride("radar_style", setting.value == "definitive" ? 1 : 0);
+    else if (name == "radar.position_x")
+        m_ClientVariables.SetRuntimeOverride("radar_position_x", static_cast<float>(std::strtod(setting.value.c_str(), nullptr)));
+    else if (name == "radar.position_y")
+        m_ClientVariables.SetRuntimeOverride("radar_position_y", static_cast<float>(std::strtod(setting.value.c_str(), nullptr)));
+    else if (name == "radar.width")
+        m_ClientVariables.SetRuntimeOverride("radar_width", static_cast<float>(std::strtod(setting.value.c_str(), nullptr)));
+    else if (name == "radar.height")
+        m_ClientVariables.SetRuntimeOverride("radar_height", static_cast<float>(std::strtod(setting.value.c_str(), nullptr)));
+    else if (name == "radar.widescreen_safe")
+        m_ClientVariables.SetRuntimeOverride("radar_widescreen_safe", setting.value == "1");
+    else
+        return false;
+    return true;
+}
+
+bool CCore::SetNeonClientSettingOverride(const SString& owner, const SString& name, const SString& type, const SString& value)
+{
+    if (owner.empty())
+        return false;
+
+    bool   booleanValue = false;
+    double numberValue = 0.0;
+    bool   valid = false;
+
+    if (name == "radar.style")
+        valid = type == "string" && (value == "vanilla" || value == "definitive");
+    else if (name == "radar.position_x")
+        valid = ParseNeonNumber(type, value, numberValue) && numberValue >= 0.0 && numberValue <= 640.0;
+    else if (name == "radar.position_y")
+        valid = ParseNeonNumber(type, value, numberValue) && numberValue >= 0.0 && numberValue <= 448.0;
+    else if (name == "radar.width" || name == "radar.height")
+        valid = ParseNeonNumber(type, value, numberValue) && numberValue >= 40.0 && numberValue <= 200.0;
+    else if (name == "radar.widescreen_safe" || name == "skygfx.enabled" || name == "skygfx.color_filter" || name == "skygfx.color_filter_blur" ||
+             name == "skygfx.pc_timecycle" || name == "skygfx.depth_bias" || name == "skygfx.ycbcr" || name == "skygfx.radiosity")
+        valid = ParseNeonBoolean(type, value, booleanValue);
+    else if (name == "skygfx.radiosity_intensity")
+        valid = ParseNeonNumber(type, value, numberValue) && numberValue >= 1.0 && numberValue <= 255.0 && std::floor(numberValue) == numberValue;
+    else if (name == "skygfx.radiosity_filter_passes" || name == "skygfx.radiosity_render_passes")
+        valid = ParseNeonNumber(type, value, numberValue) && numberValue >= 1.0 && numberValue <= 4.0 && std::floor(numberValue) == numberValue;
+
+    if (!valid)
+        return false;
+
+    const std::string        settingName = name;
+    const auto               previousOverrides = m_neonClientSettingOverrides;
+    std::vector<std::string> changedSettings;
+    const auto               storeOverride = [&](const std::string& overrideName, const std::string& overrideType, const std::string& overrideValue)
+    {
+        auto& overrides = m_neonClientSettingOverrides[overrideName];
+        overrides.erase(std::remove_if(overrides.begin(), overrides.end(), [&](const auto& setting) { return setting.owner == owner; }), overrides.end());
+        overrides.push_back({owner, overrideType, overrideValue, ++m_neonClientSettingOverrideSequence});
+        std::sort(overrides.begin(), overrides.end(), [](const auto& left, const auto& right) { return left.sequence < right.sequence; });
+        changedSettings.push_back(overrideName);
+    };
+
+    storeOverride(settingName, type, value);
+    if (name == "radar.style")
+    {
+        // Both built-in profiles use NEON's neutral slider baseline. Vanilla
+        // resolves it as the Widescreen Fix layout, while the DE renderer maps
+        // it to its exact 265 px size and 85/55 offsets at 1920x1080.
+        storeOverride("radar.position_x", "number", "40");
+        storeOverride("radar.position_y", "number", "104");
+        storeOverride("radar.width", "number", "85.5");
+        storeOverride("radar.height", "number", "78");
+        storeOverride("radar.widescreen_safe", "boolean", "1");
+    }
+
+    bool applied = true;
+    for (const std::string& changedSetting : changedSettings)
+        applied = ApplyNeonClientSettingOverrides(changedSetting) && applied;
+    if (applied)
+        return true;
+
+    m_neonClientSettingOverrides = previousOverrides;
+    for (const std::string& changedSetting : changedSettings)
+        ApplyNeonClientSettingOverrides(changedSetting);
+    return false;
+}
+
+void CCore::ClearNeonClientSettingOverrides(const SString& owner)
+{
+    if (owner.empty())
+        return;
+
+    bool                     skyGfxChanged = false;
+    std::vector<std::string> changedRadarSettings;
+    for (auto iter = m_neonClientSettingOverrides.begin(); iter != m_neonClientSettingOverrides.end();)
+    {
+        auto&             settings = iter->second;
+        const std::size_t oldSize = settings.size();
+        settings.erase(std::remove_if(settings.begin(), settings.end(), [&](const auto& setting) { return setting.owner == owner; }), settings.end());
+        if (settings.size() != oldSize)
+        {
+            if (iter->first.rfind("skygfx.", 0) == 0)
+                skyGfxChanged = true;
+            else
+                changedRadarSettings.push_back(iter->first);
+        }
+
+        if (settings.empty())
+            iter = m_neonClientSettingOverrides.erase(iter);
+        else
+            ++iter;
+    }
+
+    for (const std::string& setting : changedRadarSettings)
+        ApplyNeonClientSettingOverrides(setting);
+    if (skyGfxChanged && !ApplySkyGfxClientSettingOverrides())
+        WriteDebugEvent("SkyGfx: could not reactivate the saved user profile after resource override cleanup");
 }
 
 void CCore::ChatEcho(const char* szText, bool bColorCoded)

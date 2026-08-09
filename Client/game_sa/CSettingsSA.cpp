@@ -17,6 +17,7 @@
 #include "CHudSA.h"
 #include "CModelInfoSA.h"
 #include "CSettingsSA.h"
+#include "CRadarSA.h"
 #include "CCameraSA.h"
 #include "CCamSA.h"
 
@@ -465,6 +466,9 @@ void CSettingsSA::SetAspectRatio(eAspectRatio aspectRatio, bool bAdjustmentEnabl
         pGame->GetHud()->AdjustComponents(fValue);
     else
         pGame->GetHud()->ResetComponentAdjustment();
+
+    // Radar scale references depend on the HUD aspect-ratio multipliers, so refresh them after those values change.
+    UpdateRadarLayoutFromCVars();
 }
 
 ////////////////////////////////////////////////

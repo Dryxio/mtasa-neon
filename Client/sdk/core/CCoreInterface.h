@@ -236,6 +236,13 @@ public:
     virtual void BeginConnectionLoading(const char* status) = 0;
     virtual void UpdateConnectionLoading(const char* status, float progress) = 0;
     virtual void EndConnectionLoading() = 0;
+
+    // Neon-only visual settings are exposed through an allowlisted bridge.
+    // Overrides belong to the calling resource and never replace the player's
+    // persisted preferences; the deathmatch module releases them on stop.
+    virtual bool GetNeonClientSetting(const SString& name, SString& type, SString& value) = 0;
+    virtual bool SetNeonClientSettingOverride(const SString& owner, const SString& name, const SString& type, const SString& value) = 0;
+    virtual void ClearNeonClientSettingOverrides(const SString& owner) = 0;
 };
 
 class CClientTime

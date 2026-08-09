@@ -17,6 +17,7 @@
 
 class CMarker;
 class CVector;
+class CVector2D;
 struct IDirect3DTexture9;
 
 struct SRadarMapStats
@@ -50,5 +51,6 @@ public:
     virtual bool               IsMapTileRegistered(unsigned int column, unsigned int row) const = 0;
     virtual void               PrepareMapTileTextures(const unsigned int* columns, const unsigned int* rows, std::size_t count) = 0;
     virtual IDirect3DTexture9* AcquireMapTileTexture(unsigned int column, unsigned int row, bool& unloadAfterUse) = 0;
-    virtual void ReleaseMapTileTexture(unsigned int column, unsigned int row, IDirect3DTexture9* texture, bool unloadAfterUse) = 0;
+    virtual void               ReleaseMapTileTexture(unsigned int column, unsigned int row, IDirect3DTexture9* texture, bool unloadAfterUse) = 0;
+    virtual bool               GetLayout(CVector2D& position, CVector2D& size) const = 0;
 };

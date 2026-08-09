@@ -74,6 +74,27 @@ namespace
     constexpr int   kExtendedDrawDistanceMax = 5000;
     constexpr int   kExtendedDrawDistanceDefault = 2000;
     constexpr int   kExtendedDrawDistanceStep = 100;
+    constexpr float kRadarPositionXMin = 0.0f;
+    constexpr float kRadarPositionXMax = 640.0f;
+    constexpr float kRadarPositionXDefault = 40.0f;
+    constexpr float kRadarPositionYMin = 0.0f;
+    constexpr float kRadarPositionYMax = 448.0f;
+    constexpr float kRadarPositionYDefault = 104.0f;
+    constexpr float kRadarSizeMin = 40.0f;
+    constexpr float kRadarSizeMax = 200.0f;
+    constexpr float kRadarNeonWidthDefault = 85.5f;
+    constexpr float kRadarNeonHeightDefault = 78.0f;
+    constexpr float kRadarVanillaWidth = 94.0f;
+    constexpr float kRadarVanillaHeight = 76.0f;
+    constexpr float kRadarSizeStep = 0.5f;
+
+    bool IsRadarManagedByRuntime()
+    {
+        const CClientVariables& clientVars = CClientVariables::GetSingleton();
+        return clientVars.HasRuntimeOverride("radar_style") || clientVars.HasRuntimeOverride("radar_position_x") ||
+               clientVars.HasRuntimeOverride("radar_position_y") || clientVars.HasRuntimeOverride("radar_width") ||
+               clientVars.HasRuntimeOverride("radar_height") || clientVars.HasRuntimeOverride("radar_widescreen_safe");
+    }
 
     float NormalizeSliderValue(float value, float minValue, float maxValue)
     {
@@ -108,6 +129,12 @@ namespace
         const float distance = DenormalizeSliderValue(slider->GetScrollPosition(), kExtendedDrawDistanceMin, kExtendedDrawDistanceMax);
         const int   quantized = static_cast<int>(std::round(distance / kExtendedDrawDistanceStep)) * kExtendedDrawDistanceStep;
         return std::clamp(quantized, kExtendedDrawDistanceMin, kExtendedDrawDistanceMax);
+    }
+
+    float GetRadarValueFromSlider(CGUIScrollBar* slider, float minValue, float maxValue, float step)
+    {
+        const float value = DenormalizeSliderValue(slider->GetScrollPosition(), minValue, maxValue);
+        return std::clamp(std::round(value / step) * step, minValue, maxValue);
     }
 
     float ComputeSliderWidth(float tabWidth, float sliderX, float preferredWidth, float reservedWidth = kSliderValueReserve)
@@ -228,6 +255,7 @@ void CSettings::ResetGuiPointers()
     m_pTabNeon = NULL;
     m_pTabSkyGfx = NULL;
     m_pTabInterface = NULL;
+    m_pTabRadar = NULL;
     m_pTabBrowser = NULL;
     m_pTabPostFX = NULL;
     m_pTabAudio = NULL;
@@ -444,6 +472,19 @@ void CSettings::ResetGuiPointers()
     m_pInterfaceLanguageSelector = NULL;
     m_pInterfaceSkinSelector = NULL;
     m_pInterfaceLoadSkin = NULL;
+    m_pRadarPositionX = NULL;
+    m_pRadarPositionY = NULL;
+    m_pRadarWidth = NULL;
+    m_pRadarHeight = NULL;
+    m_pRadarPositionXValue = NULL;
+    m_pRadarPositionYValue = NULL;
+    m_pRadarWidthValue = NULL;
+    m_pRadarHeightValue = NULL;
+    m_pRadarManagedLabel = NULL;
+    m_pRadarStyle = NULL;
+    m_pRadarWidescreenSafe = NULL;
+    m_pRadarDefaultButton = NULL;
+    m_pRadarVanillaButton = NULL;
 
     m_pChatPresets = NULL;
     m_pChatLoadPreset = NULL;
@@ -1540,6 +1581,19 @@ void CSettings::CreateGUI()
     /**
      *  Neon tab
      **/
+    CVector2D neonSectionSize(std::max(0.0f, tabPanelSize.fX - 20.0f), std::max(0.0f, tabPanelSize.fY - 20.0f));
+    auto*     neonTabPanel = reinterpret_cast<CGUITabPanel*>(pManager->CreateTabPanel(m_pTabNeon));
+    neonTabPanel->SetPosition(CVector2D(0.0f, 0.0f));
+    neonTabPanel->SetSize(neonSectionSize);
+    neonTabPanel->GetSize(neonSectionSize);
+    pTabNeon = neonTabPanel->CreateTab(_("Rendering"));
+    m_pTabRadar = neonTabPanel->CreateTab(_("Radar"));
+
+    CVector2D neonContentSize;
+    pTabNeon->GetSize(neonContentSize);
+    CVector2D radarContentSize;
+    m_pTabRadar->GetSize(radarContentSize);
+
     CVector2D neonPosition(16.0f, 16.0f);
     m_pNeonRenderingLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, _("Extended world rendering")));
     m_pNeonRenderingLabel->SetPosition(neonPosition);
@@ -1561,7 +1615,7 @@ void CSettings::CreateGUI()
     const CVector2D extendedDrawDistanceSliderPosition(neonPosition.fX + extendedDrawDistanceLabelSize.fX + kSliderLeftSpacing, neonPosition.fY);
     m_pExtendedDrawDistance = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, pTabNeon));
     m_pExtendedDrawDistance->SetPosition(extendedDrawDistanceSliderPosition);
-    m_pExtendedDrawDistance->SetSize(CVector2D(ComputeSliderWidth(tabPanelSize.fX, extendedDrawDistanceSliderPosition.fX, 260.0f), 20.0f));
+    m_pExtendedDrawDistance->SetSize(CVector2D(ComputeSliderWidth(neonContentSize.fX, extendedDrawDistanceSliderPosition.fX, 260.0f), 20.0f));
     m_pExtendedDrawDistance->SetProperty(
         "StepSize", SString("%1.6f", static_cast<float>(kExtendedDrawDistanceStep) / (kExtendedDrawDistanceMax - kExtendedDrawDistanceMin)));
 
@@ -1571,13 +1625,14 @@ void CSettings::CreateGUI()
     m_pExtendedDrawDistanceValueLabel->SetPosition(
         CVector2D(extendedDrawDistanceSliderPosition.fX + extendedDrawDistanceSliderSize.fX + kSliderLabelSpacing, extendedDrawDistanceSliderPosition.fY));
     m_pExtendedDrawDistanceValueLabel->AutoSize("5000 m");
-    FinalizeSliderRow(tabPanelSize.fX, m_pExtendedDrawDistance, m_pExtendedDrawDistanceValueLabel, 260.0f, kSliderLabelSpacing, m_pExtendedDrawDistanceLabel);
+    FinalizeSliderRow(neonContentSize.fX, m_pExtendedDrawDistance, m_pExtendedDrawDistanceValueLabel, 260.0f, kSliderLabelSpacing,
+                      m_pExtendedDrawDistanceLabel);
 
     neonPosition.fY += 42.0f;
     m_pExtendedDrawDistanceDescriptionLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(
         pTabNeon, _("Extends far clip and stock-world model LODs. Fog can still hide distant geometry. High values greatly increase load.")));
     m_pExtendedDrawDistanceDescriptionLabel->SetPosition(neonPosition);
-    m_pExtendedDrawDistanceDescriptionLabel->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 32.0f), 48.0f));
+    m_pExtendedDrawDistanceDescriptionLabel->SetSize(CVector2D(std::max(0.0f, neonContentSize.fX - 32.0f), 48.0f));
     m_pExtendedDrawDistanceDescriptionLabel->SetHorizontalAlign(CGUI_ALIGN_LEFT_WORDWRAP);
 
     neonPosition.fY += 56.0f;
@@ -1586,12 +1641,12 @@ void CSettings::CreateGUI()
     m_pDistantLightsRenderingLabel->AutoSize(nullptr, 20.0f);
     m_pDistantLightsRenderingLabel->SetFont("default-bold-small");
 
-    neonPosition.fY += 34.0f;
+    neonPosition.fY += 30.0f;
     m_pCheckBoxDistantLights = reinterpret_cast<CGUICheckBox*>(pManager->CreateCheckBox(pTabNeon, _("Project2DFX distant lights"), true));
     m_pCheckBoxDistantLights->SetPosition(neonPosition);
     m_pCheckBoxDistantLights->AutoSize(nullptr, 20.0f);
 
-    neonPosition.fY += 36.0f;
+    neonPosition.fY += 32.0f;
     m_pDistantLightsDrawDistanceLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, _("Distant light draw distance:")));
     m_pDistantLightsDrawDistanceLabel->SetPosition(neonPosition);
     m_pDistantLightsDrawDistanceLabel->AutoSize();
@@ -1601,7 +1656,7 @@ void CSettings::CreateGUI()
     const CVector2D distantLightsSliderPosition(neonPosition.fX + distantLightsLabelSize.fX + kSliderLeftSpacing, neonPosition.fY);
     m_pDistantLightsDrawDistance = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, pTabNeon));
     m_pDistantLightsDrawDistance->SetPosition(distantLightsSliderPosition);
-    m_pDistantLightsDrawDistance->SetSize(CVector2D(ComputeSliderWidth(tabPanelSize.fX, distantLightsSliderPosition.fX, 260.0f), 20.0f));
+    m_pDistantLightsDrawDistance->SetSize(CVector2D(ComputeSliderWidth(neonContentSize.fX, distantLightsSliderPosition.fX, 260.0f), 20.0f));
     m_pDistantLightsDrawDistance->SetProperty(
         "StepSize", SString("%1.6f", static_cast<float>(kDistantLightsDrawDistanceStep) / (kDistantLightsDrawDistanceMax - kDistantLightsDrawDistanceMin)));
 
@@ -1611,10 +1666,10 @@ void CSettings::CreateGUI()
     m_pDistantLightsDrawDistanceValueLabel->SetPosition(
         CVector2D(distantLightsSliderPosition.fX + distantLightsSliderSize.fX + kSliderLabelSpacing, distantLightsSliderPosition.fY));
     m_pDistantLightsDrawDistanceValueLabel->AutoSize("5000 m");
-    FinalizeSliderRow(tabPanelSize.fX, m_pDistantLightsDrawDistance, m_pDistantLightsDrawDistanceValueLabel, 260.0f, kSliderLabelSpacing,
+    FinalizeSliderRow(neonContentSize.fX, m_pDistantLightsDrawDistance, m_pDistantLightsDrawDistanceValueLabel, 260.0f, kSliderLabelSpacing,
                       m_pDistantLightsDrawDistanceLabel);
 
-    neonPosition.fY += 42.0f;
+    neonPosition.fY += 38.0f;
     m_pDistantLightsCoronaSizeLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, _("Distant corona radius:")));
     m_pDistantLightsCoronaSizeLabel->SetPosition(neonPosition);
     m_pDistantLightsCoronaSizeLabel->AutoSize();
@@ -1624,7 +1679,7 @@ void CSettings::CreateGUI()
     const CVector2D distantLightsCoronaSizeSliderPosition(neonPosition.fX + distantLightsCoronaSizeLabelSize.fX + kSliderLeftSpacing, neonPosition.fY);
     m_pDistantLightsCoronaSize = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, pTabNeon));
     m_pDistantLightsCoronaSize->SetPosition(distantLightsCoronaSizeSliderPosition);
-    m_pDistantLightsCoronaSize->SetSize(CVector2D(ComputeSliderWidth(tabPanelSize.fX, distantLightsCoronaSizeSliderPosition.fX, 260.0f), 20.0f));
+    m_pDistantLightsCoronaSize->SetSize(CVector2D(ComputeSliderWidth(neonContentSize.fX, distantLightsCoronaSizeSliderPosition.fX, 260.0f), 20.0f));
     m_pDistantLightsCoronaSize->SetProperty("StepSize", SString("%1.6f", kDistantLightsCoronaRadiusMultiplierStep / (kDistantLightsCoronaRadiusMultiplierMax -
                                                                                                                      kDistantLightsCoronaRadiusMultiplierMin)));
 
@@ -1635,23 +1690,24 @@ void CSettings::CreateGUI()
     m_pDistantLightsCoronaSizeValueLabel->SetPosition(CVector2D(
         distantLightsCoronaSizeSliderPosition.fX + distantLightsCoronaSizeSliderSize.fX + kSliderLabelSpacing, distantLightsCoronaSizeSliderPosition.fY));
     m_pDistantLightsCoronaSizeValueLabel->AutoSize("100%");
-    FinalizeSliderRow(tabPanelSize.fX, m_pDistantLightsCoronaSize, m_pDistantLightsCoronaSizeValueLabel, 260.0f, kSliderLabelSpacing,
+    FinalizeSliderRow(neonContentSize.fX, m_pDistantLightsCoronaSize, m_pDistantLightsCoronaSizeValueLabel, 260.0f, kSliderLabelSpacing,
                       m_pDistantLightsCoronaSizeLabel);
 
-    neonPosition.fY += 42.0f;
+    neonPosition.fY += 38.0f;
     m_pDistantLightsDescriptionLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(
         pTabNeon, _("Adds Project2DFX static coronas and timed traffic lights at night. 50% uses its current radius scale; lower values shrink Neon's "
                     "buffered corona sprites.")));
     m_pDistantLightsDescriptionLabel->SetPosition(neonPosition);
-    m_pDistantLightsDescriptionLabel->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 32.0f), 48.0f));
+    m_pDistantLightsDescriptionLabel->SetSize(CVector2D(std::max(0.0f, neonContentSize.fX - 32.0f), 44.0f));
     m_pDistantLightsDescriptionLabel->SetHorizontalAlign(CGUI_ALIGN_LEFT_WORDWRAP);
 
-    neonPosition.fY += 56.0f;
+    neonPosition.fY += 48.0f;
     m_pRebuildDistantLightsButton = reinterpret_cast<CGUIButton*>(pManager->CreateButton(pTabNeon, _("Rebuild distant light cache")));
     m_pRebuildDistantLightsButton->SetPosition(neonPosition);
     m_pRebuildDistantLightsButton->AutoSize(nullptr, 24.0f, 12.0f);
     m_pRebuildDistantLightsButton->SetZOrderingEnabled(false);
 
+    CreateRadarTabGUI(radarContentSize);
     CreateSkyGfxTabGUI(tabPanelSize);
 
     /**
@@ -2143,6 +2199,13 @@ void CSettings::CreateGUI()
     m_pChatLoadPreset->SetClickHandler(GUI_CALLBACK(&CSettings::OnChatLoadPresetClick, this));
     m_pInterfaceLanguageSelector->SetSelectionHandler(GUI_CALLBACK(&CSettings::OnLanguageChanged, this));
     m_pInterfaceSkinSelector->SetSelectionHandler(GUI_CALLBACK(&CSettings::OnSkinChanged, this));
+    m_pRadarPositionX->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnRadarLayoutChanged, this));
+    m_pRadarPositionY->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnRadarLayoutChanged, this));
+    m_pRadarWidth->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnRadarLayoutChanged, this));
+    m_pRadarHeight->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnRadarLayoutChanged, this));
+    m_pRadarStyle->SetSelectionHandler(GUI_CALLBACK(&CSettings::OnRadarStyleChanged, this));
+    m_pRadarDefaultButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnRadarDefaultClick, this));
+    m_pRadarVanillaButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnRadarVanillaClick, this));
     m_pMapAlpha->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnMapAlphaChanged, this));
     m_pAudioMasterVolume->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnMasterVolumeChanged, this));
     m_pAudioRadioVolume->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnRadioVolumeChanged, this));
@@ -2363,6 +2426,16 @@ void CSettings::Update()
     if (m_dwFrameCount >= CORE_SETTINGS_UPDATE_INTERVAL)
     {
         UpdateJoypadTab();
+
+        // Managed visual profiles are read-only in this window. Refresh them
+        // while active, and once more after release, so a resource change can
+        // never leave stale values or disabled controls on screen.
+        const bool skyGfxManaged = SkyGfx::CManager::Get().HasRuntimeOverrides();
+        if (skyGfxManaged || !m_pCheckBoxSkyGfxEnabled->IsEnabled())
+            UpdateSkyGfxTab();
+        const bool radarManaged = IsRadarManagedByRuntime();
+        if (radarManaged || !m_pRadarStyle->IsEnabled())
+            RefreshRadarTabFromConfig();
 
         m_dwFrameCount = 0;
     }
@@ -2708,7 +2781,10 @@ void CSettings::CreateSkyGfxTabGUI(const CVector2D& tabPanelSize)
 
 void CSettings::UpdateSkyGfxTab()
 {
-    const SkyGfx::CManager&         manager = SkyGfx::CManager::Get();
+    const SkyGfx::CManager& manager = SkyGfx::CManager::Get();
+    // A connected resource can temporarily control SkyGfx without changing the
+    // player's saved profile. Show the configuration that is actually rendering
+    // so the settings window never contradicts the in-game result.
     const SkyGfxMTAConfigV1&        config = manager.GetConfig();
     const SkyGfx::IntegrationStatus status = manager.GetStatus();
 
@@ -2740,7 +2816,7 @@ void CSettings::UpdateSkyGfxTab()
     switch (status)
     {
         case SkyGfx::IntegrationStatus::Disabled:
-            m_pSkyGfxStatusLabel->SetText(_("Bridge status: Disabled"));
+            m_pSkyGfxStatusLabel->SetText(manager.HasRuntimeOverrides() ? _("Bridge status: Disabled (managed by server)") : _("Bridge status: Disabled"));
             break;
         case SkyGfx::IntegrationStatus::ModuleMissing:
             m_pSkyGfxStatusLabel->SetText(_("Bridge status: skygfx_mta.dll was not found"));
@@ -2749,7 +2825,7 @@ void CSettings::UpdateSkyGfxTab()
             m_pSkyGfxStatusLabel->SetText(_("Bridge status: Incompatible API version"));
             break;
         case SkyGfx::IntegrationStatus::BridgeReady:
-            m_pSkyGfxStatusLabel->SetText(_("Bridge status: Active"));
+            m_pSkyGfxStatusLabel->SetText(manager.HasRuntimeOverrides() ? _("Bridge status: Active (managed by server)") : _("Bridge status: Active"));
             break;
         case SkyGfx::IntegrationStatus::Failed:
             m_pSkyGfxStatusLabel->SetText(_("Bridge status: Initialization failed"));
@@ -2761,10 +2837,12 @@ void CSettings::UpdateSkyGfxTab()
 
 void CSettings::UpdateSkyGfxControls()
 {
-    const bool enabled = m_pCheckBoxSkyGfxEnabled->GetSelected();
+    const bool locallyEditable = !SkyGfx::CManager::Get().HasRuntimeOverrides();
+    const bool enabled = locallyEditable && m_pCheckBoxSkyGfxEnabled->GetSelected();
     const bool colorFilterEnabled = enabled && m_pCheckBoxSkyGfxColorFilter->GetSelected();
     const bool radiosityEnabled = enabled && m_pCheckBoxSkyGfxRadiosity->GetSelected();
 
+    m_pCheckBoxSkyGfxEnabled->SetEnabled(locallyEditable);
     m_pSkyGfxPlayStation2Label->SetEnabled(enabled);
     m_pCheckBoxSkyGfxColorFilter->SetEnabled(enabled);
     m_pCheckBoxSkyGfxColorFilterBlur->SetEnabled(colorFilterEnabled);
@@ -2782,7 +2860,13 @@ void CSettings::UpdateSkyGfxControls()
 
 void CSettings::SaveSkyGfxSettings()
 {
-    SkyGfxMTAConfigV1 config = SkyGfx::CManager::Get().GetConfig();
+    // Runtime values belong to the resource that supplied them. Persisting the
+    // displayed effective profile here would silently copy a server override
+    // into the player's global Neon settings.
+    if (SkyGfx::CManager::Get().HasRuntimeOverrides() || !m_pCheckBoxSkyGfxEnabled->IsEnabled())
+        return;
+
+    SkyGfxMTAConfigV1 config = SkyGfx::CManager::Get().GetUserConfig();
     config.enabled = m_pCheckBoxSkyGfxEnabled->GetSelected() ? 1u : 0u;
     config.preset = SkyGfxMTAPreset::PlayStation2;
     config.ps2ColorFilter = m_pCheckBoxSkyGfxColorFilter->GetSelected() ? 1u : 0u;
@@ -3328,6 +3412,189 @@ bool CSettings::OnBindsDefaultClick(CGUIElement* pElement)
     // Re-initialize the binds list
     Initialize();
 
+    return true;
+}
+
+void CSettings::CreateRadarTabGUI(const CVector2D& tabPanelSize)
+{
+    if (!m_pTabRadar)
+        return;
+
+    CGUI* pManager = g_pCore->GetGUI();
+
+    CGUILabel* title = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pTabRadar, _("Radar appearance and layout")));
+    title->SetPosition(CVector2D(10.0f, 8.0f));
+    title->SetFont("default-bold-small");
+    title->AutoSize();
+
+    CGUILabel* styleLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pTabRadar, _("Style:")));
+    styleLabel->SetPosition(CVector2D(std::max(10.0f, tabPanelSize.fX - 275.0f), 8.0f));
+    styleLabel->AutoSize();
+
+    m_pRadarStyle = reinterpret_cast<CGUIComboBox*>(pManager->CreateComboBox(m_pTabRadar, ""));
+    m_pRadarStyle->SetPosition(CVector2D(std::max(58.0f, tabPanelSize.fX - 220.0f), 4.0f));
+    m_pRadarStyle->SetSize(CVector2D(210.0f, 76.0f));
+    m_pRadarStyle->AddItem(_("GTA vanilla"))->SetData((void*)0);
+    m_pRadarStyle->AddItem(_("GTA Definitive Edition"))->SetData((void*)1);
+    m_pRadarStyle->SetReadOnly(true);
+
+    m_pRadarManagedLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pTabRadar, _("Managed by connected server")));
+    m_pRadarManagedLabel->SetPosition(CVector2D(std::max(10.0f, tabPanelSize.fX - 275.0f), 34.0f));
+    m_pRadarManagedLabel->SetSize(CVector2D(265.0f, 18.0f));
+    m_pRadarManagedLabel->SetHorizontalAlign(CGUI_ALIGN_RIGHT);
+    m_pRadarManagedLabel->SetVisible(false);
+
+    CGUILabel* description = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(
+        m_pTabRadar,
+        _("Definitive Edition uses the mod's 3D renderer, 144 map tiles and matching blip textures. Position uses GTA's 640 x 448 reference space.")));
+    description->SetPosition(CVector2D(10.0f, 54.0f));
+    description->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 20.0f), 34.0f));
+    description->SetHorizontalAlign(CGUI_ALIGN_LEFT_WORDWRAP);
+
+    const float marginX = 10.0f;
+    const float columnGap = 24.0f;
+    const float columnWidth = std::max(0.0f, (tabPanelSize.fX - marginX * 2.0f - columnGap) * 0.5f);
+    const float sliderOffset = 128.0f;
+    const float sliderWidth = std::max(80.0f, columnWidth - sliderOffset - 48.0f);
+    const float firstRowY = 94.0f;
+    const float rowHeight = 44.0f;
+
+    const auto createRow = [&](const char* text, float columnX, float y, CGUIScrollBar*& slider, CGUILabel*& valueLabel, const char* largestValue)
+    {
+        CGUILabel* label = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pTabRadar, text));
+        label->SetPosition(CVector2D(columnX, y));
+        label->AutoSize();
+
+        slider = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, m_pTabRadar));
+        slider->SetPosition(CVector2D(columnX + sliderOffset, y));
+        slider->SetSize(CVector2D(sliderWidth, 20.0f));
+
+        valueLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(m_pTabRadar, ""));
+        valueLabel->SetPosition(CVector2D(columnX + sliderOffset + sliderWidth + kSliderLabelSpacing, y + 2.0f));
+        valueLabel->AutoSize(largestValue);
+        FinalizeSliderRow(columnX + columnWidth, slider, valueLabel, sliderWidth, kSliderLabelSpacing, label);
+    };
+
+    const float rightColumnX = marginX + columnWidth + columnGap;
+    createRow(_("Horizontal position:"), marginX, firstRowY, m_pRadarPositionX, m_pRadarPositionXValue, "640");
+    m_pRadarPositionX->SetProperty("StepSize", SString("%1.6f", 1.0f / (kRadarPositionXMax - kRadarPositionXMin)));
+
+    createRow(_("Vertical position:"), marginX, firstRowY + rowHeight, m_pRadarPositionY, m_pRadarPositionYValue, "448");
+    m_pRadarPositionY->SetProperty("StepSize", SString("%1.6f", 1.0f / (kRadarPositionYMax - kRadarPositionYMin)));
+
+    createRow(_("Width:"), rightColumnX, firstRowY, m_pRadarWidth, m_pRadarWidthValue, "200.0");
+    m_pRadarWidth->SetProperty("StepSize", SString("%1.6f", kRadarSizeStep / (kRadarSizeMax - kRadarSizeMin)));
+
+    createRow(_("Height:"), rightColumnX, firstRowY + rowHeight, m_pRadarHeight, m_pRadarHeightValue, "200.0");
+    m_pRadarHeight->SetProperty("StepSize", SString("%1.6f", kRadarSizeStep / (kRadarSizeMax - kRadarSizeMin)));
+
+    m_pRadarWidescreenSafe = reinterpret_cast<CGUICheckBox*>(pManager->CreateCheckBox(m_pTabRadar, _("Widescreen-safe scaling (size follows screen height)")));
+    m_pRadarWidescreenSafe->SetPosition(CVector2D(marginX, firstRowY + rowHeight * 2.0f));
+    m_pRadarWidescreenSafe->AutoSize(nullptr, 20.0f);
+
+    m_pRadarDefaultButton = reinterpret_cast<CGUIButton*>(pManager->CreateButton(m_pTabRadar, _("NEON default")));
+    m_pRadarDefaultButton->AutoSize(NULL, 20.0f, 8.0f);
+    CVector2D buttonSize;
+    m_pRadarDefaultButton->GetSize(buttonSize);
+    const float buttonY = firstRowY + rowHeight * 2.0f + 38.0f;
+    m_pRadarDefaultButton->SetPosition(CVector2D(marginX, buttonY));
+    m_pRadarDefaultButton->SetZOrderingEnabled(false);
+
+    m_pRadarVanillaButton = reinterpret_cast<CGUIButton*>(pManager->CreateButton(m_pTabRadar, _("GTA vanilla")));
+    m_pRadarVanillaButton->AutoSize(NULL, 20.0f, 8.0f);
+    m_pRadarVanillaButton->SetPosition(CVector2D(marginX + buttonSize.fX + 12.0f, buttonY));
+    m_pRadarVanillaButton->SetZOrderingEnabled(false);
+}
+
+void CSettings::UpdateRadarTab()
+{
+    const int   positionX = static_cast<int>(std::round(GetRadarValueFromSlider(m_pRadarPositionX, kRadarPositionXMin, kRadarPositionXMax, 1.0f)));
+    const int   positionY = static_cast<int>(std::round(GetRadarValueFromSlider(m_pRadarPositionY, kRadarPositionYMin, kRadarPositionYMax, 1.0f)));
+    const float width = GetRadarValueFromSlider(m_pRadarWidth, kRadarSizeMin, kRadarSizeMax, kRadarSizeStep);
+    const float height = GetRadarValueFromSlider(m_pRadarHeight, kRadarSizeMin, kRadarSizeMax, kRadarSizeStep);
+
+    m_pRadarPositionXValue->SetText(SString("%i", positionX));
+    m_pRadarPositionYValue->SetText(SString("%i", positionY));
+    m_pRadarWidthValue->SetText(SString("%.1f", width));
+    m_pRadarHeightValue->SetText(SString("%.1f", height));
+
+    const bool managed = IsRadarManagedByRuntime();
+    m_pRadarManagedLabel->SetVisible(managed);
+    m_pRadarStyle->SetEnabled(!managed);
+    m_pRadarPositionX->SetEnabled(!managed);
+    m_pRadarPositionY->SetEnabled(!managed);
+    m_pRadarWidth->SetEnabled(!managed);
+    m_pRadarHeight->SetEnabled(!managed);
+    m_pRadarPositionXValue->SetEnabled(!managed);
+    m_pRadarPositionYValue->SetEnabled(!managed);
+    m_pRadarWidthValue->SetEnabled(!managed);
+    m_pRadarHeightValue->SetEnabled(!managed);
+    m_pRadarWidescreenSafe->SetEnabled(!managed);
+    m_pRadarDefaultButton->SetEnabled(!managed);
+    m_pRadarVanillaButton->SetEnabled(!managed);
+}
+
+void CSettings::RefreshRadarTabFromConfig()
+{
+    m_bRefreshingRadarTab = true;
+    m_pRadarPositionX->SetScrollPosition(NormalizeSliderValue(CVARS_GET_VALUE<float>("radar_position_x"), kRadarPositionXMin, kRadarPositionXMax));
+    m_pRadarPositionY->SetScrollPosition(NormalizeSliderValue(CVARS_GET_VALUE<float>("radar_position_y"), kRadarPositionYMin, kRadarPositionYMax));
+    m_pRadarWidth->SetScrollPosition(NormalizeSliderValue(CVARS_GET_VALUE<float>("radar_width"), kRadarSizeMin, kRadarSizeMax));
+    m_pRadarHeight->SetScrollPosition(NormalizeSliderValue(CVARS_GET_VALUE<float>("radar_height"), kRadarSizeMin, kRadarSizeMax));
+    m_pRadarWidescreenSafe->SetSelected(CVARS_GET_VALUE<bool>("radar_widescreen_safe"));
+    m_pRadarStyle->SetSelectedItemByIndex(std::clamp(CVARS_GET_VALUE<int>("radar_style"), 0, 1));
+    m_bRefreshingRadarTab = false;
+    UpdateRadarTab();
+}
+
+bool CSettings::OnRadarLayoutChanged(CGUIElement* pElement)
+{
+    UpdateRadarTab();
+    return true;
+}
+
+bool CSettings::OnRadarStyleChanged(CGUIElement* pElement)
+{
+    if (m_bRefreshingRadarTab || IsRadarManagedByRuntime())
+        return true;
+
+    // Style selection is a preset boundary. Both built-in profiles start from
+    // Neon's neutral values; Vanilla resolves to WidescreenFix while DE maps
+    // them to its native 265 px square at 1080p.
+    m_pRadarPositionX->SetScrollPosition(NormalizeSliderValue(kRadarPositionXDefault, kRadarPositionXMin, kRadarPositionXMax));
+    m_pRadarPositionY->SetScrollPosition(NormalizeSliderValue(kRadarPositionYDefault, kRadarPositionYMin, kRadarPositionYMax));
+    m_pRadarWidth->SetScrollPosition(NormalizeSliderValue(kRadarNeonWidthDefault, kRadarSizeMin, kRadarSizeMax));
+    m_pRadarHeight->SetScrollPosition(NormalizeSliderValue(kRadarNeonHeightDefault, kRadarSizeMin, kRadarSizeMax));
+    m_pRadarWidescreenSafe->SetSelected(true);
+    UpdateRadarTab();
+    return true;
+}
+
+bool CSettings::OnRadarDefaultClick(CGUIElement* pElement)
+{
+    m_pRadarPositionX->SetScrollPosition(NormalizeSliderValue(kRadarPositionXDefault, kRadarPositionXMin, kRadarPositionXMax));
+    m_pRadarPositionY->SetScrollPosition(NormalizeSliderValue(kRadarPositionYDefault, kRadarPositionYMin, kRadarPositionYMax));
+    m_pRadarWidth->SetScrollPosition(NormalizeSliderValue(kRadarNeonWidthDefault, kRadarSizeMin, kRadarSizeMax));
+    m_pRadarHeight->SetScrollPosition(NormalizeSliderValue(kRadarNeonHeightDefault, kRadarSizeMin, kRadarSizeMax));
+    m_pRadarWidescreenSafe->SetSelected(true);
+    m_bRefreshingRadarTab = true;
+    m_pRadarStyle->SetSelectedItemByIndex(0);
+    m_bRefreshingRadarTab = false;
+    UpdateRadarTab();
+    return true;
+}
+
+bool CSettings::OnRadarVanillaClick(CGUIElement* pElement)
+{
+    m_pRadarPositionX->SetScrollPosition(NormalizeSliderValue(kRadarPositionXDefault, kRadarPositionXMin, kRadarPositionXMax));
+    m_pRadarPositionY->SetScrollPosition(NormalizeSliderValue(kRadarPositionYDefault, kRadarPositionYMin, kRadarPositionYMax));
+    m_pRadarWidth->SetScrollPosition(NormalizeSliderValue(kRadarVanillaWidth, kRadarSizeMin, kRadarSizeMax));
+    m_pRadarHeight->SetScrollPosition(NormalizeSliderValue(kRadarVanillaHeight, kRadarSizeMin, kRadarSizeMax));
+    m_pRadarWidescreenSafe->SetSelected(false);
+    m_bRefreshingRadarTab = true;
+    m_pRadarStyle->SetSelectedItemByIndex(0);
+    m_bRefreshingRadarTab = false;
+    UpdateRadarTab();
     return true;
 }
 
@@ -4467,6 +4734,8 @@ void CSettings::LoadData()
     UpdateNeonTab();
     UpdateSkyGfxTab();
 
+    RefreshRadarTabFromConfig();
+
     // Locale
     SString strLocale;
     CVARS_GET("locale", strLocale);
@@ -4851,6 +5120,17 @@ void CSettings::SaveData()
     }
 
     // Aspect ratio
+    if (!IsRadarManagedByRuntime() && m_pRadarStyle->IsEnabled())
+    {
+        CVARS_SET("radar_position_x", GetRadarValueFromSlider(m_pRadarPositionX, kRadarPositionXMin, kRadarPositionXMax, 1.0f));
+        CVARS_SET("radar_position_y", GetRadarValueFromSlider(m_pRadarPositionY, kRadarPositionYMin, kRadarPositionYMax, 1.0f));
+        CVARS_SET("radar_width", GetRadarValueFromSlider(m_pRadarWidth, kRadarSizeMin, kRadarSizeMax, kRadarSizeStep));
+        CVARS_SET("radar_height", GetRadarValueFromSlider(m_pRadarHeight, kRadarSizeMin, kRadarSizeMax, kRadarSizeStep));
+        CVARS_SET("radar_widescreen_safe", m_pRadarWidescreenSafe->GetSelected());
+        if (CGUIListItem* pRadarStyle = m_pRadarStyle->GetSelectedItem())
+            CVARS_SET("radar_style", static_cast<int>(reinterpret_cast<std::intptr_t>(pRadarStyle->GetData())));
+    }
+
     if (CGUIListItem* pRatioSelected = m_pComboAspectRatio->GetSelectedItem())
     {
         eAspectRatio aspectRatio = (eAspectRatio)(int)pRatioSelected->GetData();

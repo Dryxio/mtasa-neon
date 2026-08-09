@@ -264,6 +264,11 @@ void CClientVariables::ValidateValues()
     ClampValue("voicevolume", 0.0f, 1.0f);
     ClampValue("mapalpha", 0, 255);
     ClampValue("mapimage", 0, 1);
+    ClampValue("radar_position_x", 0.0f, 640.0f);
+    ClampValue("radar_position_y", 0.0f, 448.0f);
+    ClampValue("radar_width", 40.0f, 200.0f);
+    ClampValue("radar_height", 40.0f, 200.0f);
+    ClampValue("radar_style", 0, 1);
     ClampValue("borderless_gamma_power", 0.5f, 2.0f);
     ClampValue("borderless_brightness_scale", 0.5f, 2.0f);
     ClampValue("borderless_contrast_scale", 0.5f, 2.0f);
@@ -339,6 +344,12 @@ void CClientVariables::LoadDefaults()
     DEFAULT("voicevolume", 1.0f);                                           // voice chat output volume
     DEFAULT("mapalpha", 155);                                               // player map alpha
     DEFAULT("mapimage", 0);                                                 // player map image
+    DEFAULT("radar_position_x", 40.0f);                                     // Vanilla radar left margin in GTA's 640-wide reference space
+    DEFAULT("radar_position_y", 104.0f);                                    // Vanilla radar bottom margin in GTA's 448-high reference space
+    DEFAULT("radar_width", 85.5f);                                          // NEON default matches Widescreen Fix's compact radar width
+    DEFAULT("radar_height", 78.0f);                                         // NEON default matches Widescreen Fix's radar height
+    DEFAULT("radar_widescreen_safe", true);                                 // Keep the radar size stable across widescreen aspect ratios
+    DEFAULT("radar_style", 0);                                              // 0 = GTA vanilla, 1 = Definitive Edition renderer
     DEFAULT("browser_speed", 1);                                            // Browser speed
     DEFAULT("single_download", 0);                                          // Single connection for downloads
     DEFAULT("packet_tag", 0);                                               // Tag network packets
@@ -387,22 +398,22 @@ void CClientVariables::LoadDefaults()
         Get("borderless_enable_srgb", legacyEnable);
         Set("borderless_apply_windowed", legacyEnable);
     }
-    DEFAULT("vertical_aim_sensitivity", 0.0015f);        // 0.0015f is GTA default setting
-    DEFAULT("process_priority", 0);                      // 0-normal 1-above normal 2-high
-    DEFAULT("process_dpi_aware", false);                 // Enable DPI awareness in core initialization
-    DEFAULT("mute_master_when_minimized", 0);            // 0-off 1-on
-    DEFAULT("mute_sfx_when_minimized", 0);               // 0-off 1-on
-    DEFAULT("mute_radio_when_minimized", 0);             // 0-off 1-on
-    DEFAULT("mute_mta_when_minimized", 0);               // 0-off 1-on
-    DEFAULT("mute_voice_when_minimized", 0);             // 0-off 1-on
-    DEFAULT("share_file_cache", 1);                      // 0-no 1-share client resource file cache with other MTA installs
-    DEFAULT("show_unsafe_resolutions", 0);               // 0-off 1-show resolutions that are higher that the desktop
-    DEFAULT("fov", 70);                                  // Camera field of view
-    DEFAULT("browser_remote_websites", true);            // Load remote websites?
-    DEFAULT("browser_remote_javascript", true);          // Execute javascript on remote websites?
-    DEFAULT("filter_duplicate_log_lines", true);         // Filter duplicate log lines for debug view and clientscript.log
-    DEFAULT("always_show_transferbox", false);           // Should the transfer box always be visible for downloads? (and ignore scripted control)
-    DEFAULT("allow_discord_rpc", true);  // Enable Discord Rich Presence
+    DEFAULT("vertical_aim_sensitivity", 0.0015f);  // 0.0015f is GTA default setting
+    DEFAULT("process_priority", 0);                // 0-normal 1-above normal 2-high
+    DEFAULT("process_dpi_aware", false);           // Enable DPI awareness in core initialization
+    DEFAULT("mute_master_when_minimized", 0);      // 0-off 1-on
+    DEFAULT("mute_sfx_when_minimized", 0);         // 0-off 1-on
+    DEFAULT("mute_radio_when_minimized", 0);       // 0-off 1-on
+    DEFAULT("mute_mta_when_minimized", 0);         // 0-off 1-on
+    DEFAULT("mute_voice_when_minimized", 0);       // 0-off 1-on
+    DEFAULT("share_file_cache", 1);                // 0-no 1-share client resource file cache with other MTA installs
+    DEFAULT("show_unsafe_resolutions", 0);         // 0-off 1-show resolutions that are higher that the desktop
+    DEFAULT("fov", 70);                            // Camera field of view
+    DEFAULT("browser_remote_websites", true);      // Load remote websites?
+    DEFAULT("browser_remote_javascript", true);    // Execute javascript on remote websites?
+    DEFAULT("filter_duplicate_log_lines", true);   // Filter duplicate log lines for debug view and clientscript.log
+    DEFAULT("always_show_transferbox", false);     // Should the transfer box always be visible for downloads? (and ignore scripted control)
+    DEFAULT("allow_discord_rpc", true);            // Enable Discord Rich Presence
     // Sharing a stable Discord identifier with servers is a privacy-sensitive legacy opt-in,
     // not first-run setup.
     DEFAULT("discord_rpc_share_data", false);
