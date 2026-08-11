@@ -4846,13 +4846,15 @@ void CClientPed::ApplyControllerStateFixes(CControllerState& Current)
             {
                 Current.ButtonSquare = 0;
                 Current.ButtonCross = 0;
+                // Keep fire disabled until the crouch transition has finished. Allowing it here is
+                // required for the vanilla fast-fire animation cut exposed by the fastfire glitch.
+                Current.ButtonCircle = 0;
+                Current.LeftShoulder1 = 0;
             }
-            // Disable the fire keys whilst crouching as well
-            Current.ButtonCircle = 0;
-            Current.LeftShoulder1 = 0;
-            if (m_ulLastTimeBeganCrouch >= ulNow - 400.0f * fSpeedRatio)
+            if (!g_pClientGame->IsGlitchEnabled(CClientGame::GLITCH_CROUCHBUG) && m_ulLastTimeBeganCrouch >= ulNow - 400.0f * fSpeedRatio)
             {
-                // Disable double crouching (another anim cut)
+                // Disable double crouching (another anim cut). The crouchbug glitch deliberately
+                // restores GTA's original second-crouch input during this transition.
                 if (g_pClientGame->IsUsingAlternatePulseOrder())
                     Current.ShockButtonL = 255;  // Do this differently if we have changed the pulse order
                 else
