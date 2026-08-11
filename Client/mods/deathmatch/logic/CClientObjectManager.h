@@ -44,6 +44,11 @@ public:
     bool        IsLowLodObjectLimitReached();
     bool        IsHardObjectLimitReached();
 
+    bool SetStreamingLimits(uint uiMaxStreamedInCount, uint uiMaxLowLodStreamedInCount);
+    uint GetMaxStreamedInCount() const { return m_uiMaxStreamedInCount; }
+    uint GetMaxLowLodStreamedInCount() const { return m_uiMaxLowLodStreamedInCount; }
+    uint GetMaxTotalStreamedInCount() const;
+
     void RestreamObjects(unsigned short usModel);
     void RestreamAllObjects();
 
@@ -56,6 +61,7 @@ public:
 
 protected:
     void UpdateLimitInfo();
+    void RestreamObjectCategory(bool bLowLod);
 
     int  m_iEntryInfoNodeEntries;
     int  m_iPointerNodeDoubleLinkEntries;

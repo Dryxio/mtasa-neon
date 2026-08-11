@@ -201,6 +201,8 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineSetModelFlag", ArgumentParser<EngineSetModelFlag>},
         {"engineResetModelFlags", ArgumentParser<EngineResetModelFlags>},
         {"engineRestreamWorld", ArgumentParser<EngineRestreamWorld>},
+        {"engineSetObjectStreamingLimits", ArgumentParser<EngineSetObjectStreamingLimits>},
+        {"engineGetObjectStreamingLimits", ArgumentParser<EngineGetObjectStreamingLimits>},
         {"engineLoadIMG", ArgumentParser<EngineLoadIMG>},
         {"engineImageLinkDFF", ArgumentParser<EngineImageLinkDFF>},
         {"engineImageLinkTXD", ArgumentParser<EngineImageLinkTXD>},
@@ -352,6 +354,8 @@ void CLuaEngineDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setObjectGroupPhysicalProperty", "engineSetObjectGroupPhysicalProperty");
     lua_classfunction(luaVM, "getObjectGroupPhysicalProperty", "engineGetObjectGroupPhysicalProperty");
     lua_classfunction(luaVM, "restoreObjectGroupPhysicalProperties", "engineRestoreObjectGroupPhysicalProperties");
+    lua_classfunction(luaVM, "setObjectStreamingLimits", "engineSetObjectStreamingLimits");
+    lua_classfunction(luaVM, "getObjectStreamingLimits", "engineGetObjectStreamingLimits");
 
     lua_classfunction(luaVM, "setModelFlags", "engineSetModelFlags");
     lua_classfunction(luaVM, "resetModelFlags", "engineResetModelFlags");
@@ -3222,6 +3226,24 @@ bool CLuaEngineDefs::EngineRestreamWorld()
 {
     g_pClientGame->RestreamWorld();
     return true;
+}
+
+bool CLuaEngineDefs::EngineSetObjectStreamingLimits(std::uint32_t maxObjects, std::uint32_t maxLowLodObjects)
+{
+    CClientObjectManager* pObjectManager = g_pClientGame->GetObjectManager();
+    if (!pObjectManager->SetStreamingLimits(maxObjects, maxLowLodObjects))
+    {
+        throw std::invalid_argument(
+            SString("Object and low-LOD object streaming limits must have a combined value between 0 and %u", pObjectManager->GetMaxTotalStreamedInCount()));
+    }
+
+    return true;
+}
+
+CLuaMultiReturn<std::uint32_t, std::uint32_t, std::uint32_t> CLuaEngineDefs::EngineGetObjectStreamingLimits()
+{
+    const CClientObjectManager* pObjectManager = g_pClientGame->GetObjectManager();
+    return {pObjectManager->GetMaxStreamedInCount(), pObjectManager->GetMaxLowLodStreamedInCount(), pObjectManager->GetMaxTotalStreamedInCount()};
 }
 
 uint CLuaEngineDefs::EngineRequestTXD(lua_State* const luaVM, std::string strTxdName)

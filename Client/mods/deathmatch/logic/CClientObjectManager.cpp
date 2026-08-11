@@ -302,6 +302,43 @@ bool CClientObjectManager::IsHardObjectLimitReached()
     return g_pGame->GetPools()->GetObjectCount() >= MAX_OBJECTS_MTA;
 }
 
+bool CClientObjectManager::SetStreamingLimits(uint uiMaxStreamedInCount, uint uiMaxLowLodStreamedInCount)
+{
+    // Both categories use the same fixed GTA object pool. Keeping the sum within the
+    // MTA-owned portion preserves the native-game reserve and the dependent pool budgets.
+    if (uiMaxStreamedInCount > MAX_OBJECTS_MTA || uiMaxLowLodStreamedInCount > MAX_OBJECTS_MTA - uiMaxStreamedInCount)
+        return false;
+
+    const bool bRestreamObjects = m_uiStreamedInCount > uiMaxStreamedInCount;
+    const bool bRestreamLowLodObjects = m_uiLowLodStreamedInCount > uiMaxLowLodStreamedInCount;
+
+    m_uiMaxStreamedInCount = uiMaxStreamedInCount;
+    m_uiMaxLowLodStreamedInCount = uiMaxLowLodStreamedInCount;
+
+    // A lower quota must take effect immediately. Restreaming the affected category also
+    // lets its distance-sorted streamer refill the new budget with the nearest objects.
+    if (bRestreamObjects)
+        RestreamObjectCategory(false);
+    if (bRestreamLowLodObjects)
+        RestreamObjectCategory(true);
+
+    return true;
+}
+
+uint CClientObjectManager::GetMaxTotalStreamedInCount() const
+{
+    return MAX_OBJECTS_MTA;
+}
+
+void CClientObjectManager::RestreamObjectCategory(bool bLowLod)
+{
+    for (CClientObject* pObject : m_Objects)
+    {
+        if (pObject->IsStreamedIn() && pObject->IsLowLod() == bLowLod)
+            pObject->StreamOutForABit();
+    }
+}
+
 void CClientObjectManager::RestreamObjects(unsigned short usModel)
 {
     for (uint i = 0; i < m_Objects.size(); i++)

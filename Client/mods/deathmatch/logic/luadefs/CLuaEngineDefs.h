@@ -106,6 +106,9 @@ public:
     static bool                                            EngineSetModelVisibleTime(std::string strModelId, char cHourOn, char cHourOff);
     static std::variant<bool, CLuaMultiReturn<char, char>> EngineGetModelVisibleTime(std::string strModelId);
 
+    static bool EngineSetObjectStreamingLimits(std::uint32_t maxObjects, std::uint32_t maxLowLodObjects);
+    static CLuaMultiReturn<std::uint32_t, std::uint32_t, std::uint32_t> EngineGetObjectStreamingLimits();
+
     static size_t EngineGetPoolCapacity(ePools pool);
     static size_t EngineGetPoolDefaultCapacity(ePools pool);
     static size_t EngineGetPoolUsedCapacity(ePools pool);
