@@ -33,7 +33,7 @@ namespace
             return;
 
         // Always provide base installation paths so loader-proxy can validate subprocess origin
-        SString gtaPath = GetCommonRegistryValue("", "GTA:SA Path");
+        SString gtaPath = GetCommonRegistryValue("", GetGTAPathRegistryValueName());
         if (gtaPath.empty())
         {
             // Fallback for Wine/compatibility layer: check environment variable

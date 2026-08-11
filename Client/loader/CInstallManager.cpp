@@ -228,13 +228,23 @@ void CInstallManager::InitSequencer()
         CR " "                                                                   //
         CR "gta_version_end: "                                                   ////// End of 'gta version check' //////
         CR " "                                                                   //
+        CR "neon_migrate: "                                                      ////// Start of Neon one-time service migration //////
+        CR "            CALL ProcessNeonServiceMigration "                       // Install the service once after an auto-update
+        CR "            IF LastResult == ok GOTO neon_migrate_end: "             //
+        CR " "                                                                   //
+        CR "            CALL ChangeToAdmin "                                     // Reuse the sequencer's blocking UAC hand-off
+        CR "            IF LastResult == ok GOTO neon_migrate: "                 //
+        CR "            GOTO do_quit: "                                          // Refused UAC: retry on the next launch
+        CR " "                                                                   //
+        CR "neon_migrate_end: "                                                  ////// End of Neon one-time service migration //////
+        CR " "                                                                   //
         CR "service_check: "                                                     ////// Start of 'Service checks' //////
         CR "            CALL ProcessServiceChecks "                              // Make changes to comply with service requirements
         CR "            IF LastResult == ok GOTO service_end: "                  //
         CR " "                                                                   //
         CR "            CALL ChangeToAdmin "                                     // If changes failed, try as admin
         CR "            IF LastResult == ok GOTO service_check: "                //
-        CR "            CALL Quit "                                              //
+        CR "            GOTO do_quit: "                                          // Wake the blocked user process before quitting
         CR " "                                                                   //
         CR "service_end: "                                                       ////// End of 'Service checks' //////
         CR " "                                                                   //
@@ -288,6 +298,7 @@ void CInstallManager::InitSequencer()
     m_pSequencer->AddFunction("ProcessGtaVersionCheck", &CInstallManager::_ProcessGtaVersionCheck);
     m_pSequencer->AddFunction("ProcessLayoutChecks", &CInstallManager::_ProcessLayoutChecks);
     m_pSequencer->AddFunction("ProcessLangFileChecks", &CInstallManager::_ProcessLangFileChecks);
+    m_pSequencer->AddFunction("ProcessNeonServiceMigration", &CInstallManager::_ProcessNeonServiceMigration);
     m_pSequencer->AddFunction("ProcessServiceChecks", &CInstallManager::_ProcessServiceChecks);
     m_pSequencer->AddFunction("ProcessAppCompatChecks", &CInstallManager::_ProcessAppCompatChecks);
     m_pSequencer->AddFunction("ChangeFromAdmin", &CInstallManager::_ChangeFromAdmin);
@@ -1763,6 +1774,57 @@ SString CInstallManager::_ProcessLangFileChecks()
 
 //////////////////////////////////////////////////////////
 //
+// CInstallManager::_ProcessNeonServiceMigration
+//
+// Auto-updates replace the launcher but do not rerun NSIS. Existing Neon
+// installations therefore need one verified POST_INSTALL pass using the
+// sequencer's UAC hand-off. The marker is written only after the service also
+// passes PRE_GAME, so refusal or failure is retried on the next launch.
+//
+//////////////////////////////////////////////////////////
+SString CInstallManager::_ProcessNeonServiceMigration()
+{
+#if defined(MTA_NEON) && MTASA_VERSION_TYPE != VERSION_TYPE_CUSTOM
+    if (IsNativeArm64Host())
+    {
+        AddReportLog(8071, "Neon service migration skipped on an ARM64 host");
+        return "ok";
+    }
+
+    if (IsNeonServiceMigrationComplete())
+        return "ok";
+
+    if (!IsUserAdmin())
+    {
+        m_strAdminReason = _("Update install settings");
+        return "fail";
+    }
+
+    if (!RunServiceInstall())
+    {
+        AddReportLog(8071, "Neon service migration failed during POST_INSTALL");
+        return "fail";
+    }
+
+    if (!CheckService(CHECK_SERVICE_PRE_GAME))
+    {
+        AddReportLog(8071, "Neon service migration failed PRE_GAME verification");
+        return "fail";
+    }
+
+    if (!MarkNeonServiceMigrationComplete())
+    {
+        AddReportLog(8071, "Neon service migration could not persist its completion marker");
+        return "fail";
+    }
+
+    AddReportLog(8071, "Neon service migration completed");
+#endif
+    return "ok";
+}
+
+//////////////////////////////////////////////////////////
+//
 // CInstallManager::_ProcessServiceChecks
 //
 //
@@ -1778,6 +1840,17 @@ SString CInstallManager::_ProcessServiceChecks()
             m_strAdminReason = _("Update install settings");
             return "fail";
         }
+
+    #ifdef MTA_NEON
+        // An official MTA install or a later system change can invalidate the
+        // shared service after Neon's one-time migration. An elevated launcher
+        // must repair it instead of silently treating admin rights as success.
+        if (!IsNativeArm64Host() && (!RunServiceInstall() || !CheckService(CHECK_SERVICE_PRE_GAME)))
+        {
+            AddReportLog(8071, "Neon service repair failed");
+            return "fail";
+        }
+    #endif
     }
 #endif
     return "ok";

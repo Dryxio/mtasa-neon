@@ -46,6 +46,7 @@ protected:
     SString _ProcessGtaVersionCheck();
     SString _ProcessLayoutChecks();
     SString _ProcessLangFileChecks();
+    SString _ProcessNeonServiceMigration();
     SString _ProcessServiceChecks();
     SString _ProcessAppCompatChecks();
     SString _ChangeFromAdmin();

@@ -39,7 +39,7 @@ void CMultiplayerSA::SetFastClothesLoading(EFastClothesLoading fastClothesLoadin
     if (fastClothesLoading != FAST_CLOTHES_OFF)
     {
         // Load and cache player.img
-        SString strGTASAPath = GetCommonRegistryValue("", "GTA:SA Path");
+        SString strGTASAPath = GetCommonRegistryValue("", GetGTAPathRegistryValueName());
         SString strFilename = PathJoin(strGTASAPath, "models", "player.img");
         FileLoad(strFilename, m_PlayerImgCache);
     }

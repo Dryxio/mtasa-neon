@@ -112,6 +112,12 @@ HMODULE GetLibraryHandle(const SString& strFilename, DWORD* pdwOutLastError = NU
 void    FreeLibraryHandle();
 uint    WaitForObject(HANDLE hProcess, HANDLE hThread, DWORD dwMilliseconds, HANDLE hMutex);
 bool    CheckService(uint uiStage);
+bool    RunServiceInstall();
+
+#ifdef MTA_NEON
+bool IsNeonServiceMigrationComplete();
+bool MarkNeonServiceMigrationComplete();
+#endif
 
 void MaybeShowCopySettingsDialog();
 

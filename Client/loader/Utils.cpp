@@ -614,6 +614,11 @@ namespace
         RegCloseKey(hKey);
     }
 
+    void PersistGTAPath(const SString& strPath)
+    {
+        SetCommonRegistryValue("", GetGTAPathRegistryValueName(), strPath);
+    }
+
     // Read Last Run Location from a specific registry view. viewFlag should be one of
     // KEY_WOW64_64KEY, KEY_WOW64_32KEY, or 0 (no view override). Returns empty string on any failure.
     // Oversized values are rejected without allocation so a malformed registry entry on the U01
@@ -854,8 +859,13 @@ ePathResult GetGamePath(SString& strOutResult, bool bFindIfMissing)
     // Registry places to look
     std::vector<SString> pathList;
 
-    // Try HKLM "SOFTWARE\\Multi Theft Auto: San Andreas All\\Common\\"
+    // Prefer the fork-owned value so another MTA installation cannot replace
+    // Neon's selected GTA directory. The legacy shared value is a migration
+    // fallback for players upgrading from an older Neon build.
+    pathList.push_back(GetCommonRegistryValue("", GetGTAPathRegistryValueName()));
+#ifdef MTA_NEON
     pathList.push_back(GetCommonRegistryValue("", "GTA:SA Path"));
+#endif
 
     WriteDebugEvent(SString("GetGamePath: Registry returned '%s'", pathList[0].c_str()));
 
@@ -883,7 +893,7 @@ ePathResult GetGamePath(SString& strOutResult, bool bFindIfMissing)
         {
             strOutResult = pathList[i];
             // Update registry.
-            SetCommonRegistryValue("", "GTA:SA Path", strOutResult);
+            PersistGTAPath(strOutResult);
             WriteDebugEvent(SString("GetGamePath: Found GTA at '%s'", strOutResult.c_str()));
             return GAME_PATH_OK;
         }
@@ -952,7 +962,7 @@ ePathResult GetGamePath(SString& strOutResult, bool bFindIfMissing)
 
     // File found. Update registry.
     AddReportLog(3210, SString("GetGamePath: Success - GTA found at '%s'", strOutResult.c_str()));
-    SetCommonRegistryValue("", "GTA:SA Path", strOutResult);
+    PersistGTAPath(strOutResult);
     return GAME_PATH_OK;
 }
 
@@ -1679,6 +1689,90 @@ bool CheckService(uint uiStage)
 
     return false;
 }
+
+//////////////////////////////////////////////////////////
+//
+// RunServiceInstall
+//
+// Perform the same verified service installation used by /kdinstall without
+// starting another launcher process. This lets the auto-update sequencer keep
+// the original command line while its existing UAC hand-off is active.
+//
+//////////////////////////////////////////////////////////
+bool RunServiceInstall()
+{
+    UpdateMTAVersionApplicationSetting(true);
+    WatchDogReset();
+    WatchDogBeginSection(WD_SECTION_POST_INSTALL);
+    return CheckService(CHECK_SERVICE_POST_INSTALL);
+}
+
+#ifdef MTA_NEON
+namespace
+{
+    constexpr wchar_t NEON_SERVICE_MIGRATION_NAME[] = L"MTA Neon Service Migration";
+    constexpr wchar_t NEON_SERVICE_MIGRATION_VALUE[] = L"kdinstall-v1";
+
+    WString GetNeonServiceMigrationRegistryPath()
+    {
+        return FromUTF8(PathJoin(GetProductRegistryPath(), GetMajorVersionString()).TrimEnd("\\"));
+    }
+}
+
+//////////////////////////////////////////////////////////
+//
+// IsNeonServiceMigrationComplete
+//
+// Keep this marker in the x86 registry view used by the launcher and netc.
+// An explicit view prevents a stale value in another MTA installation's
+// 64-bit view from masking a future Neon migration revision.
+//
+//////////////////////////////////////////////////////////
+bool IsNeonServiceMigrationComplete()
+{
+    const WString subKey = GetNeonServiceMigrationRegistryPath();
+
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subKey.c_str(), 0, KEY_QUERY_VALUE | KEY_WOW64_32KEY, &key) != ERROR_SUCCESS || !key)
+        return false;
+
+    wchar_t    value[NUMELMS(NEON_SERVICE_MIGRATION_VALUE)] = {};
+    DWORD      type = 0;
+    DWORD      size = sizeof(value);
+    const LONG result = RegQueryValueExW(key, NEON_SERVICE_MIGRATION_NAME, nullptr, &type, reinterpret_cast<BYTE*>(value), &size);
+    RegCloseKey(key);
+
+    return result == ERROR_SUCCESS && type == REG_SZ && size == sizeof(NEON_SERVICE_MIGRATION_VALUE) &&
+           memcmp(value, NEON_SERVICE_MIGRATION_VALUE, sizeof(NEON_SERVICE_MIGRATION_VALUE)) == 0;
+}
+
+//////////////////////////////////////////////////////////
+//
+// MarkNeonServiceMigrationComplete
+//
+// Persist only after POST_INSTALL and PRE_GAME both succeed, then read the
+// value back so an ACL or registry failure cannot suppress the next retry.
+//
+//////////////////////////////////////////////////////////
+bool MarkNeonServiceMigrationComplete()
+{
+    const WString subKey = GetNeonServiceMigrationRegistryPath();
+
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, subKey.c_str(), 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_WOW64_32KEY, nullptr,
+                        &key, nullptr) != ERROR_SUCCESS ||
+        !key)
+        return false;
+
+    const LONG result = RegSetValueExW(key, NEON_SERVICE_MIGRATION_NAME, 0, REG_SZ, reinterpret_cast<const BYTE*>(NEON_SERVICE_MIGRATION_VALUE),
+                                       sizeof(NEON_SERVICE_MIGRATION_VALUE));
+    if (result == ERROR_SUCCESS)
+        RegFlushKey(key);
+    RegCloseKey(key);
+
+    return result == ERROR_SUCCESS && IsNeonServiceMigrationComplete();
+}
+#endif
 
 ///////////////////////////////////////////////////////////////////////////
 //

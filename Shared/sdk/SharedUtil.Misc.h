@@ -123,8 +123,9 @@ namespace SharedUtil
     SString GetVersionRegistryValue(const SString& strVersion, const SString& strPath, const SString& strName, int* iResult = nullptr);
 
     // Get/set registry values for all versions (Common)
-    void    SetCommonRegistryValue(const SString& strPath, const SString& strName, const SString& strValue);
-    SString GetCommonRegistryValue(const SString& strPath, const SString& strName, int* iResult = nullptr);
+    void        SetCommonRegistryValue(const SString& strPath, const SString& strName, const SString& strValue);
+    SString     GetCommonRegistryValue(const SString& strPath, const SString& strName, int* iResult = nullptr);
+    const char* GetGTAPathRegistryValueName();
 
     bool ShellExecuteBlocking(const SString& strAction, const SString& strFile, const SString& strParameters = "", const SString& strDirectory = "",
                               int nShowCmd = 1);

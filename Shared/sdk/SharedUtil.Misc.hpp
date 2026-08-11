@@ -1016,7 +1016,7 @@ namespace
 
 }
 
-static SString ReadRegistryStringValue(HKEY hkRoot, const char* szSubKey, const char* szValue, int* iResult)
+static SString ReadRegistryStringValue(HKEY hkRoot, const char* szSubKey, const char* szValue, int* iResult, REGSAM preferredView = 0)
 {
     SString strOutResult;
     int     status = 0;
@@ -1045,13 +1045,18 @@ static SString ReadRegistryStringValue(HKEY hkRoot, const char* szSubKey, const 
     constexpr size_t                     kAccessMaskSlots = 3u;
     std::array<REGSAM, kAccessMaskSlots> accessMasks{};
     size_t                               maskCount = 0;
+    if (preferredView != 0)
+        accessMasks[maskCount++] = KEY_READ | preferredView;
+    else
+    {
     #ifdef KEY_WOW64_64KEY
-    accessMasks[maskCount++] = KEY_READ | KEY_WOW64_64KEY;
+        accessMasks[maskCount++] = KEY_READ | KEY_WOW64_64KEY;
     #endif
     #ifdef KEY_WOW64_32KEY
-    accessMasks[maskCount++] = KEY_READ | KEY_WOW64_32KEY;
+        accessMasks[maskCount++] = KEY_READ | KEY_WOW64_32KEY;
     #endif
-    accessMasks[maskCount++] = KEY_READ;
+        accessMasks[maskCount++] = KEY_READ;
+    }
 
     for (size_t maskIndex = 0; maskIndex < maskCount && !success; ++maskIndex)
     {
@@ -1155,7 +1160,28 @@ void SharedUtil::SetCommonRegistryValue(const SString& strPath, const SString& s
 
 SString SharedUtil::GetCommonRegistryValue(const SString& strPath, const SString& strName, int* iResult /*= nullptr*/)
 {
+    #ifdef MTA_NEON
+    // Every Neon game-path consumer is 32-bit, and the installer grants standard
+    // users write access to that view. Reading it explicitly prevents a stale,
+    // unwritable 64-bit value from forcing the GTA selector on every launch.
+    if (strName == GetGTAPathRegistryValueName())
+        return ReadRegistryStringValue(HKEY_LOCAL_MACHINE, MakeVersionRegistryPath("Common", strPath), strName, iResult, KEY_WOW64_32KEY);
+    #endif
+
     return ReadRegistryStringValue(HKEY_LOCAL_MACHINE, MakeVersionRegistryPath("Common", strPath), strName, iResult);
+}
+
+// Neon must not share its selected GTA installation with official MTA clients.
+// Both products can coexist and may intentionally launch different GTA copies;
+// a distinct value prevents the last product launched or installed from silently
+// changing the other product's game directory.
+const char* SharedUtil::GetGTAPathRegistryValueName()
+{
+    #ifdef MTA_NEON
+    return "MTA Neon GTA:SA Path";
+    #else
+    return "GTA:SA Path";
+    #endif
 }
 
 //

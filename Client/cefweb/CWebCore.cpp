@@ -144,7 +144,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
 
     // Read GTA path from registry to pass to CEF subprocess
     int           iRegistryResult = 0;
-    const SString strGTAPath = GetCommonRegistryValue("", "GTA:SA Path", &iRegistryResult);
+    const SString strGTAPath = GetCommonRegistryValue("", GetGTAPathRegistryValueName(), &iRegistryResult);
 
     // Check if process is running with elevated privileges
     // CEF subprocesses may have communication issues when running elevated

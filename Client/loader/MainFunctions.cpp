@@ -1077,10 +1077,12 @@ void HandleSpecialLaunchOptions()
     // Handle service install request from the installer
     if (CommandLineContains("/kdinstall"))
     {
-        UpdateMTAVersionApplicationSetting(true);
-        WatchDogReset();
-        WatchDogBeginSection(WD_SECTION_POST_INSTALL);
-        ExitProcess(CheckService(CHECK_SERVICE_POST_INSTALL) ? EXIT_OK : EXIT_ERROR);
+        bool success = RunServiceInstall();
+#ifdef MTA_NEON
+        if (success)
+            success = CheckService(CHECK_SERVICE_PRE_GAME) && MarkNeonServiceMigrationComplete();
+#endif
+        ExitProcess(success ? EXIT_OK : EXIT_ERROR);
     }
 
     // Handle service uninstall request from the installer
@@ -1876,7 +1878,9 @@ int LaunchGame(SString strCmdLine)
     SetDllDirectory(PathJoin(strMTASAPath, "mta"));
 
 #if MTASA_VERSION_TYPE != VERSION_TYPE_CUSTOM
-    if (!CheckService(CHECK_SERVICE_PRE_CREATE) && !IsUserAdmin())
+    // The service repair path is unavailable when the Win32 client runs under ARM64 emulation.
+    // ProcessServiceChecks already permits this host, so the later pre-create check must do the same.
+    if (!CheckService(CHECK_SERVICE_PRE_CREATE) && !IsNativeArm64Host() && !IsUserAdmin())
     {
         RelaunchAsAdmin(strCmdLine, _("Fix configuration issue"));
         ExitProcess(EXIT_OK);

@@ -375,8 +375,18 @@ Function .onInit
         ${EndIf}
     ${EndIf}
 
-    ; Try to find previously saved GTA:SA install path
-    ReadRegStr $2 HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path"
+    ; Try to find Neon's saved GTA:SA path first. Official MTA installations
+    ; own the legacy value and may intentionally point at a different game copy.
+    !ifdef MTA_NEON
+        SetRegView 32
+        ReadRegStr $2 HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "MTA Neon GTA:SA Path"
+    !else
+        ReadRegStr $2 HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path"
+    !endif
+    ; Older Neon installers used the shared value, so retain it as a migration fallback.
+    ${If} $2 == ""
+        ReadRegStr $2 HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path"
+    ${EndIf}
     ${If} $2 == ""
         ReadRegStr $2 HKCU "SOFTWARE\Multi Theft Auto: San Andreas" "GTA:SA Path"
     ${EndIf}
@@ -460,15 +470,20 @@ Function .onInstSuccess
     ${LogText} "+Function begin - .onInstSuccess"
     SetShellVarContext all
 
-    ; The game-side loader can read either registry view before the launcher has
-    ; had a chance to update it. Seed both views so first launch never resolves
-    ; another MTA installation or fails with U01.
+    ; Seed version locations in both views. Neon keeps its GTA path in the
+    ; writable 32-bit view used by every client component.
     SetRegView 64
-    WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+    !ifndef MTA_NEON
+        WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+    !endif
     WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Install Location" $INSTDIR
     WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Run Location" $INSTDIR
     SetRegView 32
-    WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+    !ifdef MTA_NEON
+        WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "MTA Neon GTA:SA Path" $GTA_DIR
+    !else
+        WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+    !endif
     WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Install Location" $INSTDIR
     WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Run Location" $INSTDIR
     WriteRegStr HKLM "${PRODUCT_INSTALL_REGKEY}" "Last Install Location" $INSTDIR
@@ -700,14 +715,20 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
         ${EndIf}
         #############################################################
 
-        ; Create the required runtime state in both registry views before the
-        ; launcher drops back to the standard user's token.
+        ; Create version runtime state in both views and Neon's writable GTA
+        ; path in the 32-bit client view before dropping the admin token.
         SetRegView 64
-        WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+        !ifndef MTA_NEON
+            WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+        !endif
         WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Install Location" $INSTDIR
         WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Run Location" $INSTDIR
         SetRegView 32
-        WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+        !ifdef MTA_NEON
+            WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "MTA Neon GTA:SA Path" $GTA_DIR
+        !else
+            WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\Common" "GTA:SA Path" $GTA_DIR
+        !endif
         WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Install Location" $INSTDIR
         WriteRegStr HKLM "SOFTWARE\Multi Theft Auto: San Andreas All\${0.0}" "Last Run Location" $INSTDIR
         WriteRegStr HKLM "${PRODUCT_INSTALL_REGKEY}" "Last Install Location" $INSTDIR
@@ -807,7 +828,7 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
         SetOutPath "$INSTDIR\MTA"
         SetOverwrite on
 
-        # Keep the upstream 32-bit registry ACL behavior for launcher updates.
+        # All client components use the writable 32-bit view for Neon's game path.
         AccessControl::GrantOnRegKey HKLM "SOFTWARE\Multi Theft Auto: San Andreas All" "($PermissionsGroup)" "FullAccess"
 
         SetOutPath "$INSTDIR\MTA"
@@ -2602,6 +2623,21 @@ Var ServiceModified
 
 Function DoServiceInstall
     ${If} $ServiceModified != 1
+        !ifdef MTA_NEON
+            ; Neon build numbers come from GITHUB_RUN_NUMBER and are currently
+            ; far below the upstream historical 4909 feature threshold. The
+            ; packaged loader supports /kdinstall regardless of that public
+            ; build number, so always perform and await the required setup.
+            ClearErrors
+            ExecWait '"$INSTDIR\Multi Theft Auto.exe" /nolaunch /kdinstall' $R6
+            ${If} ${Errors}
+                ${LogText} "Could not start the Neon service installation command"
+            ${ElseIf} $R6 != 0
+                ${LogText} "Neon service installation failed with exit code $R6"
+            ${Else}
+                StrCpy $ServiceModified 1
+            ${EndIf}
+        !else
         ; Check loader can do command
         GetDLLVersion "$INSTDIR\mta\loader.dll" $R0 $R1
         IntOp $R5 $R1 & 0x0000FFFF ; $R5 now contains build
@@ -2609,6 +2645,7 @@ Function DoServiceInstall
             Exec '"$INSTDIR\Multi Theft Auto.exe" /nolaunch /kdinstall'
             StrCpy $ServiceModified 1
         ${EndIf}
+        !endif
     ${EndIf}
 FunctionEnd
 
