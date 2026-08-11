@@ -103,6 +103,13 @@ export class MockBackend implements BrowserBackend {
   connect(address: ServerAddress, password?: string): Promise<void> {
     const id = serverKey(address.ip, address.port)
     const server = this.internet.get(id) ?? this.lan.get(id)
+    if (server?.passworded && !password) {
+      this.emit({
+        type: 'connect-failed',
+        error: { address, code: 'password-required', message: '' },
+      })
+      return Promise.resolve()
+    }
     this.emit({ type: 'connect-started', address, serverName: server?.name })
     this.connectProgressTimer = setTimeout(() => {
       this.emit({ type: 'connect-progress', stage: 'authorizing' })

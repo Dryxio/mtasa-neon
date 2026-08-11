@@ -17,6 +17,7 @@ export function App() {
   const searchRef = useRef<HTMLInputElement>(null)
   const hasInitialSelection = useRef(false)
   const [loadscreen] = useState(chooseLaunchLoadscreen)
+  const [playersViewServerId, setPlayersViewServerId] = useState<string | null>(null)
 
   useEffect(() => {
     void actions.init()
@@ -28,12 +29,17 @@ export function App() {
   )
 
   const selected = state.selectedId ? (state.servers.get(state.selectedId) ?? null) : null
+  const playersViewOpen = selected !== null && playersViewServerId === selected.id
 
   useEffect(() => {
     if (!state.selectedId) return
     if (hasInitialSelection.current) playUiSound('highlight')
     else hasInitialSelection.current = true
   }, [state.selectedId])
+
+  useEffect(() => {
+    if (playersViewServerId !== null && playersViewServerId !== state.selectedId) setPlayersViewServerId(null)
+  }, [playersViewServerId, state.selectedId])
 
   // Bouton Connect de la barre d'outils : adresse directe si la recherche en
   // contient une ("ip:port" / "mtasa://…"), sinon serveur sélectionné.
@@ -49,6 +55,14 @@ export function App() {
       if (state.connect.phase !== 'idle') {
         if (e.key === 'Escape') {
           actions.dismissConnect()
+        }
+        return
+      }
+      if (playersViewOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          playUiSound('back')
+          setPlayersViewServerId(null)
         }
         return
       }
@@ -79,7 +93,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [servers, selected, state.connect.phase, state.query])
+  }, [playersViewOpen, servers, selected, state.connect.phase, state.query])
 
   return (
     <div className="shell">
@@ -129,6 +143,16 @@ export function App() {
         <div className="details-zone">
           <DetailsPanel
             server={selected}
+            playersViewOpen={playersViewOpen}
+            onOpenPlayers={() => {
+              if (!selected) return
+              playUiSound('select')
+              setPlayersViewServerId(selected.id)
+            }}
+            onClosePlayers={() => {
+              playUiSound('back')
+              setPlayersViewServerId(null)
+            }}
             onConnect={(server) => {
               playUiSound('select')
               actions.connectTo(server)

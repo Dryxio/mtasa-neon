@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import type { ConnectFlow } from '../store'
-import type { ServerItem } from '../types'
 import { playUiSound } from '../uiSound'
-import { IconAt, IconClose, IconLock } from './Icons'
+import { IconClose, IconLock } from './Icons'
 
 interface ConnectModalsProps {
   connect: ConnectFlow
@@ -178,35 +177,4 @@ function getFailurePresentation(code: NonNullable<ConnectFlow['error']>['code'] 
     default:
       return { title: t('modal.connectionFailed'), hint: t('modal.unknownError'), retry: true }
   }
-}
-
-interface PlayersModalProps {
-  server: ServerItem
-  onClose: () => void
-}
-
-export function PlayersModal({ server, onClose }: PlayersModalProps) {
-  const { formatNumber, t } = useI18n()
-  return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal modal--players">
-        <div className="modal__title">
-          <IconAt size={16} />
-          {t('modal.playersCount', { count: formatNumber(server.players) })}
-        </div>
-        <div className="modal__players">
-          {server.playerList.map((player, i) => (
-            <span key={player.name + i} className="chip">
-              @{player.name}
-            </span>
-          ))}
-        </div>
-        <div className="modal__actions">
-          <button type="button" className="modal__btn" onClick={onClose}>
-            {t('common.close')}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
