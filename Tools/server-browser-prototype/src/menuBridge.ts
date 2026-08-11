@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ConnectErrorCode, ConnectStage } from './backend/BrowserBackend'
+import { publishConnectionUiEvent, subscribeConnectionUiEvents } from './connectionUiEvents'
 import { normalizeTranslations, type TranslationMap } from './i18n'
 import type { ConnectFlow } from './store'
 
@@ -147,6 +148,64 @@ export function useMenuBridge() {
   const [state, setState] = useState<MenuState>(INITIAL_STATE)
 
   useEffect(() => {
+    const unsubscribeConnectionUi = subscribeConnectionUiEvents((event) => {
+      if (event.type === 'connect-started') {
+        setState((current) => ({
+          ...current,
+          connect: {
+            phase: 'connecting',
+            address: event.address,
+            serverName: event.serverName,
+            stage: 'contacting',
+          },
+        }))
+      }
+      else if (event.type === 'connect-progress') {
+        setState((current) => ({
+          ...current,
+          connect:
+            current.connect.phase === 'connecting'
+              ? { ...current.connect, stage: event.stage, statusMessage: event.message }
+              : current.connect,
+        }))
+      }
+      else if (event.type === 'connect-failed') {
+        setState((current) => {
+          const code = normalizeConnectErrorCode(event.error.code)
+          const needsPassword = code === 'bad-password' || code === 'password-required'
+          const address = event.error.address.ip ? event.error.address : current.connect.address
+          return {
+            ...current,
+            connect: {
+              phase: needsPassword ? 'password' : 'failed',
+              address,
+              serverName: current.connect.serverName,
+              error:
+                code === 'password-required' || !address
+                  ? undefined
+                  : { address, code, message: event.error.message },
+            },
+          }
+        })
+      }
+      else if (event.type === 'connect-succeeded') {
+        setState((current) => ({
+          ...current,
+          connect: { ...current.connect, phase: 'connecting', address: event.address, stage: 'joining' },
+        }))
+        window.setTimeout(() => {
+          setState((current) =>
+            current.connect.stage === 'joining'
+              ? { ...current, connect: { phase: 'idle', address: null } }
+              : current,
+          )
+        }, 900)
+      }
+      else if (event.type === 'connect-dismissed') {
+        setState((current) => ({ ...current, connect: { phase: 'idle', address: null } }))
+      }
+    })
+
     window.__neonMenu = {
       emit(events) {
         for (const event of events) {
@@ -233,6 +292,7 @@ export function useMenuBridge() {
     }
     send('menu:ready')
     return () => {
+      unsubscribeConnectionUi()
       delete window.__neonMenu
     }
   }, [])
@@ -276,7 +336,7 @@ export function useMenuBridge() {
 
   const dismissConnection = useCallback(() => {
     send('sb:cancelConnect')
-    setState((current) => ({ ...current, connect: { phase: 'idle', address: null } }))
+    publishConnectionUiEvent({ type: 'connect-dismissed' })
   }, [])
 
   return { state, command, setLanguage, submitConnectionPassword, retryConnection, dismissConnection }

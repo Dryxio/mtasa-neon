@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { backend } from './backend'
 import type { ConnectError, ConnectStage } from './backend'
+import { publishConnectionUiEvent, subscribeConnectionUiEvents } from './connectionUiEvents'
 import { DEFAULT_FILTERS, type BrowserFilters } from './search'
 import type { ServerAddress, ServerItem, ServerSource } from './types'
 import { serverKey } from './types'
@@ -38,7 +39,6 @@ export interface BrowserState {
   connect: ConnectFlow
   stats: NetworkStats
   notice: string | null
-  playersModalOpen: boolean
 }
 
 let state: BrowserState = {
@@ -52,7 +52,6 @@ let state: BrowserState = {
   connect: { phase: 'idle', address: null },
   stats: { playersOnline: 0, peakPlayers: 0, serverCount: 0 },
   notice: null,
-  playersModalOpen: false,
 }
 
 const subscribers = new Set<() => void>()
@@ -73,6 +72,8 @@ export function useBrowserState(): BrowserState {
 }
 
 backend.subscribe((event) => {
+  if (event.type.startsWith('connect-')) publishConnectionUiEvent(event as Extract<typeof event, { type: `connect-${string}` }>)
+
   switch (event.type) {
     case 'servers-reset':
       if (event.source === state.source) {
@@ -155,6 +156,10 @@ backend.subscribe((event) => {
   }
 })
 
+subscribeConnectionUiEvents((event) => {
+  if (event.type === 'connect-dismissed') setState({ connect: { phase: 'idle', address: null } })
+})
+
 const refreshedSources = new Set<ServerSource>()
 
 async function refreshStats(): Promise<void> {
@@ -199,7 +204,7 @@ export const actions = {
   },
 
   select(id: string | null): void {
-    setState({ selectedId: id, playersModalOpen: false })
+    setState({ selectedId: id })
   },
 
   /** Déplace la sélection dans la liste visible fournie par l'appelant. */
@@ -212,12 +217,8 @@ export const actions = {
 
   connectTo(server: ServerItem): void {
     const address: ServerAddress = { ip: server.ip, port: server.gamePort }
-    if (server.passworded) {
-      setState({
-        connect: { phase: 'password', address, serverName: server.name },
-      })
-      return
-    }
+    // Let the backend publish password-required like every other connection
+    // state so the always-mounted modal remains the single UI owner.
     void backend.connect(address)
   },
 
@@ -235,7 +236,7 @@ export const actions = {
 
   dismissConnect(): void {
     backend.cancelConnect()
-    setState({ connect: { phase: 'idle', address: null } })
+    publishConnectionUiEvent({ type: 'connect-dismissed' })
   },
 
   toggleFavourite(server: ServerItem): void {
@@ -247,10 +248,6 @@ export const actions = {
     setState({ servers })
     if (server.isFavourite) void backend.removeFavourite(address)
     else void backend.addFavourite(address)
-  },
-
-  setPlayersModal(open: boolean): void {
-    setState({ playersModalOpen: open })
   },
 
   /**
