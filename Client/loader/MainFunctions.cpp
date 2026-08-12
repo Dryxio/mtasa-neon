@@ -1080,7 +1080,7 @@ void HandleSpecialLaunchOptions()
         bool success = RunServiceInstall();
 #ifdef MTA_NEON
         if (success)
-            success = CheckService(CHECK_SERVICE_PRE_GAME) && MarkNeonServiceMigrationComplete();
+            success = MarkNeonServiceMigrationComplete();
 #endif
         ExitProcess(success ? EXIT_OK : EXIT_ERROR);
     }

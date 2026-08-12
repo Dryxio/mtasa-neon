@@ -1750,8 +1750,10 @@ bool IsNeonServiceMigrationComplete()
 //
 // MarkNeonServiceMigrationComplete
 //
-// Persist only after POST_INSTALL and PRE_GAME both succeed, then read the
-// value back so an ACL or registry failure cannot suppress the next retry.
+// Persist only after POST_INSTALL succeeds, then read the value back so an ACL
+// or registry failure cannot suppress the next retry. PRE_GAME belongs to the
+// following normal launch; running it in the installer process can reject a
+// service transition which only becomes ready after that process exits.
 //
 //////////////////////////////////////////////////////////
 bool MarkNeonServiceMigrationComplete()

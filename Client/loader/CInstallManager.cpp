@@ -1777,9 +1777,11 @@ SString CInstallManager::_ProcessLangFileChecks()
 // CInstallManager::_ProcessNeonServiceMigration
 //
 // Auto-updates replace the launcher but do not rerun NSIS. Existing Neon
-// installations therefore need one verified POST_INSTALL pass using the
-// sequencer's UAC hand-off. The marker is written only after the service also
-// passes PRE_GAME, so refusal or failure is retried on the next launch.
+// installations therefore need one POST_INSTALL pass using the sequencer's
+// UAC hand-off. POST_INSTALL deliberately ends the installer process before a
+// normal launch validates the service, so do not make an immediate PRE_GAME
+// result fatal here. The normal PRE_GAME/PRE_CREATE checks remain active after
+// the hand-off and are not bypassed by the migration marker.
 //
 //////////////////////////////////////////////////////////
 SString CInstallManager::_ProcessNeonServiceMigration()
@@ -1803,19 +1805,17 @@ SString CInstallManager::_ProcessNeonServiceMigration()
     if (!RunServiceInstall())
     {
         AddReportLog(8071, "Neon service migration failed during POST_INSTALL");
-        return "fail";
-    }
-
-    if (!CheckService(CHECK_SERVICE_PRE_GAME))
-    {
-        AddReportLog(8071, "Neon service migration failed PRE_GAME verification");
-        return "fail";
+        // Keep the launcher usable when the closed network module cannot
+        // repair the service on a particular machine. With no marker this is
+        // retried later, while the existing PRE_CREATE fallback can still
+        // launch with elevation instead of closing silently after UAC.
+        return "ok";
     }
 
     if (!MarkNeonServiceMigrationComplete())
     {
         AddReportLog(8071, "Neon service migration could not persist its completion marker");
-        return "fail";
+        return "ok";
     }
 
     AddReportLog(8071, "Neon service migration completed");
@@ -1840,17 +1840,6 @@ SString CInstallManager::_ProcessServiceChecks()
             m_strAdminReason = _("Update install settings");
             return "fail";
         }
-
-    #ifdef MTA_NEON
-        // An official MTA install or a later system change can invalidate the
-        // shared service after Neon's one-time migration. An elevated launcher
-        // must repair it instead of silently treating admin rights as success.
-        if (!IsNativeArm64Host() && (!RunServiceInstall() || !CheckService(CHECK_SERVICE_PRE_GAME)))
-        {
-            AddReportLog(8071, "Neon service repair failed");
-            return "fail";
-        }
-    #endif
     }
 #endif
     return "ok";
