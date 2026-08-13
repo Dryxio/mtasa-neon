@@ -427,8 +427,8 @@ struct RpGeometry
     RpTriangle*           triangles;
     RwColor*              colors;
     RwTextureCoordinates* texcoords[RW_MAX_TEXTURE_COORDS];
-    void*                 unknown2;
-    void*                 info;
+    void*                 mesh;
+    void*                 repEntry;
     RpMorphTarget*        morph_target;
 };
 

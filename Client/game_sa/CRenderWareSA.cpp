@@ -867,6 +867,73 @@ bool CRenderWareSA::GetModelTextures(std::vector<std::tuple<std::string, CPixels
 
 ////////////////////////////////////////////////////////////////
 //
+// CRenderWareSA::AcquireModelTexture
+//
+// Resolve a texture through its source model and retain it after the source
+// TXD streams out. SA-MP material descriptions use the model as the stable
+// texture-library owner; the textual TXD name is only descriptive metadata.
+//
+////////////////////////////////////////////////////////////////
+RwTexture* CRenderWareSA::AcquireModelTexture(ushort usModelId, const SString& strTxdName, const SString& strTextureName)
+{
+    CModelInfo* pModelInfo = pGame->GetModelInfo(usModelId);
+    if (!pModelInfo || strTxdName.empty() || strTextureName.empty())
+        return nullptr;
+
+    // SA-MP uses the model to bring the archive entry into memory, but resolves
+    // the texture through the explicit TXD name supplied by the map export.
+    // This matters for shared/parent dictionaries and custom model remapping.
+    const auto findTxdSlot = reinterpret_cast<int(__cdecl*)(const char*)>(0x731850);
+    int        iTxdId = findTxdSlot(strTxdName);
+    if (iTxdId < 0)
+        return nullptr;
+
+    bool             bLoadedModel = false;
+    RwTexDictionary* pTxd = CTxdStore_GetTxd(static_cast<unsigned short>(iTxdId));
+    if (!pTxd)
+    {
+        bLoadedModel = !pModelInfo->IsLoaded();
+        pModelInfo->Request(BLOCKING, "CRenderWareSA::AcquireModelTexture");
+        iTxdId = findTxdSlot(strTxdName);
+        pTxd = iTxdId >= 0 ? CTxdStore_GetTxd(static_cast<unsigned short>(iTxdId)) : nullptr;
+    }
+
+    RwTexture* pResult = pTxd ? RwTexDictionaryFindNamedTexture(pTxd, strTextureName) : nullptr;
+    if (!pResult && pTxd)
+    {
+        // RenderWare texture names are normally canonical lowercase, but old
+        // Texture Studio exports are not consistent about casing.
+        std::vector<RwTexture*> textures;
+        GetTxdTextures(textures, pTxd);
+        for (RwTexture* pTexture : textures)
+        {
+            if (pTexture && strTextureName.CompareI(pTexture->name))
+            {
+                pResult = pTexture;
+                break;
+            }
+        }
+    }
+
+    // The object material owns this reference. Render-time pointer swaps do
+    // not touch refcounts, matching the safe part of SA-MP's lifecycle.
+    if (pResult)
+        ++pResult->refs;
+
+    if (bLoadedModel)
+        reinterpret_cast<void(__cdecl*)(unsigned short)>(FUNC_RemoveModel)(usModelId);
+
+    return pResult;
+}
+
+void CRenderWareSA::ReleaseTextureReference(RwTexture* pTexture)
+{
+    if (pTexture)
+        RwTextureDestroy(pTexture);
+}
+
+////////////////////////////////////////////////////////////////
+//
 // CRenderWareSA::GetTxdTextures
 //
 // If TXD must already be loaded

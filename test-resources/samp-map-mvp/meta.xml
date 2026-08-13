@@ -1,0 +1,6 @@
+<meta>
+    <info author="MTA Neon" name="Native SA-MP map importer MVP" type="script" version="1.0.0" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" />
+    <file src="Ext_DylanCarter3.pwn" />
+</meta>

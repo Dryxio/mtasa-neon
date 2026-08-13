@@ -124,4 +124,10 @@ public:
     virtual void RwMatrixSetPosition(RwMatrix& rwInOutMatrix, const CVector& vecPosition) = 0;
     virtual void RwMatrixGetScale(const RwMatrix& rwMatrix, CVector& vecOutScale) = 0;
     virtual void RwMatrixSetScale(RwMatrix& rwInOutMatrix, const CVector& vecScale) = 0;
+
+    // Keep a source-model texture alive independently of GTA streaming so an
+    // object can safely borrow it for a per-instance material override. These
+    // are appended to preserve every existing interface vtable slot.
+    virtual RwTexture* AcquireModelTexture(ushort usModelID, const SString& strTxdName, const SString& strTextureName) = 0;
+    virtual void       ReleaseTextureReference(RwTexture* pTexture) = 0;
 };

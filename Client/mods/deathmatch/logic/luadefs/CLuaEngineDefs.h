@@ -72,6 +72,7 @@ public:
     LUA_DECLARE(EngineGetModelTextureNames);
     LUA_DECLARE(EngineGetVisibleTextureNames);
     LUA_DECLARE(EngineGetModelTextures);
+    LUA_DECLARE(EngineParseSAMPMap);
     LUA_DECLARE(EngineSetSurfaceProperties);
     LUA_DECLARE(EngineGetSurfaceProperties);
     LUA_DECLARE(EngineResetSurfaceProperties);
@@ -90,6 +91,7 @@ public:
     static bool                                            EngineSetModelFlag(uint uiModelID, eModelIdeFlag eFlag, bool state);
     static bool                                            EngineResetModelFlags(uint uiModelID);
     static uint                                            EngineGetModelTXDID(uint uiDffModelID);
+    static std::variant<bool, uint>                        EngineGetTXDIDFromName(std::string strTxdName);
     static bool                                            EngineSetModelTXDID(uint uiDffModelID, unsigned short uiTxdId);
     static bool                                            EngineResetModelTXDID(uint uiDffModelID);
     static CClientIMG*                                     EngineLoadIMG(lua_State* const luaVM, std::string strFilePath);

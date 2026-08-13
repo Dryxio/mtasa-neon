@@ -3871,6 +3871,8 @@ void CClientGame::StaticGameRunNamedAnimDestructorHandler(class CTaskSimpleRunNa
 
 void CClientGame::StaticGameEntityRenderHandler(CEntitySAInterface* pGameEntity)
 {
+    static CClientObject* pMaterialObject = nullptr;
+
     if (pGameEntity)
     {
         CPools* pPools = g_pGame->GetPools();
@@ -3878,8 +3880,9 @@ void CClientGame::StaticGameEntityRenderHandler(CEntitySAInterface* pGameEntity)
         CClientEntity* pClientEntity = pPools->GetClientEntity((DWORD*)pGameEntity);
         if (pClientEntity)
         {
-            int    iTypeMask;
-            ushort usModelId = 0xFFFF;
+            int            iTypeMask;
+            ushort         usModelId = 0xFFFF;
+            CClientObject* pNextMaterialObject = nullptr;
             switch (pClientEntity->GetType())
             {
                 case CCLIENTPED:
@@ -3892,6 +3895,7 @@ void CClientGame::StaticGameEntityRenderHandler(CEntitySAInterface* pGameEntity)
                     break;
                 case CCLIENTOBJECT:
                     iTypeMask = TYPE_MASK_OBJECT;
+                    pNextMaterialObject = static_cast<CClientObject*>(pClientEntity);
                     break;
                 case CCLIENTBUILDING:
                     iTypeMask = TYPE_MASK_WORLD;
@@ -3900,11 +3904,25 @@ void CClientGame::StaticGameEntityRenderHandler(CEntitySAInterface* pGameEntity)
                     iTypeMask = TYPE_MASK_OTHER;
                     break;
             }
+
+            if (pMaterialObject != pNextMaterialObject)
+            {
+                if (pMaterialObject)
+                    pMaterialObject->RestoreSAMPObjectMaterialsAfterRender();
+                pMaterialObject = pNextMaterialObject;
+                if (pMaterialObject)
+                    pMaterialObject->ApplySAMPObjectMaterialsForRender();
+            }
             g_pGame->GetRenderWare()->SetRenderingClientEntity(pClientEntity, usModelId, iTypeMask);
             return;
         }
     }
 
+    if (pMaterialObject)
+    {
+        pMaterialObject->RestoreSAMPObjectMaterialsAfterRender();
+        pMaterialObject = nullptr;
+    }
     g_pGame->GetRenderWare()->SetRenderingClientEntity(NULL, 0xFFFF, TYPE_MASK_WORLD);
 }
 

@@ -13,9 +13,18 @@ class CResource;
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
 #include <game/CObject.h>
 #include "CClientStreamElement.h"
 #include "CClientModel.h"
+
+struct RpMaterial;
+struct RpGeometry;
+struct RwTexture;
 
 struct SLastSyncedObjectData
 {
@@ -133,6 +142,15 @@ public:
     bool          ReleaseGangTag(CResource* pOwner);
     void          ApplyNativeGangTagProgress(unsigned char ucProgress) { m_ucGangTagProgress = ucProgress; }
 
+    // SA-MP assigns texture and colour overrides by DFF material slot rather
+    // than by texture name. Keep this state on the client element so it
+    // survives GTA object streaming and can be reapplied to a new instance.
+    bool SetSAMPObjectMaterial(unsigned char ucSlot, int iSourceModel, const std::string& strTxdName, const std::string& strTextureName,
+                               std::uint32_t uiMaterialColor);
+    bool RemoveSAMPObjectMaterial(unsigned char ucSlot);
+    void ApplySAMPObjectMaterialsForRender();
+    void RestoreSAMPObjectMaterialsAfterRender();
+
 protected:
     void StreamIn(bool bInstantly);
     void StreamOut();
@@ -173,6 +191,47 @@ protected:
     CResource*    m_pGangTagOwner = nullptr;
     unsigned char m_ucGangTagProgress = 0;
     bool          m_bGangTagSprayEnabled = false;
+
+    struct SSAMPObjectMaterial
+    {
+        bool          bEnabled = false;
+        bool          bReplaceTexture = false;
+        bool          bOverrideColor = false;
+        int           iSourceModel = -1;
+        std::string   strTxdName;
+        std::string   strTextureName;
+        std::uint32_t uiMaterialColor = 0;
+        RwTexture*    pTexture = nullptr;
+        bool          bTargetWarningLogged = false;
+    };
+
+    struct SSAMPObjectMaterialTarget
+    {
+        RpMaterial* pMaterial = nullptr;
+        RpGeometry* pGeometry = nullptr;
+    };
+
+    struct SSavedSAMPObjectMaterial
+    {
+        RpMaterial*   pMaterial = nullptr;
+        RpGeometry*   pGeometry = nullptr;
+        RwTexture*    pTexture = nullptr;
+        std::uint32_t uiColor = 0;
+        std::uint32_t uiGeometryFlags = 0;
+        float         fAmbient = 0.0f;
+        float         fSpecular = 0.0f;
+        float         fDiffuse = 0.0f;
+    };
+
+    static constexpr std::size_t                                                   SAMP_OBJECT_MATERIAL_SLOTS = 16;
+    std::array<SSAMPObjectMaterial, SAMP_OBJECT_MATERIAL_SLOTS>                    m_SAMPMaterials{};
+    std::array<std::vector<SSAMPObjectMaterialTarget>, SAMP_OBJECT_MATERIAL_SLOTS> m_SAMPMaterialTargets;
+    std::vector<SSavedSAMPObjectMaterial>                                          m_SAMPSavedMaterials;
+    void*                                                                          m_pSAMPMaterialTargetRwObject = nullptr;
+    bool                                                                           m_bSAMPMaterialsApplied = false;
+
+    void ClearSAMPObjectMaterials();
+    void ResolveSAMPObjectMaterialTargets();
 
     CVector m_vecMoveSpeed;
     CVector m_vecTurnSpeed;

@@ -18,6 +18,7 @@
 #include <game/CPtrNodeSingleLinkPool.h>
 #include <lua/CLuaFunctionParser.h>
 #include "CLuaEngineDefs.h"
+#include "CSampMapParser.h"
 #include "CVehicleSoundManager.h"
 #include <enums/VehicleType.h>
 
@@ -186,6 +187,7 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineSetModelVisibleTime", ArgumentParser<EngineSetModelVisibleTime>},
         {"engineGetModelVisibleTime", ArgumentParser<EngineGetModelVisibleTime>},
         {"engineGetModelTextures", EngineGetModelTextures},
+        {"engineParseSAMPMap", EngineParseSAMPMap},
         {"engineGetSurfaceProperties", EngineGetSurfaceProperties},
         {"engineSetSurfaceProperties", EngineSetSurfaceProperties},
         {"engineResetSurfaceProperties", EngineResetSurfaceProperties},
@@ -214,6 +216,7 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineImageGetFiles", ArgumentParser<EngineImageGetFileList>},
         {"engineImageGetFile", ArgumentParser<EngineImageGetFile>},
         {"engineGetModelTXDID", ArgumentParser<EngineGetModelTXDID>},
+        {"engineGetTXDIDFromName", ArgumentParser<EngineGetTXDIDFromName>},
         {"engineSetModelTXDID", ArgumentParser<EngineSetModelTXDID>},
         {"engineResetModelTXDID", ArgumentParser<EngineResetModelTXDID>},
         {"engineStreamingFreeUpMemory", ArgumentParser<EngineStreamingFreeUpMemory>},
@@ -356,12 +359,14 @@ void CLuaEngineDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "restoreObjectGroupPhysicalProperties", "engineRestoreObjectGroupPhysicalProperties");
     lua_classfunction(luaVM, "setObjectStreamingLimits", "engineSetObjectStreamingLimits");
     lua_classfunction(luaVM, "getObjectStreamingLimits", "engineGetObjectStreamingLimits");
+    lua_classfunction(luaVM, "parseSAMPMap", "engineParseSAMPMap");
 
     lua_classfunction(luaVM, "setModelFlags", "engineSetModelFlags");
     lua_classfunction(luaVM, "resetModelFlags", "engineResetModelFlags");
     lua_classfunction(luaVM, "getModelFlags", "engineGetModelFlags");
 
     lua_classfunction(luaVM, "getModelTXDID", "engineGetModelTXDID");
+    lua_classfunction(luaVM, "getTXDIDFromName", "engineGetTXDIDFromName");
     lua_classfunction(luaVM, "setModelTXDID", "engineSetModelTXDID");
     lua_classfunction(luaVM, "resetModelTXDID", "engineResetModelTXDID");
 
@@ -2001,6 +2006,21 @@ uint CLuaEngineDefs::EngineGetModelTXDID(uint uiModelID)
     return pModelInfo->GetTextureDictionaryID();
 }
 
+std::variant<bool, uint> CLuaEngineDefs::EngineGetTXDIDFromName(std::string strTxdName)
+{
+    if (strTxdName.empty() || strTxdName.size() > 24)
+        throw std::invalid_argument("Expected a TXD name between 1 and 24 characters at argument 1");
+
+    // SA-MP reuses TXDs from GTA's cutscene and interior archives without
+    // associating them with a stable public model ID. Resolve the GTA slot by
+    // its IDE name so an imported SA-MP model can retain that relationship.
+    const auto findTxdSlot = reinterpret_cast<int(__cdecl*)(const char*)>(0x731850);
+    const int  txdId = findTxdSlot(strTxdName.c_str());
+    if (txdId < 0)
+        return false;
+    return static_cast<uint>(txdId);
+}
+
 bool CLuaEngineDefs::EngineSetModelTXDID(uint uiModelID, unsigned short usTxdId)
 {
     std::uint16_t runtimeModelId = 0;
@@ -2273,6 +2293,117 @@ int CLuaEngineDefs::EngineGetModelTextures(lua_State* luaVM)
         lua_settable(luaVM, -3);
     }
 
+    return 1;
+}
+
+int CLuaEngineDefs::EngineParseSAMPMap(lua_State* luaVM)
+{
+    SString          source;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadString(source);
+
+    if (argStream.HasErrors())
+        return luaL_error(luaVM, argStream.GetFullErrorMessage());
+
+    // Parsing only produces inert data. Resources remain in control of model
+    // remapping, element ownership, dimensions and failure policy.
+    const SampMap::SParseResult result = SampMap::Parse(std::string_view{source.c_str(), source.length()});
+
+    const auto setNumber = [luaVM](const char* name, double value)
+    {
+        lua_pushnumber(luaVM, value);
+        lua_setfield(luaVM, -2, name);
+    };
+    const auto setString = [luaVM](const char* name, const std::string& value)
+    {
+        lua_pushlstring(luaVM, value.data(), value.size());
+        lua_setfield(luaVM, -2, name);
+    };
+
+    lua_createtable(luaVM, 0, 7);
+    lua_pushboolean(luaVM, result.Succeeded());
+    lua_setfield(luaVM, -2, "success");
+    setNumber("errorCount", static_cast<double>(result.errorCount));
+    setNumber("objectCount", static_cast<double>(result.objects.size()));
+    setNumber("removedBuildingCount", static_cast<double>(result.removedBuildings.size()));
+
+    lua_createtable(luaVM, static_cast<int>(result.objects.size()), 0);
+    for (std::size_t objectIndex = 0; objectIndex < result.objects.size(); ++objectIndex)
+    {
+        const SampMap::SObject& object = result.objects[objectIndex];
+        lua_createtable(luaVM, 0, 20);
+
+        const char* creationType = object.creationKind == SampMap::EObjectCreationKind::Object          ? "object"
+                                   : object.creationKind == SampMap::EObjectCreationKind::DynamicObject ? "dynamicObject"
+                                                                                                        : "dynamicObjectEx";
+        lua_pushstring(luaVM, creationType);
+        lua_setfield(luaVM, -2, "creationType");
+        setString("handle", object.sourceHandle);
+        setNumber("model", object.model);
+        setNumber("x", object.positionX);
+        setNumber("y", object.positionY);
+        setNumber("z", object.positionZ);
+        setNumber("rx", object.rotationX);
+        setNumber("ry", object.rotationY);
+        setNumber("rz", object.rotationZ);
+        setNumber("world", object.virtualWorld);
+        setNumber("interior", object.interior);
+        setNumber("player", object.player);
+        setNumber("area", object.area);
+        setNumber("priority", object.priority);
+        setNumber("streamDistance", object.streamDistance);
+        setNumber("drawDistance", object.drawDistance);
+        setNumber("line", static_cast<double>(object.location.line));
+        setNumber("column", static_cast<double>(object.location.column));
+
+        lua_createtable(luaVM, static_cast<int>(object.materials.size()), 0);
+        for (std::size_t materialIndex = 0; materialIndex < object.materials.size(); ++materialIndex)
+        {
+            const SampMap::SMaterial& material = object.materials[materialIndex];
+            lua_createtable(luaVM, 0, 8);
+            setNumber("slot", material.slot);
+            setNumber("sourceModel", material.sourceModel);
+            setString("txd", material.txdName);
+            setString("texture", material.textureName);
+            setNumber("color", material.color);
+            setNumber("line", static_cast<double>(material.location.line));
+            setNumber("column", static_cast<double>(material.location.column));
+            lua_rawseti(luaVM, -2, static_cast<int>(materialIndex + 1));
+        }
+        lua_setfield(luaVM, -2, "materials");
+        lua_rawseti(luaVM, -2, static_cast<int>(objectIndex + 1));
+    }
+    lua_setfield(luaVM, -2, "objects");
+
+    lua_createtable(luaVM, static_cast<int>(result.removedBuildings.size()), 0);
+    for (std::size_t removalIndex = 0; removalIndex < result.removedBuildings.size(); ++removalIndex)
+    {
+        const SampMap::SRemovedBuilding& removal = result.removedBuildings[removalIndex];
+        lua_createtable(luaVM, 0, 7);
+        setNumber("model", removal.model);
+        setNumber("x", removal.positionX);
+        setNumber("y", removal.positionY);
+        setNumber("z", removal.positionZ);
+        setNumber("radius", removal.radius);
+        setNumber("line", static_cast<double>(removal.location.line));
+        setNumber("column", static_cast<double>(removal.location.column));
+        lua_rawseti(luaVM, -2, static_cast<int>(removalIndex + 1));
+    }
+    lua_setfield(luaVM, -2, "removedBuildings");
+
+    lua_createtable(luaVM, static_cast<int>(result.diagnostics.size()), 0);
+    for (std::size_t diagnosticIndex = 0; diagnosticIndex < result.diagnostics.size(); ++diagnosticIndex)
+    {
+        const SampMap::SDiagnostic& diagnostic = result.diagnostics[diagnosticIndex];
+        lua_createtable(luaVM, 0, 4);
+        lua_pushstring(luaVM, diagnostic.severity == SampMap::EDiagnosticSeverity::Error ? "error" : "warning");
+        lua_setfield(luaVM, -2, "severity");
+        setNumber("line", static_cast<double>(diagnostic.location.line));
+        setNumber("column", static_cast<double>(diagnostic.location.column));
+        setString("message", diagnostic.message);
+        lua_rawseti(luaVM, -2, static_cast<int>(diagnosticIndex + 1));
+    }
+    lua_setfield(luaVM, -2, "diagnostics");
     return 1;
 }
 

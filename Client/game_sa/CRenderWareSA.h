@@ -96,6 +96,8 @@ public:
     void               PulseWorldTextureWatch();
     void               GetModelTextureNames(std::vector<SString>& outNameList, ushort usModelID);
     bool               GetModelTextures(std::vector<std::tuple<std::string, CPixels>>& outTextureList, ushort usModelID, std::vector<SString> vTextureNames);
+    RwTexture*         AcquireModelTexture(ushort usModelID, const SString& strTxdName, const SString& strTextureName) override;
+    void               ReleaseTextureReference(RwTexture* pTexture) override;
     void               GetTxdTextures(std::vector<RwTexture*>& outTextureList, ushort usTxdId);
     static void        GetTxdTextures(std::vector<RwTexture*>& outTextureList, RwTexDictionary* pTXD);
     const char*        GetTextureName(CD3DDUMMY* pD3DData);

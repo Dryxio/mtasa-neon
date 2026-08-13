@@ -37,6 +37,9 @@
 *.out       binary
 *.app       binary
 *.dat       binary
+*.img       binary
+*.col       binary
+*.pwn       text whitespace=-blank-at-eol,-blank-at-eof
 *.rar       binary
 *.ttf       binary
 

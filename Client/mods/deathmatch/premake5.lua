@@ -64,6 +64,11 @@ project "Client Deathmatch"
 	filter "system:windows"
 		buildoptions { "-Zm180" }
 
+	-- The map parser is intentionally buildable without the client PCH so its
+	-- clean-room grammar can be unit-tested as a standalone component.
+	filter "files:logic/CSampMapParser.cpp"
+		flags { "NoPCH" }
+
 	filter "architecture:not x86"
 		flags { "ExcludeFromBuild" }
 

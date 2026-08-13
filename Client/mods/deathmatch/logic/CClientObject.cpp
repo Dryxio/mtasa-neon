@@ -9,6 +9,11 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include <game/RenderWare.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 
 #define MTA_BUILDINGS
 #define CCLIENTOBJECT_MAX 250
@@ -16,6 +21,31 @@
 #ifndef M_PI
     #define M_PI 3.14159265358979323846
 #endif
+
+namespace
+{
+    // A freshly streamed DFF has no D3D9 instance data until its first GTA
+    // render. Changing geometry flags before that render makes RenderWare take
+    // its re-instancing path and dereference a vertex buffer that does not yet
+    // exist. Texture pointers are safe to swap immediately, but colour-driven
+    // geometry mutations must wait until stream 0 has been created.
+    bool IsGeometryD3D9ReadyForMaterialColour(const RpGeometry* pGeometry)
+    {
+        if (!pGeometry || !pGeometry->repEntry)
+            return false;
+
+        // RwResEntry is 24 bytes in GTA's 32-bit RenderWare build. The D3D9
+        // resource header then stores four 32-bit fields before stream 0's
+        // vertex-buffer pointer.
+        constexpr std::size_t RW_RES_ENTRY_SIZE = 24;
+        constexpr std::size_t D3D9_HEADER_PREFIX_SIZE = 16;
+        static_assert(sizeof(void*) == 4, "GTA RenderWare material code requires a 32-bit client build");
+
+        const auto* pStream0VertexBuffer =
+            reinterpret_cast<void* const*>(static_cast<const std::uint8_t*>(pGeometry->repEntry) + RW_RES_ENTRY_SIZE + D3D9_HEADER_PREFIX_SIZE);
+        return *pStream0VertexBuffer != nullptr;
+    }
+}  // namespace
 
 CClientObject::CClientObject(CClientManager* pManager, ElementID ID, unsigned short usModel, bool bLowLod)
     : ClassInit(this), CClientStreamElement(bLowLod ? pManager->GetObjectLodStreamer() : pManager->GetObjectStreamer(), ID), m_bIsLowLod(bLowLod)
@@ -67,12 +97,202 @@ CClientObject::~CClientObject()
     // Destroy the object
     Destroy();
 
+    // Material textures hold their own RenderWare references and outlive the
+    // streamed GTA object. Release them with the owning client element.
+    ClearSAMPObjectMaterials();
+
     // Remove us from the list
     Unlink();
 
     if (m_bIsLowLod)
         m_pManager->OnLowLODElementDestroyed();
     m_clientModel = nullptr;
+}
+
+bool CClientObject::SetSAMPObjectMaterial(unsigned char ucSlot, int iSourceModel, const std::string& strTxdName, const std::string& strTextureName,
+                                          std::uint32_t uiMaterialColor)
+{
+    if (ucSlot >= SAMP_OBJECT_MATERIAL_SLOTS)
+        return false;
+
+    const bool bReplaceTexture = iSourceModel > 0 && !strTextureName.empty() && !SString(strTextureName).CompareI("none");
+    RwTexture* pTexture = nullptr;
+    if (bReplaceTexture)
+    {
+        pTexture = g_pGame->GetRenderWare()->AcquireModelTexture(static_cast<unsigned short>(iSourceModel), SString(strTxdName), SString(strTextureName));
+        if (!pTexture)
+            return false;
+    }
+
+    RemoveSAMPObjectMaterial(ucSlot);
+
+    SSAMPObjectMaterial& material = m_SAMPMaterials[ucSlot];
+    material.bEnabled = true;
+    material.bReplaceTexture = bReplaceTexture;
+    material.bOverrideColor = uiMaterialColor != 0;
+    material.iSourceModel = iSourceModel;
+    material.strTxdName = strTxdName;
+    material.strTextureName = strTextureName;
+    // SA-MP uses zero to preserve the target material colour.
+    material.uiMaterialColor = uiMaterialColor;
+    material.pTexture = pTexture;
+    return true;
+}
+
+bool CClientObject::RemoveSAMPObjectMaterial(unsigned char ucSlot)
+{
+    if (ucSlot >= SAMP_OBJECT_MATERIAL_SLOTS)
+        return false;
+
+    RestoreSAMPObjectMaterialsAfterRender();
+
+    SSAMPObjectMaterial& material = m_SAMPMaterials[ucSlot];
+    if (material.pTexture)
+        g_pGame->GetRenderWare()->ReleaseTextureReference(material.pTexture);
+    material = {};
+    return true;
+}
+
+void CClientObject::ClearSAMPObjectMaterials()
+{
+    RestoreSAMPObjectMaterialsAfterRender();
+    for (SSAMPObjectMaterial& material : m_SAMPMaterials)
+    {
+        if (material.pTexture)
+            g_pGame->GetRenderWare()->ReleaseTextureReference(material.pTexture);
+        material = {};
+    }
+    for (auto& targets : m_SAMPMaterialTargets)
+        targets.clear();
+    m_pSAMPMaterialTargetRwObject = nullptr;
+}
+
+void CClientObject::ResolveSAMPObjectMaterialTargets()
+{
+    // Keep the concrete SA entity interface out of this module's ABI.
+    void* pRwObject = m_pObject ? static_cast<void*>(m_pObject->GetRpClump()) : nullptr;
+    if (pRwObject == m_pSAMPMaterialTargetRwObject)
+        return;
+
+    m_pSAMPMaterialTargetRwObject = pRwObject;
+    for (auto& targets : m_SAMPMaterialTargets)
+        targets.clear();
+    for (SSAMPObjectMaterial& material : m_SAMPMaterials)
+        material.bTargetWarningLogged = false;
+
+    if (!pRwObject)
+        return;
+
+    auto appendAtomicMaterials = [this](RpAtomic* pAtomic)
+    {
+        RpGeometry* pGeometry = pAtomic ? pAtomic->geometry : nullptr;
+        if (!pGeometry || !pGeometry->materials.materials)
+            return;
+
+        const int materialCount = std::min(pGeometry->materials.entries, static_cast<int>(SAMP_OBJECT_MATERIAL_SLOTS));
+        for (int index = 0; index < materialCount; ++index)
+        {
+            RpMaterial* pMaterial = pGeometry->materials.materials[index];
+            auto&       targets = m_SAMPMaterialTargets[index];
+            const auto  existing = std::find_if(targets.begin(), targets.end(), [pMaterial, pGeometry](const SSAMPObjectMaterialTarget& target)
+                                                { return target.pMaterial == pMaterial && target.pGeometry == pGeometry; });
+            if (pMaterial && existing == targets.end())
+                targets.push_back({pMaterial, pGeometry});
+        }
+    };
+
+    RwObject* pObject = static_cast<RwObject*>(pRwObject);
+    if (pObject->type == RP_TYPE_ATOMIC)
+    {
+        appendAtomicMaterials(reinterpret_cast<RpAtomic*>(pObject));
+    }
+    else if (pObject->type == RP_TYPE_CLUMP)
+    {
+        RpClump*     pClump = reinterpret_cast<RpClump*>(pObject);
+        RwListEntry* pRoot = &pClump->atomics.root;
+        for (RwListEntry* pEntry = pRoot->next; pEntry && pEntry != pRoot; pEntry = pEntry->next)
+        {
+            auto* pAtomic = reinterpret_cast<RpAtomic*>(reinterpret_cast<unsigned char*>(pEntry) - offsetof(RpAtomic, globalClumps));
+            appendAtomicMaterials(pAtomic);
+        }
+    }
+}
+
+void CClientObject::ApplySAMPObjectMaterialsForRender()
+{
+    if (m_bSAMPMaterialsApplied)
+        return;
+
+    ResolveSAMPObjectMaterialTargets();
+    for (std::size_t slot = 0; slot < m_SAMPMaterials.size(); ++slot)
+    {
+        SSAMPObjectMaterial& definition = m_SAMPMaterials[slot];
+        if (!definition.bEnabled)
+            continue;
+        if (m_SAMPMaterialTargets[slot].empty())
+        {
+            if (!definition.bTargetWarningLogged)
+            {
+                definition.bTargetWarningLogged = true;
+                g_pCore->GetConsole()->Printf("[SAMP material] model=%u slot=%u unavailable", GetLogicalModel(), static_cast<unsigned int>(slot));
+            }
+            continue;
+        }
+
+        // SA-MP restarts material indices for every atomic. Apply slot N to
+        // material N of each geometry, while snapshotting each target so a
+        // multi-atomic model is restored without SA-MP's shared-state bug.
+        for (const SSAMPObjectMaterialTarget& target : m_SAMPMaterialTargets[slot])
+        {
+            RpMaterial*   pTarget = target.pMaterial;
+            RpGeometry*   pGeometry = target.pGeometry;
+            const RwColor oldColor = pTarget->color;
+            m_SAMPSavedMaterials.push_back({pTarget, pGeometry, pTarget->texture,
+                                            static_cast<std::uint32_t>(oldColor.a) << 24 | static_cast<std::uint32_t>(oldColor.r) << 16 |
+                                                static_cast<std::uint32_t>(oldColor.g) << 8 | static_cast<std::uint32_t>(oldColor.b),
+                                            pGeometry->flags, pTarget->lighting.ambient, pTarget->lighting.specular, pTarget->lighting.diffuse});
+
+            if (definition.bReplaceTexture)
+                pTarget->texture = definition.pTexture;
+
+            if (definition.bOverrideColor && IsGeometryD3D9ReadyForMaterialColour(pGeometry))
+            {
+                // Pawn exports use AARRGGBB, whereas RwColor stores separate
+                // RGBA bytes. Convert the source representation explicitly.
+                pTarget->color.r = static_cast<unsigned char>((definition.uiMaterialColor >> 16) & 0xFF);
+                pTarget->color.g = static_cast<unsigned char>((definition.uiMaterialColor >> 8) & 0xFF);
+                pTarget->color.b = static_cast<unsigned char>(definition.uiMaterialColor & 0xFF);
+                pTarget->color.a = static_cast<unsigned char>((definition.uiMaterialColor >> 24) & 0xFF);
+                pTarget->lighting.ambient = 1.0f;
+                pTarget->lighting.specular = 0.0f;
+                pTarget->lighting.diffuse = 1.0f;
+                pGeometry->flags = (pGeometry->flags | 0x40) & ~0x08;
+            }
+        }
+    }
+
+    m_bSAMPMaterialsApplied = !m_SAMPSavedMaterials.empty();
+}
+
+void CClientObject::RestoreSAMPObjectMaterialsAfterRender()
+{
+    if (!m_bSAMPMaterialsApplied)
+        return;
+
+    for (auto iter = m_SAMPSavedMaterials.rbegin(); iter != m_SAMPSavedMaterials.rend(); ++iter)
+    {
+        iter->pMaterial->texture = iter->pTexture;
+        iter->pMaterial->color.r = static_cast<unsigned char>((iter->uiColor >> 16) & 0xFF);
+        iter->pMaterial->color.g = static_cast<unsigned char>((iter->uiColor >> 8) & 0xFF);
+        iter->pMaterial->color.b = static_cast<unsigned char>(iter->uiColor & 0xFF);
+        iter->pMaterial->color.a = static_cast<unsigned char>((iter->uiColor >> 24) & 0xFF);
+        iter->pMaterial->lighting.ambient = iter->fAmbient;
+        iter->pMaterial->lighting.specular = iter->fSpecular;
+        iter->pMaterial->lighting.diffuse = iter->fDiffuse;
+        iter->pGeometry->flags = iter->uiGeometryFlags;
+    }
+    m_SAMPSavedMaterials.clear();
+    m_bSAMPMaterialsApplied = false;
 }
 
 void CClientObject::Unlink()
@@ -665,6 +885,11 @@ void CClientObject::Destroy()
     // If the object exists
     if (m_pObject)
     {
+        RestoreSAMPObjectMaterialsAfterRender();
+        for (auto& targets : m_SAMPMaterialTargets)
+            targets.clear();
+        m_pSAMPMaterialTargetRwObject = nullptr;
+
         if (m_pGangTagOwner)
             g_pMultiplayer->SetGangTagSprayEnabled(m_pObject->GetObjectInterface(), false);
 

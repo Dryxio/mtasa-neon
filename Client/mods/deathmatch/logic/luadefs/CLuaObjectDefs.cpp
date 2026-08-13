@@ -40,6 +40,8 @@ void CLuaObjectDefs::LoadFunctions()
         {"toggleObjectRespawn", ToggleObjectRespawn},
         {"setObjectMass", SetObjectMass},
         {"setObjectProperty", SetObjectProperty},
+        {"setObjectMaterial", SetObjectMaterial},
+        {"removeObjectMaterial", RemoveObjectMaterial},
         {"setObjectGangTagAlpha", ArgumentParser<SetObjectGangTagAlpha>},
         {"acquireObjectGangTag", ArgumentParser<AcquireObjectGangTag>},
         {"setObjectGangTagProgress", ArgumentParser<SetObjectGangTagProgress>},
@@ -75,6 +77,8 @@ void CLuaObjectDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setBreakable", "setObjectBreakable");
     lua_classfunction(luaVM, "setMass", "setObjectMass");
     lua_classfunction(luaVM, "setProperty", "setObjectProperty");
+    lua_classfunction(luaVM, "setMaterial", "setObjectMaterial");
+    lua_classfunction(luaVM, "removeMaterial", "removeObjectMaterial");
     lua_classfunction(luaVM, "setGangTagAlpha", "setObjectGangTagAlpha");
     lua_classfunction(luaVM, "acquireGangTag", "acquireObjectGangTag");
     lua_classfunction(luaVM, "setGangTagProgress", "setObjectGangTagProgress");
@@ -142,6 +146,77 @@ int CLuaObjectDefs::CreateObject(lua_State* luaVM)
     if (argStream.HasErrors())
         m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
 
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaObjectDefs::SetObjectMaterial(lua_State* luaVM)
+{
+    // bool setObjectMaterial(object, int slot, int sourceModel, string txdName, string textureName, [int materialColor = 0])
+    CClientObject* pObject = nullptr;
+    unsigned int   uiSlot = 0;
+    int            iSourceModel = -1;
+    SString        strTxdName;
+    SString        strTextureName;
+    SColor         materialColor;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pObject);
+    argStream.ReadNumberBounded(uiSlot, 0, 15);
+    argStream.ReadNumber(iSourceModel);
+    argStream.ReadString(strTxdName);
+    argStream.ReadString(strTextureName);
+    argStream.ReadColor(materialColor, 0);
+
+    std::uint16_t usRuntimeModel = 0;
+    if (!argStream.HasErrors() && iSourceModel > 0)
+    {
+        if (static_cast<unsigned int>(iSourceModel) > SERVER_MODEL_ID_MAX ||
+            !m_pManager->GetModelManager()->ResolveModelID(static_cast<unsigned int>(iSourceModel), usRuntimeModel, nullptr, false))
+        {
+            argStream.SetCustomError("Invalid source model id");
+        }
+    }
+    else if (!argStream.HasErrors() && iSourceModel != -1 && iSourceModel != 0)
+    {
+        argStream.SetCustomError("Source model id must be -1, 0, or a valid model id");
+    }
+
+    if (!argStream.HasErrors())
+    {
+        const int  iRuntimeSourceModel = iSourceModel <= 0 ? iSourceModel : static_cast<int>(usRuntimeModel);
+        const bool bResult = pObject->SetSAMPObjectMaterial(static_cast<unsigned char>(uiSlot), iRuntimeSourceModel, strTxdName, strTextureName,
+                                                            static_cast<std::uint32_t>(materialColor));
+        if (!bResult)
+        {
+            m_pScriptDebugging->LogWarning(luaVM, SString("Unable to resolve texture '%s' from source model %d", strTextureName.c_str(), iSourceModel));
+        }
+        lua_pushboolean(luaVM, bResult);
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaObjectDefs::RemoveObjectMaterial(lua_State* luaVM)
+{
+    // bool removeObjectMaterial(object, int slot)
+    CClientObject* pObject = nullptr;
+    unsigned int   uiSlot = 0;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pObject);
+    argStream.ReadNumberBounded(uiSlot, 0, 15);
+
+    if (!argStream.HasErrors())
+    {
+        lua_pushboolean(luaVM, pObject->RemoveSAMPObjectMaterial(static_cast<unsigned char>(uiSlot)));
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
     lua_pushboolean(luaVM, false);
     return 1;
 }
