@@ -357,6 +357,11 @@ public:
     void                                  UpdateAmbientPedPopulationModels(const CVector& origin) override;
     void                                  ResetAmbientPedPopulationModels() override;
     EAmbientPedSpawnCandidateResult       GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate) override;
+    EAmbientPedSpawnCandidateResult       GetAmbientPedSpawnCandidateForPopulation(const CVector& origin, EAmbientPedPopulationSelection selection,
+                                                                                   unsigned char gangId, SAmbientPedSpawnCandidate& candidate) override;
+    bool                                  GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profile) const override;
+    bool                                  ResetAmbientPedPopulationZonesToBootstrap() override;
+    bool                                  SetAmbientPedPopulationZoneState(const char* label, const SAmbientPedPopulationZoneState& state) override;
 
 private:
     std::unique_ptr<CPools>           m_Pools;
@@ -432,6 +437,25 @@ private:
     bool             m_isIgnoreFireStateEnabled{false};
     bool             m_isVehicleBurnExplosionsEnabled{true};
     bool             m_areAmbientPedPopulationModelsActive{false};
+    bool             m_areAmbientPedPopulationZonesInitialized{false};
+    unsigned int     m_ambientPedGangModelUpdateCounter{};
+    unsigned int     m_ambientPedGangModelRotation{};
+    int              m_ambientPedGangModels[10][2]{};
+    unsigned char    m_ambientPedPopulationZoneSnapshot[380][0x11]{};
+    unsigned char    m_ambientPedPopulationZoneExpected[380][0x11]{};
+    unsigned char    m_ambientPedPopulationModelFlagSnapshot[289]{};
+    unsigned char    m_ambientPedPopulationTxdFlagSnapshot[289]{};
+    bool             m_ambientPedPopulationStreamingTouched[289]{};
+
+    void InitializeAmbientPedPopulationZones();
+    void ApplyAmbientPedPopulationZoneBootstrap();
+    void RestoreAmbientPedPopulationZones();
+    void InitializeAmbientPedPopulationStreamingLease();
+    void ProtectAmbientPedPopulationStreamingRequests();
+    void PreserveAmbientPedPopulationStreamingFlags();
+    void RestoreAmbientPedPopulationStreamingLease();
+    void UpdateAmbientPedGangModels();
+    void ResetAmbientPedGangModels();
 
     static unsigned int& ClumpOffset;
 

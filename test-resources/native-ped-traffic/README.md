@@ -3,9 +3,22 @@
 This test resource creates a small shared ambient pedestrian population without
 reenabling GTA's unmanaged `CPopulation::AddToPopulation` loop.
 
-Each client keeps GTA's stock zone-ped model residency current. The server then
-rate-limits requests for native civilian/path-placement candidates, creates the
-real MTA ped, and assigns one persistent syncer. Only that owner runs
+The server first selects one versioned vanilla campaign population state. The
+default `post_intro` preset starts from the stock 336-zone main.scm bootstrap,
+then applies the first playable free-roam mutation (Grove strength 10 in GAN1
+and GAN2). Every client must acknowledge the same revision before it may own AI
+or propose a spawn; stale profiles and candidates are rejected.
+
+Each ready client keeps GTA's stock zone-ped model residency current. It also reports
+GTA's read-only population targets for the current zone, two-hour time bucket,
+weekday/weekend state and current rain adjustment. The server caps its
+conservative near-player target by that native target, preserves its
+floating civilian/gang targets, and reproduces `FindNewPedType` from the shared
+live population over those cap-scaled supported targets before requesting a
+native civilian or exact-gang placement
+candidate. GTA still chooses the model from its loaded `pedgrp.dat` entries;
+the server validates the result, creates the real MTA ped, and assigns one persistent
+syncer. Only that owner runs
 `CTaskComplexWanderStandard`; other clients receive the existing compact native
 locomotion presentation through normal ped sync.
 
@@ -69,8 +82,14 @@ back through GTA's native in-air/land lifecycle rather than leaving the ped
 latched to stale geometry.
 
 The initial limits are intentionally conservative: 24 peds globally, 12 near a
-player, four per 64 m cell, one candidate request every 500 ms, at least 10 m
-between traffic peds, and a 20-slot reserve below MTA's 110-ped logical limit.
+player, four per 64 m cell, one candidate request every 250 ms while below the
+native target, at least 10 m between traffic peds, and a 20-slot reserve below
+MTA's 110-ped logical limit. Peds outside the 120 m shared residency receive a
+four-second grace before removal; a stable population-family change retires at
+most one furthest surplus ped every two seconds instead of replacing a whole
+street at once. Retirement is allowed only when that class is surplus for every
+overlapping player, the ped is in a plain active lifecycle, and it is at least
+90 m from every player.
 Candidates are also rejected within 25 m of another player to avoid a spawn
 which was hidden from the proposing client but visible to somebody else.
 Ownership changes only after another player stays at least 20 m closer for
@@ -83,6 +102,9 @@ lease before the new epoch is assigned.
 - `/pedtraffic off` destroys only resource-owned traffic peds.
 - `/pedtraffic status` prints counters and the current cap.
 - `/pedtraffic debug on|off` enables bounded client/server telemetry.
+- `/pedtraffic preset post_intro|post_cleaning_the_hood|post_green_sabre|post_home_coming`
+  changes the authoritative campaign population state. Existing traffic is
+  cleared and both clients must acknowledge the new revision before refill.
 - `/pedtraffic cap 1..110` changes the test cap; keep 24 for the first run.
 - `/pedtraffic weapon` gives the caller a pistol for the threat checkpoint.
 - `/pedtraffic vehicle [model]` creates one resource-owned player vehicle for
@@ -95,21 +117,45 @@ lease before the new epoch is assigned.
   the temporary barrier on completion, failure, `off` or resource shutdown.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
-and civilian-only. Ambient vehicle population, cops, gangs, dealers, couples,
-attractors, conversations and headless/offline simulation are deliberately
-outside this checkpoint. The optional command above creates a test vehicle,
-not autonomous vehicle traffic.
+and now admits GTA's civilian and resident-gang population classes. The native
+profile reports cops and dealers too, but this checkpoint deliberately does not
+spawn those classes yet. Ambient vehicle population, cops, dealers, couples, attractors, conversations,
+headless/offline simulation, custom weather rules and public server density
+controls remain outside this checkpoint. GTA's stock rain reduction is already
+reflected in the native target. The optional command above creates a test
+vehicle, not autonomous vehicle traffic. The existing ambient event scopes use
+the spawned model's gang identity; persistent gang relations in GTA systems not
+covered by those scopes remain a later behavior checkpoint.
 
 ## Engine APIs exercised
 
 - `updateAmbientPedPopulationModels(Vector3 origin)` runs GTA's ped-only zone
   model residency pass. Call it while candidate generation is active.
-- `getAmbientPedSpawnCandidate(Vector3 origin)` returns a read-only table with
-  `model`, `pedType`, `x`, `y`, `z`, `direction`, and `pathLerp`, or `false`
-  plus a bounded miss reason. It never creates an unmanaged GTA ped.
-- `resetAmbientPedPopulationModels()` releases the eight stock population
-  model slots retained by the update pass. Call it when generation stops; the
-  client script also calls it during resource shutdown.
+- `getAmbientPedSpawnCandidate(Vector3 origin[, string populationClass,
+  int gangId])` returns a read-only table with
+  `model`, `pedType`, `populationClass`, `gang`, `x`, `y`, `z`, `direction`,
+  and `pathLerp`, or `false` plus a bounded miss reason. It never creates an
+  unmanaged GTA ped. Omit the optional arguments for GTA's local automatic
+  choice; pass `"civilian", -1` or `"gang", 0..7` when a server has already
+  arbitrated the class from synchronized live counts. A forced gang miss never
+  falls back to a civilian.
+- `getAmbientPedPopulationProfile()` returns GTA's current supported target as
+  `supportedTarget`, split into `civilianTarget` and `gangTarget`. `target` also
+  includes the effective `copTarget` and reported `dealerTarget`; `rawCopTarget`
+  preserves the pre-`noCops` popcycle value for diagnostics. Zone metadata includes
+  `zoneType`, `dealerStrength`, `raceFlags`, `noCops`, `timeIndex`, `weekend`,
+  and the ten native `gangWeights`. The civilian target already contains GTA's
+  stock rain adjustment.
+- `resetAmbientPedPopulationZonesToBootstrap()` restores the stock main.scm
+  population initialization inside the active reversible lease.
+- `setAmbientPedPopulationZoneState(label, state)` applies validated optional
+  `populationType`, `races`, `dealerStrength`, `noCops`, and indexed
+  `gangStrengths` fields to one INFO zone. The harness uses it only while
+  applying a server-issued world revision.
+- `resetAmbientPedPopulationModels()` releases the eight stock civilian slots
+  and the ped-only gang residency, then restores the zone metadata snapshot.
+  Call it when generation stops; the client script also calls it during
+  resource shutdown.
 - `acquirePedNativeEventProfile(ped, "ambient-wander")` leases the narrow
   avoidance and civilian-threat policy. Acquire it on every client and release
   the token on element or resource teardown; only the current syncer reports
@@ -122,7 +168,7 @@ not autonomous vehicle traffic.
   physical hit and health pipeline; the replay only selects the model's stock
   flee or fight response and cannot apply the damage twice.
 
-All six functions are client-side primitives. The server must still validate
+All population and behavior functions are client-side primitives. The server must still validate
 the proposal, create and own the MTA ped, select exactly one syncer, and clean
 up every resource-owned element.
 
@@ -130,8 +176,11 @@ up every resource-owned element.
 
 1. Put both players outdoors in the same neighbourhood and run
    `/pedtraffic debug on`, then `/pedtraffic on`.
-2. Let the population reach 12 nearby peds. Both clients should see the same
-   models and positions; only `[ped-traffic][client] accepted` owners run AI.
+2. At Grove Street, confirm native Grove-family models can appear; repeat in a
+   Ballas neighbourhood and confirm the resident gang family changes. Both
+   clients should see the same models, population classes and positions; only
+   `[ped-traffic][client] accepted` owners run AI. The native target may keep
+   the nearby count below 12 for the current zone/time profile.
 3. Stand or walk in front of several traffic peds, then observe peds passing a
    parked vehicle. `avoid-transition` must show the response only with
    `role=owner`; both clients should see the same walking detour without a run
@@ -141,11 +190,42 @@ up every resource-owned element.
    teleport or duplicate ped.
 5. Disconnect the current owner. A nearby second client should receive the next
    epoch; with no nearby fallback, the server should despawn that ped.
-6. Kill one traffic ped and verify its corpse is removed after eight seconds
+6. Kill one traffic ped and verify its corpse is removed after 30 seconds
    and replenished within the cap.
 7. Run `/pedtraffic status`, then `/pedtraffic off`. The server must report zero
    resource-owned peds and each client must release its eight stock zone-model
    slots. No vehicle may be created at any point.
+
+## Population world-state checkpoint
+
+1. Enable debug and traffic at Grove Street. Both clients must log the same
+   `population-world-ready` revision before the first candidate request.
+2. With `post_intro`, GAN1/GAN2 must report Grove strength 10. Switch to
+   `post_cleaning_the_hood`; existing traffic is cleared and the new revision
+   must report Grove 40 on both clients.
+3. Switch to `post_green_sabre`; GAN1/GAN2 become Ballas 10/25 and Grove 0.
+   Switch to `post_home_coming`; both become Grove 40 and Ballas 0.
+4. During every switch, no profile or candidate carrying the previous revision
+   may be accepted. `/pedtraffic status` and periodic debug telemetry must show
+   the same preset and revision.
+
+## Population arbitration and model-diversity checkpoint
+
+1. Put both clients together at Grove Street, run `/pedtraffic debug on`,
+   `/pedtraffic preset post_cleaning_the_hood`, then `/pedtraffic on`.
+2. Server `spawn` lines must show the floating civilian/gang targets, live
+   counts, randomized sub-two deficits, chosen gang score and native model.
+   There must be no `population-hint-mismatch` and no old
+   `population-class-quota` rejection storm.
+3. Let the population refill repeatedly for at least 30–60 gang creations.
+   Telemetry `models=` must contain only Grove models 105/106/107 for gang 1;
+   all three should appear over the stock two-model residency rotation. A short
+   run may legitimately repeat one skin because vanilla loads only two gang
+   models at once and shuffles only the loaded entries.
+4. Repeat in Ballas territory and confirm models 102/103/104 over time. Repeat
+   once in SF or LV to verify the regional `pedgrp.dat` column is used instead
+   of the Los Santos column. Both clients must see the same server-created
+   elements and models throughout.
 
 ## Threat checkpoint
 

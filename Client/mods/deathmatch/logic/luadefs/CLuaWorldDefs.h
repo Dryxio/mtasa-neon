@@ -108,6 +108,9 @@ public:
     LUA_DECLARE(GetBirdsEnabled);
     static bool UpdateAmbientPedPopulationModels(CVector origin);
     static bool ResetAmbientPedPopulationModels();
+    LUA_DECLARE(ResetAmbientPedPopulationZonesToBootstrap);
+    LUA_DECLARE(SetAmbientPedPopulationZoneState);
+    LUA_DECLARE(GetAmbientPedPopulationProfile);
     LUA_DECLARE(GetAmbientPedSpawnCandidate);
     LUA_DECLARE(SetPedTargetingMarkerEnabled);
     LUA_DECLARE(IsPedTargetingMarkerEnabled);

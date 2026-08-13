@@ -61,6 +61,9 @@ void CLuaWorldDefs::LoadFunctions()
         {"getBirdsEnabled", GetBirdsEnabled},
         {"updateAmbientPedPopulationModels", ArgumentParser<UpdateAmbientPedPopulationModels>},
         {"resetAmbientPedPopulationModels", ArgumentParser<ResetAmbientPedPopulationModels>},
+        {"resetAmbientPedPopulationZonesToBootstrap", ResetAmbientPedPopulationZonesToBootstrap},
+        {"setAmbientPedPopulationZoneState", SetAmbientPedPopulationZoneState},
+        {"getAmbientPedPopulationProfile", GetAmbientPedPopulationProfile},
         {"getAmbientPedSpawnCandidate", GetAmbientPedSpawnCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
         {"getWorldProperty", ArgumentParser<GetWorldProperty>},
@@ -193,9 +196,13 @@ int CLuaWorldDefs::CreateExplosion(lua_State* luaVM)
 int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
 {
     CVector origin;
+    SString selectionName;
+    int     gangId = -1;
 
     CScriptArgReader argStream(luaVM);
     argStream.ReadVector3D(origin);
+    argStream.ReadString(selectionName, "auto");
+    argStream.ReadNumber(gangId, -1);
 
     if (argStream.HasErrors())
     {
@@ -204,8 +211,32 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
         return 1;
     }
 
+    EAmbientPedPopulationSelection selection = EAmbientPedPopulationSelection::Automatic;
+    if (selectionName == "civilian")
+        selection = EAmbientPedPopulationSelection::Civilian;
+    else if (selectionName == "gang")
+        selection = EAmbientPedPopulationSelection::Gang;
+    else if (selectionName != "auto")
+    {
+        m_pScriptDebugging->LogCustom(luaVM, "Population selection must be auto, civilian or gang");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+    if ((selection == EAmbientPedPopulationSelection::Gang && (gangId < 0 || gangId > 7)) ||
+        (selection != EAmbientPedPopulationSelection::Gang && gangId != -1))
+    {
+        // Stock gang slots 8 and 9 reuse Aztecas models whose peds.ide type is
+        // still GANG8, so exposing them would promise a ped identity GTA cannot
+        // represent without a later explicit type-override checkpoint.
+        m_pScriptDebugging->LogCustom(luaVM, "Gang selection requires a gang ID from 0 to 7; other selections require -1");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
     SAmbientPedSpawnCandidate candidate;
-    const auto                result = g_pGame->GetAmbientPedSpawnCandidate(origin, candidate);
+    const auto                result = selection == EAmbientPedPopulationSelection::Automatic
+                                           ? g_pGame->GetAmbientPedSpawnCandidate(origin, candidate)
+                                           : g_pGame->GetAmbientPedSpawnCandidateForPopulation(origin, selection, static_cast<unsigned char>(gangId), candidate);
     if (result != EAmbientPedSpawnCandidateResult::Success)
     {
         const char* reason = "unknown";
@@ -240,7 +271,7 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
         return 2;
     }
 
-    lua_createtable(luaVM, 0, 8);
+    lua_createtable(luaVM, 0, 10);
     lua_pushinteger(luaVM, candidate.modelId);
     lua_setfield(luaVM, -2, "model");
     lua_pushinteger(luaVM, candidate.pedType);
@@ -255,6 +286,59 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     lua_setfield(luaVM, -2, "direction");
     lua_pushnumber(luaVM, candidate.pathLerp);
     lua_setfield(luaVM, -2, "pathLerp");
+    lua_pushstring(luaVM, candidate.populationClass == EAmbientPedPopulationClass::Gang ? "gang" : "civilian");
+    lua_setfield(luaVM, -2, "populationClass");
+    if (candidate.populationClass == EAmbientPedPopulationClass::Gang)
+        lua_pushinteger(luaVM, candidate.gangId);
+    else
+        lua_pushboolean(luaVM, false);
+    lua_setfield(luaVM, -2, "gang");
+    return 1;
+}
+
+int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
+{
+    SAmbientPedPopulationProfile profile;
+    if (!g_pGame->GetAmbientPedPopulationProfile(profile))
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    lua_createtable(luaVM, 0, 14);
+    lua_pushnumber(luaVM, profile.target);
+    lua_setfield(luaVM, -2, "target");
+    lua_pushnumber(luaVM, profile.supportedTarget);
+    lua_setfield(luaVM, -2, "supportedTarget");
+    lua_pushnumber(luaVM, profile.civilianTarget);
+    lua_setfield(luaVM, -2, "civilianTarget");
+    lua_pushnumber(luaVM, profile.rawCopTarget);
+    lua_setfield(luaVM, -2, "rawCopTarget");
+    lua_pushnumber(luaVM, profile.copTarget);
+    lua_setfield(luaVM, -2, "copTarget");
+    lua_pushnumber(luaVM, profile.gangTarget);
+    lua_setfield(luaVM, -2, "gangTarget");
+    lua_pushnumber(luaVM, profile.dealerTarget);
+    lua_setfield(luaVM, -2, "dealerTarget");
+    lua_pushinteger(luaVM, profile.zoneType);
+    lua_setfield(luaVM, -2, "zoneType");
+    lua_pushinteger(luaVM, profile.timeIndex);
+    lua_setfield(luaVM, -2, "timeIndex");
+    lua_pushboolean(luaVM, profile.weekend != 0);
+    lua_setfield(luaVM, -2, "weekend");
+    lua_pushinteger(luaVM, profile.dealerStrength);
+    lua_setfield(luaVM, -2, "dealerStrength");
+    lua_pushinteger(luaVM, profile.raceFlags);
+    lua_setfield(luaVM, -2, "raceFlags");
+    lua_pushboolean(luaVM, profile.noCops != 0);
+    lua_setfield(luaVM, -2, "noCops");
+    lua_createtable(luaVM, 10, 0);
+    for (int gangId = 0; gangId < 10; ++gangId)
+    {
+        lua_pushinteger(luaVM, profile.gangWeights[gangId]);
+        lua_rawseti(luaVM, -2, gangId + 1);
+    }
+    lua_setfield(luaVM, -2, "gangWeights");
     return 1;
 }
 
@@ -268,6 +352,103 @@ bool CLuaWorldDefs::ResetAmbientPedPopulationModels()
 {
     g_pGame->ResetAmbientPedPopulationModels();
     return true;
+}
+
+int CLuaWorldDefs::ResetAmbientPedPopulationZonesToBootstrap(lua_State* luaVM)
+{
+    lua_pushboolean(luaVM, g_pGame->ResetAmbientPedPopulationZonesToBootstrap());
+    return 1;
+}
+
+int CLuaWorldDefs::SetAmbientPedPopulationZoneState(lua_State* luaVM)
+{
+    if (!lua_isstring(luaVM, 1) || !lua_istable(luaVM, 2))
+    {
+        m_pScriptDebugging->LogCustom(luaVM, "Expected zone label and population state table");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SAmbientPedPopulationZoneState state;
+    const auto                     readOptionalByte = [luaVM, &state](const char* field, unsigned int fieldMask, unsigned char& output, unsigned int maximum)
+    {
+        lua_getfield(luaVM, 2, field);
+        if (lua_isnil(luaVM, -1))
+        {
+            lua_pop(luaVM, 1);
+            return true;
+        }
+
+        const lua_Number value = lua_tonumber(luaVM, -1);
+        const bool       valid = lua_isnumber(luaVM, -1) && std::isfinite(value) && value == std::floor(value) && value >= 0 && value <= maximum;
+        if (valid)
+        {
+            output = static_cast<unsigned char>(value);
+            state.fields |= fieldMask;
+        }
+        lua_pop(luaVM, 1);
+        return valid;
+    };
+
+    if (!readOptionalByte("populationType", static_cast<unsigned int>(EAmbientPedPopulationZoneField::PopulationType), state.populationType, 19) ||
+        !readOptionalByte("races", static_cast<unsigned int>(EAmbientPedPopulationZoneField::Races), state.races, 15) ||
+        !readOptionalByte("dealerStrength", static_cast<unsigned int>(EAmbientPedPopulationZoneField::DealerStrength), state.dealerStrength, 255))
+    {
+        m_pScriptDebugging->LogCustom(luaVM, "Invalid numeric population zone field");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    lua_getfield(luaVM, 2, "noCops");
+    if (!lua_isnil(luaVM, -1))
+    {
+        if (!lua_isboolean(luaVM, -1))
+        {
+            lua_pop(luaVM, 1);
+            m_pScriptDebugging->LogCustom(luaVM, "Population zone noCops must be boolean");
+            lua_pushboolean(luaVM, false);
+            return 1;
+        }
+        state.noCops = lua_toboolean(luaVM, -1) != 0;
+        state.fields |= static_cast<unsigned int>(EAmbientPedPopulationZoneField::NoCops);
+    }
+    lua_pop(luaVM, 1);
+
+    lua_getfield(luaVM, 2, "gangStrengths");
+    if (!lua_isnil(luaVM, -1))
+    {
+        if (!lua_istable(luaVM, -1))
+        {
+            lua_pop(luaVM, 1);
+            m_pScriptDebugging->LogCustom(luaVM, "Population zone gangStrengths must be a table");
+            lua_pushboolean(luaVM, false);
+            return 1;
+        }
+
+        for (int gangId = 0; gangId < 10; ++gangId)
+        {
+            lua_rawgeti(luaVM, -1, gangId + 1);
+            if (!lua_isnil(luaVM, -1))
+            {
+                const lua_Number value = lua_tonumber(luaVM, -1);
+                if (!lua_isnumber(luaVM, -1) || !std::isfinite(value) || value != std::floor(value) || value < 0 || value > 255)
+                {
+                    lua_pop(luaVM, 2);
+                    m_pScriptDebugging->LogCustom(luaVM, "Invalid gang strength in population zone state");
+                    lua_pushboolean(luaVM, false);
+                    return 1;
+                }
+                state.gangStrength[gangId] = static_cast<unsigned char>(value);
+                state.gangMask |= static_cast<unsigned short>(1u << gangId);
+            }
+            lua_pop(luaVM, 1);
+        }
+    }
+    lua_pop(luaVM, 1);
+
+    const char* label = lua_tostring(luaVM, 1);
+    lua_pushboolean(luaVM, g_pGame->SetAmbientPedPopulationZoneState(label, state));
+    return 1;
 }
 
 int CLuaWorldDefs::GetTime(lua_State* luaVM)

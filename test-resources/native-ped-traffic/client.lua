@@ -1,5 +1,8 @@
 local enabled = false
 local debugEnabled = false
+local populationWorldReady = false
+local populationWorldRevision = 0
+local populationWorldPreset = "none"
 local assignments = {}
 local nativeEventProfiles = {}
 local avoidanceStates = {}
@@ -68,6 +71,78 @@ local function formatReasons(bucket)
     end
     table.sort(values)
     return #values > 0 and table.concat(values, ",") or "none"
+end
+
+local function isIntegerInRange(value, minimum, maximum)
+    return type(value) == "number" and value == value and value == math.floor(value) and value >= minimum and value <= maximum
+end
+
+local function validatePopulationWorldState(snapshot)
+    if type(snapshot) ~= "table" or snapshot.schema ~= 1 or snapshot.baseline ~= "stock-main-scm-bootstrap-601def3b" or
+        not isIntegerInRange(snapshot.revision, 1, 2147483647) or type(snapshot.preset) ~= "string" or
+        type(snapshot.capabilities) ~= "table" or snapshot.capabilities.zones ~= true or type(snapshot.zones) ~= "table" then
+        return false, "invalid-header"
+    end
+
+    for label, state in pairs(snapshot.zones) do
+        if type(label) ~= "string" or #label < 1 or #label > 7 or label:find("[^A-Z0-9]") or type(state) ~= "table" then
+            return false, "invalid-zone"
+        end
+        if state.populationType ~= nil and not isIntegerInRange(state.populationType, 0, 19) then
+            return false, "invalid-population-type"
+        end
+        if state.races ~= nil and not isIntegerInRange(state.races, 0, 15) then
+            return false, "invalid-races"
+        end
+        if state.dealerStrength ~= nil and not isIntegerInRange(state.dealerStrength, 0, 255) then
+            return false, "invalid-dealer-strength"
+        end
+        if state.noCops ~= nil and type(state.noCops) ~= "boolean" then
+            return false, "invalid-no-cops"
+        end
+        if state.gangStrengths ~= nil then
+            if type(state.gangStrengths) ~= "table" then
+                return false, "invalid-gang-strengths"
+            end
+            for index, strength in pairs(state.gangStrengths) do
+                if not isIntegerInRange(index, 1, 10) or not isIntegerInRange(strength, 0, 255) then
+                    return false, "invalid-gang-strength"
+                end
+            end
+        end
+    end
+    return true
+end
+
+local function applyPopulationWorldState(snapshot)
+    populationWorldReady = false
+    local valid, reason = validatePopulationWorldState(snapshot)
+    if not valid then
+        return false, reason
+    end
+    if type(resetAmbientPedPopulationZonesToBootstrap) ~= "function" or type(setAmbientPedPopulationZoneState) ~= "function" then
+        return false, "native-api-unavailable"
+    end
+    if not resetAmbientPedPopulationZonesToBootstrap() then
+        return false, "bootstrap-reset-failed"
+    end
+
+    local labels = {}
+    for label in pairs(snapshot.zones) do
+        labels[#labels + 1] = label
+    end
+    table.sort(labels)
+    for _, label in ipairs(labels) do
+        if not setAmbientPedPopulationZoneState(label, snapshot.zones[label]) then
+            resetAmbientPedPopulationZonesToBootstrap()
+            return false, "zone-apply-failed:" .. label
+        end
+    end
+
+    populationWorldRevision = snapshot.revision
+    populationWorldPreset = snapshot.preset
+    populationWorldReady = true
+    return true
 end
 
 local function clearTimer(task, name)
@@ -408,6 +483,18 @@ local function beginAssignment(task)
     installWander()
 end
 
+addEvent("pedTraffic:populationWorldState", true)
+addEventHandler("pedTraffic:populationWorldState", resourceRoot, function(snapshot)
+    local revision = type(snapshot) == "table" and snapshot.revision or false
+    local success, reason = applyPopulationWorldState(snapshot)
+    triggerServerEvent("pedTraffic:populationWorldApplied", resourceRoot, revision, {zones = success == true}, success, reason)
+    if success then
+        log(("population-world-applied revision=%d preset=%s"):format(populationWorldRevision, populationWorldPreset), 3)
+    else
+        log(("population-world-rejected revision=%s reason=%s"):format(tostring(revision), tostring(reason)), 2)
+    end
+end)
+
 addEvent("pedTraffic:setEnabled", true)
 addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValue)
     enabled = value == true
@@ -415,6 +502,7 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
     observedAimTargets = {}
     log("enabled=" .. tostring(enabled))
     if not enabled then
+        populationWorldReady = false
         airTestSessions = {}
         climbTestSessions = {}
         local current = {}
@@ -433,25 +521,57 @@ addEventHandler("pedTraffic:setDebug", resourceRoot, function(value)
 end)
 
 addEvent("pedTraffic:candidateRequest", true)
-addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId)
+addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId, worldRevision, populationClass, gang)
     local startedAt = getTickCount()
-    if not enabled or getElementDimension(localPlayer) ~= 0 or getElementInterior(localPlayer) ~= 0 or isPedDead(localPlayer) or
+    if not enabled or not populationWorldReady or worldRevision ~= populationWorldRevision or getElementDimension(localPlayer) ~= 0 or
+        getElementInterior(localPlayer) ~= 0 or isPedDead(localPlayer) or
         type(getAmbientPedSpawnCandidate) ~= "function" then
         stats.candidateMisses = stats.candidateMisses + 1
-        triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, false, getTickCount() - startedAt)
+        triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt, "world-not-ready")
+        return
+    end
+
+    if populationClass ~= "civilian" and populationClass ~= "gang" or
+        (populationClass == "gang" and (type(gang) ~= "number" or gang ~= math.floor(gang) or gang < 0 or gang > 7)) or
+        (populationClass == "civilian" and gang ~= false) then
+        stats.candidateMisses = stats.candidateMisses + 1
+        triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt,
+                           "invalid-population-hint")
         return
     end
 
     local x, y, z = getElementPosition(localPlayer)
-    local candidate, missReason = getAmbientPedSpawnCandidate(x, y, z)
+    local candidate, missReason = getAmbientPedSpawnCandidate(x, y, z, populationClass, populationClass == "gang" and gang or -1)
     if candidate then
         stats.candidateHits = stats.candidateHits + 1
     else
         stats.candidateMisses = stats.candidateMisses + 1
         countReason(stats.missReasons, missReason)
     end
-    triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, candidate or false, getTickCount() - startedAt, missReason)
+    if debugEnabled then
+        log(("candidate request=%d class=%s gang=%s result=%s model=%s elapsed=%d reason=%s"):format(
+                requestId, populationClass, tostring(gang), tostring(candidate ~= false and candidate ~= nil),
+                tostring(candidate and candidate.model), getTickCount() - startedAt, tostring(missReason)))
+    end
+    triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, candidate or false, getTickCount() - startedAt, missReason)
 end)
+
+setTimer(function()
+    if not enabled or not populationWorldReady then
+        return
+    end
+
+    if type(getAmbientPedPopulationProfile) ~= "function" then
+        triggerServerEvent("pedTraffic:populationProfile", resourceRoot, false)
+        return
+    end
+
+    local profile = getAmbientPedPopulationProfile()
+    if type(profile) == "table" then
+        profile.worldRevision = populationWorldRevision
+    end
+    triggerServerEvent("pedTraffic:populationProfile", resourceRoot, type(profile) == "table" and profile or false)
+end, 1000, 0)
 
 addEvent("pedTraffic:assign", true)
 addEventHandler("pedTraffic:assign", resourceRoot, function(ped, epoch, direction, reason, resumePhysical)
@@ -767,7 +887,7 @@ addEventHandler("onClientPreRender", root, function()
         end
     end
 
-    if enabled and getElementDimension(localPlayer) == 0 and getElementInterior(localPlayer) == 0 and
+    if enabled and populationWorldReady and getElementDimension(localPlayer) == 0 and getElementInterior(localPlayer) == 0 and
         type(updateAmbientPedPopulationModels) == "function" then
         local x, y, z = getElementPosition(localPlayer)
         updateAmbientPedPopulationModels(x, y, z)
@@ -906,8 +1026,9 @@ setTimer(function()
             if task.accepted then active = active + 1 end
         end
         for _ in pairs(nativeEventProfiles) do profiles = profiles + 1 end
-        log(("telemetry active=%d profiles=%d hits=%d misses=%d assignments=%d failures=%d missReasons=%s"):format(
-                active, profiles, stats.candidateHits, stats.candidateMisses, stats.assignments, stats.failures, formatReasons(stats.missReasons)))
+        log(("telemetry active=%d profiles=%d worldReady=%s preset=%s revision=%d hits=%d misses=%d assignments=%d failures=%d missReasons=%s"):format(
+                active, profiles, tostring(populationWorldReady), populationWorldPreset, populationWorldRevision, stats.candidateHits,
+                stats.candidateMisses, stats.assignments, stats.failures, formatReasons(stats.missReasons)))
     end
 end, 10000, 0)
 
@@ -929,10 +1050,10 @@ setTimer(function()
                                     (profileToken and "observer" or "missing")
             local threatRoot, threatLeaf = getThreatState(ped)
             local vehicleRoot, vehicleLeaf = getVehicleReactionState(ped)
-            log(("ped id=%d syncer=%s streamed=%s profile=%s avoid=%s threat=%s/%s vehicle=%s/%s nativeStyle=%s move=%s speed=%.5f velocity=(%.5f,%.5f,%.5f) pos=(%.2f,%.2f,%.2f)"):format(
-                    id, tostring(isElementSyncer(ped)), tostring(isElementStreamedIn(ped)), profileRole, tostring(getAvoidanceState(ped)),
-                    tostring(threatRoot), tostring(threatLeaf), tostring(vehicleRoot), tostring(vehicleLeaf), tostring(nativeStyle), tostring(moveState),
-                    horizontalSpeed, vx, vy, vz, x, y, z))
+            log(("ped id=%d model=%d syncer=%s streamed=%s profile=%s avoid=%s threat=%s/%s vehicle=%s/%s nativeStyle=%s move=%s speed=%.5f velocity=(%.5f,%.5f,%.5f) pos=(%.2f,%.2f,%.2f)"):format(
+                    id, getElementModel(ped), tostring(isElementSyncer(ped)), tostring(isElementStreamedIn(ped)), profileRole,
+                    tostring(getAvoidanceState(ped)), tostring(threatRoot), tostring(threatLeaf), tostring(vehicleRoot), tostring(vehicleLeaf),
+                    tostring(nativeStyle), tostring(moveState), horizontalSpeed, vx, vy, vz, x, y, z))
         end
     end
 end, 2000, 0)

@@ -139,17 +139,78 @@ struct SNativeWorldTransportFile
 
 struct SNativeWorldStartupAuthorization;
 
+enum class EAmbientPedPopulationClass : unsigned char
+{
+    Civilian,
+    Gang,
+};
+
+enum class EAmbientPedPopulationSelection : unsigned char
+{
+    Automatic,
+    Civilian,
+    Gang,
+};
+
+enum class EAmbientPedPopulationZoneField : unsigned int
+{
+    PopulationType = 1 << 0,
+    Races = 1 << 1,
+    DealerStrength = 1 << 2,
+    NoCops = 1 << 3,
+};
+
+struct SAmbientPedPopulationZoneState
+{
+    unsigned int   fields{};
+    unsigned short gangMask{};
+    unsigned char  populationType{};
+    unsigned char  races{};
+    unsigned char  dealerStrength{};
+    unsigned char  noCops{};
+    unsigned char  gangStrength[10]{};
+};
+static_assert(sizeof(SAmbientPedPopulationZoneState) == 20, "Ambient population zone state ABI changed");
+
+// Read directly from GTA's active popcycle state after Neon's reversible
+// vanilla zone bootstrap and authoritative campaign mutations have been
+// applied. supportedTarget names the civilian/gang subset implemented by the
+// current traffic checkpoint; target still reports all four vanilla classes.
+struct SAmbientPedPopulationProfile
+{
+    float         target{};
+    float         supportedTarget{};
+    float         civilianTarget{};
+    float         rawCopTarget{};
+    float         copTarget{};
+    float         gangTarget{};
+    float         dealerTarget{};
+    unsigned char zoneType{};
+    unsigned char timeIndex{};
+    unsigned char weekend{};
+    unsigned char dealerStrength{};
+    unsigned char raceFlags{};
+    unsigned char noCops{};
+    unsigned char gangWeights[10]{};
+};
+static_assert(sizeof(SAmbientPedPopulationProfile) == 44, "Ambient population profile ABI changed");
+
 // A read-only proposal produced by GTA's stock population rules. The caller
 // still owns the network element and its lifetime; Game SA never creates an
 // unmanaged ambient ped from this structure.
 struct SAmbientPedSpawnCandidate
 {
-    CVector       position{};
-    unsigned int  modelId{};
-    unsigned char pedType{};
-    unsigned char wanderDirection{};
-    float         pathLerp{};
+    CVector                    position{};
+    unsigned int               modelId{};
+    unsigned char              pedType{};
+    unsigned char              wanderDirection{};
+    float                      pathLerp{};
+    EAmbientPedPopulationClass populationClass{EAmbientPedPopulationClass::Civilian};
+    unsigned char              gangId{0xFF};
 };
+static_assert(sizeof(SAmbientPedSpawnCandidate) == 28, "Ambient population candidate ABI changed");
+static_assert(offsetof(SAmbientPedSpawnCandidate, pathLerp) == 20, "Ambient population candidate path ABI changed");
+static_assert(offsetof(SAmbientPedSpawnCandidate, populationClass) == 24, "Ambient population candidate class ABI changed");
 
 enum class EAmbientPedSpawnCandidateResult : unsigned char
 {
@@ -463,4 +524,9 @@ public:
     virtual void                            UpdateAmbientPedPopulationModels(const CVector& origin) = 0;
     virtual void                            ResetAmbientPedPopulationModels() = 0;
     virtual EAmbientPedSpawnCandidateResult GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate) = 0;
+    virtual bool                            GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profile) const = 0;
+    virtual bool                            ResetAmbientPedPopulationZonesToBootstrap() = 0;
+    virtual bool                            SetAmbientPedPopulationZoneState(const char* label, const SAmbientPedPopulationZoneState& state) = 0;
+    virtual EAmbientPedSpawnCandidateResult GetAmbientPedSpawnCandidateForPopulation(const CVector& origin, EAmbientPedPopulationSelection selection,
+                                                                                     unsigned char gangId, SAmbientPedSpawnCandidate& candidate) = 0;
 };
