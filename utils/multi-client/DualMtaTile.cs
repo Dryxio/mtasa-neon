@@ -33,6 +33,9 @@ public static class Program
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
 
     [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr window, int command);
 
     [DllImport("user32.dll")]
@@ -93,19 +96,31 @@ public static class Program
         int workHeight = workArea.Bottom - workArea.Top;
         int leftWidth = workWidth / 2;
         int rightWidth = workWidth - leftWidth;
-        // The development profiles use 1440x900 (16:10), which fills more of the
-        // tall Parallels desktop while still leaving two non-overlapping columns.
-        int height = Math.Min((int)Math.Round(leftWidth * 10.0 / 16.0), workHeight);
-        int y = workArea.Top + (workHeight - height) / 2;
+
+        // GTA owns the actual window size and rejects unsupported render modes.
+        // Preserve that size and only center each client in its half of the VM.
+        Rect primaryRect;
+        Rect secondaryRect;
+        if (!GetWindowRect(primary, out primaryRect) || !GetWindowRect(secondary, out secondaryRect))
+            return 4;
+
+        int primaryWidth = primaryRect.Right - primaryRect.Left;
+        int primaryHeight = primaryRect.Bottom - primaryRect.Top;
+        int secondaryWidth = secondaryRect.Right - secondaryRect.Left;
+        int secondaryHeight = secondaryRect.Bottom - secondaryRect.Top;
+        int primaryX = workArea.Left + Math.Max(0, (leftWidth - primaryWidth) / 2);
+        int secondaryX = workArea.Left + leftWidth + Math.Max(0, (rightWidth - secondaryWidth) / 2);
+        int primaryY = workArea.Top + Math.Max(0, (workHeight - primaryHeight) / 2);
+        int secondaryY = workArea.Top + Math.Max(0, (workHeight - secondaryHeight) / 2);
 
         ShowWindow(primary, 9);   // SW_RESTORE
         ShowWindow(secondary, 9); // SW_RESTORE
 
-        const uint showWindow = 0x0040; // SWP_SHOWWINDOW
-        if (!SetWindowPos(primary, IntPtr.Zero, workArea.Left, y, leftWidth, height, showWindow))
-            return 4;
-        if (!SetWindowPos(secondary, IntPtr.Zero, workArea.Left + leftWidth, y, rightWidth, height, showWindow))
+        const uint positionOnly = 0x0001 | 0x0004 | 0x0040; // SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW
+        if (!SetWindowPos(primary, IntPtr.Zero, primaryX, primaryY, 0, 0, positionOnly))
             return 5;
+        if (!SetWindowPos(secondary, IntPtr.Zero, secondaryX, secondaryY, 0, 0, positionOnly))
+            return 6;
 
         return 0;
     }
