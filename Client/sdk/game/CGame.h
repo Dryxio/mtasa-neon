@@ -85,6 +85,29 @@ typedef bool(PreWeaponFireHandler)(class CPlayerPed* pPlayer, bool bStopIfUsingB
 typedef void(PostWeaponFireHandler)();
 typedef void(TaskSimpleBeHitHandler)(class CPedSAInterface* pPedAttacker, ePedPieceTypes hitBodyPart, int hitBodySide, int weaponId);
 
+// Captured immediately after GTA's stock group decision maker has selected a
+// response. Ped pointers are only for in-process MTA identity resolution;
+// diagnostic consumers must persist the stable fields below, never addresses.
+struct SNativeAIGroupDecision
+{
+    class CPed*  representative{};
+    class CPed*  sourcePed{};
+    unsigned int nativeGroupId{0xFFFFFFFFU};
+    int          eventType{-1};
+    int          eventSourceType{-1};
+    int          taskType{-1};
+    unsigned int representativeModel{};
+    int          representativePedType{-1};
+    unsigned int sourceModel{};
+    int          sourcePedType{-1};
+    bool         sourceIsPed{};
+    bool         sourceIsPlayer{};
+    bool         threatened{};
+    bool         friendly{};
+};
+
+typedef void(NativeAIGroupDecisionHandler)(const SNativeAIGroupDecision& decision);
+
 enum eGameVersion
 {
     VERSION_ALL = 0,
@@ -205,12 +228,76 @@ struct SAmbientPedSpawnCandidate
     unsigned char              pedType{};
     unsigned char              wanderDirection{};
     float                      pathLerp{};
+    float                      headingDegrees{};
     EAmbientPedPopulationClass populationClass{EAmbientPedPopulationClass::Civilian};
     unsigned char              gangId{0xFF};
 };
-static_assert(sizeof(SAmbientPedSpawnCandidate) == 28, "Ambient population candidate ABI changed");
+static_assert(sizeof(SAmbientPedSpawnCandidate) == 32, "Ambient population candidate ABI changed");
 static_assert(offsetof(SAmbientPedSpawnCandidate, pathLerp) == 20, "Ambient population candidate path ABI changed");
-static_assert(offsetof(SAmbientPedSpawnCandidate, populationClass) == 24, "Ambient population candidate class ABI changed");
+static_assert(offsetof(SAmbientPedSpawnCandidate, populationClass) == 28, "Ambient population candidate class ABI changed");
+
+constexpr std::size_t AMBIENT_PED_GROUP_MAX_MEMBERS = 5;
+
+enum class EAmbientPedNativeGroupDiagnosticStatus : unsigned char
+{
+    Active,
+    ResourceLeaseMissing,
+    ResourceElementMissing,
+    ResourceElementNotPed,
+    ResourcePedNotSyncing,
+    ResourceGamePedMissing,
+    GameLeaseMissing,
+    MemberCountMismatch,
+    SlotInactive,
+    LeaseMemberMismatch,
+    MemberFlagMissing,
+    MemberDetached,
+    NoTrackedMember,
+};
+
+struct SAmbientPedNativeGroupMemberDiagnostic
+{
+    bool          resourceElementPresent{};
+    bool          resourceElementIsPed{};
+    bool          resourcePedSyncing{};
+    bool          gamePedPresent{};
+    bool          leaseMemberMatches{};
+    bool          nativeAmbientGroupFlag{};
+    bool          attachedToExpectedGroup{};
+    std::uint32_t gamePedAddress{};
+    std::uint32_t expectedGamePedAddress{};
+    std::uint32_t primaryTaskAddress{};
+    std::uint32_t expectedPrimaryTaskAddress{};
+    std::uint32_t defaultTaskAddress{};
+    std::uint32_t expectedDefaultTaskAddress{};
+    int           primaryTaskType{-1};
+    int           defaultTaskType{-1};
+};
+
+// This snapshot is intentionally pull-only: diagnostics can inspect a failed
+// lease without adding a per-frame logging path to ambient traffic.
+struct SAmbientPedNativeGroupDiagnostic
+{
+    EAmbientPedNativeGroupDiagnosticStatus status{EAmbientPedNativeGroupDiagnosticStatus::ResourceLeaseMissing};
+    bool                                   active{};
+    bool                                   resourceLeasePresent{};
+    bool                                   gameLeasePresent{};
+    bool                                   memberCountMatches{};
+    bool                                   slotActive{};
+    bool                                   hasTrackedMember{};
+    unsigned int                           nativeGroupId{};
+    unsigned char                          memberCount{};
+    SAmbientPedNativeGroupMemberDiagnostic members[AMBIENT_PED_GROUP_MAX_MEMBERS]{};
+};
+
+// PlaceRandomGroup normally creates local CPeds. Neon only asks GTA for the
+// placement/model proposal, then lets the server create the network elements.
+struct SAmbientPedGroupSpawnCandidate
+{
+    SAmbientPedSpawnCandidate members[AMBIENT_PED_GROUP_MAX_MEMBERS]{};
+    unsigned char             count{};
+};
+static_assert(sizeof(SAmbientPedGroupSpawnCandidate) == 164, "Ambient population group candidate ABI changed");
 
 enum class EAmbientPedSpawnCandidateResult : unsigned char
 {
@@ -529,4 +616,16 @@ public:
     virtual bool                            SetAmbientPedPopulationZoneState(const char* label, const SAmbientPedPopulationZoneState& state) = 0;
     virtual EAmbientPedSpawnCandidateResult GetAmbientPedSpawnCandidateForPopulation(const CVector& origin, EAmbientPedPopulationSelection selection,
                                                                                      unsigned char gangId, SAmbientPedSpawnCandidate& candidate) = 0;
+    virtual EAmbientPedSpawnCandidateResult GetAmbientPedGangGroupCandidate(const CVector& origin, unsigned char gangId, unsigned char maxMembers,
+                                                                            SAmbientPedGroupSpawnCandidate& candidate) = 0;
+    virtual bool                            AcquireAmbientPedNativeGroup(CPed* const* members, unsigned char count, unsigned int& nativeGroupId) = 0;
+    virtual bool                            ReleaseAmbientPedNativeGroup(unsigned int nativeGroupId, CPed* const* members, unsigned char count) = 0;
+    virtual bool                            IsAmbientPedNativeGroupActive(unsigned int nativeGroupId, CPed* const* members, unsigned char count) const = 0;
+    virtual void                            GetAmbientPedNativeGroupDiagnostic(unsigned int nativeGroupId, CPed* const* members, unsigned char count,
+                                                                               SAmbientPedNativeGroupDiagnostic& diagnostic) const = 0;
+    // Append-only diagnostic ABI: keep these at the end so enabling telemetry
+    // does not move any established CGame virtual slot.
+    virtual void SetNativeAIGroupDecisionHandler(NativeAIGroupDecisionHandler* pHandler) = 0;
+    virtual bool HasNativeAIGroupDecisionHandler() const noexcept = 0;
+    virtual void ReportNativeAIGroupDecision(const SNativeAIGroupDecision& decision) const = 0;
 };

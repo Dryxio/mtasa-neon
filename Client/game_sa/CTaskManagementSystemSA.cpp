@@ -216,6 +216,18 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_SIMPLE_ANIM:
             pTaskSA = new CTaskSimpleRunAnimSA;
             break;
+        case TASK_SIMPLE_HANDSIGNAL_ANIM:
+            // PlayHandSignalAnim derives from GTA's verified SimpleAnim
+            // prefix. Exposing only that prefix lets observers mirror its
+            // live body animation without creating hands or group AI.
+            pTaskSA = new CTaskSimpleAnimSA;
+            break;
+        case TASK_COMPLEX_HANDSIGNAL_ANIM:
+            // The partial-animation slot stores the complex root. A generic
+            // complex wrapper is sufficient to traverse to the verified
+            // SimpleAnim leaf without exposing or constructing group logic.
+            pTaskSA = new CTaskComplexSA;
+            break;
         case TASK_SIMPLE_CHAT:
             // Chat is a timed run-animation task. Keeping its concrete wrapper
             // exposes GTA's live association to presentation-only observers.

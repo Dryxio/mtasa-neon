@@ -74,6 +74,8 @@ private:
     CPedDamageResponse*      m_pDamageResponse;
     bool                     m_bDestroyInterface;
     EDamageReasonType        m_DamageReason;
+    int                      m_iDamageFactor{-1};
+    bool                     m_bNativeDamageAttempt{};
 
 public:
     CEventDamageSA(CEntity* pEntity, unsigned int i_1, eWeaponType weaponType, ePedPieceTypes hitZone, unsigned char uc_2, bool b_3, bool b_4);
@@ -108,4 +110,8 @@ public:
     bool              AffectsPed(CPed* pPed);
     void              SetDamageReason(EDamageReasonType damageReason) { m_DamageReason = damageReason; }
     EDamageReasonType GetDamageReason() { return m_DamageReason; }
+    int               GetDamageFactor() const override { return m_iDamageFactor; }
+    void              SetDamageFactor(int damageFactor) override { m_iDamageFactor = damageFactor; }
+    bool              IsNativeDamageAttempt() const override { return m_bNativeDamageAttempt; }
+    void              SetNativeDamageAttempt(bool nativeDamageAttempt) override { m_bNativeDamageAttempt = nativeDamageAttempt; }
 };

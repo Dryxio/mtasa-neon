@@ -468,6 +468,7 @@ public:
     bool IsNativeEventProfileActive(const CResource* owner, unsigned int token, ePedNativeEventProfile profile) const;
     bool AddNativeGunAimedAtEvent(CClientPed* aimingPed);
     bool AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone);
+    bool AddNativeDamageEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction);
     bool IsStoryProtected() const noexcept { return m_bStoryProtected; }
     bool SetStoryProtected(bool enabled);
     bool GetSuffersCriticalHits() const noexcept { return m_suffersCriticalHits.value_or(true); }
@@ -681,6 +682,9 @@ protected:
     void ApplySuffersCriticalHitsState();
     void ApplyStayInSamePlaceState();
     void ApplyNeverTargetedState();
+    void ArmRemoteStreamInTransformFence();
+    void UpdateRemoteStreamInTransformFence();
+    void ClearRemoteStreamInTransformFence(const char* reason);
 
     void ModelRequestCallback(CModelInfo* pModelInfo);
 
@@ -850,6 +854,12 @@ public:
     bool                                     m_bPendingRebuildPlayer;
     uint                                     m_uiFrameLastRebuildPlayer;
     bool                                     m_bIsSyncing;
+    CMatrix                                  m_remoteStreamInFenceMatrix;
+    float                                    m_remoteStreamInFenceCurrentRotation{};
+    float                                    m_remoteStreamInFenceTargetRotation{};
+    unsigned long                            m_remoteStreamInFenceStartedAt{};
+    bool                                     m_remoteStreamInFenceActive{};
+    bool                                     m_remoteStreamInFencePreviousStaticWaitingForCollision{};
     SNativeTaskLocomotionSync                m_nativeTaskLocomotionPresentation;
     CControllerState                         m_nativeTaskLocomotionBaseControllerState;
     unsigned long                            m_nativeTaskLocomotionPresentationReceivedAt{};
@@ -867,6 +877,7 @@ public:
     CTaskSAInterface*                        m_nativeTaskWeaponPresentationPreviousAttackTask{};
     std::optional<unsigned char>             m_nativeTaskWeaponPresentationPreviousShootingRate;
     SNativeTaskAnimationPresentationSync     m_nativeTaskAnimationPresentation;
+    std::unique_ptr<CAnimBlock>              m_nativeTaskAnimationPresentationBlock;
     unsigned long                            m_nativeTaskAnimationPresentationReceivedAt{};
     unsigned short                           m_nativeTaskAnimationPresentationAppliedGroup{};
     unsigned short                           m_nativeTaskAnimationPresentationAppliedAnimId{};

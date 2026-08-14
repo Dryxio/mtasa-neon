@@ -120,6 +120,9 @@ class CTaskSimpleAnimSA : public virtual CTaskSimpleSA, public virtual CTaskSimp
 {
 public:
     CTaskSimpleAnimSA() {};
+
+    void GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept override;
+    bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
 };
 
 class CTaskSimpleRunAnimSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleRunAnim
@@ -129,6 +132,7 @@ public:
     CTaskSimpleRunAnimSA(const AssocGroupId animGroup, const AnimationId animID, const float fBlendDelta, const int iTaskType, const char* pTaskName,
                          const bool bHoldLastFrame = false);
 
+    void GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept override;
     bool GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed, float& fBlendAmount) const override;
 };
 

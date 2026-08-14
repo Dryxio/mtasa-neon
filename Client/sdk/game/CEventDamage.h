@@ -61,4 +61,17 @@ public:
 
     virtual void              SetDamageReason(EDamageReasonType damageReason) = 0;
     virtual EDamageReasonType GetDamageReason() = 0;
+
+    // Raw factor passed to CWeapon::GenerateDamageEvent before GTA applies
+    // victim stats, armour and damage modifiers. A negative value means the
+    // event did not originate from that weapon pipeline. Keep new metadata
+    // accessors at the vtable tail for cross-module ABI stability.
+    virtual int  GetDamageFactor() const = 0;
+    virtual void SetDamageFactor(int damageFactor) = 0;
+
+    // True only for the first MTA wrapper associated with the original event
+    // created by CWeapon::GenerateDamageEvent. Later AffectsPed passes and GTA
+    // clones retain the factor but must not emit another network observation.
+    virtual bool IsNativeDamageAttempt() const = 0;
+    virtual void SetNativeDamageAttempt(bool nativeDamageAttempt) = 0;
 };

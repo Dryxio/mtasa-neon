@@ -309,11 +309,19 @@ public:
     void SetPreWeaponFireHandler(PreWeaponFireHandler* pPreWeaponFireHandler) { m_pPreWeaponFireHandler = pPreWeaponFireHandler; }
     void SetPostWeaponFireHandler(PostWeaponFireHandler* pPostWeaponFireHandler) { m_pPostWeaponFireHandler = pPostWeaponFireHandler; }
     void SetTaskSimpleBeHitHandler(TaskSimpleBeHitHandler* pTaskSimpleBeHitHandler) { m_pTaskSimpleBeHitHandler = pTaskSimpleBeHitHandler; }
+    void SetNativeAIGroupDecisionHandler(NativeAIGroupDecisionHandler* pHandler) override { m_pNativeAIGroupDecisionHandler = pHandler; }
+    bool HasNativeAIGroupDecisionHandler() const noexcept override { return m_pNativeAIGroupDecisionHandler != nullptr; }
+    void ReportNativeAIGroupDecision(const SNativeAIGroupDecision& decision) const override
+    {
+        if (m_pNativeAIGroupDecisionHandler)
+            m_pNativeAIGroupDecisionHandler(decision);
+    }
     CAnimBlendClumpDataSAInterface** GetClumpData(RpClump* clump) { return RWPLUGINOFFSET(CAnimBlendClumpDataSAInterface*, clump, ClumpOffset); }
 
-    PreWeaponFireHandler*   m_pPreWeaponFireHandler;
-    PostWeaponFireHandler*  m_pPostWeaponFireHandler;
-    TaskSimpleBeHitHandler* m_pTaskSimpleBeHitHandler;
+    PreWeaponFireHandler*         m_pPreWeaponFireHandler;
+    PostWeaponFireHandler*        m_pPostWeaponFireHandler;
+    TaskSimpleBeHitHandler*       m_pTaskSimpleBeHitHandler;
+    NativeAIGroupDecisionHandler* m_pNativeAIGroupDecisionHandler{};
 
     void RemoveGameWorld();
     void RestoreGameWorld();
@@ -362,44 +370,60 @@ public:
     bool                                  GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profile) const override;
     bool                                  ResetAmbientPedPopulationZonesToBootstrap() override;
     bool                                  SetAmbientPedPopulationZoneState(const char* label, const SAmbientPedPopulationZoneState& state) override;
+    EAmbientPedSpawnCandidateResult       GetAmbientPedGangGroupCandidate(const CVector& origin, unsigned char gangId, unsigned char maxMembers,
+                                                                          SAmbientPedGroupSpawnCandidate& candidate) override;
+    bool                                  AcquireAmbientPedNativeGroup(CPed* const* members, unsigned char count, unsigned int& nativeGroupId) override;
+    bool                                  ReleaseAmbientPedNativeGroup(unsigned int nativeGroupId, CPed* const* members, unsigned char count) override;
+    bool                                  IsAmbientPedNativeGroupActive(unsigned int nativeGroupId, CPed* const* members, unsigned char count) const override;
+    void                                  GetAmbientPedNativeGroupDiagnostic(unsigned int nativeGroupId, CPed* const* members, unsigned char count,
+                                                                             SAmbientPedNativeGroupDiagnostic& diagnostic) const override;
 
 private:
-    std::unique_ptr<CPools>           m_Pools;
-    CPlayerInfo*                      m_pPlayerInfo;
-    CProjectileInfo*                  m_pProjectileInfo;
-    CRadar*                           m_pRadar;
-    CClock*                           m_pClock;
-    CCoronas*                         m_pCoronas;
-    CCheckpoints*                     m_pCheckpoints;
-    CEventList*                       m_pEventList;
-    CFireManager*                     m_pFireManager;
-    CGarages*                         m_pGarages;
-    CHud*                             m_pHud;
-    CWeather*                         m_pWeather;
-    CWorld*                           m_pWorld;
-    CCamera*                          m_pCamera;
-    CModelInfo*                       m_pModelInfo;
-    CPickups*                         m_pPickups;
-    CWeaponInfo*                      m_pWeaponInfo;
-    CExplosionManager*                m_pExplosionManager;
-    C3DMarkers*                       m_p3DMarkers;
-    CRenderWareSA*                    m_pRenderWare;
-    std::unique_ptr<CHandlingManager> m_HandlingManager;
-    CAnimManager*                     m_pAnimManager;
-    CStreaming*                       m_pStreaming;
-    CVisibilityPlugins*               m_pVisibilityPlugins;
-    CKeyGen*                          m_pKeyGen;
-    CRopes*                           m_pRopes;
-    CFx*                              m_pFx;
-    CFxManagerSA*                     m_pFxManager;
-    CWaterManager*                    m_pWaterManager;
-    CWeaponStatManager*               m_pWeaponStatsManager;
-    CPointLights*                     m_pPointLights;
-    CColStore*                        m_collisionStore;
-    CObjectGroupPhysicalProperties*   m_pObjectGroupPhysicalProperties;
-    CCoverManagerSA*                  m_pCoverManager;
-    CPlantManagerSA*                  m_pPlantManager;
-    CBuildingRemoval*                 m_pBuildingRemoval;
+    struct SAmbientPedNativeGroupLease
+    {
+        unsigned char                                    count{};
+        std::array<CPed*, AMBIENT_PED_GROUP_MAX_MEMBERS> members{};
+        std::array<void*, AMBIENT_PED_GROUP_MAX_MEMBERS> defaultTasks{};
+        std::array<void*, AMBIENT_PED_GROUP_MAX_MEMBERS> primaryTasks{};
+    };
+
+    std::unordered_map<unsigned int, SAmbientPedNativeGroupLease> m_ambientPedNativeGroupLeases;
+    std::unique_ptr<CPools>                                       m_Pools;
+    CPlayerInfo*                                                  m_pPlayerInfo;
+    CProjectileInfo*                                              m_pProjectileInfo;
+    CRadar*                                                       m_pRadar;
+    CClock*                                                       m_pClock;
+    CCoronas*                                                     m_pCoronas;
+    CCheckpoints*                                                 m_pCheckpoints;
+    CEventList*                                                   m_pEventList;
+    CFireManager*                                                 m_pFireManager;
+    CGarages*                                                     m_pGarages;
+    CHud*                                                         m_pHud;
+    CWeather*                                                     m_pWeather;
+    CWorld*                                                       m_pWorld;
+    CCamera*                                                      m_pCamera;
+    CModelInfo*                                                   m_pModelInfo;
+    CPickups*                                                     m_pPickups;
+    CWeaponInfo*                                                  m_pWeaponInfo;
+    CExplosionManager*                                            m_pExplosionManager;
+    C3DMarkers*                                                   m_p3DMarkers;
+    CRenderWareSA*                                                m_pRenderWare;
+    std::unique_ptr<CHandlingManager>                             m_HandlingManager;
+    CAnimManager*                                                 m_pAnimManager;
+    CStreaming*                                                   m_pStreaming;
+    CVisibilityPlugins*                                           m_pVisibilityPlugins;
+    CKeyGen*                                                      m_pKeyGen;
+    CRopes*                                                       m_pRopes;
+    CFx*                                                          m_pFx;
+    CFxManagerSA*                                                 m_pFxManager;
+    CWaterManager*                                                m_pWaterManager;
+    CWeaponStatManager*                                           m_pWeaponStatsManager;
+    CPointLights*                                                 m_pPointLights;
+    CColStore*                                                    m_collisionStore;
+    CObjectGroupPhysicalProperties*                               m_pObjectGroupPhysicalProperties;
+    CCoverManagerSA*                                              m_pCoverManager;
+    CPlantManagerSA*                                              m_pPlantManager;
+    CBuildingRemoval*                                             m_pBuildingRemoval;
 
     std::unique_ptr<CVehicleAudioSettingsManagerSA> m_pVehicleAudioSettingsManager;
 

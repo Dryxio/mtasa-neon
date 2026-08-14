@@ -16,6 +16,10 @@
 #include <game/CPedDamageResponse.h>
 #include <game/CEventList.h>
 #include <game/CEventDamage.h>
+#include <game/CPedIntelligence.h>
+#include <game/CTaskManager.h>
+#include <game/Task.h>
+#include <game/TaskTypes.h>
 #include "../game_sa/CPedModelInfoSA.h"
 
 class CEventDamageSAInterface;
@@ -70,6 +74,7 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define HOOKPOS_CCam_ProcessFixed                                0x51D470
 #define HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon      0x6859a0
 #define HOOKPOS_CPed_IsPlayer                                    0x5DF8F0
+#define HOOKPOS_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim      0x66D9D8
 #define HOOKPOS_CTaskSimpleJump_Launch_PlayerStats               0x679C11
 #define HOOKPOS_CTaskSimpleJump_StartAnim_PlayerStats            0x67D921
 #define HOOKPOS_CPed_KillPedWithCar                              0x5F0360
@@ -77,11 +82,25 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define CALL_CEventGroup_Add_ComputeInformRespectedFriends       0x4AB46C
 #define CALL_CEventGroup_Add_ComputeLookAt                       0x4AB480
 #define CALL_CEventGroup_Add_ComputeResponseTaskType             0x4AB491
+#define CALL_CEventEditableResponse_GroupSourceA                 0x4B5801
+#define CALL_CEventEditableResponse_GroupSourceB                 0x4B5883
+#define CALL_CEventEditableResponse_InformGroupQueueAdd          0x4B7E1E
+#define CALL_CPedGroupIntelligence_AddEvent_ComputeGroupResponse 0x5F74E2
 #define CALL_CEventScanner_AddInAirEvent                         0x607F0D
 #define CALL_CEventScanner_AddBuildingCollisionEvent             0x605145
+#define VTBL_CTaskComplexGangLeader_ScanForStuff                 0x86F928
+#define FUNC_CTaskComplexGangLeader_ScanForStuff                 0x65E200
 #define FUNC_CEventEditableResponse_ComputeResponseTaskType      0x4B56C0
+#define FUNC_CEventEditableResponse_ComputeGroupResponseTaskType 0x4B57A0
 #define FUNC_CEventEditableResponse_ComputeResponseTaskOfType    0x4B5730
+#define FUNC_CEventSource_ComputeEventSourceType                 0x4ABAC0
+#define FUNC_CEventGroupEvent_Constructor                        0x4ADFD0
+#define FUNC_CEventGroupEvent_Destructor                         0x4AE070
+#define FUNC_CInformGroupEventQueue_Add                          0x4B7CD0
+#define FUNC_CPedGroupIntelligence_AddEvent                      0x5F7470
+#define FUNC_CPedGroups_GetPedsGroup                             0x5F7E80
 #define FUNC_CPedType_GetPedTypeAcquaintances                    0x6089B0
+#define FUNC_CPed_SetMoveAnim                                    0x5E4A00
 #define RETURN_CEventDamage_ComputeDamageAnim_Floor_IsPlayer     0x4B415F
 #define RETURN_CEventDamage_ComputeDamageAnim_Pistol_IsPlayer    0x4B41D8
 #define RETURN_CEventDamage_ComputeDamageAnim_Heavy_IsPlayer     0x4B41F3
@@ -148,6 +167,19 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define RETURN_CTaskSimpleFight_ProcessPed_ChainA_IsPlayer       0x629FAB
 #define RETURN_CTaskSimpleFight_ProcessPed_ChainB_IsPlayer       0x629FD7
 #define RETURN_CTaskSimpleFight_ProcessPed_Heading_IsPlayer      0x62A035
+#define RETURN_CEventDamage_AffectsPed_GroupSource_IsPlayer      0x4B3854
+#define RETURN_CPedGroupMembership_AddMember_IsPlayer            0x5F6B25
+#define RETURN_CPedGroupMembership_RemoveMember_IsPlayer         0x5F80F1
+#define RETURN_CPedGroupMembership_Process_IsPlayer              0x5FBA84
+#define RETURN_CEventEditableResponse_GroupLeaderA_IsPlayer      0x4B57D8
+#define RETURN_CEventEditableResponse_GroupLeaderB_IsPlayer      0x4B5874
+#define RETURN_CTaskAllocatorKillThreats_Closest_IsPlayer        0x69C8C6
+#define RETURN_CTaskAllocatorKillThreats_Group_IsPlayer          0x69D24C
+#define RETURN_CTaskAllocatorKillThreats_Ped_IsPlayer            0x69D30C
+#define RETURN_CTaskAllocatorKillThreatsRandom_Group_IsPlayer    0x69D54F
+#define RETURN_CTaskAllocatorKillThreatsRandom_Ped_IsPlayer      0x69D6D4
+#define RETURN_CTaskSimpleGoToPoint_ProcessPed_IsPlayer          0x66D897
+DWORD         RETURN_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim = 0x66D9DF;
 constexpr int EVENT_TYPE_BUILDING_COLLISION = 6;
 constexpr int EVENT_TYPE_DAMAGE = 9;
 constexpr int EVENT_TYPE_POTENTIAL_GET_RUN_OVER = 12;
@@ -617,11 +649,16 @@ void             HOOK_CCam_ProcessFixed();
 void             HOOK_Render3DStuff();
 void             HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon();
 void             HOOK_CPed_IsPlayer();
+void             HOOK_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim();
 void             HOOK_CTaskSimpleJump_Launch_PlayerStats();
 void             HOOK_CTaskSimpleJump_StartAnim_PlayerStats();
 void             HOOK_CPed_KillPedWithCar();
 bool __fastcall  HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, void*, CPedSAInterface* ped, int taskType);
 void __fastcall  HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*, CPedSAInterface* ped, bool decisionMakerTypeInGroup);
+int __cdecl      HOOK_CEventEditableResponse_GroupSource(void* event, CPedSAInterface* ped);
+void __fastcall  HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse(void* event, void*, void* group);
+bool __cdecl     HOOK_CInformGroupEventQueue_Add(CPedSAInterface* ped, void* group, void* event);
+void __fastcall  HOOK_CTaskComplexGangLeader_ScanForStuff(void* task, void*, CPedSAInterface* ped);
 void* __fastcall HOOK_CEventScanner_AddInAirEvent(void* eventGroup, void*, void* event, bool valid);
 void* __fastcall HOOK_CEventScanner_AddBuildingCollisionEvent(void* eventGroup, void*, void* event, bool valid);
 void             HOOK_CTrain_ProcessControl_Derail();
@@ -835,6 +872,7 @@ void CMultiplayerSA::InitHooks()
     HookInstall(HOOKPOS_CCam_ProcessFixed, (DWORD)HOOK_CCam_ProcessFixed, 5);
     HookInstall(HOOKPOS_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon, (DWORD)HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon, 7);
     HookInstall(HOOKPOS_CPed_IsPlayer, (DWORD)HOOK_CPed_IsPlayer, 6);
+    HookInstall(HOOKPOS_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim, (DWORD)HOOK_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim, 7);
     HookInstall(HOOKPOS_CTaskSimpleJump_Launch_PlayerStats, (DWORD)HOOK_CTaskSimpleJump_Launch_PlayerStats, 6);
     HookInstall(HOOKPOS_CTaskSimpleJump_StartAnim_PlayerStats, (DWORD)HOOK_CTaskSimpleJump_StartAnim_PlayerStats, 6);
     HookInstall(HOOKPOS_CPed_KillPedWithCar, (DWORD)HOOK_CPed_KillPedWithCar, 8);
@@ -842,6 +880,11 @@ void CMultiplayerSA::InitHooks()
     HookInstallCall(CALL_CEventGroup_Add_ComputeInformRespectedFriends, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
     HookInstallCall(CALL_CEventGroup_Add_ComputeLookAt, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
     HookInstallCall(CALL_CEventGroup_Add_ComputeResponseTaskType, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskType);
+    HookInstallCall(CALL_CEventEditableResponse_GroupSourceA, (DWORD)HOOK_CEventEditableResponse_GroupSource);
+    HookInstallCall(CALL_CEventEditableResponse_GroupSourceB, (DWORD)HOOK_CEventEditableResponse_GroupSource);
+    HookInstallCall(CALL_CPedGroupIntelligence_AddEvent_ComputeGroupResponse, (DWORD)HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse);
+    HookInstallCall(CALL_CEventEditableResponse_InformGroupQueueAdd, (DWORD)HOOK_CInformGroupEventQueue_Add);
+    MemPut<DWORD>(VTBL_CTaskComplexGangLeader_ScanForStuff, (DWORD)HOOK_CTaskComplexGangLeader_ScanForStuff);
     HookInstallCall(CALL_CEventScanner_AddInAirEvent, (DWORD)HOOK_CEventScanner_AddInAirEvent);
     HookInstallCall(CALL_CEventScanner_AddBuildingCollisionEvent, (DWORD)HOOK_CEventScanner_AddBuildingCollisionEvent);
     HookInstall(HOOKPOS_CTrain_ProcessControl_Derail, (DWORD)HOOK_CTrain_ProcessControl_Derail, 6);
@@ -3885,6 +3928,8 @@ static bool IsNativeAmbientWanderEventProfileActive(CPedSAInterface* pedInterfac
     return pPed && pPed->IsNativeAmbientWanderEventProfileActive();
 }
 
+static bool IsNativeAmbientGroupMember(CPedSAInterface* pedInterface);
+
 static bool IsNativeTaskAirbornePresentationObserver(CPedSAInterface* pedInterface)
 {
     CPed* pPed = GetPedFromInterface(pedInterface);
@@ -3962,6 +4007,195 @@ private:
     CPedAcquaintanceSAInterface m_PreviousAcquaintance{};
     bool                        m_bApplied{};
 };
+
+namespace
+{
+    // The two audited calls at 0x4B5801/0x4B5883 are inside the stock 1.0 US
+    // group overload. Keep their exact result scoped to that synchronous call
+    // so diagnostics describe the decision GTA made, not a later inference.
+    struct SNativeAIGroupDecisionCapture
+    {
+        CPedSAInterface* representative{};
+        int              eventSourceType{-1};
+        unsigned int     representativeModel{};
+        int              representativePedType{-1};
+    };
+
+    thread_local SNativeAIGroupDecisionCapture* g_pNativeAIGroupDecisionCapture{};
+}
+
+int __cdecl HOOK_CEventEditableResponse_GroupSource(void* event, CPedSAInterface* ped)
+{
+    const bool                     useAmbientGroupIdentity = ped && IsNativeAmbientGroupMember(ped);
+    CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientGroupIdentity);
+    const int                      sourceType = reinterpret_cast<int(__cdecl*)(void*, CPedSAInterface*)>(FUNC_CEventSource_ComputeEventSourceType)(event, ped);
+    if (g_pNativeAIGroupDecisionCapture)
+    {
+        g_pNativeAIGroupDecisionCapture->representative = ped;
+        g_pNativeAIGroupDecisionCapture->eventSourceType = sourceType;
+        g_pNativeAIGroupDecisionCapture->representativeModel = ped ? ped->m_nModelIndex : 0;
+        g_pNativeAIGroupDecisionCapture->representativePedType = ped ? ped->bPedType : -1;
+    }
+    return sourceType;
+}
+
+void __fastcall HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse(void* event, void*, void* group)
+{
+    using ComputeGroupResponse = void(__thiscall*)(void*, void*);
+    constexpr std::uintptr_t GTA_PED_GROUPS = 0xC09920;
+    constexpr std::size_t    PED_GROUP_SIZE = 0x2D4;
+    constexpr unsigned int   PED_GROUP_COUNT = 8;
+    constexpr std::size_t    EVENT_TASK_TYPE_OFFSET = 0x0E;
+
+    if (!pGameInterface || !pGameInterface->HasNativeAIGroupDecisionHandler())
+    {
+        reinterpret_cast<ComputeGroupResponse>(FUNC_CEventEditableResponse_ComputeGroupResponseTaskType)(event, group);
+        return;
+    }
+
+    SNativeAIGroupDecisionCapture  capture;
+    SNativeAIGroupDecisionCapture* previousCapture = g_pNativeAIGroupDecisionCapture;
+    g_pNativeAIGroupDecisionCapture = &capture;
+    reinterpret_cast<ComputeGroupResponse>(FUNC_CEventEditableResponse_ComputeGroupResponseTaskType)(event, group);
+    g_pNativeAIGroupDecisionCapture = previousCapture;
+
+    if (!event || !capture.representative)
+        return;
+
+    auto* vtable = *static_cast<DWORD**>(event);
+    if (!vtable)
+        return;
+
+    using GetEventType = int(__thiscall*)(void*);
+    using GetSourceEntity = CEntitySAInterface*(__thiscall*)(void*);
+    CEntitySAInterface* sourceInterface = reinterpret_cast<GetSourceEntity>(vtable[10])(event);
+    CPed*               sourcePed{};
+    CPedSAInterface*    sourcePedInterface{};
+    if (sourceInterface)
+    {
+        auto* sourceClientEntity = pGameInterface->GetPools()->GetPed(reinterpret_cast<DWORD*>(sourceInterface));
+        if (sourceClientEntity)
+        {
+            sourcePed = sourceClientEntity->pEntity;
+            sourcePedInterface = static_cast<CPedSAInterface*>(sourceInterface);
+        }
+    }
+
+    SNativeAIGroupDecision decision;
+    decision.representative = GetPedFromInterface(capture.representative);
+    decision.sourcePed = sourcePed;
+    decision.eventType = reinterpret_cast<GetEventType>(vtable[1])(event);
+    decision.eventSourceType = capture.eventSourceType;
+    decision.taskType = *reinterpret_cast<const std::int16_t*>(static_cast<const unsigned char*>(event) + EVENT_TASK_TYPE_OFFSET);
+    decision.representativeModel = capture.representativeModel;
+    decision.representativePedType = capture.representativePedType;
+    decision.sourceIsPed = sourcePedInterface != nullptr;
+    if (sourcePedInterface)
+    {
+        decision.sourceModel = sourcePedInterface->m_nModelIndex;
+        decision.sourcePedType = sourcePedInterface->bPedType;
+        decision.sourceIsPlayer = sourcePedInterface->IsPlayer();
+    }
+    // CEventSource checks threatened before friendly. These booleans record
+    // the branch that selected the decision table column, rather than trying
+    // to reconstruct acquaintances after the scoped model identity is gone.
+    decision.threatened = capture.eventSourceType == 3;
+    decision.friendly = capture.eventSourceType == 2;
+
+    const auto groupAddress = reinterpret_cast<std::uintptr_t>(group);
+    if (groupAddress >= GTA_PED_GROUPS && groupAddress < GTA_PED_GROUPS + PED_GROUP_SIZE * PED_GROUP_COUNT &&
+        (groupAddress - GTA_PED_GROUPS) % PED_GROUP_SIZE == 0)
+    {
+        decision.nativeGroupId = static_cast<unsigned int>((groupAddress - GTA_PED_GROUPS) / PED_GROUP_SIZE);
+    }
+    else
+    {
+        // Never persist an address from a malformed or foreign group pointer.
+        decision.nativeGroupId = 0xFFFFFFFFU;
+    }
+
+    if (decision.representative)
+        pGameInterface->ReportNativeAIGroupDecision(decision);
+}
+
+struct CInformGroupEventQueueEntrySAInterface
+{
+    CPedSAInterface* ped;
+    void*            group;
+    void*            event;
+    std::int32_t     time;
+};
+static_assert(sizeof(CInformGroupEventQueueEntrySAInterface) == 0x10);
+
+bool __cdecl HOOK_CInformGroupEventQueue_Add(CPedSAInterface* ped, void* group, void* event)
+{
+    using GetEventType = int(__thiscall*)(void*);
+    using CloneEvent = void*(__thiscall*)(void*);
+    using QueueAdd = bool(__cdecl*)(CPedSAInterface*, void*, void*);
+    using GetPedsGroup = void*(__cdecl*)(CPedSAInterface*);
+    using ConstructGroupEvent = void*(__thiscall*)(void*, CPedSAInterface*, void*);
+    using DestructGroupEvent = void(__thiscall*)(void*);
+    using AddGroupEvent = bool(__thiscall*)(void*, void*);
+
+    constexpr std::uintptr_t INFORM_GROUP_EVENT_QUEUE_ADDRESS = 0xA9B018;
+    constexpr std::size_t    INFORM_GROUP_EVENT_QUEUE_SIZE = 8;
+    constexpr std::size_t    PED_GROUP_INTELLIGENCE_OFFSET = 0x30;
+    constexpr std::size_t    GROUP_EVENT_SIZE = 0x14;
+
+    auto*     vtable = event ? *static_cast<DWORD**>(event) : nullptr;
+    const int eventType = vtable ? reinterpret_cast<GetEventType>(vtable[1])(event) : -1;
+    bool      duplicate = false;
+    bool      hasFreeSlot = false;
+
+    // GTA's queue has only eight entries. Capture the exact reason for a
+    // stock rejection before Add mutates it: duplicate informs must remain
+    // deduplicated, whereas a genuinely full queue may need the scoped
+    // fallback below.
+    auto* entries = reinterpret_cast<CInformGroupEventQueueEntrySAInterface*>(INFORM_GROUP_EVENT_QUEUE_ADDRESS);
+    for (std::size_t i = 0; i < INFORM_GROUP_EVENT_QUEUE_SIZE; ++i)
+    {
+        auto& entry = entries[i];
+        if (entry.ped == ped)
+        {
+            auto* entryVtable = entry.event ? *static_cast<DWORD**>(entry.event) : nullptr;
+            if (entryVtable && reinterpret_cast<GetEventType>(entryVtable[1])(entry.event) == eventType)
+                duplicate = true;
+        }
+        else if (!hasFreeSlot && !entry.event)
+            hasFreeSlot = true;
+    }
+
+    const bool accepted = reinterpret_cast<QueueAdd>(FUNC_CInformGroupEventQueue_Add)(ped, group, event);
+    if (accepted || duplicate || hasFreeSlot || eventType != EVENT_TYPE_DAMAGE || !IsNativeAmbientGroupMember(ped))
+        return accepted;
+
+    // The call site is reached only after GTA's individual decision maker has
+    // selected INFORM_GROUP. Damage informs have no queue delay, so when the
+    // fixed-size vanilla queue is genuinely full, deliver the same cloned
+    // CEventGroupEvent directly to the current group intelligence. Ordinary
+    // groups and every non-overflow path remain entirely stock.
+    void* actualGroup = reinterpret_cast<GetPedsGroup>(FUNC_CPedGroups_GetPedsGroup)(ped);
+    bool  delivered = false;
+    if (actualGroup && actualGroup == group && vtable)
+    {
+        void* clonedEvent = reinterpret_cast<CloneEvent>(vtable[4])(event);
+        if (clonedEvent)
+        {
+            alignas(void*) unsigned char groupEventStorage[GROUP_EVENT_SIZE]{};
+            reinterpret_cast<ConstructGroupEvent>(FUNC_CEventGroupEvent_Constructor)(groupEventStorage, ped, clonedEvent);
+            delivered = reinterpret_cast<AddGroupEvent>(FUNC_CPedGroupIntelligence_AddEvent)(
+                static_cast<unsigned char*>(actualGroup) + PED_GROUP_INTELLIGENCE_OFFSET, groupEventStorage);
+            reinterpret_cast<DestructGroupEvent>(FUNC_CEventGroupEvent_Destructor)(groupEventStorage);
+        }
+    }
+
+    AddReportLog(2082, SString("Native ambient group inform overflow: event=%d ped=%p group=%p delivered=%d", eventType, ped, group, delivered), 3);
+
+    // The original clone was not inserted into the queue. Preserve stock
+    // ownership by reporting failure so InformGroup deletes that clone; the
+    // direct group event above owns its independent clone.
+    return false;
+}
 
 static bool IsNativeAmbientBehaviorIsPlayerCallSite(DWORD returnAddress)
 {
@@ -4078,6 +4312,73 @@ static bool IsTaskSimpleFightIsPlayerCallSite(DWORD returnAddress)
     }
 }
 
+static bool IsNativeAmbientGroupBehaviorIsPlayerCallSite(DWORD returnAddress)
+{
+    switch (returnAddress)
+    {
+        case RETURN_CEventDamage_AffectsPed_GroupSource_IsPlayer:
+        case RETURN_CPedGroupMembership_AddMember_IsPlayer:
+        case RETURN_CPedGroupMembership_RemoveMember_IsPlayer:
+        case RETURN_CPedGroupMembership_Process_IsPlayer:
+        case RETURN_CEventEditableResponse_GroupLeaderA_IsPlayer:
+        case RETURN_CEventEditableResponse_GroupLeaderB_IsPlayer:
+        case RETURN_CTaskAllocatorKillThreats_Closest_IsPlayer:
+        case RETURN_CTaskAllocatorKillThreats_Group_IsPlayer:
+        case RETURN_CTaskAllocatorKillThreats_Ped_IsPlayer:
+        case RETURN_CTaskAllocatorKillThreatsRandom_Group_IsPlayer:
+        case RETURN_CTaskAllocatorKillThreatsRandom_Ped_IsPlayer:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool IsNativeAmbientGroupMember(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    return pPed && pPed->IsNativeAmbientGroupActive();
+}
+
+static bool IsNativeAmbientGroupLocomotionOwner(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    if (!pPed || !pPed->IsNativeAmbientGroupActive() || !pPed->IsNativeAmbientWanderEventProfileActive())
+        return false;
+
+    CPedIntelligence* pIntelligence = pPed->GetPedIntelligence();
+    CTaskManager*     pTaskManager = pIntelligence ? pIntelligence->GetTaskManager() : nullptr;
+    CTask*            pTask = pTaskManager ? pTaskManager->GetSimplestActiveTask() : nullptr;
+    if (!pTask || pTask->GetTaskType() != TASK_SIMPLE_GO_TO_POINT)
+        return false;
+
+    // FindActiveTaskByType also sees an inactive primary task underneath a
+    // higher-priority event. The active leaf ancestry limits this compatibility
+    // lane to the GangFollower task that is executing this exact ProcessPed.
+    for (CTask* pParent = pTask->GetParent(); pParent; pParent = pParent->GetParent())
+    {
+        if (pParent->GetTaskType() == TASK_COMPLEX_GANG_FOLLOWER)
+            return true;
+    }
+    return false;
+}
+
+static bool IsNativeAmbientGroupLocomotionIsPlayerCallSite(DWORD returnAddress)
+{
+    return returnAddress == RETURN_CTaskSimpleGoToPoint_ProcessPed_IsPlayer;
+}
+
+void __fastcall HOOK_CTaskComplexGangLeader_ScanForStuff(void* task, void*, CPedSAInterface* ped)
+{
+    // The stock scan can recruit any nearby same-type PED_GAME ped and can
+    // assign partner tasks outside the group. Managed ambient groups have an
+    // exact network-owned membership, so only their scan is disabled; every
+    // ordinary GTA group keeps the original behavior.
+    if (IsNativeAmbientGroupMember(ped))
+        return;
+
+    reinterpret_cast<void(__thiscall*)(void*, CPedSAInterface*)>(FUNC_CTaskComplexGangLeader_ScanForStuff)(task, ped);
+}
+
 bool IsPlayer()
 {
     // These audited call sites need the behaviour of the CPed represented by
@@ -4092,6 +4393,10 @@ bool IsPlayer()
     if (IsTaskSimpleFightIsPlayerCallSite(dwIsPlayerReturnAddress) && NativeFightUsesNonPlayerBehavior(pIsPlayerPed))
         return false;
     if (IsTaskJumpFallIsPlayerCallSite(dwIsPlayerReturnAddress) && NativeJumpUsesNonPlayerBehavior(pIsPlayerPed))
+        return false;
+    if (IsNativeAmbientGroupBehaviorIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientGroupMember(pIsPlayerPed))
+        return false;
+    if (IsNativeAmbientGroupLocomotionIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientGroupLocomotionOwner(pIsPlayerPed))
         return false;
     return true;
 }
@@ -4208,6 +4513,45 @@ static void __declspec(naked) HOOK_CPed_IsPlayer()
     }
 }
 
+static void __declspec(naked) HOOK_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    /*
+    0066D9D8  mov         eax,dword ptr [esi]       <hook>
+    0066D9DA  mov         ecx,esi
+    0066D9DC  call        dword ptr [eax+5Ch]
+    0066D9DF  ...                                  <return>
+    */
+    // clang-format off
+    __asm
+    {
+        pushad
+        push    esi
+        call    IsNativeAmbientGroupLocomotionOwner
+        add     esp, 4
+        test    al, al
+        popad
+
+        jz      stockVirtualCall
+
+        // Script-created peds use CPlayerPed, whose SetMoveAnim override is a
+        // no-op. GangFollower deliberately owns the WALK association speed,
+        // so call CPed's implementation directly for this active task only.
+        mov     ecx, esi
+        mov     eax, FUNC_CPed_SetMoveAnim
+        call    eax
+        jmp     RETURN_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim
+
+    stockVirtualCall:
+        mov     eax, dword ptr [esi]
+        mov     ecx, esi
+        call    dword ptr [eax+5Ch]
+        jmp     RETURN_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim
+    }
+    // clang-format on
+}
+
 static bool ShouldSuppressNativeAmbientVehicleDamage(CPedSAInterface* ped)
 {
     // Collision geometry is evaluated independently by every peer. Once an
@@ -4260,20 +4604,25 @@ bool __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, void
 
     // EventGroup computes inform/look-at decisions before the main response.
     // Fence every one of those calls as well so an observer never emits local
-    // side effects and an owner uses the civilian model's complete stock DM.
+    // side effects and an owner uses the model identity with its correct live
+    // stock decision maker.
     // Damage is still admitted below on observers by GTA's special damage
     // rule, preserving MTA's physical response, health and death pipeline.
     if (isAmbientEvent && !IsNativeAmbientWanderEventProfileActive(ped))
         return false;
 
-    const bool         useAmbientDecisionMaker = isAmbientEvent && ped->pPedStats;
+    const bool useAmbientModelIdentity = isAmbientEvent && ped->pPedStats;
+    // AddMember installs GTA's GangMbr decision maker on every non-player
+    // group member. Keep that live value: replacing it with the ped-stat
+    // default (R_Tough for gang models) removes INFORM_GROUP from damage.
+    const bool         useAmbientDecisionMaker = useAmbientModelIdentity && !IsNativeAmbientGroupMember(ped);
     const std::int32_t previousDecisionMaker = useAmbientDecisionMaker ? intelligence->decisionMakerType : 0;
     if (useAmbientDecisionMaker)
         intelligence->decisionMakerType = ped->pPedStats->GetDefaultDecisionMaker();
 
     bool result;
     {
-        CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientDecisionMaker);
+        CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientModelIdentity);
         result = reinterpret_cast<ComputeResponseTaskOfType>(FUNC_CEventEditableResponse_ComputeResponseTaskOfType)(event, ped, taskType);
     }
     if (useAmbientDecisionMaker && ped->pPedIntelligence == intelligence)
@@ -4297,7 +4646,10 @@ void __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*,
     if (isAmbientWanderEvent && !IsNativeAmbientWanderEventProfileActive(ped))
         return;
 
-    const bool         useAmbientDecisionMaker = isAmbientWanderEvent && ped->pPedStats;
+    const bool useAmbientModelIdentity = isAmbientWanderEvent && ped->pPedStats;
+    // Group membership owns the individual decision maker in stock GTA. The
+    // ambient compatibility override is only for standalone script peds.
+    const bool         useAmbientDecisionMaker = useAmbientModelIdentity && !IsNativeAmbientGroupMember(ped);
     const bool         useMissionDecisionMaker = eventType == EVENT_TYPE_VEHICLE_ON_FIRE && intelligence && HasNativeMissionEventProfile(ped);
     const std::int32_t previousDecisionMaker = useAmbientDecisionMaker || useMissionDecisionMaker ? intelligence->decisionMakerType : 0;
     if (useAmbientDecisionMaker)
@@ -4306,7 +4658,7 @@ void __fastcall HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*,
         intelligence->decisionMakerType = -1;
 
     {
-        CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientDecisionMaker);
+        CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientModelIdentity);
         reinterpret_cast<ComputeResponseTaskType>(FUNC_CEventEditableResponse_ComputeResponseTaskType)(event, ped, decisionMakerTypeInGroup);
     }
 

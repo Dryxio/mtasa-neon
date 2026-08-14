@@ -11,6 +11,7 @@
 #include "StdInc.h"
 #include <game/CEventDamage.h>
 #include "../game_sa/CWeaponInfoSA.h"
+#include "multiplayer_shotsync.h"
 extern EDamageReasonType g_GenerateDamageEventReason;
 static CElapsedTime      ms_LastFxTimer;
 
@@ -21,10 +22,10 @@ static CElapsedTime      ms_LastFxTimer;
 // Try to detect pistol whippings
 //
 //////////////////////////////////////////////////////////////////////////////////////////
-void OnMY_CWeapon_GenerateDamageEvent(DWORD calledFrom, CPedSAInterface* pPed, CEntitySAInterface* pEntity, eWeaponType weaponType, uint uiFlags1,
-                                      ePedPieceTypes pedPieceType, uint uiFlags2)
+void OnMY_CWeapon_GenerateDamageEvent(DWORD calledFrom, CPedSAInterface* pPed, CEntitySAInterface* pEntity, eWeaponType weaponType, int damageFactor,
+                                      ePedPieceTypes pedPieceType, uint direction)
 {
-    // uiFlags1 appears to be:
+    // damageFactor examples:
     //          4 - punch
     //          7 - punch 2
     //         12 - punch 3
@@ -44,7 +45,12 @@ void OnMY_CWeapon_GenerateDamageEvent(DWORD calledFrom, CPedSAInterface* pPed, C
     //         10 - dead
     //          and lots more probably
 
-    if (uiFlags1 == 8)
+    // Preserve the exact pre-calculator factor while the synchronous GTA
+    // damage event is alive. The damage response only retains the final loss,
+    // which cannot be inverted reliably after armour and ped-stat modifiers.
+    CaptureGeneratedDamageEvent(pPed, pEntity, weaponType, damageFactor, pedPieceType, static_cast<unsigned char>(direction));
+
+    if (damageFactor == 8)
         g_GenerateDamageEventReason = EDamageReason::PISTOL_WHIP;
     else
         g_GenerateDamageEventReason = EDamageReason::OTHER;

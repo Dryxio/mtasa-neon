@@ -15,6 +15,72 @@
 #include "CAnimBlendHierarchySA.h"
 #include "CPedSA.h"
 
+namespace
+{
+    void GetLiveSimpleAnimationDiagnostic(const CTaskSimpleAnimSAInterface* task, SNamedAnimPresentationDiagnostic& diagnostic)
+    {
+        diagnostic = {};
+        // SimpleAnim is only safe to present while GTA still owns a live,
+        // blended association. The shared prefix is verified for RunAnim and
+        // PlayHandSignalAnim; no derived fields or task state are inferred.
+        const auto* association = task && task->m_pAnim ? reinterpret_cast<const CAnimBlendAssociationSAInterface*>(task->m_pAnim) : nullptr;
+        diagnostic.association = association;
+        if (!association)
+        {
+            diagnostic.validation = ENamedAnimPresentationValidation::NO_ASSOCIATION;
+            return;
+        }
+
+        diagnostic.hierarchy = association->pAnimHierarchy;
+        diagnostic.animGroup = association->sAnimGroup;
+        diagnostic.animId = association->sAnimID;
+        diagnostic.currentTime = association->fCurrentTime;
+        diagnostic.speed = association->fSpeed;
+        diagnostic.blendAmount = association->fBlendAmount;
+        if (!association->pAnimHierarchy)
+        {
+            diagnostic.validation = ENamedAnimPresentationValidation::NO_HIERARCHY;
+            return;
+        }
+
+        diagnostic.totalTime = association->pAnimHierarchy->fTotalTime;
+        if (diagnostic.totalTime <= 0.0f)
+            diagnostic.validation = ENamedAnimPresentationValidation::INVALID_TOTAL_TIME;
+        else if (diagnostic.animGroup < 0)
+            diagnostic.validation = ENamedAnimPresentationValidation::INVALID_ANIM_GROUP;
+        else if (diagnostic.animId < 0)
+            diagnostic.validation = ENamedAnimPresentationValidation::INVALID_ANIM_ID;
+        else if (!std::isfinite(diagnostic.currentTime))
+            diagnostic.validation = ENamedAnimPresentationValidation::INVALID_CURRENT_TIME;
+        else if (!std::isfinite(diagnostic.speed))
+            diagnostic.validation = ENamedAnimPresentationValidation::INVALID_SPEED;
+        else if (diagnostic.speed <= 0.0f)
+            diagnostic.validation = ENamedAnimPresentationValidation::NON_POSITIVE_SPEED;
+        else if (!std::isfinite(diagnostic.blendAmount))
+            diagnostic.validation = ENamedAnimPresentationValidation::INVALID_BLEND_AMOUNT;
+        else if (diagnostic.blendAmount <= 0.01f)
+            diagnostic.validation = ENamedAnimPresentationValidation::INACTIVE_BLEND_AMOUNT;
+        else
+            diagnostic.validation = ENamedAnimPresentationValidation::VALID;
+    }
+
+    bool GetLiveSimpleAnimationPresentation(const CTaskSimpleAnimSAInterface* task, unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress,
+                                            float& fSpeed, float& fBlendAmount)
+    {
+        SNamedAnimPresentationDiagnostic diagnostic;
+        GetLiveSimpleAnimationDiagnostic(task, diagnostic);
+        if (diagnostic.validation != ENamedAnimPresentationValidation::VALID)
+            return false;
+
+        usAnimGroup = static_cast<unsigned short>(diagnostic.animGroup);
+        usAnimId = static_cast<unsigned short>(diagnostic.animId);
+        fProgress = std::clamp(diagnostic.currentTime / diagnostic.totalTime, 0.0f, 1.0f);
+        fSpeed = diagnostic.speed;
+        fBlendAmount = std::clamp(diagnostic.blendAmount, 0.0f, 1.0f);
+        return true;
+    }
+}
+
 CTaskComplexPartnerChatSA::CTaskComplexPartnerChatSA(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled)
 {
     CreateTaskInterface(sizeof(CTaskComplexPartnerChatSAInterface));
@@ -75,6 +141,18 @@ CTaskSimpleStandStillSA::CTaskSimpleStandStillSA(int iDuration)
     // clang-format on
 }
 
+void CTaskSimpleAnimSA::GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept
+{
+    GetLiveSimpleAnimationDiagnostic(static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface()), diagnostic);
+}
+
+bool CTaskSimpleAnimSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
+                                                 float& fBlendAmount) const
+{
+    return GetLiveSimpleAnimationPresentation(static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface()), usAnimGroup, usAnimId, fProgress, fSpeed,
+                                              fBlendAmount);
+}
+
 CTaskSimpleRunNamedAnimSAInterface* CTaskSimpleRunNamedAnimSA::GetAnimationInterface() noexcept
 {
     return reinterpret_cast<CTaskSimpleRunNamedAnimSAInterface*>(this->GetInterface());
@@ -97,47 +175,7 @@ const char* CTaskSimpleRunNamedAnimSA::GetGroupName() const noexcept
 
 void CTaskSimpleRunNamedAnimSA::GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept
 {
-    diagnostic = {};
-    const auto* task = static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface());
-    const auto* association = task ? reinterpret_cast<const CAnimBlendAssociationSAInterface*>(task->m_pAnim) : nullptr;
-    diagnostic.association = association;
-    if (!association)
-    {
-        diagnostic.validation = ENamedAnimPresentationValidation::NO_ASSOCIATION;
-        return;
-    }
-
-    diagnostic.hierarchy = association->pAnimHierarchy;
-    diagnostic.animGroup = association->sAnimGroup;
-    diagnostic.animId = association->sAnimID;
-    diagnostic.currentTime = association->fCurrentTime;
-    diagnostic.speed = association->fSpeed;
-    diagnostic.blendAmount = association->fBlendAmount;
-    if (!association->pAnimHierarchy)
-    {
-        diagnostic.validation = ENamedAnimPresentationValidation::NO_HIERARCHY;
-        return;
-    }
-
-    diagnostic.totalTime = association->pAnimHierarchy->fTotalTime;
-    if (diagnostic.totalTime <= 0.0f)
-        diagnostic.validation = ENamedAnimPresentationValidation::INVALID_TOTAL_TIME;
-    else if (diagnostic.animGroup < 0)
-        diagnostic.validation = ENamedAnimPresentationValidation::INVALID_ANIM_GROUP;
-    else if (diagnostic.animId < 0)
-        diagnostic.validation = ENamedAnimPresentationValidation::INVALID_ANIM_ID;
-    else if (!std::isfinite(diagnostic.currentTime))
-        diagnostic.validation = ENamedAnimPresentationValidation::INVALID_CURRENT_TIME;
-    else if (!std::isfinite(diagnostic.speed))
-        diagnostic.validation = ENamedAnimPresentationValidation::INVALID_SPEED;
-    else if (diagnostic.speed <= 0.0f)
-        diagnostic.validation = ENamedAnimPresentationValidation::NON_POSITIVE_SPEED;
-    else if (!std::isfinite(diagnostic.blendAmount))
-        diagnostic.validation = ENamedAnimPresentationValidation::INVALID_BLEND_AMOUNT;
-    else if (diagnostic.blendAmount <= 0.01f)
-        diagnostic.validation = ENamedAnimPresentationValidation::INACTIVE_BLEND_AMOUNT;
-    else
-        diagnostic.validation = ENamedAnimPresentationValidation::VALID;
+    GetLiveSimpleAnimationDiagnostic(static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface()), diagnostic);
 }
 
 bool CTaskSimpleRunNamedAnimSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
@@ -202,21 +240,13 @@ CTaskSimpleRunAnimSA::CTaskSimpleRunAnimSA(const AssocGroupId animGroup, const A
 bool CTaskSimpleRunAnimSA::GetPresentationAnimation(unsigned short& usAnimGroup, unsigned short& usAnimId, float& fProgress, float& fSpeed,
                                                     float& fBlendAmount) const
 {
-    const auto* task = static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface());
-    const auto* association = reinterpret_cast<const CAnimBlendAssociationSAInterface*>(task->m_pAnim);
-    if (!association || !association->pAnimHierarchy || association->pAnimHierarchy->fTotalTime <= 0.0f || association->sAnimGroup < 0 ||
-        association->sAnimID < 0 || !std::isfinite(association->fCurrentTime) || !std::isfinite(association->fSpeed) || association->fSpeed <= 0.0f ||
-        !std::isfinite(association->fBlendAmount) || association->fBlendAmount <= 0.01f)
-    {
-        return false;
-    }
+    return GetLiveSimpleAnimationPresentation(static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface()), usAnimGroup, usAnimId, fProgress, fSpeed,
+                                              fBlendAmount);
+}
 
-    usAnimGroup = static_cast<unsigned short>(association->sAnimGroup);
-    usAnimId = static_cast<unsigned short>(association->sAnimID);
-    fProgress = std::clamp(association->fCurrentTime / association->pAnimHierarchy->fTotalTime, 0.0f, 1.0f);
-    fSpeed = association->fSpeed;
-    fBlendAmount = std::clamp(association->fBlendAmount, 0.0f, 1.0f);
-    return true;
+void CTaskSimpleRunAnimSA::GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept
+{
+    GetLiveSimpleAnimationDiagnostic(static_cast<const CTaskSimpleAnimSAInterface*>(GetInterface()), diagnostic);
 }
 
 CTaskSimpleRunNamedAnimSA::CTaskSimpleRunNamedAnimSA(const char* pAnimName, const char* pAnimGroupName, const int flags, const float fBlendDelta,

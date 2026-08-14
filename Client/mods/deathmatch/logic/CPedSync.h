@@ -12,6 +12,7 @@
 #pragma once
 
 #include <CClientCommon.h>
+#include <cstdint>
 #include <unordered_map>
 #include "CClientVehicle.h"
 
@@ -54,9 +55,10 @@ private:
     void Update();
     void UpdateNativeTaskAnimationPresentation();
     void UpdateNativeTaskLocomotionBurst(unsigned long currentTime);
-    void WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed);
-    bool WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed, bool& reliableSemanticTransition);
-    bool WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed);
+    void WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed, std::uint64_t telemetryPacketSequence);
+    bool WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed, bool& reliableSemanticTransition,
+                                              std::uint64_t telemetryPacketSequence);
+    bool WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed, std::uint64_t telemetryPacketSequence);
 
     CClientPedManager*                                               m_pPedManager;
     CMappedList<CClientPed*>                                         m_List;

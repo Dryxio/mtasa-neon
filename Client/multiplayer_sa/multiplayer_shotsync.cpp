@@ -64,6 +64,68 @@ struct SScriptPedChokeEvent
     CPedSAInterface* pVictim{};
 };
 
+struct SGeneratedDamageEventContext
+{
+    CPedSAInterface*    pVictim{};
+    CEntitySAInterface* pInflictor{};
+    eWeaponType         weaponType{};
+    int                 damageFactor{-1};
+    ePedPieceTypes      pedPieceType{};
+    unsigned char       direction{};
+    bool                pending{};
+};
+
+static SGeneratedDamageEventContext& GetGeneratedDamageEventContext()
+{
+    static SGeneratedDamageEventContext context;
+    return context;
+}
+
+static std::unordered_map<CEventDamageSAInterface*, int>& GetGeneratedDamageEventFactors()
+{
+    // CEventDamage clones can outlive CWeapon::GenerateDamageEvent. Tie the
+    // raw factor to the event lifetime and release it from the existing
+    // damage-event destructor hook.
+    static auto* factors = new std::unordered_map<CEventDamageSAInterface*, int>;
+    return *factors;
+}
+
+void CaptureGeneratedDamageEvent(CPedSAInterface* pVictim, CEntitySAInterface* pInflictor, eWeaponType weaponType, int damageFactor,
+                                 ePedPieceTypes pedPieceType, unsigned char direction)
+{
+    GetGeneratedDamageEventContext() = {pVictim, pInflictor, weaponType, damageFactor, pedPieceType, direction, true};
+}
+
+struct SGeneratedDamageEventResolution
+{
+    int  damageFactor{-1};
+    bool firstAssociation{};
+};
+
+static SGeneratedDamageEventResolution ResolveGeneratedDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim)
+{
+    if (!pEvent)
+        return {};
+
+    auto& factors = GetGeneratedDamageEventFactors();
+    if (const auto it = factors.find(pEvent); it != factors.end())
+        return {it->second, false};
+
+    auto& context = GetGeneratedDamageEventContext();
+    if (!context.pending || context.pVictim != pVictim || context.pInflictor != pEvent->pInflictor || context.weaponType != pEvent->weaponUsed ||
+        context.pedPieceType != pEvent->pedPieceType || context.direction != pEvent->ucDirection)
+    {
+        return {};
+    }
+
+    // A GenerateDamageEvent call owns one original CEventDamage. Clones copy
+    // the association below, so clearing pending here prevents a later,
+    // unrelated event with coincidentally equal fields from inheriting it.
+    context.pending = false;
+    factors.emplace(pEvent, context.damageFactor);
+    return {context.damageFactor, true};
+}
+
 static std::unordered_map<CEventDamageSAInterface*, SScriptPedChokeEvent>& GetScriptPedChokeEvents()
 {
     // The hooks remain callable until the multiplayer module is detached.
@@ -1037,6 +1099,9 @@ bool ProcessDamageEvent(CEventDamageSAInterface* event, CPedSAInterface* affects
             CEventDamage*           pEvent = pGameInterface->GetEventList()->GetEventDamage(event);
             const EDamageReasonType damageReason = g_GenerateDamageEventReason;
             pEvent->SetDamageReason(damageReason);
+            const auto generatedDamage = ResolveGeneratedDamageEvent(event, affectsPed);
+            pEvent->SetDamageFactor(generatedDamage.damageFactor);
+            pEvent->SetNativeDamageAttempt(generatedDamage.firstAssociation);
             // Call the event
             bool       bReturn = m_pDamageHandler(pPed, pEvent);
             const bool bChokingWeapon =
@@ -1094,12 +1159,20 @@ void CloneScriptPedChokeEvent(CEventDamageSAInterface* pDestination, CEventDamag
     auto  it = events.find(pSource);
     if (pDestination && it != events.end())
         events[pDestination] = it->second;
+
+    auto& damageFactors = GetGeneratedDamageEventFactors();
+    auto  factorIt = damageFactors.find(pSource);
+    if (pDestination && factorIt != damageFactors.end())
+        damageFactors[pDestination] = factorIt->second;
 }
 
 void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent)
 {
     if (pEvent)
+    {
         GetScriptPedChokeEvents().erase(pEvent);
+        GetGeneratedDamageEventFactors().erase(pEvent);
+    }
 }
 
 CPedSAInterface*              affectsPed = 0;

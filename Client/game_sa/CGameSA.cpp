@@ -25,6 +25,7 @@
 #include "CCarEnterExitSA.h"
 #include "CCheckpointsSA.h"
 #include "CClockSA.h"
+#include "CColModelSA.h"
 #include "CColStoreSA.h"
 #include "CControllerConfigManagerSA.h"
 #include "CCoronasSA.h"
@@ -45,6 +46,7 @@
 #include "CNativeModelStoreSA.h"
 #include "CNativeWorldPackSA.h"
 #include "CPadSA.h"
+#include "CPedSA.h"
 #include "CPedModelInfoSA.h"
 #include "CPickupsSA.h"
 #include "CPlayerInfoSA.h"
@@ -55,7 +57,10 @@
 #include "CSettingsSA.h"
 #include "CStatsSA.h"
 #include "CTaskManagementSystemSA.h"
+#include "CTaskManagerSA.h"
 #include "CTasksSA.h"
+#include "TaskGoToSA.h"
+#include "TaskBasicSA.h"
 #include "CVisibilityPluginsSA.h"
 #include "CWaterManagerSA.h"
 #include "CWeaponInfoSA.h"
@@ -135,6 +140,74 @@ namespace
     constexpr unsigned int   PED_TYPE_CIVMALE = 4;
     constexpr unsigned int   PED_TYPE_CIVFEMALE = 5;
     constexpr unsigned int   PED_TYPE_GANG1 = 7;
+    constexpr std::uintptr_t GTA_PED_GROUP_ACTIVE = 0xC098E0;
+    constexpr std::uintptr_t GTA_PED_GROUPS = 0xC09920;
+    constexpr std::uintptr_t FUNC_AddPedGroup = 0x5FB800;
+    constexpr std::uintptr_t FUNC_RemovePedGroup = 0x5FB870;
+    constexpr std::uintptr_t FUNC_GetPedsGroup = 0x5F7E80;
+    constexpr std::uintptr_t FUNC_AddPedGroupMember = 0x5F6AE0;
+    constexpr std::uintptr_t FUNC_ProcessPedGroupMembership = 0x5FBA60;
+    constexpr std::uintptr_t FUNC_ProcessPedGroupIntelligence = 0x5FC4A0;
+    constexpr std::uintptr_t FUNC_SetPedGroupDefaultTaskAllocatorType = 0x5FBB70;
+    constexpr std::uintptr_t FUNC_FindAmbientGroupGroundZ = 0x5696C0;
+    constexpr std::uintptr_t FUNC_GetRadianAngleBetweenPoints = 0x53CBE0;
+    constexpr std::size_t    PED_GROUP_SIZE = 0x2D4;
+    constexpr std::size_t    PED_GROUP_MEMBERSHIP_OFFSET = 0x08;
+    constexpr std::size_t    PED_GROUP_INTELLIGENCE_OFFSET = 0x30;
+    constexpr unsigned int   PED_GROUP_COUNT = 8;
+    constexpr unsigned int   MAX_AMBIENT_PED_NATIVE_GROUPS = 5;
+    constexpr int            PED_GROUP_LEADER_MEMBER_INDEX = 7;
+    constexpr int            PED_GROUP_RANDOM_TASK_ALLOCATOR = 5;
+
+    void* GetPedGroupInterface(unsigned int groupId)
+    {
+        return groupId < PED_GROUP_COUNT ? reinterpret_cast<void*>(GTA_PED_GROUPS + groupId * PED_GROUP_SIZE) : nullptr;
+    }
+
+    void* GetPedGroupMembershipInterface(unsigned int groupId)
+    {
+        auto* group = static_cast<unsigned char*>(GetPedGroupInterface(groupId));
+        return group ? group + PED_GROUP_MEMBERSHIP_OFFSET : nullptr;
+    }
+
+    void* GetPedGroupIntelligenceInterface(unsigned int groupId)
+    {
+        auto* group = static_cast<unsigned char*>(GetPedGroupInterface(groupId));
+        return group ? group + PED_GROUP_INTELLIGENCE_OFFSET : nullptr;
+    }
+
+    bool IsPedGroupSlotActive(unsigned int groupId)
+    {
+        return groupId < PED_GROUP_COUNT && reinterpret_cast<const bool*>(GTA_PED_GROUP_ACTIVE)[groupId];
+    }
+
+    int AcquireNonPlayerPedGroupSlot()
+    {
+        int groupId = reinterpret_cast<int(__cdecl*)()>(FUNC_AddPedGroup)();
+        if (groupId != 0)
+            return groupId;
+
+        // CPedGroups slot 0 is GTA's player-group identity. If it happened to
+        // be inactive, keep the slot allocated while asking GTA for the next
+        // free slot, then release only the slot allocated by this call.
+        groupId = reinterpret_cast<int(__cdecl*)()>(FUNC_AddPedGroup)();
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemovePedGroup)(0);
+        return groupId;
+    }
+
+    int GetPedTaskType(CTaskSAInterface* task)
+    {
+        if (!task || !task->VTBL || !task->VTBL->GetTaskType)
+            return -1;
+        const auto vtableAddress = reinterpret_cast<std::uintptr_t>(task->VTBL);
+        const auto getTaskTypeAddress = static_cast<std::uintptr_t>(task->VTBL->GetTaskType);
+        if (vtableAddress < 0x400000 || vtableAddress >= 0x900000 || getTaskTypeAddress < 0x400000 || getTaskTypeAddress >= 0x900000 ||
+            getTaskTypeAddress == 0x82263A)
+        {
+            return -1;
+        }
+        return reinterpret_cast<int(__thiscall*)(CTaskSAInterface*)>(task->VTBL->GetTaskType)(task);
+    }
 
     struct SAmbientPedPopulationZoneInfoSA
     {
@@ -1768,6 +1841,281 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
     candidate.wanderDirection = static_cast<unsigned char>(rand() & 7);
     candidate.pathLerp = pathLerp;
     return EAmbientPedSpawnCandidateResult::Success;
+}
+
+EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedGangGroupCandidate(const CVector& origin, unsigned char gangId, unsigned char maxMembers,
+                                                                         SAmbientPedGroupSpawnCandidate& candidate)
+{
+    candidate = {};
+    if (gangId >= AMBIENT_PED_GANG_COUNT || maxMembers < 2)
+        return EAmbientPedSpawnCandidateResult::NoModel;
+
+    SAmbientPedSpawnCandidate anchor;
+    const auto                result = GetAmbientPedSpawnCandidateForPopulation(origin, EAmbientPedPopulationSelection::Gang, gangId, anchor);
+    if (result != EAmbientPedSpawnCandidateResult::Success)
+        return result;
+
+    const unsigned int upperBound = std::min<unsigned int>({4, maxMembers, AMBIENT_PED_GROUP_MAX_MEMBERS});
+    const unsigned int requestedCount = upperBound == 2 ? 2 : 2 + static_cast<unsigned int>(rand()) % (upperBound - 1);
+    constexpr float    kAmbientGroupPi = 3.14159265358979323846f;
+    const float        angleStep = 2.0f * kAmbientGroupPi / static_cast<float>(requestedCount);
+    const float        placeRadius = std::sqrt(0.5f / (1.0f - std::cos(angleStep)));
+    const CVector      groupOrigin = anchor.position;
+    if (!reinterpret_cast<bool(__cdecl*)(const CVector&, float, int, void*, bool, bool, bool)>(FUNC_IsPositionClearForPed)(groupOrigin, placeRadius, -1,
+                                                                                                                           nullptr, true, true, true))
+    {
+        return EAmbientPedSpawnCandidateResult::Blocked;
+    }
+
+    CVector firstGroundPosition{};
+    bool    hasFirstGroundPosition = false;
+
+    for (unsigned int index = 0; index < requestedCount; ++index)
+    {
+        const float angleJitter = (static_cast<float>(rand() & 0xFFFF) / 65535.0f * 0.4f - 0.2f) * angleStep;
+        const float radiusJitter = static_cast<float>(rand() & 0xFFFF) / 65535.0f * 0.4f - 0.2f;
+        const float angle = static_cast<float>(index) * angleStep + angleJitter;
+        const float radius = placeRadius * (1.0f + radiusJitter);
+
+        SAmbientPedSpawnCandidate member = anchor;
+        auto*                     modelInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(member.modelId));
+        if (index != 0)
+        {
+            const int modelId = reinterpret_cast<int(__cdecl*)(int)>(FUNC_ChooseGangOccupation)(gangId);
+            modelInfo = modelId >= 0 ? reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(modelId)) : nullptr;
+            if (!modelInfo || !modelInfo->pRwObject || modelInfo->pedType != PED_TYPE_GANG1 + gangId)
+                continue;
+            member.modelId = modelId;
+            member.pedType = static_cast<unsigned char>(modelInfo->pedType);
+            member.wanderDirection = static_cast<unsigned char>(rand() & 7);
+        }
+
+        member.position.fX = groupOrigin.fX + std::cos(angle) * radius;
+        member.position.fY = groupOrigin.fY + std::sin(angle) * radius;
+        member.position.fZ = groupOrigin.fZ + 1.0f;
+        bool        hasGround = false;
+        const float groundZ = reinterpret_cast<float(__cdecl*)(float, float, float, bool*, void**)>(FUNC_FindAmbientGroupGroundZ)(
+            member.position.fX, member.position.fY, member.position.fZ, &hasGround, nullptr);
+        if (!hasGround)
+            continue;
+        member.position.fZ = std::max(groupOrigin.fZ, groundZ + 1.0f);
+        const float headingRadians = reinterpret_cast<float(__cdecl*)(float, float, float, float)>(FUNC_GetRadianAngleBetweenPoints)(
+            groupOrigin.fX, groupOrigin.fY, member.position.fX, member.position.fY);
+        member.headingDegrees = headingRadians * 180.0f / kAmbientGroupPi;
+        if (!hasFirstGroundPosition)
+        {
+            firstGroundPosition = member.position;
+            hasFirstGroundPosition = true;
+        }
+
+        const float boundRadius = modelInfo && modelInfo->pColModel ? modelInfo->pColModel->m_sphere.m_radius : -1.0f;
+        if (!reinterpret_cast<bool(__cdecl*)(const CVector&, float, int, void*, bool, bool, bool)>(FUNC_IsPositionClearForPed)(member.position, boundRadius, -1,
+                                                                                                                               nullptr, true, true, true))
+        {
+            continue;
+        }
+        if (hasFirstGroundPosition && index != 0)
+        {
+            SLineOfSightFlags flags;
+            flags.bCheckVehicles = false;
+            flags.bCheckPeds = false;
+            flags.bCheckObjects = false;
+            flags.bCheckDummies = false;
+            if (std::abs(member.position.fZ - firstGroundPosition.fZ) >= 1.0f || !m_pWorld->IsLineOfSightClear(&member.position, &firstGroundPosition, flags))
+            {
+                continue;
+            }
+        }
+
+        candidate.members[candidate.count++] = member;
+    }
+
+    return candidate.count >= 2 ? EAmbientPedSpawnCandidateResult::Success : EAmbientPedSpawnCandidateResult::Blocked;
+}
+
+bool CGameSA::AcquireAmbientPedNativeGroup(CPed* const* members, unsigned char count, unsigned int& nativeGroupId)
+{
+    nativeGroupId = std::numeric_limits<unsigned int>::max();
+    if (!members || count < 2 || count > AMBIENT_PED_GROUP_MAX_MEMBERS)
+        return false;
+
+    std::array<CPedSA*, AMBIENT_PED_GROUP_MAX_MEMBERS> peds{};
+    for (unsigned char index = 0; index < count; ++index)
+    {
+        peds[index] = dynamic_cast<CPedSA*>(members[index]);
+        if (!peds[index] || !peds[index]->GetPedInterface() || peds[index]->IsNativeAmbientGroupActive())
+            return false;
+        for (unsigned char prior = 0; prior < index; ++prior)
+        {
+            if (peds[prior] == peds[index])
+                return false;
+        }
+        if (reinterpret_cast<void*(__cdecl*)(CPedSAInterface*)>(FUNC_GetPedsGroup)(peds[index]->GetPedInterface()))
+            return false;
+    }
+
+    if (m_ambientPedNativeGroupLeases.size() >= MAX_AMBIENT_PED_NATIVE_GROUPS)
+        return false;
+
+    const int groupId = AcquireNonPlayerPedGroupSlot();
+    if (groupId <= 0 || static_cast<unsigned int>(groupId) >= PED_GROUP_COUNT)
+        return false;
+    if (m_ambientPedNativeGroupLeases.contains(groupId))
+    {
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemovePedGroup)(groupId);
+        return false;
+    }
+
+    auto* membership = GetPedGroupMembershipInterface(groupId);
+    auto* intelligence = GetPedGroupIntelligenceInterface(groupId);
+    if (!membership || !intelligence)
+    {
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemovePedGroup)(groupId);
+        return false;
+    }
+
+    SAmbientPedNativeGroupLease lease;
+    lease.count = count;
+    for (unsigned char index = 0; index < count; ++index)
+        lease.members[index] = peds[index];
+    const auto [leaseIter, inserted] = m_ambientPedNativeGroupLeases.emplace(groupId, lease);
+    if (!inserted)
+    {
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemovePedGroup)(groupId);
+        return false;
+    }
+
+    for (auto* ped : peds)
+    {
+        if (ped)
+            ped->SetNativeAmbientGroupActive(true);
+    }
+
+    reinterpret_cast<void(__thiscall*)(void*, int)>(FUNC_SetPedGroupDefaultTaskAllocatorType)(intelligence, PED_GROUP_RANDOM_TASK_ALLOCATOR);
+    for (unsigned char index = 0; index < count; ++index)
+    {
+        const int memberIndex = index == 0 ? PED_GROUP_LEADER_MEMBER_INDEX : index - 1;
+        reinterpret_cast<void(__thiscall*)(void*, CPedSAInterface*, int)>(FUNC_AddPedGroupMember)(membership, peds[index]->GetPedInterface(), memberIndex);
+        reinterpret_cast<void(__thiscall*)(void*)>(FUNC_ProcessPedGroupMembership)(membership);
+        reinterpret_cast<void(__thiscall*)(void*)>(FUNC_ProcessPedGroupIntelligence)(intelligence);
+
+        auto* wander = new CTaskComplexWanderGangSA(PedMoveState::PEDMOVE_WALK, static_cast<unsigned char>(rand() & 7), 5000, true, 0.5f);
+        auto* beInGroup = new CTaskComplexBeInGroupSA(groupId, false);
+        if (!wander->IsValid() || !beInGroup->IsValid())
+        {
+            delete wander;
+            delete beInGroup;
+            ReleaseAmbientPedNativeGroup(groupId, members, count);
+            return false;
+        }
+        m_pTaskManagementSystem->AddTask(wander);
+        m_pTaskManagementSystem->AddTask(beInGroup);
+        auto& nativeLease = leaseIter->second;
+        nativeLease.defaultTasks[index] = wander->GetInterface();
+        nativeLease.primaryTasks[index] = beInGroup->GetInterface();
+        auto* taskManager = static_cast<CTaskManagerSA*>(peds[index]->GetPedIntelligence()->GetTaskManager());
+        taskManager->SetTask(wander, TASK_PRIORITY_DEFAULT, true);
+        taskManager->SetTask(beInGroup, TASK_PRIORITY_PRIMARY, true);
+    }
+
+    nativeGroupId = static_cast<unsigned int>(groupId);
+    return true;
+}
+
+bool CGameSA::ReleaseAmbientPedNativeGroup(unsigned int nativeGroupId, CPed* const* members, unsigned char count)
+{
+    const auto leaseIter = m_ambientPedNativeGroupLeases.find(nativeGroupId);
+    if (!members || leaseIter == m_ambientPedNativeGroupLeases.end() || count != leaseIter->second.count)
+        return false;
+
+    auto* group = GetPedGroupInterface(nativeGroupId);
+    bool  ownsActiveSlot = false;
+    for (unsigned char index = 0; index < count; ++index)
+    {
+        auto* ped = dynamic_cast<CPedSA*>(members[index]);
+        if (!ped || ped != leaseIter->second.members[index] || !ped->GetPedInterface())
+            continue;
+        ownsActiveSlot = ownsActiveSlot || (ped->IsNativeAmbientGroupActive() &&
+                                            reinterpret_cast<void*(__cdecl*)(CPedSAInterface*)>(FUNC_GetPedsGroup)(ped->GetPedInterface()) == group);
+        auto*  taskManager = static_cast<CTaskManagerSA*>(ped->GetPedIntelligence()->GetTaskManager());
+        CTask* primaryTask = taskManager->GetTask(TASK_PRIORITY_PRIMARY);
+        if (primaryTask && primaryTask->GetInterface() == leaseIter->second.primaryTasks[index])
+            taskManager->SetTask(nullptr, TASK_PRIORITY_PRIMARY, true);
+
+        CTask* defaultTask = taskManager->GetTask(TASK_PRIORITY_DEFAULT);
+        if (defaultTask && defaultTask->GetInterface() == leaseIter->second.defaultTasks[index])
+        {
+            auto* replacement = dynamic_cast<CTaskSimplePlayerOnFootSA*>(m_pTasks->CreateTaskSimplePlayerOnFoot());
+            if (replacement && replacement->IsValid())
+                taskManager->SetTask(replacement, TASK_PRIORITY_DEFAULT, true);
+        }
+        ped->SetNativeAmbientGroupActive(false);
+    }
+    // The eight GTA slots have no generation counter. If every tracked member
+    // has already vanished, CPedGroups::Process owns empty-slot cleanup; never
+    // risk deleting a mission/resource group which reused the same index.
+    if (IsPedGroupSlotActive(nativeGroupId) && ownsActiveSlot)
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemovePedGroup)(nativeGroupId);
+    m_ambientPedNativeGroupLeases.erase(leaseIter);
+    return true;
+}
+
+bool CGameSA::IsAmbientPedNativeGroupActive(unsigned int nativeGroupId, CPed* const* members, unsigned char count) const
+{
+    const auto leaseIter = m_ambientPedNativeGroupLeases.find(nativeGroupId);
+    if (!members || leaseIter == m_ambientPedNativeGroupLeases.end() || count != leaseIter->second.count || !IsPedGroupSlotActive(nativeGroupId))
+        return false;
+    auto* group = GetPedGroupInterface(nativeGroupId);
+    bool  hasTrackedMember = false;
+    for (unsigned char index = 0; index < count; ++index)
+    {
+        auto* ped = dynamic_cast<CPedSA*>(members[index]);
+        hasTrackedMember = hasTrackedMember || (ped && ped->IsNativeAmbientGroupActive() && ped->GetPedInterface() &&
+                                                reinterpret_cast<void*(__cdecl*)(CPedSAInterface*)>(FUNC_GetPedsGroup)(ped->GetPedInterface()) == group);
+    }
+    return hasTrackedMember;
+}
+
+void CGameSA::GetAmbientPedNativeGroupDiagnostic(unsigned int nativeGroupId, CPed* const* members, unsigned char count,
+                                                 SAmbientPedNativeGroupDiagnostic& diagnostic) const
+{
+    diagnostic.nativeGroupId = nativeGroupId;
+    diagnostic.memberCount = count;
+
+    const auto leaseIter = m_ambientPedNativeGroupLeases.find(nativeGroupId);
+    diagnostic.gameLeasePresent = leaseIter != m_ambientPedNativeGroupLeases.end();
+    if (!diagnostic.gameLeasePresent)
+        return;
+
+    diagnostic.memberCountMatches = count == leaseIter->second.count;
+    diagnostic.slotActive = IsPedGroupSlotActive(nativeGroupId);
+    auto*               group = GetPedGroupInterface(nativeGroupId);
+    const unsigned char inspectedCount = std::min<unsigned char>(count, AMBIENT_PED_GROUP_MAX_MEMBERS);
+    for (unsigned char index = 0; index < inspectedCount; ++index)
+    {
+        auto& member = diagnostic.members[index];
+        auto* ped = members ? dynamic_cast<CPedSA*>(members[index]) : nullptr;
+        member.leaseMemberMatches = ped && ped == leaseIter->second.members[index];
+        member.expectedGamePedAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(leaseIter->second.members[index]));
+        member.expectedPrimaryTaskAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(leaseIter->second.primaryTasks[index]));
+        member.expectedDefaultTaskAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(leaseIter->second.defaultTasks[index]));
+        if (!ped || !ped->GetPedInterface())
+            continue;
+
+        member.nativeAmbientGroupFlag = ped->IsNativeAmbientGroupActive();
+        member.attachedToExpectedGroup = reinterpret_cast<void*(__cdecl*)(CPedSAInterface*)>(FUNC_GetPedsGroup)(ped->GetPedInterface()) == group;
+        diagnostic.hasTrackedMember = diagnostic.hasTrackedMember || (member.nativeAmbientGroupFlag && member.attachedToExpectedGroup);
+
+        auto* taskManager = static_cast<CTaskManagerSA*>(ped->GetPedIntelligence()->GetTaskManager());
+        auto* taskManagerInterface = taskManager ? taskManager->GetInterface() : nullptr;
+        if (!taskManagerInterface)
+            continue;
+
+        member.primaryTaskAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(taskManagerInterface->m_tasks[TASK_PRIORITY_PRIMARY]));
+        member.defaultTaskAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(taskManagerInterface->m_tasks[TASK_PRIORITY_DEFAULT]));
+        member.primaryTaskType = GetPedTaskType(taskManagerInterface->m_tasks[TASK_PRIORITY_PRIMARY]);
+        member.defaultTaskType = GetPedTaskType(taskManagerInterface->m_tasks[TASK_PRIORITY_DEFAULT]);
+    }
 }
 
 eGameVersion CGameSA::FindGameVersion()

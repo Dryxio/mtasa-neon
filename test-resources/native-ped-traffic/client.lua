@@ -4,6 +4,8 @@ local populationWorldReady = false
 local populationWorldRevision = 0
 local populationWorldPreset = "none"
 local assignments = {}
+local groupAssignments = {}
+local groupByPed = {}
 local nativeEventProfiles = {}
 local avoidanceStates = {}
 local threatStates = {}
@@ -13,11 +15,16 @@ local climbTestSessions = {}
 local healthStates = {}
 local observedAimTargets = {}
 local nativeDamageObservations = {}
+local nativeDamageTraceTimes = {}
+local nativePlayerDamageReceipts = {}
+local nextNativePlayerDamageNonce = 0
 local stats = {
     candidateHits = 0,
     candidateMisses = 0,
     assignments = 0,
     failures = 0,
+    groupAssignments = 0,
+    groupFailures = 0,
     missReasons = {},
 }
 
@@ -57,6 +64,34 @@ local function consumeNativeDamage(ped, attacker, weapon, bodypart)
         nativeDamageObservations[ped] = nil
     end
     return matched
+end
+
+local function traceNativeDamageSource(ped, attacker, weapon, bodypart, role)
+    if not debugEnabled then
+        return
+    end
+
+    local victimId = getElementData(ped, "neon:ambientPedTrafficId")
+    local victimGroup = getElementData(ped, "neon:ambientPedGroupId")
+    local attackerType = isElement(attacker) and getElementType(attacker) or "none"
+    local attackerId = attackerType == "ped" and getElementData(attacker, "neon:ambientPedTrafficId") or false
+    local attackerGroup = attackerType == "ped" and getElementData(attacker, "neon:ambientPedGroupId") or false
+    local attackerName = attackerType == "player" and getPlayerName(attacker) or "none"
+    local sameGroup = victimGroup ~= false and victimGroup ~= nil and attackerGroup == victimGroup
+    local signature = table.concat({attackerType, tostring(attackerId), tostring(attackerName), tostring(weapon),
+                                    tostring(bodypart), tostring(role)}, ":")
+    local now = getTickCount()
+    local traceTimes = nativeDamageTraceTimes[ped] or {}
+    if now - (traceTimes[signature] or -1000) < 1000 then
+        return
+    end
+    traceTimes[signature] = now
+    nativeDamageTraceTimes[ped] = traceTimes
+
+    log(("damage-source victim=%s victimGroup=%s role=%s attackerType=%s attackerId=%s attackerGroup=%s attackerName=%s " ..
+         "sameGroup=%s weapon=%s bodypart=%s"):format(tostring(victimId), tostring(victimGroup), tostring(role), attackerType,
+                                                       tostring(attackerId), tostring(attackerGroup), tostring(attackerName),
+                                                       tostring(sameGroup), tostring(weapon), tostring(bodypart)))
 end
 
 local function countReason(bucket, reason)
@@ -190,6 +225,7 @@ local function releaseTrafficEventProfile(ped)
     vehicleReactionStates[ped] = nil
     healthStates[ped] = nil
     nativeDamageObservations[ped] = nil
+    nativeDamageTraceTimes[ped] = nil
 end
 
 local function getAvoidanceState(ped)
@@ -352,6 +388,170 @@ local function getVehicleReactionState(ped)
     return false, false
 end
 
+local function reportGroup(task, evidence, data)
+    triggerServerEvent("pedTraffic:groupEvidence", resourceRoot, task.id, task.epoch, evidence, data or {})
+end
+
+local function captureGroupDiagnostic(task, context, level)
+    if not task.token or type(getPedNativeGroupDiagnostic) ~= "function" then
+        return false
+    end
+
+    local diagnostic = getPedNativeGroupDiagnostic(task.token)
+    if type(diagnostic) ~= "table" then
+        return false
+    end
+
+    local evidence = {
+        reason = tostring(diagnostic.reason or "unknown"),
+        nativeGroupId = tonumber(diagnostic.nativeGroupId) or -1,
+        slotActive = diagnostic.slotActive == true,
+        resourceLeasePresent = diagnostic.resourceLeasePresent == true,
+        gameLeasePresent = diagnostic.gameLeasePresent == true,
+        memberCountMatches = diagnostic.memberCountMatches == true,
+        hasTrackedMember = diagnostic.hasTrackedMember == true,
+        members = {},
+    }
+    local memberLog = {}
+    for index, member in ipairs(diagnostic.members or {}) do
+        local compact = {
+            resourceElementPresent = member.resourceElementPresent == true,
+            resourceElementIsPed = member.resourceElementIsPed == true,
+            resourcePedSyncing = member.resourcePedSyncing == true,
+            gamePedPresent = member.gamePedPresent == true,
+            leaseMemberMatches = member.leaseMemberMatches == true,
+            nativeAmbientGroupFlag = member.nativeAmbientGroupFlag == true,
+            attachedToExpectedGroup = member.attachedToExpectedGroup == true,
+            primaryTask = tostring(member.primaryTask or "none"),
+            expectedPrimaryTask = tostring(member.expectedPrimaryTask or "none"),
+            defaultTask = tostring(member.defaultTask or "none"),
+            expectedDefaultTask = tostring(member.expectedDefaultTask or "none"),
+            primaryTaskType = tonumber(member.primaryTaskType) or -1,
+            defaultTaskType = tonumber(member.defaultTaskType) or -1,
+        }
+        evidence.members[index] = compact
+        memberLog[index] = ("m%d(sync=%s game=%s lease=%s flag=%s attached=%s primary=%s/%s default=%s/%s)"):format(
+            index, tostring(compact.resourcePedSyncing), tostring(compact.gamePedPresent), tostring(compact.leaseMemberMatches),
+            tostring(compact.nativeAmbientGroupFlag), tostring(compact.attachedToExpectedGroup), compact.primaryTask,
+            compact.expectedPrimaryTask, compact.defaultTask, compact.expectedDefaultTask)
+    end
+    log(("group-diagnostic group=%d epoch=%d context=%s nativeReason=%s nativeGroup=%d slotActive=%s tracked=%s members=[%s]"):format(
+            task.id, task.epoch, tostring(context), evidence.reason, evidence.nativeGroupId, tostring(evidence.slotActive),
+            tostring(evidence.hasTrackedMember), table.concat(memberLog, ";")), level)
+    return evidence
+end
+
+local function releaseGroupAssignment(task, releaseNativeGroup)
+    clearTimer(task, "retryTimer")
+    clearTimer(task, "monitorTimer")
+    if releaseNativeGroup and task.token and type(releasePedNativeGroup) == "function" then
+        releasePedNativeGroup(task.token)
+    end
+    task.token = nil
+    task.accepted = false
+    for _, ped in ipairs(task.peds) do
+        local lease = task.leases[ped]
+        if lease then
+            releaseElementStreamingLease(lease)
+            task.leases[ped] = nil
+        end
+        if groupByPed[ped] == task then
+            groupByPed[ped] = nil
+        end
+    end
+    if groupAssignments[task.id] == task then
+        groupAssignments[task.id] = nil
+    end
+end
+
+local function failGroupAssignment(task, reason)
+    stats.failures = stats.failures + 1
+    stats.groupFailures = stats.groupFailures + 1
+    local diagnostic = captureGroupDiagnostic(task, reason, 2)
+    log(("group-failure group=%d epoch=%d reason=%s"):format(task.id, task.epoch, tostring(reason)), 2)
+    reportGroup(task, "failure", {reason = reason, nativeDiagnostic = diagnostic or nil})
+    releaseGroupAssignment(task, true)
+end
+
+local function beginGroupAssignment(task)
+    if groupAssignments[task.id] ~= task then
+        return
+    end
+    if type(acquireElementStreamingLease) ~= "function" or type(releaseElementStreamingLease) ~= "function" or
+        type(setPedUseNativeWalkingStyle) ~= "function" or type(isPedNativeEventProfileActive) ~= "function" or
+        type(acquirePedNativeGroup) ~= "function" or type(releasePedNativeGroup) ~= "function" or
+        type(isPedNativeGroupActive) ~= "function" then
+        return failGroupAssignment(task, "group-native-api-missing")
+    end
+
+    local ready = true
+    for _, ped in ipairs(task.peds) do
+        if not isElement(ped) then
+            return failGroupAssignment(task, "group-member-missing")
+        end
+        if not acquireTrafficEventProfile(ped) then
+            return failGroupAssignment(task, "group-profile-refused")
+        end
+        if not task.leases[ped] then
+            task.leases[ped] = acquireElementStreamingLease(ped)
+        end
+        if not task.leases[ped] then
+            return failGroupAssignment(task, "group-streaming-lease-refused")
+        end
+        if not isElementStreamedIn(ped) or not isElementSyncer(ped) or
+            not isPedNativeEventProfileActive(ped, nativeEventProfiles[ped]) then
+            ready = false
+        end
+    end
+
+    if not ready then
+        if getTickCount() - task.requestedAt < 10000 then
+            clearTimer(task, "retryTimer")
+            task.retryTimer = setTimer(function() beginGroupAssignment(task) end, 200, 1)
+            return
+        end
+        return failGroupAssignment(task, "group-stream-or-syncer-timeout")
+    end
+
+    for _, ped in ipairs(task.peds) do
+        if not setPedUseNativeWalkingStyle(ped, true) then
+            return failGroupAssignment(task, "group-native-walking-style-refused")
+        end
+    end
+    if not task.token then
+        task.token = acquirePedNativeGroup(task.peds, "ambient-random")
+    end
+    if not task.token or not isPedNativeGroupActive(task.token) then
+        return failGroupAssignment(task, "group-acquire-refused")
+    end
+
+    task.accepted = true
+    stats.assignments = stats.assignments + #task.peds
+    stats.groupAssignments = stats.groupAssignments + 1
+    reportGroup(task, "accepted")
+    log(("group-accepted group=%d epoch=%d members=%d reason=%s"):format(
+            task.id, task.epoch, #task.peds, tostring(task.reason)), 3)
+    task.monitorTimer = setTimer(function()
+        if groupAssignments[task.id] ~= task then
+            return
+        end
+        for _, ped in ipairs(task.peds) do
+            if not isElement(ped) then
+                captureGroupDiagnostic(task, "group-member-missing", 2)
+                return releaseGroupAssignment(task, true)
+            end
+            if not isElementSyncer(ped) then
+                captureGroupDiagnostic(task, "group-ownership-lost", 3)
+                log(("group-ownership-lost group=%d epoch=%d"):format(task.id, task.epoch))
+                return releaseGroupAssignment(task, true)
+            end
+        end
+        if not isPedNativeGroupActive(task.token) then
+            return failGroupAssignment(task, "group-became-inactive")
+        end
+    end, 1000, 0)
+end
+
 local function releaseTask(task, killNativeTask, preservePhysicalTask)
     clearTimer(task, "retryTimer")
     clearTimer(task, "monitorTimer")
@@ -505,6 +705,9 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
         populationWorldReady = false
         airTestSessions = {}
         climbTestSessions = {}
+        local groups = {}
+        for _, task in pairs(groupAssignments) do groups[#groups + 1] = task end
+        for _, task in ipairs(groups) do releaseGroupAssignment(task, true) end
         local current = {}
         for _, task in pairs(assignments) do current[#current + 1] = task end
         for _, task in ipairs(current) do releaseTask(task, true) end
@@ -521,11 +724,12 @@ addEventHandler("pedTraffic:setDebug", resourceRoot, function(value)
 end)
 
 addEvent("pedTraffic:candidateRequest", true)
-addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId, worldRevision, populationClass, gang)
+addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId, worldRevision, populationClass, gang, maximumGroupMembers)
     local startedAt = getTickCount()
     if not enabled or not populationWorldReady or worldRevision ~= populationWorldRevision or getElementDimension(localPlayer) ~= 0 or
         getElementInterior(localPlayer) ~= 0 or isPedDead(localPlayer) or
-        type(getAmbientPedSpawnCandidate) ~= "function" then
+        (populationClass == "gang" and type(getAmbientPedGangGroupCandidate) ~= "function" or
+            populationClass ~= "gang" and type(getAmbientPedSpawnCandidate) ~= "function") then
         stats.candidateMisses = stats.candidateMisses + 1
         triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt, "world-not-ready")
         return
@@ -540,8 +744,30 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         return
     end
 
+    if populationClass == "gang" and not isIntegerInRange(maximumGroupMembers, 2, 4) then
+        stats.candidateMisses = stats.candidateMisses + 1
+        triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt,
+                           "invalid-group-size")
+        return
+    end
+
     local x, y, z = getElementPosition(localPlayer)
-    local candidate, missReason = getAmbientPedSpawnCandidate(x, y, z, populationClass, populationClass == "gang" and gang or -1)
+    local candidate, missReason
+    if populationClass == "gang" then
+        candidate, missReason = getAmbientPedGangGroupCandidate(x, y, z, gang, maximumGroupMembers)
+        if type(candidate) == "table" then
+            for _, member in ipairs(candidate.members or candidate) do
+                if type(member) == "table" then
+                    -- The group oracle's gang argument is authoritative for
+                    -- this read-only proposal; retain the shared single-ped
+                    -- wire shape so the server can authenticate every member.
+                    member.populationClass = "gang"
+                end
+            end
+        end
+    else
+        candidate, missReason = getAmbientPedSpawnCandidate(x, y, z, populationClass, -1)
+    end
     if candidate then
         stats.candidateHits = stats.candidateHits + 1
     else
@@ -549,9 +775,10 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         countReason(stats.missReasons, missReason)
     end
     if debugEnabled then
-        log(("candidate request=%d class=%s gang=%s result=%s model=%s elapsed=%d reason=%s"):format(
+        local memberCount = populationClass == "gang" and (type(candidate) == "table" and #(candidate.members or candidate) or 0) or 1
+        log(("candidate request=%d class=%s gang=%s result=%s model=%s members=%d elapsed=%d reason=%s"):format(
                 requestId, populationClass, tostring(gang), tostring(candidate ~= false and candidate ~= nil),
-                tostring(candidate and candidate.model), getTickCount() - startedAt, tostring(missReason)))
+                tostring(candidate and candidate.model), memberCount, getTickCount() - startedAt, tostring(missReason)))
     end
     triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, candidate or false, getTickCount() - startedAt, missReason)
 end)
@@ -623,6 +850,67 @@ addEventHandler("pedTraffic:stop", resourceRoot, function(ped, epoch, reason)
     if task and task.epoch == epoch then
         log(("stop epoch=%d reason=%s"):format(epoch, tostring(reason)))
         releaseTask(task, true)
+    end
+end)
+
+addEvent("pedTraffic:assignGroup", true)
+addEventHandler("pedTraffic:assignGroup", resourceRoot, function(groupId, epoch, peds, reason)
+    if not enabled or not isIntegerInRange(groupId, 1, 2147483647) or not isIntegerInRange(epoch, 1, 2147483647) or
+        type(peds) ~= "table" or #peds < 2 or #peds > 4 then
+        return
+    end
+    local old = groupAssignments[groupId]
+    if old then
+        if old.epoch == epoch then
+            if old.accepted then
+                reportGroup(old, "accepted")
+            else
+                beginGroupAssignment(old)
+            end
+            return
+        end
+        releaseGroupAssignment(old, true)
+    end
+
+    local task = {
+        id = groupId,
+        epoch = epoch,
+        peds = {},
+        leases = {},
+        reason = reason,
+        requestedAt = getTickCount(),
+        accepted = false,
+    }
+    local seen = {}
+    for index, ped in ipairs(peds) do
+        if not isElement(ped) or getElementType(ped) ~= "ped" or seen[ped] or groupByPed[ped] then
+            return
+        end
+        seen[ped] = true
+        task.peds[index] = ped
+    end
+    groupAssignments[groupId] = task
+    for _, ped in ipairs(task.peds) do groupByPed[ped] = task end
+    beginGroupAssignment(task)
+end)
+
+addEvent("pedTraffic:revokeGroup", true)
+addEventHandler("pedTraffic:revokeGroup", resourceRoot, function(groupId, epoch, reason)
+    local task = groupAssignments[groupId]
+    if not task or task.epoch ~= epoch then
+        return
+    end
+    log(("group-revoke group=%d epoch=%d reason=%s"):format(groupId, epoch, tostring(reason)))
+    releaseGroupAssignment(task, true)
+    reportGroup(task, "released", {reason = reason})
+end)
+
+addEvent("pedTraffic:stopGroup", true)
+addEventHandler("pedTraffic:stopGroup", resourceRoot, function(groupId, epoch, reason)
+    local task = groupAssignments[groupId]
+    if task and task.epoch == epoch then
+        log(("group-stop group=%d epoch=%d reason=%s"):format(groupId, epoch, tostring(reason)))
+        releaseGroupAssignment(task, true)
     end
 end)
 
@@ -812,6 +1100,41 @@ addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attacki
     setTimer(inject, 100, 1)
 end)
 
+addEvent("pedTraffic:nativePlayerDamage", true)
+addEventHandler("pedTraffic:nativePlayerDamage", resourceRoot, function(attackingPed, epoch, nonce, weapon, bodypart, damageFactor, direction)
+    if not enabled or not isElement(attackingPed) or getElementType(attackingPed) ~= "ped" or
+        getElementData(attackingPed, "neon:ambientPedTraffic") ~= true or not isIntegerInRange(epoch, 1, 2147483647) or
+        getElementData(attackingPed, "neon:ambientPedTrafficEpoch") ~= epoch or
+        not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 15) or
+        (bodypart ~= 0 and not isIntegerInRange(bodypart, 3, 9)) or not isIntegerInRange(damageFactor, 1, 200) or
+        not isIntegerInRange(direction, 0, 3) or type(addPedNativeDamageEvent) ~= "function" then
+        return
+    end
+
+    -- A reliable hit from an older owner must not cross a completed handoff.
+    -- The new syncer can generate its own native collision, which would make
+    -- replaying the old epoch a double hit.
+    if isElementSyncer(attackingPed) then
+        return
+    end
+
+    local previous = nativePlayerDamageReceipts[attackingPed]
+    if previous and (epoch < previous.epoch or (epoch == previous.epoch and nonce <= previous.nonce)) then
+        return
+    end
+
+    local token = nativeEventProfiles[attackingPed]
+    if not token then
+        return
+    end
+
+    nativePlayerDamageReceipts[attackingPed] = {epoch = epoch, nonce = nonce}
+    local accepted = addPedNativeDamageEvent(localPlayer, attackingPed, weapon, bodypart, damageFactor, direction, token)
+    log(("native-player-damage id=%s epoch=%d nonce=%d accepted=%s weapon=%d bodypart=%d factor=%d direction=%d health=%.2f"):format(
+            tostring(getElementData(attackingPed, "neon:ambientPedTrafficId")), epoch, nonce, tostring(accepted), weapon,
+            bodypart, damageFactor, direction, getElementHealth(localPlayer)), accepted and 3 or 2)
+end)
+
 addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
     if not enabled or getElementData(source, "neon:ambientPedTraffic") ~= true then
         return
@@ -827,6 +1150,7 @@ addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
     local token = nativeEventProfiles[source]
     if token and isPedNativeEventProfileActive(source, token) then
         rememberNativeDamage(source, attacker, weapon, bodypart)
+        traceNativeDamageSource(source, attacker, weapon, bodypart, "owner")
         log(("damage-observed id=%s role=owner weapon=%s bodypart=%s"):format(
                 tostring(getElementData(source, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart)))
         return
@@ -840,9 +1164,44 @@ addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
         return
     end
 
+    traceNativeDamageSource(source, attacker, weapon, bodypart, "observer")
     log(("damage-observed id=%s role=observer weapon=%s bodypart=%s"):format(
             tostring(getElementData(source, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart)))
     triggerServerEvent("pedTraffic:damageObserved", resourceRoot, source, weapon, bodypart)
+end)
+
+addEventHandler("onClientPlayerNativeDamageAttempt", root, function(attacker, weapon, bodypart, damageFactor, direction)
+    if not enabled or source == localPlayer or not isElement(attacker) or getElementType(attacker) ~= "ped" or
+        getElementData(attacker, "neon:ambientPedTraffic") ~= true or not isElementSyncer(attacker) then
+        return
+    end
+
+    local token = nativeEventProfiles[attacker]
+    if not token or not isPedNativeEventProfileActive(attacker, token) then
+        return
+    end
+
+    local task = assignments[attacker] or groupByPed[attacker]
+    if not task or not task.accepted or not isIntegerInRange(task.epoch, 1, 2147483647) then
+        return
+    end
+
+    -- Only CWeapon::GenerateDamageEvent carries the exact pre-calculator
+    -- factor. Refuse to guess from loss: armour, victim stats and friendly-fire
+    -- modifiers make that value non-invertible.
+    if not isIntegerInRange(damageFactor, 1, 200) or not isIntegerInRange(direction, 0, 3) then
+        log(("native-player-damage-observed id=%s accepted=false reason=missing-native-factor weapon=%s bodypart=%s factor=%s direction=%s"):format(
+                tostring(getElementData(attacker, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart),
+                tostring(damageFactor), tostring(direction)), 2)
+        return
+    end
+
+    nextNativePlayerDamageNonce = nextNativePlayerDamageNonce % 2147483647 + 1
+    log(("native-player-damage-observed id=%s epoch=%d nonce=%d victim=%s weapon=%s bodypart=%s factor=%d direction=%d"):format(
+            tostring(getElementData(attacker, "neon:ambientPedTrafficId")), task.epoch, nextNativePlayerDamageNonce,
+            getPlayerName(source), tostring(weapon), tostring(bodypart), damageFactor, direction))
+    triggerServerEvent("pedTraffic:nativePlayerDamageObserved", resourceRoot, attacker, source, task.epoch,
+                       nextNativePlayerDamageNonce, weapon, bodypart, damageFactor, direction)
 end)
 
 local function getActiveGunAimTarget()
@@ -897,9 +1256,13 @@ end)
 addEventHandler("onClientElementDestroy", root, function()
     observedAimTargets[source] = nil
     nativeDamageObservations[source] = nil
+    nativeDamageTraceTimes[source] = nil
+    nativePlayerDamageReceipts[source] = nil
     vehicleReactionStates[source] = nil
     airTestSessions[source] = nil
     climbTestSessions[source] = nil
+    local groupTask = groupByPed[source]
+    if groupTask then releaseGroupAssignment(groupTask, true) end
     local task = assignments[source]
     if task then releaseTask(task, false) end
     releaseTrafficEventProfile(source)
@@ -919,6 +1282,11 @@ end)
 addEventHandler("onClientResourceStop", resourceRoot, function()
     airTestSessions = {}
     climbTestSessions = {}
+    nativeDamageTraceTimes = {}
+    nativePlayerDamageReceipts = {}
+    local groups = {}
+    for _, task in pairs(groupAssignments) do groups[#groups + 1] = task end
+    for _, task in ipairs(groups) do releaseGroupAssignment(task, true) end
     local current = {}
     for _, task in pairs(assignments) do current[#current + 1] = task end
     for _, task in ipairs(current) do releaseTask(task, true) end
@@ -1021,14 +1389,22 @@ end, 50, 0)
 setTimer(function()
     if debugEnabled then
         local active = 0
+        local activeGroups = 0
         local profiles = 0
         for _, task in pairs(assignments) do
             if task.accepted then active = active + 1 end
         end
+        for _, task in pairs(groupAssignments) do
+            if task.accepted then
+                activeGroups = activeGroups + 1
+                active = active + #task.peds
+            end
+        end
         for _ in pairs(nativeEventProfiles) do profiles = profiles + 1 end
-        log(("telemetry active=%d profiles=%d worldReady=%s preset=%s revision=%d hits=%d misses=%d assignments=%d failures=%d missReasons=%s"):format(
-                active, profiles, tostring(populationWorldReady), populationWorldPreset, populationWorldRevision, stats.candidateHits,
-                stats.candidateMisses, stats.assignments, stats.failures, formatReasons(stats.missReasons)))
+        log(("telemetry active=%d groups=%d profiles=%d worldReady=%s preset=%s revision=%d hits=%d misses=%d assignments=%d groupAssignments=%d failures=%d groupFailures=%d missReasons=%s"):format(
+                active, activeGroups, profiles, tostring(populationWorldReady), populationWorldPreset, populationWorldRevision,
+                stats.candidateHits, stats.candidateMisses, stats.assignments, stats.groupAssignments, stats.failures,
+                stats.groupFailures, formatReasons(stats.missReasons)))
     end
 end, 10000, 0)
 
@@ -1041,6 +1417,7 @@ setTimer(function()
         if getElementData(ped, "neon:ambientPedTraffic") == true then
             local id = tonumber(getElementData(ped, "neon:ambientPedTrafficId")) or -1
             local x, y, z = getElementPosition(ped)
+            local _, _, heading = getElementRotation(ped)
             local vx, vy, vz = getElementVelocity(ped)
             local horizontalSpeed = math.sqrt(vx * vx + vy * vy)
             local moveState = type(getPedMoveState) == "function" and getPedMoveState(ped) or "unavailable"
@@ -1048,15 +1425,32 @@ setTimer(function()
             local profileToken = nativeEventProfiles[ped]
             local profileRole = profileToken and isPedNativeEventProfileActive(ped, profileToken) and "owner" or
                                     (profileToken and "observer" or "missing")
+            local groupId = getElementData(ped, "neon:ambientPedGroupId") or "none"
+            local groupRole = getElementData(ped, "neon:ambientPedGroupRole") or "none"
             local threatRoot, threatLeaf = getThreatState(ped)
             local vehicleRoot, vehicleLeaf = getVehicleReactionState(ped)
-            log(("ped id=%d model=%d syncer=%s streamed=%s profile=%s avoid=%s threat=%s/%s vehicle=%s/%s nativeStyle=%s move=%s speed=%.5f velocity=(%.5f,%.5f,%.5f) pos=(%.2f,%.2f,%.2f)"):format(
-                    id, getElementModel(ped), tostring(isElementSyncer(ped)), tostring(isElementStreamedIn(ped)), profileRole,
-                    tostring(getAvoidanceState(ped)), tostring(threatRoot), tostring(threatLeaf), tostring(vehicleRoot), tostring(vehicleLeaf),
-                    tostring(nativeStyle), tostring(moveState), horizontalSpeed, vx, vy, vz, x, y, z))
+            log(("ped id=%d model=%d group=%s/%s syncer=%s streamed=%s profile=%s avoid=%s threat=%s/%s vehicle=%s/%s nativeStyle=%s move=%s speed=%.5f velocity=(%.5f,%.5f,%.5f) pos=(%.2f,%.2f,%.2f) heading=%.1f"):format(
+                    id, getElementModel(ped), tostring(groupId), tostring(groupRole), tostring(isElementSyncer(ped)),
+                    tostring(isElementStreamedIn(ped)), profileRole, tostring(getAvoidanceState(ped)), tostring(threatRoot),
+                    tostring(threatLeaf), tostring(vehicleRoot), tostring(vehicleLeaf), tostring(nativeStyle), tostring(moveState),
+                    horizontalSpeed, vx, vy, vz, x, y, z, heading))
         end
     end
 end, 2000, 0)
+
+addEventHandler("onClientElementStreamIn", root, function()
+    if not debugEnabled or getElementType(source) ~= "ped" or
+        getElementData(source, "neon:ambientPedTraffic") ~= true then
+        return
+    end
+
+    local id = tonumber(getElementData(source, "neon:ambientPedTrafficId")) or -1
+    local groupId = getElementData(source, "neon:ambientPedGroupId") or "none"
+    local x, y, z = getElementPosition(source)
+    local _, _, heading = getElementRotation(source)
+    log(("stream-in id=%d group=%s syncer=%s pos=(%.2f,%.2f,%.2f) heading=%.1f"):format(
+            id, tostring(groupId), tostring(isElementSyncer(source)), x, y, z, heading))
+end)
 
 setTimer(function()
     if not debugEnabled then

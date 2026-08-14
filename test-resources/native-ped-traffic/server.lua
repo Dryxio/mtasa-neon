@@ -15,7 +15,41 @@ local config = {
     handoffHold = 3000,
     handoffTimeout = 2000,
     corpseLifetime = 30000,
+    nativeMeleeDamageRadius = 5,
+    nativeMeleeDamageInterval = 250,
+    minimumGangGroupSize = 2,
+    maximumGangGroupSize = 4,
+    maximumGangGroupSpan = 8,
+    -- GTA has eight global group slots and normally reserves one for the
+    -- player. Leave two more available to unrelated mission/resource logic.
+    maximumNativeGangGroups = 5,
 }
+
+-- MTA represents scripted peds with CPlayerPed, whose constructor selects
+-- STYLE_GRAB_KICK (15). Stock ambient CPed selects STYLE_STANDARD (4), so every
+-- traffic spawn below explicitly restores style 4 before native AI runs.
+-- CTaskSimpleFight then uses UNARMED_1. Gang pedstats have attackStrength=1.0,
+-- while the stock civilian profiles span 0.3..1.5. These are the exact integer factors
+-- reachable after GetStrikeDamage applies that multiplier and truncates. Keep
+-- this canonical allowlist narrower than the engine primitive: accepting the
+-- full melee.dat 1..200 range would let a compromised syncer claim the
+-- UNARMED_4 instant-kill strike for an ordinary traffic ped.
+local stockUnarmedGangDamageFactors = {[5] = true, [6] = true, [9] = true, [15] = true, [25] = true}
+local stockUnarmedCivilianDamageFactors = {
+    [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true, [8] = true,
+    [9] = true, [10] = true, [12] = true, [13] = true, [15] = true, [16] = true, [17] = true,
+    [18] = true, [20] = true, [22] = true, [25] = true, [27] = true, [30] = true, [37] = true,
+}
+
+local function isCanonicalTrafficMeleeDamage(record, weapon, damageFactor)
+    if weapon ~= 0 then
+        return false
+    end
+    if record.populationClass == "gang" then
+        return stockUnarmedGangDamageFactors[damageFactor] == true
+    end
+    return record.populationClass == "civilian" and stockUnarmedCivilianDamageFactors[damageFactor] == true
+end
 
 -- Stock peds.ide/pedgrp.dat mapping. The server cannot inspect a model's native
 -- CPedModelInfo type, so this allowlist authenticates the gang identity claimed
@@ -54,6 +88,7 @@ local enabled = false
 local debugEnabled = false
 local nextRequestId = 0
 local nextPedId = 0
+local nextGroupId = 0
 local nextAirTestId = 0
 local nextClimbTestId = 0
 local requestCursor = 0
@@ -62,6 +97,7 @@ local populationProfiles = {}
 local populationWorld = PedTrafficPopulationWorld.create("post_intro")
 local populationWorldRevisions = {}
 local trafficPeds = {}
+local trafficGroups = {}
 local testVehicles = {}
 local stats = {
     requests = 0,
@@ -75,6 +111,10 @@ local stats = {
     populationSelections = {civilian = 0, gang = 0},
     gangSelections = {[0] = 0, [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0, [6] = 0, [7] = 0, [8] = 0, [9] = 0},
     spawnedModels = {},
+    groupSpawns = 0,
+    groupHandoffs = 0,
+    groupRemovals = 0,
+    groupPromotions = 0,
 }
 
 local function log(message, force)
@@ -186,10 +226,15 @@ end
 local function calculateNativeTargets(profile)
     -- Stock adds while integerCount < floatTarget, which is equivalent to a
     -- ceiling once represented by server-owned elements.
-    local supportedTarget = profile.supportedTarget * populationWorld.densityMultiplier
     local civilianNativeTarget = profile.civilianTarget * populationWorld.densityMultiplier
     local gangNativeTarget = populationWorld.randomGangMembers and profile.gangTarget * populationWorld.densityMultiplier or 0
-    supportedTarget = populationWorld.randomGangMembers and supportedTarget or civilianNativeTarget
+    local supportedTarget = civilianNativeTarget + gangNativeTarget
+    local supportedGangWeight = 0
+    for index = 1, 8 do supportedGangWeight = supportedGangWeight + profile.gangWeights[index] end
+    if profile.totalGangWeight > 0 and supportedGangWeight < profile.totalGangWeight then
+        gangNativeTarget = gangNativeTarget * supportedGangWeight / profile.totalGangWeight
+        supportedTarget = civilianNativeTarget + gangNativeTarget
+    end
     if supportedTarget <= 0 then
         return 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     end
@@ -202,9 +247,9 @@ local function calculateNativeTargets(profile)
     local gang = gangNativeTarget * scale
     local total = math.max(0, math.ceil(civilian + gang - 0.0001))
     local gangTargets = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-    if gang > 0 and profile.totalGangWeight > 0 then
-        for index = 1, 10 do
-            gangTargets[index] = gang * profile.gangWeights[index] / profile.totalGangWeight
+    if gang > 0 and supportedGangWeight > 0 then
+        for index = 1, 8 do
+            gangTargets[index] = gang * profile.gangWeights[index] / supportedGangWeight
         end
     end
     return total, civilian, gang, gangTargets
@@ -305,8 +350,16 @@ local function chooseGangFromDeficit(profile, gangTarget, gangCounts)
     local selectedGang = false
     local selectedScore = 0
     local scores = {}
-    for index = 1, 10 do
-        local score = profile.gangWeights[index] / profile.totalGangWeight - gangCounts[index] / gangTarget
+    -- GTA's stock slots 8/9 reuse GANG8 model identity and cannot currently
+    -- be represented by Neon's explicit ped-type contract. Keep them outside
+    -- this supported checkpoint instead of issuing an impossible client hint.
+    local supportedWeight = 0
+    for index = 1, 8 do supportedWeight = supportedWeight + profile.gangWeights[index] end
+    if supportedWeight <= 0 then
+        return false
+    end
+    for index = 1, 8 do
+        local score = profile.gangWeights[index] / supportedWeight - gangCounts[index] / gangTarget
         scores[index] = score
         -- Vanilla's strict argmax starts at gang zero, so the lower gang ID
         -- wins an exact tie. A positive aggregate gang deficit guarantees at
@@ -455,7 +508,7 @@ local function findFurthestPopulationPed(x, y, z, radius, predicate)
     local furthestDistanceSquared = -1
     local radiusSquared = radius * radius
     for ped, record in pairs(trafficPeds) do
-        if isElement(ped) and not record.removing and record.state == "active" and not isPedDead(ped) and not record.airTest and
+        if isElement(ped) and not record.group and not record.removing and record.state == "active" and not isPedDead(ped) and not record.airTest and
             not record.climbTest and getTickCount() - (record.lastInteractionAt or 0) >= 10000 and predicate(record) and
             isPopulationPedSurplusForAllResidents(record) then
             local px, py, pz = getElementPosition(ped)
@@ -480,10 +533,76 @@ local function findFurthestPopulationPed(x, y, z, radius, predicate)
     return furthestRecord
 end
 
+local function findFurthestSurplusPopulationGroup(x, y, z, radius, gang, requireTotalSurplus)
+    local furthestGroup = false
+    local furthestDistanceSquared = -1
+    local radiusSquared = radius * radius
+    local safeRadiusSquared = config.retireSafeRadius * config.retireSafeRadius
+    for _, group in pairs(trafficGroups) do
+        if not group.removing and group.state == "active" and (gang == nil or group.gang == gang) then
+            local centreX, centreY, centreZ, memberCount = 0, 0, 0, 0
+            local eligible = true
+            for _, record in ipairs(group.members) do
+                if not isElement(record.ped) or isPedDead(record.ped) or getTickCount() - (record.lastInteractionAt or 0) < 10000 then
+                    eligible = false
+                    break
+                end
+                local px, py, pz = getElementPosition(record.ped)
+                centreX, centreY, centreZ = centreX + px, centreY + py, centreZ + pz
+                memberCount = memberCount + 1
+            end
+            if eligible and memberCount > 0 then
+                centreX, centreY, centreZ = centreX / memberCount, centreY / memberCount, centreZ / memberCount
+                local distanceSquared = squaredDistance(x, y, z, centreX, centreY, centreZ)
+                local surplusForEveryResident = true
+                local residentCount = 0
+                for _, player in ipairs(getEligiblePlayers()) do
+                    local playerX, playerY, playerZ = getElementPosition(player)
+                    local residentDistanceSquared = squaredDistance(centreX, centreY, centreZ, playerX, playerY, playerZ)
+                    if residentDistanceSquared < safeRadiusSquared then
+                        surplusForEveryResident = false
+                        break
+                    end
+                    if residentDistanceSquared <= config.nearRadius * config.nearRadius then
+                        residentCount = residentCount + 1
+                        local nativeTarget, _, _, gangTargets = getNativeTargetsNearPlayer(player)
+                        if nativeTarget == false then
+                            surplusForEveryResident = false
+                            break
+                        end
+                        local totalCount, _, gangCounts = getPopulationCountsNear(playerX, playerY, playerZ, config.nearRadius)
+                        if (requireTotalSurplus and totalCount - nativeTarget < memberCount) or
+                            gangCounts[group.gang + 1] - gangTargets[group.gang + 1] < memberCount then
+                            surplusForEveryResident = false
+                            break
+                        end
+                    end
+                end
+                if residentCount == 0 then
+                    surplusForEveryResident = false
+                end
+                if surplusForEveryResident and distanceSquared <= radiusSquared and distanceSquared > furthestDistanceSquared then
+                    furthestGroup = group
+                    furthestDistanceSquared = distanceSquared
+                end
+            end
+        end
+    end
+    return furthestGroup
+end
+
 local function getTrafficPedCount()
     local count = 0
     for ped in pairs(trafficPeds) do
         if isElement(ped) then count = count + 1 end
+    end
+    return count
+end
+
+local function getTrafficGroupCount()
+    local count = 0
+    for _, group in pairs(trafficGroups) do
+        if not group.removing then count = count + 1 end
     end
     return count
 end
@@ -547,9 +666,14 @@ local function stopClimbTest(record, reason)
     record.climbTest = nil
 end
 
+local removeGroup
+
 local function removeRecord(record, reason)
     if not record or record.removing then
         return
+    end
+    if record.group then
+        return removeGroup(record.group, reason)
     end
     record.removing = true
     if record.airTest then
@@ -636,6 +760,10 @@ local function assignOwner(record, owner, reason)
         removeRecord(record, "syncer-refused")
         return false
     end
+    -- Victim-side damage replay can outlive the owner packet that produced it.
+    -- Replicate the sparse authority generation so every observer, including a
+    -- third client that is neither old nor new owner, can reject a stale hit.
+    setElementData(record.ped, "neon:ambientPedTrafficEpoch", record.epoch)
 
     -- Count successful ownership epochs here so disconnect handoffs, which skip
     -- the revoke phase, are measured consistently with ordinary handoffs.
@@ -667,7 +795,7 @@ local function findClosestActiveTrafficPed(player, maxDistance)
     local closestRecord, closestDistanceSquared
     local maximumDistanceSquared = maxDistance * maxDistance
     for _, record in pairs(trafficPeds) do
-        if not record.removing and record.state == "active" and isElement(record.ped) and not isPedDead(record.ped) and
+        if not record.group and not record.removing and record.state == "active" and isElement(record.ped) and not isPedDead(record.ped) and
             getElementDimension(record.ped) == getElementDimension(player) and getElementInterior(record.ped) == getElementInterior(player) then
             local px, py, pz = getElementPosition(record.ped)
             local distanceSquared = squaredDistance(x, y, z, px, py, pz)
@@ -836,10 +964,156 @@ local function beginHandoff(record, newOwner, reason)
     end
 end
 
+local function getGroupCentre(group)
+    local x, y, z, count = 0, 0, 0, 0
+    for _, record in ipairs(group.members) do
+        if isElement(record.ped) then
+            local px, py, pz = getElementPosition(record.ped)
+            x, y, z, count = x + px, y + py, z + pz, count + 1
+        end
+    end
+    if count == 0 then
+        return false
+    end
+    return x / count, y / count, z / count
+end
+
+local function setGroupState(group, state)
+    group.state = state
+    for _, record in ipairs(group.members) do
+        record.owner = group.owner
+        record.pendingOwner = group.pendingOwner
+        record.state = state
+        record.epoch = group.epoch
+    end
+end
+
+local function sendGroupAssignment(group, reason)
+    if not group or group.removing or group.state ~= "assigning" or not isElement(group.owner) then
+        return false
+    end
+    local peds = {}
+    for _, record in ipairs(group.members) do
+        if not isElement(record.ped) then
+            return false
+        end
+        peds[#peds + 1] = record.ped
+    end
+    group.assignmentLastSent = getTickCount()
+    return triggerClientEvent(group.owner, "pedTraffic:assignGroup", resourceRoot, group.id, group.epoch, peds, reason)
+end
+
+removeGroup = function(group, reason)
+    if not group or group.removing then
+        return
+    end
+    group.removing = true
+    trafficGroups[group.id] = nil
+    if isElement(group.owner) then
+        triggerClientEvent(group.owner, "pedTraffic:stopGroup", resourceRoot, group.id, group.epoch, reason)
+    end
+
+    local removed = 0
+    for _, record in ipairs(group.members) do
+        if not record.removing then
+            record.removing = true
+            trafficPeds[record.ped] = nil
+            if isElement(record.ped) then
+                destroyElement(record.ped)
+            end
+            removed = removed + 1
+        end
+    end
+    if group.counted then
+        stats.despawned = stats.despawned + removed
+        stats.groupRemovals = stats.groupRemovals + 1
+    end
+    log(("group-despawn group=%d gang=%d members=%d reason=%s active=%d"):format(
+            group.id, group.gang, removed, tostring(reason), getTrafficPedCount()))
+end
+
+local function assignGroupOwner(group, owner, reason)
+    if not group or group.removing or not isEligiblePlayer(owner) then
+        return false
+    end
+    for _, record in ipairs(group.members) do
+        if not isElement(record.ped) then
+            removeGroup(group, "member-missing-before-assign")
+            return false
+        end
+    end
+
+    local isHandoff = group.epoch > 0
+    group.owner = owner
+    group.pendingOwner = nil
+    group.epoch = group.epoch + 1
+    group.handoffCandidate = nil
+    group.handoffCandidateSince = nil
+    group.handoffDeadline = nil
+    group.assignmentStartedAt = getTickCount()
+    group.assignmentLastSent = 0
+    setGroupState(group, "assigning")
+
+    -- A native group may only be driven by one machine. Commit every MTA
+    -- syncer before asking that owner to acquire the local GTA group slot.
+    for _, record in ipairs(group.members) do
+        if not setElementSyncer(record.ped, owner, true) then
+            removeGroup(group, "group-syncer-refused")
+            return false
+        end
+    end
+    for _, record in ipairs(group.members) do
+        setElementData(record.ped, "neon:ambientPedTrafficEpoch", group.epoch)
+    end
+    if isHandoff then
+        stats.handoffs = stats.handoffs + 1
+        stats.groupHandoffs = stats.groupHandoffs + 1
+    end
+    if not sendGroupAssignment(group, reason) then
+        removeGroup(group, "group-assignment-send-refused")
+        return false
+    end
+    log(("group-assign group=%d epoch=%d gang=%d members=%d owner=%s reason=%s"):format(
+            group.id, group.epoch, group.gang, #group.members, getPlayerName(owner), tostring(reason)))
+    return true
+end
+
+local function finishGroupHandoff(group, reason)
+    if not group or group.removing then
+        return
+    end
+    local owner = group.pendingOwner
+    if not isEligiblePlayer(owner) then
+        local x, y, z = getGroupCentre(group)
+        owner = x and findClosestPlayer(x, y, z, config.despawnRadius) or false
+    end
+    if not owner then
+        removeGroup(group, "group-handoff-no-owner")
+        return
+    end
+    assignGroupOwner(group, owner, reason)
+end
+
+local function beginGroupHandoff(group, newOwner, reason)
+    if not group or group.removing or group.state == "revoking" or newOwner == group.owner then
+        return
+    end
+    group.pendingOwner = newOwner
+    group.handoffDeadline = getTickCount() + config.handoffTimeout
+    setGroupState(group, "revoking")
+    if isElement(group.owner) then
+        triggerClientEvent(group.owner, "pedTraffic:revokeGroup", resourceRoot, group.id, group.epoch, reason)
+        log(("group-revoke group=%d epoch=%d old=%s new=%s reason=%s"):format(
+                group.id, group.epoch, getPlayerName(group.owner), getPlayerName(newOwner), tostring(reason)))
+    else
+        finishGroupHandoff(group, "group-owner-departed")
+    end
+end
+
 local function validateCandidate(player, candidate)
     if type(candidate) ~= "table" or not isFiniteNumber(candidate.x) or not isFiniteNumber(candidate.y) or
         not isFiniteNumber(candidate.z) or not isFiniteNumber(candidate.model) or not isFiniteNumber(candidate.pedType) or
-        not isFiniteNumber(candidate.direction) then
+        not isFiniteNumber(candidate.direction) or (candidate.populationClass == "gang" and not isFiniteNumber(candidate.heading)) then
         return false, "shape"
     end
 
@@ -849,7 +1123,7 @@ local function validateCandidate(player, candidate)
     local populationClass = candidate.populationClass
     local gang = candidate.gang
     if not isIntegerInRange(model, 7, 288) or not isIntegerInRange(pedType, 4, 16) or
-        not isIntegerInRange(direction, 0, 7) then
+        not isIntegerInRange(direction, 0, 7) or (populationClass == "gang" and (candidate.heading < -360 or candidate.heading > 360)) then
         return false, "candidate-contract"
     end
     if populationClass == "civilian" then
@@ -882,6 +1156,162 @@ local function validateCandidate(player, candidate)
         return false, "other-player-too-close"
     end
     return true, model, direction, populationClass, gang
+end
+
+local function validateGroupCandidate(player, candidate, selection)
+    local members = type(candidate) == "table" and (candidate.members or candidate) or false
+    local maximum = type(selection) == "table" and tonumber(selection.maximumGroupMembers) or 0
+    if type(members) ~= "table" or #members < config.minimumGangGroupSize or
+        #members > config.maximumGangGroupSize or #members > maximum then
+        return false, "group-size"
+    end
+
+    local validated = {}
+    local plannedCells = {}
+    local anchorX, anchorY, anchorZ
+    local maximumSpanSquared = config.maximumGangGroupSpan * config.maximumGangGroupSpan
+    for index, candidateMember in ipairs(members) do
+        local valid, modelOrReason, direction, populationClass, gang = validateCandidate(player, candidateMember)
+        if not valid then
+            return false, "group-member-" .. tostring(index) .. ":" .. tostring(modelOrReason)
+        end
+        if populationClass ~= "gang" or gang ~= selection.gang then
+            return false, "group-population-hint-mismatch"
+        end
+        if index == 1 then
+            anchorX, anchorY, anchorZ = candidateMember.x, candidateMember.y, candidateMember.z
+        elseif squaredDistance(candidateMember.x, candidateMember.y, candidateMember.z, anchorX, anchorY, anchorZ) > maximumSpanSquared then
+            return false, "group-span"
+        end
+        for previousIndex = 1, index - 1 do
+            local previous = members[previousIndex]
+            if squaredDistance(candidateMember.x, candidateMember.y, candidateMember.z, previous.x, previous.y, previous.z) < 0.5 * 0.5 then
+                return false, "group-member-overlap"
+            end
+        end
+
+        local cellX, cellY = cellForPosition(candidateMember.x, candidateMember.y)
+        local cellKey = tostring(cellX) .. ":" .. tostring(cellY)
+        plannedCells[cellKey] = (plannedCells[cellKey] or 0) + 1
+        if countPedsInCell(cellX, cellY) + plannedCells[cellKey] > config.maxPerCell then
+            return false, "group-cell-full"
+        end
+        validated[index] = {
+            candidate = candidateMember,
+            model = modelOrReason,
+            direction = direction,
+        }
+    end
+    return true, validated
+end
+
+local function spawnGangGroup(player, candidate, selection)
+    if not enabled or not isEligiblePlayer(player) then
+        return false, "runtime-unavailable"
+    end
+    if getTrafficGroupCount() >= config.maximumNativeGangGroups then
+        return false, "native-group-cap"
+    end
+    local valid, validatedOrReason = validateGroupCandidate(player, candidate, selection)
+    if not valid then
+        return false, validatedOrReason
+    end
+    local validated = validatedOrReason
+    local memberCount = #validated
+    if getTrafficPedCount() + memberCount > config.globalCap or
+        #getElementsByType("ped") + memberCount > config.pedPoolSoftLimit then
+        return false, "group-capacity-changed"
+    end
+    local stillNeeded, staleReason = isSelectionStillNeeded(player, selection)
+    if not stillNeeded then
+        return false, staleReason
+    end
+
+    nextGroupId = nextGroupId + 1
+    local group = {
+        id = nextGroupId,
+        gang = selection.gang,
+        members = {},
+        owner = nil,
+        epoch = 0,
+        state = "created",
+        createdAt = getTickCount(),
+    }
+    trafficGroups[group.id] = group
+
+    for index, member in ipairs(validated) do
+        local candidateMember = member.candidate
+        local ped = createPed(member.model, candidateMember.x, candidateMember.y, candidateMember.z, candidateMember.heading)
+        if not ped then
+            removeGroup(group, "group-create-ped-refused")
+            return false, "group-create-ped"
+        end
+        nextPedId = nextPedId + 1
+        local record = {
+            id = nextPedId,
+            ped = ped,
+            owner = nil,
+            epoch = 0,
+            direction = member.direction,
+            populationClass = "gang",
+            gang = selection.gang,
+            state = "created",
+            createdAt = group.createdAt,
+            group = group,
+            groupIndex = index,
+        }
+        group.members[index] = record
+        trafficPeds[ped] = record
+        setElementDimension(ped, 0)
+        setElementInterior(ped, 0)
+        setElementData(ped, "neon:ambientPedTraffic", true)
+        setElementData(ped, "neon:ambientPedTrafficId", record.id)
+        setElementData(ped, "neon:ambientPedPopulationClass", "gang")
+        setElementData(ped, "neon:ambientPedGang", selection.gang)
+        setElementData(ped, "neon:ambientPedGroupId", group.id)
+        setElementData(ped, "neon:ambientPedGroupIndex", index)
+        setElementData(ped, "neon:ambientPedGroupRole", index == 1 and "leader" or "member")
+        if not setPedFightingStyle(ped, 4) then
+            removeGroup(group, "group-vanilla-fighting-style-refused")
+            return false, "group-vanilla-fighting-style"
+        end
+        if not setPedUseNativeWalkingStyle(ped, true) then
+            removeGroup(group, "group-native-walking-style-refused")
+            return false, "group-native-walking-style"
+        end
+    end
+    group.leader = group.members[1]
+
+    local centreX, centreY, centreZ = getGroupCentre(group)
+    local owner = centreX and findClosestPlayer(centreX, centreY, centreZ, config.despawnRadius) or false
+    if not owner then
+        removeGroup(group, "group-no-owner")
+        return false, "group-no-owner"
+    end
+    if not assignGroupOwner(group, owner, "group-spawn") then
+        return false, "group-assign-owner"
+    end
+
+    group.counted = true
+    stats.groupSpawns = stats.groupSpawns + 1
+    stats.spawned = stats.spawned + memberCount
+    local models = {}
+    local spawnTransforms = {}
+    for _, member in ipairs(validated) do
+        stats.spawnedModels[member.model] = (stats.spawnedModels[member.model] or 0) + 1
+        models[#models + 1] = tostring(member.model)
+    end
+    for _, record in ipairs(group.members) do
+        local x, y, z = getElementPosition(record.ped)
+        local _, _, heading = getElementRotation(record.ped)
+        spawnTransforms[#spawnTransforms + 1] = ("id=%d:(%.2f,%.2f,%.2f)@%.1f"):format(record.id, x, y, z, heading)
+    end
+    log(("group-spawn group=%d gang=%d members=%d models=%s owner=%s epoch=%d target=%.2f live=%d pos=%.1f,%.1f,%.1f"):format(
+            group.id, group.gang, memberCount, table.concat(models, "/"), getPlayerName(owner), group.epoch,
+            selection.gangTarget, selection.totalGangCount, centreX, centreY, centreZ), true)
+    log(("group-spawn-transform group=%d epoch=%d members=[%s]"):format(
+            group.id, group.epoch, table.concat(spawnTransforms, ";")), true)
+    return true
 end
 
 local function spawnCandidate(player, candidate, selection)
@@ -933,6 +1363,11 @@ local function spawnCandidate(player, candidate, selection)
     setElementData(ped, "neon:ambientPedTrafficId", record.id)
     setElementData(ped, "neon:ambientPedPopulationClass", populationClass)
     setElementData(ped, "neon:ambientPedGang", gang)
+
+    if not setPedFightingStyle(ped, 4) then
+        removeRecord(record, "vanilla-fighting-style-refused")
+        return false, "vanilla-fighting-style"
+    end
 
     -- Persist this through the server custom-data lane so observers use the
     -- same native walk style as the machine running WanderStandard.
@@ -1065,7 +1500,12 @@ addEventHandler("pedTraffic:candidate", resourceRoot, function(requestId, worldR
         return
     end
 
-    local created, reason = spawnCandidate(player, candidate, request.selection)
+    local created, reason
+    if request.selection.populationClass == "gang" then
+        created, reason = spawnGangGroup(player, candidate, request.selection)
+    else
+        created, reason = spawnCandidate(player, candidate, request.selection)
+    end
     if not created then
         stats.rejected = stats.rejected + 1
         countReason(stats.rejectionReasons, reason)
@@ -1203,6 +1643,37 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
     end
 end)
 
+addEvent("pedTraffic:groupEvidence", true)
+addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoch, evidence, data)
+    local group = trafficGroups[tonumber(groupId)]
+    if not group or group.removing or group.epoch ~= epoch or client ~= group.owner then
+        return
+    end
+    if evidence == "accepted" and group.state == "assigning" then
+        setGroupState(group, "active")
+        group.acceptedAt = getTickCount()
+        log(("group-accepted group=%d epoch=%d gang=%d members=%d owner=%s"):format(
+                group.id, group.epoch, group.gang, #group.members, getPlayerName(client)), true)
+        for _, record in ipairs(group.members) do
+            for _, player in ipairs(getEligiblePlayers()) do
+                if hasValidGunAimContext(player, record.ped, true) then
+                    bridgeGunAim(record, player)
+                end
+            end
+        end
+    elseif evidence == "released" and group.state == "revoking" then
+        finishGroupHandoff(group, "group-release-ack")
+    elseif evidence == "failure" then
+        local diagnostic = type(data) == "table" and type(data.nativeDiagnostic) == "table" and data.nativeDiagnostic or false
+        log(("group-client-failure group=%d epoch=%d owner=%s reason=%s nativeReason=%s nativeGroup=%s slotActive=%s tracked=%s"):format(
+                group.id, group.epoch, getPlayerName(client), type(data) == "table" and tostring(data.reason) or "unknown",
+                diagnostic and tostring(diagnostic.reason) or "unavailable", diagnostic and tostring(diagnostic.nativeGroupId) or "unavailable",
+                diagnostic and tostring(diagnostic.slotActive) or "unavailable",
+                diagnostic and tostring(diagnostic.hasTrackedMember) or "unavailable"), true)
+        removeGroup(group, "group-client-failure")
+    end
+end)
+
 addEvent("pedTraffic:gunAimObserved", true)
 addEventHandler("pedTraffic:gunAimObserved", resourceRoot, function(ped)
     local record = trafficPeds[ped]
@@ -1236,10 +1707,97 @@ addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon,
     bridgeDamageResponse(record, client, math.floor(weapon), math.floor(bodypart))
 end)
 
+addEvent("pedTraffic:nativePlayerDamageObserved", true)
+addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
+                function(attackingPed, victim, epoch, nonce, weapon, bodypart, damageFactor, direction)
+    local record = trafficPeds[attackingPed]
+    epoch = tonumber(epoch)
+    nonce = tonumber(nonce)
+    weapon = tonumber(weapon)
+    bodypart = tonumber(bodypart)
+    damageFactor = tonumber(damageFactor)
+    direction = tonumber(direction)
+    if not record or record.removing or record.state ~= "active" or client ~= record.owner or
+        getElementSyncer(attackingPed) ~= client or not isElement(victim) or getElementType(victim) ~= "player" or victim == client or
+        getElementHealth(victim) <= 0 or not isIntegerInRange(epoch, 1, 2147483647) or epoch ~= record.epoch or
+        not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 15) or
+        (bodypart ~= 0 and not isIntegerInRange(bodypart, 3, 9)) or not isIntegerInRange(damageFactor, 1, 200) or
+        not isIntegerInRange(direction, 0, 3) then
+        return
+    end
+
+    if record.group and (record.group.removing or record.group.state ~= "active" or record.group.owner ~= client or
+        record.group.epoch ~= epoch) then
+        return
+    end
+
+    -- The raw factor comes from GTA's synchronous GenerateDamageEvent hook,
+    -- but remains untrusted network input. Authenticate the exclusive owner,
+    -- epoch, canonical melee weapon, collision envelope and cadence, then
+    -- require one of the factors reachable by this traffic ped's stock class.
+    local canonicalWeapon = getPedWeapon(attackingPed)
+    if canonicalWeapon ~= math.floor(weapon) or
+        not isCanonicalTrafficMeleeDamage(record, canonicalWeapon, math.floor(damageFactor)) then
+        return
+    end
+
+    local px, py, pz = getElementPosition(attackingPed)
+    local vx, vy, vz = getElementPosition(victim)
+    if getElementDimension(attackingPed) ~= getElementDimension(victim) or
+        getElementInterior(attackingPed) ~= getElementInterior(victim) or
+        squaredDistance(px, py, pz, vx, vy, vz) > config.nativeMeleeDamageRadius * config.nativeMeleeDamageRadius then
+        return
+    end
+
+    local now = getTickCount()
+    if record.nativePlayerDamageOwner == client and record.nativePlayerDamageEpoch == epoch then
+        if nonce <= (record.nativePlayerDamageNonce or 0) or now - (record.nativePlayerDamageAt or 0) < config.nativeMeleeDamageInterval then
+            return
+        end
+    end
+
+    record.nativePlayerDamageOwner = client
+    record.nativePlayerDamageEpoch = epoch
+    record.nativePlayerDamageNonce = nonce
+    record.nativePlayerDamageAt = now
+    record.lastInteractionAt = now
+    log(("native-player-damage id=%d epoch=%d nonce=%d owner=%s victim=%s weapon=%d bodypart=%d factor=%d direction=%d"):format(
+            record.id, epoch, nonce, getPlayerName(client), getPlayerName(victim), canonicalWeapon, math.floor(bodypart),
+            math.floor(damageFactor), math.floor(direction)))
+    triggerClientEvent(victim, "pedTraffic:nativePlayerDamage", resourceRoot, attackingPed, epoch, nonce,
+                       canonicalWeapon, math.floor(bodypart), math.floor(damageFactor), math.floor(direction))
+end)
+
 addEventHandler("onPedWasted", root, function()
     local record = trafficPeds[source]
     if not record then
         return
+    end
+    if record.group and record.group.leader == record then
+        local replacement = false
+        for _, member in ipairs(record.group.members) do
+            if member ~= record and isElement(member.ped) and not isPedDead(member.ped) then
+                replacement = member
+                break
+            end
+        end
+        if replacement then
+            record.group.leader = replacement
+            stats.groupPromotions = stats.groupPromotions + 1
+            for _, member in ipairs(record.group.members) do
+                if isElement(member.ped) then
+                    setElementData(member.ped, "neon:ambientPedGroupRole", member == replacement and "leader" or "member")
+                end
+            end
+            log(("group-promote group=%d epoch=%d old=%d new=%d reason=leader-wasted"):format(
+                    record.group.id, record.group.epoch, record.id, replacement.id), true)
+        else
+            log(("group-death group=%d epoch=%d member=%d role=last-alive"):format(
+                    record.group.id, record.group.epoch, record.id), true)
+        end
+    elseif record.group then
+        log(("group-death group=%d epoch=%d member=%d role=member"):format(
+                record.group.id, record.group.epoch, record.id), true)
     end
     local expectedPed = source
     setTimer(function()
@@ -1252,6 +1810,10 @@ end)
 
 addEventHandler("onElementDestroy", root, function()
     local record = trafficPeds[source]
+    if record and record.group and not record.group.removing then
+        removeGroup(record.group, "group-member-destroyed")
+        return
+    end
     if record and not record.removing then
         if record.airTest then
             triggerClientEvent(root, "pedTraffic:airTestStop", resourceRoot, record.ped, record.epoch, record.airTest.nonce,
@@ -1268,8 +1830,24 @@ addEventHandler("onPlayerQuit", root, function()
     populationProfiles[source] = nil
     populationWorldRevisions[source] = nil
     removeTestVehicle(source)
+    local groups = {}
+    for _, group in pairs(trafficGroups) do groups[#groups + 1] = group end
+    for _, group in ipairs(groups) do
+        if group.owner == source and not group.removing then
+            local x, y, z = getGroupCentre(group)
+            local newOwner = x and findClosestPlayer(x, y, z, config.despawnRadius, source) or false
+            if newOwner then
+                group.owner = nil
+                group.pendingOwner = newOwner
+                setGroupState(group, "revoking")
+                finishGroupHandoff(group, "group-owner-quit")
+            else
+                removeGroup(group, "group-owner-quit-no-fallback")
+            end
+        end
+    end
     for _, record in pairs(trafficPeds) do
-        if record.owner == source and not record.removing then
+        if not record.group and record.owner == source and not record.removing then
             local x, y, z = getElementPosition(record.ped)
             local newOwner = findClosestPlayer(x, y, z, config.despawnRadius, source)
             if newOwner then
@@ -1328,6 +1906,7 @@ setTimer(function()
         if nativeTarget and profile and now >= (profile.nextRebalanceAt or 0) and
             (totalCount > nativeTarget or (totalCount >= nativeTarget and classDeficit)) then
             local surplus = false
+            local surplusGroup = false
             if civilianCount - civilianTarget >= 1 then
                 surplus = findFurthestPopulationPed(x, y, z, config.nearRadius, function(record)
                     return record.populationClass == "civilian"
@@ -1340,24 +1919,48 @@ setTimer(function()
                         surplus = findFurthestPopulationPed(x, y, z, config.nearRadius, function(record)
                             return record.populationClass == "gang" and record.gang == gang
                         end)
-                        if surplus then break end
+                        if not surplus then
+                            surplusGroup = findFurthestSurplusPopulationGroup(x, y, z, config.nearRadius, gang, false)
+                        end
+                        if surplus or surplusGroup then break end
                     end
                 end
             end
-            if not surplus and totalCount > nativeTarget then
+            if not surplus and not surplusGroup and totalCount > nativeTarget then
                 surplus = findFurthestPopulationPed(x, y, z, config.nearRadius, function()
                     return true
                 end)
+                if not surplus then
+                    surplusGroup = findFurthestSurplusPopulationGroup(x, y, z, config.nearRadius, nil, true)
+                end
             end
-            if surplus then
+            if surplus or surplusGroup then
                 profile.nextRebalanceAt = now + 2000
-                removeRecord(surplus, "population-rebalance")
+                if surplusGroup then
+                    removeGroup(surplusGroup, "group-population-rebalance")
+                else
+                    removeRecord(surplus, "population-rebalance")
+                end
                 break
             end
             profile.nextRebalanceAt = now + 1000
         end
 
         local selection = nativeTarget and selectPopulationForPlayer(player)
+        if selection and selection.populationClass == "gang" and
+            getTrafficGroupCount() >= config.maximumNativeGangGroups then
+            selection = false
+        end
+        if selection and selection.populationClass == "gang" then
+            selection.maximumGroupMembers = math.min(
+                config.maximumGangGroupSize,
+                config.globalCap - getTrafficPedCount(),
+                config.pedPoolSoftLimit - #getElementsByType("ped"),
+                selection.totalTarget - selection.totalCount)
+            if selection.maximumGroupMembers < config.minimumGangGroupSize then
+                selection = false
+            end
+        end
         if selection and not request and getTrafficPedCount() < config.globalCap and #getElementsByType("ped") < config.pedPoolSoftLimit then
             nextRequestId = nextRequestId + 1
             pendingRequests[player] = {
@@ -1371,12 +1974,13 @@ setTimer(function()
             if selection.populationClass == "gang" then
                 stats.gangSelections[selection.gang] = stats.gangSelections[selection.gang] + 1
             end
-            log(("arbitrate request=%d player=%s class=%s gang=%s target=%.2f/%.2f live=%d/%d deficit=%.2f/%.2f roll=%.2f/%.2f"):format(
-                    nextRequestId, getPlayerName(player), selection.populationClass, tostring(selection.gang), selection.civilianTarget,
-                    selection.gangTarget, selection.civilianCount, selection.totalGangCount, selection.civilianDeficit, selection.gangDeficit,
+            log(("arbitrate request=%d player=%s class=%s gang=%s maxMembers=%d target=%.2f/%.2f live=%d/%d deficit=%.2f/%.2f roll=%.2f/%.2f"):format(
+                    nextRequestId, getPlayerName(player), selection.populationClass, tostring(selection.gang), selection.maximumGroupMembers or 1,
+                    selection.civilianTarget, selection.gangTarget, selection.civilianCount, selection.totalGangCount,
+                    selection.civilianDeficit, selection.gangDeficit,
                     selection.civilianChance, selection.gangChance))
             triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision,
-                               selection.populationClass, selection.gang)
+                               selection.populationClass, selection.gang, selection.maximumGroupMembers or 1)
             break
         end
     end
@@ -1388,12 +1992,67 @@ setTimer(function()
     end
 
     local now = getTickCount()
+    local groups = {}
+    for _, group in pairs(trafficGroups) do groups[#groups + 1] = group end
+    for _, group in ipairs(groups) do
+        if not group.removing then
+            if group.state == "revoking" then
+                if now >= (group.handoffDeadline or 0) then
+                    finishGroupHandoff(group, "group-release-timeout")
+                end
+            elseif group.state == "assigning" then
+                if now - (group.assignmentStartedAt or now) >= 10000 then
+                    removeGroup(group, "group-assignment-timeout")
+                elseif now - (group.assignmentLastSent or 0) >= 1000 then
+                    sendGroupAssignment(group, "group-assignment-retry")
+                end
+            elseif group.state == "active" then
+                local x, y, z = getGroupCentre(group)
+                if not x then
+                    removeGroup(group, "group-empty")
+                else
+                    local closest, closestDistanceSquared = findClosestPlayer(x, y, z, config.despawnRadius)
+                    if not closest then
+                        if not group.outsideResidencySince then
+                            group.outsideResidencySince = now
+                        elseif now - group.outsideResidencySince >= config.despawnGrace then
+                            removeGroup(group, "group-outside-residency")
+                        end
+                    else
+                        group.outsideResidencySince = nil
+                        if not isEligiblePlayer(group.owner) then
+                            beginGroupHandoff(group, closest, "group-owner-ineligible")
+                        elseif closest ~= group.owner then
+                            local ownerX, ownerY, ownerZ = getElementPosition(group.owner)
+                            local ownerDistance = math.sqrt(squaredDistance(x, y, z, ownerX, ownerY, ownerZ))
+                            local closestDistance = math.sqrt(closestDistanceSquared)
+                            if closestDistance + config.handoffMargin < ownerDistance then
+                                if group.handoffCandidate ~= closest then
+                                    group.handoffCandidate = closest
+                                    group.handoffCandidateSince = now
+                                elseif now - group.handoffCandidateSince >= config.handoffHold then
+                                    beginGroupHandoff(group, closest, "group-closer-owner")
+                                end
+                            else
+                                group.handoffCandidate = nil
+                                group.handoffCandidateSince = nil
+                            end
+                        else
+                            group.handoffCandidate = nil
+                            group.handoffCandidateSince = nil
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     local records = {}
     for _, record in pairs(trafficPeds) do
         records[#records + 1] = record
     end
     for _, record in ipairs(records) do
-        if not record.removing and isElement(record.ped) then
+        if not record.group and not record.removing and isElement(record.ped) then
             if record.state == "revoking" then
                 if now >= (record.handoffDeadline or 0) then
                     finishHandoff(record, "release-timeout")
@@ -1462,9 +2121,12 @@ end, 1000, 0)
 setTimer(function()
     if debugEnabled then
         local activeCivilians, activeGangs = getActivePopulationSummary()
-        log(("telemetry active=%d activeCiv=%d activeGangs=%s ready=%d preset=%s revision=%d requests=%d misses=%d rejected=%d spawned=%d despawned=%d handoffs=%d selections=%s selectedGangs=%s models=%s missReasons=%s rejectionReasons=%s"):format(
-                getTrafficPedCount(), activeCivilians, formatNumericMap(activeGangs), #getEligiblePlayers(), populationWorld.preset,
-                populationWorld.revision, stats.requests, stats.candidateMisses, stats.rejected, stats.spawned, stats.despawned, stats.handoffs,
+        local activeGroups = getTrafficGroupCount()
+        log(("telemetry active=%d activeCiv=%d activeGangs=%s groups=%d groupSpawns=%d groupHandoffs=%d groupPromotions=%d groupRemovals=%d ready=%d preset=%s revision=%d requests=%d misses=%d rejected=%d spawned=%d despawned=%d handoffs=%d selections=%s selectedGangs=%s models=%s missReasons=%s rejectionReasons=%s"):format(
+                getTrafficPedCount(), activeCivilians, formatNumericMap(activeGangs), activeGroups, stats.groupSpawns,
+                stats.groupHandoffs, stats.groupPromotions, stats.groupRemovals,
+                #getEligiblePlayers(), populationWorld.preset, populationWorld.revision, stats.requests, stats.candidateMisses,
+                stats.rejected, stats.spawned, stats.despawned, stats.handoffs,
                 formatNumericMap(stats.populationSelections), formatNumericMap(stats.gangSelections), formatNumericMap(stats.spawnedModels),
                 formatReasons(stats.missReasons), formatReasons(stats.rejectionReasons)))
     end

@@ -548,6 +548,7 @@ public:
     bool        AddNativeGunAimedAtEvent(CPed* aimingPed) override;
     int         GetNativeCurrentEventType() const override;
     bool        AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone) override;
+    bool        AddNativeDamageEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction) override;
     eWeaponType GetLastWeaponDamage() const noexcept override { return static_cast<eWeaponType>(GetPedInterface()->lastWeaponDamage); }
     void        SetNativeTaskAirbornePresentationState(bool airborne, bool observer) override;
     bool        IsNativeTaskAirbornePresentationObserver() const noexcept override { return m_bNativeTaskAirbornePresentationObserver; }
@@ -557,6 +558,9 @@ public:
     bool        NativeFightUsesNonPlayerBehavior() const override { return m_bNativeFightUsesNonPlayerBehavior; }
     void        SetNativeJumpUsesNonPlayerBehavior(bool enabled) override { m_bNativeJumpUsesNonPlayerBehavior = enabled; }
     bool        NativeJumpUsesNonPlayerBehavior() const override { return m_bNativeJumpUsesNonPlayerBehavior; }
+    void        SetNativeAmbientGroupActive(bool active) override;
+    bool        IsNativeAmbientGroupActive() const noexcept override { return m_bNativeAmbientGroupActive; }
+    bool        IsMoveAnimationSpeedSetByTask() const noexcept override { return GetPedInterface()->pedFlags.bMoveAnimSpeedHasBeenSetByTask; }
 
     static void __fastcall RemoveWeaponWhenEnteringVehicle(CPedSAInterface* pedInterface, void*, int jetpack);
     static void            StaticSetHooks();
@@ -576,13 +580,18 @@ private:
     std::int16_t m_defaultVoiceType;
     std::int16_t m_defaultVoiceID;
 
-    std::uint32_t m_type{PLAYER_PED};
-    std::uint8_t  m_occupiedSeat;
-    bool          m_bNativeMissionEventProfileActive{false};
-    bool          m_bNativeAmbientWanderEventProfileSelected{false};
-    bool          m_bNativeAmbientWanderEventProfileActive{false};
-    bool          m_bNativeChokingUsesNonPlayerBehavior{false};
-    bool          m_bNativeFightUsesNonPlayerBehavior{false};
-    bool          m_bNativeJumpUsesNonPlayerBehavior{false};
-    bool          m_bNativeTaskAirbornePresentationObserver{false};
+    std::uint32_t               m_type{PLAYER_PED};
+    std::uint8_t                m_occupiedSeat;
+    bool                        m_bNativeMissionEventProfileActive{false};
+    bool                        m_bNativeAmbientWanderEventProfileSelected{false};
+    bool                        m_bNativeAmbientWanderEventProfileActive{false};
+    bool                        m_bNativeChokingUsesNonPlayerBehavior{false};
+    bool                        m_bNativeFightUsesNonPlayerBehavior{false};
+    bool                        m_bNativeJumpUsesNonPlayerBehavior{false};
+    bool                        m_bNativeTaskAirbornePresentationObserver{false};
+    bool                        m_bNativeAmbientGroupActive{false};
+    bool                        m_bNativeAmbientGroupDecisionMakerCaptured{false};
+    int                         m_iNativeAmbientGroupPreviousDecisionMaker{};
+    int                         m_iNativeAmbientGroupPreviousDecisionMakerInGroup{};
+    CPedAcquaintanceSAInterface m_nativeAmbientGroupPreviousAcquaintance{};
 };

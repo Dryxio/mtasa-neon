@@ -14,8 +14,10 @@
 #include "CEventDamageSA.h"
 #include "CPedSA.h"
 #include "CPedModelInfoSA.h"
+#include "CPedDamageResponseCalculatorSA.h"
 #include "CPlayerInfoSA.h"
 #include "CStatsSA.h"
+#include "TaskAttackSA.h"
 #include "CTaskManagerSA.h"
 #include "CTasksSA.h"
 #include "CProjectileInfoSA.h"
@@ -161,6 +163,26 @@ bool CPedSA::AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weapon
     if (!targetInterface || !targetInterface->pPedIntelligence || !sourceInterface || targetInterface == sourceInterface)
         return false;
 
+    // Group combat can already have installed a fight task against this exact
+    // attacker by the time the cross-owner damage fallback arrives. Feeding a
+    // second personality event into that in-flight native response makes
+    // CEventHandler urgently abort the fight-control tree. GTA's compact task
+    // pipeline is not safe under that artificial duplicate. Preserve
+    // retargeting and first-hit reactions, but suppress the redundant event
+    // once the same fight target is already authoritative on this managed
+    // ambient group member.
+    if (IsNativeAmbientGroupActive())
+    {
+        auto* const taskManager = GetPedIntelligence()->GetTaskManager();
+        auto* const attackTask = taskManager ? taskManager->GetTaskSecondary(TASK_SECONDARY_ATTACK) : nullptr;
+        if (attackTask && attackTask->GetTaskType() == TASK_SIMPLE_FIGHT)
+        {
+            const auto* const fightTask = reinterpret_cast<const CTaskSimpleFightSAInterface*>(attackTask->GetInterface());
+            if (fightTask && reinterpret_cast<const void*>(fightTask->m_pTargetEntity) == sourceInterface)
+                return false;
+        }
+    }
+
     CEventDamageSA event(attackingPed, pGame->GetSystemTime(), weaponType, hitZone, 0, false, targetInterface->pVehicle != nullptr);
     auto*          eventInterface = event.GetInterface();
 
@@ -184,6 +206,41 @@ bool CPedSA::AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weapon
 
     accepted->bAddToEventGroup = false;
     return true;
+}
+
+bool CPedSA::AddNativeDamageEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction)
+{
+    constexpr std::uintptr_t FUNC_CEventGroup_Add = 0x4AB420;
+
+    auto* targetInterface = GetPedInterface();
+    auto* sourceInterface = attackingPed ? attackingPed->GetPedInterface() : nullptr;
+    if (!targetInterface || !targetInterface->pPedIntelligence || !sourceInterface || targetInterface == sourceInterface)
+        return false;
+
+    if (damageFactor <= 0 || damageFactor > 10000 || direction > 3)
+        return false;
+
+    const float previousHealth = GetHealth();
+    const float previousArmor = GetArmor();
+
+    // CWeapon::GenerateDamageEvent computes CPedDamageResponse before the
+    // event enters CEventGroup. Repeat that ordering on the authoritative
+    // victim: the transported value is the exact pre-calculator melee factor,
+    // while health, armour, ped stats and death rules remain local GTA state.
+    CEventDamageSA event(attackingPed, pGame->GetSystemTime(), weaponType, hitZone, direction, false, targetInterface->pVehicle != nullptr);
+    if (!event.AffectsPed(this))
+        return false;
+
+    CPedDamageResponseCalculatorSA damageCalculator(attackingPed, static_cast<float>(damageFactor), weaponType, hitZone, false);
+    damageCalculator.ComputeDamageResponse(this, event.GetDamageResponse(), true);
+
+    using AddEvent = void*(__thiscall*)(void*, void*, bool);
+    const bool accepted = reinterpret_cast<AddEvent>(FUNC_CEventGroup_Add)(targetInterface->pPedIntelligence->eventGroup, event.GetInterface(), false) != nullptr;
+
+    // MTA deliberately rejects GTA's own lethal response after its local
+    // wasted pipeline has accepted the health transition. Report that replay
+    // as successful too; cancelled or locked damage restores both values.
+    return accepted || GetHealth() != previousHealth || GetArmor() != previousArmor;
 }
 
 void CPedSA::DisableSpeechForScript(bool stopCurrentSpeech)
@@ -906,4 +963,39 @@ void CPedSA::StaticSetHooks()
     HookInstallCall(0x64DB4D, (DWORD)CPedSA::RemoveWeaponWhenEnteringVehicle);  // CTaskSimpleCarGetIn::ProcessPed
     HookInstallCall(0x64BCA3, (DWORD)CPedSA::RemoveWeaponWhenEnteringVehicle);  // CTaskSimpleCarSetPedInAsDriver::ProcessPed
     HookInstallCall(0x64B876, (DWORD)CPedSA::RemoveWeaponWhenEnteringVehicle);  // CTaskSimpleCarSetPedInAsPassenger::ProcessPed
+}
+void CPedSA::SetNativeAmbientGroupActive(bool active)
+{
+    if (m_bNativeAmbientGroupActive == active)
+        return;
+
+    auto* pedInterface = GetPedInterface();
+    auto* intelligence = pedInterface ? pedInterface->pPedIntelligence : nullptr;
+    if (active)
+    {
+        if (!intelligence || !pedInterface->pPedStats)
+            return;
+        m_iNativeAmbientGroupPreviousDecisionMaker = intelligence->decisionMakerType;
+        m_iNativeAmbientGroupPreviousDecisionMakerInGroup = intelligence->decisionMakerTypeInGroup;
+        m_nativeAmbientGroupPreviousAcquaintance = pedInterface->pedAcquaintance;
+        m_bNativeAmbientGroupDecisionMakerCaptured = true;
+        intelligence->decisionMakerType = pedInterface->pPedStats->GetDefaultDecisionMaker();
+        intelligence->decisionMakerTypeInGroup = pedInterface->pPedStats->GetDefaultDecisionMaker();
+
+        auto* modelInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(pedInterface->m_nModelIndex));
+        if (modelInfo && modelInfo->pedType < 32)
+        {
+            using GetPedTypeAcquaintances = CPedAcquaintanceSAInterface*(__cdecl*)(int);
+            if (auto* acquaintances = reinterpret_cast<GetPedTypeAcquaintances>(0x6089B0)(modelInfo->pedType))
+                pedInterface->pedAcquaintance = *acquaintances;
+        }
+    }
+    else if (m_bNativeAmbientGroupDecisionMakerCaptured && intelligence)
+    {
+        intelligence->decisionMakerType = m_iNativeAmbientGroupPreviousDecisionMaker;
+        intelligence->decisionMakerTypeInGroup = m_iNativeAmbientGroupPreviousDecisionMakerInGroup;
+        pedInterface->pedAcquaintance = m_nativeAmbientGroupPreviousAcquaintance;
+        m_bNativeAmbientGroupDecisionMakerCaptured = false;
+    }
+    m_bNativeAmbientGroupActive = active;
 }

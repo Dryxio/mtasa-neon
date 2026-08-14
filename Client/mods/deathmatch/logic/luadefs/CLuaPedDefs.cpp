@@ -319,8 +319,13 @@ void CLuaPedDefs::LoadFunctions()
         {"acquirePedNativeEventProfile", AcquirePedNativeEventProfile},
         {"releasePedNativeEventProfile", ReleasePedNativeEventProfile},
         {"isPedNativeEventProfileActive", IsPedNativeEventProfileActive},
+        {"acquirePedNativeGroup", AcquirePedNativeGroup},
+        {"releasePedNativeGroup", ReleasePedNativeGroup},
+        {"isPedNativeGroupActive", IsPedNativeGroupActive},
+        {"getPedNativeGroupDiagnostic", GetPedNativeGroupDiagnostic},
         {"addPedNativeGunAimedAtEvent", AddPedNativeGunAimedAtEvent},
         {"addPedNativeDamageResponseEvent", AddPedNativeDamageResponseEvent},
+        {"addPedNativeDamageEvent", AddPedNativeDamageEvent},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
         {"setPedStayInSamePlace", ArgumentParser<SetPedStayInSamePlace>},
@@ -3595,6 +3600,174 @@ int CLuaPedDefs::IsPedNativeEventProfileActive(lua_State* luaVM)
     return 1;
 }
 
+int CLuaPedDefs::AcquirePedNativeGroup(lua_State* luaVM)
+{
+    if (!lua_istable(luaVM, 1) || !lua_isstring(luaVM, 2) || strcmp(lua_tostring(luaVM, 2), "ambient-random") != 0)
+    {
+        m_pScriptDebugging->LogCustom(luaVM, "Expected a ped table and ambient-random group profile");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    const std::size_t count = lua_objlen(luaVM, 1);
+    if (count < 2 || count > AMBIENT_PED_GROUP_MAX_MEMBERS)
+    {
+        m_pScriptDebugging->LogCustom(luaVM, "Native ambient groups require 2 to 5 peds");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    std::vector<CClientPed*> peds;
+    peds.reserve(count);
+    for (std::size_t index = 1; index <= count; ++index)
+    {
+        lua_rawgeti(luaVM, 1, index);
+        auto* entity = lua_toelement(luaVM, -1);
+        lua_pop(luaVM, 1);
+        if (!entity || entity->GetType() != CCLIENTPED)
+        {
+            m_pScriptDebugging->LogCustom(luaVM, "Native ambient group members must all be peds");
+            lua_pushboolean(luaVM, false);
+            return 1;
+        }
+        peds.push_back(static_cast<CClientPed*>(entity));
+    }
+
+    CLuaMain*          pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource*         pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    const unsigned int token = pResource ? pResource->AcquirePedNativeGroup(peds) : 0;
+    if (token != 0)
+        lua_pushnumber(luaVM, token);
+    else
+        lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::ReleasePedNativeGroup(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->ReleasePedNativeGroup(token));
+    return 1;
+}
+
+int CLuaPedDefs::IsPedNativeGroupActive(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->IsPedNativeGroupActive(token));
+    return 1;
+}
+
+int CLuaPedDefs::GetPedNativeGroupDiagnostic(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    if (!pResource)
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    const SAmbientPedNativeGroupDiagnostic diagnostic = pResource->GetPedNativeGroupDiagnostic(token);
+    const auto                             getStatusName = [](EAmbientPedNativeGroupDiagnosticStatus status) -> const char*
+    {
+        switch (status)
+        {
+            case EAmbientPedNativeGroupDiagnosticStatus::Active:
+                return "active";
+            case EAmbientPedNativeGroupDiagnosticStatus::ResourceLeaseMissing:
+                return "resource-lease-missing";
+            case EAmbientPedNativeGroupDiagnosticStatus::ResourceElementMissing:
+                return "resource-element-missing";
+            case EAmbientPedNativeGroupDiagnosticStatus::ResourceElementNotPed:
+                return "resource-element-not-ped";
+            case EAmbientPedNativeGroupDiagnosticStatus::ResourcePedNotSyncing:
+                return "resource-ped-not-syncing";
+            case EAmbientPedNativeGroupDiagnosticStatus::ResourceGamePedMissing:
+                return "resource-game-ped-missing";
+            case EAmbientPedNativeGroupDiagnosticStatus::GameLeaseMissing:
+                return "game-lease-missing";
+            case EAmbientPedNativeGroupDiagnosticStatus::MemberCountMismatch:
+                return "member-count-mismatch";
+            case EAmbientPedNativeGroupDiagnosticStatus::SlotInactive:
+                return "slot-inactive";
+            case EAmbientPedNativeGroupDiagnosticStatus::LeaseMemberMismatch:
+                return "lease-member-mismatch";
+            case EAmbientPedNativeGroupDiagnosticStatus::MemberFlagMissing:
+                return "member-flag-missing";
+            case EAmbientPedNativeGroupDiagnosticStatus::MemberDetached:
+                return "member-detached";
+            case EAmbientPedNativeGroupDiagnosticStatus::NoTrackedMember:
+                return "no-tracked-member";
+        }
+        return "unknown";
+    };
+    const auto setBoolean = [luaVM](const char* name, bool value)
+    {
+        lua_pushboolean(luaVM, value);
+        lua_setfield(luaVM, -2, name);
+    };
+    const auto setNumber = [luaVM](const char* name, double value)
+    {
+        lua_pushnumber(luaVM, value);
+        lua_setfield(luaVM, -2, name);
+    };
+    const auto setPointer = [luaVM](const char* name, std::uint32_t value)
+    {
+        const SString address("0x%08X", value);
+        lua_pushstring(luaVM, address);
+        lua_setfield(luaVM, -2, name);
+    };
+
+    lua_createtable(luaVM, 0, 9);
+    setBoolean("active", diagnostic.active);
+    lua_pushstring(luaVM, getStatusName(diagnostic.status));
+    lua_setfield(luaVM, -2, "reason");
+    setNumber("nativeGroupId", diagnostic.nativeGroupId);
+    setNumber("memberCount", diagnostic.memberCount);
+    setBoolean("resourceLeasePresent", diagnostic.resourceLeasePresent);
+    setBoolean("gameLeasePresent", diagnostic.gameLeasePresent);
+    setBoolean("memberCountMatches", diagnostic.memberCountMatches);
+    setBoolean("slotActive", diagnostic.slotActive);
+    setBoolean("hasTrackedMember", diagnostic.hasTrackedMember);
+
+    lua_createtable(luaVM, diagnostic.memberCount, 0);
+    const unsigned char memberCount = std::min<unsigned char>(diagnostic.memberCount, AMBIENT_PED_GROUP_MAX_MEMBERS);
+    for (unsigned char index = 0; index < memberCount; ++index)
+    {
+        const auto& member = diagnostic.members[index];
+        lua_createtable(luaVM, 0, 15);
+        setBoolean("resourceElementPresent", member.resourceElementPresent);
+        setBoolean("resourceElementIsPed", member.resourceElementIsPed);
+        setBoolean("resourcePedSyncing", member.resourcePedSyncing);
+        setBoolean("gamePedPresent", member.gamePedPresent);
+        setBoolean("leaseMemberMatches", member.leaseMemberMatches);
+        setBoolean("nativeAmbientGroupFlag", member.nativeAmbientGroupFlag);
+        setBoolean("attachedToExpectedGroup", member.attachedToExpectedGroup);
+        setPointer("gamePed", member.gamePedAddress);
+        setPointer("expectedGamePed", member.expectedGamePedAddress);
+        setPointer("primaryTask", member.primaryTaskAddress);
+        setPointer("expectedPrimaryTask", member.expectedPrimaryTaskAddress);
+        setPointer("defaultTask", member.defaultTaskAddress);
+        setPointer("expectedDefaultTask", member.expectedDefaultTaskAddress);
+        setNumber("primaryTaskType", member.primaryTaskType);
+        setNumber("defaultTaskType", member.defaultTaskType);
+        lua_rawseti(luaVM, -2, index + 1);
+    }
+    lua_setfield(luaVM, -2, "members");
+    return 1;
+}
+
 int CLuaPedDefs::AddPedNativeGunAimedAtEvent(lua_State* luaVM)
 {
     CClientPed*      pPed = nullptr;
@@ -3648,6 +3821,50 @@ int CLuaPedDefs::AddPedNativeDamageResponseEvent(lua_State* luaVM)
         lua_pushboolean(luaVM,
                         validWeapon && validHitZone && pResource && pResource->IsPedNativeEventProfileActive(pPed, uiToken) && pPed &&
                             pPed->AddNativeDamageResponseEvent(pAttackingPed, static_cast<eWeaponType>(iWeaponType), static_cast<ePedPieceTypes>(iHitZone)));
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::AddPedNativeDamageEvent(lua_State* luaVM)
+{
+    CClientPed*      pDamagedPed = nullptr;
+    CClientPed*      pAttackingPed = nullptr;
+    int              iWeaponType = WEAPONTYPE_UNIDENTIFIED;
+    int              iHitZone = PED_PIECE_UNKNOWN;
+    int              iDamageFactor = 0;
+    int              iDirection = -1;
+    unsigned int     uiToken = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pDamagedPed);
+    argStream.ReadUserData(pAttackingPed);
+    argStream.ReadNumber(iWeaponType);
+    argStream.ReadNumber(iHitZone);
+    argStream.ReadNumber(iDamageFactor);
+    argStream.ReadNumber(iDirection);
+    argStream.ReadNumber(uiToken);
+
+    if (!argStream.HasErrors())
+    {
+        const bool validWeapon = iWeaponType >= WEAPONTYPE_UNARMED && iWeaponType <= WEAPONTYPE_FALL;
+        const bool validHitZone = iHitZone == PED_PIECE_UNKNOWN || (iHitZone >= PED_PIECE_TORSO && iHitZone <= PED_PIECE_HEAD);
+        const bool validDamageFactor = iDamageFactor > 0 && iDamageFactor <= 10000;
+        const bool validDirection = iDirection >= 0 && iDirection <= 3;
+        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+
+        // The server-side resource authenticates simulation ownership before
+        // asking the victim to replay a hit. Require the same resource's
+        // observer lease here, and let only the local player mutate its own
+        // GTA damage state; an unrelated resource or remote player is refused.
+        lua_pushboolean(luaVM,
+                        validWeapon && validHitZone && validDamageFactor && validDirection && pResource &&
+                            pResource->HasPedNativeEventProfileLease(pAttackingPed, uiToken) && pDamagedPed &&
+                            pDamagedPed->AddNativeDamageEvent(pAttackingPed, static_cast<eWeaponType>(iWeaponType), static_cast<ePedPieceTypes>(iHitZone),
+                                                              iDamageFactor, static_cast<unsigned char>(iDirection)));
         return 1;
     }
 

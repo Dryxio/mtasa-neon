@@ -42,6 +42,7 @@
 #include <game/CVehicleAudioSettingsManager.h>
 #include <windowsx.h>
 #include "CServerInfo.h"
+#include "CNativeAITelemetry.h"
 #include "CClientPed.h"
 
 #include <array>
@@ -331,6 +332,8 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pGame->SetPreWeaponFireHandler(CClientGame::PreWeaponFire);
     g_pGame->SetPostWeaponFireHandler(CClientGame::PostWeaponFire);
     g_pGame->SetTaskSimpleBeHitHandler(CClientGame::StaticTaskSimpleBeHitHandler);
+    if (CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::GROUP_DECISION))
+        g_pGame->SetNativeAIGroupDecisionHandler(CNativeAITelemetry::RecordGroupDecision);
     g_pGame->GetAudioEngine()->SetWorldSoundHandler(CClientGame::StaticWorldSoundHandler);
     g_pCore->SetMessageProcessor(CClientGame::StaticProcessMessage);
     g_pCore->GetKeyBinds()->SetKeyStrokeHandler(CClientGame::StaticKeyStrokeHandler);
@@ -560,6 +563,7 @@ CClientGame::~CClientGame()
     g_pGame->SetPreWeaponFireHandler(NULL);
     g_pGame->SetPostWeaponFireHandler(NULL);
     g_pGame->SetTaskSimpleBeHitHandler(NULL);
+    g_pGame->SetNativeAIGroupDecisionHandler(nullptr);
     g_pGame->GetPools()->GetPtrNodeSingleLinkPool().ResetCapacity();
     g_pGame->GetAudioEngine()->SetWorldSoundHandler(NULL);
     g_pCore->SetMessageProcessor(NULL);
@@ -2731,7 +2735,8 @@ void CClientGame::AddBuiltInEvents()
     m_Events.AddEvent("onClientPlayerStuntStart", "type", NULL, false);
     m_Events.AddEvent("onClientPlayerStuntFinish", "type, time, distance", NULL, false);
     m_Events.AddEvent("onClientPlayerRadioSwitch", "", NULL, false);
-    m_Events.AddEvent("onClientPlayerDamage", "attacker, weapon, bodypart", NULL, false);
+    m_Events.AddEvent("onClientPlayerDamage", "attacker, weapon, bodypart, loss, damageFactor, direction", NULL, false);
+    m_Events.AddEvent("onClientPlayerNativeDamageAttempt", "attacker, weapon, bodypart, damageFactor, direction", NULL, false);
     m_Events.AddEvent("onClientPlayerWeaponFire", "weapon, ammo, ammoInClip, hitX, hitY, hitZ, hitElement", NULL, false);
     m_Events.AddEvent("onClientPlayerWeaponReload", "weapon, clip, ammo", nullptr, false);
     m_Events.AddEvent("onClientPlayerWasted", "ammo, killer, weapon, bodypart, isStealth, animGroup, animID", nullptr, false);
@@ -2748,7 +2753,7 @@ void CClientGame::AddBuiltInEvents()
     m_Events.AddEvent("onClientPlayerNetworkStatus", "type, ticks", NULL, false);
 
     // Ped events
-    m_Events.AddEvent("onClientPedDamage", "attacker, weapon, bodypart", NULL, false);
+    m_Events.AddEvent("onClientPedDamage", "attacker, weapon, bodypart, loss, damageFactor, direction", NULL, false);
     m_Events.AddEvent("onClientPedVehicleEnter", "vehicle, seat", NULL, false);
     m_Events.AddEvent("onClientPedVehicleExit", "vehicle, seat", NULL, false);
     m_Events.AddEvent("onClientPedWeaponFire", "weapon, ammo, ammoInClip, hitX, hitY, hitZ, hitElement", NULL, false);
@@ -4492,6 +4497,25 @@ bool CClientGame::DamageHandler(CPed* pDamagePed, CEventDamage* pEvent)
     if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
         return false;
 
+    // Remote player health is authoritative on the victim's client. GTA can
+    // still produce the native contact and physical response on the attacking
+    // ped's owner without reaching the health-delta gate used by
+    // onClientPlayerDamage. Emit the original GenerateDamageEvent association
+    // once so a resource can authenticate and relay that native attempt.
+    if (pDamagedPed && IS_PLAYER(pDamagedPed) && pEvent->IsNativeDamageAttempt())
+    {
+        CLuaArguments arguments;
+        if (pInflictingEntity)
+            arguments.PushElement(pInflictingEntity);
+        else
+            arguments.PushBoolean(false);
+        arguments.PushNumber(static_cast<unsigned char>(weaponUsed));
+        arguments.PushNumber(static_cast<unsigned char>(hitZone));
+        arguments.PushNumber(pEvent->GetDamageFactor());
+        arguments.PushNumber(static_cast<unsigned char>(pEvent->GetDirection()));
+        pDamagedPed->CallEvent("onClientPlayerNativeDamageAttempt", arguments, false);
+    }
+
     // If the damage was caused by an explosion
     if (weaponUsed == WEAPONTYPE_EXPLOSION)
     {
@@ -4645,6 +4669,8 @@ bool CClientGame::ApplyPedDamageFromGame(eWeaponType weaponUsed, float fDamage, 
         Arguments.PushNumber(static_cast<unsigned char>(weaponUsed));
         Arguments.PushNumber(static_cast<unsigned char>(hitZone));
         Arguments.PushNumber(fDamage);
+        Arguments.PushNumber(pEvent->GetDamageFactor());
+        Arguments.PushNumber(static_cast<unsigned char>(pEvent->GetDirection()));
 
         // Call our event
         if ((IS_PLAYER(pDamagedPed) && !pDamagedPed->CallEvent("onClientPlayerDamage", Arguments, true)) ||

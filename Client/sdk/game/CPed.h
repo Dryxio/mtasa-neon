@@ -373,6 +373,10 @@ public:
     virtual eWeaponType              GetLastWeaponDamage() const noexcept = 0;
     virtual void                     SetNativeTaskAirbornePresentationState(bool airborne, bool observer) = 0;
     virtual bool                     IsNativeTaskAirbornePresentationObserver() const noexcept = 0;
+    virtual void                     SetNativeAmbientGroupActive(bool active) = 0;
+    virtual bool                     IsNativeAmbientGroupActive() const noexcept = 0;
+    virtual bool                     IsMoveAnimationSpeedSetByTask() const noexcept = 0;
+    virtual bool AddNativeDamageEvent(CPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction) = 0;
 
     // The game interface keeps the virtuals private because they were
     // originally implementation details. Story-script policies need a

@@ -65,6 +65,7 @@ void CLuaWorldDefs::LoadFunctions()
         {"setAmbientPedPopulationZoneState", SetAmbientPedPopulationZoneState},
         {"getAmbientPedPopulationProfile", GetAmbientPedPopulationProfile},
         {"getAmbientPedSpawnCandidate", GetAmbientPedSpawnCandidate},
+        {"getAmbientPedGangGroupCandidate", GetAmbientPedGangGroupCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
         {"getWorldProperty", ArgumentParser<GetWorldProperty>},
 
@@ -293,6 +294,71 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     else
         lua_pushboolean(luaVM, false);
     lua_setfield(luaVM, -2, "gang");
+    return 1;
+}
+
+int CLuaWorldDefs::GetAmbientPedGangGroupCandidate(lua_State* luaVM)
+{
+    CVector          origin;
+    int              gangId = -1;
+    int              maxMembers = 4;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadVector3D(origin);
+    argStream.ReadNumber(gangId);
+    argStream.ReadNumber(maxMembers, 4);
+    if (argStream.HasErrors() || gangId < 0 || gangId > 7 || maxMembers < 2 || maxMembers > 4)
+    {
+        if (argStream.HasErrors())
+            m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+        else
+            m_pScriptDebugging->LogCustom(luaVM, "Gang groups require gang 0..7 and maxMembers 2..4");
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SAmbientPedGroupSpawnCandidate candidate;
+    const auto result = g_pGame->GetAmbientPedGangGroupCandidate(origin, static_cast<unsigned char>(gangId), static_cast<unsigned char>(maxMembers), candidate);
+    if (result != EAmbientPedSpawnCandidateResult::Success)
+    {
+        const char* reason = result == EAmbientPedSpawnCandidateResult::NoModel           ? "no-model"
+                             : result == EAmbientPedSpawnCandidateResult::NoPath          ? "no-path"
+                             : result == EAmbientPedSpawnCandidateResult::PathDensity     ? "path-density"
+                             : result == EAmbientPedSpawnCandidateResult::VisibleTooClose ? "visible-too-close"
+                             : result == EAmbientPedSpawnCandidateResult::Blocked         ? "blocked"
+                             : result == EAmbientPedSpawnCandidateResult::InvalidOrigin   ? "invalid-origin"
+                                                                                          : "unsupported-model";
+        lua_pushboolean(luaVM, false);
+        lua_pushstring(luaVM, reason);
+        return 2;
+    }
+
+    lua_createtable(luaVM, candidate.count, 0);
+    for (unsigned char index = 0; index < candidate.count; ++index)
+    {
+        const auto& member = candidate.members[index];
+        lua_createtable(luaVM, 0, 9);
+        lua_pushinteger(luaVM, member.modelId);
+        lua_setfield(luaVM, -2, "model");
+        lua_pushinteger(luaVM, member.pedType);
+        lua_setfield(luaVM, -2, "pedType");
+        lua_pushnumber(luaVM, member.position.fX);
+        lua_setfield(luaVM, -2, "x");
+        lua_pushnumber(luaVM, member.position.fY);
+        lua_setfield(luaVM, -2, "y");
+        lua_pushnumber(luaVM, member.position.fZ);
+        lua_setfield(luaVM, -2, "z");
+        lua_pushinteger(luaVM, member.wanderDirection);
+        lua_setfield(luaVM, -2, "direction");
+        lua_pushnumber(luaVM, member.pathLerp);
+        lua_setfield(luaVM, -2, "pathLerp");
+        lua_pushnumber(luaVM, member.headingDegrees);
+        lua_setfield(luaVM, -2, "heading");
+        lua_pushinteger(luaVM, gangId);
+        lua_setfield(luaVM, -2, "gang");
+        lua_pushstring(luaVM, "gang");
+        lua_setfield(luaVM, -2, "populationClass");
+        lua_rawseti(luaVM, -2, index + 1);
+    }
     return 1;
 }
 

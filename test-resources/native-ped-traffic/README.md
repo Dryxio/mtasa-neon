@@ -43,6 +43,12 @@ against MTA's synchronized target ray by the server, bridges the shooter-local
 aimed-at case to the owner as a real `CEventGunAimedAt`. The target ray alone is
 not sufficient because MTA updates it continuously even when the aim control is
 released.
+
+Traffic spawns also force fighting style `4` (`STYLE_STANDARD`). MTA scripted
+peds are backed by `CPlayerPed` and otherwise inherit the player's grab-kick
+style `15`; stock ambient `CPed` uses style `4`. Leaving the wrapper default in
+place changes both the combat animations and GTA's raw melee factors before
+any synchronization occurs.
 Likewise, a hit detected by a non-owner is relayed to the owner. The resource
 prefers the real `CEventDamage` created there by MTA's synchronized bullet
 replay and injects a behavior-only event only when that native event is absent.
@@ -167,6 +173,24 @@ covered by those scopes remain a later behavior checkpoint.
   inserts a behavior-only GTA damage event on the active owner. MTA keeps the
   physical hit and health pipeline; the replay only selects the model's stock
   flee or fight response and cannot apply the damage twice.
+- `addPedNativeDamageEvent(localPlayer, attacker, weapon, bodypart,
+  damageFactor, direction, token)` replays an authenticated cross-owner hit on
+  the victim client. `damageFactor` is GTA's raw pre-calculator melee value,
+  exposed as the fifth `onClientPlayerDamage`/`onClientPedDamage` argument;
+  the sixth argument is GTA's `0..3` local hit direction. The victim runs the
+  stock damage-response calculator against its own health, armour and ped
+  state before the event enters GTA's event group. The primitive accepts only
+  the local player and an attacker covered by the calling resource's observer
+  lease; the server must still validate owner, epoch, weapon, distance,
+  cadence and the allowed factor range. Damage events created outside
+  `CWeapon::GenerateDamageEvent` expose `damageFactor = -1`; callers must not
+  infer or invent a factor from the final `loss` value.
+- `onClientPlayerNativeDamageAttempt` exposes that raw factor and direction
+  once for the original GTA damage event, before MTA's health-delta gate. This
+  matters when native AI hits a remote player: the AI owner can simulate the
+  contact while only the victim owner may change health. The event is
+  observational; this resource authenticates and relays it before invoking
+  `addPedNativeDamageEvent` on the victim client.
 
 All population and behavior functions are client-side primitives. The server must still validate
 the proposal, create and own the MTA ped, select exactly one syncer, and clean
@@ -345,3 +369,22 @@ The climb regression then completed both the uninterrupted and forced-handoff
 barrier cases on two clients. Observers received the native climb animation
 through completion, while the new owner reconstructed `TASK_SIMPLE_CLIMB` on
 the same barrier and finished without a timeout, task failure or crash.
+
+## Deferred vanilla-reference validation
+
+Before declaring broad traffic parity complete, record a small reference suite
+directly in unmodified GTA:SA single-player using telemetry equivalent to the
+Neon owner diagnostics. Cover at least pedestrian pursuit, melee combat and
+blocking, threat/flee reactions, ambient gang groups, obstacle and moving-
+vehicle avoidance, impacts, airborne recovery, and climbing. Keep the world
+location, models, weapons, time, weather, target geometry, and random seed as
+stable as practical, and preserve each run as a versioned session bundle.
+
+Compare those reference captures against the Neon owner first, then compare
+the owner against both multiplayer observers. The report should align native
+task transitions, active animation associations and progress, movement state,
+position, velocity, heading, and reaction timing for each ped. This final
+differential pass is deliberately deferred until the behavior checkpoints are
+implemented; it should replace subjective visual expectations or reliance on
+reversed source alone when deciding whether a remaining difference is vanilla
+behavior, a native-wrapper mismatch, or a synchronization defect.

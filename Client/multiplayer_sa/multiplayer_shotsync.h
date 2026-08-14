@@ -17,6 +17,7 @@
 #include <game/CPlayerPed.h>
 
 class CEventDamageSAInterface;
+class CEntitySAInterface;
 
 // #include "../game_sa/CPedIKSA.h"
 
@@ -55,6 +56,8 @@ VOID           InitShotsyncHooks();
 CShotSyncData* GetLocalPedShotSyncData();
 VOID WriteGunDirectionDataForPed(class CPedSAInterface* pPedInterface, float* fGunDirectionX, float* fGunDirectionY, eVehicleAimDirection* cGunDirection);
 bool IsLocalPlayer(CPedSAInterface* pPedInterface);
+void CaptureGeneratedDamageEvent(CPedSAInterface* pVictim, CEntitySAInterface* pInflictor, eWeaponType weaponType, int damageFactor,
+                                 ePedPieceTypes pedPieceType, unsigned char direction);
 bool ConsumeScriptPedChokeEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim);
 void CloneScriptPedChokeEvent(CEventDamageSAInterface* pDestination, CEventDamageSAInterface* pSource);
 void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent);

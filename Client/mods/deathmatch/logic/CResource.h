@@ -61,13 +61,19 @@ public:
     void    Stop();
     SString GetState();
 
-    unsigned int AcquireElementStreamingLease(class CClientStreamElement* pElement);
-    bool         ReleaseElementStreamingLease(unsigned int uiToken);
-    void         ReleaseAllElementStreamingLeases();
-    unsigned int AcquirePedNativeEventProfile(class CClientPed* pPed, ePedNativeEventProfile profile);
-    bool         ReleasePedNativeEventProfile(unsigned int uiToken);
-    bool         IsPedNativeEventProfileActive(class CClientPed* pPed, unsigned int uiToken) const;
-    void         ReleaseAllPedNativeEventProfiles();
+    unsigned int                     AcquireElementStreamingLease(class CClientStreamElement* pElement);
+    bool                             ReleaseElementStreamingLease(unsigned int uiToken);
+    void                             ReleaseAllElementStreamingLeases();
+    unsigned int                     AcquirePedNativeEventProfile(class CClientPed* pPed, ePedNativeEventProfile profile);
+    bool                             ReleasePedNativeEventProfile(unsigned int uiToken);
+    bool                             IsPedNativeEventProfileActive(class CClientPed* pPed, unsigned int uiToken) const;
+    bool                             HasPedNativeEventProfileLease(class CClientPed* pPed, unsigned int uiToken) const;
+    void                             ReleaseAllPedNativeEventProfiles();
+    unsigned int                     AcquirePedNativeGroup(const std::vector<class CClientPed*>& peds);
+    bool                             ReleasePedNativeGroup(unsigned int uiToken);
+    bool                             IsPedNativeGroupActive(unsigned int uiToken) const;
+    SAmbientPedNativeGroupDiagnostic GetPedNativeGroupDiagnostic(unsigned int uiToken) const;
+    void                             ReleaseAllPedNativeGroups();
 
     CDownloadableResource* AddResourceFile(CDownloadableResource::eResourceType resourceType, const char* szFileName, uint uiDownloadSize,
                                            CChecksum serverChecksum, bool bAutoDownload);
@@ -198,6 +204,15 @@ private:
 
     unsigned int                                                                   m_uiNextPedNativeEventProfileToken{1};
     std::unordered_map<unsigned int, std::unique_ptr<SPedNativeEventProfileLease>> m_pedNativeEventProfileLeases;
+
+    struct SPedNativeGroupLease
+    {
+        std::vector<CClientEntityPtr> peds;
+        unsigned int                  nativeGroupId{};
+    };
+
+    unsigned int                                                            m_uiNextPedNativeGroupToken{1};
+    std::unordered_map<unsigned int, std::unique_ptr<SPedNativeGroupLease>> m_pedNativeGroupLeases;
 
     struct
     {

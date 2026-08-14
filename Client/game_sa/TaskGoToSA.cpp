@@ -72,6 +72,27 @@ CTaskComplexWanderStandardSA::CTaskComplexWanderStandardSA(const int iMoveState,
     // clang-format on
 }
 
+CTaskComplexWanderGangSA::CTaskComplexWanderGangSA(int moveState, unsigned char direction, unsigned int scanTime, bool wanderSensibly, float targetRadius)
+{
+    CreateTaskInterface(0x38);
+    if (!IsValid())
+        return;
+
+    auto* task = GetInterface();
+    reinterpret_cast<void(__thiscall*)(CTaskSAInterface*, int, unsigned char, unsigned int, bool, float)>(FUNC_CTaskComplexWanderGang__Constructor)(
+        task, moveState, direction, scanTime, wanderSensibly, targetRadius);
+}
+
+CTaskComplexBeInGroupSA::CTaskComplexBeInGroupSA(int groupId, bool isLeader)
+{
+    CreateTaskInterface(0x28);
+    if (!IsValid())
+        return;
+
+    auto* task = GetInterface();
+    reinterpret_cast<void(__thiscall*)(CTaskSAInterface*, int, bool)>(FUNC_CTaskComplexBeInGroup__Constructor)(task, groupId, isLeader);
+}
+
 CTaskComplexGoToPointAndStandStillSA::CTaskComplexGoToPointAndStandStillSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
                                                                            const float fSlowDownDistance)
 {

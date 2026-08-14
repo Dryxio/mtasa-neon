@@ -17,6 +17,7 @@
 #include "luadefs/CLuaPlayerDefs.h"
 #include "luadefs/CLuaVehicleDefs.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 
@@ -110,14 +111,12 @@ CResource::~CResource()
     if (m_nativeWorldTransport.publication.valid())
         g_pClientGame->GetResourceManager()->RetireNativeWorldTransportPublication(std::move(m_nativeWorldTransport.publication));
 
-    // Streaming leases can target server-owned elements which are not children
-    // of this resource. Release them while both the resource identity and any
-    // surviving target elements are still valid.
-    ReleaseAllElementStreamingLeases();
-
-    // Native event profiles can also target server-owned peds. Revoke their
-    // narrow GTA AI exception before the resource identity disappears.
+    // Native groups own tasks which dereference GTA-global group slots. Tear
+    // them down while their member streaming leases still guarantee live game
+    // interfaces, then revoke event policy before dropping those references.
+    ReleaseAllPedNativeGroups();
     ReleaseAllPedNativeEventProfiles();
+    ReleaseAllElementStreamingLeases();
 
     // Mission-audio handles lease GTA-global hardware slots rather than child
     // elements, so resource teardown must stop only this resource's sounds.
@@ -338,10 +337,186 @@ bool CResource::IsPedNativeEventProfileActive(CClientPed* pPed, unsigned int uiT
     return pPed && pPed->IsNativeEventProfileActive(this, uiToken, iter->second->profile);
 }
 
+bool CResource::HasPedNativeEventProfileLease(CClientPed* pPed, unsigned int uiToken) const
+{
+    const auto iter = m_pedNativeEventProfileLeases.find(uiToken);
+    return iter != m_pedNativeEventProfileLeases.end() && iter->second->ped == pPed;
+}
+
 void CResource::ReleaseAllPedNativeEventProfiles()
 {
     while (!m_pedNativeEventProfileLeases.empty())
         ReleasePedNativeEventProfile(m_pedNativeEventProfileLeases.begin()->first);
+}
+
+unsigned int CResource::AcquirePedNativeGroup(const std::vector<CClientPed*>& peds)
+{
+    if (peds.size() < 2 || peds.size() > AMBIENT_PED_GROUP_MAX_MEMBERS)
+        return 0;
+
+    std::array<CPed*, AMBIENT_PED_GROUP_MAX_MEMBERS> gamePeds{};
+    for (std::size_t index = 0; index < peds.size(); ++index)
+    {
+        if (!peds[index] || peds[index]->GetType() != CCLIENTPED || !peds[index]->IsSyncing() || !peds[index]->GetGamePlayer())
+            return 0;
+        const auto profileIter =
+            std::find_if(m_pedNativeEventProfileLeases.begin(), m_pedNativeEventProfileLeases.end(), [pPed = peds[index]](const auto& lease)
+                         { return lease.second->ped == pPed && lease.second->profile == ePedNativeEventProfile::AMBIENT_WANDER; });
+        if (profileIter == m_pedNativeEventProfileLeases.end() ||
+            !peds[index]->IsNativeEventProfileActive(this, profileIter->first, ePedNativeEventProfile::AMBIENT_WANDER))
+            return 0;
+        gamePeds[index] = peds[index]->GetGamePlayer();
+    }
+
+    unsigned int nativeGroupId = 0;
+    if (!g_pGame->AcquireAmbientPedNativeGroup(gamePeds.data(), static_cast<unsigned char>(peds.size()), nativeGroupId))
+        return 0;
+
+    unsigned int uiToken = 0;
+    do
+    {
+        uiToken = m_uiNextPedNativeGroupToken++;
+    } while (uiToken == 0 || m_pedNativeGroupLeases.contains(uiToken));
+
+    auto lease = std::make_unique<SPedNativeGroupLease>();
+    lease->nativeGroupId = nativeGroupId;
+    for (auto* ped : peds)
+        lease->peds.emplace_back(ped);
+    m_pedNativeGroupLeases.emplace(uiToken, std::move(lease));
+    return uiToken;
+}
+
+bool CResource::ReleasePedNativeGroup(unsigned int uiToken)
+{
+    const auto iter = m_pedNativeGroupLeases.find(uiToken);
+    if (iter == m_pedNativeGroupLeases.end())
+        return false;
+
+    std::array<CPed*, AMBIENT_PED_GROUP_MAX_MEMBERS> gamePeds{};
+    for (std::size_t index = 0; index < iter->second->peds.size(); ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        auto* ped = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        gamePeds[index] = ped ? ped->GetGamePlayer() : nullptr;
+    }
+
+    const bool released =
+        g_pGame->ReleaseAmbientPedNativeGroup(iter->second->nativeGroupId, gamePeds.data(), static_cast<unsigned char>(iter->second->peds.size()));
+    m_pedNativeGroupLeases.erase(iter);
+    return released;
+}
+
+bool CResource::IsPedNativeGroupActive(unsigned int uiToken) const
+{
+    const auto iter = m_pedNativeGroupLeases.find(uiToken);
+    if (iter == m_pedNativeGroupLeases.end())
+        return false;
+
+    std::array<CPed*, AMBIENT_PED_GROUP_MAX_MEMBERS> gamePeds{};
+    for (std::size_t index = 0; index < iter->second->peds.size(); ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        auto* ped = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        if (!ped || !ped->IsSyncing() || !ped->GetGamePlayer())
+            return false;
+        gamePeds[index] = ped->GetGamePlayer();
+    }
+    return g_pGame->IsAmbientPedNativeGroupActive(iter->second->nativeGroupId, gamePeds.data(), static_cast<unsigned char>(iter->second->peds.size()));
+}
+
+SAmbientPedNativeGroupDiagnostic CResource::GetPedNativeGroupDiagnostic(unsigned int uiToken) const
+{
+    SAmbientPedNativeGroupDiagnostic diagnostic;
+    const auto                       iter = m_pedNativeGroupLeases.find(uiToken);
+    if (iter == m_pedNativeGroupLeases.end())
+        return diagnostic;
+
+    diagnostic.resourceLeasePresent = true;
+    diagnostic.nativeGroupId = iter->second->nativeGroupId;
+    diagnostic.memberCount = static_cast<unsigned char>(iter->second->peds.size());
+
+    std::array<CPed*, AMBIENT_PED_GROUP_MAX_MEMBERS> gamePeds{};
+    const std::size_t                                inspectedCount = std::min<std::size_t>(iter->second->peds.size(), AMBIENT_PED_GROUP_MAX_MEMBERS);
+    for (std::size_t index = 0; index < inspectedCount; ++index)
+    {
+        auto& member = diagnostic.members[index];
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        member.resourceElementPresent = entity != nullptr;
+        member.resourceElementIsPed = entity && entity->GetType() == CCLIENTPED;
+        auto* ped = member.resourceElementIsPed ? static_cast<CClientPed*>(entity) : nullptr;
+        member.resourcePedSyncing = ped && ped->IsSyncing();
+        gamePeds[index] = ped ? ped->GetGamePlayer() : nullptr;
+        member.gamePedPresent = gamePeds[index] != nullptr;
+        member.gamePedAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gamePeds[index]));
+    }
+
+    g_pGame->GetAmbientPedNativeGroupDiagnostic(diagnostic.nativeGroupId, gamePeds.data(), diagnostic.memberCount, diagnostic);
+
+    for (std::size_t index = 0; index < inspectedCount; ++index)
+    {
+        const auto& member = diagnostic.members[index];
+        if (!member.resourceElementPresent)
+        {
+            diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::ResourceElementMissing;
+            return diagnostic;
+        }
+        if (!member.resourceElementIsPed)
+        {
+            diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::ResourceElementNotPed;
+            return diagnostic;
+        }
+        if (!member.resourcePedSyncing)
+        {
+            diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::ResourcePedNotSyncing;
+            return diagnostic;
+        }
+        if (!member.gamePedPresent)
+        {
+            diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::ResourceGamePedMissing;
+            return diagnostic;
+        }
+    }
+    if (!diagnostic.gameLeasePresent)
+        diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::GameLeaseMissing;
+    else if (!diagnostic.memberCountMatches)
+        diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::MemberCountMismatch;
+    else if (!diagnostic.slotActive)
+        diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::SlotInactive;
+    else if (diagnostic.hasTrackedMember)
+    {
+        diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::Active;
+        diagnostic.active = true;
+    }
+    else
+    {
+        for (std::size_t index = 0; index < inspectedCount; ++index)
+        {
+            const auto& member = diagnostic.members[index];
+            if (!member.leaseMemberMatches)
+            {
+                diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::LeaseMemberMismatch;
+                return diagnostic;
+            }
+            if (!member.nativeAmbientGroupFlag)
+            {
+                diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::MemberFlagMissing;
+                return diagnostic;
+            }
+            if (!member.attachedToExpectedGroup)
+            {
+                diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::MemberDetached;
+                return diagnostic;
+            }
+        }
+        diagnostic.status = EAmbientPedNativeGroupDiagnosticStatus::NoTrackedMember;
+    }
+    return diagnostic;
+}
+
+void CResource::ReleaseAllPedNativeGroups()
+{
+    while (!m_pedNativeGroupLeases.empty())
+        ReleasePedNativeGroup(m_pedNativeGroupLeases.begin()->first);
 }
 
 CDownloadableResource* CResource::AddResourceFile(CDownloadableResource::eResourceType resourceType, const char* szFileName, uint uiDownloadSize,

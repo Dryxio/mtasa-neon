@@ -31,10 +31,13 @@ public:
     virtual ~CTaskSimpleStandStill() {};
 };
 
+struct SNamedAnimPresentationDiagnostic;
+
 class CTaskSimpleAnim : public virtual CTaskSimple
 {
 public:
     virtual ~CTaskSimpleAnim() {};
+    virtual void GetPresentationDiagnostic(SNamedAnimPresentationDiagnostic& diagnostic) const noexcept = 0;
 };
 
 class CTaskSimpleRunAnim : public virtual CTaskSimpleAnim

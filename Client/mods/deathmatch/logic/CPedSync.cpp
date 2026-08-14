@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CNativeAITelemetry.h"
 
 using std::list;
 
@@ -176,6 +177,13 @@ void CPedSync::AddPed(CClientPed* pPed)
     m_NativeTaskLocomotionBurstStates.erase(pPed);
     m_NativeTaskLocomotionSpatialReceiveTimes.erase(pPed);
     pPed->SetSyncing(true);
+    if (CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::OWNERSHIP))
+    {
+        SNativeAITelemetryPacket telemetryPacket;
+        telemetryPacket.direction = "local";
+        telemetryPacket.syncContext = pPed->GetSyncTimeContext();
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, "syncer_acquire", pPed, &telemetryPacket);
+    }
 }
 
 void CPedSync::RemovePed(CClientPed* pPed)
@@ -186,6 +194,13 @@ void CPedSync::RemovePed(CClientPed* pPed)
     m_NativeTaskLocomotionBurstStates.erase(pPed);
     m_NativeTaskLocomotionSpatialReceiveTimes.erase(pPed);
     pPed->SetSyncing(false);
+    if (CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::OWNERSHIP))
+    {
+        SNativeAITelemetryPacket telemetryPacket;
+        telemetryPacket.direction = "local";
+        telemetryPacket.syncContext = pPed->GetSyncTimeContext();
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, "syncer_release", pPed, &telemetryPacket);
+    }
 }
 
 bool CPedSync::Exists(CClientPed* pPed)
@@ -273,9 +288,13 @@ void CPedSync::Packet_PedStopSync(NetBitStreamInterface& BitStream)
 
 void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
 {
+    const bool          telemetryEnabled = CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::NETWORK);
+    const std::uint64_t telemetryPacketSequence = telemetryEnabled ? CNativeAITelemetry::NextPacketSequence() : 0;
+
     // While we're not out of peds
     while (BitStream.GetNumberOfUnreadBits() > 32)
     {
+        const int telemetryRecordStartBit = telemetryEnabled ? BitStream.GetReadOffsetAsBits() : 0;
         // Read out the ped id
         ElementID ID;
         if (BitStream.Read(ID))
@@ -302,11 +321,11 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             if ((flags2 & 0x08) && BitStream.Can(eBitStreamVersion::NativeTaskAnimationPresentation) && !BitStream.Read(&nativeTaskAnimationPresentation))
                 return;
 
-            CVector vecPosition{CVector::NoInit{}}, vecMoveSpeed{CVector::NoInit{}};
-            float   fRotation, fHealth, fArmor;
-            bool    bOnFire;
-            bool    bIsInWater;
-            float   cameraRotation;
+            CVector vecPosition{}, vecMoveSpeed{};
+            float   fRotation{}, fHealth{}, fArmor{};
+            bool    bOnFire{};
+            bool    bIsInWater{};
+            float   cameraRotation{};
 
             // Read out the position
             SPositionSync position(false);
@@ -323,9 +342,12 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             if (ucFlags & 0x04)
                 BitStream.Read(&velocity);
 
-            vecPosition = position.data.vecPosition;
-            fRotation = rotation.data.fRotation;
-            vecMoveSpeed = velocity.data.vecVelocity;
+            if (ucFlags & 0x01)
+                vecPosition = position.data.vecPosition;
+            if (ucFlags & 0x02)
+                fRotation = rotation.data.fRotation;
+            if (ucFlags & 0x04)
+                vecMoveSpeed = velocity.data.vecVelocity;
 
             // And health with armour
             if (ucFlags & 0x08)
@@ -352,6 +374,32 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
             CClientPed* pPed = m_pPedManager->Get(ID);
             if (pPed && pPed->CanUpdateSync(ucSyncTimeContext))
             {
+                SNativeAITelemetryPacket telemetryPacket;
+                if (telemetryEnabled)
+                {
+                    telemetryPacket.localSequence = telemetryPacketSequence;
+                    telemetryPacket.lane = flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE ? "animation_fast" : "ped_spatial";
+                    telemetryPacket.direction = "receive";
+                    telemetryPacket.ordering = flags2 & PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE ? "native_task_presentation" : "default";
+                    telemetryPacket.sampleKey =
+                        CNativeAITelemetry::MakeSampleKey(telemetryPacket.lane, BitStream, telemetryRecordStartBit, BitStream.GetReadOffsetAsBits());
+                    telemetryPacket.syncContext = ucSyncTimeContext;
+                    telemetryPacket.flags = ucFlags;
+                    telemetryPacket.flags2 = flags2;
+                    telemetryPacket.hasPosition = ucFlags & 0x01;
+                    telemetryPacket.hasHeading = ucFlags & 0x02;
+                    telemetryPacket.hasVelocity = ucFlags & 0x04;
+                    if (telemetryPacket.hasPosition)
+                        telemetryPacket.position = vecPosition;
+                    if (telemetryPacket.hasHeading)
+                        telemetryPacket.heading = fRotation;
+                    if (telemetryPacket.hasVelocity)
+                        telemetryPacket.velocity = vecMoveSpeed;
+                    telemetryPacket.locomotion = flags2 & 0x02 ? &nativeTaskLocomotion : nullptr;
+                    telemetryPacket.animation = flags2 & 0x08 ? &nativeTaskAnimationPresentation : nullptr;
+                    CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_receive", pPed, &telemetryPacket);
+                }
+
                 unsigned long spatialSyncRate = PED_SYNC_RATE;
                 if (ucFlags & (0x01 | 0x02 | 0x04))
                 {
@@ -408,6 +456,12 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
                     pPed->SetOnFire(bOnFire);
                 if (ucFlags & 0x40)
                     pPed->SetInWater(bIsInWater);
+
+                if (telemetryEnabled)
+                {
+                    telemetryPacket.direction = "apply";
+                    CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "observer_apply", pPed, &telemetryPacket);
+                }
             }
         }
     }
@@ -552,10 +606,12 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
     if (!pBitStream)
         return;
 
+    const std::uint64_t telemetryPacketSequence =
+        CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::NETWORK) ? CNativeAITelemetry::NextPacketSequence() : 0;
     std::size_t writtenPedCount = 0;
     for (const SBurstCandidate& candidate : candidates)
     {
-        if (WriteNativeTaskLocomotionBurst(pBitStream, candidate.ped))
+        if (WriteNativeTaskLocomotionBurst(pBitStream, candidate.ped, telemetryPacketSequence))
         {
             candidate.state->lastSentAt = currentTime;
             ++writtenPedCount;
@@ -565,6 +621,16 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
     if (writtenPedCount != 0)
     {
         g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+        if (telemetryPacketSequence != 0)
+        {
+            SNativeAITelemetryPacket telemetryPacket;
+            telemetryPacket.localSequence = telemetryPacketSequence;
+            telemetryPacket.lane = "locomotion_burst";
+            telemetryPacket.direction = "dispatch";
+            telemetryPacket.reliability = "unreliable_sequenced";
+            telemetryPacket.ordering = "default";
+            CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_dispatch", nullptr, &telemetryPacket);
+        }
         if (IsNativeTaskLocomotionBurstTraceEnabled())
         {
             g_pCore->GetConsole()->Printf("[native-task-locomotion][burst-send] profile=%s pid=%u peds=%u deferred=%u rate=%lu",
@@ -576,7 +642,7 @@ void CPedSync::UpdateNativeTaskLocomotionBurst(unsigned long currentTime)
     g_pNet->DeallocateNetBitStream(pBitStream);
 }
 
-bool CPedSync::WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed)
+bool CPedSync::WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream, CClientPed* pPed, std::uint64_t telemetryPacketSequence)
 {
     // Candidate discovery already sampled the animation presentation. Avoid
     // repeating that diagnostic-heavy task traversal for every emitted ped;
@@ -597,6 +663,7 @@ bool CPedSync::WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream,
         return false;
     }
 
+    const int telemetryRecordStartBit = telemetryPacketSequence != 0 ? pBitStream->GetNumberOfBitsUsed() : 0;
     pBitStream->Write(pPed->GetID());
     pBitStream->Write(pPed->GetSyncTimeContext());
     pBitStream->Write(static_cast<unsigned char>(0x01 | 0x02 | 0x04));
@@ -618,6 +685,28 @@ bool CPedSync::WriteNativeTaskLocomotionBurst(NetBitStreamInterface* pBitStream,
     SCameraRotationSync cameraRotationSync;
     cameraRotationSync.data.fRotation = cameraRotation;
     pBitStream->Write(&cameraRotationSync);
+
+    if (telemetryPacketSequence != 0)
+    {
+        SNativeAITelemetryPacket telemetryPacket;
+        telemetryPacket.localSequence = telemetryPacketSequence;
+        telemetryPacket.lane = "locomotion_burst";
+        telemetryPacket.direction = "send";
+        telemetryPacket.reliability = "unreliable_sequenced";
+        telemetryPacket.ordering = "default";
+        telemetryPacket.sampleKey = CNativeAITelemetry::MakeSampleKey("ped_spatial", *pBitStream, telemetryRecordStartBit, pBitStream->GetNumberOfBitsUsed());
+        telemetryPacket.syncContext = pPed->GetSyncTimeContext();
+        telemetryPacket.flags = 0x01 | 0x02 | 0x04;
+        telemetryPacket.flags2 = 0x01 | 0x02;
+        telemetryPacket.hasPosition = true;
+        telemetryPacket.position = position;
+        telemetryPacket.hasHeading = true;
+        telemetryPacket.heading = rotation;
+        telemetryPacket.hasVelocity = true;
+        telemetryPacket.velocity = velocity;
+        telemetryPacket.locomotion = &locomotion;
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_serialize", pPed, &telemetryPacket);
+    }
 
     // The burst shares the ordinary spatial sequence, so this is now the
     // latest transmitted state for both the next burst sample and the normal
@@ -642,15 +731,27 @@ void CPedSync::Update()
         if (pBitStream)
         {
             // Write each ped to it
+            const std::uint64_t telemetryPacketSequence =
+                CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::NETWORK) ? CNativeAITelemetry::NextPacketSequence() : 0;
             list<CClientPed*>::const_iterator iter = m_List.begin();
             for (; iter != m_List.end(); ++iter)
             {
-                WritePedInformation(pBitStream, *iter);
+                WritePedInformation(pBitStream, *iter, telemetryPacketSequence);
                 m_NativeTaskLocomotionBurstStates[*iter].initialized = true;
             }
 
             // Send and destroy the packet
             g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+            if (telemetryPacketSequence != 0 && pBitStream->GetNumberOfBitsUsed() != 0)
+            {
+                SNativeAITelemetryPacket telemetryPacket;
+                telemetryPacket.localSequence = telemetryPacketSequence;
+                telemetryPacket.lane = "ped_spatial";
+                telemetryPacket.direction = "dispatch";
+                telemetryPacket.reliability = "unreliable_sequenced";
+                telemetryPacket.ordering = "default";
+                CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_dispatch", nullptr, &telemetryPacket);
+            }
             g_pNet->DeallocateNetBitStream(pBitStream);
         }
     }
@@ -665,10 +766,12 @@ void CPedSync::UpdateNativeTaskAnimationPresentation()
     if (!pBitStream)
         return;
 
+    const std::uint64_t telemetryPacketSequence =
+        CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::NETWORK) ? CNativeAITelemetry::NextPacketSequence() : 0;
     bool wrotePresentation = false;
     bool reliableSemanticTransition = false;
     for (CClientPed* pPed : m_List)
-        wrotePresentation |= WriteNativeTaskAnimationPresentation(pBitStream, pPed, reliableSemanticTransition);
+        wrotePresentation |= WriteNativeTaskAnimationPresentation(pBitStream, pPed, reliableSemanticTransition, telemetryPacketSequence);
 
     if (wrotePresentation)
     {
@@ -677,11 +780,22 @@ void CPedSync::UpdateNativeTaskAnimationPresentation()
         // 100 ms animation progress remains unreliable and bandwidth-bounded.
         const NetPacketReliability reliability = reliableSemanticTransition ? PACKET_RELIABILITY_RELIABLE_ORDERED : PACKET_RELIABILITY_UNRELIABLE_SEQUENCED;
         g_pNet->SendPacket(PACKET_ID_PED_SYNC, pBitStream, PACKET_PRIORITY_MEDIUM, reliability, PACKET_ORDERING_NATIVE_TASK_PRESENTATION);
+        if (telemetryPacketSequence != 0)
+        {
+            SNativeAITelemetryPacket telemetryPacket;
+            telemetryPacket.localSequence = telemetryPacketSequence;
+            telemetryPacket.lane = "animation_fast";
+            telemetryPacket.direction = "dispatch";
+            telemetryPacket.reliability = reliableSemanticTransition ? "reliable_ordered" : "unreliable_sequenced";
+            telemetryPacket.ordering = "native_task_presentation";
+            CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_dispatch", nullptr, &telemetryPacket);
+        }
     }
     g_pNet->DeallocateNetBitStream(pBitStream);
 }
 
-bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed, bool& reliableSemanticTransition)
+bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitStream, CClientPed* pPed, bool& reliableSemanticTransition,
+                                                    std::uint64_t telemetryPacketSequence)
 {
     if (!pBitStream->Can(eBitStreamVersion::NativeTaskAnimationPresentation))
         return false;
@@ -768,11 +882,28 @@ bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitS
                                     presentation.data.bClimbAnimationPlaying != lastPresentation.data.bClimbAnimationPlaying);
     reliableSemanticTransition |= physical != wasPhysical || (physical && presentation.data.uiMode != lastPresentation.data.uiMode) || climbPhaseChanged;
 
+    const int telemetryRecordStartBit = telemetryPacketSequence != 0 ? pBitStream->GetNumberOfBitsUsed() : 0;
     pBitStream->Write(pPed->GetID());
     pBitStream->Write(pPed->GetSyncTimeContext());
     pBitStream->Write(static_cast<unsigned char>(0));
     pBitStream->Write(static_cast<std::uint8_t>(0x08 | PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE));
     pBitStream->Write(&presentation);
+
+    if (telemetryPacketSequence != 0)
+    {
+        SNativeAITelemetryPacket telemetryPacket;
+        telemetryPacket.localSequence = telemetryPacketSequence;
+        telemetryPacket.lane = "animation_fast";
+        telemetryPacket.direction = "send";
+        telemetryPacket.reliability = "see_packet_dispatch";
+        telemetryPacket.ordering = "native_task_presentation";
+        telemetryPacket.sampleKey =
+            CNativeAITelemetry::MakeSampleKey(telemetryPacket.lane, *pBitStream, telemetryRecordStartBit, pBitStream->GetNumberOfBitsUsed());
+        telemetryPacket.syncContext = pPed->GetSyncTimeContext();
+        telemetryPacket.flags2 = 0x08 | PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE;
+        telemetryPacket.animation = &presentation;
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_serialize", pPed, &telemetryPacket);
+    }
 
     pPed->m_LastSyncedData->nativeTaskAnimationPresentation = presentation;
     pPed->m_LastSyncedData->nativeTaskAnimationPresentationResetPending = false;
@@ -781,7 +912,7 @@ bool CPedSync::WriteNativeTaskAnimationPresentation(NetBitStreamInterface* pBitS
     return true;
 }
 
-void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed)
+void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed* pPed, std::uint64_t telemetryPacketSequence)
 {
     CVector vecPosition;
     pPed->GetPosition(vecPosition);
@@ -862,6 +993,8 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
     // Do we really have to sync this ped?
     if (ucFlags == 0 && flags2 == 0)
         return;
+
+    const int telemetryRecordStartBit = telemetryPacketSequence != 0 ? pBitStream->GetNumberOfBitsUsed() : 0;
 
     // Write the ped id
     pBitStream->Write(pPed->GetID());
@@ -957,6 +1090,29 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
 
         pBitStream->WriteBit(isReloadingWeapon);
         pPed->m_LastSyncedData->isReloadingWeapon = isReloadingWeapon;
+    }
+
+    if (telemetryPacketSequence != 0)
+    {
+        SNativeAITelemetryPacket telemetryPacket;
+        telemetryPacket.localSequence = telemetryPacketSequence;
+        telemetryPacket.lane = "ped_spatial";
+        telemetryPacket.direction = "send";
+        telemetryPacket.reliability = "unreliable_sequenced";
+        telemetryPacket.ordering = "default";
+        telemetryPacket.sampleKey =
+            CNativeAITelemetry::MakeSampleKey(telemetryPacket.lane, *pBitStream, telemetryRecordStartBit, pBitStream->GetNumberOfBitsUsed());
+        telemetryPacket.syncContext = pPed->GetSyncTimeContext();
+        telemetryPacket.flags = ucFlags;
+        telemetryPacket.flags2 = flags2;
+        telemetryPacket.hasPosition = ucFlags & 0x01;
+        telemetryPacket.position = vecPosition;
+        telemetryPacket.hasHeading = ucFlags & 0x02;
+        telemetryPacket.heading = pPed->GetCurrentRotation();
+        telemetryPacket.hasVelocity = ucFlags & 0x04;
+        telemetryPacket.velocity = vecVelocity;
+        telemetryPacket.locomotion = flags2 & 0x02 ? &nativeTaskLocomotion : nullptr;
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_serialize", pPed, &telemetryPacket);
     }
 
     // The animation has been overwritten or interrupted by the client

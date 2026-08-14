@@ -22,6 +22,8 @@ typedef DWORD CTaskUtilityLineUpPedWithCar;
 
 #define FUNC_CTaskComplexWanderStandard__Constructor 0x48E4F0
 #define FUNC_CTaskComplexWanderStandard__Destructor  0x48E600
+#define FUNC_CTaskComplexWanderGang__Constructor     0x66F5C0
+#define FUNC_CTaskComplexBeInGroup__Constructor      0x632E50
 
 #define FUNC_CTaskComplexGoToPointAndStandStill__Constructor      0x668120
 #define FUNC_CTaskComplexGoToPointAndStandStillTimed__Constructor 0x6685E0
@@ -123,6 +125,18 @@ class CTaskComplexWanderStandardSA : public virtual CTaskComplexWanderSA, public
 public:
     CTaskComplexWanderStandardSA() {};
     CTaskComplexWanderStandardSA(const int iMoveState, const unsigned char iDir, const bool bWanderSensibly = true);
+};
+
+class CTaskComplexWanderGangSA : public virtual CTaskComplexWanderSA
+{
+public:
+    CTaskComplexWanderGangSA(int moveState, unsigned char direction, unsigned int scanTime, bool wanderSensibly, float targetRadius);
+};
+
+class CTaskComplexBeInGroupSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexBeInGroupSA(int groupId, bool isLeader);
 };
 
 // Keep these layouts explicit: GTA's constructors initialise memory allocated by

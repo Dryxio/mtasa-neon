@@ -112,6 +112,7 @@ public:
     LUA_DECLARE(SetAmbientPedPopulationZoneState);
     LUA_DECLARE(GetAmbientPedPopulationProfile);
     LUA_DECLARE(GetAmbientPedSpawnCandidate);
+    LUA_DECLARE(GetAmbientPedGangGroupCandidate);
     LUA_DECLARE(SetPedTargetingMarkerEnabled);
     LUA_DECLARE(IsPedTargetingMarkerEnabled);
     LUA_DECLARE(SetMoonSize);
