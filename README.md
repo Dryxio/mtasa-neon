@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://mtasa-neon-wiki.vercel.app/neon"><img src="docs/media/neon-readme-banner.svg" alt="MTA:SA Neon Engine — open the documentation and Lua API" width="100%"></a>
+  <a href="https://mtasa-neon-wiki.vercel.app/neon"><img src="docs/media/neon-readme-banner.png" alt="MTA:SA Neon Engine — native AI, extended worlds, and new Lua APIs" width="100%"></a>
 </p>
 
 <p align="center">
