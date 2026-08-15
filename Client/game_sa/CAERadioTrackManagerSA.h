@@ -21,12 +21,10 @@
 #define FUNC_Reset                    0x4E7F80
 #define FUNC_StartRadio               0x4EB3C0
 
-#define FUNC_CAEAudioHardware_PlayTrack          0x4D8F10
-#define FUNC_CAEAudioHardware_StartTrackPlayback 0x4D8F30
-#define FUNC_CAEAudioHardware_StopTrack          0x4D8F50
-#define FUNC_CAEAudioHardware_GetTrackPlayTime   0x4D8F60
-#define FUNC_CAEAudioHardware_GetTrackLengthMs   0x4D8F70
-#define FUNC_CAEAudioHardware_GetPlayingTrackID  0x4D8F90
+#define FUNC_CAEAudioHardware_StopTrack         0x4D8F50
+#define FUNC_CAEAudioHardware_GetTrackPlayTime  0x4D8F60
+#define FUNC_CAEAudioHardware_GetTrackLengthMs  0x4D8F70
+#define FUNC_CAEAudioHardware_GetPlayingTrackID 0x4D8F90
 
 #define CLASS_CAERadioTrackManager 0x8CB6F8
 #define CLASS_CAEAudioHardware     0xB5F8B8
@@ -45,22 +43,29 @@ enum class eRadioTrackMode
 
 struct tRadioSettings
 {
-    std::int32_t djIndex[4];
+    std::int32_t trackQueue[5];
     std::int32_t currentTrackId;
     std::int32_t prevTrackId;
     std::int32_t trackPlayTime;
     std::int32_t trackLengthInMS;
-    std::uint8_t trackFlags[2];
+    std::uint8_t trackFlags;
     std::uint8_t currentRadioStation;
-    std::uint8_t field_27;
     std::uint8_t bassSet;
+    std::uint8_t field_27;
     float        bassGain;
-    std::uint8_t trackTypes[4];
+    std::uint8_t trackTypes[5];
     std::uint8_t currentTrackType;
     std::uint8_t prevTrackType;
-    std::int8_t  trackIndexes[10];
+    std::int8_t  trackIndexes[5];
+    std::int8_t  currentTrackIndex;
+    std::int8_t  prevTrackIndex;
+    std::uint8_t field_3A[2];
 };
 static_assert(sizeof(tRadioSettings) == 0x3C, "Invalid size of tRadioSettings struct!");
+static_assert(offsetof(tRadioSettings, currentTrackId) == 0x14, "Invalid current track offset!");
+static_assert(offsetof(tRadioSettings, trackPlayTime) == 0x1C, "Invalid play time offset!");
+static_assert(offsetof(tRadioSettings, currentRadioStation) == 0x25, "Invalid station offset!");
+static_assert(offsetof(tRadioSettings, trackTypes) == 0x2C, "Invalid track type offset!");
 
 struct tRadioState
 {
