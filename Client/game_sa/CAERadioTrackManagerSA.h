@@ -21,7 +21,15 @@
 #define FUNC_Reset                    0x4E7F80
 #define FUNC_StartRadio               0x4EB3C0
 
+#define FUNC_CAEAudioHardware_PlayTrack          0x4D8F10
+#define FUNC_CAEAudioHardware_StartTrackPlayback 0x4D8F30
+#define FUNC_CAEAudioHardware_StopTrack          0x4D8F50
+#define FUNC_CAEAudioHardware_GetTrackPlayTime   0x4D8F60
+#define FUNC_CAEAudioHardware_GetTrackLengthMs   0x4D8F70
+#define FUNC_CAEAudioHardware_GetPlayingTrackID  0x4D8F90
+
 #define CLASS_CAERadioTrackManager 0x8CB6F8
+#define CLASS_CAEAudioHardware     0xB5F8B8
 
 enum class eRadioTrackMode
 {
@@ -120,4 +128,6 @@ public:
     void  Reset();
     void  StartRadio(BYTE bStationID, BYTE bUnknown);
     bool  IsStationLoading() const;
+    bool  GetPlaybackState(SRadioPlaybackState& state) const override;
+    bool  SetPlaybackState(const SRadioPlaybackState& state) override;
 };
