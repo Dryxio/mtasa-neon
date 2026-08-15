@@ -24,6 +24,7 @@
 #define FUNC_CAEAudioHardware_StopTrack         0x4D8F50
 #define FUNC_CAEAudioHardware_GetTrackPlayTime  0x4D8F60
 #define FUNC_CAEAudioHardware_GetTrackLengthMs  0x4D8F70
+#define FUNC_CAEAudioHardware_GetActiveTrackID  0x4D8F80
 #define FUNC_CAEAudioHardware_GetPlayingTrackID 0x4D8F90
 
 #define CLASS_CAERadioTrackManager 0x8CB6F8
