@@ -11,6 +11,24 @@
 
 #pragma once
 
+struct SRadioPlaybackState
+{
+    static constexpr unsigned int QUEUE_SIZE = 5;
+
+    bool          radioOn{};
+    unsigned char stationId{};
+    int           mode{};
+    int           currentTrackId{-1};
+    int           currentTrackType{6};
+    int           currentTrackIndex{-1};
+    int           playTimeMs{-1};
+    int           trackLengthMs{-1};
+    unsigned char trackFlags{};
+    int           trackQueue[QUEUE_SIZE]{-1, -1, -1, -1, -1};
+    signed char   trackTypes[QUEUE_SIZE]{6, 6, 6, 6, 6};
+    signed char   trackIndexes[QUEUE_SIZE]{-1, -1, -1, -1, -1};
+};
+
 class CAERadioTrackManager
 {
 public:
@@ -22,4 +40,6 @@ public:
     virtual void  Reset() = 0;
     virtual void  StartRadio(BYTE bStationID, BYTE bUnknown) = 0;
     virtual bool  IsStationLoading() const = 0;
+    virtual bool  GetPlaybackState(SRadioPlaybackState& state) const = 0;
+    virtual bool  SetPlaybackState(const SRadioPlaybackState& state) = 0;
 };
