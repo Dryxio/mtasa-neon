@@ -111,6 +111,7 @@ public:
     LUA_DECLARE(ResetAmbientPedPopulationZonesToBootstrap);
     LUA_DECLARE(SetAmbientPedPopulationZoneState);
     LUA_DECLARE(GetAmbientPedPopulationProfile);
+    static bool IsAmbientPedSphereVisible(CVector position, float radius);
     LUA_DECLARE(GetAmbientPedSpawnCandidate);
     LUA_DECLARE(GetAmbientPedGangGroupCandidate);
     LUA_DECLARE(SetPedTargetingMarkerEnabled);

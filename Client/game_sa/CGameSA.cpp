@@ -105,10 +105,13 @@ namespace
     constexpr std::uintptr_t FUNC_GeneratePedCreationCoors = 0x44E790;
     constexpr std::uintptr_t FUNC_TakePathWidthIntoAccount = 0x44DA30;
     constexpr std::uintptr_t FUNC_PedCreationDistMultiplier = 0x6116C0;
+    constexpr std::uintptr_t FUNC_CullZonesFewerPeds = 0x72DD90;
     constexpr std::uintptr_t FUNC_ChooseGangOccupation = 0x611550;
     constexpr std::uintptr_t FUNC_ChooseCivilianOccupation = 0x612F90;
     constexpr std::uintptr_t FUNC_IsPositionClearForPed = 0x616860;
     constexpr std::uintptr_t GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER = 0xB6F11C;
+    constexpr std::uintptr_t GTA_PED_DENSITY_MULTIPLIER = 0x8D2530;
+    constexpr std::uintptr_t GTA_MAX_PEDS_IN_USE = 0x8D2538;
     constexpr std::uintptr_t GTA_CURRENT_STREAMING_ZONE_TYPE = 0x8E4C20;
     constexpr std::uintptr_t GTA_LOADED_PED_MODELS = 0x8E4C00;
     constexpr std::uintptr_t GTA_NAVIGATION_ZONE_ARRAY = 0xBA3798;
@@ -1631,12 +1634,19 @@ bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profi
     const float rawCopTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_COP_PEDS);
     const float gangTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_GANG_PEDS);
     const float dealerTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_DEALER_PEDS);
+    const float pedDensityMultiplier = *reinterpret_cast<const float*>(GTA_PED_DENSITY_MULTIPLIER);
+    const auto  maximumPedsInUse = *reinterpret_cast<const unsigned int*>(GTA_MAX_PEDS_IN_USE);
+    const float creationDistanceMultiplier = reinterpret_cast<float(__cdecl*)()>(FUNC_PedCreationDistMultiplier)();
+    const float generationDistanceMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
     const int   zoneType = *reinterpret_cast<const int*>(GTA_POPCYCLE_ZONE_TYPE);
     const int   timeIndex = *reinterpret_cast<const int*>(GTA_POPCYCLE_TIME_INDEX);
     const int   weekend = *reinterpret_cast<const int*>(GTA_POPCYCLE_WEEKEND);
-    if (!std::isfinite(civilianTarget) || !std::isfinite(rawCopTarget) || !std::isfinite(gangTarget) || !std::isfinite(dealerTarget) || civilianTarget < 0.0f ||
-        civilianTarget > 110.0f || rawCopTarget < 0.0f || rawCopTarget > 110.0f || gangTarget < 0.0f || gangTarget > 110.0f || dealerTarget < 0.0f ||
-        dealerTarget > 110.0f || zoneType < 0 || zoneType >= 20 || timeIndex < 0 || timeIndex >= 12 || weekend < 0 || weekend > 1)
+    if (!std::isfinite(civilianTarget) || !std::isfinite(rawCopTarget) || !std::isfinite(gangTarget) || !std::isfinite(dealerTarget) ||
+        !std::isfinite(pedDensityMultiplier) || !std::isfinite(creationDistanceMultiplier) || !std::isfinite(generationDistanceMultiplier) ||
+        civilianTarget < 0.0f || civilianTarget > 110.0f || rawCopTarget < 0.0f || rawCopTarget > 110.0f || gangTarget < 0.0f || gangTarget > 110.0f ||
+        dealerTarget < 0.0f || dealerTarget > 110.0f || pedDensityMultiplier < 0.0f || pedDensityMultiplier > 10.0f || maximumPedsInUse > 110 ||
+        creationDistanceMultiplier < 1.0f || creationDistanceMultiplier > 1.5f || generationDistanceMultiplier <= 0.0f ||
+        generationDistanceMultiplier > 10.0f || zoneType < 0 || zoneType >= 20 || timeIndex < 0 || timeIndex >= 12 || weekend < 0 || weekend > 1)
     {
         return false;
     }
@@ -1644,6 +1654,11 @@ bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profi
     profile.civilianTarget = civilianTarget;
     profile.gangTarget = gangTarget;
     profile.dealerTarget = dealerTarget;
+    profile.pedDensityMultiplier = pedDensityMultiplier;
+    profile.fewerPedsMultiplier = reinterpret_cast<bool(__cdecl*)()>(FUNC_CullZonesFewerPeds)() ? 0.6f : 1.0f;
+    profile.maximumPedsInUse = maximumPedsInUse;
+    profile.creationDistanceMultiplier = creationDistanceMultiplier;
+    profile.generationDistanceMultiplier = generationDistanceMultiplier;
     profile.supportedTarget = civilianTarget + gangTarget;
     profile.zoneType = static_cast<unsigned char>(zoneType);
     profile.timeIndex = static_cast<unsigned char>(timeIndex);
@@ -1657,6 +1672,16 @@ bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profi
     profile.target = profile.supportedTarget + profile.copTarget + dealerTarget;
     std::copy(std::begin(zoneInfo->gangStrength), std::end(zoneInfo->gangStrength), std::begin(profile.gangWeights));
     return std::isfinite(profile.target) && std::isfinite(profile.supportedTarget) && profile.target <= 110.0f;
+}
+
+bool CGameSA::IsAmbientPedSphereVisible(const CVector& position, float radius)
+{
+    if (!std::isfinite(position.fX) || !std::isfinite(position.fY) || !std::isfinite(position.fZ) || !std::isfinite(radius) || radius < 0.0f || radius > 100.0f)
+    {
+        return false;
+    }
+    CVector mutablePosition = position;
+    return m_pCamera->IsSphereVisible(&mutablePosition, radius);
 }
 
 EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate)

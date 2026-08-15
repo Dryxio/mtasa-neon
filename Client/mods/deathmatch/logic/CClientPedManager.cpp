@@ -49,6 +49,18 @@ void CClientPedManager::DoPulse(bool bDoStandardPulses)
     }
 }
 
+void CClientPedManager::RecordNativeAIRotationTelemetryPostProcess()
+{
+    // This hook runs after GTA has processed every ped for the frame. Sampling
+    // here distinguishes the interpolator's logical current/target values from
+    // the final matrix heading that the renderer will consume.
+    for (CClientPed* ped : m_StreamedIn)
+    {
+        if (ped)
+            ped->RecordNativeAIRotationTelemetryPostProcess();
+    }
+}
+
 CClientPed* CClientPedManager::Get(ElementID ID, bool bCheckPlayers)
 {
     // Grab the element with the given id. Check its type.

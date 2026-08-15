@@ -316,6 +316,7 @@ public:
         if (m_pNativeAIGroupDecisionHandler)
             m_pNativeAIGroupDecisionHandler(decision);
     }
+    bool                             IsAmbientPedSphereVisible(const CVector& position, float radius) override;
     CAnimBlendClumpDataSAInterface** GetClumpData(RpClump* clump) { return RWPLUGINOFFSET(CAnimBlendClumpDataSAInterface*, clump, ClumpOffset); }
 
     PreWeaponFireHandler*         m_pPreWeaponFireHandler;

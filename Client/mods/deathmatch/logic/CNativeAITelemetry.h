@@ -50,6 +50,41 @@ struct SNativeAITelemetryPacket
     const SNativeTaskAnimationPresentationSync* animation{};
 };
 
+// Captures the rotation state after GTA has processed peds for the frame. The
+// receive metadata identifies the exact network target which fed the current
+// interpolation, while matrixHeading records what an observer can render.
+struct SNativeAIRotationTelemetry
+{
+    std::uint64_t lastReceiveSequence{};
+    std::uint64_t lastReceiveSampleKey{};
+    std::uint32_t lastReceiveAtMs{};
+    std::uint32_t sampleAgeMs{};
+    std::uint32_t receiveIntervalMs{};
+    std::uint32_t spatialSyncRateMs{};
+    std::uint32_t interpolationBeginMs{};
+    std::uint32_t interpolationEndMs{};
+
+    float currentHeading{};
+    float targetHeading{};
+    float matrixHeading{};
+    float interpolationBeginHeading{};
+    float interpolationTargetHeading{};
+    float networkSampleHeading{};
+
+    std::uint32_t animationMode{};
+    std::uint16_t animationGroup{};
+    std::uint16_t animationId{};
+
+    bool hasNetworkSample{};
+    bool networkHeadingApplied{};
+    bool interpolationActive{};
+    bool remoteStreamInFence{};
+    bool remoteReplicaPhysicsFence{};
+    bool nativeCollisionAuthorityFence{};
+    bool ownerCollisionFence{};
+    bool animationPresentationActive{};
+};
+
 class CNativeAITelemetry final
 {
 public:
@@ -58,5 +93,6 @@ public:
     static std::uint64_t MakeSampleKey(const char* lane, const NetBitStreamInterface& bitStream, int startBit, int endBit) noexcept;
     static void          RecordPedEvent(ENativeAITelemetryCategory category, const char* event, CClientPed* ped,
                                         const SNativeAITelemetryPacket* packet = nullptr) noexcept;
+    static void          RecordPedRotationEvent(const char* event, CClientPed* ped, const SNativeAIRotationTelemetry& rotation) noexcept;
     static void          RecordGroupDecision(const SNativeAIGroupDecision& decision) noexcept;
 };

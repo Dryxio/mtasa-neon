@@ -82,6 +82,8 @@ void CPedRPCs::SetPedRotation(CClientEntity* pSource, NetBitStreamInterface& bit
             // here makes remote named animations rotate back toward zero.
             if (!IS_PLAYER(pPed) && ucNewWay != 1)
                 pPed->SetCameraRotation(rotation.data.fRotation);
+            if (pPed->GetType() == CCLIENTPED)
+                pPed->UpdateRemoteAuthoritativeTransform(nullptr, &rotation.data.fRotation, nullptr);
             pPed->SetSyncTimeContext(ucTimeContext);
         }
     }
@@ -203,6 +205,9 @@ void CPedRPCs::WarpPedIntoVehicle(CClientEntity* pSource, NetBitStreamInterface&
             CClientVehicle* pVehicle = m_pVehicleManager->Get(VehicleID);
             if (pVehicle)
             {
+                // Release any on-foot collision fence before GTA changes the
+                // ped's physical ownership to the vehicle.
+                pPed->InvalidateRemoteAuthoritativeTransformRestore();
                 CStaticFunctionDefinitions::WarpPedIntoVehicle(pPed, pVehicle, ucSeat);
             }
         }
@@ -220,7 +225,15 @@ void CPedRPCs::RemovePedFromVehicle(CClientEntity* pSource, NetBitStreamInterfac
         if (pPed)
         {
             if (CStaticFunctionDefinitions::RemovePedFromVehicle(pPed))
+            {
                 pPed->SetSyncTimeContext(ucTimeContext);
+                CVector position;
+                CVector velocity;
+                pPed->GetPosition(position);
+                pPed->GetMoveSpeed(velocity);
+                const float rotation = pPed->GetCurrentRotation();
+                pPed->UpdateRemoteAuthoritativeTransform(&position, &rotation, &velocity);
+            }
         }
     }
 }

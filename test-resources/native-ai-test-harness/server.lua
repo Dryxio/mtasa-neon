@@ -2,6 +2,14 @@ local activeRun
 local nextRunSequence = 0
 local logPath = "@harness-server.jsonl"
 
+local function isRotationKind(kind)
+    return kind == "rotation" or kind == "rotation_handoff"
+end
+
+local function isHandoffKind(kind)
+    return kind == "handoff" or kind == "rotation_handoff"
+end
+
 -- GetStrikeDamage (GTA 1.0 US 0x61C740) reads the current move's damage byte
 -- from the active melee combo, then applies the non-player pedstats attack
 -- multiplier. The harness pins STYLE_STANDARD/UNARMED_1 and gang pedstats use
@@ -173,7 +181,7 @@ local function setRunStep(actionId, step)
     run.actionId = actionId
     run.step = step
     setActorTrace(run.owner, "owner-player", actionId, step)
-    setActorTrace(run.victim, run.kind == "handoff" and "next-owner-player" or "victim-player", actionId, step)
+    setActorTrace(run.victim, isHandoffKind(run.kind) and "next-owner-player" or "victim-player", actionId, step)
     for index, ped in ipairs(run.peds) do
         setActorTrace(ped, "ped-" .. index, actionId, step)
     end
@@ -298,6 +306,85 @@ local function placePlayer(player, position)
     setPedArmor(player, 0)
 end
 
+local function dispatchRotation(rotationIndex)
+    local run = activeRun
+    if not run or run.finished or not isRotationKind(run.kind) then
+        return
+    end
+
+    local targetHeading = run.scenario.rotationTargets[rotationIndex]
+    local actionId = ("rotation-%03d"):format(targetHeading)
+    setRunStep(actionId, "rotation-dispatch")
+    run.rotationActions[actionId] = {
+        converged = {},
+        ownerApplied = false,
+        ownerHeld = false,
+        targetHeading = targetHeading,
+    }
+    writeStage("rotation_action_dispatched", {
+        action_id = actionId,
+        actor_id = "ped-2",
+        owner_actor_id = run.rotationOwner == run.owner and "owner-player" or "next-owner-player",
+        target_heading = targetHeading,
+        rotation_index = rotationIndex,
+        epoch = run.epoch,
+    })
+    for _, player in ipairs({run.owner, run.victim}) do
+        triggerClientEvent(player, "nativeAIHarness:rotationAction", resourceRoot, run.id, run.epoch,
+                           actionId, run.peds[2], targetHeading, run.rotationOwner)
+    end
+end
+
+local function beginRotationSequence(rotationOwner)
+    local run = activeRun
+    if not run or run.finished then
+        return
+    end
+    run.rotationOwner = rotationOwner
+    run.rotationActions = {}
+    for rotationIndex = 1, #run.scenario.rotationTargets do
+        local delay = NATIVE_AI_HARNESS.traceLeadTime + (rotationIndex - 1) * NATIVE_AI_HARNESS.rotationTurnInterval
+        run.timers["rotationDispatch" .. rotationIndex] = setTimer(function(expectedId, expectedIndex)
+            if activeRun and activeRun.id == expectedId then
+                dispatchRotation(expectedIndex)
+            end
+        end, delay, 1, run.id, rotationIndex)
+    end
+    local completionDelay = NATIVE_AI_HARNESS.traceLeadTime +
+                                (#run.scenario.rotationTargets - 1) * NATIVE_AI_HARNESS.rotationTurnInterval +
+                                NATIVE_AI_HARNESS.rotationFinalObservation
+    run.timers.rotationComplete = setTimer(function(expectedId)
+        local active = activeRun
+        if not active or active.id ~= expectedId then
+            return
+        end
+        for _, targetHeading in ipairs(active.scenario.rotationTargets) do
+            local actionId = ("rotation-%03d"):format(targetHeading)
+            local action = active.rotationActions[actionId]
+            if not action or not action.ownerApplied or not action.ownerHeld then
+                assertion("rotation-owner-held:" .. actionId, false, true, action and action.ownerHeld or false)
+                return finishRun(false, "owner did not hold predetermined action " .. actionId)
+            end
+        end
+        local finalTarget = active.scenario.rotationTargets[#active.scenario.rotationTargets]
+        local finalActionId = ("rotation-%03d"):format(finalTarget)
+        local finalAction = active.rotationActions[finalActionId]
+        if not finalAction or not finalAction.converged[active.owner] or not finalAction.converged[active.victim] then
+            assertion("rotation-final-convergence", false, "owner+observer", "incomplete")
+            return finishRun(false, "final rotation did not converge during the capture window")
+        end
+        writeStage("rotation_schedule_complete", {
+            action_id = finalActionId,
+            actor_id = "ped-2",
+            target_heading = finalTarget,
+            turn_interval_ms = NATIVE_AI_HARNESS.rotationTurnInterval,
+            final_observation_ms = NATIVE_AI_HARNESS.rotationFinalObservation,
+            epoch = active.epoch,
+        })
+        finishRun(true, "predetermined rotation trace captured; causal analyzer verdict required")
+    end, completionDelay, 1, run.id)
+end
+
 local function beginScheduledAction()
     local run = activeRun
     if not run or run.finished then
@@ -325,6 +412,14 @@ local function beginScheduledAction()
                 })
             end
         end, NATIVE_AI_HARNESS.traceLeadTime, 1, run.id)
+    elseif run.kind == "rotation" then
+        setRunStep("prepare", "settle")
+        writeTrace("action_scheduled", {
+            action_id = "rotation-000",
+            due_relative_ms = getTickCount() + NATIVE_AI_HARNESS.traceLeadTime - run.startedAt,
+            owner_actor_id = "owner-player",
+        })
+        beginRotationSequence(run.owner)
     else
         setRunStep("prepare", "settle")
         run.pendingActionId = "group-handoff"
@@ -375,7 +470,8 @@ local function startRun(caller, kind, ownerName, victimName)
     end
     local scenario = NATIVE_AI_HARNESS.scenarios[kind]
     if not scenario then
-        return outputChatBox("[native AI] Usage: /nativeai run melee|handoff [owner] [victim-or-next-owner]", caller, 255, 180, 80)
+        return outputChatBox("[native AI] Usage: /nativeai run melee|handoff|rotation|rotation_handoff [owner] [victim-or-next-owner]", caller,
+                             255, 180, 80)
     end
     local owner, victim, reason = resolveRoles(caller, ownerName, victimName)
     if not owner or not victim or owner == victim then
@@ -440,20 +536,22 @@ local function startRun(caller, kind, ownerName, victimName)
     setRunStep("prepare", "wait-client-leases")
     writeTrace("run_start", {
         owner_actor_id = "owner-player",
-        victim_actor_id = kind == "handoff" and "next-owner-player" or "victim-player",
+        victim_actor_id = isHandoffKind(kind) and "next-owner-player" or "victim-player",
         actors = {
             {actor_id = "owner-player", type = "player", role = "initial-owner", transform = scenario.owner},
-            {actor_id = kind == "handoff" and "next-owner-player" or "victim-player", type = "player",
-             role = kind == "handoff" and "next-owner" or "victim", transform = scenario.victim},
-            {actor_id = "ped-1", type = "ped", model = scenario.pedModels[1], group_id = "group-1",
+            {actor_id = isHandoffKind(kind) and "next-owner-player" or "victim-player", type = "player",
+             role = isHandoffKind(kind) and "next-owner" or "victim", transform = scenario.victim},
+            {actor_id = "ped-1", type = "ped", model = scenario.pedModels[1],
+             group_id = isRotationKind(kind) and false or "group-1",
              owner_actor_id = "owner-player", fighting_style = scenario.fightingStyle, transform = scenario.peds[1]},
-            {actor_id = "ped-2", type = "ped", model = scenario.pedModels[2], group_id = "group-1",
+            {actor_id = "ped-2", type = "ped", model = scenario.pedModels[2],
+             group_id = isRotationKind(kind) and false or "group-1",
              owner_actor_id = "owner-player", fighting_style = scenario.fightingStyle, transform = scenario.peds[2]},
         },
         epoch = run.epoch,
     })
     announce(("Run %s: owner and %s roles assigned. Do not move; action is automatic."):format(
-                 run.id, kind == "handoff" and "next-owner" or "victim"))
+                 run.id, isHandoffKind(kind) and "next-owner" or "victim"))
     triggerClientEvent(owner, "nativeAIHarness:prepare", resourceRoot, run.id, scenario.id, run.epoch,
                        run.peds, owner, victim, "owner", kind)
     triggerClientEvent(victim, "nativeAIHarness:prepare", resourceRoot, run.id, scenario.id, run.epoch,
@@ -484,12 +582,39 @@ addCommandHandler("nativeai", function(player, _, action, kind, ownerName, victi
                               activeRun.id, activeRun.scenario.id, activeRun.step, activeRun.actionId,
                               getPlayerName(activeRun.owner), getPlayerName(activeRun.victim)), player, 180, 220, 255)
         else
-            outputChatBox("[native AI] No active run. /nativeai run melee|handoff", player, 180, 220, 255)
+            outputChatBox("[native AI] No active run. /nativeai run melee|handoff|rotation|rotation_handoff", player, 180, 220, 255)
         end
     else
-        outputChatBox("[native AI] /nativeai run melee|handoff [owner] [victim-or-next-owner]", player, 255, 180, 80)
+        outputChatBox("[native AI] /nativeai run melee|handoff|rotation|rotation_handoff [owner] [victim-or-next-owner]", player, 255, 180, 80)
     end
 end)
+
+local function completeRotationActionIfReady(run, actionId)
+    local action = run.rotationActions and run.rotationActions[actionId]
+    if not action or action.completed or not action.ownerApplied or not action.converged[run.owner] or not action.converged[run.victim] then
+        return
+    end
+    local ownerEvidence = action.converged[run.rotationOwner]
+    local observer = run.rotationOwner == run.owner and run.victim or run.owner
+    local observerEvidence = action.converged[observer]
+    local converged = ownerEvidence and observerEvidence and ownerEvidence.role == "owner" and observerEvidence.role == "observer"
+    assertion("rotation-owner-observer-convergence:" .. actionId, converged == true, "owner+observer", converged and "complete" or "role mismatch",
+              {owner = ownerEvidence, observer = observerEvidence})
+    if not converged then
+        return finishRun(false, "rotation convergence roles mismatched")
+    end
+    action.completed = true
+    writeStage("rotation_action_converged", {
+        action_id = actionId,
+        actor_id = "ped-2",
+        target_heading = observerEvidence.targetHeading,
+        owner_elapsed_ms = ownerEvidence.elapsedMs,
+        observer_elapsed_ms = observerEvidence.elapsedMs,
+        owner_delta_degrees = ownerEvidence.deltaDegrees,
+        observer_delta_degrees = observerEvidence.deltaDegrees,
+        epoch = run.epoch,
+    })
+end
 
 addEvent("nativeAIHarness:evidence", true)
 addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch, evidence, data)
@@ -499,8 +624,8 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
         return
     end
     writeTrace("client_evidence", {
-        actor_id = client == run.owner and "owner-player" or (run.kind == "handoff" and "next-owner-player" or "victim-player"),
-        action_id = run.actionId,
+        actor_id = client == run.owner and "owner-player" or (isHandoffKind(run.kind) and "next-owner-player" or "victim-player"),
+        action_id = data.actionId and tostring(data.actionId) or run.actionId,
         evidence = tostring(evidence),
         details = data,
     })
@@ -519,11 +644,14 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
         if not assertion("native-attack-dispatch", accepted == #run.peds, #run.peds, accepted) then
             finishRun(false, "native combat task dispatch failed")
         end
-    elseif evidence == "owner-released" and client == run.owner and run.kind == "handoff" and run.step == "revoke-old-owner" then
+    elseif evidence == "owner-released" and client == run.owner and isHandoffKind(run.kind) and run.step == "revoke-old-owner" then
         assertion("old-owner-release", data.released == true, true, data.released)
         run.epoch = run.epoch + 1
         for _, ped in ipairs(run.peds) do
             setElementSyncer(ped, run.victim, true, true)
+        end
+        if run.kind == "rotation_handoff" then
+            triggerClientEvent(run.owner, "nativeAIHarness:updateObserverEpoch", resourceRoot, run.id, run.epoch)
         end
         setRunStep("group-handoff-acquire", "acquire-new-owner")
         run.timers.acquire = setTimer(function(expectedId)
@@ -532,14 +660,67 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
                                    activeRun.id, activeRun.epoch, activeRun.actionId)
             end
         end, NATIVE_AI_HARNESS.traceLeadTime, 1, run.id)
-    elseif evidence == "owner-acquired" and client == run.victim and run.kind == "handoff" and run.step == "acquire-new-owner" then
+    elseif evidence == "owner-acquired" and client == run.victim and isHandoffKind(run.kind) and run.step == "acquire-new-owner" then
         local syncersGood = true
         for _, ped in ipairs(run.peds) do
             syncersGood = syncersGood and getElementSyncer(ped) == run.victim
         end
         local acquired = data.acquired == true and syncersGood
         assertion("new-owner-acquire", acquired, "next-owner-player", acquired and "next-owner-player" or "inactive/mixed")
-        finishRun(acquired, acquired and "native group transferred to epoch 2" or "new owner failed to acquire native group")
+        if not acquired then
+            finishRun(false, "new owner failed to acquire native group")
+        elseif run.kind == "handoff" then
+            finishRun(true, "native group transferred to epoch 2")
+        else
+            beginRotationSequence(run.victim)
+        end
+    elseif evidence == "rotation-owner-applied" and isRotationKind(run.kind) and client == run.rotationOwner then
+        local actionId = tostring(data.actionId)
+        local action = run.rotationActions and run.rotationActions[actionId]
+        if not action then
+            return
+        end
+        action.ownerApplied = data.accepted == true
+        if not assertion("rotation-owner-applied:" .. actionId, action.ownerApplied, true, data.accepted,
+                         {target_heading = data.targetHeading, actual_heading = data.actualHeading}) then
+            finishRun(false, "owner failed to apply " .. actionId)
+        else
+            completeRotationActionIfReady(run, actionId)
+        end
+    elseif evidence == "rotation-owner-held" and isRotationKind(run.kind) and client == run.rotationOwner then
+        local actionId = tostring(data.actionId)
+        local action = run.rotationActions and run.rotationActions[actionId]
+        if not action then
+            return
+        end
+        action.ownerHeld = true
+        writeStage("rotation_owner_held", {
+            action_id = actionId,
+            actor_id = tostring(data.actorId or "ped-2"),
+            target_heading = tonumber(data.targetHeading),
+            actual_heading = tonumber(data.actualHeading),
+            delta_degrees = tonumber(data.deltaDegrees),
+            elapsed_ms = tonumber(data.elapsedMs),
+            consecutive_frames = tonumber(data.consecutiveFrames),
+            epoch = run.epoch,
+        })
+        completeRotationActionIfReady(run, actionId)
+    elseif evidence == "rotation-owner-drift" and isRotationKind(run.kind) and client == run.rotationOwner then
+        local actionId = tostring(data.actionId)
+        assertion("rotation-owner-held:" .. actionId, false, "stable native heading", data.actualHeading, {
+            target_heading = data.targetHeading,
+            delta_degrees = data.deltaDegrees,
+            elapsed_ms = data.elapsedMs,
+        })
+        finishRun(false, "owner heading drifted before network attribution for " .. actionId)
+    elseif evidence == "rotation-converged" and isRotationKind(run.kind) then
+        local actionId = tostring(data.actionId)
+        local action = run.rotationActions and run.rotationActions[actionId]
+        if not action then
+            return
+        end
+        action.converged[client] = data
+        completeRotationActionIfReady(run, actionId)
     elseif evidence == "damage-applied" and client == run.victim and run.kind == "melee" then
         local before = tonumber(data.healthBefore)
         local after = tonumber(data.healthAfter)
@@ -700,4 +881,4 @@ addEventHandler("onResourceStop", resourceRoot, function()
     cleanupRun("resource-stop")
 end)
 
-outputServerLog("[native-ai-harness] Ready: /nativeai run melee|handoff [owner] [victim-or-next-owner]")
+outputServerLog("[native-ai-harness] Ready: /nativeai run melee|handoff|rotation|rotation_handoff [owner] [victim-or-next-owner]")

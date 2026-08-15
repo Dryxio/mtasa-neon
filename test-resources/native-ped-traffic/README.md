@@ -11,10 +11,10 @@ or propose a spawn; stale profiles and candidates are rejected.
 
 Each ready client keeps GTA's stock zone-ped model residency current. It also reports
 GTA's read-only population targets for the current zone, two-hour time bucket,
-weekday/weekend state and current rain adjustment. The server caps its
-conservative near-player target by that native target, preserves its
-floating civilian/gang targets, and reproduces `FindNewPedType` from the shared
-live population over those cap-scaled supported targets before requesting a
+weekday/weekend state and current rain adjustment. The server applies GTA's
+live density multiplier, cull-zone reduction and maximum-ped gate, projects
+that complete target onto the civilian/gang classes currently supported, and
+reproduces `FindNewPedType` from the shared live population before requesting a
 native civilian or exact-gang placement
 candidate. GTA still chooses the model from its loaded `pedgrp.dat` entries;
 the server validates the result, creates the real MTA ped, and assigns one persistent
@@ -87,20 +87,46 @@ at the transferred animation phase; if the anchor is no longer valid, it falls
 back through GTA's native in-air/land lifecycle rather than leaving the ped
 latched to stale geometry.
 
-The initial limits are intentionally conservative: 24 peds globally, 12 near a
-player, four per 64 m cell, one candidate request every 250 ms while below the
-native target, at least 10 m between traffic peds, and a 20-slot reserve below
-MTA's 110-ped logical limit. Peds outside the 120 m shared residency receive a
-four-second grace before removal; a stable population-family change retires at
-most one furthest surplus ped every two seconds instead of replacing a whole
-street at once. Retirement is allowed only when that class is surplus for every
-overlapping player, the ped is in a plain active lifecycle, and it is at least
-90 m from every player.
-Candidates are also rejected within 25 m of another player to avoid a spawn
-which was hidden from the proposing client but visible to somebody else.
+The density checkpoint leaves a 20-slot reserve below MTA's 110-ped logical
+limit and issues at most one global candidate request every 100 ms. Civilians
+are created singly; resident gangs use GTA's native two-to-four-member batch.
+The server keeps the native float class deficits and uses the projected total's
+integer gate, so a fractional target behaves like stock `AddToPopulation`
+without rounding each family independently. A 64 m cell guard of 12 and a 2 m
+server separation check are only final abuse/saturation bounds; GTA's path-node
+density and collision query still decide normal placement.
+
+Each player owns a local population bubble derived from that client's live GTA
+creation and camera-generation multipliers. Civilian residency ends at the
+stock 54.5 multiplier; gangs retain GTA's extra 30 m. Overlapping players share
+the same peds and counts, while disjoint players can fill separate bubbles.
+A group remains resident when any member is inside any player's gang radius.
+Peds beyond every matching radius receive the stock four-second grace, then
+the server asks every eligible client whether the element is on screen. A
+missing answer or any visible vote defers removal. Family rebalancing uses the
+same all-client camera veto and retires at most one surplus ped or whole group
+every two seconds.
+
+Before creation, every client close enough to suffer a visible pop evaluates
+GTA's native camera-sphere test. Any visible-too-close vote rejects the
+candidate. Accepted peds start at alpha zero and fade locally over the stock
+roughly 16-frame interval; the server publishes only the initial and final
+alpha states. This preserves visual continuity without sending per-frame alpha
+updates. The intermediate vanilla 25 m-to-removal-radius camera-mode retention
+exceptions are not modeled yet; removal is deliberately more conservative and
+waits for every client to report the ped off screen.
+
 Ownership changes only after another player stays at least 20 m closer for
 three seconds. The old owner kills its native task and releases its streaming
 lease before the new epoch is assigned.
+
+With debug enabled, the server also writes bounded structured records to the
+deployed resource's private `@population-server.jsonl`. Its
+`neon.ped_traffic.population` schema correlates profile changes, per-player
+target/live/deficit snapshots, requests, native misses, camera votes, spawns,
+rejections and removals by request, visibility-check, traffic and group IDs.
+The file is reset when `/pedtraffic debug on` begins a new session and stops at
+20,000 lines.
 
 ## Commands
 
@@ -111,7 +137,8 @@ lease before the new epoch is assigned.
 - `/pedtraffic preset post_intro|post_cleaning_the_hood|post_green_sabre|post_home_coming`
   changes the authoritative campaign population state. Existing traffic is
   cleared and both clients must acknowledge the new revision before refill.
-- `/pedtraffic cap 1..110` changes the test cap; keep 24 for the first run.
+- `/pedtraffic cap 1..110` changes the safety cap; the default is 90 so two
+  disjoint native population bubbles can fill while preserving 20 logical slots.
 - `/pedtraffic weapon` gives the caller a pistol for the threat checkpoint.
 - `/pedtraffic vehicle [model]` creates one resource-owned player vehicle for
   collision testing (default model 560). It is removed on `off`, quit or stop.
@@ -121,6 +148,8 @@ lease before the new epoch is assigned.
   active ped and makes it enter GTA's native climb/vault task; add `handoff` to
   transfer ownership while `TASK_SIMPLE_CLIMB` is active. The resource removes
   the temporary barrier on completion, failure, `off` or resource shutdown.
+- `/pedtraffic residency` runs the fail-fast two-client collision-residency
+  handoff, suspension and resumption checkpoint described below.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
 and now admits GTA's civilian and resident-gang population classes. The native
@@ -150,8 +179,14 @@ covered by those scopes remain a later behavior checkpoint.
   includes the effective `copTarget` and reported `dealerTarget`; `rawCopTarget`
   preserves the pre-`noCops` popcycle value for diagnostics. Zone metadata includes
   `zoneType`, `dealerStrength`, `raceFlags`, `noCops`, `timeIndex`, `weekend`,
-  and the ten native `gangWeights`. The civilian target already contains GTA's
-  stock rain adjustment.
+  and the ten native `gangWeights`. Runtime density/lifecycle fields expose
+  `pedDensityMultiplier`, `fewerPedsMultiplier`, `maximumPedsInUse`,
+  `creationDistanceMultiplier` and `generationDistanceMultiplier`. The
+  civilian target already contains GTA's stock rain adjustment.
+- `isAmbientPedSphereVisible(Vector3 position[, float radius])` performs GTA's
+  camera-frustum sphere query without creating an entity. This resource uses
+  it only as a multi-client candidate veto; every near-enough camera must agree
+  before the server creates a shared ped.
 - `resetAmbientPedPopulationZonesToBootstrap()` restores the stock main.scm
   population initialization inside the active reversible lease.
 - `setAmbientPedPopulationZoneState(label, state)` applies validated optional
@@ -220,6 +255,34 @@ up every resource-owned element.
    resource-owned peds and each client must release its eight stock zone-model
    slots. No vehicle may be created at any point.
 
+## Deterministic collision-residency checkpoint
+
+Connect exactly two clients on foot in dimension/interior 0, enable traffic,
+and wait until one grounded native gang group is active. Run this command from
+either client:
+
+```text
+/pedtraffic residency
+```
+
+The harness enables and resets the population JSONL trace, preserves both
+player transforms, then drives one existing group through the shortest causal
+sequence: owner A and resident B near the group, A outside its residency radius
+for an A-to-B handoff, the inverse B-to-A handoff, both clients outside for a
+mandatory `suspended` state, and finally A returning for resumption. Player
+transforms and frozen states are restored on PASS, FAIL, cancellation, or a
+client departure.
+
+Every 100 ms, `@population-server.jsonl` correlates the scenario action and
+elapsed tick with group owner/epoch/state and each ped's Z/frozen state. Both
+clients add their local Z, vertical velocity, grounded/syncer/collision-ready
+flags, and physical task phase. The scenario stops at the first Z drop greater
+than 0.5, `IN_AIR`/fall task, active-owner sample without collision readiness,
+acceptance without the readiness proof, missing frozen suspension, missing
+client, or seven-second phase timeout. A successful terminal row is
+`residency_test_result` with `result=PASS` and
+`reason=handoff-return-suspend-resume`.
+
 ## Population world-state checkpoint
 
 1. Enable debug and traffic at Grove Street. Both clients must log the same
@@ -250,6 +313,38 @@ up every resource-owned element.
    once in SF or LV to verify the regional `pedgrp.dat` column is used instead
    of the Los Santos column. Both clients must see the same server-created
    elements and models throughout.
+
+## Vanilla density and lifecycle checkpoint
+
+1. Start both clients together at Grove Street, enable debug, select
+   `post_cleaning_the_hood`, then enable traffic. Do not move for 30 seconds.
+   `population_snapshot` rows must converge to the reported hard total without
+   repeated `cell-full`, `separation` or `visibility-timeout` failures.
+2. Face the same street from both clients while it fills. A candidate visible
+   too close to either camera must produce `visible-to-resident`, not a spawn.
+   Accepted visible-ring candidates should fade in, never appear fully opaque
+   in one frame.
+3. Move the clients together through Ganton. Nearby counts should refill
+   continuously in small batches; old peds must remain until outside the
+   class-specific radius for four seconds and off screen on both clients.
+4. Separate the clients into disjoint Los Santos neighbourhoods. Each local
+   bubble should approach its own native target without the five-group limit
+   being shared between client owners. Bring the clients back together and
+   confirm overlapping counts merge without duplicate bursts or visible mass
+   removal.
+5. Leave one client watching an old street while the other moves away. No ped
+   visible to the stationary client may despawn. Close that camera or leave the
+   area and verify the deferred removals complete, then inspect
+   `@population-server.jsonl` for the complete target/request/vote/lifecycle
+   chain.
+6. Repeat the streaming boundary in both ownership directions: first move only
+   the observer away and return, then move only the current owner away while
+   the observer stays beside the group. The second case must emit
+   `group_handoff_started` with `group-owner-left-residency`, advance the epoch
+   exactly once, and never serialize an airborne or descending transform from
+   the departing owner. Finally repeat with both clients leaving and with the
+   owner disconnecting. A compile or static review is only a test-ready gate;
+   this four-case matrix must pass before the lifecycle fix is called complete.
 
 ## Threat checkpoint
 

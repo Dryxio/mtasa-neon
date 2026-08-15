@@ -20,11 +20,13 @@ class CClientPed;
 #include "CClientPad.h"
 #include "CClientModel.h"
 #include "CPedNativeEventProfile.h"
+#include <cstdint>
 #include <memory>
 #include <optional>
 
 #include <game/CPad.h>
 #include <game/CPed.h>
+#include <game/CColStore.h>
 #include <game/TaskTypes.h>
 #include <net/SyncStructures.h>
 
@@ -43,6 +45,7 @@ class CClientVehicle;
 class CTask;
 class CTaskSAInterface;
 class CTaskSimpleSwim;
+struct SNativeAITelemetryPacket;
 
 enum eDelayedSyncData
 {
@@ -250,6 +253,8 @@ public:
     void  SetCurrentRotation(float fRotation, bool bIncludeTarget = true);
     void  SetTargetRotation(float fRotation);
     void  SetTargetRotation(unsigned long ulDelay, std::optional<float> rotation, std::optional<float> cameraRotation);
+    void  SetNativeAIRotationTelemetryNetworkSample(const SNativeAITelemetryPacket& packet, unsigned long receivedAt, unsigned long receiveInterval,
+                                                    unsigned long spatialSyncRate, bool headingApplied) noexcept;
 
     float GetCameraRotation();
     void  SetCameraRotation(float fRotation);
@@ -514,6 +519,8 @@ public:
     const CClientEntity* GetTargetOriginSource() const noexcept { return m_interp.pTargetOriginSource; }
     void                 GetTargetPosition(CVector& vecPosition);
     void                 SetTargetPosition(const CVector& vecPosition, unsigned long ulDelay, CClientEntity* pTargetOriginSource = NULL);
+    void                 UpdateRemoteAuthoritativeTransform(const CVector* pPosition, const float* pRotation, const CVector* pMoveSpeed);
+    void                 InvalidateRemoteAuthoritativeTransformRestore();
     void                 RemoveTargetPosition();
     void                 UpdateTargetPosition();
     void                 UpdateUnderFloorFix(const CVector& vecTargetPosition, const CVector& vecOrigin);
@@ -677,6 +684,10 @@ protected:
     void _ChangeModel();
     void ApplyMissionActorState();
     void ApplyNativeEventProfileState();
+    bool RefreshNativeCollisionResidency();
+    void ReleaseNativeCollisionResidency(const char* reason);
+    bool HasNativeCollisionGroundSupport();
+    void UpdateNativeCollisionAuthorityFence(bool shouldFence, const char* reason);
     void ClearNativeAmbientWanderResponse();
     void ApplyStoryProtectionState();
     void ApplySuffersCriticalHitsState();
@@ -684,7 +695,12 @@ protected:
     void ApplyNeverTargetedState();
     void ArmRemoteStreamInTransformFence();
     void UpdateRemoteStreamInTransformFence();
-    void ClearRemoteStreamInTransformFence(const char* reason);
+    void ClearRemoteStreamInTransformFence(const char* reason, bool commitAuthoritativeTransform = false);
+    void UpdateNativeAmbientOwnerCollisionFence();
+    void ClearNativeAmbientOwnerCollisionFence(const char* reason, bool restoreSafeTransform = true);
+    void UpdateRemoteReplicaPhysicsFence();
+    void ApplyPhysicalFreezeState();
+    void RecordNativeAIRotationTelemetryPostProcess() noexcept;
 
     void ModelRequestCallback(CModelInfo* pModelInfo);
 
@@ -749,33 +765,45 @@ public:
     CControllerState* m_lastControllerState;
     CControllerState  m_rawControllerState;  // copy of lastControllerState before CClientPed::ApplyControllerStateFixes is applied (modifies states to
                                              // prevent stuff like rapid input glitch)
-    CRemoteDataStorage*                      m_remoteDataStorage;
-    unsigned long                            m_ulLastTimeFired;
-    unsigned long                            m_ulLastTimeBeganAiming;
-    unsigned long                            m_ulLastTimeEndedAiming;
-    unsigned long                            m_ulLastTimeBeganCrouch;
-    unsigned long                            m_ulLastTimeBeganStand;
-    unsigned long                            m_ulLastTimeMovedWhileCrouched;
-    unsigned long                            m_ulLastTimePressedLeftOrRight;
-    unsigned long                            m_ulLastTimeUseGunCrouched;
-    unsigned long                            m_ulLastTimeSprintPressed;
-    unsigned long                            m_ulBlockSprintReleaseTime;
-    bool                                     m_bWasSprintButtonDown;
-    CModelInfo*                              m_pLoadedModelInfo;
-    eWeaponSlot                              m_pOutOfVehicleWeaponSlot;
-    float                                    m_fBeginAimX;
-    float                                    m_fBeginAimY;
-    float                                    m_fTargetAimX;
-    float                                    m_fTargetAimY;
-    unsigned long                            m_ulBeginAimTime;
-    unsigned long                            m_ulTargetAimTime;
-    bool                                     m_bTargetAkimboUp;
-    unsigned long                            m_ulBeginRotationTime;
-    unsigned long                            m_ulEndRotationTime;
-    float                                    m_fBeginRotation;
-    float                                    m_fTargetRotationA;
-    float                                    m_fBeginCameraRotation;
-    float                                    m_fTargetCameraRotation;
+    CRemoteDataStorage* m_remoteDataStorage;
+    unsigned long       m_ulLastTimeFired;
+    unsigned long       m_ulLastTimeBeganAiming;
+    unsigned long       m_ulLastTimeEndedAiming;
+    unsigned long       m_ulLastTimeBeganCrouch;
+    unsigned long       m_ulLastTimeBeganStand;
+    unsigned long       m_ulLastTimeMovedWhileCrouched;
+    unsigned long       m_ulLastTimePressedLeftOrRight;
+    unsigned long       m_ulLastTimeUseGunCrouched;
+    unsigned long       m_ulLastTimeSprintPressed;
+    unsigned long       m_ulBlockSprintReleaseTime;
+    bool                m_bWasSprintButtonDown;
+    CModelInfo*         m_pLoadedModelInfo;
+    eWeaponSlot         m_pOutOfVehicleWeaponSlot;
+    float               m_fBeginAimX;
+    float               m_fBeginAimY;
+    float               m_fTargetAimX;
+    float               m_fTargetAimY;
+    unsigned long       m_ulBeginAimTime;
+    unsigned long       m_ulTargetAimTime;
+    bool                m_bTargetAkimboUp;
+    unsigned long       m_ulBeginRotationTime;
+    unsigned long       m_ulEndRotationTime;
+    float               m_fBeginRotation;
+    float               m_fTargetRotationA;
+    float               m_fBeginCameraRotation;
+    float               m_fTargetCameraRotation;
+    struct SNativeAIRotationNetworkSample
+    {
+        std::uint64_t localSequence{};
+        std::uint64_t sampleKey{};
+        unsigned long receivedAt{};
+        unsigned long receiveInterval{};
+        unsigned long spatialSyncRate{};
+        float         heading{};
+        bool          valid{};
+        bool          applied{};
+    } m_nativeAIRotationNetworkSample;
+    unsigned long                            m_nativeAIRotationTelemetryNextSampleAt{};
     unsigned long                            m_ulBeginTarget;
     unsigned long                            m_ulEndTarget;
     CVector                                  m_vecBeginSource;
@@ -816,75 +844,112 @@ public:
     CResource*                               m_nativeEventProfileOwner{};
     unsigned int                             m_uiNativeEventProfileToken{};
     ePedNativeEventProfile                   m_nativeEventProfile{ePedNativeEventProfile::NONE};
-    bool                                     m_bStoryProtected{false};
-    std::optional<SPedCreatedByState>        m_missionActorNativeState;
-    std::optional<SPedStoryProtectionState>  m_storyProtectionNativeState;
-    std::optional<bool>                      m_suffersCriticalHits;
-    std::optional<bool>                      m_stayInSamePlace;
-    std::optional<bool>                      m_neverTargeted;
-    std::list<CClientProjectile*>            m_Projectiles;
-    unsigned char                            m_ucAlpha;
-    float                                    m_fTargetRotation;
-    int                                      m_iVehicleInOutState;
-    bool                                     m_bRecreatingModel;
-    CClientEntityPtr                         m_pCurrentContactEntity;
-    bool                                     m_bSunbathing;
-    CClientPad                               m_Pad;
-    bool                                     m_bDestroyingSatchels;
-    bool                                     m_bDoingGangDriveby;
-    bool                                     m_bProcessingWeaponFireEvent;
-    bool                                     m_bDeferredGangDrivebyAbort;
-    std::unique_ptr<CAnimBlock>              m_pAnimationBlock;
-    bool                                     m_bRequestedAnimation;
-    SAnimationCache                          m_AnimationCache;
-    bool                                     m_bHeadless;
-    bool                                     m_bFrozen;
-    bool                                     m_bFrozenWaitingForGroundToLoad;
-    float                                    m_fGroundCheckTolerance;
-    float                                    m_fObjectsAroundTolerance;
-    int                                      m_iLoadAllModelsCounter;
-    bool                                     m_bIsOnFire;
-    bool                                     m_bIsInWater;
-    SLastSyncedPedData*                      m_LastSyncedData;
-    bool                                     m_bSpeechEnabled;
-    bool                                     m_bStealthAiming;
-    float                                    m_fLighting;
-    unsigned char                            m_ucEnteringDoor;
-    unsigned char                            m_ucLeavingDoor;
-    bool                                     m_bPendingRebuildPlayer;
-    uint                                     m_uiFrameLastRebuildPlayer;
-    bool                                     m_bIsSyncing;
-    CMatrix                                  m_remoteStreamInFenceMatrix;
-    float                                    m_remoteStreamInFenceCurrentRotation{};
-    float                                    m_remoteStreamInFenceTargetRotation{};
-    unsigned long                            m_remoteStreamInFenceStartedAt{};
-    bool                                     m_remoteStreamInFenceActive{};
-    bool                                     m_remoteStreamInFencePreviousStaticWaitingForCollision{};
-    SNativeTaskLocomotionSync                m_nativeTaskLocomotionPresentation;
-    CControllerState                         m_nativeTaskLocomotionBaseControllerState;
-    unsigned long                            m_nativeTaskLocomotionPresentationReceivedAt{};
-    bool                                     m_nativeTaskLocomotionPresentationApplied{false};
-    CVector                                  m_nativeTaskLocomotionAuthoritativeVelocity;
-    unsigned long                            m_nativeTaskLocomotionAuthoritativeVelocityReceivedAt{};
-    bool                                     m_nativeTaskLocomotionAuthoritativeVelocityValid{false};
-    SNativeTaskWeaponPresentationSync        m_nativeTaskWeaponPresentation;
-    CVector                                  m_nativeTaskWeaponPresentationAppliedTarget;
-    unsigned long                            m_nativeTaskWeaponPresentationReceivedAt{};
-    bool                                     m_nativeTaskWeaponPresentationActive{false};
-    unsigned int                             m_nativeTaskWeaponPresentationFireCount{};
-    CTaskSAInterface*                        m_nativeTaskWeaponPresentationPrimaryTask{};
-    CTaskSAInterface*                        m_nativeTaskWeaponPresentationAttackTask{};
-    CTaskSAInterface*                        m_nativeTaskWeaponPresentationPreviousAttackTask{};
-    std::optional<unsigned char>             m_nativeTaskWeaponPresentationPreviousShootingRate;
-    SNativeTaskAnimationPresentationSync     m_nativeTaskAnimationPresentation;
-    std::unique_ptr<CAnimBlock>              m_nativeTaskAnimationPresentationBlock;
-    unsigned long                            m_nativeTaskAnimationPresentationReceivedAt{};
-    unsigned short                           m_nativeTaskAnimationPresentationAppliedGroup{};
-    unsigned short                           m_nativeTaskAnimationPresentationAppliedAnimId{};
-    CAnimBlendAssociationSAInterface*        m_nativeTaskAnimationPresentationAppliedAssociation{};
-    std::optional<float>                     m_nativeTaskAnimationPresentationAppliedHeading;
-    bool                                     m_nativeTaskAnimationPresentationActive{false};
-    bool                                     m_nativeTaskAirbornePresentationActive{false};
+    CollisionResidencyId                     m_nativeCollisionResidency{};
+    unsigned long                            m_nativeCollisionResidencyNextProbeAt{};
+    bool                                     m_nativeCollisionResidencyReady{};
+    struct SNativeCollisionAuthorityFence
+    {
+        CMatrix safeMatrix;
+        CVector safeMoveSpeed;
+        float   safeCurrentRotation{};
+        float   safeTargetRotation{};
+        bool    active{};
+        bool    previousStaticWaitingForCollision{};
+    } m_nativeCollisionAuthorityFence;
+    bool                                    m_remoteReplicaPhysicsFenceActive{};
+    bool                                    m_bStoryProtected{false};
+    std::optional<SPedCreatedByState>       m_missionActorNativeState;
+    std::optional<SPedStoryProtectionState> m_storyProtectionNativeState;
+    std::optional<bool>                     m_suffersCriticalHits;
+    std::optional<bool>                     m_stayInSamePlace;
+    std::optional<bool>                     m_neverTargeted;
+    std::list<CClientProjectile*>           m_Projectiles;
+    unsigned char                           m_ucAlpha;
+    float                                   m_fTargetRotation;
+    int                                     m_iVehicleInOutState;
+    bool                                    m_bRecreatingModel;
+    CClientEntityPtr                        m_pCurrentContactEntity;
+    bool                                    m_bSunbathing;
+    CClientPad                              m_Pad;
+    bool                                    m_bDestroyingSatchels;
+    bool                                    m_bDoingGangDriveby;
+    bool                                    m_bProcessingWeaponFireEvent;
+    bool                                    m_bDeferredGangDrivebyAbort;
+    std::unique_ptr<CAnimBlock>             m_pAnimationBlock;
+    bool                                    m_bRequestedAnimation;
+    SAnimationCache                         m_AnimationCache;
+    bool                                    m_bHeadless;
+    bool                                    m_bFrozen;
+    bool                                    m_bFrozenWaitingForGroundToLoad;
+    float                                   m_fGroundCheckTolerance;
+    float                                   m_fObjectsAroundTolerance;
+    int                                     m_iLoadAllModelsCounter;
+    bool                                    m_bIsOnFire;
+    bool                                    m_bIsInWater;
+    SLastSyncedPedData*                     m_LastSyncedData;
+    bool                                    m_bSpeechEnabled;
+    bool                                    m_bStealthAiming;
+    float                                   m_fLighting;
+    unsigned char                           m_ucEnteringDoor;
+    unsigned char                           m_ucLeavingDoor;
+    bool                                    m_bPendingRebuildPlayer;
+    uint                                    m_uiFrameLastRebuildPlayer;
+    bool                                    m_bIsSyncing;
+    struct SRemoteAuthoritativeTransform
+    {
+        CVector position;
+        CVector moveSpeed;
+        float   rotation{};
+        bool    positionValid{};
+        bool    moveSpeedValid{};
+        bool    rotationValid{};
+        bool    restoreAllowed{};
+    } m_remoteAuthoritativeTransform;
+    CMatrix       m_remoteStreamInFenceMatrix;
+    float         m_remoteStreamInFenceCurrentRotation{};
+    float         m_remoteStreamInFenceTargetRotation{};
+    unsigned long m_remoteStreamInFenceStartedAt{};
+    unsigned long m_remoteStreamInFenceRetryAt{};
+    unsigned long m_remoteStreamInFenceNextProbeAt{};
+    bool          m_remoteStreamInFenceActive{};
+    bool          m_remoteStreamInFencePreviousStaticWaitingForCollision{};
+    struct SNativeAmbientOwnerCollisionFence
+    {
+        CMatrix       safeMatrix;
+        CVector       safeMoveSpeed;
+        float         safeCurrentRotation{};
+        float         safeTargetRotation{};
+        unsigned long startedAt{};
+        unsigned long nextProbeAt{};
+        bool          snapshotValid{};
+        bool          active{};
+        bool          previousStaticWaitingForCollision{};
+    } m_nativeAmbientOwnerCollisionFence;
+    SNativeTaskLocomotionSync            m_nativeTaskLocomotionPresentation;
+    CControllerState                     m_nativeTaskLocomotionBaseControllerState;
+    unsigned long                        m_nativeTaskLocomotionPresentationReceivedAt{};
+    bool                                 m_nativeTaskLocomotionPresentationApplied{false};
+    CVector                              m_nativeTaskLocomotionAuthoritativeVelocity;
+    unsigned long                        m_nativeTaskLocomotionAuthoritativeVelocityReceivedAt{};
+    bool                                 m_nativeTaskLocomotionAuthoritativeVelocityValid{false};
+    SNativeTaskWeaponPresentationSync    m_nativeTaskWeaponPresentation;
+    CVector                              m_nativeTaskWeaponPresentationAppliedTarget;
+    unsigned long                        m_nativeTaskWeaponPresentationReceivedAt{};
+    bool                                 m_nativeTaskWeaponPresentationActive{false};
+    unsigned int                         m_nativeTaskWeaponPresentationFireCount{};
+    CTaskSAInterface*                    m_nativeTaskWeaponPresentationPrimaryTask{};
+    CTaskSAInterface*                    m_nativeTaskWeaponPresentationAttackTask{};
+    CTaskSAInterface*                    m_nativeTaskWeaponPresentationPreviousAttackTask{};
+    std::optional<unsigned char>         m_nativeTaskWeaponPresentationPreviousShootingRate;
+    SNativeTaskAnimationPresentationSync m_nativeTaskAnimationPresentation;
+    std::unique_ptr<CAnimBlock>          m_nativeTaskAnimationPresentationBlock;
+    unsigned long                        m_nativeTaskAnimationPresentationReceivedAt{};
+    unsigned short                       m_nativeTaskAnimationPresentationAppliedGroup{};
+    unsigned short                       m_nativeTaskAnimationPresentationAppliedAnimId{};
+    CAnimBlendAssociationSAInterface*    m_nativeTaskAnimationPresentationAppliedAssociation{};
+    std::optional<float>                 m_nativeTaskAnimationPresentationAppliedHeading;
+    bool                                 m_nativeTaskAnimationPresentationActive{false};
+    bool                                 m_nativeTaskAirbornePresentationActive{false};
     // Start-sync can transfer a ped while it is airborne or attached to a
     // climb anchor. Keep takeover state separate from observer presentation
     // so ordinary animation cleanup cannot erase it before GTA is reseeded.

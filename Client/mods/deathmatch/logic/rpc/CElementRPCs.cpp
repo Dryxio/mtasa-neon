@@ -163,6 +163,8 @@ void CElementRPCs::SetElementPosition(CClientEntity* pSource, NetBitStreamInterf
         {
             // Set its position
             pSource->SetPosition(vecPosition);
+            if (pSource->GetType() == CCLIENTPED)
+                static_cast<CClientPed*>(pSource)->UpdateRemoteAuthoritativeTransform(&vecPosition, nullptr, nullptr);
         }
     }
 }
@@ -181,6 +183,8 @@ void CElementRPCs::SetElementVelocity(CClientEntity* pSource, NetBitStreamInterf
                 CClientPed* pPed = static_cast<CClientPed*>(pSource);
 
                 pPed->SetMoveSpeed(vecVelocity);
+                if (pSource->GetType() == CCLIENTPED)
+                    pPed->UpdateRemoteAuthoritativeTransform(nullptr, nullptr, &vecVelocity);
                 pPed->ResetInterpolation();
 
                 // If local player, reset return position (so we can't warp back if connection fails)
@@ -267,6 +271,8 @@ void CElementRPCs::SetElementInterior(CClientEntity* pSource, NetBitStreamInterf
             if (bitStream.Read(vecPosition.fX) && bitStream.Read(vecPosition.fY) && bitStream.Read(vecPosition.fZ))
             {
                 pSource->SetPosition(vecPosition);
+                if (pSource->GetType() == CCLIENTPED)
+                    static_cast<CClientPed*>(pSource)->UpdateRemoteAuthoritativeTransform(&vecPosition, nullptr, nullptr);
             }
         }
     }
@@ -349,6 +355,8 @@ void CElementRPCs::AttachElements(CClientEntity* pSource, NetBitStreamInterface&
 
     pSource->SetAttachedOffsets(vecPosition, vecRotation);
     pSource->AttachTo(pAttachedToEntity);
+    if (pSource->GetType() == CCLIENTPED)
+        static_cast<CClientPed*>(pSource)->InvalidateRemoteAuthoritativeTransformRestore();
 }
 
 void CElementRPCs::DetachElements(CClientEntity* pSource, NetBitStreamInterface& bitStream)
@@ -389,14 +397,25 @@ void CElementRPCs::DetachElements(CClientEntity* pSource, NetBitStreamInterface&
     pSource->SetSyncTimeContext(ucTimeContext);
     pSource->AttachTo(NULL);
 
-    if (vecPosition.fX != 0.0f || vecPosition.fY != 0.0f || vecPosition.fZ != 0.0f)
+    const bool hasPosition = vecPosition.fX != 0.0f || vecPosition.fY != 0.0f || vecPosition.fZ != 0.0f;
+    if (hasPosition)
     {
         pSource->SetPosition(vecPosition);
     }
 
-    if (vecRotation.fX != 0.0f || vecRotation.fY != 0.0f || vecRotation.fZ != 0.0f)
+    const bool hasRotation = vecRotation.fX != 0.0f || vecRotation.fY != 0.0f || vecRotation.fZ != 0.0f;
+    if (hasRotation)
     {
         pSource->SetRotationDegrees(vecRotation);
+    }
+
+    if (pSource->GetType() == CCLIENTPED)
+    {
+        CClientPed* pPed = static_cast<CClientPed*>(pSource);
+        const float rotation = pPed->GetCurrentRotation();
+        // DETACH has no authoritative velocity payload. Keep the last network
+        // velocity instead of blessing observer-side physics as network truth.
+        pPed->UpdateRemoteAuthoritativeTransform(hasPosition ? &vecPosition : nullptr, hasRotation ? &rotation : nullptr, nullptr);
     }
 }
 

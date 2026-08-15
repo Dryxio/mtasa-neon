@@ -235,7 +235,8 @@ namespace
         }
 
         void Write(ENativeAITelemetryCategory category, const char* event, CClientPed* ped, const SNativeAITelemetryPacket* packet,
-                   const SNativeAIGroupDecision* groupDecision = nullptr, CClientPed* sourcePed = nullptr) noexcept
+                   const SNativeAIGroupDecision* groupDecision = nullptr, CClientPed* sourcePed = nullptr,
+                   const SNativeAIRotationTelemetry* rotation = nullptr) noexcept
         {
             try
             {
@@ -246,7 +247,7 @@ namespace
 
                 std::string line;
                 line.reserve(4096);
-                BuildLine(line, category, event, ped, packet, groupDecision, sourcePed, now);
+                BuildLine(line, category, event, ped, packet, groupDecision, sourcePed, rotation, now);
                 if (line.size() > MAX_JSON_LINE_BYTES)
                 {
                     ++m_droppedSinceLastRecord;
@@ -390,7 +391,8 @@ namespace
         }
 
         void BuildLine(std::string& output, ENativeAITelemetryCategory category, const char* event, CClientPed* ped, const SNativeAITelemetryPacket* packet,
-                       const SNativeAIGroupDecision* groupDecision, CClientPed* sourcePed, std::uint64_t monotonicNow)
+                       const SNativeAIGroupDecision* groupDecision, CClientPed* sourcePed, const SNativeAIRotationTelemetry* rotation,
+                       std::uint64_t monotonicNow)
         {
             output.push_back('{');
             bool first = true;
@@ -569,6 +571,54 @@ namespace
                 }
                 output.push_back('}');
             }
+            if (rotation)
+            {
+                AppendKey(output, "rotation", first);
+                output.push_back('{');
+                bool rotationFirst = true;
+                AppendFloat(output, "current_heading", rotation->currentHeading, rotationFirst);
+                AppendFloat(output, "target_heading", rotation->targetHeading, rotationFirst);
+                AppendFloat(output, "matrix_heading", rotation->matrixHeading, rotationFirst);
+                AppendFloat(output, "interpolation_begin_heading", rotation->interpolationBeginHeading, rotationFirst);
+                AppendFloat(output, "interpolation_target_heading", rotation->interpolationTargetHeading, rotationFirst);
+                AppendBoolean(output, "interpolation_active", rotation->interpolationActive, rotationFirst);
+                AppendInteger(output, "interpolation_begin_ms", rotation->interpolationBeginMs, rotationFirst);
+                AppendInteger(output, "interpolation_end_ms", rotation->interpolationEndMs, rotationFirst);
+                AppendBoolean(output, "has_network_sample", rotation->hasNetworkSample, rotationFirst);
+                if (rotation->hasNetworkSample)
+                {
+                    AppendInteger(output, "last_receive_sequence", rotation->lastReceiveSequence, rotationFirst);
+                    if (rotation->lastReceiveSampleKey != 0)
+                    {
+                        char sampleKey[17]{};
+                        snprintf(sampleKey, sizeof(sampleKey), "%016" PRIx64, rotation->lastReceiveSampleKey);
+                        AppendString(output, "last_receive_sample_key", sampleKey, rotationFirst);
+                    }
+                    AppendInteger(output, "last_receive_at_ms", rotation->lastReceiveAtMs, rotationFirst);
+                    AppendInteger(output, "sample_age_ms", rotation->sampleAgeMs, rotationFirst);
+                    AppendInteger(output, "receive_interval_ms", rotation->receiveIntervalMs, rotationFirst);
+                    AppendInteger(output, "spatial_sync_rate_ms", rotation->spatialSyncRateMs, rotationFirst);
+                    AppendFloat(output, "network_sample_heading", rotation->networkSampleHeading, rotationFirst);
+                    AppendBoolean(output, "network_heading_applied", rotation->networkHeadingApplied, rotationFirst);
+                }
+                AppendKey(output, "fences", rotationFirst);
+                output.push_back('{');
+                bool fencesFirst = true;
+                AppendBoolean(output, "remote_stream_in", rotation->remoteStreamInFence, fencesFirst);
+                AppendBoolean(output, "remote_replica_physics", rotation->remoteReplicaPhysicsFence, fencesFirst);
+                AppendBoolean(output, "native_collision_authority", rotation->nativeCollisionAuthorityFence, fencesFirst);
+                AppendBoolean(output, "owner_collision", rotation->ownerCollisionFence, fencesFirst);
+                output.push_back('}');
+                AppendKey(output, "animation_presentation", rotationFirst);
+                output.push_back('{');
+                bool animationFirst = true;
+                AppendBoolean(output, "active", rotation->animationPresentationActive, animationFirst);
+                AppendInteger(output, "mode", rotation->animationMode, animationFirst);
+                AppendInteger(output, "group", rotation->animationGroup, animationFirst);
+                AppendInteger(output, "id", rotation->animationId, animationFirst);
+                output.push_back('}');
+                output.push_back('}');
+            }
             if (groupDecision)
             {
                 AppendKey(output, "group_decision", first);
@@ -684,6 +734,20 @@ void CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory category, con
     try
     {
         GetWriter().Write(category, event, ped, packet);
+    }
+    catch (...)
+    {
+        // Construction of the optional writer must not affect gameplay.
+    }
+}
+
+void CNativeAITelemetry::RecordPedRotationEvent(const char* event, CClientPed* ped, const SNativeAIRotationTelemetry& rotation) noexcept
+{
+    if (!IsEnabled(ENativeAITelemetryCategory::PRESENTATION))
+        return;
+    try
+    {
+        GetWriter().Write(ENativeAITelemetryCategory::PRESENTATION, event, ped, nullptr, nullptr, nullptr, &rotation);
     }
     catch (...)
     {

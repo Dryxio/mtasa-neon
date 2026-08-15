@@ -77,8 +77,10 @@ bool CPedSyncPacket::Read(NetBitStreamInterface& BitStream)
             return false;
         }
 
-        // Did we recieve position?
-        if (ucFlags & 0x01)
+        // Spatial updates are independently optional. In particular, a ped
+        // turning in place sends rotation without position; skipping the
+        // shared reader in that case leaves the relayed rotation at zero.
+        if (ucFlags & 0x07)
         {
             if (!Data.ReadSpatialData(BitStream))
                 return false;

@@ -13,10 +13,12 @@
 #include <cstdint>
 
 class CVector;
+class CPhysical;
 
 // GTA's ABI field remains one byte, but the native store runtime preserves the
 // authoritative slot in side storage. Do not truncate it at the MTA boundary.
 using CollisionSlot = std::uint32_t;
+using CollisionResidencyId = std::uint32_t;
 
 class CColStore
 {
@@ -91,4 +93,13 @@ public:
 
     // Returns the last model id in the collision pool slot model range
     virtual int GetLastModel(CollisionSlot slot) = 0;
+
+    // Keeps collision resident around an authoritative physical agent. Unlike a
+    // one-shot request, this contract is reapplied immediately before every GTA
+    // CColStore::LoadCollision pass consumes and clears its required flags.
+    // Append new methods here: CColStore crosses the game/client DLL boundary.
+    virtual CollisionResidencyId AcquireCollisionResidency(CPhysical* physical, int areaCode) = 0;
+    virtual bool                 UpdateCollisionResidency(CollisionResidencyId residency, CPhysical* physical, int areaCode) = 0;
+    virtual void                 ReleaseCollisionResidency(CollisionResidencyId residency) = 0;
+    virtual bool                 IsCollisionResidencyLoaded(CollisionResidencyId residency) = 0;
 };

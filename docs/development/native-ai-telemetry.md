@@ -15,9 +15,9 @@ client's `mta/logs` directory:
   receipt and observer application.
 - `native-ai-telemetry-ownership.enable` enables syncer acquire/release events.
 - `native-ai-telemetry-group.enable` enables native group-response decisions.
-- `native-ai-telemetry-task.enable` and
-  `native-ai-telemetry-presentation.enable` reserve the task/presentation
-  categories for focused producers added by later checkpoints.
+- `native-ai-telemetry-task.enable` enables focused task producers.
+- `native-ai-telemetry-presentation.enable` enables post-ped-process rotation
+  samples for harness actors and marked ambient traffic.
 
 Enablement is cached for the process lifetime, so restart the client after
 adding or removing a marker. Output is written to
@@ -58,7 +58,19 @@ server processing timestamps.
 Each ped record also includes the current task leaf and bounded parent
 ancestry, animation/locomotion data when present, position, heading, velocity,
 model, syncer state, and optional namespaced native-AI identity fields. Raw
-engine pointers are intentionally excluded.
+engine pointers are intentionally excluded. All native telemetry headings are
+in radians.
+
+`rotation_post_process` is sampled after GTA has processed peds and before the
+Lua `onClientPedsProcessed` event. Its `rotation` object separates the wrapper
+current heading, GTA target heading, and final matrix heading; records the
+interpolation begin/target values and timers; identifies the last received
+sample, receive interval and selected spatial sync rate; and reports stream-in,
+replica-physics, collision-authority, owner-collision and animation-presentation
+fences. This makes it possible to distinguish a correct decoded target from a
+rendered observer that is still converging or was overridden later in the
+frame. The producer is opt-in and restricted to deterministic harness actors
+or peds carrying the ambient-traffic marker.
 
 The deterministic test harness publishes five synchronized, namespaced fields
 on its actors: run, scenario, actor, action and step. The writer copies them to
@@ -75,6 +87,15 @@ The representative `ped` object supplies the corresponding traffic ID,
 server-group ID, member index, role, owner, and epoch. This makes the chain
 from an ambient group event to its exact vanilla response queryable without
 logging raw pointers or player names.
+
+Ownership telemetry also records `owner_collision_hold_started` and
+`owner_collision_hold_released`. These delimit the interval where an ambient
+ped is still authoritative but its local GTA collision sector is unavailable.
+While the hold is active, the owner must serialize the same collision-backed
+transform; the analyzer reports any movement beyond its tolerance as the first
+owner-side divergence. Population JSONL complements this with
+`group_handoff_started` and `group_handoff_assigned`, including stable member
+IDs, epochs, anonymous owner IDs, distances, and the handoff reason.
 
 ## Deterministic workflow
 
@@ -95,9 +116,23 @@ before invoking the analyzer.
 
 The analyzer checks writer integrity, ownership and handoff invariants, local
 receive/apply pairing, fast-animation delivery, bounded semantic spatial
-differences and harness assertions. It prints the earliest failing stage as
+differences, deterministic rotation serialize/receive/post-render convergence,
+and harness assertions. It prints the earliest failing stage as
 `FIRST_DIVERGENCE`. A clean report only means that the current invariants found
 no divergence; it is not a general proof that the run matches vanilla.
+
+Rotation scenarios deliberately dispatch their turns on a fixed schedule. For
+each exact observer receive, the analyzer records the first rendered delta and
+time to convergence using that client's monotonic clock. Network transit is a
+separate wall-clock estimate and cannot be blamed for a delta measured after
+receipt. The render grace is the recorded spatial interpolation rate plus
+100 ms (one 50 ms telemetry period and one scheduling/frame margin). Repeated
+cadence-checkpoint samples near the preceding target are reported as
+`rotation_one_snapshot_behind`, even if the final held target eventually
+converges. That verdict uses the first post-render sample at least 50 ms after
+receipt; the earlier exact sample is preserved for attribution but excluded
+from classification so a healthy short interpolation cannot fail merely
+because its first rendered frame occurred immediately after receipt.
 
 For native-AI regressions, identify that first divergence before changing the
 runtime. Record the actor, owner, action, task ancestry, observed transition and

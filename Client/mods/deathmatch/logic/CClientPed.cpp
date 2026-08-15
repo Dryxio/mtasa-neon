@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CNativeAITelemetry.h"
 #include <game/CAEVehicleAudioEntity.h>
 #include <game/CAnimBlendAssocGroup.h>
 #include <game/CAnimManager.h>
@@ -37,6 +38,7 @@
 #include <game/TaskGoTo.h>
 #include <game/TaskSimpleSwim.h>
 #include "enums/VehicleType.h"
+#include <limits>
 #include <unordered_map>
 
 using std::list;
@@ -57,10 +59,20 @@ namespace
 {
     constexpr unsigned long REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_TIMEOUT = 1500;
     constexpr unsigned long REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM = 100;
+    constexpr unsigned long NATIVE_COLLISION_RESIDENCY_PROBE_INTERVAL = 100;
+    constexpr float         NATIVE_COLLISION_GROUND_PROBE_ABOVE = 0.25f;
+    constexpr float         NATIVE_COLLISION_BASE_TOLERANCE_BELOW = 0.35f;
+    constexpr float         NATIVE_COLLISION_BASE_TOLERANCE_ABOVE = 0.75f;
 
     bool IsRemotePedStreamInTransformFenceTraceEnabled()
     {
         static const bool enabled = FileExists(SharedUtil::CalcMTASAPath("mta\\logs\\remote-ped-stream-fence-trace.enable"));
+        return enabled;
+    }
+
+    bool IsNativeCollisionResidencyTraceEnabled()
+    {
+        static const bool enabled = FileExists(SharedUtil::CalcMTASAPath("mta\\logs\\native-collision-residency-trace.enable"));
         return enabled;
     }
 }
@@ -427,9 +439,9 @@ namespace
         const int                primaryType = pPrimaryTask ? static_cast<int>(pPrimaryTask->GetTaskType()) : -1;
         const int                simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
         const int                simplestParentType = pSimplestParentTask ? static_cast<int>(pSimplestParentTask->GetTaskType()) : -1;
-        const SString signature("%s:%u:%d:%d:%d:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState),
+        const SString            signature("%s:%u:%d:%d:%d:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState),
                                 commandMoveState ? static_cast<int>(*commandMoveState) : -1, parentMoveState ? static_cast<int>(*parentMoveState) : -1,
-                                primaryType, simplestType, simplestParentType, controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
+                                           primaryType, simplestType, simplestParentType, controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
         if (!ShouldTraceNativeTaskLocomotion(pPed, ENativeTaskLocomotionTraceChannel::PRODUCER, signature))
             return;
 
@@ -755,6 +767,11 @@ void CClientPed::Init(CClientManager* pManager, unsigned long ulModelID, bool bI
 
 CClientPed::~CClientPed()
 {
+    // _DestroyModel owns the normal release. This covers streamed-out and
+    // exceptional teardown paths as well, without leaving a stale residence.
+    ReleaseNativeCollisionResidency("destructor");
+    dassert(m_nativeCollisionResidency == 0);
+
     // A hack to destroy custom animation by playing a default internal animation.
     // When IFP is unloaded by leaving the server, the pointer to its animations might
     // still be somewhere in use, and a crash can occur by calling its members.
@@ -1943,7 +1960,7 @@ void CClientPed::UpdateNativeTaskWeaponPresentation()
     const unsigned long sampleAge = CClientTime::GetTime() - m_nativeTaskWeaponPresentationReceivedAt;
     const bool          occupied = GetRealOccupiedVehicle() != nullptr;
     const bool          invalidVehicleState = (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::FIRE && occupied) ||
-                                              (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::DRIVEBY && !occupied);
+                                     (m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::DRIVEBY && !occupied);
     if (m_bIsLocalPlayer || m_bIsSyncing || HasSyncedAnim() || IsDead() || invalidVehicleState ||
         m_nativeTaskWeaponPresentation.data.uiMode == SNativeTaskWeaponPresentationSync::NONE || sampleAge > presentationLease)
     {
@@ -2375,17 +2392,17 @@ void CClientPed::SetNativeTaskAnimationPresentation(const SNativeTaskAnimationPr
 {
     const unsigned int previousMode = m_nativeTaskAnimationPresentation.data.uiMode;
     const bool         leavingClimb = previousMode == SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION &&
-                                      presentation.data.uiMode != SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
-    const bool         shapeChanged = presentation.data.uiMode != m_nativeTaskAnimationPresentation.data.uiMode ||
-                                      presentation.data.usAnimGroup != m_nativeTaskAnimationPresentation.data.usAnimGroup ||
-                                      presentation.data.usAnimId != m_nativeTaskAnimationPresentation.data.usAnimId;
+                              presentation.data.uiMode != SNativeTaskAnimationPresentationSync::CLIMB_ANIMATION;
+    const bool shapeChanged = presentation.data.uiMode != m_nativeTaskAnimationPresentation.data.uiMode ||
+                              presentation.data.usAnimGroup != m_nativeTaskAnimationPresentation.data.usAnimGroup ||
+                              presentation.data.usAnimId != m_nativeTaskAnimationPresentation.data.usAnimId;
     // Native tasks can loop or restart while reusing the same animation
     // association. Rewinding that association in place preserves both cases;
     // fading and recreating it at every progress wrap causes a visible pop.
-    const bool                  changed = shapeChanged || presentation.data.fProgress != m_nativeTaskAnimationPresentation.data.fProgress ||
-                                          presentation.data.fSpeed != m_nativeTaskAnimationPresentation.data.fSpeed ||
-                                          presentation.data.fBlendAmount != m_nativeTaskAnimationPresentation.data.fBlendAmount ||
-                                          presentation.data.fHeading != m_nativeTaskAnimationPresentation.data.fHeading;
+    const bool changed = shapeChanged || presentation.data.fProgress != m_nativeTaskAnimationPresentation.data.fProgress ||
+                         presentation.data.fSpeed != m_nativeTaskAnimationPresentation.data.fSpeed ||
+                         presentation.data.fBlendAmount != m_nativeTaskAnimationPresentation.data.fBlendAmount ||
+                         presentation.data.fHeading != m_nativeTaskAnimationPresentation.data.fHeading;
     const bool                  partialAnimation = IsNativeTaskPartialAnimation(presentation);
     const char*                 incomingBlockName = partialAnimation ? g_pGame->GetAnimManager()->GetAnimBlockName(presentation.data.usAnimGroup) : nullptr;
     auto                        incomingBlock = incomingBlockName ? g_pGame->GetAnimManager()->GetAnimationBlock(incomingBlockName) : nullptr;
@@ -3875,6 +3892,11 @@ void CClientPed::SetFrozen(bool bFrozen)
             // Always use the client's cached matrix, it's already updated by SetCurrentRotation
             m_matFrozen = m_Matrix;
         }
+
+        // Wrapper freezes, collision holds and observer fencing share GTA's
+        // bDontApplySpeed bit. Recompute the union so releasing one reason can
+        // never accidentally release (or strand) another.
+        ApplyPhysicalFreezeState();
     }
 }
 
@@ -4614,6 +4636,7 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
         if (IsFrozenWaitingForGroundToLoad())
             HandleWaitingForGroundToLoad();
 
+        UpdateNativeAmbientOwnerCollisionFence();
         UpdateRemoteStreamInTransformFence();
 
         // Bodge to get things loaded quicker on spawn
@@ -4629,6 +4652,10 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
 
         UpdateNativeTaskWeaponPresentation();
         UpdateNativeTaskAnimationPresentation();
+        UpdateRemoteReplicaPhysicsFence();
+
+        if (RefreshNativeCollisionResidency())
+            ApplyNativeEventProfileState();
 
         // Run any gang driveby abort deferred by SetDoingGangDriveby(false).
         if (m_bDeferredGangDrivebyAbort)
@@ -5257,6 +5284,14 @@ void CClientPed::SetCurrentRotation(float fRotation, bool bIncludeTarget)
     CVector vecRotation = m_Matrix.GetRotation();
     vecRotation.fZ = fRotation;
     m_Matrix.SetRotation(vecRotation);
+
+    // Ordinary GTA processing consumes fCurrentRotation and updates the live
+    // matrix. Remote replicas are physically frozen to prevent observer-only
+    // gravity while collision is unavailable, so that consumption never
+    // happens. Apply only the interpolated orientation while that fence is
+    // active; m_Matrix already carries the authoritative network position.
+    if (m_pPlayerPed && m_remoteReplicaPhysicsFenceActive)
+        m_pPlayerPed->SetMatrix(&m_Matrix);
 }
 
 void CClientPed::SetTargetRotation(float fRotation)
@@ -5291,6 +5326,76 @@ void CClientPed::SetTargetRotation(unsigned long ulDelay, std::optional<float> r
         m_fBeginCameraRotation = GetCameraRotation();
         m_fTargetCameraRotation = cameraRotation.value();
     }
+}
+
+void CClientPed::SetNativeAIRotationTelemetryNetworkSample(const SNativeAITelemetryPacket& packet, unsigned long receivedAt, unsigned long receiveInterval,
+                                                           unsigned long spatialSyncRate, bool headingApplied) noexcept
+{
+    if (!packet.hasHeading)
+        return;
+
+    m_nativeAIRotationNetworkSample.localSequence = packet.localSequence;
+    m_nativeAIRotationNetworkSample.sampleKey = packet.sampleKey;
+    m_nativeAIRotationNetworkSample.receivedAt = receivedAt;
+    m_nativeAIRotationNetworkSample.receiveInterval = receiveInterval;
+    m_nativeAIRotationNetworkSample.spatialSyncRate = spatialSyncRate;
+    m_nativeAIRotationNetworkSample.heading = packet.heading;
+    m_nativeAIRotationNetworkSample.valid = true;
+    m_nativeAIRotationNetworkSample.applied = headingApplied;
+}
+
+void CClientPed::RecordNativeAIRotationTelemetryPostProcess() noexcept
+{
+    if (!CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::PRESENTATION) || !m_pPlayerPed || m_bIsLocalPlayer || GetType() != CCLIENTPED)
+        return;
+
+    SString    runId;
+    bool       ambientTraffic = false;
+    const bool harnessActor = GetCustomDataString(CStringName("neon:nativeAIRunId"), runId, false);
+    GetCustomDataBool(CStringName("neon:ambientPedTraffic"), ambientTraffic, false);
+    if (!harnessActor && !ambientTraffic)
+        return;
+
+    const unsigned long now = CClientTime::GetTime();
+    if (m_nativeAIRotationTelemetryNextSampleAt != 0 && now < m_nativeAIRotationTelemetryNextSampleAt)
+        return;
+    // Twenty samples per second retain frame-after-apply evidence while
+    // leaving ample room under the shared JSONL writer's rate limit.
+    m_nativeAIRotationTelemetryNextSampleAt = now + 50;
+
+    CVector matrixRotation;
+    GetRotationRadiansNew(matrixRotation);
+
+    SNativeAIRotationTelemetry rotation;
+    rotation.currentHeading = GetCurrentRotation();
+    rotation.targetHeading = m_pPlayerPed->GetTargetRotation();
+    rotation.matrixHeading = matrixRotation.fZ;
+    rotation.interpolationBeginHeading = m_fBeginRotation;
+    rotation.interpolationTargetHeading = m_fTargetRotationA;
+    rotation.interpolationActive = m_ulBeginRotationTime != 0 && now < m_ulEndRotationTime;
+    rotation.interpolationBeginMs = m_ulBeginRotationTime;
+    rotation.interpolationEndMs = m_ulEndRotationTime;
+    rotation.hasNetworkSample = m_nativeAIRotationNetworkSample.valid;
+    if (rotation.hasNetworkSample)
+    {
+        rotation.lastReceiveSequence = m_nativeAIRotationNetworkSample.localSequence;
+        rotation.lastReceiveSampleKey = m_nativeAIRotationNetworkSample.sampleKey;
+        rotation.lastReceiveAtMs = m_nativeAIRotationNetworkSample.receivedAt;
+        rotation.sampleAgeMs = now - m_nativeAIRotationNetworkSample.receivedAt;
+        rotation.receiveIntervalMs = m_nativeAIRotationNetworkSample.receiveInterval;
+        rotation.spatialSyncRateMs = m_nativeAIRotationNetworkSample.spatialSyncRate;
+        rotation.networkSampleHeading = m_nativeAIRotationNetworkSample.heading;
+        rotation.networkHeadingApplied = m_nativeAIRotationNetworkSample.applied;
+    }
+    rotation.remoteStreamInFence = m_remoteStreamInFenceActive;
+    rotation.remoteReplicaPhysicsFence = m_remoteReplicaPhysicsFenceActive;
+    rotation.nativeCollisionAuthorityFence = m_nativeCollisionAuthorityFence.active;
+    rotation.ownerCollisionFence = m_nativeAmbientOwnerCollisionFence.active;
+    rotation.animationPresentationActive = m_nativeTaskAnimationPresentationActive;
+    rotation.animationMode = m_nativeTaskAnimationPresentation.data.uiMode;
+    rotation.animationGroup = m_nativeTaskAnimationPresentation.data.usAnimGroup;
+    rotation.animationId = m_nativeTaskAnimationPresentation.data.usAnimId;
+    CNativeAITelemetry::RecordPedRotationEvent("rotation_post_process", this, rotation);
 }
 
 // Temporary
@@ -5339,7 +5444,7 @@ void CClientPed::Interpolate()
     }
 
     // Don't interpolate rotation and position if we're working on getting in/out of a vehicle, or are attached to something
-    if (!m_bForceGettingIn && !m_bForceGettingOut && !m_pOccupiedVehicle && !m_pAttachedToEntity)
+    if (!m_bForceGettingIn && !m_bForceGettingOut && !m_pOccupiedVehicle && !m_pAttachedToEntity && !m_remoteStreamInFenceActive)
     {
         // We have interpolation data for rotation?
         if (m_ulBeginRotationTime != 0)
@@ -5553,7 +5658,6 @@ void CClientPed::_CreateModel()
         // stream in. Reapply their persisted actor classification before GTA
         // starts evaluating ambient task transitions on the new instance.
         ApplyMissionActorState();
-        ApplyNativeEventProfileState();
         ApplyStoryProtectionState();
         ApplySuffersCriticalHitsState();
         ApplyStayInSamePlaceState();
@@ -5580,6 +5684,52 @@ void CClientPed::_CreateModel()
             m_Matrix.vPos = vecPosition;
         }
 
+        const bool remoteNonSyncer = GetType() == CCLIENTPED && !m_bIsLocalPlayer && !m_bIsSyncing;
+        if (remoteNonSyncer)
+        {
+            // The create RPC is the only network truth available before the
+            // first PED_SYNC. Seed each missing component independently: an
+            // earlier position-only RPC must not leave heading or velocity at
+            // their zero-initialized defaults.
+            if (!m_remoteAuthoritativeTransform.positionValid)
+            {
+                m_remoteAuthoritativeTransform.position = m_Matrix.vPos;
+                m_remoteAuthoritativeTransform.positionValid = true;
+                m_remoteAuthoritativeTransform.restoreAllowed = true;
+            }
+            if (!m_remoteAuthoritativeTransform.moveSpeedValid)
+            {
+                m_remoteAuthoritativeTransform.moveSpeed = m_vecMoveSpeed;
+                m_remoteAuthoritativeTransform.moveSpeedValid = true;
+            }
+            if (!m_remoteAuthoritativeTransform.rotationValid)
+            {
+                m_remoteAuthoritativeTransform.rotation = m_fCurrentRotation;
+                m_remoteAuthoritativeTransform.rotationValid = true;
+            }
+        }
+
+        const bool syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+        const bool restoreRemoteAuthoritativeTransform =
+            remoteNonSyncer && m_remoteAuthoritativeTransform.restoreAllowed && !GetOccupiedVehicle() && !GetOccupyingVehicle() && !IsGettingIntoVehicle() &&
+            !IsGettingOutOfVehicle() && !GetAttachedTo() && !syncedAnimationOwnsTransform &&
+            !SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) && !m_nativeTaskAirbornePresentationActive;
+        if (restoreRemoteAuthoritativeTransform)
+        {
+            if (m_remoteAuthoritativeTransform.positionValid)
+                m_Matrix.vPos = m_remoteAuthoritativeTransform.position;
+            if (m_remoteAuthoritativeTransform.rotationValid)
+            {
+                m_fCurrentRotation = m_remoteAuthoritativeTransform.rotation;
+                m_fTargetRotation = m_remoteAuthoritativeTransform.rotation;
+                CVector rotation = m_Matrix.GetRotation();
+                rotation.fZ = m_remoteAuthoritativeTransform.rotation;
+                m_Matrix.SetRotation(rotation);
+            }
+            if (m_remoteAuthoritativeTransform.moveSpeedValid)
+                m_vecMoveSpeed = m_remoteAuthoritativeTransform.moveSpeed;
+        }
+
         // Restore any settings
         m_pPlayerPed->SetLanding(false);
         m_pPlayerPed->SetMatrix(&m_Matrix);
@@ -5587,6 +5737,11 @@ void CClientPed::_CreateModel()
         m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
         m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
         m_pPlayerPed->SetTurnSpeed(&m_vecTurnSpeed);
+        // Collision ownership must only be evaluated after the reconstructed
+        // CPlayerPed has received its authoritative transform. Evaluating it
+        // earlier arms the safety fence around GTA's temporary creation
+        // origin and then pins the ped at (0, 0, 0).
+        ApplyNativeEventProfileState();
         Duck(m_bDucked);
         SetWearingGoggles(m_bWearingGoggles);
         m_pPlayerPed->SetVisible(m_bVisible);
@@ -5720,38 +5875,74 @@ void CClientPed::_CreateLocalModel()
 
 void CClientPed::ArmRemoteStreamInTransformFence()
 {
-    if (!m_pPlayerPed || GetType() != CCLIENTPED || m_bIsLocalPlayer || m_bIsSyncing || IsFrozen() || GetRealOccupiedVehicle() ||
+    const bool syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+    if (!m_pPlayerPed || GetType() != CCLIENTPED || m_bIsLocalPlayer || m_bIsSyncing || IsFrozen() || !m_remoteAuthoritativeTransform.restoreAllowed ||
+        GetOccupiedVehicle() || GetOccupyingVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || GetAttachedTo() || syncedAnimationOwnsTransform ||
         SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) || m_nativeTaskAirbornePresentationActive)
     {
         return;
     }
 
+    CVector localPosition;
+    GetPosition(localPosition);
     m_remoteStreamInFenceMatrix = m_Matrix;
-    m_remoteStreamInFenceCurrentRotation = m_fCurrentRotation;
-    m_remoteStreamInFenceTargetRotation = m_fTargetRotation;
+    m_remoteStreamInFenceMatrix.vPos = m_remoteAuthoritativeTransform.position;
+    m_remoteStreamInFenceCurrentRotation = m_remoteAuthoritativeTransform.rotation;
+    m_remoteStreamInFenceTargetRotation = m_remoteAuthoritativeTransform.rotation;
+    CVector fenceRotation = m_remoteStreamInFenceMatrix.GetRotation();
+    fenceRotation.fZ = m_remoteAuthoritativeTransform.rotation;
+    m_remoteStreamInFenceMatrix.SetRotation(fenceRotation);
     m_remoteStreamInFenceStartedAt = CClientTime::GetTime();
+    m_remoteStreamInFenceNextProbeAt = m_remoteStreamInFenceStartedAt;
     m_remoteStreamInFencePreviousStaticWaitingForCollision = m_pPlayerPed->IsStaticWaitingForCollision();
     m_remoteStreamInFenceActive = true;
     m_pPlayerPed->SetStaticWaitingForCollision(true);
     m_pPlayerPed->SetFrozen(true);
+    m_pPlayerPed->SetMatrix(&m_remoteStreamInFenceMatrix);
+    m_pPlayerPed->SetCurrentRotation(m_remoteStreamInFenceCurrentRotation);
+    m_pPlayerPed->SetTargetRotation(m_remoteStreamInFenceTargetRotation);
+    m_pPlayerPed->SetMoveSpeed(m_remoteAuthoritativeTransform.moveSpeedValid ? m_remoteAuthoritativeTransform.moveSpeed : CVector());
 
     if (CColStore* collisionStore = g_pGame->GetCollisionStore())
         collisionStore->RequestCollision(m_remoteStreamInFenceMatrix.vPos, m_ucInterior);
 
     if (IsRemotePedStreamInTransformFenceTraceEnabled())
     {
-        g_pCore->GetConsole()->Printf("[remote-ped-stream-fence][arm] ped=%u model=%lu pos=(%.3f,%.3f,%.3f) heading=%.3f", GetID().Value(), GetModel(),
-                                      m_remoteStreamInFenceMatrix.vPos.fX, m_remoteStreamInFenceMatrix.vPos.fY, m_remoteStreamInFenceMatrix.vPos.fZ,
-                                      m_remoteStreamInFenceCurrentRotation);
+        g_pCore->GetConsole()->Printf(
+            "[remote-ped-stream-fence][arm] ped=%u model=%lu source=authoritative pos=(%.3f,%.3f,%.3f) local=(%.3f,%.3f,%.3f) heading=%.3f", GetID().Value(),
+            GetModel(), m_remoteStreamInFenceMatrix.vPos.fX, m_remoteStreamInFenceMatrix.vPos.fY, m_remoteStreamInFenceMatrix.vPos.fZ, localPosition.fX,
+            localPosition.fY, localPosition.fZ, m_remoteStreamInFenceCurrentRotation);
     }
 }
 
 void CClientPed::UpdateRemoteStreamInTransformFence()
 {
     if (!m_remoteStreamInFenceActive)
-        return;
+    {
+        // Collision can unload while a remote ped is still inside the entity
+        // streaming radius. Catch that transition before GTA integrates
+        // gravity and before StreamOut can persist a local observer fall.
+        const unsigned long now = CClientTime::GetTime();
+        const bool          syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+        if (!m_pPlayerPed || GetType() != CCLIENTPED || m_bIsLocalPlayer || m_bIsSyncing || IsFrozen() || !m_remoteAuthoritativeTransform.restoreAllowed ||
+            GetOccupiedVehicle() || GetOccupyingVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || GetAttachedTo() ||
+            syncedAnimationOwnsTransform || SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) ||
+            m_nativeTaskAirbornePresentationActive || !m_remoteAuthoritativeTransform.positionValid || now < m_remoteStreamInFenceRetryAt ||
+            now < m_remoteStreamInFenceNextProbeAt)
+        {
+            return;
+        }
 
-    if (!m_pPlayerPed || m_bIsLocalPlayer || m_bIsSyncing || IsFrozen() || GetRealOccupiedVehicle() ||
+        m_remoteStreamInFenceNextProbeAt = now + REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM;
+        CColStore* collisionStore = g_pGame->GetCollisionStore();
+        if (collisionStore && !collisionStore->HasCollisionLoaded(m_remoteAuthoritativeTransform.position, m_ucInterior))
+            ArmRemoteStreamInTransformFence();
+        return;
+    }
+
+    const bool syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+    if (!m_pPlayerPed || m_bIsLocalPlayer || m_bIsSyncing || IsFrozen() || !m_remoteAuthoritativeTransform.restoreAllowed || GetOccupiedVehicle() ||
+        GetOccupyingVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || GetAttachedTo() || syncedAnimationOwnsTransform ||
         SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) || m_nativeTaskAirbornePresentationActive)
     {
         ClearRemoteStreamInTransformFence("state_changed");
@@ -5764,7 +5955,7 @@ void CClientPed::UpdateRemoteStreamInTransformFence()
     if (!collisionStore || (elapsed >= REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM && collisionReady) ||
         elapsed >= REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_TIMEOUT)
     {
-        ClearRemoteStreamInTransformFence(elapsed >= REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_TIMEOUT ? "timeout" : "collision_ready");
+        ClearRemoteStreamInTransformFence(elapsed >= REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_TIMEOUT ? "timeout" : "collision_ready", true);
         return;
     }
 
@@ -5778,7 +5969,7 @@ void CClientPed::UpdateRemoteStreamInTransformFence()
     m_pPlayerPed->SetTargetRotation(m_remoteStreamInFenceTargetRotation);
 }
 
-void CClientPed::ClearRemoteStreamInTransformFence(const char* reason)
+void CClientPed::ClearRemoteStreamInTransformFence(const char* reason, bool commitAuthoritativeTransform)
 {
     if (!m_remoteStreamInFenceActive)
         return;
@@ -5786,8 +5977,28 @@ void CClientPed::ClearRemoteStreamInTransformFence(const char* reason)
     const unsigned long elapsed = CClientTime::GetTime() - m_remoteStreamInFenceStartedAt;
     if (m_pPlayerPed)
     {
+        if (commitAuthoritativeTransform)
+        {
+            // A PED_SYNC received while the fence was active may have refreshed
+            // the target after the previous pulse. Commit that exact final
+            // target before unfreezing, then discard interpolation timers whose
+            // errors were measured from an older local transform.
+            m_Matrix = m_remoteStreamInFenceMatrix;
+            m_fCurrentRotation = m_remoteStreamInFenceCurrentRotation;
+            m_fTargetRotation = m_remoteStreamInFenceTargetRotation;
+            m_pPlayerPed->SetMatrix(&m_Matrix);
+            m_pPlayerPed->SetCurrentRotation(m_fCurrentRotation);
+            m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
+            if (m_remoteAuthoritativeTransform.moveSpeedValid)
+            {
+                m_vecMoveSpeed = m_remoteAuthoritativeTransform.moveSpeed;
+                m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
+            }
+        }
+        RemoveTargetPosition();
+        m_ulBeginRotationTime = 0;
         m_pPlayerPed->SetStaticWaitingForCollision(m_remoteStreamInFencePreviousStaticWaitingForCollision);
-        m_pPlayerPed->SetFrozen(IsFrozen());
+        ApplyPhysicalFreezeState();
         // GTA's stock mission collision gate puts a physical back on the
         // moving list after clearing bStaticWaitingForCollision. The fence can
         // be armed after construction, so AddToMovingList is intentionally a
@@ -5797,6 +6008,7 @@ void CClientPed::ClearRemoteStreamInTransformFence(const char* reason)
             m_pPlayerPed->AddToMovingList();
     }
     m_remoteStreamInFenceActive = false;
+    m_remoteStreamInFenceRetryAt = CClientTime::GetTime() + REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM;
 
     if (IsRemotePedStreamInTransformFenceTraceEnabled())
     {
@@ -5805,9 +6017,195 @@ void CClientPed::ClearRemoteStreamInTransformFence(const char* reason)
     }
 }
 
+void CClientPed::UpdateNativeAmbientOwnerCollisionFence()
+{
+    auto&      state = m_nativeAmbientOwnerCollisionFence;
+    const auto clearUnloadedCollisionAirborneTask = [this]()
+    {
+        if (!m_pTaskManager || !m_pPlayerPed)
+            return;
+        for (const int priority :
+             {TASK_PRIORITY_PHYSICAL_RESPONSE, TASK_PRIORITY_EVENT_RESPONSE_TEMP, TASK_PRIORITY_EVENT_RESPONSE_NONTEMP, TASK_PRIORITY_PRIMARY})
+        {
+            if (m_pTaskManager->FindTaskByType(priority, TASK_COMPLEX_IN_AIR_AND_LAND))
+                KillTask(priority, true);
+        }
+        m_pPlayerPed->SetNativeTaskAirbornePresentationState(false, false);
+        m_nativeTaskAirbornePresentationActive = false;
+        m_nativeTaskPhysicalTakeover = {};
+        m_nativeTaskPhysicalTakeoverPending = false;
+        m_nativeTaskPhysicalTakeoverStartedAt = 0;
+    };
+
+    const bool syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+    const bool transformOwnedElsewhere =
+        GetOccupiedVehicle() || GetOccupyingVehicle() || IsGettingIntoVehicle() || IsGettingOutOfVehicle() || GetAttachedTo() || syncedAnimationOwnsTransform;
+    if (state.active)
+    {
+        // A revoke releases the ambient profile before MTA flips the syncer.
+        // Keep holding during that short gap; only the ownership transition,
+        // collision recovery, or an explicit transform owner may release it.
+        if (!m_pPlayerPed || GetType() != CCLIENTPED || m_bIsLocalPlayer || !m_bIsSyncing || IsFrozen() || transformOwnedElsewhere)
+        {
+            ClearNativeAmbientOwnerCollisionFence("state_changed");
+            return;
+        }
+
+        const unsigned long now = CClientTime::GetTime();
+        if (now >= state.nextProbeAt)
+        {
+            state.nextProbeAt = now + REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM;
+            CColStore* collisionStore = g_pGame->GetCollisionStore();
+            if (!collisionStore || collisionStore->HasCollisionLoaded(state.safeMatrix.vPos, m_ucInterior))
+            {
+                ClearNativeAmbientOwnerCollisionFence("collision_ready");
+                return;
+            }
+            collisionStore->RequestCollision(state.safeMatrix.vPos, m_ucInterior);
+        }
+
+        // The server must never receive a gravity-integrated position from an
+        // owner whose local collision sector has disappeared. Keep the last
+        // collision-backed transform authoritative until the immediate
+        // handoff completes or the sector is available again.
+        clearUnloadedCollisionAirborneTask();
+        m_Matrix = state.safeMatrix;
+        m_fCurrentRotation = state.safeCurrentRotation;
+        m_fTargetRotation = state.safeTargetRotation;
+        m_vecMoveSpeed = {};
+        m_pPlayerPed->SetMatrix(&m_Matrix);
+        m_pPlayerPed->SetCurrentRotation(m_fCurrentRotation);
+        m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
+        m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
+        return;
+    }
+
+    const bool ambientOwner =
+        m_pPlayerPed && GetType() == CCLIENTPED && !m_bIsLocalPlayer && m_bIsSyncing && m_pPlayerPed->IsNativeAmbientWanderEventProfileActive();
+    if (!ambientOwner || IsFrozen() || transformOwnedElsewhere)
+    {
+        // A vehicle, attachment, or root-motion animation can legitimately
+        // move the ped without this on-foot collision contract. Rebase after
+        // that state ends instead of restoring a stale snapshot.
+        state.snapshotValid = false;
+        return;
+    }
+
+    CMatrix liveMatrix;
+    m_pPlayerPed->GetMatrix(&liveMatrix);
+    if (!state.snapshotValid)
+    {
+        // StartSync/create RPC has already installed this transform. Seed it
+        // even if collision is currently absent so a new owner cannot take a
+        // first gravity step before the server finishes the handoff.
+        state.safeMatrix = liveMatrix;
+        state.safeCurrentRotation = m_pPlayerPed->GetCurrentRotation();
+        state.safeTargetRotation = m_pPlayerPed->GetTargetRotation();
+        m_pPlayerPed->GetMoveSpeed(&state.safeMoveSpeed);
+        state.snapshotValid = true;
+    }
+
+    const unsigned long now = CClientTime::GetTime();
+    if (now < state.nextProbeAt)
+        return;
+    state.nextProbeAt = now + REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM;
+
+    CColStore* collisionStore = g_pGame->GetCollisionStore();
+    if (!collisionStore || collisionStore->HasCollisionLoaded(liveMatrix.vPos, m_ucInterior))
+    {
+        // Refresh only from a transform backed by loaded world collision. A
+        // later missing-COL pulse will therefore have an uncontaminated
+        // position even if GTA immediately enters IN_AIR_AND_LAND.
+        state.safeMatrix = liveMatrix;
+        state.safeCurrentRotation = m_pPlayerPed->GetCurrentRotation();
+        state.safeTargetRotation = m_pPlayerPed->GetTargetRotation();
+        m_pPlayerPed->GetMoveSpeed(&state.safeMoveSpeed);
+        return;
+    }
+
+    state.startedAt = now;
+    state.previousStaticWaitingForCollision = m_pPlayerPed->IsStaticWaitingForCollision();
+    state.active = true;
+    clearUnloadedCollisionAirborneTask();
+    m_Matrix = state.safeMatrix;
+    m_fCurrentRotation = state.safeCurrentRotation;
+    m_fTargetRotation = state.safeTargetRotation;
+    m_vecMoveSpeed = {};
+    m_pPlayerPed->SetStaticWaitingForCollision(true);
+    m_pPlayerPed->SetFrozen(true);
+    m_pPlayerPed->SetMatrix(&m_Matrix);
+    m_pPlayerPed->SetCurrentRotation(m_fCurrentRotation);
+    m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
+    m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
+    collisionStore->RequestCollision(state.safeMatrix.vPos, m_ucInterior);
+
+    CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, "owner_collision_hold_started", this);
+    if (IsRemotePedStreamInTransformFenceTraceEnabled())
+    {
+        g_pCore->GetConsole()->Printf("[native-ambient-owner-collision][hold] ped=%u model=%lu safe=(%.3f,%.3f,%.3f) local=(%.3f,%.3f,%.3f)", GetID().Value(),
+                                      GetModel(), state.safeMatrix.vPos.fX, state.safeMatrix.vPos.fY, state.safeMatrix.vPos.fZ, liveMatrix.vPos.fX,
+                                      liveMatrix.vPos.fY, liveMatrix.vPos.fZ);
+    }
+}
+
+void CClientPed::ClearNativeAmbientOwnerCollisionFence(const char* reason, bool restoreSafeTransform)
+{
+    auto& state = m_nativeAmbientOwnerCollisionFence;
+    if (!state.active)
+        return;
+
+    const unsigned long elapsed = CClientTime::GetTime() - state.startedAt;
+    if (m_pPlayerPed)
+    {
+        if (restoreSafeTransform && state.snapshotValid)
+        {
+            m_Matrix = state.safeMatrix;
+            m_fCurrentRotation = state.safeCurrentRotation;
+            m_fTargetRotation = state.safeTargetRotation;
+            m_vecMoveSpeed = state.safeMoveSpeed;
+            m_pPlayerPed->SetMatrix(&m_Matrix);
+            m_pPlayerPed->SetCurrentRotation(m_fCurrentRotation);
+            m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
+            m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
+        }
+        m_pPlayerPed->SetStaticWaitingForCollision(state.previousStaticWaitingForCollision);
+        ApplyPhysicalFreezeState();
+        if (!state.previousStaticWaitingForCollision && !m_pPlayerPed->IsStatic())
+            m_pPlayerPed->AddToMovingList();
+    }
+    state.active = false;
+    state.nextProbeAt = CClientTime::GetTime() + REMOTE_PED_STREAM_IN_TRANSFORM_FENCE_MINIMUM;
+
+    CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, "owner_collision_hold_released", this);
+    if (IsRemotePedStreamInTransformFenceTraceEnabled())
+    {
+        g_pCore->GetConsole()->Printf("[native-ambient-owner-collision][release] ped=%u model=%lu reason=%s elapsed=%lu", GetID().Value(), GetModel(),
+                                      reason ? reason : "unknown", elapsed);
+    }
+}
+
 void CClientPed::_DestroyModel()
 {
-    ClearRemoteStreamInTransformFence("destroy_model");
+    UpdateNativeCollisionAuthorityFence(false, "destroy_model");
+    ReleaseNativeCollisionResidency("destroy_model");
+    m_remoteReplicaPhysicsFenceActive = false;
+    ClearNativeAmbientOwnerCollisionFence("destroy_model");
+    m_nativeAmbientOwnerCollisionFence.snapshotValid = false;
+    const bool remoteNonSyncer = GetType() == CCLIENTPED && !m_bIsLocalPlayer && !m_bIsSyncing;
+    const bool syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+    const bool preserveRemoteAuthoritativeTransform = remoteNonSyncer && m_remoteAuthoritativeTransform.restoreAllowed && !GetOccupiedVehicle() &&
+                                                      !GetOccupyingVehicle() && !IsGettingIntoVehicle() && !IsGettingOutOfVehicle() && !GetAttachedTo() &&
+                                                      !syncedAnimationOwnsTransform &&
+                                                      !SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) &&
+                                                      !m_nativeTaskAirbornePresentationActive && m_remoteAuthoritativeTransform.positionValid;
+    if (remoteNonSyncer && !preserveRemoteAuthoritativeTransform)
+    {
+        // Vehicle, attachment, root-motion and physical presentation own the
+        // live cache for this stream-out. Keep an older on-foot snapshot from
+        // overwriting that deliberate state on the next model creation.
+        m_remoteAuthoritativeTransform.restoreAllowed = false;
+    }
+    ClearRemoteStreamInTransformFence("destroy_model", preserveRemoteAuthoritativeTransform);
     // This path also serves model recreation without StreamOut. Release a
     // presentation task while its original GTA ped and saved shooting rate
     // still exist, so the replacement entity can accept the next sample.
@@ -5843,11 +6241,29 @@ void CClientPed::_DestroyModel()
         m_pCurrentContactEntity = NULL;
     }
 
-    // Remember the player position
-    m_Matrix.vPos = *m_pPlayerPed->GetPosition();
-
-    m_fCurrentRotation = m_pPlayerPed->GetCurrentRotation();
-    m_pPlayerPed->GetMoveSpeed(&m_vecMoveSpeed);
+    // A remote CPlayerPed is presentation only. Never persist its locally
+    // simulated fall over the last transform accepted from its network
+    // owner; a stationary owner may not send another position after this
+    // observer streams the entity back in.
+    if (preserveRemoteAuthoritativeTransform)
+    {
+        m_Matrix.vPos = m_remoteAuthoritativeTransform.position;
+        if (m_remoteAuthoritativeTransform.rotationValid)
+        {
+            m_fCurrentRotation = m_remoteAuthoritativeTransform.rotation;
+            m_fTargetRotation = m_remoteAuthoritativeTransform.rotation;
+            CVector rotation = m_Matrix.GetRotation();
+            rotation.fZ = m_remoteAuthoritativeTransform.rotation;
+            m_Matrix.SetRotation(rotation);
+        }
+        m_vecMoveSpeed = m_remoteAuthoritativeTransform.moveSpeedValid ? m_remoteAuthoritativeTransform.moveSpeed : CVector();
+    }
+    else
+    {
+        m_Matrix.vPos = *m_pPlayerPed->GetPosition();
+        m_fCurrentRotation = m_pPlayerPed->GetCurrentRotation();
+        m_pPlayerPed->GetMoveSpeed(&m_vecMoveSpeed);
+    }
     m_pPlayerPed->GetTurnSpeed(&m_vecTurnSpeed);
     m_bDucked = IsDucked();
     m_bWearingGoggles = IsWearingGoggles();
@@ -6388,12 +6804,16 @@ void CClientPed::ApplyNativeEventProfileState()
     if (!m_pPlayerPed)
         return;
 
+    RefreshNativeCollisionResidency();
+
     // The lease remains logically owned across stream and syncer generations,
     // but only the authoritative syncer may let GTA consume ambient events.
     const bool leased = m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0;
-    const bool missionActive = leased && m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor && m_bIsSyncing;
+    const bool missionActive =
+        leased && m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor && m_bIsSyncing && m_nativeCollisionResidencyReady;
     const bool ambientSelected = leased && m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER;
-    const bool ambientActive = ambientSelected && !m_bMissionActor && m_bIsSyncing;
+    const bool ambientActive = ambientSelected && !m_bMissionActor && m_bIsSyncing && m_nativeCollisionResidencyReady;
+    dassert((!missionActive && !ambientActive) || (m_nativeCollisionResidency != 0 && m_nativeCollisionResidencyReady));
 
     // Acquiring the lease can race a local scanner event. Purge a response
     // whenever this peer is fenced as an observer, even if the wrapper was not
@@ -6412,6 +6832,219 @@ void CClientPed::ApplyNativeEventProfileState()
     m_pPlayerPed->SetNativeAmbientWanderEventProfile(ambientSelected, ambientActive);
 }
 
+bool CClientPed::RefreshNativeCollisionResidency()
+{
+    CColStore* collisionStore = g_pGame ? g_pGame->GetCollisionStore() : nullptr;
+    bool       markedNativeAgent = false;
+    GetCustomDataBool(CStringName("neon:ambientPedTraffic"), markedNativeAgent, false);
+    const bool validProfile = m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0 &&
+                              ((m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER && !m_bMissionActor) ||
+                               (m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor));
+    const bool physicalTakeover = m_nativeTaskPhysicalTakeoverPending || m_nativeTaskAirbornePresentationActive;
+    const bool wantsNativeAuthority =
+        m_pPlayerPed && GetType() == CCLIENTPED && !m_bIsLocalPlayer && m_bIsSyncing && (markedNativeAgent || validProfile || physicalTakeover);
+    if (!wantsNativeAuthority)
+    {
+        const bool changed = m_nativeCollisionResidencyReady;
+        UpdateNativeCollisionAuthorityFence(false, "state_changed");
+        ReleaseNativeCollisionResidency("state_changed");
+        return changed;
+    }
+
+    // Deny authority first and release it only after the probe below. This is
+    // called synchronously by SetSyncing, before the newly authoritative GTA
+    // physical can reach its next ProcessControl tick.
+    if (!m_nativeCollisionResidencyReady)
+        UpdateNativeCollisionAuthorityFence(true, "awaiting_ground_support");
+
+    if (!collisionStore)
+    {
+        const bool changed = m_nativeCollisionResidencyReady;
+        ReleaseNativeCollisionResidency("store_unavailable");
+        return changed;
+    }
+
+    if (!m_nativeCollisionResidency)
+    {
+        m_nativeCollisionResidency = collisionStore->AcquireCollisionResidency(m_pPlayerPed, m_ucInterior);
+        m_nativeCollisionResidencyNextProbeAt = 0;
+        if (m_nativeCollisionResidency)
+            CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, "collision_residency_acquired", this);
+    }
+    else if (!collisionStore->UpdateCollisionResidency(m_nativeCollisionResidency, m_pPlayerPed, m_ucInterior))
+    {
+        const bool changed = m_nativeCollisionResidencyReady;
+        UpdateNativeCollisionAuthorityFence(true, "update_refused");
+        ReleaseNativeCollisionResidency("update_refused");
+        return changed;
+    }
+
+    if (!m_nativeCollisionResidency)
+        return false;
+
+    const unsigned long now = CClientTime::GetTime();
+    if (now < m_nativeCollisionResidencyNextProbeAt)
+        return false;
+    m_nativeCollisionResidencyNextProbeAt = now + NATIVE_COLLISION_RESIDENCY_PROBE_INTERVAL;
+
+    const bool ready = collisionStore->IsCollisionResidencyLoaded(m_nativeCollisionResidency) && HasNativeCollisionGroundSupport();
+    const bool changed = ready != m_nativeCollisionResidencyReady;
+    if (changed)
+    {
+        m_nativeCollisionResidencyReady = ready;
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP,
+                                           ready ? "collision_residency_ground_ready" : "collision_residency_ground_lost", this);
+    }
+    UpdateNativeCollisionAuthorityFence(!ready, ready ? "ground_ready" : "ground_lost");
+    return changed;
+}
+
+void CClientPed::ReleaseNativeCollisionResidency(const char* reason)
+{
+    if (!m_nativeCollisionResidency)
+    {
+        m_nativeCollisionResidencyReady = false;
+        return;
+    }
+
+    if (g_pGame)
+    {
+        if (CColStore* collisionStore = g_pGame->GetCollisionStore())
+            collisionStore->ReleaseCollisionResidency(m_nativeCollisionResidency);
+    }
+    m_nativeCollisionResidency = 0;
+    m_nativeCollisionResidencyReady = false;
+    m_nativeCollisionResidencyNextProbeAt = 0;
+    const SString event = reason ? SString("collision_residency_released_%s", reason) : SString("%s", "collision_residency_released");
+    CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, event, this);
+}
+
+bool CClientPed::HasNativeCollisionGroundSupport()
+{
+    if (!m_pPlayerPed || !g_pGame || !g_pGame->GetWorld())
+        return false;
+
+    const CVector position = *m_pPlayerPed->GetPosition();
+    if (!std::isfinite(position.fX) || !std::isfinite(position.fY) || !std::isfinite(position.fZ))
+        return false;
+    const float rawBaseOffset = m_pPlayerPed->GetDistanceFromCentreOfMassToBaseOfModel();
+    const float baseOffset = std::isfinite(rawBaseOffset) ? std::clamp(rawBaseOffset, 0.0f, 2.0f) : 1.0f;
+    const float minimumRootDelta = std::max(0.0f, baseOffset - NATIVE_COLLISION_BASE_TOLERANCE_BELOW);
+    const float maximumRootDelta = baseOffset + NATIVE_COLLISION_BASE_TOLERANCE_ABOVE;
+    CVector     start = position;
+    CVector     end = position;
+    start.fZ += NATIVE_COLLISION_GROUND_PROBE_ABOVE;
+    end.fZ -= maximumRootDelta;
+
+    SLineOfSightFlags flags;
+    flags.bCheckPeds = false;
+    flags.bSeeThroughStuff = false;
+    flags.bIgnoreSomeObjectsForCamera = false;
+    CColPoint*  collision{};
+    const bool  hit = g_pGame->GetWorld()->ProcessLineOfSight(&start, &end, &collision, nullptr, flags);
+    const float lineRootDelta = hit && collision ? position.fZ - collision->GetPosition().fZ : std::numeric_limits<float>::infinity();
+    CVector     groundProbePosition = position;
+    const float groundZ = g_pGame->GetWorld()->FindGroundZFor3DPosition(&groundProbePosition);
+    const float groundRootDelta = std::isfinite(groundZ) ? position.fZ - groundZ : std::numeric_limits<float>::infinity();
+    const bool  lineSupported = hit && collision && lineRootDelta >= minimumRootDelta && lineRootDelta <= maximumRootDelta;
+    const bool  supported = lineSupported;
+    const float feetDelta = lineRootDelta - baseOffset;
+    if (IsNativeCollisionResidencyTraceEnabled())
+    {
+        g_pCore->GetConsole()->Printf(
+            "[native-collision-residency][ground-probe] ped=%u model=%lu pos=(%.3f,%.3f,%.3f) lineHit=%s lineDelta=%.3f groundZ=%.3f groundDelta=%.3f "
+            "baseOffset=%.3f feetDelta=%.3f range=(%.3f,%.3f) source=%s ready=%s",
+            GetID().Value(), GetModel(), position.fX, position.fY, position.fZ, hit ? "true" : "false", lineRootDelta, groundZ, groundRootDelta, baseOffset,
+            feetDelta, minimumRootDelta, maximumRootDelta, lineSupported ? "line" : "none", supported ? "true" : "false");
+    }
+    if (collision)
+        collision->Destroy();
+    return supported;
+}
+
+void CClientPed::UpdateNativeCollisionAuthorityFence(bool shouldFence, const char* reason)
+{
+    auto& fence = m_nativeCollisionAuthorityFence;
+    if (!m_pPlayerPed)
+    {
+        fence.active = false;
+        return;
+    }
+
+    if (shouldFence && !fence.active)
+    {
+        m_pPlayerPed->GetMatrix(&fence.safeMatrix);
+        fence.safeCurrentRotation = m_pPlayerPed->GetCurrentRotation();
+        fence.safeTargetRotation = m_pPlayerPed->GetTargetRotation();
+        m_pPlayerPed->GetMoveSpeed(&fence.safeMoveSpeed);
+        fence.previousStaticWaitingForCollision = m_pPlayerPed->IsStaticWaitingForCollision();
+        fence.active = true;
+        m_pPlayerPed->SetStaticWaitingForCollision(true);
+        ApplyPhysicalFreezeState();
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, "collision_authority_fenced", this);
+    }
+
+    if (shouldFence && fence.active)
+    {
+        // Native physical tasks can author matrices directly, independently of
+        // bDontApplySpeed. Preserve the acquisition transform until nearby
+        // support has actually been observed.
+        m_Matrix = fence.safeMatrix;
+        m_fCurrentRotation = fence.safeCurrentRotation;
+        m_fTargetRotation = fence.safeTargetRotation;
+        m_vecMoveSpeed = {};
+        m_pPlayerPed->SetMatrix(&m_Matrix);
+        m_pPlayerPed->SetCurrentRotation(m_fCurrentRotation);
+        m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
+        m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
+        return;
+    }
+
+    if (!shouldFence && fence.active)
+    {
+        m_Matrix = fence.safeMatrix;
+        m_fCurrentRotation = fence.safeCurrentRotation;
+        m_fTargetRotation = fence.safeTargetRotation;
+        m_vecMoveSpeed = fence.safeMoveSpeed;
+        m_pPlayerPed->SetMatrix(&m_Matrix);
+        m_pPlayerPed->SetCurrentRotation(m_fCurrentRotation);
+        m_pPlayerPed->SetTargetRotation(m_fTargetRotation);
+        m_pPlayerPed->SetMoveSpeed(m_vecMoveSpeed);
+        m_pPlayerPed->SetStaticWaitingForCollision(fence.previousStaticWaitingForCollision);
+        fence.active = false;
+        ApplyPhysicalFreezeState();
+        if (!fence.previousStaticWaitingForCollision && !m_pPlayerPed->IsStatic())
+            m_pPlayerPed->AddToMovingList();
+        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP,
+                                           reason && strcmp(reason, "ground_ready") == 0 ? "collision_authority_ground_ready" : "collision_authority_released",
+                                           this);
+    }
+}
+
+void CClientPed::ApplyPhysicalFreezeState()
+{
+    if (m_pPlayerPed)
+        m_pPlayerPed->SetFrozen(IsFrozen() || m_remoteStreamInFenceActive || m_nativeAmbientOwnerCollisionFence.active ||
+                                m_nativeCollisionAuthorityFence.active || m_remoteReplicaPhysicsFenceActive);
+}
+
+void CClientPed::UpdateRemoteReplicaPhysicsFence()
+{
+    const bool syncedAnimationOwnsTransform = HasSyncedAnim() && GetAnimationCache().bUpdatePosition;
+    const bool physicalPresentation =
+        SNativeTaskAnimationPresentationSync::IsPhysicalMode(m_nativeTaskAnimationPresentation.data.uiMode) || m_nativeTaskAirbornePresentationActive;
+    const bool shouldFence = m_pPlayerPed && GetType() == CCLIENTPED && !m_bIsLocalPlayer && !m_bIsSyncing && !IsFrozen() && !GetOccupiedVehicle() &&
+                             !GetOccupyingVehicle() && !IsGettingIntoVehicle() && !IsGettingOutOfVehicle() && !GetAttachedTo() &&
+                             !syncedAnimationOwnsTransform && !physicalPresentation;
+    if (shouldFence == m_remoteReplicaPhysicsFenceActive)
+        return;
+
+    m_remoteReplicaPhysicsFenceActive = shouldFence;
+    ApplyPhysicalFreezeState();
+    CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, shouldFence ? "remote_replica_physics_fenced" : "remote_replica_physics_released",
+                                       this);
+}
+
 void CClientPed::ClearNativeAmbientWanderResponse()
 {
     if (!m_pTaskManager || !m_pPlayerPed)
@@ -6421,8 +7054,8 @@ void CClientPed::ClearNativeAmbientWanderResponse()
     CTask*            physicalLeaf = m_pTaskManager->GetSimplestTask(TASK_PRIORITY_PHYSICAL_RESPONSE);
     const eWeaponType lastWeaponDamage = m_pPlayerPed->GetLastWeaponDamage();
     const bool        isVehicleImpactFall = physicalRoot && physicalRoot->GetTaskType() == TASK_COMPLEX_FALL_AND_GET_UP && physicalLeaf &&
-                                            (physicalLeaf->GetTaskType() == TASK_SIMPLE_FALL || physicalLeaf->GetTaskType() == TASK_SIMPLE_GET_UP) &&
-                                            (lastWeaponDamage == WEAPONTYPE_RAMMEDBYCAR || lastWeaponDamage == WEAPONTYPE_RUNOVERBYCAR);
+                                     (physicalLeaf->GetTaskType() == TASK_SIMPLE_FALL || physicalLeaf->GetTaskType() == TASK_SIMPLE_GET_UP) &&
+                                     (lastWeaponDamage == WEAPONTYPE_RAMMEDBYCAR || lastWeaponDamage == WEAPONTYPE_RUNOVERBYCAR);
     if (isVehicleImpactFall)
     {
         // KillPedWithCar puts its fall/get-up chain in the physical slot. Do
@@ -7808,6 +8441,51 @@ void CClientPed::SetTargetPosition(const CVector& vecPosition, unsigned long ulD
         // Set the position straight
         SetPosition(vecPosition + vecOrigin);
     }
+}
+
+void CClientPed::UpdateRemoteAuthoritativeTransform(const CVector* pPosition, const float* pRotation, const CVector* pMoveSpeed)
+{
+    // A non-syncer still runs a local GTA CPlayerPed instance. Keep network
+    // truth separate from that instance: unloaded collision can make the
+    // observer fall even though the owner remains stationary, and the owner
+    // may then have no spatial delta to resend for an arbitrarily long time.
+    if (GetType() != CCLIENTPED || m_bIsLocalPlayer || m_bIsSyncing)
+        return;
+
+    if (pPosition && std::isfinite(pPosition->fX) && std::isfinite(pPosition->fY) && std::isfinite(pPosition->fZ))
+    {
+        m_remoteAuthoritativeTransform.position = *pPosition;
+        m_remoteAuthoritativeTransform.positionValid = true;
+        m_remoteAuthoritativeTransform.restoreAllowed = true;
+        if (m_remoteStreamInFenceActive)
+            m_remoteStreamInFenceMatrix.vPos = *pPosition;
+    }
+    if (pRotation && std::isfinite(*pRotation))
+    {
+        m_remoteAuthoritativeTransform.rotation = *pRotation;
+        m_remoteAuthoritativeTransform.rotationValid = true;
+        if (m_remoteStreamInFenceActive)
+        {
+            m_remoteStreamInFenceCurrentRotation = *pRotation;
+            m_remoteStreamInFenceTargetRotation = *pRotation;
+            CVector fenceRotation = m_remoteStreamInFenceMatrix.GetRotation();
+            fenceRotation.fZ = *pRotation;
+            m_remoteStreamInFenceMatrix.SetRotation(fenceRotation);
+        }
+    }
+    if (pMoveSpeed && std::isfinite(pMoveSpeed->fX) && std::isfinite(pMoveSpeed->fY) && std::isfinite(pMoveSpeed->fZ))
+    {
+        m_remoteAuthoritativeTransform.moveSpeed = *pMoveSpeed;
+        m_remoteAuthoritativeTransform.moveSpeedValid = true;
+        if (m_remoteStreamInFenceActive && m_pPlayerPed)
+            m_pPlayerPed->SetMoveSpeed(*pMoveSpeed);
+    }
+}
+
+void CClientPed::InvalidateRemoteAuthoritativeTransformRestore()
+{
+    m_remoteAuthoritativeTransform.restoreAllowed = false;
+    ClearRemoteStreamInTransformFence("authoritative_transform_suspended");
 }
 
 void CClientPed::RemoveTargetPosition()
@@ -9627,6 +10305,40 @@ void CClientPed::SetSyncing(bool bIsSyncing)
 {
     if (m_bIsSyncing != bIsSyncing)
     {
+        // A post-render sample must never be correlated with a receive from a
+        // previous ownership epoch.
+        m_nativeAIRotationNetworkSample = {};
+        m_nativeAIRotationTelemetryNextSampleAt = 0;
+        if (!bIsSyncing)
+        {
+            // If the old owner was waiting on unloaded collision, publish and
+            // bootstrap the observer from the last collision-backed transform
+            // rather than the locally integrated fall it prevented.
+            ClearNativeAmbientOwnerCollisionFence("lost_syncer");
+            // The final locally-owned state is the observer's authoritative
+            // bootstrap until the first spatial packet from the new syncer.
+            GetPosition(m_remoteAuthoritativeTransform.position);
+            m_remoteAuthoritativeTransform.positionValid = true;
+            m_remoteAuthoritativeTransform.rotation = GetCurrentRotation();
+            m_remoteAuthoritativeTransform.rotationValid = true;
+            GetMoveSpeed(m_remoteAuthoritativeTransform.moveSpeed);
+            m_remoteAuthoritativeTransform.moveSpeedValid = true;
+            m_remoteAuthoritativeTransform.restoreAllowed = true;
+        }
+        else
+        {
+            ClearNativeAmbientOwnerCollisionFence("became_syncer", false);
+            // Local authority now owns the live GTA state. Do not let an old
+            // observer snapshot reseed a later physical/task transition.
+            m_remoteAuthoritativeTransform = {};
+            // Packet_PedStartSync installs an immediate heading rather than a
+            // new interpolation. Clear the observer's old rotation timer even
+            // when no collision fence happened to be active.
+            m_ulBeginRotationTime = 0;
+            m_ulEndRotationTime = 0;
+        }
+        m_nativeAmbientOwnerCollisionFence.snapshotValid = false;
+
         if (!bIsSyncing && m_pTaskManager)
         {
             // The old authority must not keep integrating a native vertical
@@ -9729,8 +10441,21 @@ void CClientPed::SetSyncing(bool bIsSyncing)
     }
     m_bIsSyncing = bIsSyncing;
     if (bIsSyncing)
+    {
+        // StartSync installs an immediate position and rotation before flipping
+        // this bit. Drop the observer's old interpolation timer so it cannot
+        // overwrite that new authoritative heading on the next pulse.
         ClearRemoteStreamInTransformFence("became_syncer");
+        m_remoteReplicaPhysicsFenceActive = false;
+        ApplyPhysicalFreezeState();
+    }
     ApplyNativeEventProfileState();
+    if (bIsSyncing && GetType() == CCLIENTPED)
+    {
+        bool markedNativeAgent = false;
+        GetCustomDataBool(CStringName("neon:ambientPedTraffic"), markedNativeAgent, false);
+        dassert(!markedNativeAgent || m_nativeCollisionResidencyReady || m_nativeCollisionAuthorityFence.active);
+    }
     if (!bIsSyncing)
     {
         // Reset vehicle in/out stuff in case the ped was entering/exiting

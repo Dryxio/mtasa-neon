@@ -20,6 +20,10 @@ Start the resource, connect two clients and run one of:
 /nativeai run melee <owner> <victim>
 /nativeai run handoff
 /nativeai run handoff <owner> <next-owner>
+/nativeai run rotation
+/nativeai run rotation <owner> <observer>
+/nativeai run rotation_handoff
+/nativeai run rotation_handoff <owner> <next-owner>
 /nativeai status
 /nativeai cleanup
 ```
@@ -44,6 +48,23 @@ accepted native replay which reduces health on the victim's own client.
 native group on the first owner, advances the epoch, transfers both MTA
 syncers, and acquires the group on the second client. PASS requires both peds
 to share the expected owner after acquisition.
+
+`isolated-ped-rotation-v2` deliberately leaves Grove actor `ped-2` outside a
+native group, with no WanderGang/GangFollower task able to rewrite its heading.
+Its explicit owner applies the deterministic native headings `45`, `135`, then
+`225` degrees at predetermined 450 ms intervals. Dispatch never waits for
+observer convergence: every target persists longer than the configured 400 ms
+ped sync interval, while the close spacing keeps a one-snapshot interpolation
+lag observable instead of allowing it to disappear before the next action.
+The server-side harness requires the owner to hold each target for at least
+120 ms before the action is attributable to networking, plus owner acceptance and
+final convergence during a 1200 ms hold; its PASS means the trace capture is
+complete, not that presentation latency is correct. The offline causal analyzer
+owns that verdict.
+`isolated-ped-rotation-handoff-v2` first transfers both ped syncers to the second
+client, then runs the
+same sequence under epoch 2. Run the non-handoff scenario first; use the
+handoff variant only after its baseline is stable.
 
 ## Correlation and assertions
 
@@ -81,7 +102,26 @@ dispatch. Planned and actual relative milliseconds are both logged. Missing
 stages become explicit failed assertions at the verdict or timeout; the first
 server validation rejection ends the run immediately with a `run_end` record.
 
-The harness controls every input relevant to these two scenarios. It does not
+Rotation runs emit `rotation_action_dispatched` and
+`rotation_schedule_complete`; an action may also emit
+`rotation_action_converged` when both clients converge before the next fixed
+turn. The C++ telemetry supplies the corresponding owner `packet_serialize`,
+observer `packet_receive`, and `rotation_post_process` samples under the same
+action and actor IDs. The analyzer starts presentation timing at the exact
+observer receive, reports network transit separately, and fails if the rendered
+matrix remains outside two degrees after `spatialSyncRate + 100 ms`. The extra
+100 ms covers the 50 ms post-render sampling cadence plus one frame/scheduling
+margin. It also fails a sustained one-snapshot lag when the first post-render
+sample at least 50 ms after receipt remains within 15 degrees of the previous
+target and at least 45 degrees from the newly decoded target for both
+consecutive turns. The arbitrary first sample (0–50 ms after receipt) remains
+in the evidence but cannot trigger this verdict: a healthy 100 ms interpolation
+may still be near its old target in its first frame. At the 50 ms checkpoint a
+400 ms, 90-degree interpolation has advanced about 11.25 degrees, while a
+healthy 100 ms interpolation has advanced about 45 degrees. The 45-degree new
+target bound also excludes small animation-facing corrections.
+
+The harness controls every input relevant to these scenarios. It does not
 claim to seed GTA's process-global random generator; future scenarios which
 exercise a random decision must record the selected native branch or add a
 dedicated engine seed/capture facility before claiming deterministic replay.

@@ -208,6 +208,11 @@ struct SAmbientPedPopulationProfile
     float         copTarget{};
     float         gangTarget{};
     float         dealerTarget{};
+    float         pedDensityMultiplier{};
+    float         fewerPedsMultiplier{};
+    unsigned int  maximumPedsInUse{};
+    float         creationDistanceMultiplier{};
+    float         generationDistanceMultiplier{};
     unsigned char zoneType{};
     unsigned char timeIndex{};
     unsigned char weekend{};
@@ -216,7 +221,7 @@ struct SAmbientPedPopulationProfile
     unsigned char noCops{};
     unsigned char gangWeights[10]{};
 };
-static_assert(sizeof(SAmbientPedPopulationProfile) == 44, "Ambient population profile ABI changed");
+static_assert(sizeof(SAmbientPedPopulationProfile) == 64, "Ambient population profile ABI changed");
 
 // A read-only proposal produced by GTA's stock population rules. The caller
 // still owns the network element and its lifetime; Game SA never creates an
@@ -628,4 +633,10 @@ public:
     virtual void SetNativeAIGroupDecisionHandler(NativeAIGroupDecisionHandler* pHandler) = 0;
     virtual bool HasNativeAIGroupDecisionHandler() const noexcept = 0;
     virtual void ReportNativeAIGroupDecision(const SNativeAIGroupDecision& decision) const = 0;
+
+    // The server coordinates every shared spawn/despawn, but only the local
+    // GTA camera can reproduce CPopulation's frustum test. This read-only
+    // oracle lets a resource collect a veto from every nearby client without
+    // creating an unmanaged GTA entity.
+    virtual bool IsAmbientPedSphereVisible(const CVector& position, float radius) = 0;
 };

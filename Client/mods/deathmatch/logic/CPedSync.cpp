@@ -288,7 +288,8 @@ void CPedSync::Packet_PedStopSync(NetBitStreamInterface& BitStream)
 
 void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
 {
-    const bool          telemetryEnabled = CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::NETWORK);
+    const bool telemetryEnabled =
+        CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::NETWORK) || CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::PRESENTATION);
     const std::uint64_t telemetryPacketSequence = telemetryEnabled ? CNativeAITelemetry::NextPacketSequence() : 0;
 
     // While we're not out of peds
@@ -400,28 +401,35 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
                     CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_receive", pPed, &telemetryPacket);
                 }
 
-                unsigned long spatialSyncRate = PED_SYNC_RATE;
+                const unsigned long currentTime = CClientTime::GetTime();
+                unsigned long       receiveInterval = 0;
+                unsigned long       spatialSyncRate = PED_SYNC_RATE;
                 if (ucFlags & (0x01 | 0x02 | 0x04))
                 {
                     // A transient owner burst uses the ordinary sequenced
                     // spatial lane to preserve packet order. Infer its cadence
                     // locally so repeated 100 ms targets do not retain the
                     // normal 400 ms interpolation lag after the turn is over.
-                    const unsigned long currentTime = CClientTime::GetTime();
-                    auto&               lastReceiveTime = m_NativeTaskLocomotionSpatialReceiveTimes[pPed];
+                    auto& lastReceiveTime = m_NativeTaskLocomotionSpatialReceiveTimes[pPed];
                     if (lastReceiveTime != 0 && currentTime > lastReceiveTime)
                     {
-                        const unsigned long receiveInterval = currentTime - lastReceiveTime;
+                        receiveInterval = currentTime - lastReceiveTime;
                         if (receiveInterval < static_cast<unsigned long>(PED_SYNC_RATE))
                             spatialSyncRate = std::clamp(receiveInterval, 50UL, static_cast<unsigned long>(PED_SYNC_RATE));
                     }
                     lastReceiveTime = currentTime;
                 }
                 const bool lockSyncedAnimationTransform = pPed->HasSyncedAnim() && !pPed->GetAnimationCache().bUpdatePosition;
+                pPed->UpdateRemoteAuthoritativeTransform((ucFlags & 0x01) && !lockSyncedAnimationTransform ? &vecPosition : nullptr,
+                                                         (ucFlags & 0x02) && !lockSyncedAnimationTransform ? &fRotation : nullptr,
+                                                         (ucFlags & 0x04) && !lockSyncedAnimationTransform ? &vecMoveSpeed : nullptr);
                 if ((ucFlags & 0x01) && !lockSyncedAnimationTransform)
                     pPed->SetTargetPosition(vecPosition, spatialSyncRate);
                 if ((ucFlags & 0x02) && !lockSyncedAnimationTransform)
                     pPed->SetTargetRotation(spatialSyncRate, fRotation, std::nullopt);
+                if (telemetryEnabled && (ucFlags & 0x02))
+                    pPed->SetNativeAIRotationTelemetryNetworkSample(telemetryPacket, currentTime, receiveInterval, spatialSyncRate,
+                                                                    !lockSyncedAnimationTransform);
                 if ((ucFlags & 0x04) && !lockSyncedAnimationTransform)
                 {
                     pPed->SetMoveSpeed(vecMoveSpeed);

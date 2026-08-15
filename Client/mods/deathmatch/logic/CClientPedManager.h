@@ -26,6 +26,7 @@ public:
     void DeleteAll();
 
     void        DoPulse(bool bDoStandardPulses);
+    void        RecordNativeAIRotationTelemetryPostProcess();
     CClientPed* Get(ElementID ID, bool bCheckPlayers = false);
 
     bool Exists(CClientPed* pPed);

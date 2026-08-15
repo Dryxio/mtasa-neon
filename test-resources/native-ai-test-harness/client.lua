@@ -1,5 +1,9 @@
 local activeRun
 
+local function isRotationKind(kind)
+    return kind == "rotation" or kind == "rotation_handoff"
+end
+
 local function report(evidence, data)
     if activeRun then
         triggerServerEvent("nativeAIHarness:evidence", resourceRoot, activeRun.id, activeRun.epoch, evidence, data or {})
@@ -75,6 +79,15 @@ local function acquireOwnerGroup(run)
             return false, "native walking style refused"
         end
     end
+    -- A native group necessarily installs WanderGang/GangFollower tasks. Both
+    -- are allowed to change heading after a script write, which makes them an
+    -- invalid fixture for locating a rotation transport divergence. Rotation
+    -- scenarios deliberately stop here: the freshly created script peds keep
+    -- their inert PlayerOnFoot default while melee/handoff still exercise the
+    -- real native group implementation.
+    if isRotationKind(run.kind) then
+        return true
+    end
     if not run.groupToken then
         run.groupToken = acquirePedNativeGroup(run.peds, "ambient-random")
     end
@@ -101,7 +114,7 @@ local function finishPreparation()
         ownerReady, reason = acquireOwnerGroup(run)
     end
     if profilesReady and streamed and ownerReady then
-        return report("ready", {role = run.role, groupActive = run.role == "owner"})
+        return report("ready", {role = run.role, groupActive = run.role == "owner" and not isRotationKind(run.kind)})
     end
     if getTickCount() - run.requestedAt >= NATIVE_AI_HARNESS.preparationTimeout then
         return report("failure", {reason = reason or "streaming timeout"})
@@ -114,7 +127,8 @@ addEventHandler("nativeAIHarness:prepare", resourceRoot,
                 function(runId, scenarioId, epoch, peds, owner, victim, role, kind)
     if source ~= resourceRoot or type(runId) ~= "string" or type(scenarioId) ~= "string" or type(peds) ~= "table" or
         #peds < 2 or #peds > 5 or not isElement(owner) or not isElement(victim) or
-        (role ~= "owner" and role ~= "observer") or (kind ~= "melee" and kind ~= "handoff") then
+        (role ~= "owner" and role ~= "observer") or
+        (kind ~= "melee" and kind ~= "handoff" and kind ~= "rotation" and kind ~= "rotation_handoff") then
         return
     end
     stopRun()
@@ -222,19 +236,26 @@ addEvent("nativeAIHarness:releaseOwner", true)
 addEventHandler("nativeAIHarness:releaseOwner", resourceRoot, function(runId, epoch, actionId)
     local run = activeRun
     if source ~= resourceRoot or not run or run.id ~= tostring(runId) or run.epoch ~= tonumber(epoch) or
-        run.role ~= "owner" or localPlayer ~= run.owner or actionId ~= "group-handoff" then
+        run.role ~= "owner" or localPlayer ~= run.owner or actionId ~= "group-handoff" or
+        (run.kind ~= "handoff" and run.kind ~= "rotation_handoff") then
         return
     end
-    local released = run.groupToken and releasePedNativeGroup(run.groupToken) == true or false
-    run.groupToken = nil
+    local released = true
+    if not isRotationKind(run.kind) then
+        released = run.groupToken and releasePedNativeGroup(run.groupToken) == true or false
+        run.groupToken = nil
+    end
     report("owner-released", {released = released})
+    if run.kind == "rotation_handoff" then
+        run.role = "observer"
+    end
 end)
 
 addEvent("nativeAIHarness:acquireOwner", true)
 addEventHandler("nativeAIHarness:acquireOwner", resourceRoot, function(runId, epoch, actionId)
     local run = activeRun
     if source ~= resourceRoot or not run or run.id ~= tostring(runId) or localPlayer ~= run.victim or
-        actionId ~= "group-handoff-acquire" then
+        actionId ~= "group-handoff-acquire" or (run.kind ~= "handoff" and run.kind ~= "rotation_handoff") then
         return
     end
     run.epoch = tonumber(epoch)
@@ -255,6 +276,122 @@ addEventHandler("nativeAIHarness:acquireOwner", resourceRoot, function(runId, ep
         run.prepareTimer = setTimer(acquire, 100, 1)
     end
     acquire()
+end)
+
+addEvent("nativeAIHarness:updateObserverEpoch", true)
+addEventHandler("nativeAIHarness:updateObserverEpoch", resourceRoot, function(runId, epoch)
+    local run = activeRun
+    if source == resourceRoot and run and run.id == tostring(runId) and run.kind == "rotation_handoff" and run.role == "observer" then
+        run.epoch = tonumber(epoch)
+    end
+end)
+
+local function headingDeltaDegrees(left, right)
+    return math.abs((left - right + 180.0) % 360.0 - 180.0)
+end
+
+addEvent("nativeAIHarness:rotationAction", true)
+addEventHandler("nativeAIHarness:rotationAction", resourceRoot,
+                function(runId, epoch, actionId, ped, targetHeading, rotationOwner)
+    local run = activeRun
+    targetHeading = tonumber(targetHeading)
+    if source ~= resourceRoot or not run or not isRotationKind(run.kind) or run.id ~= tostring(runId) or
+        run.epoch ~= tonumber(epoch) or type(actionId) ~= "string" or not isElement(ped) or
+        not targetHeading or not isElement(rotationOwner) then
+        return
+    end
+
+    run.actionId = actionId
+    run.rotationObservation = {
+        actionId = actionId,
+        ped = ped,
+        targetHeading = targetHeading,
+        startedAt = getTickCount(),
+        convergedFrames = 0,
+        reported = false,
+        ownerHeldReported = false,
+        ownerDriftReported = false,
+        isRotationOwner = localPlayer == rotationOwner,
+    }
+
+    if localPlayer == rotationOwner then
+        -- The script API converges to the requested element rotation after
+        -- the native ped update. The owner-held observation below is the
+        -- authoritative gate; the immediate read is diagnostic only.
+        local scriptHeading = targetHeading
+        local accepted = isElementSyncer(ped) and setElementVelocity(ped, 0, 0, 0) and
+                             setElementRotation(ped, 0, 0, scriptHeading) == true
+        local _, _, actualHeading = getElementRotation(ped)
+        report("rotation-owner-applied", {
+            actionId = actionId,
+            actorId = tostring(getElementData(ped, "neon:nativeAIActorId") or "unknown"),
+            accepted = accepted == true,
+            targetHeading = targetHeading,
+            actualHeading = actualHeading,
+            scriptHeading = scriptHeading,
+        })
+    end
+end)
+
+addEventHandler("onClientPedsProcessed", root, function()
+    local run = activeRun
+    local observation = run and run.rotationObservation
+    if not observation or observation.reported or not isElement(observation.ped) then
+        return
+    end
+
+    local _, _, actualHeading = getElementRotation(observation.ped)
+    local delta = headingDeltaDegrees(actualHeading, observation.targetHeading)
+    if delta <= NATIVE_AI_HARNESS.rotationConvergenceDegrees then
+        observation.convergedFrames = observation.convergedFrames + 1
+    else
+        observation.convergedFrames = 0
+    end
+    local elapsed = getTickCount() - observation.startedAt
+    if observation.isRotationOwner then
+        if not observation.ownerHeldReported and elapsed >= NATIVE_AI_HARNESS.rotationOwnerHoldMinimumMs and
+            observation.convergedFrames >= NATIVE_AI_HARNESS.rotationConvergenceFrames then
+            observation.ownerHeldReported = true
+            report("rotation-owner-held", {
+                actionId = observation.actionId,
+                actorId = tostring(getElementData(observation.ped, "neon:nativeAIActorId") or "unknown"),
+                targetHeading = observation.targetHeading,
+                actualHeading = actualHeading,
+                deltaDegrees = delta,
+                elapsedMs = elapsed,
+                consecutiveFrames = observation.convergedFrames,
+            })
+        elseif elapsed >= NATIVE_AI_HARNESS.rotationOwnerHoldMinimumMs and
+            delta > NATIVE_AI_HARNESS.rotationConvergenceDegrees and not observation.ownerDriftReported then
+            observation.ownerDriftReported = true
+            report("rotation-owner-drift", {
+                actionId = observation.actionId,
+                actorId = tostring(getElementData(observation.ped, "neon:nativeAIActorId") or "unknown"),
+                targetHeading = observation.targetHeading,
+                actualHeading = actualHeading,
+                deltaDegrees = delta,
+                elapsedMs = elapsed,
+            })
+        end
+    end
+    if observation.convergedFrames < NATIVE_AI_HARNESS.rotationConvergenceFrames then
+        return
+    end
+    if elapsed < NATIVE_AI_HARNESS.rotationObservationMinimumMs then
+        return
+    end
+
+    observation.reported = true
+    report("rotation-converged", {
+        actionId = observation.actionId,
+        actorId = tostring(getElementData(observation.ped, "neon:nativeAIActorId") or "unknown"),
+        role = run.role,
+        targetHeading = observation.targetHeading,
+        actualHeading = actualHeading,
+        deltaDegrees = delta,
+        elapsedMs = elapsed,
+        consecutiveFrames = observation.convergedFrames,
+    })
 end)
 
 addEvent("nativeAIHarness:stop", true)

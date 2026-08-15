@@ -64,6 +64,7 @@ void CLuaWorldDefs::LoadFunctions()
         {"resetAmbientPedPopulationZonesToBootstrap", ResetAmbientPedPopulationZonesToBootstrap},
         {"setAmbientPedPopulationZoneState", SetAmbientPedPopulationZoneState},
         {"getAmbientPedPopulationProfile", GetAmbientPedPopulationProfile},
+        {"isAmbientPedSphereVisible", ArgumentParser<IsAmbientPedSphereVisible>},
         {"getAmbientPedSpawnCandidate", GetAmbientPedSpawnCandidate},
         {"getAmbientPedGangGroupCandidate", GetAmbientPedGangGroupCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
@@ -371,7 +372,7 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
         return 1;
     }
 
-    lua_createtable(luaVM, 0, 14);
+    lua_createtable(luaVM, 0, 19);
     lua_pushnumber(luaVM, profile.target);
     lua_setfield(luaVM, -2, "target");
     lua_pushnumber(luaVM, profile.supportedTarget);
@@ -386,6 +387,16 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
     lua_setfield(luaVM, -2, "gangTarget");
     lua_pushnumber(luaVM, profile.dealerTarget);
     lua_setfield(luaVM, -2, "dealerTarget");
+    lua_pushnumber(luaVM, profile.pedDensityMultiplier);
+    lua_setfield(luaVM, -2, "pedDensityMultiplier");
+    lua_pushnumber(luaVM, profile.fewerPedsMultiplier);
+    lua_setfield(luaVM, -2, "fewerPedsMultiplier");
+    lua_pushinteger(luaVM, profile.maximumPedsInUse);
+    lua_setfield(luaVM, -2, "maximumPedsInUse");
+    lua_pushnumber(luaVM, profile.creationDistanceMultiplier);
+    lua_setfield(luaVM, -2, "creationDistanceMultiplier");
+    lua_pushnumber(luaVM, profile.generationDistanceMultiplier);
+    lua_setfield(luaVM, -2, "generationDistanceMultiplier");
     lua_pushinteger(luaVM, profile.zoneType);
     lua_setfield(luaVM, -2, "zoneType");
     lua_pushinteger(luaVM, profile.timeIndex);
@@ -412,6 +423,11 @@ bool CLuaWorldDefs::UpdateAmbientPedPopulationModels(CVector origin)
 {
     g_pGame->UpdateAmbientPedPopulationModels(origin);
     return true;
+}
+
+bool CLuaWorldDefs::IsAmbientPedSphereVisible(CVector position, float radius)
+{
+    return g_pGame->IsAmbientPedSphereVisible(position, radius);
 }
 
 bool CLuaWorldDefs::ResetAmbientPedPopulationModels()

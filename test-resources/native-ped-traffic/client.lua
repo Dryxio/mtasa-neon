@@ -3,6 +3,7 @@ local debugEnabled = false
 local populationWorldReady = false
 local populationWorldRevision = 0
 local populationWorldPreset = "none"
+local latestPopulationProfile = false
 local assignments = {}
 local groupAssignments = {}
 local groupByPed = {}
@@ -17,6 +18,8 @@ local observedAimTargets = {}
 local nativeDamageObservations = {}
 local nativeDamageTraceTimes = {}
 local nativePlayerDamageReceipts = {}
+local spawnFades = {}
+local residencyTest = false
 local nextNativePlayerDamageNonce = 0
 local stats = {
     candidateHits = 0,
@@ -528,7 +531,10 @@ local function beginGroupAssignment(task)
     task.accepted = true
     stats.assignments = stats.assignments + #task.peds
     stats.groupAssignments = stats.groupAssignments + 1
-    reportGroup(task, "accepted")
+    -- The deterministic residency test treats this evidence as the authority
+    -- commit point. Carry the collision-readiness proof used by this exact
+    -- branch so the server can reject an acceptance that races the lease.
+    reportGroup(task, "accepted", {collisionReady = ready})
     log(("group-accepted group=%d epoch=%d members=%d reason=%s"):format(
             task.id, task.epoch, #task.peds, tostring(task.reason)), 3)
     task.monitorTimer = setTimer(function()
@@ -607,8 +613,13 @@ local function beginAssignment(task)
         return fail(task, "stream-or-syncer-timeout")
     end
 
-    if not isPedNativeEventProfileActive(task.ped, nativeEventProfiles[task.ped]) then
-        return fail(task, "ambient-profile-inactive")
+    if not task.resumePhysical and not isPedNativeEventProfileActive(task.ped, nativeEventProfiles[task.ped]) then
+        if getTickCount() - task.requestedAt < 10000 then
+            clearTimer(task, "retryTimer")
+            task.retryTimer = setTimer(function() beginAssignment(task) end, 200, 1)
+            return
+        end
+        return fail(task, "collision-residency-timeout")
     end
 
     if not setPedUseNativeWalkingStyle(task.ped, true) then
@@ -674,7 +685,11 @@ local function beginAssignment(task)
                 return
             end
             task.resumePending = false
-            installWander()
+            -- A transferred physical task must run to completion, but native
+            -- ambient simulation may resume only after the new owner's COL
+            -- lease has observed both loaded collision and ground support.
+            task.resumePhysical = false
+            beginAssignment(task)
         end
         waitForPhysicalCompletion()
         return
@@ -682,6 +697,97 @@ local function beginAssignment(task)
 
     installWander()
 end
+
+local function stopResidencyObservation()
+    local test = residencyTest
+    residencyTest = false
+    if not test then
+        return
+    end
+    if isTimer(test.timer) then
+        killTimer(test.timer)
+    end
+    if type(setPedStayInSamePlace) == "function" then
+        for ped, previous in pairs(test.previousStay) do
+            if isElement(ped) then
+                setPedStayInSamePlace(ped, previous)
+            end
+        end
+    end
+end
+
+local function sampleResidencyTest(test)
+    if residencyTest ~= test then
+        return
+    end
+    local rows = {}
+    for _, ped in ipairs(test.peds) do
+        if not isElement(ped) then
+            triggerServerEvent("pedTraffic:residencySample", resourceRoot, test.id, {error = "ped-missing"})
+            return
+        end
+        local rootTask, leafTask = getJumpLifecycleState(ped)
+        local _, _, z = getElementPosition(ped)
+        local _, _, vz = getElementVelocity(ped)
+        local token = nativeEventProfiles[ped]
+        rows[#rows + 1] = {
+            ped = ped,
+            trafficId = getElementData(ped, "neon:ambientPedTrafficId"),
+            epoch = getElementData(ped, "neon:ambientPedTrafficEpoch"),
+            z = z,
+            velocityZ = vz,
+            frozen = isElementFrozen(ped),
+            grounded = type(isPedOnGround) == "function" and isPedOnGround(ped) or false,
+            syncer = isElementSyncer(ped),
+            ready = token and type(isPedNativeEventProfileActive) == "function" and
+                isPedNativeEventProfileActive(ped, token) == true or false,
+            rootTask = rootTask or false,
+            leafTask = leafTask or false,
+            phase = classifyJumpLifecyclePhase(leafTask),
+        }
+    end
+    test.sequence = test.sequence + 1
+    triggerServerEvent("pedTraffic:residencySample", resourceRoot, test.id, {
+        clientTick = getTickCount(),
+        sequence = test.sequence,
+        peds = rows,
+    })
+end
+
+addEvent("pedTraffic:residencyObserve", true)
+addEventHandler("pedTraffic:residencyObserve", resourceRoot, function(id, peds)
+    stopResidencyObservation()
+    if not isIntegerInRange(id, 1, 2147483647) or type(peds) ~= "table" or #peds < 1 or
+        type(getPedStayInSamePlace) ~= "function" or type(setPedStayInSamePlace) ~= "function" then
+        triggerServerEvent("pedTraffic:residencySample", resourceRoot, id, {error = "client-api-unavailable"})
+        return
+    end
+    local test = {id = id, peds = {}, previousStay = {}, sequence = 0}
+    residencyTest = test
+    for _, ped in ipairs(peds) do
+        if not isElement(ped) or getElementData(ped, "neon:ambientPedTraffic") ~= true then
+            triggerServerEvent("pedTraffic:residencySample", resourceRoot, id, {error = "invalid-ped"})
+            stopResidencyObservation()
+            return
+        end
+        test.peds[#test.peds + 1] = ped
+        test.previousStay[ped] = getPedStayInSamePlace(ped) == true
+        if not setPedStayInSamePlace(ped, true) then
+            triggerServerEvent("pedTraffic:residencySample", resourceRoot, id, {error = "stay-put-refused"})
+            stopResidencyObservation()
+            return
+        end
+    end
+    sampleResidencyTest(test)
+    test.timer = setTimer(sampleResidencyTest, 100, 0, test)
+end)
+
+addEvent("pedTraffic:residencyStop", true)
+addEventHandler("pedTraffic:residencyStop", resourceRoot, function(id)
+    if residencyTest and residencyTest.id == id then
+        stopResidencyObservation()
+    end
+end)
 
 addEvent("pedTraffic:populationWorldState", true)
 addEventHandler("pedTraffic:populationWorldState", resourceRoot, function(snapshot)
@@ -702,7 +808,9 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
     observedAimTargets = {}
     log("enabled=" .. tostring(enabled))
     if not enabled then
+        stopResidencyObservation()
         populationWorldReady = false
+        latestPopulationProfile = false
         airTestSessions = {}
         climbTestSessions = {}
         local groups = {}
@@ -783,6 +891,72 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
     triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, candidate or false, getTickCount() - startedAt, missReason)
 end)
 
+addEvent("pedTraffic:visibilityProbe", true)
+addEventHandler("pedTraffic:visibilityProbe", resourceRoot, function(checkId, kind, probes, populationClass)
+    local visible = false
+    local detail = {probeIndex = false, tooClose = false}
+    if not enabled or not populationWorldReady or type(checkId) ~= "number" or type(probes) ~= "table" then
+        visible = true
+        detail.reason = "runtime-not-ready"
+    elseif kind == "candidate" then
+        local profile = latestPopulationProfile
+        if type(profile) ~= "table" or profile.worldRevision ~= populationWorldRevision or
+            getTickCount() - (profile.capturedAt or 0) > 2500 or
+            type(isAmbientPedSphereVisible) ~= "function" then
+            visible = true
+            detail.reason = "native-visibility-unavailable"
+        else
+            local tooCloseDistance = profile.creationDistanceMultiplier * 42.5 + (populationClass == "gang" and 30 or 0)
+            local playerX, playerY = getElementPosition(localPlayer)
+            for index, probe in ipairs(probes) do
+                if type(probe) ~= "table" or type(probe.x) ~= "number" or type(probe.y) ~= "number" or
+                    type(probe.z) ~= "number" or type(probe.radius) ~= "number" then
+                    visible = true
+                    detail.reason = "invalid-probe"
+                    detail.probeIndex = index
+                    break
+                end
+                local dx, dy = probe.x - playerX, probe.y - playerY
+                local tooClose = dx * dx + dy * dy < tooCloseDistance * tooCloseDistance
+                if tooClose and isAmbientPedSphereVisible(probe.x, probe.y, probe.z, probe.radius) then
+                    visible = true
+                    detail.probeIndex = index
+                    detail.tooClose = true
+                    break
+                end
+            end
+        end
+    elseif kind == "ped-removal" or kind == "group-removal" then
+        for index, ped in ipairs(probes) do
+            if isElement(ped) and isElementOnScreen(ped) then
+                visible = true
+                detail.probeIndex = index
+                break
+            end
+        end
+    else
+        visible = true
+        detail.reason = "invalid-kind"
+    end
+    log(("visibility-probe check=%d kind=%s visible=%s probe=%s tooClose=%s reason=%s"):format(
+            checkId, tostring(kind), tostring(visible), tostring(detail.probeIndex), tostring(detail.tooClose), tostring(detail.reason)))
+    triggerServerEvent("pedTraffic:visibilityProbeResult", resourceRoot, checkId, visible, detail)
+end)
+
+addEvent("pedTraffic:spawnFadeIn", true)
+addEventHandler("pedTraffic:spawnFadeIn", resourceRoot, function(peds, duration)
+    if type(peds) ~= "table" or type(duration) ~= "number" or duration < 1 or duration > 1000 then
+        return
+    end
+    local now = getTickCount()
+    for _, ped in ipairs(peds) do
+        if isElement(ped) and getElementType(ped) == "ped" and getElementData(ped, "neon:ambientPedTraffic") == true then
+            setElementAlpha(ped, 0)
+            spawnFades[ped] = {startedAt = now, duration = duration}
+        end
+    end
+end)
+
 setTimer(function()
     if not enabled or not populationWorldReady then
         return
@@ -796,6 +970,10 @@ setTimer(function()
     local profile = getAmbientPedPopulationProfile()
     if type(profile) == "table" then
         profile.worldRevision = populationWorldRevision
+        profile.capturedAt = getTickCount()
+        latestPopulationProfile = profile
+    else
+        latestPopulationProfile = false
     end
     triggerServerEvent("pedTraffic:populationProfile", resourceRoot, type(profile) == "table" and profile or false)
 end, 1000, 0)
@@ -1226,6 +1404,19 @@ local function getActiveGunAimTarget()
 end
 
 addEventHandler("onClientPreRender", root, function()
+    local now = getTickCount()
+    for ped, fade in pairs(spawnFades) do
+        if not isElement(ped) then
+            spawnFades[ped] = nil
+        else
+            local progress = math.min(1, (now - fade.startedAt) / fade.duration)
+            setElementAlpha(ped, math.floor(progress * 255 + 0.5))
+            if progress >= 1 then
+                spawnFades[ped] = nil
+            end
+        end
+    end
+
     local aimActive, aimTarget = getActiveGunAimTarget()
     if not aimActive then
         observedAimTargets = {}
@@ -1254,6 +1445,7 @@ addEventHandler("onClientPreRender", root, function()
 end)
 
 addEventHandler("onClientElementDestroy", root, function()
+    spawnFades[source] = nil
     observedAimTargets[source] = nil
     nativeDamageObservations[source] = nil
     nativeDamageTraceTimes[source] = nil
@@ -1280,6 +1472,7 @@ addEventHandler("onClientElementDataChange", root, function(dataName)
 end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
+    stopResidencyObservation()
     airTestSessions = {}
     climbTestSessions = {}
     nativeDamageTraceTimes = {}
@@ -1417,6 +1610,7 @@ setTimer(function()
         if getElementData(ped, "neon:ambientPedTraffic") == true then
             local id = tonumber(getElementData(ped, "neon:ambientPedTrafficId")) or -1
             local x, y, z = getElementPosition(ped)
+            local groundZ = getGroundPosition(x, y, z)
             local _, _, heading = getElementRotation(ped)
             local vx, vy, vz = getElementVelocity(ped)
             local horizontalSpeed = math.sqrt(vx * vx + vy * vy)
@@ -1429,11 +1623,11 @@ setTimer(function()
             local groupRole = getElementData(ped, "neon:ambientPedGroupRole") or "none"
             local threatRoot, threatLeaf = getThreatState(ped)
             local vehicleRoot, vehicleLeaf = getVehicleReactionState(ped)
-            log(("ped id=%d model=%d group=%s/%s syncer=%s streamed=%s profile=%s avoid=%s threat=%s/%s vehicle=%s/%s nativeStyle=%s move=%s speed=%.5f velocity=(%.5f,%.5f,%.5f) pos=(%.2f,%.2f,%.2f) heading=%.1f"):format(
+            log(("ped id=%d model=%d group=%s/%s syncer=%s streamed=%s profile=%s avoid=%s threat=%s/%s vehicle=%s/%s nativeStyle=%s move=%s speed=%.5f velocity=(%.5f,%.5f,%.5f) pos=(%.2f,%.2f,%.2f) groundZ=%.2f heading=%.1f"):format(
                     id, getElementModel(ped), tostring(groupId), tostring(groupRole), tostring(isElementSyncer(ped)),
                     tostring(isElementStreamedIn(ped)), profileRole, tostring(getAvoidanceState(ped)), tostring(threatRoot),
                     tostring(threatLeaf), tostring(vehicleRoot), tostring(vehicleLeaf), tostring(nativeStyle), tostring(moveState),
-                    horizontalSpeed, vx, vy, vz, x, y, z, heading))
+                    horizontalSpeed, vx, vy, vz, x, y, z, groundZ, heading))
         end
     end
 end, 2000, 0)
