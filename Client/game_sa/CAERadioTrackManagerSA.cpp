@@ -14,6 +14,9 @@
 
 namespace
 {
+    constexpr int         INVALID_TRACK_ID = -1;
+    constexpr signed char TRACK_TYPE_NONE = 6;
+
     int GetHardwareInt(DWORD function)
     {
         int value = -1;
@@ -34,6 +37,59 @@ namespace
             mov ecx, CLASS_CAEAudioHardware
             call function
         }
+    }
+
+    void ClearQueueEntry(SRadioPlaybackState& state, unsigned int index)
+    {
+        state.trackQueue[index] = INVALID_TRACK_ID;
+        state.trackTypes[index] = TRACK_TYPE_NONE;
+        state.trackIndexes[index] = -1;
+    }
+
+    void CanonicalisePlaybackQueue(SRadioPlaybackState& state, bool forcePrepend = false)
+    {
+        if (state.currentTrackId < 0)
+            return;
+
+        int currentIndex = -1;
+        if (!forcePrepend)
+        {
+            for (unsigned int i = 0; i < SRadioPlaybackState::QUEUE_SIZE; ++i)
+            {
+                if (state.trackQueue[i] == state.currentTrackId)
+                {
+                    currentIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+
+        if (currentIndex > 0)
+        {
+            const unsigned int shift = static_cast<unsigned int>(currentIndex);
+            const unsigned int remaining = SRadioPlaybackState::QUEUE_SIZE - shift;
+            for (unsigned int i = 0; i < remaining; ++i)
+            {
+                state.trackQueue[i] = state.trackQueue[i + shift];
+                state.trackTypes[i] = state.trackTypes[i + shift];
+                state.trackIndexes[i] = state.trackIndexes[i + shift];
+            }
+            for (unsigned int i = remaining; i < SRadioPlaybackState::QUEUE_SIZE; ++i)
+                ClearQueueEntry(state, i);
+        }
+        else if (currentIndex < 0)
+        {
+            for (unsigned int i = SRadioPlaybackState::QUEUE_SIZE - 1; i > 0; --i)
+            {
+                state.trackQueue[i] = state.trackQueue[i - 1];
+                state.trackTypes[i] = state.trackTypes[i - 1];
+                state.trackIndexes[i] = state.trackIndexes[i - 1];
+            }
+        }
+
+        state.trackQueue[0] = state.currentTrackId;
+        state.trackTypes[0] = static_cast<signed char>(state.currentTrackType);
+        state.trackIndexes[0] = static_cast<signed char>(state.currentTrackIndex);
     }
 }
 
@@ -164,9 +220,10 @@ bool CAERadioTrackManagerSA::GetPlaybackState(SRadioPlaybackState& state) const
                     trackInterface->stationsListDown;
     state.stationId = settings.currentRadioStation;
     state.mode = static_cast<int>(trackInterface->trackMode);
-    state.currentTrackId = GetHardwareInt(FUNC_CAEAudioHardware_GetPlayingTrackID);
-    state.currentTrackType = settings.currentTrackType;
-    state.currentTrackIndex = settings.currentTrackIndex;
+
+    const int playingTrackId = GetHardwareInt(FUNC_CAEAudioHardware_GetPlayingTrackID);
+    const int activeTrackId = GetHardwareInt(FUNC_CAEAudioHardware_GetActiveTrackID);
+    state.currentTrackId = playingTrackId >= 0 ? playingTrackId : activeTrackId;
     state.playTimeMs = GetHardwareInt(FUNC_CAEAudioHardware_GetTrackPlayTime);
     state.trackLengthMs = GetHardwareInt(FUNC_CAEAudioHardware_GetTrackLengthMs);
     state.trackFlags = settings.trackFlags;
@@ -176,6 +233,39 @@ bool CAERadioTrackManagerSA::GetPlaybackState(SRadioPlaybackState& state) const
         state.trackQueue[i] = settings.trackQueue[i];
         state.trackTypes[i] = static_cast<signed char>(settings.trackTypes[i]);
         state.trackIndexes[i] = settings.trackIndexes[i];
+    }
+
+    state.currentTrackType = settings.currentTrackType;
+    state.currentTrackIndex = settings.currentTrackIndex;
+
+    bool currentIsPrevious = false;
+    if (state.currentTrackId >= 0)
+    {
+        int matchingQueueIndex = -1;
+        for (unsigned int i = 0; i < SRadioPlaybackState::QUEUE_SIZE; ++i)
+        {
+            if (state.trackQueue[i] == state.currentTrackId)
+            {
+                matchingQueueIndex = static_cast<int>(i);
+                break;
+            }
+        }
+
+        if (matchingQueueIndex >= 0)
+        {
+            state.currentTrackType = state.trackTypes[matchingQueueIndex];
+            state.currentTrackIndex = state.trackIndexes[matchingQueueIndex];
+        }
+        else if (settings.prevTrackId == state.currentTrackId)
+        {
+            state.currentTrackType = settings.prevTrackType;
+            state.currentTrackIndex = settings.prevTrackIndex;
+            currentIsPrevious = true;
+        }
+
+        // The audio thread can switch to queue[1] before the radio manager rotates its queue.
+        // Return a coherent snapshot where queue[0] is always the hardware-current track.
+        CanonicalisePlaybackQueue(state, currentIsPrevious);
     }
 
     return true;
@@ -190,31 +280,27 @@ bool CAERadioTrackManagerSA::SetPlaybackState(const SRadioPlaybackState& state)
     if (!trackInterface)
         return false;
 
+    SRadioPlaybackState normalisedState = state;
+    CanonicalisePlaybackQueue(normalisedState);
+
     auto settings = trackInterface->activeSettings;
-    settings.currentRadioStation = state.stationId;
-    settings.currentTrackId = state.currentTrackId;
+    settings.currentRadioStation = normalisedState.stationId;
+    settings.currentTrackId = normalisedState.currentTrackId;
     settings.prevTrackId = -1;
-    settings.trackPlayTime = state.playTimeMs;
-    settings.trackLengthInMS = state.trackLengthMs;
-    settings.trackFlags = state.trackFlags;
-    settings.currentTrackType = static_cast<std::uint8_t>(state.currentTrackType);
-    settings.currentTrackIndex = static_cast<std::int8_t>(state.currentTrackIndex);
-    settings.prevTrackType = 6;
+    settings.trackPlayTime = normalisedState.playTimeMs;
+    settings.trackLengthInMS = normalisedState.trackLengthMs;
+    settings.trackFlags = normalisedState.trackFlags;
+    settings.currentTrackType = static_cast<std::uint8_t>(normalisedState.currentTrackType);
+    settings.currentTrackIndex = static_cast<std::int8_t>(normalisedState.currentTrackIndex);
+    settings.prevTrackType = TRACK_TYPE_NONE;
     settings.prevTrackIndex = -1;
 
     for (unsigned int i = 0; i < SRadioPlaybackState::QUEUE_SIZE; ++i)
     {
-        settings.trackQueue[i] = state.trackQueue[i];
-        settings.trackTypes[i] = static_cast<std::uint8_t>(state.trackTypes[i]);
-        settings.trackIndexes[i] = state.trackIndexes[i];
+        settings.trackQueue[i] = normalisedState.trackQueue[i];
+        settings.trackTypes[i] = static_cast<std::uint8_t>(normalisedState.trackTypes[i]);
+        settings.trackIndexes[i] = normalisedState.trackIndexes[i];
     }
-
-    // The first queued stream is what RADIO_STARTING passes to CAEAudioHardware::PlayTrack.
-    // Canonicalise it to the supplied current clip so applying a snapshot cannot accidentally
-    // resume the previous queue head during a transition.
-    settings.trackQueue[0] = state.currentTrackId;
-    settings.trackTypes[0] = static_cast<std::uint8_t>(state.currentTrackType);
-    settings.trackIndexes[0] = static_cast<std::int8_t>(state.currentTrackIndex);
 
     // CAEStreamThread keeps the existing decoder when the track id is unchanged. Queueing a
     // stop first makes its next service pass rebuild the decoder and honour the requested seek.
