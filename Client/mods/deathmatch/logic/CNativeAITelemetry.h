@@ -14,6 +14,7 @@
 class CClientPed;
 class NetBitStreamInterface;
 struct SNativeAIGroupDecision;
+struct SNativeInstantHitResolved;
 
 enum class ENativeAITelemetryCategory : std::uint8_t
 {
@@ -22,6 +23,7 @@ enum class ENativeAITelemetryCategory : std::uint8_t
     NETWORK,
     OWNERSHIP,
     GROUP_DECISION,
+    WEAPON,
 };
 
 // Packet metadata is deliberately transport-agnostic. localSequence numbers a
@@ -47,6 +49,7 @@ struct SNativeAITelemetryPacket
     CVector velocity{};
 
     const SNativeTaskLocomotionSync*            locomotion{};
+    const SNativeTaskWeaponPresentationSync*    weaponPresentation{};
     const SNativeTaskAnimationPresentationSync* animation{};
 };
 
@@ -95,4 +98,5 @@ public:
                                         const SNativeAITelemetryPacket* packet = nullptr) noexcept;
     static void          RecordPedRotationEvent(const char* event, CClientPed* ped, const SNativeAIRotationTelemetry& rotation) noexcept;
     static void          RecordGroupDecision(const SNativeAIGroupDecision& decision) noexcept;
+    static void          RecordInstantHitResolved(const SNativeInstantHitResolved& resolved) noexcept;
 };

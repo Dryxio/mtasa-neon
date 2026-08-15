@@ -189,6 +189,7 @@ public:
     void  SetFarClipDistance(float fDistance);
     void  RestoreFarClipDistance();
     void  SetExtendedFarClipPreference(bool bEnabled, float fDistance) override;
+    void  RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim) override;
     float GetNearClipDistance();
     void  SetNearClipDistance(float fDistance);
     void  RestoreNearClipDistance();
@@ -274,6 +275,7 @@ public:
     void           SetPostWeaponFireHandler(PostWeaponFireHandler* pHandler);
     void           SetBulletImpactHandler(BulletImpactHandler* pHandler);
     void           SetBulletFireHandler(BulletFireHandler* pHandler);
+    void           SetNativeInstantHitResolvedHandler(NativeInstantHitResolvedHandler* pHandler) override;
     void           SetDrawRadarAreasHandler(DrawRadarAreasHandler* pRadarAreasHandler);
     void           SetRender3DStuffHandler(Render3DStuffHandler* pHandler);
     void           SetPreRenderSkyHandler(PreRenderSkyHandler* pHandler);

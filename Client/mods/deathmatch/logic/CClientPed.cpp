@@ -6796,7 +6796,17 @@ bool CClientPed::AddNativeDamageEvent(CClientPed* attackingPed, eWeaponType weap
         return false;
     }
 
-    return m_pPlayerPed->AddNativeDamageEvent(attackingPed->m_pPlayerPed, weaponType, hitZone, damageFactor, direction);
+    // The observer normally suppresses damage produced by the attacker's
+    // replicated weapon presentation. This call is different: the server has
+    // authenticated the owner's native hit and selected this local player as
+    // its authoritative victim. Scope that distinction to the exact pair for
+    // the synchronous AffectsPed/DamageHandler passes, then restore any outer
+    // replay context before returning.
+    CClientPed* const previousReplayVictim = attackingPed->m_pNativeDamageReplayVictim;
+    attackingPed->m_pNativeDamageReplayVictim = this;
+    const bool accepted = m_pPlayerPed->AddNativeDamageEvent(attackingPed->m_pPlayerPed, weaponType, hitZone, damageFactor, direction);
+    attackingPed->m_pNativeDamageReplayVictim = previousReplayVictim;
+    return accepted;
 }
 
 void CClientPed::ApplyNativeEventProfileState()
@@ -6828,6 +6838,13 @@ void CClientPed::ApplyNativeEventProfileState()
     // strikes. Recompute this with the owner-only profile state so handoff and
     // release fence the old peer automatically.
     m_pPlayerPed->SetNativeFightUsesNonPlayerBehavior(GetType() == CCLIENTPED && (m_bMissionActor || ambientActive));
+    // FireInstantHit's player shot-sync path replaces the explicit target with
+    // replicated player aim. A native ambient owner, like a mission actor,
+    // must keep the target selected by CTaskSimpleUseGun. Recompute the policy
+    // from current authority so observer/released peers immediately return to
+    // ordinary script-ped weapon processing after a handoff.
+    if (m_remoteDataStorage)
+        m_remoteDataStorage->SetProcessPlayerWeapon(!(m_bMissionActor || ambientActive));
     m_pPlayerPed->SetNativeMissionEventProfileActive(missionActive);
     m_pPlayerPed->SetNativeAmbientWanderEventProfile(ambientSelected, ambientActive);
 }

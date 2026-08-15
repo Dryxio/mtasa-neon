@@ -21,6 +21,8 @@
 #include <../Client/game_sa/CAnimBlendStaticAssociationSA.h>
 
 class CEntitySAInterface;
+class CEventDamageSAInterface;
+class CPedSAInterface;
 
 struct SRwResourceStats
 {
@@ -67,6 +69,20 @@ struct SVehicleWeaponHitEvent
     int                 iColSurface;
 };
 
+// Snapshot of the standard on-foot FireInstantHit primary line-of-sight
+// result. GTA stack outputs are copied or resolved through the game pools
+// before dispatch, so consumers never receive raw call-frame pointers.
+struct SNativeInstantHitResolved
+{
+    class CPed*    pInitiator{};
+    class CEntity* pTargetArgument{};
+    class CEntity* pHitEntity{};
+    CVector        vecRayStart{};
+    CVector        vecRayEnd{};
+    eWeaponType    weaponType{WEAPONTYPE_UNARMED};
+    bool           lineOfSightHit{};
+};
+
 class CAnimBlendAssociationSAInterface;
 class CAnimBlendStaticAssociationSAInterface;
 class CAnimBlendAssocGroupSAInterface;
@@ -83,6 +99,7 @@ typedef bool(PreWeaponFireHandler)(class CPlayerPed* pPlayer, bool bStopIfUsingB
 typedef void(PostWeaponFireHandler)();
 typedef void(BulletImpactHandler)(class CPed* pInitiator, class CEntity* pVictim, const CVector* pvecStartPosition, const CVector* pvecEndPosition);
 typedef void(BulletFireHandler)(class CPed* pInitiator, const CVector* pvecStartPosition, const CVector* pvecEndPosition);
+typedef void(NativeInstantHitResolvedHandler)(const SNativeInstantHitResolved& resolved);
 typedef bool(DamageHandler)(class CPed* pDamagePed, class CEventDamage* pEvent);
 typedef void(DeathHandler)(class CPed* pKilledPed, unsigned char ucDeathReason, unsigned char ucBodyPart);
 typedef bool(FireHandler)(class CEntitySAInterface* target, class CEntitySAInterface* creator);
@@ -493,4 +510,6 @@ public:
     virtual void           SetGangTagSprayHandler(GangTagSprayHandler* pHandler) = 0;
     virtual bool           SetGangTagSprayEnabled(CObjectSAInterface* pObject, bool bEnabled) = 0;
     virtual void           SetExtendedFarClipPreference(bool bEnabled, float fDistance) = 0;
+    virtual void           RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim) = 0;
+    virtual void           SetNativeInstantHitResolvedHandler(NativeInstantHitResolvedHandler* pHandler) = 0;
 };

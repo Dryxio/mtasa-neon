@@ -31,6 +31,22 @@ local stats = {
     missReasons = {},
 }
 
+local gangStandardWeaponStats = {
+    [69] = 40,
+    [71] = 200,
+    [75] = 50,
+    [77] = 200,
+}
+
+local trafficNativeDamageWeapons = {
+    [0] = true,
+    [22] = true,
+    [24] = true,
+    [28] = true,
+    [30] = true,
+    [32] = true,
+}
+
 local function log(message, level)
     if debugEnabled or (level or 0) > 1 then
         outputDebugString("[ped-traffic][client] " .. message, level or 3)
@@ -476,6 +492,41 @@ local function failGroupAssignment(task, reason)
     releaseGroupAssignment(task, true)
 end
 
+local function captureGroupWeaponState(task)
+    local ready = true
+    local rows = {}
+    for _, ped in ipairs(task.peds) do
+        local expected = tonumber(getElementData(ped, "neon:ambientPedWeapon")) or 0
+        local expectedAmmo = tonumber(getElementData(ped, "neon:ambientPedWeaponAmmo")) or 0
+        local expectedClipAmmo = tonumber(getElementData(ped, "neon:ambientPedWeaponClipAmmo")) or 0
+        local weapon = tonumber(getPedWeapon(ped)) or -1
+        local totalAmmo = tonumber(getPedTotalAmmo(ped)) or 0
+        local clipAmmo = tonumber(getPedAmmoInClip(ped)) or 0
+        local weaponStats = {}
+        local statsConverged = true
+        for stat, expectedValue in pairs(gangStandardWeaponStats) do
+            local actualValue = tonumber(getPedStat(ped, stat)) or -1
+            weaponStats[tostring(stat)] = actualValue
+            statsConverged = statsConverged and actualValue == expectedValue
+        end
+        local converged = weapon == expected and totalAmmo == expectedAmmo and clipAmmo == expectedClipAmmo and statsConverged
+        ready = ready and converged
+        rows[#rows + 1] = {
+            trafficId = getElementData(ped, "neon:ambientPedTrafficId"),
+            expected = expected,
+            expectedAmmo = expectedAmmo,
+            expectedClipAmmo = expectedClipAmmo,
+            weapon = weapon,
+            totalAmmo = totalAmmo,
+            clipAmmo = clipAmmo,
+            weaponStats = weaponStats,
+            statsConverged = statsConverged,
+            converged = converged,
+        }
+    end
+    return ready, rows
+end
+
 local function beginGroupAssignment(task)
     if groupAssignments[task.id] ~= task then
         return
@@ -488,6 +539,7 @@ local function beginGroupAssignment(task)
     end
 
     local ready = true
+    local readinessReason = "group-stream-or-syncer-timeout"
     for _, ped in ipairs(task.peds) do
         if not isElement(ped) then
             return failGroupAssignment(task, "group-member-missing")
@@ -507,13 +559,19 @@ local function beginGroupAssignment(task)
         end
     end
 
+    local weaponsReady, weaponStates = captureGroupWeaponState(task)
+    if not weaponsReady then
+        ready = false
+        readinessReason = "group-weapon-state-timeout"
+    end
+
     if not ready then
         if getTickCount() - task.requestedAt < 10000 then
             clearTimer(task, "retryTimer")
             task.retryTimer = setTimer(function() beginGroupAssignment(task) end, 200, 1)
             return
         end
-        return failGroupAssignment(task, "group-stream-or-syncer-timeout")
+        return failGroupAssignment(task, readinessReason)
     end
 
     for _, ped in ipairs(task.peds) do
@@ -534,7 +592,7 @@ local function beginGroupAssignment(task)
     -- The deterministic residency test treats this evidence as the authority
     -- commit point. Carry the collision-readiness proof used by this exact
     -- branch so the server can reject an acceptance that races the lease.
-    reportGroup(task, "accepted", {collisionReady = ready})
+    reportGroup(task, "accepted", {collisionReady = ready, weapons = weaponStates})
     log(("group-accepted group=%d epoch=%d members=%d reason=%s"):format(
             task.id, task.epoch, #task.peds, tostring(task.reason)), 3)
     task.monitorTimer = setTimer(function()
@@ -1283,7 +1341,8 @@ addEventHandler("pedTraffic:nativePlayerDamage", resourceRoot, function(attackin
     if not enabled or not isElement(attackingPed) or getElementType(attackingPed) ~= "ped" or
         getElementData(attackingPed, "neon:ambientPedTraffic") ~= true or not isIntegerInRange(epoch, 1, 2147483647) or
         getElementData(attackingPed, "neon:ambientPedTrafficEpoch") ~= epoch or
-        not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 15) or
+        not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 46) or
+        trafficNativeDamageWeapons[weapon] ~= true or
         (bodypart ~= 0 and not isIntegerInRange(bodypart, 3, 9)) or not isIntegerInRange(damageFactor, 1, 200) or
         not isIntegerInRange(direction, 0, 3) or type(addPedNativeDamageEvent) ~= "function" then
         return

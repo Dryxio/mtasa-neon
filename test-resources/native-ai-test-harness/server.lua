@@ -7,7 +7,12 @@ local function isRotationKind(kind)
 end
 
 local function isHandoffKind(kind)
-    return kind == "handoff" or kind == "rotation_handoff"
+    return kind == "handoff" or kind == "rotation_handoff" or kind == "gang_armed_handoff"
+end
+
+local function isGangDecisionKind(kind)
+    return kind == "gang_unarmed_flee" or kind == "gang_armed_leader" or kind == "gang_armed_member" or
+        kind == "gang_armed_handoff" or kind == "gang_friendly_source"
 end
 
 -- GetStrikeDamage (GTA 1.0 US 0x61C740) reads the current move's damage byte
@@ -21,6 +26,23 @@ local canonicalGangMeleeFactors = {
     [15] = true,
     [25] = true,
 }
+
+local canonicalGangFirearmFactors = {
+    [22] = 25,
+    [24] = 140,
+    [28] = 20,
+    [30] = 30,
+    [32] = 20,
+}
+
+local standardWeaponStats = {
+    {69, 40},
+    {71, 200},
+    {75, 50},
+    {77, 200},
+}
+
+local weaponClipAmmo = {[22] = 17, [24] = 7, [28] = 50, [30] = 30, [32] = 50}
 
 local meleeStages = {
     "action_dispatched",
@@ -93,7 +115,7 @@ end
 local function announce(message, level)
     outputServerLog("[native-ai-harness] " .. message)
     if activeRun then
-        for _, player in ipairs({activeRun.owner, activeRun.victim}) do
+        for _, player in ipairs({activeRun.initialOwner, activeRun.victim}) do
             if isElement(player) then
                 outputChatBox("[native AI] " .. message, player, level == "fail" and 255 or 160,
                               level == "fail" and 90 or 225, level == "fail" and 90 or 255)
@@ -125,6 +147,19 @@ local function snapshotPlayer(player)
     for _, key in ipairs(NATIVE_AI_HARNESS_TRACE_KEYS) do
         traceData[key] = allData[key]
     end
+    local weapons = {}
+    local activeWeapon = getPedWeapon(player)
+    for slot = 0, 12 do
+        local weapon = getPedWeapon(player, slot)
+        if weapon and weapon ~= 0 then
+            weapons[#weapons + 1] = {
+                weapon = weapon,
+                ammo = getPedTotalAmmo(player, slot),
+                clip = getPedAmmoInClip(player, slot),
+                current = weapon == activeWeapon,
+            }
+        end
+    end
     return {
         x = x,
         y = y,
@@ -137,6 +172,7 @@ local function snapshotPlayer(player)
         health = getElementHealth(player),
         armor = getPedArmor(player),
         frozen = isElementFrozen(player),
+        weapons = weapons,
         traceData = traceData,
     }
 end
@@ -152,6 +188,11 @@ local function restorePlayer(player, snapshot)
     setElementHealth(player, snapshot.health)
     setPedArmor(player, snapshot.armor)
     setElementFrozen(player, snapshot.frozen)
+    takeAllWeapons(player)
+    for _, weapon in ipairs(snapshot.weapons or {}) do
+        giveWeapon(player, weapon.weapon, math.min(weapon.ammo, 9999), weapon.current == true)
+        setWeaponAmmo(player, weapon.weapon, weapon.ammo, weapon.clip)
+    end
     for _, key in ipairs(NATIVE_AI_HARNESS_TRACE_KEYS) do
         if snapshot.traceData[key] == nil then
             removeElementData(player, key)
@@ -180,7 +221,7 @@ local function setRunStep(actionId, step)
     end
     run.actionId = actionId
     run.step = step
-    setActorTrace(run.owner, "owner-player", actionId, step)
+    setActorTrace(run.initialOwner, "owner-player", actionId, step)
     setActorTrace(run.victim, isHandoffKind(run.kind) and "next-owner-player" or "victim-player", actionId, step)
     for index, ped in ipairs(run.peds) do
         setActorTrace(ped, "ped-" .. index, actionId, step)
@@ -197,26 +238,50 @@ local function cancelRunTimers(run)
     run.timers = {}
 end
 
-local function cleanupRun(reason)
-    local run = activeRun
-    if not run then
+local function finalizeCleanup(run)
+    if activeRun ~= run then
         return
     end
-    writeTrace("cleanup", {details = reason or "cleanup"})
     cancelRunTimers(run)
-    for _, player in ipairs({run.owner, run.victim}) do
-        if isElement(player) then
-            triggerClientEvent(player, "nativeAIHarness:stop", resourceRoot, run.id, reason or "cleanup")
-        end
-    end
     for _, ped in ipairs(run.peds) do
         if isElement(ped) then
             destroyElement(ped)
         end
     end
-    restorePlayer(run.owner, run.snapshots[run.owner])
+    restorePlayer(run.initialOwner, run.snapshots[run.initialOwner])
     restorePlayer(run.victim, run.snapshots[run.victim])
     activeRun = nil
+end
+
+local function cleanupRun(reason, immediate)
+    local run = activeRun
+    if not run or run.cleanupPending then
+        return
+    end
+    run.cleanupPending = true
+    run.cleanupAcks = {}
+    writeTrace("cleanup", {details = reason or "cleanup"})
+    cancelRunTimers(run)
+    for _, player in ipairs({run.initialOwner, run.victim}) do
+        if isElement(player) then
+            triggerClientEvent(player, "nativeAIHarness:stop", resourceRoot, run.id, reason or "cleanup")
+        else
+            run.cleanupAcks[player] = true
+        end
+    end
+    if immediate then
+        return finalizeCleanup(run)
+    end
+    -- Keep the exact ped elements alive until both clients have released
+    -- their native group leases. Destroying them in the same server frame as
+    -- the stop event leaves the client-side release without its GTA members
+    -- and can strand one of the eight stock group slots.
+    run.timers.cleanupAckTimeout = setTimer(function(expectedId)
+        if activeRun and activeRun.id == expectedId then
+            writeTrace("cleanup_ack_timeout", {details = "forcing cleanup after missing client acknowledgement"})
+            finalizeCleanup(activeRun)
+        end
+    end, 2000, 1, run.id)
 end
 
 local function finishRun(passed, reason)
@@ -228,7 +293,8 @@ local function finishRun(passed, reason)
     -- timeout or handoff callback must not append new scenario evidence after
     -- run_end while the short visual-cleanup grace period is still active.
     cancelRunTimers(run)
-    if run.kind == "melee" then
+    if run.kind == "melee" or (isGangDecisionKind(run.kind) and run.selectedResponse == "fight" and
+        run.kind ~= "gang_armed_handoff") then
         local missing = {}
         for _, stage in ipairs(meleeStages) do
             if not run.stages[stage] then
@@ -390,7 +456,34 @@ local function beginScheduledAction()
     if not run or run.finished then
         return
     end
-    if run.kind == "melee" then
+    if isGangDecisionKind(run.kind) and run.kind ~= "gang_armed_handoff" then
+        setRunStep("prepare", "settle")
+        run.pendingActionId = run.kind == "gang_friendly_source" and "friendly-source" or "firearm-threat"
+        run.actionDueAt = getTickCount() + NATIVE_AI_HARNESS.traceLeadTime
+        writeTrace("action_scheduled", {
+            action_id = run.pendingActionId,
+            due_relative_ms = run.actionDueAt - run.startedAt,
+            owner_actor_id = "owner-player",
+        })
+        run.timers.dispatch = setTimer(function(expectedId)
+            local active = activeRun
+            if not active or active.id ~= expectedId then
+                return
+            end
+            setRunStep(active.pendingActionId, "decision-dispatch")
+            local attackedPed = active.peds[active.scenario.attackedIndex]
+            local sourcePed = active.scenario.sourcePedIndex and active.peds[active.scenario.sourcePedIndex] or active.victim
+            triggerClientEvent(active.owner, "nativeAIHarness:decisionAttack", resourceRoot, active.id, active.epoch,
+                               active.actionId, attackedPed, sourcePed, active.scenario.expectedResponse)
+            writeStage("action_dispatched", {
+                action_id = active.actionId,
+                attacked_actor_id = active.actorByPed[attackedPed],
+                source_actor_id = active.actorByPed[sourcePed] or "victim-player",
+                expected_response = active.scenario.expectedResponse or false,
+                expected_source_type = active.scenario.expectedSourceType or false,
+            })
+        end, NATIVE_AI_HARNESS.traceLeadTime, 1, run.id)
+    elseif run.kind == "melee" then
         setRunStep("prepare", "settle")
         run.pendingActionId = "melee-attack"
         run.actionDueAt = getTickCount() + NATIVE_AI_HARNESS.traceLeadTime
@@ -470,7 +563,7 @@ local function startRun(caller, kind, ownerName, victimName)
     end
     local scenario = NATIVE_AI_HARNESS.scenarios[kind]
     if not scenario then
-        return outputChatBox("[native AI] Usage: /nativeai run melee|handoff|rotation|rotation_handoff [owner] [victim-or-next-owner]", caller,
+        return outputChatBox("[native AI] Unknown scenario. Use /nativeai status for the supported scenario list.", caller,
                              255, 180, 80)
     end
     local owner, victim, reason = resolveRoles(caller, ownerName, victimName)
@@ -489,6 +582,7 @@ local function startRun(caller, kind, ownerName, victimName)
         kind = kind,
         scenario = scenario,
         owner = owner,
+        initialOwner = owner,
         victim = victim,
         epoch = 1,
         actionId = "prepare",
@@ -508,6 +602,21 @@ local function startRun(caller, kind, ownerName, victimName)
     run.snapshots[victim] = snapshotPlayer(victim)
     placePlayer(owner, scenario.owner)
     placePlayer(victim, scenario.victim)
+    if isGangDecisionKind(kind) and kind ~= "gang_friendly_source" then
+        -- IsKillTaskAppropriate reads the threat ped's active weapon, not the
+        -- weapon field carried by CEventDamage. Pin the player source so the
+        -- all-unarmed group deterministically takes the firearm-threat branch.
+        takeAllWeapons(victim)
+        if not giveWeapon(victim, 22, 17, true) or getPedWeapon(victim) ~= 22 then
+            assertion("threat-active-firearm", false, 22, getPedWeapon(victim))
+            return finishRun(false, "failed to pin the deterministic firearm threat")
+        end
+        -- The native decision is intentionally random, but the resulting
+        -- bullet path must not depend on human movement during the capture.
+        -- The exact previous frozen state is already part of snapshotPlayer
+        -- and is restored by every cleanup path.
+        setElementFrozen(victim, true)
+    end
 
     for index, position in ipairs(scenario.peds) do
         local ped = createPed(scenario.pedModels[index], position[1], position[2], position[3], position[4])
@@ -519,6 +628,19 @@ local function startRun(caller, kind, ownerName, victimName)
         setElementDimension(ped, NATIVE_AI_HARNESS.dimension)
         setElementHealth(ped, 100)
         takeAllWeapons(ped)
+        local expectedWeapon = tonumber(scenario.pedWeapons and scenario.pedWeapons[index]) or 0
+        for _, stat in ipairs(standardWeaponStats) do
+            setPedStat(ped, stat[1], stat[2])
+        end
+        if expectedWeapon ~= 0 then
+            local clip = weaponClipAmmo[expectedWeapon]
+            if not clip or not giveWeapon(ped, expectedWeapon, 9999, true) or
+                not setWeaponAmmo(ped, expectedWeapon, 25001, clip) then
+                assertion("actor-weapon-state", false, expectedWeapon, getPedWeapon(ped))
+                return finishRun(false, "failed to apply deterministic vanilla weapon state")
+            end
+        end
+        setElementData(ped, "neon:nativeAIExpectedWeapon", expectedWeapon)
         -- MTA script peds wrap CPlayerPed and therefore default to
         -- STYLE_GRAB_KICK (15). Stock CPed starts at STYLE_STANDARD (4);
         -- pin it here before the native task so GetStrikeDamage reads the
@@ -533,22 +655,37 @@ local function startRun(caller, kind, ownerName, victimName)
         run.actorByPed[ped] = "ped-" .. index
     end
 
+    local traceActors = {
+        {actor_id = "owner-player", type = "player", role = "initial-owner", transform = scenario.owner},
+        {actor_id = isHandoffKind(kind) and "next-owner-player" or "victim-player", type = "player",
+         role = isHandoffKind(kind) and "next-owner" or "victim", transform = scenario.victim},
+    }
+    for index, position in ipairs(scenario.peds) do
+        local groupId = isRotationKind(kind) and false or "group-1"
+        for partitionIndex, partition in ipairs(scenario.groupPartitions or {}) do
+            for _, memberIndex in ipairs(partition) do
+                if memberIndex == index then groupId = "group-" .. partitionIndex end
+            end
+        end
+        traceActors[#traceActors + 1] = {
+            actor_id = "ped-" .. index,
+            type = "ped",
+            model = scenario.pedModels[index],
+            group_id = groupId,
+            owner_actor_id = "owner-player",
+            fighting_style = scenario.fightingStyle,
+            weapon = scenario.pedWeapons and scenario.pedWeapons[index] or 0,
+            transform = position,
+        }
+    end
+
     setRunStep("prepare", "wait-client-leases")
     writeTrace("run_start", {
         owner_actor_id = "owner-player",
         victim_actor_id = isHandoffKind(kind) and "next-owner-player" or "victim-player",
-        actors = {
-            {actor_id = "owner-player", type = "player", role = "initial-owner", transform = scenario.owner},
-            {actor_id = isHandoffKind(kind) and "next-owner-player" or "victim-player", type = "player",
-             role = isHandoffKind(kind) and "next-owner" or "victim", transform = scenario.victim},
-            {actor_id = "ped-1", type = "ped", model = scenario.pedModels[1],
-             group_id = isRotationKind(kind) and false or "group-1",
-             owner_actor_id = "owner-player", fighting_style = scenario.fightingStyle, transform = scenario.peds[1]},
-            {actor_id = "ped-2", type = "ped", model = scenario.pedModels[2],
-             group_id = isRotationKind(kind) and false or "group-1",
-             owner_actor_id = "owner-player", fighting_style = scenario.fightingStyle, transform = scenario.peds[2]},
-        },
+        actors = traceActors,
         epoch = run.epoch,
+        victim_input_pinned = isGangDecisionKind(kind) and kind ~= "gang_friendly_source",
     })
     announce(("Run %s: owner and %s roles assigned. Do not move; action is automatic."):format(
                  run.id, isHandoffKind(kind) and "next-owner" or "victim"))
@@ -582,10 +719,10 @@ addCommandHandler("nativeai", function(player, _, action, kind, ownerName, victi
                               activeRun.id, activeRun.scenario.id, activeRun.step, activeRun.actionId,
                               getPlayerName(activeRun.owner), getPlayerName(activeRun.victim)), player, 180, 220, 255)
         else
-            outputChatBox("[native AI] No active run. /nativeai run melee|handoff|rotation|rotation_handoff", player, 180, 220, 255)
+            outputChatBox("[native AI] No active run. Core: melee, handoff, rotation, rotation_handoff. Gang: gang_unarmed_flee, gang_armed_leader, gang_armed_member, gang_armed_handoff, gang_friendly_source.", player, 180, 220, 255)
         end
     else
-        outputChatBox("[native AI] /nativeai run melee|handoff|rotation|rotation_handoff [owner] [victim-or-next-owner]", player, 255, 180, 80)
+        outputChatBox("[native AI] /nativeai run <scenario> [owner] [victim-or-next-owner]", player, 255, 180, 80)
     end
 end)
 
@@ -624,7 +761,8 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
         return
     end
     writeTrace("client_evidence", {
-        actor_id = client == run.owner and "owner-player" or (isHandoffKind(run.kind) and "next-owner-player" or "victim-player"),
+        actor_id = client == run.initialOwner and "owner-player" or
+            (isHandoffKind(run.kind) and "next-owner-player" or "victim-player"),
         action_id = data.actionId and tostring(data.actionId) or run.actionId,
         evidence = tostring(evidence),
         details = data,
@@ -671,6 +809,18 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
             finishRun(false, "new owner failed to acquire native group")
         elseif run.kind == "handoff" then
             finishRun(true, "native group transferred to epoch 2")
+        elseif run.kind == "gang_armed_handoff" then
+            run.owner = run.victim
+            setRunStep("firearm-threat-after-handoff", "decision-dispatch")
+            local attackedPed = run.peds[run.scenario.attackedIndex]
+            triggerClientEvent(run.owner, "nativeAIHarness:decisionAttack", resourceRoot, run.id, run.epoch,
+                               run.actionId, attackedPed, run.victim, run.scenario.expectedResponse)
+            writeStage("handoff_decision_dispatched", {
+                action_id = run.actionId,
+                attacked_actor_id = run.actorByPed[attackedPed],
+                owner_actor_id = "next-owner-player",
+                epoch = run.epoch,
+            })
         else
             beginRotationSequence(run.victim)
         end
@@ -721,7 +871,45 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
         end
         action.converged[client] = data
         completeRotationActionIfReady(run, actionId)
-    elseif evidence == "damage-applied" and client == run.victim and run.kind == "melee" then
+    elseif evidence == "decision-injected" and client == run.owner and isGangDecisionKind(run.kind) then
+        if not assertion("native-group-decision-injection", data.accepted == true, true, data.accepted, data) then
+            finishRun(false, "native group decision event was rejected")
+        end
+    elseif evidence == "collective-response-timeout" and client == run.owner and isGangDecisionKind(run.kind) then
+        assertion("collective-" .. tostring(data.response), false, "every group member", data.members, data)
+        finishRun(false, "group did not reach the expected collective response")
+    elseif evidence == "collective-response" and client == run.owner and isGangDecisionKind(run.kind) then
+        local response = tostring(data.response)
+        local responseAllowed = response == run.scenario.expectedResponse or
+                                    run.scenario.branchAware == true and response == "flee"
+        if not assertion("native-selected-collective-response", responseAllowed, run.scenario.branchAware and "fight|flee" or
+                             run.scenario.expectedResponse, response, data) then
+            return finishRun(false, "group allocation did not match an allowed native response")
+        end
+        writeStage("collective_response_observed", {
+            action_id = run.actionId,
+            response = response,
+            members = data.members,
+            epoch = run.epoch,
+        })
+        run.selectedResponse = response
+        assertion("collective-" .. response, true, response == "fight" and "armed attack plus unarmed cover" or
+                      "every group member", "matched", data)
+        if response == "flee" and run.scenario.branchAware then
+            finishRun(true, "weighted native decision selected the collective flee branch; damage chain not exercised")
+        elseif run.scenario.expectedResponse == "flee" then
+            finishRun(true, "unarmed group selected the collective firearm-threat flee path")
+        elseif run.kind == "gang_armed_handoff" then
+            finishRun(true, "armed collective fight response survived the owner handoff")
+        end
+    elseif evidence == "classification-captured" and client == run.owner and run.kind == "gang_friendly_source" then
+        writeStage("classification_trace_captured", {
+            action_id = run.actionId,
+            expected_source_type = run.scenario.expectedSourceType,
+        })
+        finishRun(true, "classification trace captured; analyzer must confirm event_source_type=2")
+    elseif evidence == "damage-applied" and client == run.victim and
+        (run.kind == "melee" or run.scenario.expectedResponse == "fight") then
         local before = tonumber(data.healthBefore)
         local after = tonumber(data.healthAfter)
         writeStage("victim_injection_result", {
@@ -751,7 +939,7 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
                 tonumber(data.armorAfter) or -1),
         })
         finishRun(applied == true,
-                  applied and "remote native melee reached the authoritative victim" or
+                  applied and "remote native attack reached the authoritative victim" or
                       "victim replay produced no health loss")
     end
 end)
@@ -760,7 +948,8 @@ addEvent("nativeAIHarness:nativeDamageObserved", true)
 addEventHandler("nativeAIHarness:nativeDamageObserved", resourceRoot,
                 function(runId, epoch, actionId, attackingPed, victim, nonce, weapon, bodypart, damageFactor, direction)
     local run = activeRun
-    if source ~= resourceRoot or not run or run.finished or run.kind ~= "melee" or client ~= run.owner or
+    if source ~= resourceRoot or not run or run.finished or
+        (run.kind ~= "melee" and run.scenario.expectedResponse ~= "fight") or client ~= run.owner or
         run.id ~= tostring(runId) then
         return
     end
@@ -830,8 +1019,10 @@ addEventHandler("nativeAIHarness:nativeDamageObserved", resourceRoot,
         return reject("bodypart", "0 or 3..9", bodypart)
     elseif getPedFightingStyle(attackingPed) ~= run.scenario.fightingStyle then
         return reject("fighting-style", run.scenario.fightingStyle, getPedFightingStyle(attackingPed))
-    elseif not damageFactor or not canonicalGangMeleeFactors[damageFactor] then
-        return reject("damage-factor", "5|6|9|15|25", damageFactor)
+    elseif not damageFactor or
+        (weapon == 0 and not canonicalGangMeleeFactors[damageFactor]) or
+        (weapon ~= 0 and canonicalGangFirearmFactors[weapon] ~= damageFactor) then
+        return reject("damage-factor", weapon == 0 and "5|6|9|15|25" or canonicalGangFirearmFactors[weapon], damageFactor)
     elseif not direction or direction < 0 or direction > 3 then
         return reject("direction", "0..3", direction)
     end
@@ -839,8 +1030,9 @@ addEventHandler("nativeAIHarness:nativeDamageObserved", resourceRoot,
     local vx, vy, vz = getElementPosition(victim)
     if getElementDimension(attackingPed) ~= getElementDimension(victim) or
         getElementInterior(attackingPed) ~= getElementInterior(victim) or
-        getDistanceBetweenPoints3D(px, py, pz, vx, vy, vz) > NATIVE_AI_HARNESS.meleeDamageRadius then
-        return reject("distance-or-world", "same world within " .. NATIVE_AI_HARNESS.meleeDamageRadius .. "m",
+        getDistanceBetweenPoints3D(px, py, pz, vx, vy, vz) > (weapon == 30 and 75 or weapon == 0 and NATIVE_AI_HARNESS.meleeDamageRadius or 40) then
+        local allowedRadius = weapon == 30 and 75 or weapon == 0 and NATIVE_AI_HARNESS.meleeDamageRadius or 40
+        return reject("distance-or-world", "same world within " .. allowedRadius .. "m",
                       ("distance=%.2f"):format(getDistanceBetweenPoints3D(px, py, pz, vx, vy, vz)))
     end
     local previous = run.nonceByPed[attackingPed] or 0
@@ -869,8 +1061,29 @@ addEventHandler("nativeAIHarness:nativeDamageObserved", resourceRoot,
                        run.actionId, attackingPed, nonce, weapon, bodypart, damageFactor, direction)
 end)
 
+addEvent("nativeAIHarness:stopped", true)
+addEventHandler("nativeAIHarness:stopped", resourceRoot, function(runId, groupReleased)
+    local run = activeRun
+    if source ~= resourceRoot or not run or not run.cleanupPending or run.id ~= tostring(runId) or
+        (client ~= run.initialOwner and client ~= run.victim) or run.cleanupAcks[client] then
+        return
+    end
+    run.cleanupAcks[client] = true
+    writeTrace("cleanup_ack", {
+        actor_id = client == run.initialOwner and "owner-player" or
+            (isHandoffKind(run.kind) and "next-owner-player" or "victim-player"),
+        group_released = groupReleased == true,
+    })
+    if groupReleased ~= true then
+        writeTrace("cleanup_release_failure", {details = "client native group release returned false"})
+    end
+    if run.cleanupAcks[run.initialOwner] and run.cleanupAcks[run.victim] then
+        finalizeCleanup(run)
+    end
+end)
+
 addEventHandler("onPlayerQuit", root, function()
-    if activeRun and (source == activeRun.owner or source == activeRun.victim) then
+    if activeRun and (source == activeRun.initialOwner or source == activeRun.victim) then
         finishRun(false, "participant quit before verdict")
         cleanupRun("participant-quit")
     end
@@ -878,7 +1091,7 @@ end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
     finishRun(false, "resource stopped before verdict")
-    cleanupRun("resource-stop")
+    cleanupRun("resource-stop", true)
 end)
 
-outputServerLog("[native-ai-harness] Ready: /nativeai run melee|handoff|rotation|rotation_handoff [owner] [victim-or-next-owner]")
+outputServerLog("[native-ai-harness] Ready: core melee/handoff/rotation plus gang_unarmed_flee, gang_armed_leader, gang_armed_member, gang_armed_handoff, gang_friendly_source")

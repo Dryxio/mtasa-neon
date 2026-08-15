@@ -24,6 +24,11 @@ Start the resource, connect two clients and run one of:
 /nativeai run rotation <owner> <observer>
 /nativeai run rotation_handoff
 /nativeai run rotation_handoff <owner> <next-owner>
+/nativeai run gang_unarmed_flee
+/nativeai run gang_armed_leader
+/nativeai run gang_armed_member
+/nativeai run gang_armed_handoff
+/nativeai run gang_friendly_source
 /nativeai status
 /nativeai cleanup
 ```
@@ -125,6 +130,36 @@ The harness controls every input relevant to these scenarios. It does not
 claim to seed GTA's process-global random generator; future scenarios which
 exercise a random decision must record the selected native branch or add a
 dedicated engine seed/capture facility before claiming deterministic replay.
+
+The combat scenarios use three fixed Ballas actors; the classification case
+uses two separate Ballas groups (three target members plus two source members).
+Every actor uses the exact ambient CPed
+weapon state: total ammo `25001`, STD skill thresholds, and full clips. They
+inject one real native damage-response event into GTA's group instead of
+forcing `setPedKillOnFoot`. The firearm source is frozen for the capture and
+its exact previous frozen state is restored during cleanup, so a human input
+cannot turn an aim or impact check into a different run.
+
+The decision oracle is branch-aware because GTA's weighted group decision uses
+the process-global RNG. A selected `TASK_GROUP_FLEE_THREAT` must allocate flee
+tasks. A selected `TASK_GROUP_KILL_THREATS_BASIC` makes armed members attack and
+assigns `TASK_SEEK_COVER_UNTIL_TARGET_DEAD` to participating unarmed members;
+an all-unarmed firearm response is converted to flee by GTA's appropriateness
+check. The analyzer correlates the selected C++ task with the allocation seen
+by the harness. Only an actually selected fight branch requires the owner →
+server → authoritative-victim damage chain. `gang_armed_handoff` repeats the
+collective decision after epoch 2 acquisition. `gang_friendly_source` uses a
+managed group member as the event source; the analyzer owns the strict
+`event_source_type=2` verdict from C++ group-decision telemetry.
+
+For armed fight branches, owner telemetry emits
+`native_weapon_instant_hit_resolved` immediately after the standard on-foot
+primary `FireInstantHit` line-of-sight callsite. The copied record contains the
+ray, weapon and LOS result. Target and hit identities/models are included only
+when MTA resolves them through its entity pools; raw GTA entity fields and the
+temporary collision point are deliberately excluded. This distinguishes a
+genuine world miss from a safely resolved hit that failed to reach the damage
+bridge without changing GTA's aim, impact or damage behavior.
 
 The intended debugging rule is to compare owner, server and observer/victim
 timelines and identify the first divergent event before changing behavior.

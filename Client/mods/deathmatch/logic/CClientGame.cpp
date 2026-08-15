@@ -281,6 +281,8 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pMultiplayer->SetPostWeaponFireHandler(CClientGame::PostWeaponFire);
     g_pMultiplayer->SetBulletImpactHandler(CClientGame::BulletImpact);
     g_pMultiplayer->SetBulletFireHandler(CClientGame::BulletFire);
+    if (CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::WEAPON))
+        g_pMultiplayer->SetNativeInstantHitResolvedHandler(CClientGame::NativeInstantHitResolved);
     g_pMultiplayer->SetExplosionHandler(CClientExplosionManager::Hook_StaticExplosionCreation);
     g_pMultiplayer->SetBreakTowLinkHandler(CClientGame::StaticBreakTowLinkHandler);
     g_pMultiplayer->SetDrawRadarAreasHandler(CClientGame::StaticDrawRadarAreasHandler);
@@ -515,6 +517,7 @@ CClientGame::~CClientGame()
     g_pMultiplayer->SetPostWeaponFireHandler(NULL);
     g_pMultiplayer->SetBulletImpactHandler(NULL);
     g_pMultiplayer->SetBulletFireHandler(NULL);
+    g_pMultiplayer->SetNativeInstantHitResolvedHandler(nullptr);
     g_pMultiplayer->SetExplosionHandler(NULL);
     g_pMultiplayer->SetBreakTowLinkHandler(NULL);
     g_pMultiplayer->SetDrawRadarAreasHandler(NULL);
@@ -4494,8 +4497,11 @@ bool CClientGame::DamageHandler(CPed* pDamagePed, CEventDamage* pEvent)
     // A remote native-task presentation exists only to reproduce weapon
     // animation, audio and particles. Its syncer remains the sole owner of
     // gameplay, so discard any damage GTA derives from the viewer-side clone.
+    // The resource-authenticated replay is deliberately executed with that
+    // same remote ped as its inflictor; admit only its exact synchronous
+    // attacker/victim pair so the authoritative victim can consume the hit.
     CClientPed* pPresentationPed = DynamicCast<CClientPed>(pInflictingEntity);
-    if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+    if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive() && !pPresentationPed->IsNativeDamageReplayFor(pDamagedPed))
         return false;
 
     // Remote player health is authoritative on the victim's client. GTA can
@@ -6134,6 +6140,11 @@ void CClientGame::BulletImpact(CPed* pInitiator, CEntity* pVictim, const CVector
             pInitiatorPed->SetBulletImpactData(pClientVictim, vecCollision);
         }
     }
+}
+
+void CClientGame::NativeInstantHitResolved(const SNativeInstantHitResolved& resolved)
+{
+    CNativeAITelemetry::RecordInstantHitResolved(resolved);
 }
 
 void CClientGame::BulletFire(CPed* pInitiator, const CVector* pStartPosition, const CVector* pEndPosition)

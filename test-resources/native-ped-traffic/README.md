@@ -4,10 +4,11 @@ This test resource creates a small shared ambient pedestrian population without
 reenabling GTA's unmanaged `CPopulation::AddToPopulation` loop.
 
 The server first selects one versioned vanilla campaign population state. The
-default `post_intro` preset starts from the stock 336-zone main.scm bootstrap,
-then applies the first playable free-roam mutation (Grove strength 10 in GAN1
-and GAN2). Every client must acknowledge the same revision before it may own AI
-or propose a spawn; stale profiles and candidates are rejected.
+default `post_home_coming` preset starts from the stock 336-zone main.scm
+bootstrap, applies the late-story territory distribution, and restores Grove
+strength 40 in GAN1 and GAN2 while clearing Ballas there. Every client must
+acknowledge the same revision before it may own AI or propose a spawn; stale
+profiles and candidates are rejected.
 
 Each ready client keeps GTA's stock zone-ped model residency current. It also reports
 GTA's read-only population targets for the current zone, two-hour time bucket,

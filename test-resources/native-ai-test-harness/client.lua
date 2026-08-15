@@ -4,6 +4,14 @@ local function isRotationKind(kind)
     return kind == "rotation" or kind == "rotation_handoff"
 end
 
+local function isGangDecisionKind(kind)
+    return kind == "gang_unarmed_flee" or kind == "gang_armed_leader" or kind == "gang_armed_member" or
+        kind == "gang_armed_handoff" or kind == "gang_friendly_source"
+end
+
+local harnessWeaponClips = {[22] = 17, [24] = 7, [28] = 50, [30] = 30, [32] = 50}
+local harnessStandardWeaponStats = {[69] = 40, [71] = 200, [75] = 50, [77] = 200}
+
 local function report(evidence, data)
     if activeRun then
         triggerServerEvent("nativeAIHarness:evidence", resourceRoot, activeRun.id, activeRun.epoch, evidence, data or {})
@@ -23,10 +31,17 @@ local function stopRun()
         return
     end
     clearTimer(run, "prepareTimer")
+    local groupReleased = true
     if run.groupToken and type(releasePedNativeGroup) == "function" then
-        releasePedNativeGroup(run.groupToken)
+        groupReleased = releasePedNativeGroup(run.groupToken) == true
     end
     run.groupToken = nil
+    for _, token in ipairs(run.groupTokens or {}) do
+        if token and type(releasePedNativeGroup) == "function" then
+            groupReleased = releasePedNativeGroup(token) == true and groupReleased
+        end
+    end
+    run.groupTokens = {}
     for ped, token in pairs(run.profileTokens) do
         if token and type(releasePedNativeEventProfile) == "function" then
             releasePedNativeEventProfile(token)
@@ -37,6 +52,7 @@ local function stopRun()
         end
     end
     activeRun = nil
+    return groupReleased
 end
 
 local function acquireProfiles(run)
@@ -75,6 +91,17 @@ local function acquireOwnerGroup(run)
         if getPedFightingStyle(ped) ~= run.fightingStyle then
             return false, "owner ped fighting style not converged"
         end
+        local expectedWeapon = tonumber(getElementData(ped, "neon:nativeAIExpectedWeapon")) or 0
+        if getPedWeapon(ped) ~= expectedWeapon or
+            (expectedWeapon ~= 0 and
+             (getPedTotalAmmo(ped) ~= 25001 or getPedAmmoInClip(ped) ~= harnessWeaponClips[expectedWeapon])) then
+            return false, "owner ped weapon state not converged"
+        end
+        for stat, expectedValue in pairs(harnessStandardWeaponStats) do
+            if getPedStat(ped, stat) ~= expectedValue then
+                return false, "owner ped STD weapon skill not converged"
+            end
+        end
         if not setPedUseNativeWalkingStyle(ped, true) then
             return false, "native walking style refused"
         end
@@ -86,6 +113,25 @@ local function acquireOwnerGroup(run)
     -- their inert PlayerOnFoot default while melee/handoff still exercise the
     -- real native group implementation.
     if isRotationKind(run.kind) then
+        return true
+    end
+    if run.scenario.groupPartitions then
+        if #run.groupTokens == 0 then
+            for _, partition in ipairs(run.scenario.groupPartitions) do
+                local members = {}
+                for _, index in ipairs(partition) do members[#members + 1] = run.peds[index] end
+                local token = acquirePedNativeGroup(members, "ambient-random")
+                if not token then
+                    return false, "partitioned native group acquisition refused"
+                end
+                run.groupTokens[#run.groupTokens + 1] = token
+            end
+        end
+        for _, token in ipairs(run.groupTokens) do
+            if not isPedNativeGroupActive(token) then
+                return false, "partitioned native group inactive"
+            end
+        end
         return true
     end
     if not run.groupToken then
@@ -107,6 +153,15 @@ local function finishPreparation()
     if streamed then
         for _, ped in ipairs(run.peds) do
             streamed = streamed and isElementStreamedIn(ped) and getPedFightingStyle(ped) == run.fightingStyle
+            local expectedWeapon = tonumber(getElementData(ped, "neon:nativeAIExpectedWeapon")) or 0
+            streamed = streamed and getPedWeapon(ped) == expectedWeapon
+            if expectedWeapon ~= 0 then
+                streamed = streamed and getPedTotalAmmo(ped) == 25001 and
+                               getPedAmmoInClip(ped) == harnessWeaponClips[expectedWeapon]
+            end
+            for stat, expectedValue in pairs(harnessStandardWeaponStats) do
+                streamed = streamed and getPedStat(ped, stat) == expectedValue
+            end
         end
     end
     local ownerReady = true
@@ -128,7 +183,8 @@ addEventHandler("nativeAIHarness:prepare", resourceRoot,
     if source ~= resourceRoot or type(runId) ~= "string" or type(scenarioId) ~= "string" or type(peds) ~= "table" or
         #peds < 2 or #peds > 5 or not isElement(owner) or not isElement(victim) or
         (role ~= "owner" and role ~= "observer") or
-        (kind ~= "melee" and kind ~= "handoff" and kind ~= "rotation" and kind ~= "rotation_handoff") then
+        (kind ~= "melee" and kind ~= "handoff" and kind ~= "rotation" and kind ~= "rotation_handoff" and
+         not isGangDecisionKind(kind)) then
         return
     end
     stopRun()
@@ -141,14 +197,138 @@ addEventHandler("nativeAIHarness:prepare", resourceRoot,
         victim = victim,
         role = role,
         kind = kind,
+        scenario = NATIVE_AI_HARNESS.scenarios[kind],
         fightingStyle = NATIVE_AI_HARNESS.scenarios[kind].fightingStyle,
         requestedAt = getTickCount(),
         profileTokens = {},
+        groupTokens = {},
         streamingLeases = {},
         damageNonces = {},
         appliedNonces = {},
     }
     finishPreparation()
+end)
+
+local fightTaskNames = {
+    TASK_COMPLEX_KILL_PED_ON_FOOT = true,
+    TASK_COMPLEX_KILL_PED_ON_FOOT_ARMED = true,
+    TASK_COMPLEX_KILL_PED_ON_FOOT_STEALTH = true,
+    TASK_COMPLEX_KILL_CRIMINAL = true,
+}
+
+local coverTaskNames = {
+    TASK_SEEK_COVER_UNTIL_TARGET_DEAD = true,
+}
+
+local fleeTaskNames = {
+    TASK_COMPLEX_FLEE_ENTITY = true,
+    TASK_COMPLEX_SMART_FLEE_ENTITY = true,
+    TASK_COMPLEX_FLEE_ANY_MEANS = true,
+    TASK_SIMPLE_COWER = true,
+}
+
+local function captureCollectiveResponse(run)
+    local rows = {}
+    local allFlee = true
+    local allFightAllocation = true
+    local armedFightCount = 0
+    for index, ped in ipairs(run.peds) do
+        local hasFight = false
+        local hasFlee = false
+        local hasCover = false
+        local hierarchyRows = {}
+        for _, slot in ipairs({0, 1, 2, 3}) do
+            local hierarchy = {getPedTask(ped, "primary", slot)}
+            if hierarchy[1] ~= false then
+                hierarchyRows[tostring(slot)] = hierarchy
+                for _, taskName in ipairs(hierarchy) do
+                    hasFight = hasFight or fightTaskNames[taskName] == true
+                    hasFlee = hasFlee or fleeTaskNames[taskName] == true
+                    hasCover = hasCover or coverTaskNames[taskName] == true
+                end
+            end
+        end
+        local expectedWeapon = tonumber(run.scenario.pedWeapons and run.scenario.pedWeapons[index]) or 0
+        local armed = expectedWeapon ~= 0
+        -- TASK_GROUP_KILL_PLAYER_BASIC allocates the gun task only to armed
+        -- members. Stock unarmed members participate by seeking cover until
+        -- the target dies; accepting a kill task here would hide a wrong
+        -- allocator branch.
+        local fightAllocated = armed and hasFight or not armed and hasCover
+        if armed and hasFight then
+            armedFightCount = armedFightCount + 1
+        end
+        allFlee = allFlee and hasFlee
+        allFightAllocation = allFightAllocation and fightAllocated
+        rows[#rows + 1] = {
+            actorId = "ped-" .. index,
+            armed = armed,
+            fight = hasFight,
+            cover = hasCover,
+            flee = hasFlee,
+            tasks = hierarchyRows,
+        }
+    end
+    if allFlee then
+        return "flee", rows
+    end
+    if allFightAllocation and armedFightCount > 0 then
+        return "fight", rows
+    end
+    return false, rows
+end
+
+addEvent("nativeAIHarness:decisionAttack", true)
+addEventHandler("nativeAIHarness:decisionAttack", resourceRoot,
+                function(runId, epoch, actionId, attackedPed, sourcePed, expectedResponse)
+    local run = activeRun
+    if source ~= resourceRoot or not run or not isGangDecisionKind(run.kind) or run.id ~= tostring(runId) or
+        run.epoch ~= tonumber(epoch) or run.role ~= "owner" or localPlayer ~= run.owner or
+        not isElement(attackedPed) or not isElement(sourcePed) or type(addPedNativeDamageResponseEvent) ~= "function" then
+        return
+    end
+    local token = run.profileTokens[attackedPed]
+    local accepted = token and isPedNativeEventProfileActive(attackedPed, token) and
+                         addPedNativeDamageResponseEvent(attackedPed, sourcePed, 22, 3, token) == true
+    run.actionId = tostring(actionId)
+    run.expectedResponse = expectedResponse
+    report("decision-injected", {
+        accepted = accepted == true,
+        actionId = run.actionId,
+        attackedActorId = tostring(getElementData(attackedPed, "neon:nativeAIActorId") or "unknown"),
+        sourceActorId = tostring(getElementData(sourcePed, "neon:nativeAIActorId") or
+                                   (sourcePed == run.victim and "victim-player" or "unknown")),
+        expectedResponse = expectedResponse,
+    })
+    if not accepted then
+        return
+    end
+    if not expectedResponse then
+        return setTimer(function(expectedRun)
+            if activeRun and activeRun.id == expectedRun then
+                report("classification-captured", {actionId = activeRun.actionId})
+            end
+        end, 1200, 1, run.id)
+    end
+    local startedAt = getTickCount()
+    local function observe()
+        if not activeRun or activeRun ~= run then
+            return
+        end
+        local response, rows = captureCollectiveResponse(run)
+        if response then
+            return report("collective-response", {actionId = run.actionId, response = response, members = rows})
+        end
+        if getTickCount() - startedAt >= 5000 then
+            return report("collective-response-timeout", {
+                actionId = run.actionId,
+                response = run.scenario.branchAware and "native-selected fight or flee" or expectedResponse,
+                members = rows,
+            })
+        end
+        run.prepareTimer = setTimer(observe, 100, 1)
+    end
+    observe()
 end)
 
 addEvent("nativeAIHarness:attack", true)
@@ -171,7 +351,7 @@ end)
 
 addEventHandler("onClientPlayerNativeDamageAttempt", root, function(attacker, weapon, bodypart, damageFactor, direction)
     local run = activeRun
-    if not run or run.kind ~= "melee" or run.role ~= "owner" or localPlayer ~= run.owner or source ~= run.victim or
+    if not run or (run.kind ~= "melee" and run.expectedResponse ~= "fight") or run.role ~= "owner" or localPlayer ~= run.owner or source ~= run.victim or
         not isElement(attacker) or not run.profileTokens[attacker] or not isElementSyncer(attacker) or
         not isPedNativeEventProfileActive(attacker, run.profileTokens[attacker]) then
         return
@@ -237,7 +417,7 @@ addEventHandler("nativeAIHarness:releaseOwner", resourceRoot, function(runId, ep
     local run = activeRun
     if source ~= resourceRoot or not run or run.id ~= tostring(runId) or run.epoch ~= tonumber(epoch) or
         run.role ~= "owner" or localPlayer ~= run.owner or actionId ~= "group-handoff" or
-        (run.kind ~= "handoff" and run.kind ~= "rotation_handoff") then
+        (run.kind ~= "handoff" and run.kind ~= "rotation_handoff" and run.kind ~= "gang_armed_handoff") then
         return
     end
     local released = true
@@ -255,7 +435,8 @@ addEvent("nativeAIHarness:acquireOwner", true)
 addEventHandler("nativeAIHarness:acquireOwner", resourceRoot, function(runId, epoch, actionId)
     local run = activeRun
     if source ~= resourceRoot or not run or run.id ~= tostring(runId) or localPlayer ~= run.victim or
-        actionId ~= "group-handoff-acquire" or (run.kind ~= "handoff" and run.kind ~= "rotation_handoff") then
+        actionId ~= "group-handoff-acquire" or
+        (run.kind ~= "handoff" and run.kind ~= "rotation_handoff" and run.kind ~= "gang_armed_handoff") then
         return
     end
     run.epoch = tonumber(epoch)
@@ -397,7 +578,8 @@ end)
 addEvent("nativeAIHarness:stop", true)
 addEventHandler("nativeAIHarness:stop", resourceRoot, function(runId)
     if source == resourceRoot and activeRun and activeRun.id == tostring(runId) then
-        stopRun()
+        local groupReleased = stopRun()
+        triggerServerEvent("nativeAIHarness:stopped", resourceRoot, tostring(runId), groupReleased == true)
     end
 end)
 

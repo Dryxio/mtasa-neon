@@ -173,11 +173,16 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define RETURN_CPedGroupMembership_Process_IsPlayer              0x5FBA84
 #define RETURN_CEventEditableResponse_GroupLeaderA_IsPlayer      0x4B57D8
 #define RETURN_CEventEditableResponse_GroupLeaderB_IsPlayer      0x4B5874
+#define RETURN_CEventSource_ComputeEventSourceType_IsPlayer      0x4ABB1A
 #define RETURN_CTaskAllocatorKillThreats_Closest_IsPlayer        0x69C8C6
 #define RETURN_CTaskAllocatorKillThreats_Group_IsPlayer          0x69D24C
 #define RETURN_CTaskAllocatorKillThreats_Ped_IsPlayer            0x69D30C
 #define RETURN_CTaskAllocatorKillThreatsRandom_Group_IsPlayer    0x69D54F
 #define RETURN_CTaskAllocatorKillThreatsRandom_Ped_IsPlayer      0x69D6D4
+#define RETURN_CWeapon_DoBulletImpact_Stats_IsPlayer             0x73B5D1
+#define RETURN_CWeapon_DoBulletImpact_FriendlyFire_IsPlayer      0x73B897
+#define RETURN_CWeapon_DoBulletImpact_Critical_IsPlayer          0x73B9D4
+#define RETURN_CWeapon_DoBulletImpact_Final_IsPlayer             0x73BA71
 #define RETURN_CTaskSimpleGoToPoint_ProcessPed_IsPlayer          0x66D897
 DWORD         RETURN_CTaskSimpleGoToPoint_ProcessPed_SetMoveAnim = 0x66D9DF;
 constexpr int EVENT_TYPE_BUILDING_COLLISION = 6;
@@ -525,6 +530,7 @@ PreWeaponFireHandler*                      m_pPreWeaponFireHandler = NULL;
 PostWeaponFireHandler*                     m_pPostWeaponFireHandler = NULL;
 BulletImpactHandler*                       m_pBulletImpactHandler = NULL;
 BulletFireHandler*                         m_pBulletFireHandler = NULL;
+NativeInstantHitResolvedHandler*           m_pNativeInstantHitResolvedHandler = nullptr;
 DamageHandler*                             m_pDamageHandler = NULL;
 DeathHandler*                              m_pDeathHandler = NULL;
 FireHandler*                               m_pFireHandler = NULL;
@@ -2304,6 +2310,11 @@ void CMultiplayerSA::SetExtendedFarClipPreference(bool bEnabled, float fDistance
         RestoreFarClipPatch();
 }
 
+void CMultiplayerSA::RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim)
+{
+    ::RegisterNativeBehaviorOnlyDamageEvent(pEvent, pVictim);
+}
+
 float CMultiplayerSA::GetNearClipDistance()
 {
     return m_fNearClipDistance;
@@ -3901,8 +3912,9 @@ static void __declspec(naked) HOOK_CTaskSimplePlayerOnFoot_ProcessPlayerWeapon()
     }
 }
 
-CPedSAInterface* pIsPlayerPed = NULL;
-DWORD            dwIsPlayerReturnAddress = 0;
+CPedSAInterface*           pIsPlayerPed = NULL;
+DWORD                      dwIsPlayerReturnAddress = 0;
+extern CEntitySAInterface* pBulletImpactVictim;
 
 static CPed* GetPedFromInterface(CPedSAInterface* pedInterface)
 {
@@ -4019,6 +4031,9 @@ namespace
         int              eventSourceType{-1};
         unsigned int     representativeModel{};
         int              representativePedType{-1};
+        unsigned int     sourceModel{};
+        int              sourcePedType{-1};
+        bool             sourceIsPlayer{};
     };
 
     thread_local SNativeAIGroupDecisionCapture* g_pNativeAIGroupDecisionCapture{};
@@ -4028,6 +4043,28 @@ int __cdecl HOOK_CEventEditableResponse_GroupSource(void* event, CPedSAInterface
 {
     const bool                     useAmbientGroupIdentity = ped && IsNativeAmbientGroupMember(ped);
     CScopedAmbientPedModelIdentity modelIdentity(ped, useAmbientGroupIdentity);
+
+    CPedSAInterface* sourcePed{};
+    if (event)
+    {
+        auto* vtable = *static_cast<DWORD**>(event);
+        if (vtable)
+        {
+            using GetSourceEntity = CEntitySAInterface*(__thiscall*)(void*);
+            CEntitySAInterface* sourceEntity = reinterpret_cast<GetSourceEntity>(vtable[10])(event);
+            if (sourceEntity && sourceEntity->nType == ENTITY_TYPE_PED)
+                sourcePed = static_cast<CPedSAInterface*>(sourceEntity);
+        }
+    }
+
+    // Ambient agents are CPlayerPed wrappers on every MTA client. Scoping only
+    // the representative restores its acquaintance table, but still makes an
+    // ambient source look like PLAYER1 to IsThreatenedBy, IsFriendlyWith and
+    // the final IsPlayer branch. Hold both model identities for the one stock
+    // query so inter-gang friendship/threat decisions match CPed vanilla while
+    // all wrapper state is restored immediately afterwards.
+    const bool                     useAmbientSourceIdentity = sourcePed && IsNativeAmbientGroupMember(sourcePed);
+    CScopedAmbientPedModelIdentity sourceModelIdentity(sourcePed, useAmbientSourceIdentity);
     const int                      sourceType = reinterpret_cast<int(__cdecl*)(void*, CPedSAInterface*)>(FUNC_CEventSource_ComputeEventSourceType)(event, ped);
     if (g_pNativeAIGroupDecisionCapture)
     {
@@ -4035,6 +4072,12 @@ int __cdecl HOOK_CEventEditableResponse_GroupSource(void* event, CPedSAInterface
         g_pNativeAIGroupDecisionCapture->eventSourceType = sourceType;
         g_pNativeAIGroupDecisionCapture->representativeModel = ped ? ped->m_nModelIndex : 0;
         g_pNativeAIGroupDecisionCapture->representativePedType = ped ? ped->bPedType : -1;
+        g_pNativeAIGroupDecisionCapture->sourceModel = sourcePed ? sourcePed->m_nModelIndex : 0;
+        g_pNativeAIGroupDecisionCapture->sourcePedType = sourcePed ? sourcePed->bPedType : -1;
+        // IsPlayer is hooked by MTA and normally identifies every CPlayerPed
+        // wrapper as a player regardless of the scoped bPedType. Record the
+        // logical identity used by the audited stock call instead.
+        g_pNativeAIGroupDecisionCapture->sourceIsPlayer = sourcePed ? (!useAmbientSourceIdentity && sourcePed->IsPlayer()) : false;
     }
     return sourceType;
 }
@@ -4092,9 +4135,9 @@ void __fastcall HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse(void* e
     decision.sourceIsPed = sourcePedInterface != nullptr;
     if (sourcePedInterface)
     {
-        decision.sourceModel = sourcePedInterface->m_nModelIndex;
-        decision.sourcePedType = sourcePedInterface->bPedType;
-        decision.sourceIsPlayer = sourcePedInterface->IsPlayer();
+        decision.sourceModel = capture.sourceModel;
+        decision.sourcePedType = capture.sourcePedType;
+        decision.sourceIsPlayer = capture.sourceIsPlayer;
     }
     // CEventSource checks threatened before friendly. These booleans record
     // the branch that selected the decision table column, rather than trying
@@ -4322,6 +4365,7 @@ static bool IsNativeAmbientGroupBehaviorIsPlayerCallSite(DWORD returnAddress)
         case RETURN_CPedGroupMembership_Process_IsPlayer:
         case RETURN_CEventEditableResponse_GroupLeaderA_IsPlayer:
         case RETURN_CEventEditableResponse_GroupLeaderB_IsPlayer:
+        case RETURN_CEventSource_ComputeEventSourceType_IsPlayer:
         case RETURN_CTaskAllocatorKillThreats_Closest_IsPlayer:
         case RETURN_CTaskAllocatorKillThreats_Group_IsPlayer:
         case RETURN_CTaskAllocatorKillThreats_Ped_IsPlayer:
@@ -4333,10 +4377,91 @@ static bool IsNativeAmbientGroupBehaviorIsPlayerCallSite(DWORD returnAddress)
     }
 }
 
+static bool IsNativeAmbientArmedPlayerOnlyBehaviorIsPlayerCallSite(DWORD returnAddress)
+{
+    switch (returnAddress)
+    {
+        case RETURN_CWeapon_DoBulletImpact_Stats_IsPlayer:
+        case RETURN_CWeapon_DoBulletImpact_Critical_IsPlayer:
+        case RETURN_CWeapon_DoBulletImpact_Final_IsPlayer:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool IsNativeAmbientGroupMember(CPedSAInterface* pedInterface)
 {
     CPed* pPed = GetPedFromInterface(pedInterface);
     return pPed && pPed->IsNativeAmbientGroupActive();
+}
+
+static bool TryGetPedModelType(CPedSAInterface* pedInterface, int& pedType)
+{
+    if (!pedInterface || !pGameInterface)
+        return false;
+
+    auto** modelInfoArray = static_cast<CBaseModelInfoSAInterface**>(pGameInterface->GetModelInfoArray());
+    auto*  modelInfo = modelInfoArray ? reinterpret_cast<CPedModelInfoSAInterface*>(modelInfoArray[pedInterface->m_nModelIndex]) : nullptr;
+    if (!modelInfo || modelInfo->pedType >= 32)
+        return false;
+
+    pedType = static_cast<int>(modelInfo->pedType);
+    return true;
+}
+
+static bool TryGetLogicalBulletImpactPedType(CPedSAInterface* pedInterface, int& pedType)
+{
+    if (!pedInterface || !pGameInterface)
+        return false;
+
+    SClientEntity<CPedSA>* pedClientEntity = pGameInterface->GetPools()->GetPed(reinterpret_cast<DWORD*>(pedInterface));
+    if (!pedClientEntity || !pedClientEntity->pEntity || !pedClientEntity->pClientEntity)
+        return false;
+
+    // Multiplayer SA deliberately keeps CClientEntity opaque. Query its stable
+    // first post-destructor virtual (GetType) without importing Client
+    // Deathmatch headers into this lower-level project.
+    void** clientVtable = *reinterpret_cast<void***>(pedClientEntity->pClientEntity);
+    if (!clientVtable || !clientVtable[1])
+        return false;
+
+    using GetClientEntityType = int(__thiscall*)(const CClientEntity*);
+    const int     clientType = reinterpret_cast<GetClientEntityType>(clientVtable[1])(pedClientEntity->pClientEntity);
+    constexpr int CLIENT_ENTITY_TYPE_PLAYER = 1;
+    constexpr int CLIENT_ENTITY_TYPE_PED = 12;
+    if (clientType == CLIENT_ENTITY_TYPE_PLAYER)
+    {
+        constexpr int PED_TYPE_PLAYER1 = 0;
+        pedType = PED_TYPE_PLAYER1;
+        return true;
+    }
+
+    if (clientType != CLIENT_ENTITY_TYPE_PED)
+        return false;
+
+    // Every synchronized script ped is physically a CPlayerPed. Its model
+    // type is the only safe logical NPC identity for vanilla friendly fire;
+    // falling back to the wrapper's PLAYER1 byte would weaken same-gang immunity.
+    return TryGetPedModelType(pedInterface, pedType);
+}
+
+static bool ShouldUseNativeAmbientBulletImpactPlayerPath(CPedSAInterface* shooter)
+{
+    if (!IsNativeAmbientGroupMember(shooter))
+        return true;
+
+    auto* victim = static_cast<CPedSAInterface*>(pBulletImpactVictim);
+    int   shooterPedType{};
+    int   victimPedType{};
+    if (!TryGetLogicalBulletImpactPedType(shooter, shooterPedType) || !TryGetLogicalBulletImpactPedType(victim, victimPedType))
+        return false;
+
+    // GTA reaches this IsPlayer call only after its physical ped-type equality
+    // guard. MTA's CPlayerPed wrappers make every pair look like PLAYER1. Let
+    // different logical types continue to GenerateDamageEvent, but preserve
+    // vanilla same-type NPC immunity. Unmanaged civilians keep the stock path.
+    return shooterPedType != victimPedType;
 }
 
 static bool IsNativeAmbientGroupLocomotionOwner(CPedSAInterface* pedInterface)
@@ -4395,6 +4520,13 @@ bool IsPlayer()
     if (IsTaskJumpFallIsPlayerCallSite(dwIsPlayerReturnAddress) && NativeJumpUsesNonPlayerBehavior(pIsPlayerPed))
         return false;
     if (IsNativeAmbientGroupBehaviorIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientGroupMember(pIsPlayerPed))
+        return false;
+    if (dwIsPlayerReturnAddress == RETURN_CWeapon_DoBulletImpact_FriendlyFire_IsPlayer)
+        return ShouldUseNativeAmbientBulletImpactPlayerPath(pIsPlayerPed);
+    // These remaining DoBulletImpact calls are player-only stats, critical-hit
+    // and final-processing branches. Managed ambient shooters must retain the
+    // audited CPed result without changing the dedicated friendly-fire guard.
+    if (IsNativeAmbientArmedPlayerOnlyBehaviorIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientGroupMember(pIsPlayerPed))
         return false;
     if (IsNativeAmbientGroupLocomotionIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientGroupLocomotionOwner(pIsPlayerPed))
         return false;
@@ -5529,6 +5661,11 @@ void CMultiplayerSA::SetBulletFireHandler(BulletFireHandler* pHandler)
     m_pBulletFireHandler = pHandler;
 }
 
+void CMultiplayerSA::SetNativeInstantHitResolvedHandler(NativeInstantHitResolvedHandler* pHandler)
+{
+    m_pNativeInstantHitResolvedHandler = pHandler;
+}
+
 void CMultiplayerSA::Reset()
 {
     bHideRadar = false;
@@ -5541,6 +5678,7 @@ void CMultiplayerSA::Reset()
     m_pDamageHandler = NULL;
     m_pDeathHandler = NULL;
     m_pFireHandler = NULL;
+    m_pNativeInstantHitResolvedHandler = nullptr;
     m_pRender3DStuffHandler = NULL;
     m_pFxSystemDestructionHandler = NULL;
 }

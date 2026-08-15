@@ -416,6 +416,22 @@ def analyze_transport(records: list[dict[str, Any]]) -> list[Finding]:
 
         source_sample = sample(source)
         target_sample = sample(target)
+        owner_weapon = source_sample.get("weapon_presentation")
+        observer_weapon = target_sample.get("weapon_presentation")
+        if (owner_weapon is not None or observer_weapon is not None) and owner_weapon != observer_weapon:
+            findings.append(
+                Finding(
+                    target["_timestamp_ms"],
+                    "weapon_presentation",
+                    "Observer applied a different native weapon presentation sample",
+                    {
+                        "owner": record_evidence(source),
+                        "observer": record_evidence(target),
+                        "owner_weapon_presentation": owner_weapon,
+                        "observer_weapon_presentation": observer_weapon,
+                    },
+                )
+            )
         distance = vector_distance(source_sample.get("position"), target_sample.get("position"))
         if distance is not None and distance > SPATIAL_MAX_DISTANCE:
             findings.append(
@@ -481,24 +497,133 @@ def analyze_harness_pipeline(records: list[dict[str, Any]]) -> list[Finding]:
     if not harness:
         return []
     scenario = next((record.get("scenario_id") for record in harness if record.get("scenario_id")), None)
-    if scenario != "remote-melee-group-v1":
+    damage_scenarios = {"remote-melee-group-v1", "gang-one-armed-leader-v1", "gang-one-armed-member-v1"}
+    gang_decision_scenarios = {
+        "gang-unarmed-firearm-threat-v1": False,
+        "gang-one-armed-leader-v1": True,
+        "gang-one-armed-member-v1": True,
+        "gang-one-armed-handoff-v1": True,
+    }
+    if scenario == "gang-friendly-source-classification-v1":
+        decision = next(
+            (
+                record
+                for record in records
+                if record.get("schema") == SCHEMA
+                and record.get("event") == "group_response_selected"
+                and (record.get("trace") or {}).get("scenario_id") == scenario
+                and (record.get("trace") or {}).get("action_id") == "friendly-source"
+                and (record.get("trace") or {}).get("actor_id") in {"ped-1", "ped-2", "ped-3"}
+            ),
+            None,
+        )
+        decision_data = decision.get("group_decision") if decision else {}
+        source_data = decision_data.get("source") or {}
+        valid_decision = (
+            decision is not None
+            and decision_data.get("event_source_type") == 2
+            and decision_data.get("friendly") is True
+            and decision_data.get("threatened") is False
+            and source_data.get("is_ped") is True
+            and source_data.get("is_player") is False
+            and source_data.get("model") == 102
+        )
+        if not valid_decision:
+            terminal = next((record for record in reversed(harness) if record.get("event") == "run_end"), harness[-1])
+            return [Finding(terminal["_timestamp_ms"], "group_classification",
+                            "Friendly ambient source was not proven as source type 2",
+                            {"scenario_id": scenario, "decision": decision_data or None})]
+        return []
+    if scenario in gang_decision_scenarios:
+        decision = next(
+            (
+                record
+                for record in records
+                if record.get("schema") == SCHEMA
+                and record.get("event") == "group_response_selected"
+                and (record.get("trace") or {}).get("scenario_id") == scenario
+                and (record.get("trace") or {}).get("action_id") == "firearm-threat"
+            ),
+            None,
+        )
+        decision_data = decision.get("group_decision") if decision else {}
+        task_type = decision_data.get("task_type") if isinstance(decision_data, dict) else None
+        if task_type == 1505:  # TASK_GROUP_FLEE_THREAT
+            expected_allocation = "flee"
+        elif task_type == 1502:  # TASK_GROUP_KILL_THREATS_BASIC
+            # GTA's allocator converts an all-unarmed firearm response to
+            # flee. With an armed member it gives armed members kill tasks and
+            # unarmed members seek-cover-until-target-dead tasks.
+            expected_allocation = "fight" if gang_decision_scenarios[scenario] else "flee"
+        else:
+            terminal = next((record for record in reversed(harness) if record.get("event") == "run_end"), harness[-1])
+            return [
+                Finding(
+                    terminal["_timestamp_ms"],
+                    "group_decision",
+                    "Native group decision branch was not captured",
+                    {"scenario_id": scenario, "decision": decision_data or None},
+                )
+            ]
+
+        collective = next((record for record in harness if record.get("event") == "collective_response_observed"), None)
+        observed_allocation = collective.get("response") if collective else None
+        if observed_allocation != expected_allocation:
+            terminal = next((record for record in reversed(harness) if record.get("event") == "run_end"), harness[-1])
+            return [
+                Finding(
+                    terminal["_timestamp_ms"],
+                    "group_allocation",
+                    "Native task allocation did not match the selected group branch",
+                    {
+                        "scenario_id": scenario,
+                        "task_type": task_type,
+                        "expected_allocation": expected_allocation,
+                        "observed_allocation": observed_allocation,
+                        "members": collective.get("members") if collective else None,
+                    },
+                )
+            ]
+        if expected_allocation == "flee":
+            return []
+    if scenario not in damage_scenarios:
         return []
     events = {str(record.get("event")) for record in harness}
     for index, stage in enumerate(MELEE_CAUSAL_STAGES):
         if stage not in events:
             later = next((candidate for candidate in MELEE_CAUSAL_STAGES[index + 1:] if candidate in events), None)
             terminal = next((record for record in reversed(harness) if record.get("event") == "run_end"), harness[-1])
+            evidence: dict[str, Any] = {
+                "scenario_id": scenario,
+                "missing_stage": stage,
+                "next_observed_stage": later,
+                "observed_stages": [candidate for candidate in MELEE_CAUSAL_STAGES if candidate in events],
+            }
+            if stage == "owner_native_damage_attempt":
+                weapon_rows = [
+                    record
+                    for record in records
+                    if record.get("schema") == SCHEMA
+                    and record.get("event") == "native_weapon_instant_hit_resolved"
+                    and (record.get("trace") or {}).get("scenario_id") == scenario
+                    and (record.get("trace") or {}).get("action_id") == "firearm-threat"
+                ]
+                victim_hits = sum(
+                    1 for record in weapon_rows if ((record.get("weapon_trace") or {}).get("hit_entity") or {}).get("actor_id") == "victim-player"
+                )
+                evidence["weapon_resolution"] = {
+                    "shot_count": len(weapon_rows),
+                    "victim_hit_count": victim_hits,
+                    "samples": [
+                        {"record": record_evidence(record), "weapon_trace": record.get("weapon_trace")} for record in weapon_rows[:8]
+                    ],
+                }
             return [
                 Finding(
                     terminal["_timestamp_ms"],
                     "causal_chain",
                     f"First missing native-damage stage: {stage}",
-                    {
-                        "scenario_id": scenario,
-                        "missing_stage": stage,
-                        "next_observed_stage": later,
-                        "observed_stages": [candidate for candidate in MELEE_CAUSAL_STAGES if candidate in events],
-                    },
+                    evidence,
                 )
             ]
     return []
@@ -1226,6 +1351,63 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             models = record.get("models")
             if isinstance(models, list):
                 spawn_models.update(str(model) for model in models)
+            allowed_weapons = {
+                0: {0, 22, 28}, 1: {0, 22, 32}, 2: {0, 22}, 3: {0},
+                4: {0, 22, 28}, 5: {0, 24}, 6: {0, 22, 30}, 7: {0, 22, 28},
+            }
+            gang = record.get("gang")
+            slots_by_gang = {
+                0: (22, 28, 0), 1: (22, 0, 0), 2: (22, 0, 0), 3: (0, 0, 0),
+                4: (22, 28, 0), 5: (24, 0, 0), 6: (22, 30, 0), 7: (22, 28, 0),
+            }
+            slots = slots_by_gang.get(gang, (0, 0, 0))
+            if gang == 1 and record.get("preset") in {"post_green_sabre", "post_home_coming"}:
+                slots = (22, 32, 0)
+            selections = record.get("weapon_selections")
+            if not isinstance(selections, list) or len(selections) != int(members or 0):
+                error(record, "population_weapon", "Group spawn has incomplete weapon selection evidence")
+            else:
+                for selection in selections:
+                    weapon = selection.get("weapon")
+                    armed_roll = selection.get("armed_roll")
+                    slot_roll = selection.get("slot_roll")
+                    ammo = selection.get("ammo")
+                    clip_ammo = selection.get("clip_ammo")
+                    if weapon not in allowed_weapons.get(gang, {0}):
+                        error(record, "population_weapon", "Gang ped received a weapon outside its proven CGangs slots", selection)
+                    if not isinstance(armed_roll, int) or isinstance(armed_roll, bool) or not 0 <= armed_roll <= 99:
+                        error(record, "population_weapon", "Gang weapon armed roll is invalid", selection)
+                    if (
+                        isinstance(armed_roll, int)
+                        and not isinstance(armed_roll, bool)
+                        and armed_roll < 33
+                        and (not isinstance(slot_roll, int) or isinstance(slot_roll, bool))
+                    ):
+                        error(record, "population_weapon", "Successful armed roll did not consume the slot roll", selection)
+                    if (isinstance(armed_roll, int) and not isinstance(armed_roll, bool) and
+                            isinstance(slot_roll, int) and not isinstance(slot_roll, bool)):
+                        expected_weapon = 0
+                        if armed_roll < 33:
+                            if slots[2] != 0:
+                                expected_weapon = slots[0] if slot_roll < 33 else slots[1] if slot_roll < 66 else slots[2]
+                            elif slots[1] != 0:
+                                expected_weapon = slots[0] if slot_roll < 50 else slots[1]
+                            else:
+                                expected_weapon = slots[0]
+                        if weapon != expected_weapon:
+                            error(record, "population_weapon", "Weapon selection diverges from the recorded AddPed rolls", {
+                                **selection, "slots": slots, "expected_weapon": expected_weapon,
+                            })
+                    if weapon != 0 and ammo != 25001:
+                        error(record, "population_weapon", "Armed gang ped ammo differs from vanilla 25001", selection)
+                    expected_clip = {0: 0, 22: 17, 24: 7, 28: 50, 30: 30, 32: 50}.get(weapon)
+                    if expected_clip is None or clip_ammo != expected_clip:
+                        error(record, "population_weapon", "Gang ped clip differs from the STD weapon row", selection)
+
+        if event == "group_weapon_authority_rejected" or (
+            event == "group_combat_context_restored" and record.get("accepted") is not True
+        ):
+            error(record, "population_weapon", f"Runtime rejected authoritative gang combat state: {event}")
 
         if event == "despawn":
             despawned_peds += 1

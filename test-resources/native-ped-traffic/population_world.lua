@@ -6,11 +6,31 @@
 -- explicit, versioned world state.
 
 local BASELINE = "stock-main-scm-bootstrap-601def3b"
-local GROVE = 2
-local BALLAS = 1
+-- main.scm zone strengths are 1-based family columns, while CGangs' runtime
+-- weapon table is 0-based. Keep the domains explicit so a story mutation can
+-- never silently write Vagos weapons while changing Grove territory.
+local GROVE_ZONE_INDEX = 2
+local BALLAS_ZONE_INDEX = 1
+local GROVE_GANG_ID = 1
 local WEAPON_UNARMED = 0
 local WEAPON_PISTOL = 22
 local WEAPON_TEC9 = 32
+
+-- CGangs::Initialise (GTA SA 1.0 US 0x5DE680). Ambient AddPed reads these
+-- three runtime slots; main.scm's SET_GANG_WEAPONS opcode mutates the same
+-- table later in the campaign. There is no gangs.dat weapon source in SA.
+local BASE_GANG_WEAPONS = {
+    [0] = {22, 28, 0}, -- Ballas: pistol / micro uzi
+    [1] = {22, 0, 0},  -- Grove
+    [2] = {22, 0, 0},  -- Vagos
+    [3] = {0, 0, 0},   -- Rifa
+    [4] = {22, 28, 0}, -- Da Nang Boys
+    [5] = {24, 0, 0},  -- Mafia: desert eagle
+    [6] = {22, 30, 0}, -- Triads: pistol / AK-47
+    [7] = {22, 28, 0}, -- Aztecas
+    [8] = {0, 0, 0},   -- unused Russian slot
+    [9] = {0, 0, 0},   -- unused Bikers slot
+}
 
 local function setGang(zoneStates, label, gangIndex, strength)
     local state = zoneStates[label]
@@ -23,22 +43,22 @@ end
 
 local function buildPostIntro()
     local zones = {}
-    setGang(zones, "GAN1", GROVE, 10)
-    setGang(zones, "GAN2", GROVE, 10)
+    setGang(zones, "GAN1", GROVE_ZONE_INDEX, 10)
+    setGang(zones, "GAN2", GROVE_ZONE_INDEX, 10)
     return zones
 end
 
 local function buildPostCleaningTheHood()
     local zones = {}
-    setGang(zones, "GAN1", GROVE, 40)
-    setGang(zones, "GAN2", GROVE, 40)
+    setGang(zones, "GAN1", GROVE_ZONE_INDEX, 40)
+    setGang(zones, "GAN2", GROVE_ZONE_INDEX, 40)
     return zones
 end
 
 local function buildPostGreenSabre()
     local zones = {}
     local territoryFamilies = {
-        [BALLAS] = {
+        [BALLAS_ZONE_INDEX] = {
             SUN1 = 30, SUN3A = 30, SUN3B = 30, SUN3C = 30, SUN4 = 30,
             GAN1 = 10, GAN2 = 25, GLN1 = 40, GLN2A = 40,
             LIND1A = 20, LIND1B = 20, LIND2A = 20, LIND2B = 20, LIND3 = 20,
@@ -63,20 +83,20 @@ local function buildPostGreenSabre()
         end
     end
     for label in pairs(allTerritories) do
-        setGang(zones, label, GROVE, 0)
+        setGang(zones, label, GROVE_ZONE_INDEX, 0)
     end
     -- Green Sabre explicitly clears Grove in the hospital sub-zone even though
     -- it deliberately assigns no replacement gang there.
-    setGang(zones, "JEF3A", GROVE, 0)
+    setGang(zones, "JEF3A", GROVE_ZONE_INDEX, 0)
     return zones
 end
 
 local function buildPostHomeComing()
     local zones = buildPostGreenSabre()
-    setGang(zones, "GAN1", GROVE, 40)
-    setGang(zones, "GAN2", GROVE, 40)
-    setGang(zones, "GAN1", BALLAS, 0)
-    setGang(zones, "GAN2", BALLAS, 0)
+    setGang(zones, "GAN1", GROVE_ZONE_INDEX, 40)
+    setGang(zones, "GAN2", GROVE_ZONE_INDEX, 40)
+    setGang(zones, "GAN1", BALLAS_ZONE_INDEX, 0)
+    setGang(zones, "GAN2", BALLAS_ZONE_INDEX, 0)
     return zones
 end
 
@@ -97,14 +117,14 @@ local presetBuilders = {
         return {
             zones = buildPostGreenSabre(),
             gangWarsActive = false,
-            gangWeapons = {[GROVE] = {WEAPON_PISTOL, WEAPON_TEC9, WEAPON_UNARMED}},
+            gangWeapons = {[GROVE_GANG_ID] = {WEAPON_PISTOL, WEAPON_TEC9, WEAPON_UNARMED}},
         }
     end,
     post_home_coming = function()
         return {
             zones = buildPostHomeComing(),
             gangWarsActive = true,
-            gangWeapons = {[GROVE] = {WEAPON_PISTOL, WEAPON_TEC9, WEAPON_UNARMED}},
+            gangWeapons = {[GROVE_GANG_ID] = {WEAPON_PISTOL, WEAPON_TEC9, WEAPON_UNARMED}},
         }
     end,
 }
@@ -156,7 +176,10 @@ function PedTrafficPopulationWorld:setPreset(name)
     self.randomGangMembers = true
     self.riots = false
     self.gangWarsActive = preset.gangWarsActive == true
-    self.gangWeapons = preset.gangWeapons or {}
+    self.gangWeapons = deepCopy(BASE_GANG_WEAPONS)
+    for gang, slots in pairs(preset.gangWeapons or {}) do
+        self.gangWeapons[gang] = deepCopy(slots)
+    end
     return true
 end
 

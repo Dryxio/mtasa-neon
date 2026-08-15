@@ -24,8 +24,11 @@
 #include "CWeaponStatManagerSA.h"
 #include "CFireManagerSA.h"
 #include "gamesa_renderware.h"
+#include <core/CCoreInterface.h>
+#include <multiplayer/CMultiplayer.h>
 
-extern CGameSA* pGame;
+extern CCoreInterface* g_pCore;
+extern CGameSA*        pGame;
 
 static bool g_onlyUpdateRotations = false;
 
@@ -198,6 +201,15 @@ bool CPedSA::AddNativeDamageResponseEvent(CPed* attackingPed, eWeaponType weapon
     eventInterface->damageResponseData.bDamageCalculated = true;
     eventInterface->damageResponseData.bCheckIfAffectsPed = false;
 
+    // MTA's bullet-sync admission hook must distinguish this behavior-only
+    // replay from a real firearm hit. The marker is event- and victim-scoped,
+    // follows GTA's synchronous clones, and is erased by the damage-event
+    // destructor hook.
+    CMultiplayer* const multiplayer = g_pCore ? g_pCore->GetMultiplayer() : nullptr;
+    if (!multiplayer)
+        return false;
+    multiplayer->RegisterNativeBehaviorOnlyDamageEvent(eventInterface, targetInterface);
+
     using AddEvent = void*(__thiscall*)(void*, void*, bool);
     auto* const accepted = reinterpret_cast<CEventDamageSAInterface*>(
         reinterpret_cast<AddEvent>(FUNC_CEventGroup_Add)(targetInterface->pPedIntelligence->eventGroup, eventInterface, false));
@@ -235,7 +247,8 @@ bool CPedSA::AddNativeDamageEvent(CPed* attackingPed, eWeaponType weaponType, eP
     damageCalculator.ComputeDamageResponse(this, event.GetDamageResponse(), true);
 
     using AddEvent = void*(__thiscall*)(void*, void*, bool);
-    const bool accepted = reinterpret_cast<AddEvent>(FUNC_CEventGroup_Add)(targetInterface->pPedIntelligence->eventGroup, event.GetInterface(), false) != nullptr;
+    const bool accepted =
+        reinterpret_cast<AddEvent>(FUNC_CEventGroup_Add)(targetInterface->pPedIntelligence->eventGroup, event.GetInterface(), false) != nullptr;
 
     // MTA deliberately rejects GTA's own lethal response after its local
     // wasted pipeline has accepted the health transition. Report that replay

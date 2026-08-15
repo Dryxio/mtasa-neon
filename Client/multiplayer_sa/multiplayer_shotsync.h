@@ -58,6 +58,7 @@ VOID WriteGunDirectionDataForPed(class CPedSAInterface* pPedInterface, float* fG
 bool IsLocalPlayer(CPedSAInterface* pPedInterface);
 void CaptureGeneratedDamageEvent(CPedSAInterface* pVictim, CEntitySAInterface* pInflictor, eWeaponType weaponType, int damageFactor,
                                  ePedPieceTypes pedPieceType, unsigned char direction);
+void RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim);
 bool ConsumeScriptPedChokeEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim);
 void CloneScriptPedChokeEvent(CEventDamageSAInterface* pDestination, CEventDamageSAInterface* pSource);
 void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent);

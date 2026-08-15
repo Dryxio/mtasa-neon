@@ -16,6 +16,9 @@ local config = {
     corpseLifetime = 30000,
     nativeMeleeDamageRadius = 5,
     nativeMeleeDamageInterval = 250,
+    nativeFirearmDamageInterval = 40,
+    nativeGangWeaponChance = 33,
+    nativeGangWeaponAmmo = 25001,
     minimumGangGroupSize = 2,
     maximumGangGroupSize = 4,
     maximumGangGroupSpan = 8,
@@ -40,14 +43,27 @@ local stockUnarmedCivilianDamageFactors = {
     [18] = true, [20] = true, [22] = true, [25] = true, [27] = true, [30] = true, [37] = true,
 }
 
-local function isCanonicalTrafficMeleeDamage(record, weapon, damageFactor)
-    if weapon ~= 0 then
+local stockGangFirearmDamage = {
+    [22] = {factor = 25, radius = 40},  -- pistol STD: weapon range 35
+    [24] = {factor = 140, radius = 40}, -- desert eagle STD: weapon range 35
+    [28] = {factor = 20, radius = 40},  -- micro uzi STD: weapon range 35
+    [30] = {factor = 30, radius = 75},  -- AK-47 STD: weapon range 70
+    [32] = {factor = 20, radius = 40},  -- Tec-9 STD: weapon range 35
+}
+
+local function getCanonicalTrafficNativeDamage(record, weapon, damageFactor)
+    if weapon == 0 then
+        if record.populationClass == "gang" and stockUnarmedGangDamageFactors[damageFactor] == true or
+            record.populationClass == "civilian" and stockUnarmedCivilianDamageFactors[damageFactor] == true then
+            return config.nativeMeleeDamageRadius, config.nativeMeleeDamageInterval
+        end
         return false
     end
-    if record.populationClass == "gang" then
-        return stockUnarmedGangDamageFactors[damageFactor] == true
+    local firearm = record.populationClass == "gang" and stockGangFirearmDamage[weapon] or false
+    if firearm and damageFactor == firearm.factor then
+        return firearm.radius, config.nativeFirearmDamageInterval
     end
-    return record.populationClass == "civilian" and stockUnarmedCivilianDamageFactors[damageFactor] == true
+    return false
 end
 
 -- Stock peds.ide/pedgrp.dat mapping. The server cannot inspect a model's native
@@ -63,6 +79,82 @@ local gangByModel = {
     [117] = 6, [118] = 6, [120] = 6,
     [114] = 7, [115] = 7, [116] = 7,
 }
+
+-- CPopulation::AddPed performs two independent CGeneral rolls for every gang
+-- ped: the first arms it when [0, 100) is below 33, then the second selects
+-- uniformly from CGangs' non-zero weapon slots. The server owns this adapted
+-- distributed draw so the resulting weapon, ammo and current slot are already
+-- canonical before any client acquires the native group. GTA's process-global
+-- RNG cannot be shared across syncers; preserving its draw order and exact
+-- distribution is the deterministic network equivalent.
+local gangWeaponClipAmmo = {
+    [22] = 17, -- pistol
+    [24] = 7,  -- desert eagle (standard skill)
+    [28] = 50, -- micro uzi
+    [30] = 30, -- AK-47
+    [32] = 50, -- Tec-9
+}
+
+local gangStandardWeaponStats = {
+    {69, 40},  -- pistol
+    {71, 200}, -- desert eagle
+    {75, 50},  -- micro uzi / Tec-9
+    {77, 200}, -- AK-47
+}
+
+local function selectGangPedWeapon(slots)
+    local armedRoll = math.random(0, 99)
+    local slotRoll = false
+    local source = type(slots) == "table" and slots or {}
+    local slot1 = math.floor(tonumber(source[1]) or 0)
+    local slot2 = math.floor(tonumber(source[2]) or 0)
+    local slot3 = math.floor(tonumber(source[3]) or 0)
+    local slotCount = (slot1 ~= 0 and 1 or 0) + (slot2 ~= 0 and 1 or 0) + (slot3 ~= 0 and 1 or 0)
+
+    if armedRoll >= config.nativeGangWeaponChance then
+        return 0, armedRoll, slotRoll, slotCount
+    end
+
+    -- AddPed consumes the second roll whenever the first succeeds. It does
+    -- not compact slots: slot 3 selects 33/33/34, otherwise slot 2 selects
+    -- 50/50, otherwise slot 1 wins. Preserve zero selections too, because a
+    -- script-set sparse CGangs table can legitimately cancel this ped's grant.
+    slotRoll = math.random(0, 99)
+    local weapon
+    if slot3 ~= 0 then
+        weapon = slotRoll < 33 and slot1 or (slotRoll < 66 and slot2 or slot3)
+    elseif slot2 ~= 0 then
+        weapon = slotRoll < 50 and slot1 or slot2
+    else
+        weapon = slot1
+    end
+    return weapon > 0 and weapon or 0, armedRoll, slotRoll, slotCount
+end
+
+local function applyGangPedWeapon(ped, weapon)
+    -- Stock CPed stores one explicit STD weapon-skill byte. Script peds are
+    -- CPlayerPed wrappers and resolve skill through synchronized player stats,
+    -- which start at POOR. Pin every gang weapon family to its exact STD
+    -- threshold before the grant so both decision/damage and presentation read
+    -- the same weapon.dat row vanilla CPed would use.
+    for _, stat in ipairs(gangStandardWeaponStats) do
+        if not setPedStat(ped, stat[1], stat[2]) then
+            return false
+        end
+    end
+    if weapon == 0 then
+        return getPedWeapon(ped) == 0
+    end
+    local clip = gangWeaponClipAmmo[weapon]
+    if not clip or not giveWeapon(ped, weapon, 9999, true) then
+        return false
+    end
+    -- GTA gives ambient gang peds 25001 rounds. MTA's generic giveWeapon RPC
+    -- intentionally clamps one grant to 9999, while setWeaponAmmo transports a
+    -- full ushort. Compose the two public operations instead of weakening that
+    -- unrelated global clamp.
+    return setWeaponAmmo(ped, weapon, config.nativeGangWeaponAmmo, clip) == true
+end
 
 -- Models reachable from the stock civilian popcycle groups, intersected with
 -- peds.ide CIVMALE/CIVFEMALE. This excludes cops, dealers, gangs and specials
@@ -100,7 +192,7 @@ local requestCursor = 0
 local pendingRequests = {}
 local pendingVisibilityChecks = {}
 local populationProfiles = {}
-local populationWorld = PedTrafficPopulationWorld.create("post_intro")
+local populationWorld = PedTrafficPopulationWorld.create("post_home_coming")
 local populationWorldRevisions = {}
 local trafficPeds = {}
 local trafficGroups = {}
@@ -862,15 +954,42 @@ local function bridgeGunAim(record, aimingPlayer)
     return triggerClientEvent(record.owner, "pedTraffic:gunAimedAt", resourceRoot, record.ped, aimingPlayer)
 end
 
-local function bridgeDamageResponse(record, attackingPlayer, weapon, bodypart)
+local function bridgeDamageResponse(record, attackingPlayer, weapon, bodypart, force)
     if not record or record.removing or record.state ~= "active" or not isElement(record.owner) or not isElement(attackingPlayer) or
-        record.owner == attackingPlayer then
+        (record.owner == attackingPlayer and force ~= true) then
         return false
     end
 
     log(("damage-bridge id=%d attacker=%s owner=%s weapon=%d bodypart=%d"):format(
             record.id, getPlayerName(attackingPlayer), getPlayerName(record.owner), weapon, bodypart))
     return triggerClientEvent(record.owner, "pedTraffic:damageResponse", resourceRoot, record.ped, attackingPlayer, weapon, bodypart)
+end
+
+local function rememberGroupCombatContext(record, attackingPlayer, weapon, bodypart, source)
+    if not record or not record.group or record.group.removing or not isElement(attackingPlayer) or
+        getElementType(attackingPlayer) ~= "player" then
+        return false
+    end
+    local group = record.group
+    group.combatContext = {
+        target = record,
+        attacker = attackingPlayer,
+        weapon = math.floor(tonumber(weapon) or 0),
+        bodypart = math.floor(tonumber(bodypart) or 0),
+        observedAt = getTickCount(),
+        source = tostring(source or "unknown"),
+    }
+    writePopulationTrace("group_combat_context", {
+        group_id = group.id,
+        traffic_id = record.id,
+        epoch = group.epoch,
+        owner_id = isElement(group.owner) and getPopulationClientId(group.owner) or false,
+        attacker_id = getPopulationClientId(attackingPlayer),
+        weapon = group.combatContext.weapon,
+        bodypart = group.combatContext.bodypart,
+        source = group.combatContext.source,
+    })
+    return true
 end
 
 local function assignOwner(record, owner, reason)
@@ -1629,6 +1748,8 @@ local function spawnGangGroup(player, candidate, selection)
 
     for index, member in ipairs(validated) do
         local candidateMember = member.candidate
+        local weapon, armedRoll, slotRoll, weaponSlotCount =
+            selectGangPedWeapon(populationWorld.gangWeapons[selection.gang])
         local ped = createPed(member.model, candidateMember.x, candidateMember.y, candidateMember.z, candidateMember.heading)
         if not ped then
             removeGroup(group, "group-create-ped-refused")
@@ -1647,6 +1768,12 @@ local function spawnGangGroup(player, candidate, selection)
             createdAt = group.createdAt,
             group = group,
             groupIndex = index,
+            weapon = weapon,
+            weaponAmmo = weapon ~= 0 and config.nativeGangWeaponAmmo or 0,
+            weaponClipAmmo = weapon ~= 0 and gangWeaponClipAmmo[weapon] or 0,
+            armedRoll = armedRoll,
+            weaponSlotRoll = slotRoll,
+            weaponSlotCount = weaponSlotCount,
         }
         group.members[index] = record
         trafficPeds[ped] = record
@@ -1659,6 +1786,13 @@ local function spawnGangGroup(player, candidate, selection)
         setElementData(ped, "neon:ambientPedGroupId", group.id)
         setElementData(ped, "neon:ambientPedGroupIndex", index)
         setElementData(ped, "neon:ambientPedGroupRole", index == 1 and "leader" or "member")
+        setElementData(ped, "neon:ambientPedWeapon", weapon)
+        setElementData(ped, "neon:ambientPedWeaponAmmo", record.weaponAmmo)
+        setElementData(ped, "neon:ambientPedWeaponClipAmmo", record.weaponClipAmmo)
+        if not applyGangPedWeapon(ped, weapon) then
+            removeGroup(group, "group-vanilla-weapon-refused")
+            return false, "group-vanilla-weapon"
+        end
         if not setPedFightingStyle(ped, 4) then
             removeGroup(group, "group-vanilla-fighting-style-refused")
             return false, "group-vanilla-fighting-style"
@@ -1691,6 +1825,8 @@ local function spawnGangGroup(player, candidate, selection)
     local models = {}
     local modelIds = {}
     local memberIds = {}
+    local weapons = {}
+    local weaponSelections = {}
     local spawnTransforms = {}
     for _, member in ipairs(validated) do
         stats.spawnedModels[member.model] = (stats.spawnedModels[member.model] or 0) + 1
@@ -1699,12 +1835,22 @@ local function spawnGangGroup(player, candidate, selection)
     end
     for _, record in ipairs(group.members) do
         memberIds[#memberIds + 1] = record.id
+        weapons[#weapons + 1] = record.weapon
+        weaponSelections[#weaponSelections + 1] = {
+            traffic_id = record.id,
+            weapon = record.weapon,
+            ammo = record.weaponAmmo,
+            clip_ammo = record.weaponClipAmmo,
+            armed_roll = record.armedRoll,
+            slot_roll = record.weaponSlotRoll,
+            nonzero_slot_count = record.weaponSlotCount,
+        }
         local x, y, z = getElementPosition(record.ped)
         local _, _, heading = getElementRotation(record.ped)
         spawnTransforms[#spawnTransforms + 1] = ("id=%d:(%.2f,%.2f,%.2f)@%.1f"):format(record.id, x, y, z, heading)
     end
-    log(("group-spawn group=%d gang=%d members=%d models=%s owner=%s epoch=%d target=%.2f live=%d pos=%.1f,%.1f,%.1f"):format(
-            group.id, group.gang, memberCount, table.concat(models, "/"), getPlayerName(owner), group.epoch,
+    log(("group-spawn group=%d gang=%d members=%d models=%s weapons=%s owner=%s epoch=%d target=%.2f live=%d pos=%.1f,%.1f,%.1f"):format(
+            group.id, group.gang, memberCount, table.concat(models, "/"), table.concat(weapons, "/"), getPlayerName(owner), group.epoch,
             selection.gangTarget, selection.totalGangCount, centreX, centreY, centreZ), true)
     log(("group-spawn-transform group=%d epoch=%d members=[%s]"):format(
             group.id, group.epoch, table.concat(spawnTransforms, ";")), true)
@@ -1716,6 +1862,8 @@ local function spawnGangGroup(player, candidate, selection)
         member_count = memberCount,
         member_ids = memberIds,
         models = modelIds,
+        weapons = weapons,
+        weapon_selections = weaponSelections,
         target = selection.gangTarget,
         live_before = selection.totalGangCount,
         position = {x = centreX, y = centreY, z = centreZ},
@@ -2882,6 +3030,50 @@ addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoc
         return
     end
     if evidence == "accepted" and group.state == "assigning" then
+        local reportedWeapons = type(data) == "table" and type(data.weapons) == "table" and data.weapons or false
+        local weaponsByTrafficId = {}
+        if reportedWeapons then
+            for _, row in ipairs(reportedWeapons) do
+                if type(row) == "table" and isIntegerInRange(tonumber(row.trafficId), 1, 2147483647) then
+                    weaponsByTrafficId[tonumber(row.trafficId)] = row
+                end
+            end
+        end
+        for _, record in ipairs(group.members) do
+            local row = weaponsByTrafficId[record.id]
+            local serverWeapon = isElement(record.ped) and getPedWeapon(record.ped) or -1
+            local serverAmmo = isElement(record.ped) and getPedTotalAmmo(record.ped) or 0
+            local serverClipAmmo = isElement(record.ped) and getPedAmmoInClip(record.ped) or 0
+            local serverStatsConverged = true
+            for _, stat in ipairs(gangStandardWeaponStats) do
+                serverStatsConverged = serverStatsConverged and getPedStat(record.ped, stat[1]) == stat[2]
+            end
+            local validWeapon = row and tonumber(row.expected) == record.weapon and tonumber(row.weapon) == record.weapon and
+                row.converged == true and row.statsConverged == true and serverStatsConverged and serverWeapon == record.weapon and
+                tonumber(row.totalAmmo) == record.weaponAmmo and tonumber(row.clipAmmo) == record.weaponClipAmmo and
+                serverAmmo == record.weaponAmmo and serverClipAmmo == record.weaponClipAmmo
+            if not validWeapon then
+                writePopulationTrace("group_weapon_authority_rejected", {
+                    group_id = group.id,
+                    traffic_id = record.id,
+                    epoch = group.epoch,
+                    expected_weapon = record.weapon,
+                    server_weapon = serverWeapon,
+                    server_ammo = serverAmmo,
+                    server_clip_ammo = serverClipAmmo,
+                    server_stats_converged = serverStatsConverged,
+                    reported = row or false,
+                })
+                removeGroup(group, "group-weapon-authority-mismatch")
+                return
+            end
+        end
+        writePopulationTrace("group_weapon_authority_granted", {
+            group_id = group.id,
+            epoch = group.epoch,
+            owner_id = getPopulationClientId(client),
+            weapons = reportedWeapons,
+        })
         if residencyTest and residencyTest.group == group then
             writePopulationTrace("residency_test_accept", {
                 scenario_id = residencyTest.id,
@@ -2909,6 +3101,40 @@ addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoc
             epoch = group.epoch,
             owner_id = getPopulationClientId(client),
         })
+        local context = group.combatContext
+        local contextTargetX, contextTargetY, contextTargetZ
+        local contextAttackerX, contextAttackerY, contextAttackerZ
+        if context and context.target and isElement(context.target.ped) then
+            contextTargetX, contextTargetY, contextTargetZ = getElementPosition(context.target.ped)
+        end
+        if context and isElement(context.attacker) then
+            contextAttackerX, contextAttackerY, contextAttackerZ = getElementPosition(context.attacker)
+        end
+        if context and getTickCount() - context.observedAt <= 8000 and context.target and not context.target.removing and
+            isElement(context.target.ped) and isElement(context.attacker) and getElementHealth(context.attacker) > 0 and
+            getElementDimension(context.attacker) == getElementDimension(context.target.ped) and
+            getElementInterior(context.attacker) == getElementInterior(context.target.ped) and contextTargetX and contextAttackerX and
+            squaredDistance(contextTargetX, contextTargetY, contextTargetZ, contextAttackerX, contextAttackerY, contextAttackerZ) <= 250 * 250 then
+            local restored = bridgeDamageResponse(context.target, context.attacker, context.weapon, context.bodypart, true)
+            writePopulationTrace("group_combat_context_restored", {
+                group_id = group.id,
+                traffic_id = context.target.id,
+                epoch = group.epoch,
+                owner_id = getPopulationClientId(client),
+                attacker_id = getPopulationClientId(context.attacker),
+                weapon = context.weapon,
+                bodypart = context.bodypart,
+                accepted = restored == true,
+                context_age_ms = getTickCount() - context.observedAt,
+            })
+        elseif context then
+            writePopulationTrace("group_combat_context_expired", {
+                group_id = group.id,
+                epoch = group.epoch,
+                context_age_ms = getTickCount() - context.observedAt,
+            })
+            group.combatContext = nil
+        end
         log(("group-accepted group=%d epoch=%d gang=%d members=%d owner=%s"):format(
                 group.id, group.epoch, group.gang, #group.members, getPlayerName(client)), true)
         for _, record in ipairs(group.members) do
@@ -2963,6 +3189,7 @@ addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon,
     end
 
     record.lastInteractionAt = getTickCount()
+    rememberGroupCombatContext(record, client, weapon, bodypart, "observer-bridge")
     bridgeDamageResponse(record, client, math.floor(weapon), math.floor(bodypart))
 end)
 
@@ -2979,7 +3206,7 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
     if not record or record.removing or record.state ~= "active" or client ~= record.owner or
         getElementSyncer(attackingPed) ~= client or not isElement(victim) or getElementType(victim) ~= "player" or victim == client or
         getElementHealth(victim) <= 0 or not isIntegerInRange(epoch, 1, 2147483647) or epoch ~= record.epoch or
-        not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 15) or
+        not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 46) or
         (bodypart ~= 0 and not isIntegerInRange(bodypart, 3, 9)) or not isIntegerInRange(damageFactor, 1, 200) or
         not isIntegerInRange(direction, 0, 3) then
         return
@@ -2992,11 +3219,12 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
 
     -- The raw factor comes from GTA's synchronous GenerateDamageEvent hook,
     -- but remains untrusted network input. Authenticate the exclusive owner,
-    -- epoch, canonical melee weapon, collision envelope and cadence, then
-    -- require one of the factors reachable by this traffic ped's stock class.
+    -- epoch, canonical active weapon, collision envelope and cadence, then
+    -- require the exact melee set or STD weapon.dat firearm factor reachable
+    -- by this traffic ped's stock class.
     local canonicalWeapon = getPedWeapon(attackingPed)
-    if canonicalWeapon ~= math.floor(weapon) or
-        not isCanonicalTrafficMeleeDamage(record, canonicalWeapon, math.floor(damageFactor)) then
+    local damageRadius, damageInterval = getCanonicalTrafficNativeDamage(record, canonicalWeapon, math.floor(damageFactor))
+    if canonicalWeapon ~= math.floor(weapon) or not damageRadius then
         return
     end
 
@@ -3004,13 +3232,13 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
     local vx, vy, vz = getElementPosition(victim)
     if getElementDimension(attackingPed) ~= getElementDimension(victim) or
         getElementInterior(attackingPed) ~= getElementInterior(victim) or
-        squaredDistance(px, py, pz, vx, vy, vz) > config.nativeMeleeDamageRadius * config.nativeMeleeDamageRadius then
+        squaredDistance(px, py, pz, vx, vy, vz) > damageRadius * damageRadius then
         return
     end
 
     local now = getTickCount()
     if record.nativePlayerDamageOwner == client and record.nativePlayerDamageEpoch == epoch then
-        if nonce <= (record.nativePlayerDamageNonce or 0) or now - (record.nativePlayerDamageAt or 0) < config.nativeMeleeDamageInterval then
+        if nonce <= (record.nativePlayerDamageNonce or 0) or now - (record.nativePlayerDamageAt or 0) < damageInterval then
             return
         end
     end
@@ -3025,6 +3253,15 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
             math.floor(damageFactor), math.floor(direction)))
     triggerClientEvent(victim, "pedTraffic:nativePlayerDamage", resourceRoot, attackingPed, epoch, nonce,
                        canonicalWeapon, math.floor(bodypart), math.floor(damageFactor), math.floor(direction))
+end)
+
+addEventHandler("onPedDamage", root, function(attacker, weapon, bodypart)
+    local record = trafficPeds[source]
+    if not record or record.removing or not isElement(attacker) or getElementType(attacker) ~= "player" then
+        return
+    end
+    record.lastInteractionAt = getTickCount()
+    rememberGroupCombatContext(record, attacker, weapon, bodypart, "server-ped-damage")
 end)
 
 addEventHandler("onPedWasted", root, function()

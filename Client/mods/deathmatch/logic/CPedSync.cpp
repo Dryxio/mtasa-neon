@@ -397,6 +397,7 @@ void CPedSync::Packet_PedSync(NetBitStreamInterface& BitStream)
                     if (telemetryPacket.hasVelocity)
                         telemetryPacket.velocity = vecMoveSpeed;
                     telemetryPacket.locomotion = flags2 & 0x02 ? &nativeTaskLocomotion : nullptr;
+                    telemetryPacket.weaponPresentation = flags2 & 0x04 ? &nativeTaskWeaponPresentation : nullptr;
                     telemetryPacket.animation = flags2 & 0x08 ? &nativeTaskAnimationPresentation : nullptr;
                     CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_receive", pPed, &telemetryPacket);
                 }
@@ -1120,6 +1121,7 @@ void CPedSync::WritePedInformation(NetBitStreamInterface* pBitStream, CClientPed
         telemetryPacket.hasVelocity = ucFlags & 0x04;
         telemetryPacket.velocity = vecVelocity;
         telemetryPacket.locomotion = flags2 & 0x02 ? &nativeTaskLocomotion : nullptr;
+        telemetryPacket.weaponPresentation = flags2 & 0x04 ? &nativeTaskWeaponPresentation : nullptr;
         CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::NETWORK, "packet_serialize", pPed, &telemetryPacket);
     }
 

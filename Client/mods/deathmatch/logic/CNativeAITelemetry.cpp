@@ -9,6 +9,8 @@
 #include "StdInc.h"
 #include "CNativeAITelemetry.h"
 
+#include <multiplayer/CMultiplayer.h>
+
 #include <atomic>
 #include <chrono>
 #include <cinttypes>
@@ -23,6 +25,7 @@
 #include <game/CGame.h>
 #include <game/CTaskManager.h>
 #include <game/Task.h>
+#include <game/CWeapon.h>
 
 namespace
 {
@@ -49,6 +52,8 @@ namespace
                 return "ownership";
             case ENativeAITelemetryCategory::GROUP_DECISION:
                 return "group_decision";
+            case ENativeAITelemetryCategory::WEAPON:
+                return "weapon";
             default:
                 return "unknown";
         }
@@ -182,6 +187,7 @@ namespace
             network = all || FileExists(PathJoin(directory, "native-ai-telemetry-network.enable"));
             ownership = all || FileExists(PathJoin(directory, "native-ai-telemetry-ownership.enable"));
             groupDecision = all || FileExists(PathJoin(directory, "native-ai-telemetry-group.enable"));
+            weapon = all || FileExists(PathJoin(directory, "native-ai-telemetry-weapon.enable"));
         }
 
         bool IsEnabled(ENativeAITelemetryCategory category) const
@@ -198,6 +204,8 @@ namespace
                     return ownership;
                 case ENativeAITelemetryCategory::GROUP_DECISION:
                     return groupDecision;
+                case ENativeAITelemetryCategory::WEAPON:
+                    return weapon;
                 default:
                     return false;
             }
@@ -209,6 +217,7 @@ namespace
         bool network{};
         bool ownership{};
         bool groupDecision{};
+        bool weapon{};
     };
 
     const SEnablement& GetEnablement()
@@ -235,8 +244,8 @@ namespace
         }
 
         void Write(ENativeAITelemetryCategory category, const char* event, CClientPed* ped, const SNativeAITelemetryPacket* packet,
-                   const SNativeAIGroupDecision* groupDecision = nullptr, CClientPed* sourcePed = nullptr,
-                   const SNativeAIRotationTelemetry* rotation = nullptr) noexcept
+                   const SNativeAIGroupDecision* groupDecision = nullptr, CClientPed* sourcePed = nullptr, const SNativeAIRotationTelemetry* rotation = nullptr,
+                   const SNativeInstantHitResolved* instantHit = nullptr) noexcept
         {
             try
             {
@@ -247,7 +256,7 @@ namespace
 
                 std::string line;
                 line.reserve(4096);
-                BuildLine(line, category, event, ped, packet, groupDecision, sourcePed, rotation, now);
+                BuildLine(line, category, event, ped, packet, groupDecision, sourcePed, rotation, instantHit, now);
                 if (line.size() > MAX_JSON_LINE_BYTES)
                 {
                     ++m_droppedSinceLastRecord;
@@ -392,7 +401,7 @@ namespace
 
         void BuildLine(std::string& output, ENativeAITelemetryCategory category, const char* event, CClientPed* ped, const SNativeAITelemetryPacket* packet,
                        const SNativeAIGroupDecision* groupDecision, CClientPed* sourcePed, const SNativeAIRotationTelemetry* rotation,
-                       std::uint64_t monotonicNow)
+                       const SNativeInstantHitResolved* instantHit, std::uint64_t monotonicNow)
         {
             output.push_back('{');
             bool first = true;
@@ -437,6 +446,13 @@ namespace
 
                 if (ped->GetGamePlayer())
                     AppendInteger(output, "move_state", static_cast<int>(ped->GetGamePlayer()->GetMoveState()), pedFirst);
+                AppendInteger(output, "weapon_type", static_cast<int>(ped->GetCurrentWeaponType()), pedFirst);
+                AppendInteger(output, "weapon_slot", static_cast<int>(ped->GetCurrentWeaponSlot()), pedFirst);
+                if (CWeapon* weapon = ped->GetWeapon(ped->GetCurrentWeaponSlot()))
+                {
+                    AppendInteger(output, "weapon_ammo_total", weapon->GetAmmoTotal(), pedFirst);
+                    AppendInteger(output, "weapon_ammo_clip", weapon->GetAmmoInClip(), pedFirst);
+                }
             }
             output.push_back('}');
 
@@ -569,6 +585,23 @@ namespace
                     AppendFloat(output, "heading", packet->animation->data.fHeading, animationFirst);
                     output.push_back('}');
                 }
+                if (packet->weaponPresentation)
+                {
+                    const auto& presentation = packet->weaponPresentation->data;
+                    AppendKey(output, "weapon_presentation", sampleFirst);
+                    output.push_back('{');
+                    bool weaponFirst = true;
+                    AppendInteger(output, "mode", presentation.uiMode, weaponFirst);
+                    AppendInteger(output, "weapon_type", presentation.ucWeaponType, weaponFirst);
+                    AppendInteger(output, "burst_length", presentation.usBurstLength, weaponFirst);
+                    AppendInteger(output, "shooting_rate", presentation.ucShootingRate, weaponFirst);
+                    AppendVectorArray(output, "target", presentation.vecTarget, weaponFirst);
+                    AppendFloat(output, "abort_range", presentation.fAbortRange, weaponFirst);
+                    AppendInteger(output, "frequency_percentage", presentation.ucFrequencyPercentage, weaponFirst);
+                    AppendInteger(output, "drive_by_style", presentation.ucDriveByStyle, weaponFirst);
+                    AppendBoolean(output, "seat_rhs", presentation.bSeatRHS, weaponFirst);
+                    output.push_back('}');
+                }
                 output.push_back('}');
             }
             if (rotation)
@@ -654,6 +687,48 @@ namespace
                     AppendInteger(output, "ped_type", groupDecision->sourcePedType, sourceFirst);
                 }
                 output.push_back('}');
+                output.push_back('}');
+            }
+            if (instantHit)
+            {
+                const auto resolveClientEntity = [](CEntity* gameEntity) -> CClientEntity*
+                {
+                    if (!gameEntity)
+                        return nullptr;
+                    auto* clientEntity = static_cast<CClientEntity*>(gameEntity->GetStoredPointer());
+                    return clientEntity && clientEntity->GetGameEntity() == gameEntity ? clientEntity : nullptr;
+                };
+                const auto appendEntity = [&](const char* key, CEntity* gameEntity, bool& parentFirst)
+                {
+                    AppendKey(output, key, parentFirst);
+                    output.push_back('{');
+                    bool           entityFirst = true;
+                    CClientEntity* clientEntity = resolveClientEntity(gameEntity);
+                    AppendBoolean(output, "resolved", clientEntity != nullptr, entityFirst);
+                    if (clientEntity)
+                    {
+                        AppendInteger(output, "mta_element_id", clientEntity->GetID().Value(), entityFirst);
+                        AppendString(output, "element_type", *clientEntity->GetTypeName(), entityFirst);
+                        if (CModelInfo* modelInfo = clientEntity->GetModelInfo())
+                            AppendInteger(output, "model", modelInfo->GetModel(), entityFirst);
+                        SString actorId;
+                        if (clientEntity->GetCustomDataString(CStringName("neon:nativeAIActorId"), actorId, false))
+                            AppendString(output, "actor_id", *actorId, entityFirst);
+                    }
+                    output.push_back('}');
+                };
+
+                AppendKey(output, "weapon_trace", first);
+                output.push_back('{');
+                bool weaponFirst = true;
+                AppendString(output, "path", "fire_instant_hit_primary_los", weaponFirst);
+                AppendString(output, "callsite", "0x740B69", weaponFirst);
+                AppendInteger(output, "weapon_type", static_cast<int>(instantHit->weaponType), weaponFirst);
+                AppendVectorArray(output, "ray_start", instantHit->vecRayStart, weaponFirst);
+                AppendVectorArray(output, "ray_end", instantHit->vecRayEnd, weaponFirst);
+                AppendBoolean(output, "line_of_sight_hit", instantHit->lineOfSightHit, weaponFirst);
+                appendEntity("target_argument", instantHit->pTargetArgument, weaponFirst);
+                appendEntity("hit_entity", instantHit->pHitEntity, weaponFirst);
                 output.push_back('}');
             }
             output.push_back('}');
@@ -787,5 +862,31 @@ void CNativeAITelemetry::RecordGroupDecision(const SNativeAIGroupDecision& decis
     catch (...)
     {
         // Group decisions are diagnostic-only and must never affect AI.
+    }
+}
+
+void CNativeAITelemetry::RecordInstantHitResolved(const SNativeInstantHitResolved& resolved) noexcept
+{
+    if (!IsEnabled(ENativeAITelemetryCategory::WEAPON) || !resolved.pInitiator)
+        return;
+
+    try
+    {
+        auto* entity = static_cast<CClientEntity*>(resolved.pInitiator->GetStoredPointer());
+        if (!entity || !IS_PED(entity))
+            return;
+
+        auto* ped = static_cast<CClientPed*>(entity);
+        if (ped->GetGamePlayer() != resolved.pInitiator || !ped->IsSyncing() || !ped->GetGamePlayer()->IsNativeAmbientGroupActive())
+            return;
+
+        // Only the native owner executes gang weapon tasks. Recording here
+        // gives one authoritative ray per discharge without duplicating
+        // observer-side presentation state.
+        GetWriter().Write(ENativeAITelemetryCategory::WEAPON, "native_weapon_instant_hit_resolved", ped, nullptr, nullptr, nullptr, nullptr, &resolved);
+    }
+    catch (...)
+    {
+        // Weapon diagnostics are observation-only and must never affect fire.
     }
 }

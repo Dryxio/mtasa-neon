@@ -43,9 +43,13 @@ class CProjectileSAInterface* pProjectile = 0;
 DWORD                         dwProjectileInfoIndex;
 bool                          bWeaponFire = false;
 
-CColPointSAInterface** ppInstantHitColPoint;
-CEntitySAInterface**   ppInstantHitEntity;
-CVector *              pInstantHitStart = NULL, *pInstantHitEnd = NULL;
+CColPointSAInterface* pInstantHitColPoint;
+CEntitySAInterface**  ppInstantHitEntity;
+CVector *             pInstantHitStart = NULL, *pInstantHitEnd = NULL;
+CEntitySAInterface*   pInstantHitResolvedFiringEntity = nullptr;
+CEntitySAInterface*   pInstantHitResolvedTargetArgument = nullptr;
+eWeaponType           instantHitResolvedWeaponType = WEAPONTYPE_UNARMED;
+bool                  bInstantHitPrimaryLineOfSightHit = false;
 
 CVector vecLastOrigin;
 CVector vecLastLocalPlayerBulletStart;
@@ -88,6 +92,28 @@ static std::unordered_map<CEventDamageSAInterface*, int>& GetGeneratedDamageEven
     // damage-event destructor hook.
     static auto* factors = new std::unordered_map<CEventDamageSAInterface*, int>;
     return *factors;
+}
+
+static std::unordered_map<CEventDamageSAInterface*, CPedSAInterface*>& GetNativeBehaviorOnlyDamageEvents()
+{
+    // The event can be cloned synchronously while CEventGroup informs the
+    // native gang. Bind the exception to both the exact event lifetime and
+    // its intended victim so no ordinary firearm event can inherit it.
+    static auto* events = new std::unordered_map<CEventDamageSAInterface*, CPedSAInterface*>;
+    return *events;
+}
+
+void RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim)
+{
+    if (pEvent && pVictim)
+        GetNativeBehaviorOnlyDamageEvents()[pEvent] = pVictim;
+}
+
+static bool IsNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim)
+{
+    const auto& events = GetNativeBehaviorOnlyDamageEvents();
+    const auto  iter = events.find(pEvent);
+    return iter != events.end() && iter->second == pVictim;
 }
 
 void CaptureGeneratedDamageEvent(CPedSAInterface* pVictim, CEntitySAInterface* pInflictor, eWeaponType weaponType, int damageFactor,
@@ -140,15 +166,16 @@ CVector*            pBulletImpactStartPosition;
 CVector*            pBulletImpactEndPosition;
 CVector             vecSavedBulletImpactEndPosition;
 
-extern PreWeaponFireHandler*  m_pPreWeaponFireHandler;
-extern PostWeaponFireHandler* m_pPostWeaponFireHandler;
-extern BulletImpactHandler*   m_pBulletImpactHandler;
-extern BulletFireHandler*     m_pBulletFireHandler;
-extern DamageHandler*         m_pDamageHandler;
-extern DeathHandler*          m_pDeathHandler;
-extern FireHandler*           m_pFireHandler;
-extern ProjectileHandler*     m_pProjectileHandler;
-extern ProjectileStopHandler* m_pProjectileStopHandler;
+extern PreWeaponFireHandler*            m_pPreWeaponFireHandler;
+extern PostWeaponFireHandler*           m_pPostWeaponFireHandler;
+extern BulletImpactHandler*             m_pBulletImpactHandler;
+extern BulletFireHandler*               m_pBulletFireHandler;
+extern NativeInstantHitResolvedHandler* m_pNativeInstantHitResolvedHandler;
+extern DamageHandler*                   m_pDamageHandler;
+extern DeathHandler*                    m_pDeathHandler;
+extern FireHandler*                     m_pFireHandler;
+extern ProjectileHandler*               m_pProjectileHandler;
+extern ProjectileStopHandler*           m_pProjectileStopHandler;
 
 char szDebug[255] = {'\0'};
 
@@ -156,6 +183,35 @@ DWORD RETURN_CProjectile__AddProjectile = 0x401C3D;
 DWORD RETURN_CProjectile__CProjectile = 0x4037B3;
 
 CPools* m_pools = 0;
+
+static void CaptureNativeInstantHitPrimaryLineOfSight()
+{
+    if (!m_pNativeInstantHitResolvedHandler || !m_pools || !pInstantHitResolvedFiringEntity || !pInstantHitStart || !pInstantHitEnd)
+    {
+        return;
+    }
+
+    SClientEntity<CPedSA>* pPedClientEntity = m_pools->GetPed(reinterpret_cast<DWORD*>(pInstantHitResolvedFiringEntity));
+    CPed*                  pInitiator = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
+    if (!pInitiator)
+        return;
+
+    CEntitySAInterface* pHitInterface = bInstantHitPrimaryLineOfSightHit && ppInstantHitEntity ? *ppInstantHitEntity : nullptr;
+
+    SNativeInstantHitResolved resolved;
+    resolved.pInitiator = pInitiator;
+    resolved.pTargetArgument = pInstantHitResolvedTargetArgument ? m_pools->GetEntity(reinterpret_cast<DWORD*>(pInstantHitResolvedTargetArgument)) : nullptr;
+    resolved.pHitEntity = pHitInterface ? m_pools->GetEntity(reinterpret_cast<DWORD*>(pHitInterface)) : nullptr;
+    resolved.vecRayStart = *pInstantHitStart;
+    resolved.vecRayEnd = *pInstantHitEnd;
+    resolved.weaponType = instantHitResolvedWeaponType;
+    resolved.lineOfSightHit = bInstantHitPrimaryLineOfSightHit;
+
+    // The ray values came from FireInstantHit stack locals, while target and
+    // hit identities were resolved through GTA's pools. Dispatch this safe
+    // snapshot before returning to the native callsite.
+    m_pNativeInstantHitResolvedHandler(resolved);
+}
 
 #define VAR_CWorld_IncludeCarTyres 0xb7cd70  // Used for CWorld_ProcessLineOfSight
 
@@ -1081,6 +1137,13 @@ static void __declspec(naked) HOOK_CWeapon__Fire_Sniper()
 
 bool ProcessDamageEvent(CEventDamageSAInterface* event, CPedSAInterface* affectsPed)
 {
+    // This resource-authenticated event exists only to drive GTA's native
+    // decision path and must never enter MTA's gameplay damage handler. Let
+    // stock AffectsPed admit it so GTA can classify and inform the group,
+    // without relaxing the bullet-sync guard for any ordinary firearm event.
+    if (IsNativeBehaviorOnlyDamageEvent(event, affectsPed))
+        return true;
+
     if (m_pDamageHandler && event)
     {
         CPoolsSA*              pPools = (CPoolsSA*)pGameInterface->GetPools();
@@ -1164,6 +1227,11 @@ void CloneScriptPedChokeEvent(CEventDamageSAInterface* pDestination, CEventDamag
     auto  factorIt = damageFactors.find(pSource);
     if (pDestination && factorIt != damageFactors.end())
         damageFactors[pDestination] = factorIt->second;
+
+    auto& behaviorOnlyEvents = GetNativeBehaviorOnlyDamageEvents();
+    auto  behaviorOnlyIt = behaviorOnlyEvents.find(pSource);
+    if (pDestination && behaviorOnlyIt != behaviorOnlyEvents.end())
+        behaviorOnlyEvents[pDestination] = behaviorOnlyIt->second;
 }
 
 void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent)
@@ -1172,6 +1240,7 @@ void RemoveScriptPedChokeEvent(CEventDamageSAInterface* pEvent)
     {
         GetScriptPedChokeEvents().erase(pEvent);
         GetGeneratedDamageEventFactors().erase(pEvent);
+        GetNativeBehaviorOnlyDamageEvents().erase(pEvent);
     }
 }
 
@@ -1473,7 +1542,7 @@ static void CheckInVehicleDamage()
                     push    pInstantHitStart
                     push    pInstantHitEnd
                     push    weaponType
-                    push    ppInstantHitColPoint
+                    push    pInstantHitColPoint
                     push    ppInstantHitEntity
                     call    dwFunc
                     add     esp, 0x14
@@ -1729,6 +1798,17 @@ static void __declspec(naked) HOOK_CWeapon_FireInstantHit()
     // clang-format off
     __asm
     {
+        // ESP still includes four deferred CBirds/CShadows arguments here, so
+        // the weapon local and original target argument are shifted by +10h
+        // until GTA's later `add esp, 40h` restores the canonical frame.
+        // Copy the same enum GTA reads after that cleanup instead of retaining
+        // a raw CWeapon interface for the diagnostic callback.
+        mov         pInstantHitResolvedFiringEntity, edi
+        mov         eax, [esp+60h]
+        mov         eax, [eax]
+        mov         instantHitResolvedWeaponType, eax
+        mov         eax, [esp+1D4h]
+        mov         pInstantHitResolvedTargetArgument, eax
         push        1
         push        0
         push        0
@@ -1741,7 +1821,7 @@ static void __declspec(naked) HOOK_CWeapon_FireInstantHit()
         mov         ppInstantHitEntity, eax
         push        eax
         lea         ecx,[esp+0C4h]
-        mov         ppInstantHitColPoint, ecx
+        mov         pInstantHitColPoint, ecx
         push        ecx
         lea         edx,[esp+48h]
         mov         pInstantHitEnd, edx
@@ -1767,9 +1847,12 @@ static void __declspec(naked) HOOK_CWeapon_FireInstantHit()
     {
         popad
         call        dwFunc_CWorld_ProcessLineOfSight
+        mov         bInstantHitPrimaryLineOfSightHit, al
         pushad
     }
     // clang-format on
+
+    CaptureNativeInstantHitPrimaryLineOfSight();
 
     CheckInVehicleDamage();
 
