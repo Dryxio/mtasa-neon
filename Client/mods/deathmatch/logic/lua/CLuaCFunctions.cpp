@@ -10,6 +10,8 @@
 
 #include <StdInc.h>
 
+void RegisterRadioPlaybackFunctions();
+
 static std::vector<CLuaCFunction*>             m_sFunctions;
 static std::map<lua_CFunction, CLuaCFunction*> ms_Functions;
 static void*                                   ms_pFunctionPtrLow = (void*)0xffffffff;
@@ -41,7 +43,7 @@ CLuaCFunction* CLuaCFunctions::AddFunction(const char* szName, lua_CFunction f, 
 
 CLuaCFunction* CLuaCFunctions::GetFunction(const char* szName, lua_CFunction f)
 {
-    // Grab a function of the given name and type
+    // Grab the function we've got passed
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();
     for (; iter != m_sFunctions.end(); iter++)
     {
@@ -56,7 +58,7 @@ CLuaCFunction* CLuaCFunctions::GetFunction(const char* szName, lua_CFunction f)
 
 CLuaCFunction* CLuaCFunctions::GetFunction(const char* szName)
 {
-    // Grab a function of the given name and type
+    // Grab the function we've got passed
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();
     for (; iter != m_sFunctions.end(); iter++)
     {
@@ -80,7 +82,6 @@ CLuaCFunction* CLuaCFunctions::GetFunction(lua_CFunction f)
 
 const char* CLuaCFunctions::GetFunctionName(lua_CFunction f, bool& bRestricted)
 {
-    // Return the function name of the given C address
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();
     for (; iter != m_sFunctions.end(); iter++)
     {
@@ -107,7 +108,6 @@ bool CLuaCFunctions::IsNotFunction(lua_CFunction f)
 
 bool CLuaCFunctions::IsRestricted(const char* szName)
 {
-    // Grab a function of the given name and type
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();
     for (; iter != m_sFunctions.end(); iter++)
     {
@@ -123,6 +123,9 @@ bool CLuaCFunctions::IsRestricted(const char* szName)
 
 void CLuaCFunctions::RegisterFunctionsWithVM(lua_State* luaVM)
 {
+    // Register these lazily after the function registry's own globals are fully constructed.
+    RegisterRadioPlaybackFunctions();
+
     // Register all our functions to a lua VM
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();
     for (; iter != m_sFunctions.end(); iter++)
