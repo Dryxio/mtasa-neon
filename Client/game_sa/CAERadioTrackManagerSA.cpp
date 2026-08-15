@@ -302,14 +302,17 @@ bool CAERadioTrackManagerSA::SetPlaybackState(const SRadioPlaybackState& state)
         settings.trackIndexes[i] = normalisedState.trackIndexes[i];
     }
 
-    // CAEStreamThread keeps the existing decoder when the track id is unchanged. Queueing a
-    // stop first makes its next service pass rebuild the decoder and honour the requested seek.
+    // Keep the desired seek in RequestedSettings until GTA enters RADIO_STARTING. Service()
+    // refreshes ActiveSettings.PlayTime from the hardware before processing the radio mode, so
+    // forcing RADIO_STARTING here would overwrite the transported position before PlayTrack().
+    // RADIO_STOPPED + isInitialised follows StartRadio's native hand-off: Service copies
+    // RequestedSettings to ActiveSettings after that refresh, then starts the requested stream.
     StopHardwareTrack();
-
     trackInterface->requestedSettings = settings;
-    trackInterface->activeSettings = settings;
-    trackInterface->trackMode = eRadioTrackMode::RADIO_STARTING;
-    trackInterface->isInitialised = false;
+    trackInterface->trackMode = eRadioTrackMode::RADIO_STOPPED;
+    trackInterface->isInitialised = true;
+    trackInterface->stationsListed = 0;
+    trackInterface->stationsListDown = 0;
     trackInterface->radioStationMenuRequest = -1;
     trackInterface->radioStationScriptRequest = -1;
     return true;
