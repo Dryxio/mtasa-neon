@@ -13,10 +13,9 @@ profiles and candidates are rejected.
 Each ready client keeps GTA's stock zone-ped model residency current. It also reports
 GTA's read-only population targets for the current zone, two-hour time bucket,
 weekday/weekend state and current rain adjustment. The server applies GTA's
-live density multiplier, cull-zone reduction and maximum-ped gate, projects
-that complete target onto the civilian/gang classes currently supported, and
+live density multiplier, cull-zone reduction and maximum-ped gate, then
 reproduces `FindNewPedType` from the shared live population before requesting a
-native civilian or exact-gang placement
+native civilian, dealer or exact-gang placement
 candidate. GTA still chooses the model from its loaded `pedgrp.dat` entries;
 the server validates the result, creates the real MTA ped, and assigns one persistent
 syncer. Only that owner runs
@@ -100,16 +99,20 @@ latched to stale geometry.
 
 The density checkpoint leaves a 20-slot reserve below MTA's 110-ped logical
 limit and issues at most one global candidate request every 100 ms. Civilians
-are created singly; resident gangs use GTA's native two-to-four-member batch.
-The server keeps the native float class deficits and uses the projected total's
-integer gate, so a fractional target behaves like stock `AddToPopulation`
-without rounding each family independently. A 64 m cell guard of 12 and a 2 m
+and dealers are created singly; resident gangs use GTA's native
+two-to-four-member batch.
+The server keeps the native float class deficits and the stock gate as separate
+values. Retail omits dealers from `ms_nTotalPeds`, so dealers reduce only their
+own deficit while still counting against Neon's physical 90-ped cap. The stock
+gate is rounded only at its final integer comparison; families are never
+redistributed merely because cops or gang slots 8/9 remain unsupported. A 64 m
+cell guard of 12 and a 2 m
 server separation check are only final abuse/saturation bounds; GTA's path-node
 density and collision query still decide normal placement.
 
 Each player owns a local population bubble derived from that client's live GTA
-creation and camera-generation multipliers. Civilian residency ends at the
-stock 54.5 multiplier; gangs retain GTA's extra 30 m. Overlapping players share
+creation and camera-generation multipliers. Civilian/dealer residency ends at
+the stock 54.5 multiplier; gangs retain GTA's extra 30 m. Overlapping players share
 the same peds and counts, while disjoint players can fill separate bubbles.
 A group remains resident when any member is inside any player's gang radius.
 Peds beyond every matching radius receive the stock four-second grace, then
@@ -133,7 +136,7 @@ lease before the new epoch is assigned.
 
 With debug enabled, the server also writes bounded structured records to the
 deployed resource's private `@population-server.jsonl`. Its
-`neon.ped_traffic.population` schema correlates profile changes, per-player
+`neon.ped_traffic.population` schema version 2 correlates profile changes, per-player
 target/live/deficit snapshots, requests, native misses, camera votes, spawns,
 rejections and removals by request, visibility-check, traffic and group IDs.
 The file is reset when `/pedtraffic debug on` begins a new session and stops at
@@ -170,11 +173,23 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   expected jacker. After task 1502 begins, the driver remounts.
   If vanilla selects task 1505, rerun the command; the resource deliberately
   does not override the stock 50/50 fight/flee draw.
+- `/pedtraffic dealertest` is a fail-fast two-client harness for the complete
+  dealer core. It temporarily moves and freezes both on-foot clients in a
+  daytime business zone, requests a real dealer through the C++ population
+  oracle, verifies the retail model set, logical type 17, no initial weapon and
+  owner-only WanderStandard, forces one owner handoff, then requires cleanup
+  ACKs from both clients. Time, transforms and frozen states are restored on
+  PASS, FAIL or cancellation. The timer is keyed by the scalar scenario ID;
+  MTA clones table arguments passed to `setTimer`, so table identity must not
+  be used to drive harness progress.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
-and now admits GTA's civilian and resident-gang population classes. The native
-profile reports cops and dealers too, but this checkpoint deliberately does not
-spawn those classes yet. Ambient vehicle population, cops, dealers, couples, attractors, conversations,
+and now admits GTA's civilian, dealer and resident-gang population classes.
+Dealers are solo, use the exact retail `DEALERS` group `{28,29,30,254}`, carry
+logical `PED_TYPE_DEALER` even when `peds.ide` says criminal/civilian, receive
+no initial weapon, and start in WanderStandard. Dealer sales, later combat
+arming and authoritative `DealerStrength` ecology remain deferred. Ambient
+vehicle population, cops, couples, attractors, conversations,
 headless/offline simulation, custom weather rules and public server density
 controls remain outside this checkpoint. GTA's stock rain reduction is already
 reflected in the native target. The optional command above creates a test
@@ -191,12 +206,12 @@ covered by those scopes remain a later behavior checkpoint.
   `model`, `pedType`, `populationClass`, `gang`, `x`, `y`, `z`, `direction`,
   and `pathLerp`, or `false` plus a bounded miss reason. It never creates an
   unmanaged GTA ped. Omit the optional arguments for GTA's local automatic
-  choice; pass `"civilian", -1` or `"gang", 0..7` when a server has already
-  arbitrated the class from synchronized live counts. A forced gang miss never
-  falls back to a civilian.
+  choice; pass `"civilian", -1`, `"dealer", -1` or `"gang", 0..7` when a
+  server has already arbitrated the class from synchronized live counts. A
+  forced dealer or gang miss never falls back to a civilian.
 - `getAmbientPedPopulationProfile()` returns GTA's current supported target as
-  `supportedTarget`, split into `civilianTarget` and `gangTarget`. `target` also
-  includes the effective `copTarget` and reported `dealerTarget`; `rawCopTarget`
+  `supportedTarget`, split into `civilianTarget`, `dealerTarget` and
+  `gangTarget`. `target` also includes the effective `copTarget`; `rawCopTarget`
   preserves the pre-`noCops` popcycle value for diagnostics. Zone metadata includes
   `zoneType`, `dealerStrength`, `raceFlags`, `noCops`, `timeIndex`, `weekend`,
   and the ten native `gangWeights`. Runtime density/lifecycle fields expose
@@ -213,8 +228,9 @@ covered by those scopes remain a later behavior checkpoint.
   `populationType`, `races`, `dealerStrength`, `noCops`, and indexed
   `gangStrengths` fields to one INFO zone. The harness uses it only while
   applying a server-issued world revision.
-- `resetAmbientPedPopulationModels()` releases the eight stock civilian slots
-  and the ped-only gang residency, then restores the zone metadata snapshot.
+- `resetAmbientPedPopulationModels()` releases the eight stock civilian slots,
+  the single retail dealer slot and the ped-only gang residency, then restores
+  the zone metadata snapshot.
   Call it when generation stops; the client script also calls it during
   resource shutdown.
 - `acquirePedNativeEventProfile(ped, "ambient-wander")` leases the narrow
@@ -324,6 +340,46 @@ client, or seven-second phase timeout. A successful terminal row is
 `residency_test_result` with `result=PASS` and
 `reason=handoff-return-suspend-resume`.
 
+## Deterministic dealer checkpoint
+
+Connect exactly two clients alive and on foot, then run from either client:
+
+```text
+/pedtraffic dealertest
+```
+
+The command enables debug/traffic when needed and resets
+`@population-server.jsonl`. No manual search for a dealer is required. A PASS
+contains one `spawn` with `population_class=dealer`, `logical_ped_type=17`,
+`initial_weapon=0` and `task_profile=wander-standard`; four
+`dealer_test_sample` rows covering both clients before and after the handoff;
+two accepted `dealer_test_cleanup_ack` rows; and a final
+`dealer_test_result` with `result=PASS`.
+
+The clients are placed at the validated Grove Street fixture and remain
+unfrozen while GTA converges a fresh popcycle profile after the test teleport.
+They are frozen only after the dealer is active, so the native profile producer
+can settle without making the authority and handoff samples dependent on
+player movement. Their original transforms and frozen states are restored on
+every terminal path.
+
+Population model residence is refreshed both per rendered frame and by the
+one-second profile timer. This keeps a minimized or unfocused second client
+eligible for the two-client profile and authority assertions even when MTA
+throttles `onClientPreRender` for that window.
+
+Run the analyzer with:
+
+```text
+python3 utils/native-ai-trace-analyzer.py \
+  --population path/to/@population-server.jsonl
+```
+
+The owner sample must be the only one with syncer, accepted assignment, active
+native profile and Wander task. The observer still holds the passive profile
+lease but must not own an assignment or active native AI. The epoch advances
+exactly once during the forced handoff.
+
 ## Population world-state checkpoint
 
 1. Enable debug and traffic at Grove Street. Both clients must log the same
@@ -341,7 +397,7 @@ client, or seven-second phase timeout. A successful terminal row is
 
 1. Put both clients together at Grove Street, run `/pedtraffic debug on`,
    `/pedtraffic preset post_cleaning_the_hood`, then `/pedtraffic on`.
-2. Server `spawn` lines must show the floating civilian/gang targets, live
+2. Server `spawn` lines must show the floating civilian/dealer/gang targets, live
    counts, randomized sub-two deficits, chosen gang score and native model.
    There must be no `population-hint-mismatch` and no old
    `population-class-quota` rejection storm.

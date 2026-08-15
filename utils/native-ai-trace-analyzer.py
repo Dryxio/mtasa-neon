@@ -17,7 +17,7 @@ from typing import Any, Iterable
 SCHEMA = "neon.native_ai.telemetry"
 HARNESS_SCHEMA = "neon.native_ai.harness"
 POPULATION_SCHEMA = "neon.ped_traffic.population"
-POPULATION_SCHEMA_VERSION = 1
+POPULATION_SCHEMA_VERSION = 2
 # This is an analyzer liveness bound, not a GTA population constant. A probe
 # still pending this long after newer telemetry was emitted is useful evidence
 # of a stuck orchestration path, regardless of the configured runtime timeout.
@@ -962,6 +962,7 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
     spawned_group_members = 0
     despawned_peds = 0
     despawned_groups = 0
+    dealer_tests: dict[str, dict[str, Any]] = {}
 
     def warning(record: dict[str, Any], stage: str, message: str, extra: dict[str, Any] | None = None) -> None:
         evidence = population_evidence(record)
@@ -1081,30 +1082,41 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             gang = finite_number(record.get("gang_target"))
             cop = finite_number(record.get("cop_target"))
             dealer = finite_number(record.get("dealer_target"))
-            if None not in (supported, civilian, gang) and not math.isclose(supported, civilian + gang, abs_tol=0.02):
+            if None not in (supported, civilian, dealer, gang) and not math.isclose(
+                supported, civilian + dealer + gang, abs_tol=0.02
+            ):
                 error(
                     record,
                     "population_profile",
-                    "supported_target does not equal civilian_target + gang_target",
-                    {"supported_target": supported, "civilian_plus_gang": civilian + gang},
+                    "supported_target does not equal civilian_target + dealer_target + gang_target",
+                    {"supported_target": supported, "supported_components": civilian + dealer + gang},
                 )
-            if None not in (target, supported, cop, dealer) and not math.isclose(target, supported + cop + dealer, abs_tol=0.02):
+            if None not in (target, supported, cop) and not math.isclose(target, supported + cop, abs_tol=0.02):
                 error(
                     record,
                     "population_profile",
-                    "target does not equal supported_target + cop_target + dealer_target",
-                    {"target": target, "component_total": supported + cop + dealer},
+                    "target does not equal supported_target + cop_target",
+                    {"target": target, "component_total": supported + cop},
                 )
 
         if event in {"population_snapshot", "population_convergence", "candidate_request"}:
             player = record.get("player_id")
             target = nested_number(record, "targets", "total")
             live = nested_number(record, "live", "total")
+            physical_live = nested_number(record, "live", "physical")
+            dealer_live = nested_number(record, "live", "dealer")
             if player is not None and target is not None and live is not None:
                 convergence_by_player[str(player)].append(
                     {"event": event, "clock_ms": population_clock(record), "target": target, "live": live, "gap": target - live}
                 )
-            for population_class in ("total", "civilian", "gang"):
+            if None not in (physical_live, live, dealer_live) and not math.isclose(physical_live, live + dealer_live, abs_tol=0.02):
+                error(
+                    record,
+                    "population_snapshot",
+                    "Physical live count does not equal stock-counted live plus dealers",
+                    {"physical_live": physical_live, "stock_counted_live": live, "dealer_live": dealer_live},
+                )
+            for population_class in ("total", "civilian", "dealer", "gang"):
                 class_target = nested_number(record, "targets", population_class)
                 class_live = nested_number(record, "live", population_class)
                 class_deficit = nested_number(record, "deficits", population_class)
@@ -1180,6 +1192,15 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                         record,
                         "population_request",
                         "Gang candidate requested without a positive gang deficit",
+                        {"deficit": deficit},
+                    )
+            elif population_class == "dealer":
+                deficit = nested_number(record, "deficits", "dealer")
+                if deficit is not None and deficit <= 0:
+                    error(
+                        record,
+                        "population_request",
+                        "Dealer candidate requested without a positive dealer deficit",
                         {"deficit": deficit},
                     )
 
@@ -1334,6 +1355,15 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             spawn_classes[str(record.get("population_class") or "unknown")] += 1
             spawn_gangs[str(record.get("gang") if record.get("gang") is not None else "none")] += 1
             spawn_models[str(record.get("model") if record.get("model") is not None else "unknown")] += 1
+            if record.get("population_class") == "dealer":
+                if record.get("model") not in {28, 29, 30, 254}:
+                    error(record, "population_dealer", "Dealer spawned with a model outside retail DEALERS")
+                if record.get("logical_ped_type") != 17:
+                    error(record, "population_dealer", "Dealer spawn does not carry logical PED_TYPE_DEALER")
+                if record.get("initial_weapon") != 0:
+                    error(record, "population_dealer", "Dealer received a non-vanilla initial weapon")
+                if record.get("task_profile") != "wander-standard":
+                    error(record, "population_dealer", "Dealer did not enter the vanilla WanderStandard profile")
         elif event == "group_spawn":
             spawned_groups += 1
             members = finite_number(record.get("member_count"))
@@ -1426,6 +1456,32 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             elif live_groups.pop(str(group_id), None) is None:
                 warning(record, "population_gap", "Group despawn references a group absent from this trace")
 
+        if event == "dealer_test_started":
+            scenario_id = str(record.get("scenario_id"))
+            dealer_tests[scenario_id] = {"record": record, "samples": [], "cleanup_acks": [], "result": None}
+        elif event in {"dealer_test_sample", "dealer_test_cleanup_ack", "dealer_test_result"}:
+            scenario_id = str(record.get("scenario_id"))
+            test = dealer_tests.get(scenario_id)
+            if test is None:
+                warning(record, "population_gap", f"{event} has no dealer_test_started record")
+            elif event == "dealer_test_sample":
+                test["samples"].append(record)
+                is_owner = record.get("client_id") == record.get("owner_id")
+                if record.get("population_class") != "dealer" or record.get("logical_ped_type") != 17 or record.get("weapon") != 0:
+                    error(record, "population_dealer_test", "Dealer sample has invalid identity or initial weapon")
+                if record.get("syncer") is not is_owner or record.get("assignment") is not is_owner or record.get("profile_active") is not is_owner:
+                    error(record, "population_dealer_test", "Dealer sample violates owner-only native AI authority")
+                if is_owner and record.get("has_wander") is not True:
+                    error(record, "population_dealer_test", "Dealer owner has no WanderStandard task")
+            elif event == "dealer_test_cleanup_ack":
+                test["cleanup_acks"].append(record)
+                if record.get("accepted") is not True:
+                    error(record, "population_dealer_test", "Dealer cleanup acknowledgement reports leaked client state")
+            else:
+                test["result"] = record
+                if record.get("result") != "PASS":
+                    error(record, "population_dealer_test", "Dealer harness did not pass")
+
     clocks = [population_clock(record) for record in population if math.isfinite(population_clock(record))]
     trace_end = max(clocks, default=math.inf)
     pending_requests: list[dict[str, Any]] = []
@@ -1472,6 +1528,26 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                 "Group handoff remained pending past the analyzer liveness bound",
                 {"age_ms": age, "analyzer_liveness_bound_ms": POPULATION_STALE_CHECK_MS},
             )
+
+    for scenario_id, test in dealer_tests.items():
+        result = test["result"]
+        if result is None:
+            error(test["record"], "population_dealer_test", "Dealer harness has no terminal result", {"scenario_id": scenario_id})
+            continue
+        if result.get("result") == "PASS":
+            if len(test["samples"]) != 4:
+                error(result, "population_dealer_test", "Passing dealer harness does not have four authority samples")
+            if len(test["cleanup_acks"]) != 2:
+                error(result, "population_dealer_test", "Passing dealer harness does not have two cleanup acknowledgements")
+            initial_epoch = finite_number(result.get("initial_epoch"))
+            final_epoch = finite_number(result.get("final_epoch"))
+            if initial_epoch is None or final_epoch != initial_epoch + 1:
+                error(
+                    result,
+                    "population_dealer_test",
+                    "Passing dealer harness did not advance the owner epoch exactly once",
+                    {"initial_epoch": initial_epoch, "final_epoch": final_epoch},
+                )
 
     player_summaries: dict[str, Any] = {}
     for player in sorted(set(profiles_by_player) | set(convergence_by_player)):
@@ -1546,6 +1622,15 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             "despawn": counter_dict(despawn_reasons),
         },
         "live_at_trace_end": {"peds_observed": len(live_traffic), "groups_observed": len(live_groups)},
+        "dealer_tests": {
+            scenario_id: {
+                "samples": len(test["samples"]),
+                "cleanup_acks": len(test["cleanup_acks"]),
+                "result": test["result"].get("result") if test["result"] else None,
+                "reason": test["result"].get("reason") if test["result"] else None,
+            }
+            for scenario_id, test in dealer_tests.items()
+        },
     }
     population_serious = sorted(
         (finding for finding in findings if finding.severity == "error"),

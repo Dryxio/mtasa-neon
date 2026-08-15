@@ -117,18 +117,26 @@ namespace
     constexpr std::uintptr_t GTA_NAVIGATION_ZONE_ARRAY = 0xBA3798;
     constexpr std::uintptr_t GTA_ZONE_INFO_ARRAY = 0xBA1DF0;
     constexpr std::uintptr_t GTA_CURRENT_POPCYCLE_ZONE_INFO = 0xC0BC68;
-    constexpr std::uintptr_t GTA_POPCYCLE_OTHER_PEDS = 0xC0BC40;
-    constexpr std::uintptr_t GTA_POPCYCLE_COP_PEDS = 0xC0BC44;
-    constexpr std::uintptr_t GTA_POPCYCLE_GANG_PEDS = 0xC0BC48;
-    constexpr std::uintptr_t GTA_POPCYCLE_DEALER_PEDS = 0xC0E978;
     constexpr std::uintptr_t GTA_POPCYCLE_ZONE_TYPE = 0xC0BC6C;
     constexpr std::uintptr_t GTA_POPCYCLE_WEEKEND = 0xC0BC70;
     constexpr std::uintptr_t GTA_POPCYCLE_TIME_INDEX = 0xC0BC74;
+    constexpr std::uintptr_t GTA_POPCYCLE_COP_PERCENTAGES = 0xC0E018;
+    constexpr std::uintptr_t GTA_POPCYCLE_GANG_PERCENTAGES = 0xC0E1F8;
+    constexpr std::uintptr_t GTA_POPCYCLE_DEALER_PERCENTAGES = 0xC0E3D8;
+    constexpr std::uintptr_t GTA_POPCYCLE_MAX_PEDS = 0xC0E798;
+    constexpr std::uintptr_t FUNC_GetCurrentPercOtherPeds = 0x610310;
     constexpr std::uintptr_t GTA_PED_GROUP_TRANSLATION = 0x8D2540;
     constexpr std::uintptr_t GTA_PED_GROUP_COUNTS = 0xC0ECC0;
     constexpr std::uintptr_t GTA_PED_GROUP_MODELS = 0xC0F358;
     constexpr std::uintptr_t GTA_CURRENT_WORLD_ZONE = 0xC0FCBC;
+    constexpr std::uintptr_t GTA_WEATHER_REGION = 0xC81314;
     constexpr unsigned int   POPCYCLE_GANG_GROUP_BASE = 18;
+    constexpr unsigned int   POPCYCLE_TIME_COUNT = 12;
+    constexpr unsigned int   POPCYCLE_WEEK_COUNT = 2;
+    constexpr unsigned int   POPCYCLE_ZONE_COUNT = 20;
+    constexpr int            POPCYCLE_COP_MIN_10_CASES[] = {4, 14, 16};
+    constexpr int            POPCYCLE_COP_MIN_05_CASE = 5;
+    constexpr int            POPCYCLE_COP_DISABLED_CASES[] = {8, 17};
     constexpr unsigned int   POPCYCLE_GROUP_COUNT = 33;
     constexpr unsigned int   POPCYCLE_PED_GROUP_COUNT = 57;
     constexpr unsigned int   POPCYCLE_PED_GROUP_CAPACITY = 21;
@@ -136,6 +144,7 @@ namespace
     constexpr unsigned int   AMBIENT_PED_GANG_MODELS_PER_GANG = 2;
     constexpr unsigned int   AMBIENT_PED_GANG_ROTATION_TICKS = 550;
     constexpr unsigned int   AMBIENT_PED_STOCK_MODEL_COUNT = 289;
+    constexpr int            AMBIENT_PED_DEALER_MODELS[] = {28, 29, 30, 254};
     constexpr unsigned int   STREAMING_GAME_REQUIRED = 0x2;
     constexpr unsigned int   STREAMING_KEEP_IN_MEMORY = 0x8;
     constexpr unsigned int   AMBIENT_PED_STREAMING_FLAG_MASK = STREAMING_GAME_REQUIRED | STREAMING_KEEP_IN_MEMORY;
@@ -143,6 +152,8 @@ namespace
     constexpr unsigned int   PED_TYPE_CIVMALE = 4;
     constexpr unsigned int   PED_TYPE_CIVFEMALE = 5;
     constexpr unsigned int   PED_TYPE_GANG1 = 7;
+    constexpr unsigned int   PED_TYPE_DEALER = 17;
+    constexpr short          WEATHER_REGION_SF = 2;
     constexpr std::uintptr_t GTA_PED_GROUP_ACTIVE = 0xC098E0;
     constexpr std::uintptr_t GTA_PED_GROUPS = 0xC09920;
     constexpr std::uintptr_t FUNC_AddPedGroup = 0x5FB800;
@@ -221,6 +232,71 @@ namespace
         unsigned char raceFlags;
     };
     static_assert(sizeof(SAmbientPedPopulationZoneInfoSA) == 0x11, "Invalid CZoneInfo mirror size");
+
+    struct SAmbientPedPopulationTargetsSA
+    {
+        float civilian{};
+        float cop{};
+        float gang{};
+        float dealer{};
+    };
+
+    bool CalculateAmbientPedPopulationTargets(const SAmbientPedPopulationZoneInfoSA* zoneInfo, int timeIndex, int weekend, int zoneType,
+                                              SAmbientPedPopulationTargetsSA& targets)
+    {
+        targets = {};
+        if (!zoneInfo || timeIndex < 0 || timeIndex >= static_cast<int>(POPCYCLE_TIME_COUNT) || weekend < 0 ||
+            weekend >= static_cast<int>(POPCYCLE_WEEK_COUNT) || zoneType < 0 || zoneType >= static_cast<int>(POPCYCLE_ZONE_COUNT))
+        {
+            return false;
+        }
+
+        // CPopulation::Update is deliberately cut short by multiplayer_sa, so
+        // the four cached m_Num*Peds globals do not retain retail's dealer
+        // share. Reproduce the read-only part of UpdatePercentages here rather
+        // than calling it: the stock function also advances riot lighting.
+        float gangStrength = 0.0f;
+        for (const unsigned char strength : zoneInfo->gangStrength)
+            gangStrength += strength;
+
+        float dealerShare = std::max(0.1f, static_cast<float>(zoneInfo->dealerStrength) / 100.0f);
+        float gangShare = std::min(0.5f, gangStrength / 100.0f);
+        float copShare = gangShare >= 0.15f ? std::max(0.03f, 0.3f - gangShare) : std::max(0.02f, gangShare);
+        // These are the literal PopType case values at 0x610881. Keep the
+        // values, rather than the misleading reversed ped-group labels, tied
+        // to the table index consumed by retail.
+        if (std::find(std::begin(POPCYCLE_COP_MIN_10_CASES), std::end(POPCYCLE_COP_MIN_10_CASES), zoneType) != std::end(POPCYCLE_COP_MIN_10_CASES))
+            copShare = std::max(0.1f, copShare);
+        else if (zoneType == POPCYCLE_COP_MIN_05_CASE)
+            copShare = std::max(0.05f, copShare);
+        else if (std::find(std::begin(POPCYCLE_COP_DISABLED_CASES), std::end(POPCYCLE_COP_DISABLED_CASES), zoneType) != std::end(POPCYCLE_COP_DISABLED_CASES))
+            copShare = 0.0f;
+
+        float       civilianShare = 0.0f;
+        const float allocatedShare = dealerShare + gangShare + copShare;
+        if (allocatedShare <= 1.0f)
+            civilianShare = 1.0f - allocatedShare;
+        else
+        {
+            dealerShare /= allocatedShare;
+            gangShare /= allocatedShare;
+            copShare /= allocatedShare;
+        }
+
+        const std::size_t index = (static_cast<std::size_t>(timeIndex) * POPCYCLE_WEEK_COUNT + static_cast<std::size_t>(weekend)) * POPCYCLE_ZONE_COUNT +
+                                  static_cast<std::size_t>(zoneType);
+        const auto* maxPeds = reinterpret_cast<const unsigned char*>(GTA_POPCYCLE_MAX_PEDS);
+        const auto* copPercentages = reinterpret_cast<const unsigned char*>(GTA_POPCYCLE_COP_PERCENTAGES);
+        const auto* gangPercentages = reinterpret_cast<const unsigned char*>(GTA_POPCYCLE_GANG_PERCENTAGES);
+        const auto* dealerPercentages = reinterpret_cast<const unsigned char*>(GTA_POPCYCLE_DEALER_PERCENTAGES);
+        const float maximumPeds = static_cast<float>(maxPeds[index]);
+        const float otherPercentage = reinterpret_cast<float(__cdecl*)()>(FUNC_GetCurrentPercOtherPeds)() / 100.0f;
+        targets.civilian = maximumPeds * civilianShare * otherPercentage;
+        targets.cop = maximumPeds * copShare * static_cast<float>(copPercentages[index]) / 100.0f;
+        targets.gang = maximumPeds * gangShare * static_cast<float>(gangPercentages[index]) / 100.0f;
+        targets.dealer = maximumPeds * dealerShare * static_cast<float>(dealerPercentages[index]) / 100.0f;
+        return std::isfinite(targets.civilian) && std::isfinite(targets.cop) && std::isfinite(targets.gang) && std::isfinite(targets.dealer);
+    }
 
     struct SAmbientPedNavigationZoneSA
     {
@@ -1154,6 +1230,7 @@ void CGameSA::UpdateAmbientPedPopulationModels(const CVector& origin)
         InitializeAmbientPedPopulationZones();
         InitializeAmbientPedPopulationStreamingLease();
         std::fill(&m_ambientPedGangModels[0][0], &m_ambientPedGangModels[0][0] + AMBIENT_PED_GANG_COUNT * AMBIENT_PED_GANG_MODELS_PER_GANG, -1);
+        m_ambientPedDealerModel = -1;
         m_ambientPedGangModelUpdateCounter = 0;
         m_ambientPedGangModelRotation = 0;
     }
@@ -1199,6 +1276,7 @@ void CGameSA::UpdateAmbientPedPopulationModels(const CVector& origin)
         }
     }
     ProtectAmbientPedPopulationStreamingRequests();
+    UpdateAmbientPedDealerModel();
     UpdateAmbientPedGangModels();
     PreserveAmbientPedPopulationStreamingFlags();
 }
@@ -1212,6 +1290,7 @@ void CGameSA::ResetAmbientPedPopulationModels()
     }
 
     ProtectAmbientPedPopulationStreamingRequests();
+    ResetAmbientPedDealerModel();
     ResetAmbientPedGangModels();
 
     // These eight stock slots are otherwise orphaned when MTA's ambient caller
@@ -1520,6 +1599,55 @@ void CGameSA::RestoreAmbientPedPopulationZones()
     m_areAmbientPedPopulationZonesInitialized = false;
 }
 
+void CGameSA::UpdateAmbientPedDealerModel()
+{
+    for (const int modelId : AMBIENT_PED_DEALER_MODELS)
+        m_ambientPedPopulationStreamingTouched[modelId] = true;
+
+    int                            desiredModel = -1;
+    const auto* const              zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
+    const int                      zoneType = *reinterpret_cast<const int*>(GTA_POPCYCLE_ZONE_TYPE);
+    const int                      timeIndex = *reinterpret_cast<const int*>(GTA_POPCYCLE_TIME_INDEX);
+    const int                      weekend = *reinterpret_cast<const int*>(GTA_POPCYCLE_WEEKEND);
+    SAmbientPedPopulationTargetsSA targets;
+    if (CalculateAmbientPedPopulationTargets(zoneInfo, timeIndex, weekend, zoneType, targets) && targets.dealer > 0.03f)
+    {
+        // StreamVehiclesAndPeds chooses exactly one entry from the DEALERS
+        // group. Keep this ped-only passage separate: the surrounding retail
+        // function also streams wanted-level police vehicles and actors.
+        unsigned int dealerIndex = 2;
+        if (*reinterpret_cast<const short*>(GTA_WEATHER_REGION) == WEATHER_REGION_SF)
+            dealerIndex = 3;
+        else if ((zoneInfo->raceFlags & 0x1) != 0)
+            dealerIndex = 0;
+        else if ((zoneInfo->raceFlags & 0x2) != 0)
+            dealerIndex = 1;
+        desiredModel = AMBIENT_PED_DEALER_MODELS[dealerIndex];
+    }
+
+    if (desiredModel >= 0)
+        m_pStreaming->RequestModel(desiredModel, STREAMING_GAME_REQUIRED);
+
+    for (const int modelId : AMBIENT_PED_DEALER_MODELS)
+    {
+        if (modelId == desiredModel)
+            continue;
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelIsDeletable)(modelId);
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelTxdIsDeletable)(modelId);
+    }
+    m_ambientPedDealerModel = desiredModel;
+}
+
+void CGameSA::ResetAmbientPedDealerModel()
+{
+    for (const int modelId : AMBIENT_PED_DEALER_MODELS)
+    {
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelIsDeletable)(modelId);
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelTxdIsDeletable)(modelId);
+    }
+    m_ambientPedDealerModel = -1;
+}
+
 void CGameSA::UpdateAmbientPedGangModels()
 {
     const auto* const zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
@@ -1630,46 +1758,43 @@ bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profi
     if (!m_areAmbientPedPopulationModelsActive || !*reinterpret_cast<void**>(GTA_CURRENT_POPCYCLE_ZONE_INFO))
         return false;
 
-    const float civilianTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_OTHER_PEDS);
-    const float rawCopTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_COP_PEDS);
-    const float gangTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_GANG_PEDS);
-    const float dealerTarget = *reinterpret_cast<const float*>(GTA_POPCYCLE_DEALER_PEDS);
-    const float pedDensityMultiplier = *reinterpret_cast<const float*>(GTA_PED_DENSITY_MULTIPLIER);
-    const auto  maximumPedsInUse = *reinterpret_cast<const unsigned int*>(GTA_MAX_PEDS_IN_USE);
-    const float creationDistanceMultiplier = reinterpret_cast<float(__cdecl*)()>(FUNC_PedCreationDistMultiplier)();
-    const float generationDistanceMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
-    const int   zoneType = *reinterpret_cast<const int*>(GTA_POPCYCLE_ZONE_TYPE);
-    const int   timeIndex = *reinterpret_cast<const int*>(GTA_POPCYCLE_TIME_INDEX);
-    const int   weekend = *reinterpret_cast<const int*>(GTA_POPCYCLE_WEEKEND);
-    if (!std::isfinite(civilianTarget) || !std::isfinite(rawCopTarget) || !std::isfinite(gangTarget) || !std::isfinite(dealerTarget) ||
-        !std::isfinite(pedDensityMultiplier) || !std::isfinite(creationDistanceMultiplier) || !std::isfinite(generationDistanceMultiplier) ||
-        civilianTarget < 0.0f || civilianTarget > 110.0f || rawCopTarget < 0.0f || rawCopTarget > 110.0f || gangTarget < 0.0f || gangTarget > 110.0f ||
-        dealerTarget < 0.0f || dealerTarget > 110.0f || pedDensityMultiplier < 0.0f || pedDensityMultiplier > 10.0f || maximumPedsInUse > 110 ||
-        creationDistanceMultiplier < 1.0f || creationDistanceMultiplier > 1.5f || generationDistanceMultiplier <= 0.0f ||
-        generationDistanceMultiplier > 10.0f || zoneType < 0 || zoneType >= 20 || timeIndex < 0 || timeIndex >= 12 || weekend < 0 || weekend > 1)
+    const float                    pedDensityMultiplier = *reinterpret_cast<const float*>(GTA_PED_DENSITY_MULTIPLIER);
+    const auto                     maximumPedsInUse = *reinterpret_cast<const unsigned int*>(GTA_MAX_PEDS_IN_USE);
+    const float                    creationDistanceMultiplier = reinterpret_cast<float(__cdecl*)()>(FUNC_PedCreationDistMultiplier)();
+    const float                    generationDistanceMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
+    const int                      zoneType = *reinterpret_cast<const int*>(GTA_POPCYCLE_ZONE_TYPE);
+    const int                      timeIndex = *reinterpret_cast<const int*>(GTA_POPCYCLE_TIME_INDEX);
+    const int                      weekend = *reinterpret_cast<const int*>(GTA_POPCYCLE_WEEKEND);
+    const auto*                    zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
+    SAmbientPedPopulationTargetsSA targets;
+    if (!CalculateAmbientPedPopulationTargets(zoneInfo, timeIndex, weekend, zoneType, targets) || !std::isfinite(pedDensityMultiplier) ||
+        !std::isfinite(creationDistanceMultiplier) || !std::isfinite(generationDistanceMultiplier) || targets.civilian < 0.0f || targets.civilian > 110.0f ||
+        targets.cop < 0.0f || targets.cop > 110.0f || targets.gang < 0.0f || targets.gang > 110.0f || targets.dealer < 0.0f || targets.dealer > 110.0f ||
+        pedDensityMultiplier < 0.0f || pedDensityMultiplier > 10.0f || maximumPedsInUse > 110 || creationDistanceMultiplier < 1.0f ||
+        creationDistanceMultiplier > 1.5f || generationDistanceMultiplier <= 0.0f || generationDistanceMultiplier > 10.0f || zoneType < 0 || zoneType >= 20 ||
+        timeIndex < 0 || timeIndex >= 12 || weekend < 0 || weekend > 1)
     {
         return false;
     }
 
-    profile.civilianTarget = civilianTarget;
-    profile.gangTarget = gangTarget;
-    profile.dealerTarget = dealerTarget;
+    profile.civilianTarget = targets.civilian;
+    profile.gangTarget = targets.gang;
+    profile.dealerTarget = targets.dealer;
     profile.pedDensityMultiplier = pedDensityMultiplier;
     profile.fewerPedsMultiplier = reinterpret_cast<bool(__cdecl*)()>(FUNC_CullZonesFewerPeds)() ? 0.6f : 1.0f;
     profile.maximumPedsInUse = maximumPedsInUse;
     profile.creationDistanceMultiplier = creationDistanceMultiplier;
     profile.generationDistanceMultiplier = generationDistanceMultiplier;
-    profile.supportedTarget = civilianTarget + gangTarget;
+    profile.supportedTarget = targets.civilian + targets.gang + targets.dealer;
     profile.zoneType = static_cast<unsigned char>(zoneType);
     profile.timeIndex = static_cast<unsigned char>(timeIndex);
     profile.weekend = static_cast<unsigned char>(weekend);
-    const auto* zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
     profile.dealerStrength = zoneInfo->dealerStrength;
     profile.raceFlags = zoneInfo->raceFlags & 0x0F;
     profile.noCops = (zoneInfo->populationFlags & 0x80) != 0;
-    profile.rawCopTarget = rawCopTarget;
-    profile.copTarget = profile.noCops ? 0.0f : rawCopTarget;
-    profile.target = profile.supportedTarget + profile.copTarget + dealerTarget;
+    profile.rawCopTarget = targets.cop;
+    profile.copTarget = profile.noCops ? 0.0f : targets.cop;
+    profile.target = profile.supportedTarget + profile.copTarget;
     std::copy(std::begin(zoneInfo->gangStrength), std::end(zoneInfo->gangStrength), std::begin(profile.gangWeights));
     return std::isfinite(profile.target) && std::isfinite(profile.supportedTarget) && profile.target <= 110.0f;
 }
@@ -1694,7 +1819,7 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
 {
     candidate = {};
     if (selection != EAmbientPedPopulationSelection::Automatic && selection != EAmbientPedPopulationSelection::Civilian &&
-        selection != EAmbientPedPopulationSelection::Gang)
+        selection != EAmbientPedPopulationSelection::Gang && selection != EAmbientPedPopulationSelection::Dealer)
     {
         return EAmbientPedSpawnCandidateResult::NoModel;
     }
@@ -1717,10 +1842,31 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
     CPedModelInfoSAInterface*    modelInfo = nullptr;
     SAmbientPedPopulationProfile profile;
     const bool                   hasProfile = GetAmbientPedPopulationProfile(profile);
-    const bool                   chooseGang =
-        selection == EAmbientPedPopulationSelection::Gang ||
-        (selection == EAmbientPedPopulationSelection::Automatic && hasProfile && profile.gangTarget > 0.0f && profile.supportedTarget > 0.0f &&
-         (profile.civilianTarget <= 0.0f || static_cast<float>(rand() & 0xFFFF) / 65535.0f < profile.gangTarget / profile.supportedTarget));
+    const float                  automaticTicket = selection == EAmbientPedPopulationSelection::Automatic && hasProfile && profile.supportedTarget > 0.0f
+                                                       ? static_cast<float>(rand() & 0xFFFF) / 65535.0f * profile.supportedTarget
+                                                       : -1.0f;
+    const bool                   chooseDealer = selection == EAmbientPedPopulationSelection::Dealer ||
+                              (selection == EAmbientPedPopulationSelection::Automatic && automaticTicket >= 0.0f && automaticTicket < profile.dealerTarget);
+    const bool chooseGang = selection == EAmbientPedPopulationSelection::Gang ||
+                            (selection == EAmbientPedPopulationSelection::Automatic && automaticTicket >= profile.dealerTarget &&
+                             automaticTicket < profile.dealerTarget + profile.gangTarget);
+    if (chooseDealer)
+    {
+        const int proposedModel = m_ambientPedDealerModel;
+        if (proposedModel >= 0)
+        {
+            auto* proposedInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(proposedModel));
+            if (proposedInfo && proposedInfo->pRwObject)
+            {
+                modelId = proposedModel;
+                modelInfo = proposedInfo;
+                candidate.populationClass = EAmbientPedPopulationClass::Dealer;
+                candidate.gangId = 0xFF;
+            }
+        }
+        if (selection == EAmbientPedPopulationSelection::Dealer && modelId < 0)
+            return EAmbientPedSpawnCandidateResult::NoModel;
+    }
     if (chooseGang)
     {
         const auto* const zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
@@ -1770,7 +1916,7 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
             return EAmbientPedSpawnCandidateResult::NoModel;
     }
 
-    if (modelId < 0 && selection != EAmbientPedPopulationSelection::Gang)
+    if (modelId < 0 && selection != EAmbientPedPopulationSelection::Gang && selection != EAmbientPedPopulationSelection::Dealer)
     {
         const auto chooseCivilian = reinterpret_cast<int(__cdecl*)(bool, bool, int, int, int, bool, bool, bool, const char*)>(FUNC_ChooseCivilianOccupation);
         modelId = chooseCivilian(false, false, -1, -1, -1, false, true, false, nullptr);
@@ -1790,7 +1936,9 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
         return EAmbientPedSpawnCandidateResult::NoModel;
     if (!modelInfo || !modelInfo->pRwObject ||
         (candidate.populationClass == EAmbientPedPopulationClass::Civilian && modelInfo->pedType != PED_TYPE_CIVMALE &&
-         modelInfo->pedType != PED_TYPE_CIVFEMALE))
+         modelInfo->pedType != PED_TYPE_CIVFEMALE) ||
+        (candidate.populationClass == EAmbientPedPopulationClass::Dealer &&
+         std::find(std::begin(AMBIENT_PED_DEALER_MODELS), std::end(AMBIENT_PED_DEALER_MODELS), modelId) == std::end(AMBIENT_PED_DEALER_MODELS)))
     {
         return EAmbientPedSpawnCandidateResult::UnsupportedModel;
     }
@@ -1862,7 +2010,7 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
 
     candidate.position = position;
     candidate.modelId = static_cast<unsigned int>(modelId);
-    candidate.pedType = static_cast<unsigned char>(modelInfo->pedType);
+    candidate.pedType = candidate.populationClass == EAmbientPedPopulationClass::Dealer ? PED_TYPE_DEALER : static_cast<unsigned char>(modelInfo->pedType);
     candidate.wanderDirection = static_cast<unsigned char>(rand() & 7);
     candidate.pathLerp = pathLerp;
     return EAmbientPedSpawnCandidateResult::Success;

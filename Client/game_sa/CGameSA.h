@@ -466,6 +466,7 @@ private:
     unsigned int     m_ambientPedGangModelUpdateCounter{};
     unsigned int     m_ambientPedGangModelRotation{};
     int              m_ambientPedGangModels[10][2]{};
+    int              m_ambientPedDealerModel{-1};
     unsigned char    m_ambientPedPopulationZoneSnapshot[380][0x11]{};
     unsigned char    m_ambientPedPopulationZoneExpected[380][0x11]{};
     unsigned char    m_ambientPedPopulationModelFlagSnapshot[289]{};
@@ -479,6 +480,8 @@ private:
     void ProtectAmbientPedPopulationStreamingRequests();
     void PreserveAmbientPedPopulationStreamingFlags();
     void RestoreAmbientPedPopulationStreamingLease();
+    void UpdateAmbientPedDealerModel();
+    void ResetAmbientPedDealerModel();
     void UpdateAmbientPedGangModels();
     void ResetAmbientPedGangModels();
 

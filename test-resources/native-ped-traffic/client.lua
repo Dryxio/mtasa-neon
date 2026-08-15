@@ -909,9 +909,9 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         return
     end
 
-    if populationClass ~= "civilian" and populationClass ~= "gang" or
+    if populationClass ~= "civilian" and populationClass ~= "gang" and populationClass ~= "dealer" or
         (populationClass == "gang" and (type(gang) ~= "number" or gang ~= math.floor(gang) or gang < 0 or gang > 7)) or
-        (populationClass == "civilian" and gang ~= false) then
+        (populationClass ~= "gang" and gang ~= false) then
         stats.candidateMisses = stats.candidateMisses + 1
         triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt,
                            "invalid-population-hint")
@@ -1023,10 +1023,24 @@ addEventHandler("pedTraffic:spawnFadeIn", resourceRoot, function(peds, duration)
     end
 end)
 
+local function updateLocalPopulationModels()
+    if enabled and populationWorldReady and getElementDimension(localPlayer) == 0 and getElementInterior(localPlayer) == 0 and
+        type(updateAmbientPedPopulationModels) == "function" then
+        local x, y, z = getElementPosition(localPlayer)
+        updateAmbientPedPopulationModels(x, y, z)
+    end
+end
+
 setTimer(function()
     if not enabled or not populationWorldReady then
         return
     end
+
+    -- onClientPreRender is throttled or suspended for an unfocused/minimized
+    -- MTA window. Refresh the native model lease from this timer as well so a
+    -- background second client can still produce its population profile and
+    -- participate in deterministic owner/observer tests.
+    updateLocalPopulationModels()
 
     if type(getAmbientPedPopulationProfile) ~= "function" then
         triggerServerEvent("pedTraffic:populationProfile", resourceRoot, false)
@@ -1095,6 +1109,82 @@ addEventHandler("pedTraffic:stop", resourceRoot, function(ped, epoch, reason)
         log(("stop epoch=%d reason=%s"):format(epoch, tostring(reason)))
         releaseTask(task, true)
     end
+end)
+
+local function collectDealerTestTasks(ped)
+    local tasks = {}
+    local hasWander = false
+    if type(getPedTask) ~= "function" then
+        return tasks, hasWander
+    end
+    for slot = 0, 3 do
+        local hierarchy = {getPedTask(ped, "primary", slot)}
+        if hierarchy[1] ~= false then
+            for _, taskName in ipairs(hierarchy) do
+                tasks[#tasks + 1] = ("%d:%s"):format(slot, tostring(taskName))
+                if taskName == "TASK_COMPLEX_WANDER" or taskName == "TASK_COMPLEX_WANDER_STANDARD" then
+                    hasWander = true
+                end
+            end
+        end
+    end
+    return tasks, hasWander
+end
+
+addEvent("pedTraffic:dealerTestSample", true)
+addEventHandler("pedTraffic:dealerTestSample", resourceRoot, function(testId, ped, epoch, phase)
+    if not enabled or not isElement(ped) or getElementType(ped) ~= "ped" or
+        getElementData(ped, "neon:ambientPedTrafficId") == false then
+        return
+    end
+    local task = assignments[ped]
+    local token = nativeEventProfiles[ped]
+    local tasks, hasWander = collectDealerTestTasks(ped)
+    triggerServerEvent("pedTraffic:dealerTestSampleResult", resourceRoot, testId, phase, {
+        model = getElementModel(ped),
+        populationClass = getElementData(ped, "neon:ambientPedPopulationClass"),
+        logicalPedType = getElementData(ped, "neon:ambientPedLogicalType"),
+        weapon = getPedWeapon(ped),
+        epoch = epoch,
+        syncer = isElementSyncer(ped),
+        assignment = task ~= nil and task.epoch == epoch,
+        assignmentAccepted = task ~= nil and task.epoch == epoch and task.accepted == true,
+        profilePresent = token ~= nil,
+        profileActive = token ~= nil and isPedNativeEventProfileActive(ped, token) == true,
+        hasWander = hasWander,
+        tasks = tasks,
+    })
+end)
+
+addEvent("pedTraffic:dealerTestCleanup", true)
+addEventHandler("pedTraffic:dealerTestCleanup", resourceRoot, function(testId, trafficId)
+    local function reportCleanup(attempt)
+        local elementPresent = false
+        local assignmentPresent = false
+        local profilePresent = false
+        for ped, task in pairs(assignments) do
+            if isElement(ped) and tonumber(getElementData(ped, "neon:ambientPedTrafficId")) == trafficId then
+                elementPresent = true
+                assignmentPresent = task ~= nil
+            end
+        end
+        for ped in pairs(nativeEventProfiles) do
+            if isElement(ped) and tonumber(getElementData(ped, "neon:ambientPedTrafficId")) == trafficId then
+                elementPresent = true
+                profilePresent = true
+            end
+        end
+        if elementPresent and attempt < 20 then
+            setTimer(reportCleanup, 100, 1, attempt + 1)
+            return
+        end
+        triggerServerEvent("pedTraffic:dealerTestCleanupResult", resourceRoot, testId, trafficId, {
+            elementPresent = elementPresent,
+            assignmentPresent = assignmentPresent,
+            profilePresent = profilePresent,
+        })
+    end
+    reportCleanup(1)
 end)
 
 addEvent("pedTraffic:assignGroup", true)
@@ -1586,11 +1676,7 @@ addEventHandler("onClientPreRender", root, function()
         end
     end
 
-    if enabled and populationWorldReady and getElementDimension(localPlayer) == 0 and getElementInterior(localPlayer) == 0 and
-        type(updateAmbientPedPopulationModels) == "function" then
-        local x, y, z = getElementPosition(localPlayer)
-        updateAmbientPedPopulationModels(x, y, z)
-    end
+    updateLocalPopulationModels()
 end)
 
 addEventHandler("onClientElementDestroy", root, function()

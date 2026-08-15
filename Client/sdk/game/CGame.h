@@ -166,6 +166,7 @@ enum class EAmbientPedPopulationClass : unsigned char
 {
     Civilian,
     Gang,
+    Dealer,
 };
 
 enum class EAmbientPedPopulationSelection : unsigned char
@@ -173,6 +174,7 @@ enum class EAmbientPedPopulationSelection : unsigned char
     Automatic,
     Civilian,
     Gang,
+    Dealer,
 };
 
 enum class EAmbientPedPopulationZoneField : unsigned int
@@ -197,8 +199,9 @@ static_assert(sizeof(SAmbientPedPopulationZoneState) == 20, "Ambient population 
 
 // Read directly from GTA's active popcycle state after Neon's reversible
 // vanilla zone bootstrap and authoritative campaign mutations have been
-// applied. supportedTarget names the civilian/gang subset implemented by the
-// current traffic checkpoint; target still reports all four vanilla classes.
+// applied. supportedTarget names the civilian/gang/dealer subset implemented
+// by the current traffic checkpoint; target still reports all four vanilla
+// classes.
 struct SAmbientPedPopulationProfile
 {
     float         target{};

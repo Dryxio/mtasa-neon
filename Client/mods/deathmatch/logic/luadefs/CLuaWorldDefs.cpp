@@ -218,9 +218,11 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
         selection = EAmbientPedPopulationSelection::Civilian;
     else if (selectionName == "gang")
         selection = EAmbientPedPopulationSelection::Gang;
+    else if (selectionName == "dealer")
+        selection = EAmbientPedPopulationSelection::Dealer;
     else if (selectionName != "auto")
     {
-        m_pScriptDebugging->LogCustom(luaVM, "Population selection must be auto, civilian or gang");
+        m_pScriptDebugging->LogCustom(luaVM, "Population selection must be auto, civilian, gang or dealer");
         lua_pushboolean(luaVM, false);
         return 1;
     }
@@ -288,7 +290,10 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     lua_setfield(luaVM, -2, "direction");
     lua_pushnumber(luaVM, candidate.pathLerp);
     lua_setfield(luaVM, -2, "pathLerp");
-    lua_pushstring(luaVM, candidate.populationClass == EAmbientPedPopulationClass::Gang ? "gang" : "civilian");
+    const char* populationClass = candidate.populationClass == EAmbientPedPopulationClass::Gang     ? "gang"
+                                  : candidate.populationClass == EAmbientPedPopulationClass::Dealer ? "dealer"
+                                                                                                    : "civilian";
+    lua_pushstring(luaVM, populationClass);
     lua_setfield(luaVM, -2, "populationClass");
     if (candidate.populationClass == EAmbientPedPopulationClass::Gang)
         lua_pushinteger(luaVM, candidate.gangId);
