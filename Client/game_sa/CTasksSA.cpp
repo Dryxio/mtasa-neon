@@ -93,6 +93,13 @@ CTaskSimpleCarSetPedOut* CTasksSA::CreateTaskSimpleCarSetPedOut(CVehicle* pVehic
     return pTask;
 }
 
+CTaskSimpleBikeJacked* CTasksSA::CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver)
+{
+    auto* pTask = NewTask<CTaskSimpleBikeJackedSA>(pVehicle, iDoor, iDraggedPedDownTime, pJacker, bVictimIsDriver);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
 CTaskComplexWanderStandard* CTasksSA::CreateTaskComplexWanderStandard(const int iMoveState, const char iDir, const bool bWanderSensibly)
 {
     const char                    iNativeDir = iDir < 0 ? static_cast<char>(((int(__cdecl*)(int, int))0x407180)(0, 8)) : iDir;

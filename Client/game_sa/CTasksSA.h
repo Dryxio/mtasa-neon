@@ -27,6 +27,7 @@ class CTaskComplexUseMobilePhone;
 class CTaskComplexWanderStandard;
 class CTaskManagementSystemSA;
 class CTaskSimpleBeHit;
+class CTaskSimpleBikeJacked;
 class CTaskSimpleCarSetPedInAsDriver;
 class CTaskSimpleCarSetPedInAsPassenger;
 class CTaskSimpleCarSetPedOut;
@@ -137,6 +138,7 @@ public:
     CTaskComplex*                CreateTaskComplexInAirAndLand(bool bUsingJumpGlide = true, bool bUsingFallGlide = false);
     CTaskComplex*                CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state);
     CTaskComplex*                CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true);
+    CTaskSimpleBikeJacked*       CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver);
 
     static void StaticSetHooks();
 };

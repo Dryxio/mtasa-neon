@@ -58,6 +58,16 @@ model's decision maker. Observers mirror the result through the existing
 locomotion and animation-presentation lanes without installing local AI or
 applying damage a second time.
 
+Native motorcycle carjacks use the same authenticated authority handoff. GTA
+first resolves the attacked occupant and target door on the ambient group
+owner. The resource forwards that intent only after validating the owner,
+group epoch, motorcycle, occupied seat, world, distance, velocity, nonce and
+cadence. The server then reconstructs GTA's occupant rule instead of trusting
+the client: the primary target receives `TASK_SIMPLE_BIKE_JACKED`, and a
+passenger in seat 1 receives the second task 200 ms later only when the primary
+target is the driver. Each real player owner installs its own physical task;
+remote `CPlayerPed` wrappers never own the ejection.
+
 The moving-vehicle checkpoint keeps that same authority model. GTA's native
 `POTENTIAL_GET_RUN_OVER`, `VEHICLE_COLLISION`, `DAMAGE`, and
 `GOT_KNOCKED_OVER_BY_CAR` chain runs only on the current ped syncer. It selects
@@ -151,6 +161,15 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   the temporary barrier on completion, failure, `off` or resource shutdown.
 - `/pedtraffic residency` runs the fail-fast two-client collision-residency
   handoff, suspension and resumption checkpoint described below.
+- `/pedtraffic bikejack` requires the two clients to already occupy seats 0
+  and 1 of the same stationary motorcycle. It clears only this resource's
+  ambient population, spawns a deterministic three-member gang five metres
+  ahead (one armed Colt 45 member and two unarmed members), and assigns the
+  passenger as its native-AI owner. After the ready message, the driver exits
+  and hits the reported unarmed member; the reported armed member is the
+  expected jacker. After task 1502 begins, the driver remounts.
+  If vanilla selects task 1505, rerun the command; the resource deliberately
+  does not override the stock 50/50 fight/flee draw.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
 and now admits GTA's civilian and resident-gang population classes. The native
@@ -227,10 +246,31 @@ covered by those scopes remain a later behavior checkpoint.
   contact while only the victim owner may change health. The event is
   observational; this resource authenticates and relays it before invoking
   `addPedNativeDamageEvent` on the victim client.
+- `onClientPedNativeBikeJackAttempt`, sourced from the ambient jacker, exposes
+  the already-resolved target player, motorcycle, target door and optional
+  passenger before GTA can assign physical tasks to remote wrappers. The owner
+  sends only this intent; the server recomputes the canonical recipients.
+- `addPedNativeBikeJackTask(victim, jacker, vehicle, door, draggedDownTime,
+  primaryVictim, token)` installs GTA's exact `TASK_SIMPLE_BIKE_JACKED` on the
+  local player after a validated forward. The observer lease, current vehicle
+  and seat still gate the binding locally so a delayed owner packet cannot
+  eject a player from a different state.
 
 All population and behavior functions are client-side primitives. The server must still validate
 the proposal, create and own the MTA ped, select exactly one syncer, and clean
 up every resource-owned element.
+
+With debug telemetry enabled, a successful two-occupant carjack produces
+`native_bike_jack_owner_attempt`, two
+`native_bike_jack_server_forward` records, two
+`native_bike_jack_victim_result` records with `accepted=true`, and one
+`native_bike_jack_bridge_complete` with `success=true`. The dedicated command
+then waits until both players report outside the motorcycle and both server
+seat slots are empty. Only `native_bike_jack_test_seat_converged` with all four
+booleans true permits `native_bike_jack_test_result` (`outcome=PASS`).
+Rejections are fail-closed and recorded as `native_bike_jack_rejected`; a
+missing victim ACK terminates as `receipt-timeout`, while accepted tasks that
+do not clear both seats terminate as `seat-convergence-timeout`.
 
 ## First two-client run
 

@@ -326,6 +326,7 @@ void CLuaPedDefs::LoadFunctions()
         {"addPedNativeGunAimedAtEvent", AddPedNativeGunAimedAtEvent},
         {"addPedNativeDamageResponseEvent", AddPedNativeDamageResponseEvent},
         {"addPedNativeDamageEvent", AddPedNativeDamageEvent},
+        {"addPedNativeBikeJackTask", AddPedNativeBikeJackTask},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
         {"setPedStayInSamePlace", ArgumentParser<SetPedStayInSamePlace>},
@@ -3865,6 +3866,56 @@ int CLuaPedDefs::AddPedNativeDamageEvent(lua_State* luaVM)
                             pResource->HasPedNativeEventProfileLease(pAttackingPed, uiToken) && pDamagedPed &&
                             pDamagedPed->AddNativeDamageEvent(pAttackingPed, static_cast<eWeaponType>(iWeaponType), static_cast<ePedPieceTypes>(iHitZone),
                                                               iDamageFactor, static_cast<unsigned char>(iDirection)));
+        return 1;
+    }
+
+    m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::AddPedNativeBikeJackTask(lua_State* luaVM)
+{
+    CClientPed*      pVictim = nullptr;
+    CClientPed*      pJacker = nullptr;
+    CClientVehicle*  pVehicle = nullptr;
+    int              iDoor = -1;
+    int              iDraggedPedDownTime = -1;
+    bool             bVictimIsDriver = false;
+    unsigned int     uiToken = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pVictim);
+    argStream.ReadUserData(pJacker);
+    argStream.ReadUserData(pVehicle);
+    argStream.ReadNumber(iDoor);
+    argStream.ReadNumber(iDraggedPedDownTime);
+    argStream.ReadBool(bVictimIsDriver);
+    argStream.ReadNumber(uiToken);
+
+    if (!argStream.HasErrors())
+    {
+        CLuaMain*  pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+        CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+        const bool validVehicleType = pVehicle && (pVehicle->GetVehicleType() == CLIENTVEHICLE_BIKE || pVehicle->GetVehicleType() == CLIENTVEHICLE_BMX ||
+                                                   pVehicle->GetVehicleType() == CLIENTVEHICLE_QUADBIKE);
+        const bool validCanonicalTask =
+            (iDoor == 10 || iDoor == 11) && ((bVictimIsDriver && iDraggedPedDownTime == 0) || (!bVictimIsDriver && iDraggedPedDownTime == 200));
+        const bool validVictim = pVictim && pVictim->GetType() == CCLIENTPLAYER && pVictim->IsLocalPlayer() && pVictim->GetGamePlayer() &&
+                                 pVictim->GetOccupiedVehicle() == pVehicle && pVictim->GetRealOccupiedVehicle() == pVehicle;
+        const bool validJacker = pJacker && pJacker->GetType() == CCLIENTPED && pJacker->GetGamePlayer() && pJacker != pVictim;
+
+        bool accepted = false;
+        if (validVehicleType && validCanonicalTask && validVictim && validJacker && pResource && pResource->HasPedNativeEventProfileLease(pJacker, uiToken))
+        {
+            CTask* task = g_pGame->GetTasks()->CreateTaskSimpleBikeJacked(pVehicle->GetGameVehicle(), iDoor, iDraggedPedDownTime, pJacker->GetGamePlayer(),
+                                                                          bVictimIsDriver);
+            accepted = DispatchPedScriptCommandTask(pVictim->GetGamePlayer(), task);
+        }
+
+        // Only the victim's local process may install this physical task. The
+        // server and the resource owner have already authenticated the ambient
+        // epoch; these final checks fence stale seat or streaming state.
+        lua_pushboolean(luaVM, accepted);
         return 1;
     }
 

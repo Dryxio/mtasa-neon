@@ -17,6 +17,12 @@ local config = {
     nativeMeleeDamageRadius = 5,
     nativeMeleeDamageInterval = 250,
     nativeFirearmDamageInterval = 40,
+    nativeBikeJackDistance = 8,
+    nativeBikeJackInterval = 750,
+    -- GTA admits the drag branch at 0.1 2D move-speed units. The small margin
+    -- covers one delayed server velocity sample without allowing a moving
+    -- motorcycle to manufacture a stationary carjack.
+    nativeBikeJackMaximumSpeed = 0.12,
     nativeGangWeaponChance = 33,
     nativeGangWeaponAmmo = 25001,
     minimumGangGroupSize = 2,
@@ -197,9 +203,14 @@ local populationWorldRevisions = {}
 local trafficPeds = {}
 local trafficGroups = {}
 local testVehicles = {}
+local pendingNativeBikeJacks = {}
+local bikeJackTest = false
+local nextBikeJackTestId = 0
 local residencyTest = false
 local nextResidencyTestId = 0
 local stopResidencyTest
+local stopBikeJackTest
+local startBikeJackSeatConvergence
 local stats = {
     requests = 0,
     candidateMisses = 0,
@@ -1348,6 +1359,9 @@ removeGroup = function(group, reason)
     if not group or group.removing then
         return
     end
+    if bikeJackTest and bikeJackTest.group == group and stopBikeJackTest then
+        stopBikeJackTest("FAIL", "group-removed:" .. tostring(reason))
+    end
     group.removing = true
     if group.visibilityCheckId then
         pendingVisibilityChecks[group.visibilityCheckId] = nil
@@ -2241,11 +2255,108 @@ local function clearTraffic(reason)
     end
     pendingRequests = {}
     pendingVisibilityChecks = {}
+    pendingNativeBikeJacks = {}
+end
+
+stopBikeJackTest = function(outcome, reason)
+    local test = bikeJackTest
+    if not test then
+        return
+    end
+    bikeJackTest = false
+    if isTimer(test.timer) then
+        killTimer(test.timer)
+    end
+    if isTimer(test.seatTimer) then
+        killTimer(test.seatTimer)
+    end
+    if isTimer(test.readyTimer) then
+        killTimer(test.readyTimer)
+    end
+    writePopulationTrace("native_bike_jack_test_result", {
+        scenario_id = test.id,
+        outcome = outcome,
+        reason = reason,
+        group_id = test.group and test.group.id or false,
+        epoch = test.group and test.group.epoch or false,
+        expected_attacker_id = test.attacker and test.attacker.id or false,
+        damage_target_id = test.damageTarget and test.damageTarget.id or false,
+        driver_id = isElement(test.driver) and getPopulationClientId(test.driver) or false,
+        passenger_id = isElement(test.passenger) and getPopulationClientId(test.passenger) or false,
+    })
+    local color = outcome == "PASS" and {120, 255, 160} or {255, 160, 80}
+    outputChatBox(("Native bike-jack test %s: %s (scenario %d)"):format(outcome, tostring(reason), test.id),
+                  root, color[1], color[2], color[3])
+    -- The deterministic harness owns its synthetic group, but removeGroup
+    -- calls back here when ordinary lifecycle cleanup wins the race. Avoid
+    -- recursing in that path and let the original removal finish.
+    if test.ownsGroup and test.group and not test.group.removing and
+        not tostring(reason):match("^group%-removed:") then
+        removeGroup(test.group, "bike-jack-test-" .. tostring(outcome):lower())
+    end
+end
+
+startBikeJackSeatConvergence = function(test, pending)
+    if bikeJackTest ~= test or test.awaitingSeatConvergence then
+        return
+    end
+    test.awaitingSeatConvergence = true
+    test.seatConvergenceStartedAt = getTickCount()
+    local function poll()
+        if bikeJackTest ~= test then
+            return
+        end
+        if not isElement(test.vehicle) or not isElement(test.driver) or not isElement(test.passenger) then
+            stopBikeJackTest("FAIL", "seat-convergence-state-lost")
+            return
+        end
+        local driverOut = getPedOccupiedVehicle(test.driver) ~= test.vehicle
+        local passengerOut = getPedOccupiedVehicle(test.passenger) ~= test.vehicle
+        local driverSeatEmpty = not getVehicleOccupant(test.vehicle, 0)
+        local passengerSeatEmpty = not getVehicleOccupant(test.vehicle, 1)
+        if driverOut and passengerOut and driverSeatEmpty and passengerSeatEmpty then
+            writePopulationTrace("native_bike_jack_test_seat_converged", {
+                scenario_id = test.id,
+                group_id = test.group.id,
+                epoch = pending.epoch,
+                nonce = pending.nonce,
+                expected_attacker_id = test.attacker.id,
+                elapsed_ms = getTickCount() - test.seatConvergenceStartedAt,
+                driver_out = true,
+                passenger_out = true,
+                driver_seat_empty = true,
+                passenger_seat_empty = true,
+            })
+            stopBikeJackTest("PASS", "driver-and-passenger-seat-converged")
+        elseif getTickCount() - test.seatConvergenceStartedAt >= 8000 then
+            writePopulationTrace("native_bike_jack_test_seat_converged", {
+                scenario_id = test.id,
+                group_id = test.group.id,
+                epoch = pending.epoch,
+                nonce = pending.nonce,
+                expected_attacker_id = test.attacker.id,
+                elapsed_ms = getTickCount() - test.seatConvergenceStartedAt,
+                driver_out = driverOut,
+                passenger_out = passengerOut,
+                driver_seat_empty = driverSeatEmpty,
+                passenger_seat_empty = passengerSeatEmpty,
+                success = false,
+            })
+            stopBikeJackTest("FAIL", "seat-convergence-timeout")
+        end
+    end
+    poll()
+    if bikeJackTest == test and test.awaitingSeatConvergence then
+        test.seatTimer = setTimer(poll, 100, 0)
+    end
 end
 
 local function removeTestVehicle(player)
     local vehicle = testVehicles[player]
     testVehicles[player] = nil
+    if bikeJackTest and bikeJackTest.vehicle == vehicle then
+        stopBikeJackTest("CANCEL", "test-vehicle-removed")
+    end
     if isElement(vehicle) then
         destroyElement(vehicle)
     end
@@ -2296,6 +2407,237 @@ local function createTestVehicle(player, requestedModel)
     return true
 end
 
+local function createBikeJackTestGroup(owner, vehicle, scenarioId)
+    if getTrafficPedCount() + 3 > config.globalCap or #getElementsByType("ped") + 3 > config.pedPoolSoftLimit then
+        return false, "ped-capacity"
+    end
+    if countNativeGroupsForOwner(owner) >= config.maximumNativeGangGroups then
+        return false, "native-group-cap"
+    end
+
+    local vehicleX, vehicleY, vehicleZ = getElementPosition(vehicle)
+    local _, _, vehicleHeading = getElementRotation(vehicle)
+    local radians = math.rad(vehicleHeading)
+    local forwardX, forwardY = math.sin(radians), -math.cos(radians)
+    local rightX, rightY = math.cos(radians), math.sin(radians)
+    local centreX, centreY = vehicleX + forwardX * 5, vehicleY + forwardY * 5
+    local facing = (vehicleHeading + 180) % 360
+    local direction = math.floor((facing + 22.5) / 45) % 8
+    local groveSlots = type(populationWorld.gangWeapons[0]) == "table" and populationWorld.gangWeapons[0] or {}
+    local slot1 = math.floor(tonumber(groveSlots[1]) or 0)
+    local slot2 = math.floor(tonumber(groveSlots[2]) or 0)
+    local slot3 = math.floor(tonumber(groveSlots[3]) or 0)
+    local weaponSlotCount = (slot1 ~= 0 and 1 or 0) + (slot2 ~= 0 and 1 or 0) + (slot3 ~= 0 and 1 or 0)
+    if slot1 ~= 22 then
+        return false, "grove-pistol-slot-unavailable"
+    end
+    local definitions = {
+        {model = 102, weapon = 22, lateral = 0},
+        {model = 103, weapon = 0, lateral = -1.25},
+        {model = 104, weapon = 0, lateral = 1.25},
+    }
+
+    nextGroupId = nextGroupId + 1
+    local group = {
+        id = nextGroupId,
+        gang = 0,
+        members = {},
+        owner = nil,
+        epoch = 0,
+        state = "created",
+        createdAt = getTickCount(),
+        bikeJackTestOwned = true,
+    }
+    trafficGroups[group.id] = group
+
+    for index, definition in ipairs(definitions) do
+        local x = centreX + rightX * definition.lateral
+        local y = centreY + rightY * definition.lateral
+        local ped = createPed(definition.model, x, y, vehicleZ + 0.15, facing)
+        if not ped then
+            removeGroup(group, "bike-jack-test-create-ped-refused")
+            return false, "create-ped"
+        end
+        nextPedId = nextPedId + 1
+        local record = {
+            id = nextPedId,
+            ped = ped,
+            owner = nil,
+            epoch = 0,
+            direction = direction,
+            populationClass = "gang",
+            gang = 0,
+            state = "created",
+            createdAt = group.createdAt,
+            group = group,
+            groupIndex = index,
+            weapon = definition.weapon,
+            weaponAmmo = definition.weapon ~= 0 and config.nativeGangWeaponAmmo or 0,
+            weaponClipAmmo = definition.weapon ~= 0 and gangWeaponClipAmmo[definition.weapon] or 0,
+            -- These values describe a valid retail draw. The harness pins one
+            -- armed member so the checkpoint tests bike-jack transport rather
+            -- than spending attempts on the independent 33% weapon RNG.
+            armedRoll = definition.weapon ~= 0 and 0 or 99,
+            weaponSlotRoll = definition.weapon ~= 0 and 0 or false,
+            weaponSlotCount = weaponSlotCount,
+        }
+        group.members[index] = record
+        trafficPeds[ped] = record
+        setElementDimension(ped, getElementDimension(vehicle))
+        setElementInterior(ped, getElementInterior(vehicle))
+        setElementData(ped, "neon:ambientPedTraffic", true)
+        setElementData(ped, "neon:ambientPedTrafficId", record.id)
+        setElementData(ped, "neon:ambientPedPopulationClass", "gang")
+        setElementData(ped, "neon:ambientPedGang", 0)
+        setElementData(ped, "neon:ambientPedGroupId", group.id)
+        setElementData(ped, "neon:ambientPedGroupIndex", index)
+        setElementData(ped, "neon:ambientPedGroupRole", index == 1 and "leader" or "member")
+        setElementData(ped, "neon:ambientPedWeapon", record.weapon)
+        setElementData(ped, "neon:ambientPedWeaponAmmo", record.weaponAmmo)
+        setElementData(ped, "neon:ambientPedWeaponClipAmmo", record.weaponClipAmmo)
+        if not applyGangPedWeapon(ped, record.weapon) or not setPedFightingStyle(ped, 4) or
+            not setPedUseNativeWalkingStyle(ped, true) then
+            removeGroup(group, "bike-jack-test-ped-setup-refused")
+            return false, "ped-setup"
+        end
+    end
+    group.leader = group.members[1]
+
+    local fadingPeds = {}
+    for _, record in ipairs(group.members) do fadingPeds[#fadingPeds + 1] = record.ped end
+    beginSpawnFade(fadingPeds)
+    if not assignGroupOwner(group, owner, "bike-jack-test-spawn") then
+        removeGroup(group, "bike-jack-test-owner-refused")
+        return false, "assign-owner"
+    end
+
+    group.counted = true
+    stats.groupSpawns = stats.groupSpawns + 1
+    stats.spawned = stats.spawned + #group.members
+    for _, definition in ipairs(definitions) do
+        stats.spawnedModels[definition.model] = (stats.spawnedModels[definition.model] or 0) + 1
+    end
+    writePopulationTrace("native_bike_jack_test_group_spawned", {
+        scenario_id = scenarioId,
+        group_id = group.id,
+        epoch = group.epoch,
+        owner_id = getPopulationClientId(owner),
+        attacker_id = group.members[1].id,
+        damage_target_id = group.members[2].id,
+        position = {x = centreX, y = centreY, z = vehicleZ},
+    })
+    log(("bike-jack-test-group scenario=%d group=%d owner=%s attacker=%d target=%d"):format(
+            scenarioId, group.id, getPlayerName(owner), group.members[1].id, group.members[2].id), true)
+    return {group = group, attacker = group.members[1], damageTarget = group.members[2]}
+end
+
+local function announceBikeJackTestReady(test)
+    if bikeJackTest ~= test or test.ready then
+        return
+    end
+    if not test.group or test.group.removing then
+        stopBikeJackTest("FAIL", "group-lost-before-ready")
+        return
+    end
+    if test.group.state ~= "active" or test.group.owner ~= test.passenger or
+        getElementSyncer(test.attacker.ped) ~= test.passenger then
+        if getTickCount() - test.createdAt >= 8000 then
+            stopBikeJackTest("FAIL", "group-assignment-timeout")
+        end
+        return
+    end
+
+    test.ready = true
+    test.startedAt = getTickCount()
+    if isTimer(test.readyTimer) then
+        killTimer(test.readyTimer)
+    end
+    test.timer = setTimer(function()
+        if bikeJackTest == test then
+            stopBikeJackTest("FAIL", "attempt-timeout")
+        end
+    end, 90000, 1)
+    writePopulationTrace("native_bike_jack_test_started", {
+        scenario_id = test.id,
+        group_id = test.group.id,
+        epoch = test.group.epoch,
+        expected_attacker_id = test.attacker.id,
+        damage_target_id = test.damageTarget.id,
+        owner_id = getPopulationClientId(test.group.owner),
+        driver_id = getPopulationClientId(test.driver),
+        passenger_id = getPopulationClientId(test.passenger),
+        vehicle_model = getElementModel(test.vehicle),
+        spawned_group = true,
+    })
+    outputChatBox(("Bike-jack scenario %d ready: driver %s, passenger/AI owner %s, group %d, expected armed jacker %d"):format(
+                      test.id, getPlayerName(test.driver), getPlayerName(test.passenger), test.group.id, test.attacker.id), root, 120, 220, 255)
+    outputChatBox(("Driver: exit, hit spawned unarmed traffic ped %d once, wait for task 1502, then remount without accelerating. Passenger stays seated."):format(
+                      test.damageTarget.id),
+                  root, 120, 220, 255)
+    outputChatBox("If vanilla chooses task 1505 flee, rerun /pedtraffic bikejack; the resource does not override that 50/50 decision.",
+                  root, 255, 200, 120)
+end
+
+local function startBikeJackTest(player)
+    if not enabled or not isEligiblePlayer(player) then
+        outputChatBox("Run /pedtraffic on before starting the bike-jack test", player, 255, 160, 80)
+        return false
+    end
+    local vehicle = getPedOccupiedVehicle(player)
+    if not isElement(vehicle) or getElementType(vehicle) ~= "vehicle" or getVehicleType(vehicle) ~= "Bike" then
+        outputChatBox("Seat both clients on the same stationary motorcycle before running /pedtraffic bikejack", player, 255, 160, 80)
+        return false
+    end
+    local driver = getVehicleOccupant(vehicle, 0)
+    local passenger = getVehicleOccupant(vehicle, 1)
+    if not isElement(driver) or getElementType(driver) ~= "player" or not isElement(passenger) or
+        getElementType(passenger) ~= "player" or not isEligiblePlayer(driver) or not isEligiblePlayer(passenger) then
+        outputChatBox("The motorcycle needs one eligible client in seat 0 and another in seat 1", player, 255, 160, 80)
+        return false
+    end
+    if getPedOccupiedVehicle(driver) ~= vehicle or getPedOccupiedVehicleSeat(driver) ~= 0 or
+        getPedOccupiedVehicle(passenger) ~= vehicle or getPedOccupiedVehicleSeat(passenger) ~= 1 or
+        getElementDimension(vehicle) ~= 0 or getElementInterior(vehicle) ~= 0 then
+        outputChatBox("The two clients must occupy seats 0/1 on a motorcycle in world 0", player, 255, 160, 80)
+        return false
+    end
+
+    if bikeJackTest then
+        stopBikeJackTest("CANCEL", "restarted")
+    end
+    -- Isolate this checkpoint from naturally spawned groups while preserving
+    -- the caller's real network vehicle and its seat ownership.
+    clearTraffic("bike-jack-harness-reset")
+    setElementVelocity(vehicle, 0, 0, 0)
+    giveWeapon(driver, 22, 200, true)
+
+    nextBikeJackTestId = nextBikeJackTestId + 1
+    local selection, spawnReason = createBikeJackTestGroup(passenger, vehicle, nextBikeJackTestId)
+    if not selection then
+        outputChatBox("Could not create the deterministic bike-jack group: " .. tostring(spawnReason), player, 255, 80, 80)
+        return false
+    end
+    local group = selection.group
+    local test = {
+        id = nextBikeJackTestId,
+        group = group,
+        attacker = selection.attacker,
+        damageTarget = selection.damageTarget,
+        driver = driver,
+        passenger = passenger,
+        vehicle = vehicle,
+        createdAt = getTickCount(),
+        ownsGroup = true,
+        ready = false,
+    }
+    bikeJackTest = test
+    outputChatBox(("Bike-jack scenario %d: deterministic group spawned; waiting for passenger-owner native group ACK..."):format(test.id),
+                  root, 120, 220, 255)
+    test.readyTimer = setTimer(function() announceBikeJackTestReady(test) end, 100, 0)
+    announceBikeJackTestReady(test)
+    return true
+end
+
 local function setEnabled(value, actor)
     value = value == true
     if enabled == value then
@@ -2304,6 +2646,7 @@ local function setEnabled(value, actor)
             -- resource-owned vehicle behind even if traffic was already off.
             clearTraffic("disabled")
             clearTestVehicles()
+            pendingNativeBikeJacks = {}
             populationProfiles = {}
             populationWorldRevisions = {}
         end
@@ -2317,6 +2660,10 @@ local function setEnabled(value, actor)
         if stopResidencyTest then
             stopResidencyTest("CANCEL", "traffic-disabled")
         end
+        if stopBikeJackTest then
+            stopBikeJackTest("CANCEL", "traffic-disabled")
+        end
+        pendingNativeBikeJacks = {}
         clearTraffic("disabled")
         clearTestVehicles()
         populationProfiles = {}
@@ -3048,10 +3395,18 @@ addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoc
             for _, stat in ipairs(gangStandardWeaponStats) do
                 serverStatsConverged = serverStatsConverged and getPedStat(record.ped, stat[1]) == stat[2]
             end
+            -- Unarmed occupies a no-ammo slot for which MTA may expose a
+            -- synthetic total of 1. Authenticate the selected weapon and STD
+            -- stats, but require exact ammo and clip values only when vanilla
+            -- actually granted a firearm.
+            local clientAmmoConverged = record.weapon == 0 or
+                row and row.ammoConverged == true and tonumber(row.totalAmmo) == record.weaponAmmo and
+                    tonumber(row.clipAmmo) == record.weaponClipAmmo
+            local serverAmmoConverged = record.weapon == 0 or
+                serverAmmo == record.weaponAmmo and serverClipAmmo == record.weaponClipAmmo
             local validWeapon = row and tonumber(row.expected) == record.weapon and tonumber(row.weapon) == record.weapon and
                 row.converged == true and row.statsConverged == true and serverStatsConverged and serverWeapon == record.weapon and
-                tonumber(row.totalAmmo) == record.weaponAmmo and tonumber(row.clipAmmo) == record.weaponClipAmmo and
-                serverAmmo == record.weaponAmmo and serverClipAmmo == record.weaponClipAmmo
+                clientAmmoConverged and serverAmmoConverged
             if not validWeapon then
                 writePopulationTrace("group_weapon_authority_rejected", {
                     group_id = group.id,
@@ -3255,6 +3610,250 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
                        canonicalWeapon, math.floor(bodypart), math.floor(damageFactor), math.floor(direction))
 end)
 
+local nativeBikeJackTargetDoors = {[8] = true, [9] = true, [10] = true, [11] = true, [18] = true}
+local nativeBikeJackResultReasons = {
+    accepted = true,
+    duplicate = true,
+    ["lease-missing"] = true,
+    ["occupant-state-changed"] = true,
+    ["native-api-unavailable"] = true,
+    ["native-task-refused"] = true,
+}
+
+local function nativeBikeJackKey(record, epoch, nonce)
+    return ("%d:%d:%d"):format(record.id, epoch, nonce)
+end
+
+local function traceNativeBikeJackRejected(record, reason, epoch, nonce, targetPlayer, vehicle)
+    writePopulationTrace("native_bike_jack_rejected", {
+        traffic_id = record and record.id or false,
+        group_id = record and record.group and record.group.id or false,
+        owner_id = isElement(client) and getPopulationClientId(client) or false,
+        epoch = epoch or false,
+        nonce = nonce or false,
+        victim_id = isElement(targetPlayer) and getElementType(targetPlayer) == "player" and
+                        getPopulationClientId(targetPlayer) or false,
+        vehicle_model = isElement(vehicle) and getElementType(vehicle) == "vehicle" and getElementModel(vehicle) or false,
+        reason = reason,
+    })
+end
+
+local function finishNativeBikeJackForward(pending, reason)
+    if pendingNativeBikeJacks[pending.key] ~= pending then
+        return
+    end
+    pendingNativeBikeJacks[pending.key] = nil
+    local accepted = 0
+    local received = 0
+    for _, expected in pairs(pending.recipients) do
+        if expected.received then
+            received = received + 1
+            if expected.accepted then
+                accepted = accepted + 1
+            end
+        end
+    end
+    local passed = received == pending.recipientCount and accepted == pending.recipientCount
+    writePopulationTrace("native_bike_jack_bridge_complete", {
+        traffic_id = pending.record.id,
+        group_id = pending.record.group and pending.record.group.id or false,
+        epoch = pending.epoch,
+        nonce = pending.nonce,
+        recipients = pending.recipientCount,
+        receipts = received,
+        accepted = accepted,
+        success = passed,
+        reason = reason,
+        scenario_id = pending.scenarioId or false,
+    })
+    if pending.scenarioId and bikeJackTest and bikeJackTest.id == pending.scenarioId then
+        if passed then
+            startBikeJackSeatConvergence(bikeJackTest, pending)
+        else
+            stopBikeJackTest("FAIL", reason)
+        end
+    end
+end
+
+addEvent("pedTraffic:nativeBikeJackObserved", true)
+addEventHandler("pedTraffic:nativeBikeJackObserved", resourceRoot,
+                function(attackingPed, targetPlayer, vehicle, epoch, nonce, targetDoor, secondaryHint)
+    local record = trafficPeds[attackingPed]
+    epoch = tonumber(epoch)
+    nonce = tonumber(nonce)
+    targetDoor = tonumber(targetDoor)
+    if not record or record.removing or record.state ~= "active" or not record.group or record.group.removing or
+        record.group.state ~= "active" or client ~= record.owner or client ~= record.group.owner or
+        getElementSyncer(attackingPed) ~= client or not isIntegerInRange(epoch, 1, 2147483647) or
+        epoch ~= record.epoch or epoch ~= record.group.epoch then
+        traceNativeBikeJackRejected(record, "owner-or-epoch", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+    if not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(targetDoor, 8, 18) or
+        nativeBikeJackTargetDoors[targetDoor] ~= true or not isElement(targetPlayer) or
+        getElementType(targetPlayer) ~= "player" or getElementHealth(targetPlayer) <= 0 or not isElement(vehicle) or
+        getElementType(vehicle) ~= "vehicle" or getVehicleType(vehicle) ~= "Bike" then
+        traceNativeBikeJackRejected(record, "invalid-payload", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+
+    local targetSeat = getPedOccupiedVehicle(targetPlayer) == vehicle and getPedOccupiedVehicleSeat(targetPlayer) or false
+    local driverDoor = targetDoor == 8 or targetDoor == 10 or targetDoor == 18
+    local passengerDoor = targetDoor == 9 or targetDoor == 11
+    if (targetSeat ~= 0 and targetSeat ~= 1) or (targetSeat == 0 and not driverDoor) or
+        (targetSeat == 1 and not passengerDoor) then
+        traceNativeBikeJackRejected(record, "target-seat-door", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+
+    local passenger = targetSeat == 0 and getVehicleOccupant(vehicle, 1) or false
+    if passenger and (getElementType(passenger) ~= "player" or getElementHealth(passenger) <= 0) then
+        traceNativeBikeJackRejected(record, "invalid-passenger", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+    if secondaryHint ~= false and (targetSeat ~= 0 or not isElement(secondaryHint) or
+        getElementType(secondaryHint) ~= "player" or secondaryHint ~= passenger) then
+        traceNativeBikeJackRejected(record, "secondary-mismatch", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+
+    local dimension = getElementDimension(vehicle)
+    local interior = getElementInterior(vehicle)
+    if getElementDimension(attackingPed) ~= dimension or getElementInterior(attackingPed) ~= interior or
+        getElementDimension(targetPlayer) ~= dimension or getElementInterior(targetPlayer) ~= interior or
+        (passenger and (getElementDimension(passenger) ~= dimension or getElementInterior(passenger) ~= interior)) then
+        traceNativeBikeJackRejected(record, "world-mismatch", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+
+    local ax, ay, az = getElementPosition(attackingPed)
+    local vx, vy, vz = getElementPosition(vehicle)
+    local moveX, moveY = getElementVelocity(vehicle)
+    local maximumDistance = config.nativeBikeJackDistance
+    local maximumSpeed = config.nativeBikeJackMaximumSpeed
+    if not isFiniteNumber(moveX) or not isFiniteNumber(moveY) or
+        squaredDistance(ax, ay, az, vx, vy, vz) > maximumDistance * maximumDistance or
+        moveX * moveX + moveY * moveY > maximumSpeed * maximumSpeed then
+        traceNativeBikeJackRejected(record, "kinematic-envelope", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+
+    local now = getTickCount()
+    if record.nativeBikeJackOwner == client and record.nativeBikeJackEpoch == epoch and
+        (nonce <= (record.nativeBikeJackNonce or 0) or now - (record.nativeBikeJackAt or 0) < config.nativeBikeJackInterval) then
+        traceNativeBikeJackRejected(record, "duplicate-or-cadence", epoch, nonce, targetPlayer, vehicle)
+        return
+    end
+
+    record.nativeBikeJackOwner = client
+    record.nativeBikeJackEpoch = epoch
+    record.nativeBikeJackNonce = nonce
+    record.nativeBikeJackAt = now
+    record.lastInteractionAt = now
+    local scenarioId = bikeJackTest and bikeJackTest.group == record.group and bikeJackTest.attacker == record and
+                           bikeJackTest.vehicle == vehicle and bikeJackTest.driver == targetPlayer and bikeJackTest.id or false
+    writePopulationTrace("native_bike_jack_owner_attempt", {
+        traffic_id = record.id,
+        group_id = record.group.id,
+        owner_id = getPopulationClientId(client),
+        epoch = epoch,
+        nonce = nonce,
+        victim_id = getPopulationClientId(targetPlayer),
+        victim_seat = targetSeat,
+        target_door = targetDoor,
+        passenger_id = isElement(passenger) and getPopulationClientId(passenger) or false,
+        vehicle_model = getElementModel(vehicle),
+        scenario_id = scenarioId,
+    })
+
+    -- Retail computes the first victim's BikeJacked parameters from the door
+    -- chosen by EnterCar, then adds passenger[0] only when that first victim is
+    -- the motorcycle driver. The passenger receives the same native task 200
+    -- ms later; never trust the owner to nominate or parameterize that second
+    -- victim.
+    local primaryDoor = (targetDoor ~= 18 or passenger) and 10 or 11
+    if primaryDoor ~= 10 and primaryDoor ~= 11 then
+        primaryDoor = 10
+    end
+    local recipients = {{player = targetPlayer, seat = targetSeat, door = primaryDoor, down = 0, primary = true}}
+    if targetSeat == 0 and isElement(passenger) then
+        recipients[#recipients + 1] = {player = passenger, seat = 1, door = 11, down = 200, primary = false}
+    end
+
+    local key = nativeBikeJackKey(record, epoch, nonce)
+    local pending = {
+        key = key,
+        record = record,
+        epoch = epoch,
+        nonce = nonce,
+        recipients = {},
+        recipientCount = #recipients,
+        scenarioId = scenarioId,
+    }
+    pendingNativeBikeJacks[key] = pending
+    for _, recipient in ipairs(recipients) do
+        pending.recipients[recipient.player] = recipient
+        writePopulationTrace("native_bike_jack_server_forward", {
+            traffic_id = record.id,
+            group_id = record.group.id,
+            epoch = epoch,
+            nonce = nonce,
+            victim_id = getPopulationClientId(recipient.player),
+            expected_seat = recipient.seat,
+            door = recipient.door,
+            dragged_down_time = recipient.down,
+            primary_victim = recipient.primary,
+            scenario_id = scenarioId,
+        })
+        triggerClientEvent(recipient.player, "pedTraffic:nativeBikeJack", resourceRoot, attackingPed, vehicle, epoch, nonce,
+                           recipient.door, recipient.down, recipient.primary, recipient.seat)
+    end
+    setTimer(function()
+        if pendingNativeBikeJacks[key] == pending then
+            finishNativeBikeJackForward(pending, "receipt-timeout")
+        end
+    end, 5000, 1)
+end)
+
+addEvent("pedTraffic:nativeBikeJackResult", true)
+addEventHandler("pedTraffic:nativeBikeJackResult", resourceRoot, function(attackingPed, epoch, nonce, accepted, reason, currentSeat)
+    local record = trafficPeds[attackingPed]
+    epoch = tonumber(epoch)
+    nonce = tonumber(nonce)
+    currentSeat = tonumber(currentSeat)
+    if not record or not isIntegerInRange(epoch, 1, 2147483647) or not isIntegerInRange(nonce, 1, 2147483647) or
+        type(accepted) ~= "boolean" or nativeBikeJackResultReasons[reason] ~= true or
+        not isIntegerInRange(currentSeat, -1, 1) then
+        return
+    end
+    local pending = pendingNativeBikeJacks[nativeBikeJackKey(record, epoch, nonce)]
+    local expected = pending and pending.recipients[client]
+    if not expected or expected.received then
+        return
+    end
+    expected.received = true
+    expected.accepted = accepted
+    writePopulationTrace("native_bike_jack_victim_result", {
+        traffic_id = record.id,
+        group_id = record.group and record.group.id or false,
+        epoch = epoch,
+        nonce = nonce,
+        victim_id = getPopulationClientId(client),
+        expected_seat = expected.seat,
+        current_seat = currentSeat,
+        accepted = accepted,
+        reason = reason,
+        scenario_id = pending.scenarioId or false,
+    })
+    local complete = true
+    for _, recipient in pairs(pending.recipients) do
+        complete = complete and recipient.received == true
+    end
+    if complete then
+        finishNativeBikeJackForward(pending, "all-receipts")
+    end
+end)
+
 addEventHandler("onPedDamage", root, function(attacker, weapon, bodypart)
     local record = trafficPeds[source]
     if not record or record.removing or not isElement(attacker) or getElementType(attacker) ~= "player" then
@@ -3305,6 +3904,9 @@ addEventHandler("onPedWasted", root, function()
 end)
 
 addEventHandler("onElementDestroy", root, function()
+    if bikeJackTest and source == bikeJackTest.vehicle then
+        stopBikeJackTest("FAIL", "test-vehicle-destroyed")
+    end
     local record = trafficPeds[source]
     if record and record.group and not record.group.removing then
         removeGroup(record.group, "group-member-destroyed")
@@ -3324,6 +3926,9 @@ end)
 addEventHandler("onPlayerQuit", root, function()
     if residencyTest and (source == residencyTest.ownerA or source == residencyTest.ownerB) then
         failResidencyTest("client-left")
+    end
+    if bikeJackTest and (source == bikeJackTest.driver or source == bikeJackTest.passenger) then
+        stopBikeJackTest("FAIL", "client-left")
     end
     local visibilityChecks = {}
     for _, check in pairs(pendingVisibilityChecks) do visibilityChecks[#visibilityChecks + 1] = check end
@@ -3798,6 +4403,8 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         startClimbTest(player, tostring(value or ""):lower() == "handoff")
     elseif action == "residency" and isElement(player) then
         startResidencyTest(player)
+    elseif action == "bikejack" and isElement(player) then
+        startBikeJackTest(player)
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do
@@ -3819,6 +4426,10 @@ addEventHandler("onResourceStop", resourceRoot, function()
     if stopResidencyTest then
         stopResidencyTest("CANCEL", "resource-stop")
     end
+    if stopBikeJackTest then
+        stopBikeJackTest("CANCEL", "resource-stop")
+    end
+    pendingNativeBikeJacks = {}
     triggerClientEvent(root, "pedTraffic:setEnabled", resourceRoot, false, false)
     clearTraffic("resource-stop")
     clearTestVehicles()

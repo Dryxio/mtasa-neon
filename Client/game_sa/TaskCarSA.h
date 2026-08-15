@@ -26,6 +26,7 @@ typedef DWORD AnimationId;
 #define FUNC_CTaskComplexLeaveCar__Constructor            0x63B8C0
 #define FUNC_CTaskComplexCarDriveWander__Constructor      0x63CB10
 #define FUNC_CTaskComplexCarDriveToPoint__Constructor     0x63CE00
+#define FUNC_CTaskSimpleBikeJacked__Constructor           0x648B90
 
 // ##############################################################################
 // ## Name:    CTaskComplexEnterCar
@@ -132,6 +133,30 @@ public:
     int  GetTargetDoor() { return CTaskComplexEnterCarSA::GetTargetDoor(); };
     void SetTargetDoor(int iDoor) { return CTaskComplexEnterCarSA::SetTargetDoor(iDoor); };
     int  GetEnterCarStartTime() { return CTaskComplexEnterCarSA::GetEnterCarStartTime(); };
+};
+
+class CTaskSimpleBikeJackedSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    bool                          m_bAnimWasPlayed;
+    unsigned char                 m_pad0[3];
+    CAnimBlendAssociation*        m_pFirstAnim;
+    AnimationId                   m_iSecondAnim;
+    CVehicleSAInterface*          m_pVehicle;
+    unsigned int                  m_uiDoor;
+    unsigned int                  m_uiDraggedPedDownTime;
+    CPedSAInterface*              m_pJacker;
+    bool                          m_bVictimIsDriver;
+    unsigned char                 m_pad1[3];
+    CTaskUtilityLineUpPedWithCar* m_pTaskUtilityLineUpPedWithCar;
+};
+static_assert(sizeof(CTaskSimpleBikeJackedSAInterface) == 0x2C, "Invalid CTaskSimpleBikeJackedSAInterface size");
+
+class CTaskSimpleBikeJackedSA : public virtual CTaskSimpleSA, public virtual CTaskSimpleBikeJacked
+{
+public:
+    CTaskSimpleBikeJackedSA() = default;
+    CTaskSimpleBikeJackedSA(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver);
 };
 
 // ##############################################################################

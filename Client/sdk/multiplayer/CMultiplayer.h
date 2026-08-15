@@ -83,6 +83,19 @@ struct SNativeInstantHitResolved
     bool           lineOfSightHit{};
 };
 
+// GTA ejects motorcycle occupants from inside the ambient owner's task
+// process. Consumers must replay that physical task at each real player owner
+// instead of allowing the owner to mutate remote CPlayerPed wrappers.
+struct SNativeBikeJackAttempt
+{
+    class CPed*     pJacker{};
+    class CVehicle* pVehicle{};
+    class CPed*     pDraggedPed{};
+    class CPed*     pPassenger{};
+    int             targetDoor{};
+    int             draggedPedDownTime{};
+};
+
 class CAnimBlendAssociationSAInterface;
 class CAnimBlendStaticAssociationSAInterface;
 class CAnimBlendAssocGroupSAInterface;
@@ -100,6 +113,7 @@ typedef void(PostWeaponFireHandler)();
 typedef void(BulletImpactHandler)(class CPed* pInitiator, class CEntity* pVictim, const CVector* pvecStartPosition, const CVector* pvecEndPosition);
 typedef void(BulletFireHandler)(class CPed* pInitiator, const CVector* pvecStartPosition, const CVector* pvecEndPosition);
 typedef void(NativeInstantHitResolvedHandler)(const SNativeInstantHitResolved& resolved);
+typedef bool(NativeBikeJackAttemptHandler)(const SNativeBikeJackAttempt& attempt);
 typedef bool(DamageHandler)(class CPed* pDamagePed, class CEventDamage* pEvent);
 typedef void(DeathHandler)(class CPed* pKilledPed, unsigned char ucDeathReason, unsigned char ucBodyPart);
 typedef bool(FireHandler)(class CEntitySAInterface* target, class CEntitySAInterface* creator);
@@ -512,4 +526,5 @@ public:
     virtual void           SetExtendedFarClipPreference(bool bEnabled, float fDistance) = 0;
     virtual void           RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim) = 0;
     virtual void           SetNativeInstantHitResolvedHandler(NativeInstantHitResolvedHandler* pHandler) = 0;
+    virtual void           SetNativeBikeJackAttemptHandler(NativeBikeJackAttemptHandler* pHandler) = 0;
 };

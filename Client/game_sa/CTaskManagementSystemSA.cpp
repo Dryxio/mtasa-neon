@@ -297,6 +297,9 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
         case TASK_SIMPLE_CAR_SET_PED_OUT:
             pTaskSA = new CTaskSimpleCarSetPedOutSA;
             break;
+        case TASK_SIMPLE_BIKE_JACKED:
+            pTaskSA = new CTaskSimpleBikeJackedSA;
+            break;
 
         // Car
         case TASK_COMPLEX_ENTER_CAR_AS_DRIVER:

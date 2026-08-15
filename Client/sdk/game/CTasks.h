@@ -33,6 +33,7 @@ class CTaskComplexUseMobilePhone;
 class CTaskComplexWanderStandard;
 class CTaskSimpleAnim;
 class CTaskSimpleBeHit;
+class CTaskSimpleBikeJacked;
 class CTaskSimpleCarSetPedInAsDriver;
 class CTaskSimpleCarSetPedInAsPassenger;
 class CTaskSimpleCarSetPedOut;
@@ -188,4 +189,8 @@ public:
     // Script peds need GTA's FORCE value to run the climb scan; OK only does
     // so for a real player even though both modes share the same jump task.
     virtual CTaskComplex* CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true) = 0;
+
+    // Appended for owner-routed motorcycle ejections. GTA owns the animation,
+    // safe references and knock-off event after construction.
+    virtual CTaskSimpleBikeJacked* CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver) = 0;
 };

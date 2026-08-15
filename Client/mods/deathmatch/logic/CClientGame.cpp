@@ -283,6 +283,7 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pMultiplayer->SetBulletFireHandler(CClientGame::BulletFire);
     if (CNativeAITelemetry::IsEnabled(ENativeAITelemetryCategory::WEAPON))
         g_pMultiplayer->SetNativeInstantHitResolvedHandler(CClientGame::NativeInstantHitResolved);
+    g_pMultiplayer->SetNativeBikeJackAttemptHandler(CClientGame::NativeBikeJackAttempt);
     g_pMultiplayer->SetExplosionHandler(CClientExplosionManager::Hook_StaticExplosionCreation);
     g_pMultiplayer->SetBreakTowLinkHandler(CClientGame::StaticBreakTowLinkHandler);
     g_pMultiplayer->SetDrawRadarAreasHandler(CClientGame::StaticDrawRadarAreasHandler);
@@ -518,6 +519,7 @@ CClientGame::~CClientGame()
     g_pMultiplayer->SetBulletImpactHandler(NULL);
     g_pMultiplayer->SetBulletFireHandler(NULL);
     g_pMultiplayer->SetNativeInstantHitResolvedHandler(nullptr);
+    g_pMultiplayer->SetNativeBikeJackAttemptHandler(nullptr);
     g_pMultiplayer->SetExplosionHandler(NULL);
     g_pMultiplayer->SetBreakTowLinkHandler(NULL);
     g_pMultiplayer->SetDrawRadarAreasHandler(NULL);
@@ -2757,6 +2759,7 @@ void CClientGame::AddBuiltInEvents()
 
     // Ped events
     m_Events.AddEvent("onClientPedDamage", "attacker, weapon, bodypart, loss, damageFactor, direction", NULL, false);
+    m_Events.AddEvent("onClientPedNativeBikeJackAttempt", "targetPlayer, vehicle, targetDoor, secondaryPassenger", nullptr, false);
     m_Events.AddEvent("onClientPedVehicleEnter", "vehicle, seat", NULL, false);
     m_Events.AddEvent("onClientPedVehicleExit", "vehicle, seat", NULL, false);
     m_Events.AddEvent("onClientPedWeaponFire", "weapon, ammo, ammoInClip, hitX, hitY, hitZ, hitElement", NULL, false);
@@ -6145,6 +6148,41 @@ void CClientGame::BulletImpact(CPed* pInitiator, CEntity* pVictim, const CVector
 void CClientGame::NativeInstantHitResolved(const SNativeInstantHitResolved& resolved)
 {
     CNativeAITelemetry::RecordInstantHitResolved(resolved);
+}
+
+bool CClientGame::NativeBikeJackAttempt(const SNativeBikeJackAttempt& attempt)
+{
+    CPools* pools = g_pGame ? g_pGame->GetPools() : nullptr;
+    auto    resolveClientEntity = [pools](CEntity* entity) -> CClientEntity*
+    { return pools && entity ? pools->GetClientEntity(reinterpret_cast<DWORD*>(entity->GetInterface())) : nullptr; };
+
+    auto* draggedPlayer = dynamic_cast<CClientPlayer*>(resolveClientEntity(attempt.pDraggedPed));
+    if (!draggedPlayer)
+        return false;
+
+    // Once the resolved victim is a real network player, always claim the
+    // retail callsite. Missing owner/resource state must contain the attempt,
+    // never fall back to mutating that player's remote GTA wrapper.
+    auto* jacker = dynamic_cast<CClientPed*>(resolveClientEntity(attempt.pJacker));
+    auto* vehicle = dynamic_cast<CClientVehicle*>(resolveClientEntity(attempt.pVehicle));
+    if (!jacker || jacker->GetType() != CCLIENTPED || !jacker->IsSyncing() || !jacker->GetGamePlayer() ||
+        !jacker->GetGamePlayer()->IsNativeAmbientGroupActive() || !vehicle)
+    {
+        return true;
+    }
+
+    auto*         secondaryPassenger = dynamic_cast<CClientPlayer*>(resolveClientEntity(attempt.pPassenger));
+    CLuaArguments arguments;
+    arguments.PushElement(draggedPlayer);
+    arguments.PushElement(vehicle);
+    arguments.PushNumber(attempt.targetDoor);
+    if (secondaryPassenger)
+        arguments.PushElement(secondaryPassenger);
+    else
+        arguments.PushBoolean(false);
+
+    jacker->CallEvent("onClientPedNativeBikeJackAttempt", arguments, false);
+    return true;
 }
 
 void CClientGame::BulletFire(CPed* pInitiator, const CVector* pStartPosition, const CVector* pEndPosition)

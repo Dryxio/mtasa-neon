@@ -65,6 +65,7 @@ class CServerInfo;
 class CFire;
 enum class eAnimID;
 struct SNativeInstantHitResolved;
+struct SNativeBikeJackAttempt;
 
 struct SVehExtrapolateSettings
 {
@@ -707,6 +708,7 @@ private:
     static void BulletImpact(CPed* pInitiator, CEntity* pVictim, const CVector* pStartPosition, const CVector* pEndPosition);
     static void BulletFire(CPed* pInitiator, const CVector* pStartPosition, const CVector* pEndPosition);
     static void NativeInstantHitResolved(const SNativeInstantHitResolved& resolved);
+    static bool NativeBikeJackAttempt(const SNativeBikeJackAttempt& attempt);
 
 public:
     static bool StaticProcessPacket(unsigned char ucPacketID, NetBitStreamInterface& bitStream);

@@ -524,25 +524,68 @@ static const std::array<uint32_t, 16> shadowAddr{
     0x73A48F   // CWeapon::AddGunshell
 };
 
-PreContextSwitchHandler*                   m_pPreContextSwitchHandler = NULL;
-PostContextSwitchHandler*                  m_pPostContextSwitchHandler = NULL;
-PreWeaponFireHandler*                      m_pPreWeaponFireHandler = NULL;
-PostWeaponFireHandler*                     m_pPostWeaponFireHandler = NULL;
-BulletImpactHandler*                       m_pBulletImpactHandler = NULL;
-BulletFireHandler*                         m_pBulletFireHandler = NULL;
-NativeInstantHitResolvedHandler*           m_pNativeInstantHitResolvedHandler = nullptr;
-DamageHandler*                             m_pDamageHandler = NULL;
-DeathHandler*                              m_pDeathHandler = NULL;
-FireHandler*                               m_pFireHandler = NULL;
-ProjectileHandler*                         m_pProjectileHandler = NULL;
-ProjectileStopHandler*                     m_pProjectileStopHandler = NULL;
-ProcessCamHandler*                         m_pProcessCamHandler = NULL;
-ChokingHandler*                            m_pChokingHandler = NULL;
-ExplosionHandler*                          m_pExplosionHandler = NULL;
-BreakTowLinkHandler*                       m_pBreakTowLinkHandler = NULL;
-DrawRadarAreasHandler*                     m_pDrawRadarAreasHandler = NULL;
-Render3DStuffHandler*                      m_pRender3DStuffHandler = NULL;
-PreWeatherUpdateHandler*                   m_pPreWeatherUpdateHandler = NULL;
+PreContextSwitchHandler*         m_pPreContextSwitchHandler = NULL;
+PostContextSwitchHandler*        m_pPostContextSwitchHandler = NULL;
+PreWeaponFireHandler*            m_pPreWeaponFireHandler = NULL;
+PostWeaponFireHandler*           m_pPostWeaponFireHandler = NULL;
+BulletImpactHandler*             m_pBulletImpactHandler = NULL;
+BulletFireHandler*               m_pBulletFireHandler = NULL;
+NativeInstantHitResolvedHandler* m_pNativeInstantHitResolvedHandler = nullptr;
+NativeBikeJackAttemptHandler*    m_pNativeBikeJackAttemptHandler = nullptr;
+DamageHandler*                   m_pDamageHandler = NULL;
+DeathHandler*                    m_pDeathHandler = NULL;
+FireHandler*                     m_pFireHandler = NULL;
+ProjectileHandler*               m_pProjectileHandler = NULL;
+ProjectileStopHandler*           m_pProjectileStopHandler = NULL;
+ProcessCamHandler*               m_pProcessCamHandler = NULL;
+ChokingHandler*                  m_pChokingHandler = NULL;
+ExplosionHandler*                m_pExplosionHandler = NULL;
+BreakTowLinkHandler*             m_pBreakTowLinkHandler = NULL;
+DrawRadarAreasHandler*           m_pDrawRadarAreasHandler = NULL;
+Render3DStuffHandler*            m_pRender3DStuffHandler = NULL;
+PreWeatherUpdateHandler*         m_pPreWeatherUpdateHandler = NULL;
+
+static bool HandleNativeAmbientBikeJackAttempt(void* pEnterCarTask, CPedSAInterface* pJacker);
+
+#define HOOKPOS_CTaskComplexEnterCar_BeforeBikeJacked 0x63FF50
+DWORD RETURN_CTaskComplexEnterCar_BikeJackedPrimary = 0x63FF55;
+DWORD RETURN_CTaskComplexEnterCar_BikeJackedAlternateDoor = 0x63FF67;
+DWORD RETURN_CTaskComplexEnterCar_BikeJackedClaimed = 0x64013B;
+
+static void __declspec(naked) HOOK_CTaskComplexEnterCar_BeforeBikeJacked()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+
+    // clang-format off
+    __asm
+    {
+        pushad
+        push    edi
+        push    esi
+        call    HandleNativeAmbientBikeJackAttempt
+        add     esp, 8
+        movzx   eax, al
+        mov     [esp + 28], eax
+        popad
+
+        test    eax, eax
+        jnz     claimed
+
+        // Reproduce the overwritten target-door branch exactly.
+        cmp     [esi + 14h], ebx
+        jne     alternateDoor
+        jmp     RETURN_CTaskComplexEnterCar_BikeJackedPrimary
+
+    alternateDoor:
+        jmp     RETURN_CTaskComplexEnterCar_BikeJackedAlternateDoor
+
+    claimed:
+        // GTA already created the ambient ped's slow-drag subtask. Skip only
+        // the two BIKE_JACKED tasks that would mutate remote player wrappers.
+        jmp     RETURN_CTaskComplexEnterCar_BikeJackedClaimed
+    }
+    // clang-format on
+}
 PreWorldProcessHandler*                    m_pPreWorldProcessHandler = NULL;
 PostWorldProcessHandler*                   m_pPostWorldProcessHandler = NULL;
 PostWorldProcessPedsAfterPreRenderHandler* m_postWorldProcessPedsAfterPreRenderHandler = nullptr;
@@ -882,6 +925,7 @@ void CMultiplayerSA::InitHooks()
     HookInstall(HOOKPOS_CTaskSimpleJump_Launch_PlayerStats, (DWORD)HOOK_CTaskSimpleJump_Launch_PlayerStats, 6);
     HookInstall(HOOKPOS_CTaskSimpleJump_StartAnim_PlayerStats, (DWORD)HOOK_CTaskSimpleJump_StartAnim_PlayerStats, 6);
     HookInstall(HOOKPOS_CPed_KillPedWithCar, (DWORD)HOOK_CPed_KillPedWithCar, 8);
+    HookInstall(HOOKPOS_CTaskComplexEnterCar_BeforeBikeJacked, (DWORD)HOOK_CTaskComplexEnterCar_BeforeBikeJacked, 5);
     HookInstallCall(CALL_CEventGroup_Add_ComputeInformGroup, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
     HookInstallCall(CALL_CEventGroup_Add_ComputeInformRespectedFriends, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
     HookInstallCall(CALL_CEventGroup_Add_ComputeLookAt, (DWORD)HOOK_CEventGroup_Add_ComputeResponseTaskOfType);
@@ -4396,6 +4440,45 @@ static bool IsNativeAmbientGroupMember(CPedSAInterface* pedInterface)
     return pPed && pPed->IsNativeAmbientGroupActive();
 }
 
+static bool HandleNativeAmbientBikeJackAttempt(void* pEnterCarTask, CPedSAInterface* pJacker)
+{
+    if (!pEnterCarTask || !pJacker || !m_pNativeBikeJackAttemptHandler || !pGameInterface || !IsNativeAmbientGroupMember(pJacker))
+        return false;
+
+    // Audited retail CTaskComplexEnterCar layout at 0x63FF50. GTA has already
+    // resolved the occupied vehicle and dragged ped before reaching this hook.
+    auto* const taskBytes = static_cast<unsigned char*>(pEnterCarTask);
+    auto* const vehicleInterface = *reinterpret_cast<CVehicleSAInterface**>(taskBytes + 0x0C);
+    auto* const draggedInterface = *reinterpret_cast<CPedSAInterface**>(taskBytes + 0x40);
+    const int   targetDoor = *reinterpret_cast<int*>(taskBytes + 0x14);
+    const int   draggedPedDownTime = *reinterpret_cast<int*>(taskBytes + 0x20);
+    if (!vehicleInterface || !draggedInterface)
+        return false;
+
+    CPools* pools = pGameInterface->GetPools();
+    auto*   jackerEntity = pools ? pools->GetPed(reinterpret_cast<DWORD*>(pJacker)) : nullptr;
+    auto*   draggedEntity = pools ? pools->GetPed(reinterpret_cast<DWORD*>(draggedInterface)) : nullptr;
+    auto*   vehicleEntity = pools ? pools->GetVehicle(reinterpret_cast<DWORD*>(vehicleInterface)) : nullptr;
+    if (!jackerEntity || !jackerEntity->pEntity || !draggedEntity || !draggedEntity->pEntity || !vehicleEntity || !vehicleEntity->pEntity)
+        return false;
+
+    CPed* passenger = nullptr;
+    if (vehicleInterface->pDriver == draggedInterface && vehicleInterface->pPassengers[0])
+    {
+        auto* passengerEntity = pools->GetPed(reinterpret_cast<DWORD*>(vehicleInterface->pPassengers[0]));
+        passenger = passengerEntity ? passengerEntity->pEntity : nullptr;
+    }
+
+    SNativeBikeJackAttempt attempt;
+    attempt.pJacker = jackerEntity->pEntity;
+    attempt.pVehicle = vehicleEntity->pEntity;
+    attempt.pDraggedPed = draggedEntity->pEntity;
+    attempt.pPassenger = passenger;
+    attempt.targetDoor = targetDoor;
+    attempt.draggedPedDownTime = draggedPedDownTime;
+    return m_pNativeBikeJackAttemptHandler(attempt);
+}
+
 static bool TryGetPedModelType(CPedSAInterface* pedInterface, int& pedType)
 {
     if (!pedInterface || !pGameInterface)
@@ -5666,6 +5749,11 @@ void CMultiplayerSA::SetNativeInstantHitResolvedHandler(NativeInstantHitResolved
     m_pNativeInstantHitResolvedHandler = pHandler;
 }
 
+void CMultiplayerSA::SetNativeBikeJackAttemptHandler(NativeBikeJackAttemptHandler* pHandler)
+{
+    m_pNativeBikeJackAttemptHandler = pHandler;
+}
+
 void CMultiplayerSA::Reset()
 {
     bHideRadar = false;
@@ -5679,6 +5767,7 @@ void CMultiplayerSA::Reset()
     m_pDeathHandler = NULL;
     m_pFireHandler = NULL;
     m_pNativeInstantHitResolvedHandler = nullptr;
+    m_pNativeBikeJackAttemptHandler = nullptr;
     m_pRender3DStuffHandler = NULL;
     m_pFxSystemDestructionHandler = NULL;
 }

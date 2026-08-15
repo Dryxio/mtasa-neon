@@ -18,9 +18,11 @@ local observedAimTargets = {}
 local nativeDamageObservations = {}
 local nativeDamageTraceTimes = {}
 local nativePlayerDamageReceipts = {}
+local nativeBikeJackReceipts = {}
 local spawnFades = {}
 local residencyTest = false
 local nextNativePlayerDamageNonce = 0
+local nextNativeBikeJackNonce = 0
 local stats = {
     candidateHits = 0,
     candidateMisses = 0,
@@ -509,7 +511,12 @@ local function captureGroupWeaponState(task)
             weaponStats[tostring(stat)] = actualValue
             statsConverged = statsConverged and actualValue == expectedValue
         end
-        local converged = weapon == expected and totalAmmo == expectedAmmo and clipAmmo == expectedClipAmmo and statsConverged
+        -- MTA exposes a synthetic total ammo of 1 for slots which do not use
+        -- ammunition, including unarmed. There is no vanilla ammo payload to
+        -- authenticate for those slots; keep the exact total/clip check only
+        -- for an actual gang weapon.
+        local ammoConverged = expected == 0 or totalAmmo == expectedAmmo and clipAmmo == expectedClipAmmo
+        local converged = weapon == expected and ammoConverged and statsConverged
         ready = ready and converged
         rows[#rows + 1] = {
             trafficId = getElementData(ped, "neon:ambientPedTrafficId"),
@@ -519,6 +526,7 @@ local function captureGroupWeaponState(task)
             weapon = weapon,
             totalAmmo = totalAmmo,
             clipAmmo = clipAmmo,
+            ammoConverged = ammoConverged,
             weaponStats = weaponStats,
             statsConverged = statsConverged,
             converged = converged,
@@ -1441,6 +1449,88 @@ addEventHandler("onClientPlayerNativeDamageAttempt", root, function(attacker, we
                        nextNativePlayerDamageNonce, weapon, bodypart, damageFactor, direction)
 end)
 
+addEventHandler("onClientPedNativeBikeJackAttempt", root, function(targetPlayer, vehicle, targetDoor, secondaryPassenger)
+    local attackingPed = source
+    if not enabled or not isElement(attackingPed) or getElementType(attackingPed) ~= "ped" or
+        getElementData(attackingPed, "neon:ambientPedTraffic") ~= true or not isElementSyncer(attackingPed) or
+        not isElement(targetPlayer) or getElementType(targetPlayer) ~= "player" or not isElement(vehicle) or
+        getElementType(vehicle) ~= "vehicle" or getVehicleType(vehicle) ~= "Bike" or
+        not isIntegerInRange(targetDoor, 8, 18) or
+        (targetDoor ~= 8 and targetDoor ~= 9 and targetDoor ~= 10 and targetDoor ~= 11 and targetDoor ~= 18) or
+        (secondaryPassenger ~= false and (not isElement(secondaryPassenger) or getElementType(secondaryPassenger) ~= "player")) then
+        return
+    end
+
+    local token = nativeEventProfiles[attackingPed]
+    if not token or not isPedNativeEventProfileActive(attackingPed, token) then
+        return
+    end
+
+    local task = assignments[attackingPed] or groupByPed[attackingPed]
+    if not task or not task.accepted or not isIntegerInRange(task.epoch, 1, 2147483647) then
+        return
+    end
+
+    nextNativeBikeJackNonce = nextNativeBikeJackNonce % 2147483647 + 1
+    log(("native-bike-jack-observed id=%s epoch=%d nonce=%d target=%s door=%d passenger=%s"):format(
+            tostring(getElementData(attackingPed, "neon:ambientPedTrafficId")), task.epoch, nextNativeBikeJackNonce,
+            getPlayerName(targetPlayer), targetDoor,
+            isElement(secondaryPassenger) and getPlayerName(secondaryPassenger) or "none"))
+    triggerServerEvent("pedTraffic:nativeBikeJackObserved", resourceRoot, attackingPed, targetPlayer, vehicle, task.epoch,
+                       nextNativeBikeJackNonce, targetDoor, secondaryPassenger)
+end)
+
+addEvent("pedTraffic:nativeBikeJack", true)
+addEventHandler("pedTraffic:nativeBikeJack", resourceRoot,
+                function(attackingPed, vehicle, epoch, nonce, door, draggedDownTime, primaryVictim, expectedSeat)
+    local function reportResult(accepted, reason)
+        local currentSeat = isElement(vehicle) and getPedOccupiedVehicle(localPlayer) == vehicle and
+                                getPedOccupiedVehicleSeat(localPlayer) or -1
+        triggerServerEvent("pedTraffic:nativeBikeJackResult", resourceRoot, attackingPed, epoch, nonce,
+                           accepted == true, reason, currentSeat)
+    end
+
+    if not enabled or not isElement(attackingPed) or getElementType(attackingPed) ~= "ped" or
+        getElementData(attackingPed, "neon:ambientPedTraffic") ~= true or
+        not isIntegerInRange(epoch, 1, 2147483647) or getElementData(attackingPed, "neon:ambientPedTrafficEpoch") ~= epoch or
+        not isIntegerInRange(nonce, 1, 2147483647) or not isElement(vehicle) or getElementType(vehicle) ~= "vehicle" or
+        getVehicleType(vehicle) ~= "Bike" or not isIntegerInRange(door, 10, 11) or
+        not isIntegerInRange(draggedDownTime, 0, 200) or
+        (draggedDownTime ~= 0 and draggedDownTime ~= 200) or type(primaryVictim) ~= "boolean" or
+        not isIntegerInRange(expectedSeat, 0, 1) then
+        return
+    end
+
+    local previous = nativeBikeJackReceipts[attackingPed]
+    if previous and (epoch < previous.epoch or epoch == previous.epoch and nonce <= previous.nonce) then
+        reportResult(false, "duplicate")
+        return
+    end
+
+    local token = nativeEventProfiles[attackingPed]
+    if not token then
+        reportResult(false, "lease-missing")
+        return
+    end
+    if getElementHealth(localPlayer) <= 0 or getPedOccupiedVehicle(localPlayer) ~= vehicle or
+        getPedOccupiedVehicleSeat(localPlayer) ~= expectedSeat or getElementDimension(localPlayer) ~= getElementDimension(vehicle) or
+        getElementInterior(localPlayer) ~= getElementInterior(vehicle) then
+        reportResult(false, "occupant-state-changed")
+        return
+    end
+    if type(addPedNativeBikeJackTask) ~= "function" then
+        reportResult(false, "native-api-unavailable")
+        return
+    end
+
+    nativeBikeJackReceipts[attackingPed] = {epoch = epoch, nonce = nonce}
+    local accepted = addPedNativeBikeJackTask(localPlayer, attackingPed, vehicle, door, draggedDownTime, primaryVictim, token)
+    log(("native-bike-jack-replay id=%s epoch=%d nonce=%d accepted=%s seat=%d door=%d down=%d primary=%s"):format(
+            tostring(getElementData(attackingPed, "neon:ambientPedTrafficId")), epoch, nonce, tostring(accepted), expectedSeat,
+            door, draggedDownTime, tostring(primaryVictim)), accepted and 3 or 2)
+    reportResult(accepted == true, accepted and "accepted" or "native-task-refused")
+end)
+
 local function getActiveGunAimTarget()
     if not enabled or not getPedControlState(localPlayer, "aim_weapon") then
         return false, false
@@ -1509,6 +1599,7 @@ addEventHandler("onClientElementDestroy", root, function()
     nativeDamageObservations[source] = nil
     nativeDamageTraceTimes[source] = nil
     nativePlayerDamageReceipts[source] = nil
+    nativeBikeJackReceipts[source] = nil
     vehicleReactionStates[source] = nil
     airTestSessions[source] = nil
     climbTestSessions[source] = nil
@@ -1536,6 +1627,7 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     climbTestSessions = {}
     nativeDamageTraceTimes = {}
     nativePlayerDamageReceipts = {}
+    nativeBikeJackReceipts = {}
     local groups = {}
     for _, task in pairs(groupAssignments) do groups[#groups + 1] = task end
     for _, task in ipairs(groups) do releaseGroupAssignment(task, true) end

@@ -54,6 +54,12 @@ public:
     virtual ~CTaskComplexEnterCarAsPassenger() {};
 };
 
+class CTaskSimpleBikeJacked : public virtual CTaskSimple
+{
+public:
+    virtual ~CTaskSimpleBikeJacked() {};
+};
+
 class CTaskComplexEnterBoatAsDriver : public virtual CTaskComplex
 {
 public:

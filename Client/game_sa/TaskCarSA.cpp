@@ -12,6 +12,42 @@
 #include "StdInc.h"
 #include "TaskCarSA.h"
 
+CTaskSimpleBikeJackedSA::CTaskSimpleBikeJackedSA(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver)
+{
+    auto* pVehicleSA = dynamic_cast<CVehicleSA*>(pVehicle);
+    auto* pJackerSA = dynamic_cast<CPedSA*>(pJacker);
+    if (!pVehicleSA || !pJackerSA)
+        return;
+
+    CreateTaskInterface(sizeof(CTaskSimpleBikeJackedSAInterface));
+    if (!IsValid())
+        return;
+
+    const DWORD dwFunc = FUNC_CTaskSimpleBikeJacked__Constructor;
+    const DWORD dwThisInterface = reinterpret_cast<DWORD>(GetInterface());
+    const DWORD dwVehicle = reinterpret_cast<DWORD>(pVehicleSA->GetInterface());
+    const DWORD dwJacker = reinterpret_cast<DWORD>(pJackerSA->GetInterface());
+
+    // The retail constructor registers safe references to both entities and
+    // owns the complete BIKE_HIT -> knock-off lifecycle.
+    // clang-format off
+    __asm
+    {
+        push    ebx
+        xor     ebx, ebx
+        movzx   ebx, bVictimIsDriver
+        push    ebx
+        push    dwJacker
+        push    iDraggedPedDownTime
+        push    iDoor
+        push    dwVehicle
+        mov     ecx, dwThisInterface
+        call    dwFunc
+        pop     ebx
+    }
+    // clang-format on
+}
+
 // ##############################################################################
 // ## Name:    CTaskComplexEnterCar
 // ## Purpose: Makes the ped enter the specified vehicle

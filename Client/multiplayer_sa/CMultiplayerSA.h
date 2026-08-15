@@ -276,6 +276,7 @@ public:
     void           SetBulletImpactHandler(BulletImpactHandler* pHandler);
     void           SetBulletFireHandler(BulletFireHandler* pHandler);
     void           SetNativeInstantHitResolvedHandler(NativeInstantHitResolvedHandler* pHandler) override;
+    void           SetNativeBikeJackAttemptHandler(NativeBikeJackAttemptHandler* pHandler) override;
     void           SetDrawRadarAreasHandler(DrawRadarAreasHandler* pRadarAreasHandler);
     void           SetRender3DStuffHandler(Render3DStuffHandler* pHandler);
     void           SetPreRenderSkyHandler(PreRenderSkyHandler* pHandler);
