@@ -29,6 +29,8 @@
 #define CLASS_CAERadioTrackManager 0x8CB6F8
 #define CLASS_CAEAudioHardware     0xB5F8B8
 
+constexpr std::size_t RADIO_STATION_COUNT = 14;
+
 enum class eRadioTrackMode
 {
     RADIO_STARTING,
@@ -59,7 +61,6 @@ struct tRadioSettings
     std::int8_t  trackIndexes[5];
     std::int8_t  currentTrackIndex;
     std::int8_t  prevTrackIndex;
-    std::uint8_t field_3A[2];
 };
 static_assert(sizeof(tRadioSettings) == 0x3C, "Invalid size of tRadioSettings struct!");
 static_assert(offsetof(tRadioSettings, currentTrackId) == 0x14, "Invalid current track offset!");
@@ -91,15 +92,15 @@ public:
     bool            pauseMode;
     bool            retuneJustStarted;
     bool            autoSelect;
-    std::uint8_t    tracksInARow[14];
+    std::uint8_t    tracksInARow[RADIO_STATION_COUNT];
     std::uint8_t    gameMonthDay;
     std::uint8_t    gameClockHours;
-    std::int32_t    listenItems[14];
+    std::int32_t    listenItems[RADIO_STATION_COUNT];
     std::uint32_t   timeRadioStationReturned;
     std::uint32_t   timeToDisplayRadioName;
     std::uint32_t   savedTimeInMS;
     std::uint32_t   retuneStartedTime;
-    std::uint8_t    field_60[4];
+    std::uint32_t   field_60;
     std::int32_t    hwClientHandle;
     eRadioTrackMode trackMode;
     std::int32_t    stationsListed;
@@ -111,14 +112,16 @@ public:
     float           volume2;
     tRadioSettings  requestedSettings;
     tRadioSettings  activeSettings;
-    tRadioState     radioState[13];
-    std::uint8_t    field_33C[12];
-    std::uint8_t    field_348[32];
+    tRadioState     radioState[RADIO_STATION_COUNT];
     std::uint32_t   field_368;
     std::uint8_t    userTrackPlayMode;
     std::uint8_t    field_36D[3];
 };
 static_assert(sizeof(CAERadioTrackManagerSAInterface) == 0x370, "Invalid size of CAERadioTrackManagerSAInterface class!");
+static_assert(offsetof(CAERadioTrackManagerSAInterface, requestedSettings) == 0x88, "Invalid requested settings offset!");
+static_assert(offsetof(CAERadioTrackManagerSAInterface, activeSettings) == 0xC4, "Invalid active settings offset!");
+static_assert(offsetof(CAERadioTrackManagerSAInterface, radioState) == 0x100, "Invalid radio state offset!");
+static_assert(offsetof(CAERadioTrackManagerSAInterface, field_368) == 0x368, "Invalid tail offset!");
 
 class CAERadioTrackManagerSA : public CAERadioTrackManager
 {
