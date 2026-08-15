@@ -353,6 +353,10 @@ public:
     SString                m_strD3d9Md5;
     SString                m_strD3d9Sha256;
 
+    CElapsedTime m_BulletSyncRateTimer;
+    // Rate gate for custom weapon fire (PACKET_ID_WEAPON_BULLETSYNC)
+    CElapsedTime m_WeaponBulletSyncRateTimer;
+
 private:
     SLightweightSyncData m_lightweightSyncData;
 
