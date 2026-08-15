@@ -10,6 +10,8 @@
 
 #include <StdInc.h>
 
+void RegisterRadioPlaybackFunctions();
+
 static std::vector<CLuaCFunction*>             m_sFunctions;
 static std::map<lua_CFunction, CLuaCFunction*> ms_Functions;
 static void*                                   ms_pFunctionPtrLow = (void*)0xffffffff;
@@ -123,6 +125,8 @@ bool CLuaCFunctions::IsRestricted(const char* szName)
 
 void CLuaCFunctions::RegisterFunctionsWithVM(lua_State* luaVM)
 {
+    RegisterRadioPlaybackFunctions();
+
     // Register all our functions to a lua VM
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();
     for (; iter != m_sFunctions.end(); iter++)
