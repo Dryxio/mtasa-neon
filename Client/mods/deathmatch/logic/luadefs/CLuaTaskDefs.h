@@ -14,6 +14,7 @@
 #include "lua/LuaCommon.h"
 #include <optional>
 #include <string>
+#include <variant>
 
 class CClientPed;
 class CClientVehicle;
@@ -27,6 +28,8 @@ public:
     // mission-specific resource. INTRO1 is the first consumer of escort_left.
     static bool SetPedDriveMission(CClientPed* ped, CClientVehicle* vehicle, CClientVehicle* targetVehicle, std::string mission, float speed,
                                    std::optional<std::string> drivingStyle);
+    static bool SetVehicleStraightLineDistance(CClientVehicle* vehicle, unsigned int distance);
+    static std::variant<bool, unsigned int> GetVehicleStraightLineDistance(CClientVehicle* vehicle);
 
     static int createTaskInstance(lua_State* luaVM);
 
