@@ -29,16 +29,6 @@ namespace
         return value;
     }
 
-    void StopHardwareTrack()
-    {
-        DWORD function = FUNC_CAEAudioHardware_StopTrack;
-        __asm
-        {
-            mov ecx, CLASS_CAEAudioHardware
-            call function
-        }
-    }
-
     void ClearQueueEntry(SRadioPlaybackState& state, unsigned int index)
     {
         state.trackQueue[index] = INVALID_TRACK_ID;
@@ -302,14 +292,24 @@ bool CAERadioTrackManagerSA::SetPlaybackState(const SRadioPlaybackState& state)
         settings.trackIndexes[i] = normalisedState.trackIndexes[i];
     }
 
-    // Keep the desired seek in RequestedSettings until GTA enters RADIO_STARTING. Service()
-    // refreshes ActiveSettings.PlayTime from the hardware before processing the radio mode, so
-    // forcing RADIO_STARTING here would overwrite the transported position before PlayTrack().
-    // RADIO_STOPPED + isInitialised follows StartRadio's native hand-off: Service copies
-    // RequestedSettings to ActiveSettings after that refresh, then starts the requested stream.
-    StopHardwareTrack();
+    // Let GTA's state machine finish its asynchronous stop before it consumes the
+    // requested snapshot. Forcing RADIO_STOPPED or stopping the hardware directly
+    // can race the audio thread and leave the restored radio silent.
     trackInterface->requestedSettings = settings;
-    trackInterface->trackMode = eRadioTrackMode::RADIO_STOPPED;
+
+    switch (trackInterface->trackMode)
+    {
+        case eRadioTrackMode::RADIO_STARTING:
+        case eRadioTrackMode::RADIO_WAITING_TO_PLAY:
+        case eRadioTrackMode::RADIO_PLAYING:
+            trackInterface->trackMode = eRadioTrackMode::RADIO_STOPPING;
+            break;
+
+        default:
+            break;
+    }
+
+    trackInterface->radioState[normalisedState.stationId].timeInPauseModeInMS = -1;
     trackInterface->isInitialised = true;
     trackInterface->stationsListed = 0;
     trackInterface->stationsListDown = 0;
