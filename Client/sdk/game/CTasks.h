@@ -123,7 +123,6 @@ public:
     virtual CTaskSimpleBeHit*       CreateTaskSimpleBeHit(CPed* pPedAttacker, ePedPieceTypes hitBodyPart, int hitBodySide, int weaponId) = 0;
     virtual CTaskComplexSunbathe*   CreateTaskComplexSunbathe(class CObject* pTowel, const bool bStartStanding) = 0;
 
-    // IK
     virtual CTaskSimpleIKChain*       CreateTaskSimpleIKChain(char* idString, int effectorBoneTag, CVector effectorVec, int pivotBoneTag, CEntity* pEntity,
                                                               int offsetBoneTag, CVector offsetPos, float speed, int time = 99999999, int blendTime = 1000) = 0;
     virtual CTaskSimpleIKLookAt*      CreateTaskSimpleIKLookAt(char* idString, CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
@@ -132,7 +131,6 @@ public:
                                                                     unsigned char useTorso = false, float speed = 0.25f, int blendTime = 1000,
                                                                     int priority = 3) = 0;
 
-    // Attack
     virtual CTaskSimpleGangDriveBy* CreateTaskSimpleGangDriveBy(CEntity* pTargetEntity, const CVector* pVecTarget, float fAbortRange, char FrequencyPercentage,
                                                                 char nDrivebyStyle, bool bSeatRHS) = 0;
     virtual CTaskSimpleUseGun*      CreateTaskSimpleUseGun(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength = 1,
@@ -147,50 +145,22 @@ public:
     virtual CTaskSimpleStandStill*     CreateTaskSimpleStandStill(int iDuration) = 0;
     virtual CTaskComplex*              CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat) = 0;
     virtual CTaskComplexKillPedOnFoot* CreateTaskComplexKillPedOnFoot(CPed* pTarget) = 0;
-
-    // A successful dispatch consumes the fresh task immediately. It confirms
-    // native event submission only; callers must observe activation separately.
     virtual bool AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDeadPeds = false) = 0;
-
-    // Appended separately so existing CTasks vtable slots and the exact 0677
-    // factory remain ABI-compatible. Disabling conversation audio selects
-    // GTA's own timed PartnerChat fallback for installations with silent speech.
     virtual CTaskComplexPartnerChat* CreateTaskComplexPartnerChatEx(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection, bool bConversationEnabled) = 0;
-
-    // Appended to preserve every established CTasks vtable index.
     virtual CTaskComplex* CreateTaskComplexTurnToFaceEntity(CPed* pTarget) = 0;
-
-    // Appended native sequence surface. The factory consumes every child task,
-    // matching OPEN/CLOSE/PERFORM/CLEAR_SEQUENCE_TASK ownership.
     virtual CTaskComplex* CreateTaskComplexSequence(CTask* const* pTasks, size_t uiTaskCount, bool bRepeat = false) = 0;
     virtual int           GetTaskSequenceProgress(CPed* pPed) = 0;
-
-    // Appended after the sequence surface to preserve every established slot.
     virtual CTaskComplexCarDriveToPoint* CreateTaskComplexCarDriveToPoint(CVehicle* pVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode,
                                                                           int iDesiredVehicleModel, float fRadius, int iDrivingStyle) = 0;
-
-    // Appended for opcode 05DD. GTA owns the flee point updates, safe entity
-    // reference, timeout, and cloned task lifecycle.
     virtual CTaskComplex* CreateTaskComplexSmartFleeEntity(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod,
                                                            float fPositionChangeTolerance) = 0;
-
-    // Appended so existing CTasks vtable indices remain stable. GTA owns the
-    // complete Jump -> InAirAndLand -> Land lifecycle after construction.
     virtual CTaskComplex* CreateTaskComplexJump(bool bAllowClimb = true) = 0;
-
-    // Authority can move after the launch task has already finished. Resume
-    // directly in GTA's native airborne state machine without replaying launch.
     virtual CTaskComplex* CreateTaskComplexInAirAndLand(bool bUsingJumpGlide = true, bool bUsingFallGlide = false) = 0;
-
-    // A climb handoff must preserve the native anchor and both phase cursors;
-    // replaying Jump would rescan different geometry in each process.
     virtual CTaskComplex* CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state) = 0;
-
-    // Script peds need GTA's FORCE value to run the climb scan; OK only does
-    // so for a real player even though both modes share the same jump task.
     virtual CTaskComplex* CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true) = 0;
-
-    // Appended for owner-routed motorcycle ejections. GTA owns the animation,
-    // safe references and knock-off event after construction.
     virtual CTaskSimpleBikeJacked* CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver) = 0;
+
+    // INTRO1 first consumer: verified retail CTaskComplexCarDriveMission. Keep
+    // this appended so all established cross-module vtable indices remain stable.
+    virtual CTaskComplex* CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed) = 0;
 };

@@ -12,11 +12,21 @@
 
 #include "CLuaDefs.h"
 #include "lua/LuaCommon.h"
+#include <optional>
+#include <string>
+
+class CClientPed;
+class CClientVehicle;
 
 class CLuaTaskDefs : public CLuaDefs
 {
 public:
     static void LoadFunctions();
+
+    // New native story tasks live on the public task surface rather than in a
+    // mission-specific resource. INTRO1 is the first consumer of escort_left.
+    static bool SetPedDriveMission(CClientPed* ped, CClientVehicle* vehicle, CClientVehicle* targetVehicle, std::string mission, float speed,
+                                   std::optional<std::string> drivingStyle);
 
     static int createTaskInstance(lua_State* luaVM);
 
