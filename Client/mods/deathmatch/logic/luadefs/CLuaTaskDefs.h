@@ -30,6 +30,7 @@ public:
                                    std::optional<std::string> drivingStyle);
     static bool SetVehicleStraightLineDistance(CClientVehicle* vehicle, unsigned int distance);
     static std::variant<bool, unsigned int> GetVehicleStraightLineDistance(CClientVehicle* vehicle);
+    static bool SetPedPhysicalProofs(CClientPed* ped, bool bullet, bool fire, bool explosion, bool collision, bool melee);
 
     static int createTaskInstance(lua_State* luaVM);
 
