@@ -34,10 +34,10 @@ class CPhysicalSAInterface : public CEntitySAInterface
     virtual std::int32_t ProcessEntityCollision(CEntitySAInterface* entity, CColPointSAInterface* colPoint) = 0;
 
 public:
-    float  pad1;  // 56
-    uint32 pad2;  // 60
+    float  pad1;
+    uint32 pad2;
 
-    uint32 b0x01 : 1;  // 64
+    uint32 b0x01 : 1;
     uint32 bApplyGravity : 1;
     uint32 bDisableFriction : 1;
     uint32 bCollidable : 1;
@@ -46,17 +46,17 @@ public:
     uint32 b0x40 : 1;
     uint32 b0x80 : 1;
 
-    uint32 bSubmergedInWater : 1;  // 65
+    uint32 bSubmergedInWater : 1;
     uint32 bOnSolidSurface : 1;
     uint32 bBroken : 1;
-    uint32 b0x800 : 1;           // ref @ 0x6F5CF0
-    uint32 b0x1000 : 1;          //
-    uint32 bDontApplySpeed : 1;  //
-    uint32 b0x4000 : 1;          //
-    uint32 b0x8000 : 1;          //
+    uint32 b0x800 : 1;
+    uint32 b0x1000 : 1;
+    uint32 bDontApplySpeed : 1;
+    uint32 b0x4000 : 1;
+    uint32 b0x8000 : 1;
 
-    uint32 b0x10000 : 1;  // 66
-    uint32 b0x20000 : 1;  // ref @ CPhysical__processCollision
+    uint32 b0x10000 : 1;
+    uint32 b0x20000 : 1;
     uint32 bBulletProof : 1;
     uint32 bFireProof : 1;
     uint32 bCollisionProof : 1;
@@ -64,7 +64,7 @@ public:
     uint32 bInvulnerable : 1;
     uint32 bExplosionProof : 1;
 
-    uint32 b0x1000000 : 1;  // 67
+    uint32 b0x1000000 : 1;
     uint32 bAttachedToEntity : 1;
     uint32 b0x4000000 : 1;
     uint32 bTouchingWater : 1;
@@ -73,44 +73,44 @@ public:
     uint32 b0x40000000 : 1;
     uint32 b0x80000000 : 1;
 
-    CVector                   m_vecLinearVelocity;              // 68
-    CVector                   m_vecAngularVelocity;             // 80
-    CVector                   m_vecCollisionLinearVelocity;     // 92
-    CVector                   m_vecCollisionAngularVelocity;    // 104
-    CVector                   m_vecOffsetUnk5;                  // 116
-    CVector                   m_vecOffsetUnk6;                  // 128
-    float                     m_fMass;                          // 140
-    float                     m_fTurnMass;                      // 144
-    float                     m_pad1;                           // 148
-    float                     m_fAirResistance;                 // 152
-    float                     m_fElasticity;                    // 156
-    float                     m_fBuoyancyConstant;              // 160
-    CVector                   m_vecCenterOfMass;                // 164
-    uint32*                   m_pCollisionList;                 // 176
-    uint32*                   m_pMovingList;                    // 180
-    uint8                     m_ucColFlag1;                     // 184
-    uint8                     m_ucCollisionState;               // 185
-    uint8                     m_ucCollisionContactSurfaceType;  // 186
-    uint8                     m_ucColFlag4;                     // 187
-    CEntity*                  pLastContactedEntity[4];          // 188
-    float                     m_field_cc;                       // 204
-    float                     m_pad4c;                          // 208
-    float                     m_pad4d;                          // 212
-    float                     m_fDamageImpulseMagnitude;        // 216
-    CEntitySAInterface*       m_pCollidedEntity;                // 220
-    CVector                   m_vecCollisionImpactVelocity;     // 224
-    CVector                   m_vecCollisionPosition;           // 236
-    uint16                    m_usPieceType;                    // 248
-    uint16                    m_pad3;                           // 250
-    CEntitySAInterface*       m_pAttachedEntity;                // 252
-    CVector                   m_vecAttachedOffset;              // 256
-    CVector                   m_vecAttachedRotation;            // 268
-    CVector                   m_vecUnk;                         // 280
-    uint32                    m_pad4;                           // 292
-    CPtrNodeDoubleLink<void>* m_pControlCodeNodeLink;           // 296
-    float                     m_fLighting;                      // 300 surface brightness
-    float                     m_fLighting2;                     // 304 dynamic lighting (unused, always set to 0 in the GTA code)
-    class CShadowDataSA*      m_pShadowData;                    // 308
+    CVector                   m_vecLinearVelocity;
+    CVector                   m_vecAngularVelocity;
+    CVector                   m_vecCollisionLinearVelocity;
+    CVector                   m_vecCollisionAngularVelocity;
+    CVector                   m_vecOffsetUnk5;
+    CVector                   m_vecOffsetUnk6;
+    float                     m_fMass;
+    float                     m_fTurnMass;
+    float                     m_pad1;
+    float                     m_fAirResistance;
+    float                     m_fElasticity;
+    float                     m_fBuoyancyConstant;
+    CVector                   m_vecCenterOfMass;
+    uint32*                   m_pCollisionList;
+    uint32*                   m_pMovingList;
+    uint8                     m_ucColFlag1;
+    uint8                     m_ucCollisionState;
+    uint8                     m_ucCollisionContactSurfaceType;
+    uint8                     m_ucColFlag4;
+    CEntity*                  pLastContactedEntity[4];
+    float                     m_field_cc;
+    float                     m_pad4c;
+    float                     m_pad4d;
+    float                     m_fDamageImpulseMagnitude;
+    CEntitySAInterface*       m_pCollidedEntity;
+    CVector                   m_vecCollisionImpactVelocity;
+    CVector                   m_vecCollisionPosition;
+    uint16                    m_usPieceType;
+    uint16                    m_pad3;
+    CEntitySAInterface*       m_pAttachedEntity;
+    CVector                   m_vecAttachedOffset;
+    CVector                   m_vecAttachedRotation;
+    CVector                   m_vecUnk;
+    uint32                    m_pad4;
+    CPtrNodeDoubleLink<void>* m_pControlCodeNodeLink;
+    float                     m_fLighting;
+    float                     m_fLighting2;
+    class CShadowDataSA*      m_pShadowData;
 
     CRect*      GetBoundRect_(CRect* pRect);
     static void StaticSetHooks();
@@ -162,4 +162,6 @@ public:
     void  SetLighting(float fLighting);
 
     void SetFrozen(bool bFrozen);
+    SPhysicalProofs GetPhysicalProofs() const;
+    void            SetPhysicalProofs(const SPhysicalProofs& proofs);
 };
