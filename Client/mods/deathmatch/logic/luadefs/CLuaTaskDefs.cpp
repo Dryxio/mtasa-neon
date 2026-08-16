@@ -16,12 +16,29 @@
 
 namespace
 {
-    constexpr int CAR_MISSION_ESCORT_LEFT = 29;
+    constexpr int         CAR_MISSION_ESCORT_LEFT = 29;
+    constexpr std::size_t VEHICLE_STRAIGHT_LINE_DISTANCE_OFFSET = 0x3DD;
+
+    bool OwnsNativeVehicle(CClientVehicle* vehicle)
+    {
+        if (!vehicle)
+            return false;
+        if (vehicle->IsLocalEntity())
+            return true;
+        auto* deathmatchVehicle = dynamic_cast<CDeathmatchVehicle*>(vehicle);
+        return deathmatchVehicle && deathmatchVehicle->IsSyncing();
+    }
 
     bool OwnsDrivenVehicle(CClientPed* ped, CClientVehicle* vehicle)
     {
-        auto* deathmatchVehicle = dynamic_cast<CDeathmatchVehicle*>(vehicle);
-        return vehicle && (vehicle->IsLocalEntity() || vehicle->GetOccupant(0) == ped || (deathmatchVehicle && deathmatchVehicle->IsSyncing()));
+        return vehicle && (vehicle->GetOccupant(0) == ped || OwnsNativeVehicle(vehicle));
+    }
+
+    std::uint8_t* GetStraightLineDistanceByte(CClientVehicle* vehicle)
+    {
+        if (!vehicle || !vehicle->IsStreamedIn() || !vehicle->GetGameVehicle() || !vehicle->GetGameVehicle()->GetInterface())
+            return nullptr;
+        return reinterpret_cast<std::uint8_t*>(vehicle->GetGameVehicle()->GetInterface()) + VEHICLE_STRAIGHT_LINE_DISTANCE_OFFSET;
     }
 
     bool ParseDrivingStyle(const std::string& name, int& style)
@@ -63,6 +80,8 @@ void CLuaTaskDefs::LoadFunctions()
     // The historical task-instance surface stays disabled. New native tasks
     // use explicit validated APIs with ownership and synchronization contracts.
     CLuaCFunctions::AddFunction("setPedDriveMission", ArgumentParser<SetPedDriveMission>);
+    CLuaCFunctions::AddFunction("setVehicleStraightLineDistance", ArgumentParser<SetVehicleStraightLineDistance>);
+    CLuaCFunctions::AddFunction("getVehicleStraightLineDistance", ArgumentParser<GetVehicleStraightLineDistance>);
 
     // ChrML: Disabled for dp3
     /*
@@ -106,6 +125,29 @@ bool CLuaTaskDefs::SetPedDriveMission(CClientPed* ped, CClientVehicle* vehicle, 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexCarDriveMission(vehicle->GetGameVehicle(), targetVehicle->GetGameVehicle(), CAR_MISSION_ESCORT_LEFT,
                                                                        style, speed);
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaTaskDefs::SetVehicleStraightLineDistance(CClientVehicle* vehicle, unsigned int distance)
+{
+    if (distance > 255 || !vehicle || vehicle->IsBlown() || !OwnsNativeVehicle(vehicle))
+        return false;
+    auto* value = GetStraightLineDistanceByte(vehicle);
+    if (!value)
+        return false;
+
+    // Target GTA:SA constructs CAutoPilot at CVehicle + 0x390. The verified
+    // CAutoPilot constructor writes its uint8 straight-line distance at +0x4D,
+    // making the final CVehicle offset 0x3DD. SCM opcode 04E0 writes this byte.
+    *value = static_cast<std::uint8_t>(distance);
+    return true;
+}
+
+std::variant<bool, unsigned int> CLuaTaskDefs::GetVehicleStraightLineDistance(CClientVehicle* vehicle)
+{
+    auto* value = GetStraightLineDistanceByte(vehicle);
+    if (!value)
+        return false;
+    return static_cast<unsigned int>(*value);
 }
 
 int CLuaTaskDefs::createTaskInstance(lua_State* luaVM)
