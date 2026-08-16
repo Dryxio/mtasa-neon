@@ -100,8 +100,10 @@ public:
     CTaskSimpleStealthKill* CreateTaskSimpleStealthKill(bool bAttacker, class CPed* pPed, const AnimationId anim);
     CTaskSimpleDead*        CreateTaskSimpleDead(unsigned int uiDeathTimeMS, bool bUnk2);
     CTaskSimpleBeHit*       CreateTaskSimpleBeHit(CPed* pPedAttacker, ePedPieceTypes hitBodyPart, int hitBodySide, int weaponId);
-    CTaskComplexSunbathe*   CreateTaskComplexSunbathe(class CObject* pTowel, const bool bStartStanding);
 
+    CTaskComplexSunbathe* CreateTaskComplexSunbathe(class CObject* pTowel, const bool bStartStanding);
+
+    // IK
     CTaskSimpleIKChain* CreateTaskSimpleIKChain(char* idString, int effectorBoneTag, CVector effectorVec, int pivotBoneTag, CEntity* pEntity, int offsetBoneTag,
                                                 CVector offsetPos, float speed, int time = 99999999, int blendTime = 1000);
     CTaskSimpleIKLookAt*      CreateTaskSimpleIKLookAt(char* idString, CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos,
@@ -109,6 +111,7 @@ public:
     CTaskSimpleTriggerLookAt* CreateTaskSimpleTriggerLookAt(CEntity* pEntity, int time, int offsetBoneTag, CVector offsetPos, unsigned char useTorso = false,
                                                             float speed = 0.25f, int blendTime = 1000, int priority = 3);
 
+    // Attack
     CTaskSimpleGangDriveBy* CreateTaskSimpleGangDriveBy(CEntity* pTargetEntity, const CVector* pVecTarget, float fAbortRange, char FrequencyPercentage,
                                                         char nDrivebyStyle, bool bSeatRHS);
     CTaskSimpleUseGun*      CreateTaskSimpleUseGun(CEntity* pTargetEntity, CVector vecTarget, char nCommand, short nBurstLength = 1,
@@ -117,6 +120,7 @@ public:
                                                        short nBurstLength, int iDuration);
     CTaskSimpleFight*       CreateTaskSimpleFight(CEntity* pTargetEntity, int nCommand, unsigned int nIdlePeriod = 10000);
 
+    // Appended factories preserve the cross-module CTasks ABI.
     CTaskComplexPartnerChat*     CreateTaskComplexPartnerChat(CPed* pPartner, bool bLeadSpeaker, bool bUpdateDirection);
     CTaskSimpleStandStill*       CreateTaskSimpleStandStill(int iDuration);
     CTaskComplex*                CreateTaskComplexGoToEntityOffset(CPed* pTarget, int iTimeout, float fRadius, float fAngleDegrees, bool bRepeat);
