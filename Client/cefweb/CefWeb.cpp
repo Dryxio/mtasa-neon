@@ -59,6 +59,11 @@ extern "C" _declspec(dllexport) CWebCoreInterface* InitWebCoreInterface(CCoreInt
     if (!InitializeGlobalInterfaces(pCore)) [[unlikely]]
         return nullptr;
 
+    // The secondary development client does not need browser features. Stop
+    // before constructing CWebCore so CefInitialize and CEFLauncher never run.
+    if (pCore->IsSecondaryClient())
+        return nullptr;
+
     // Perform runtime initialization
     PerformRuntimeInitialization();
 
