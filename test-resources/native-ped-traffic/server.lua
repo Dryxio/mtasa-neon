@@ -2348,11 +2348,11 @@ local function spawnCandidate(player, candidate, selection)
         catalog_revision = record.catalogRevision,
         initial_weapon = getPedWeapon(ped),
         dealer_fight_seed = record.dealerFightSeed or false,
-        task_profile = "wander-standard",
+        task_profile = populationClass == "cop" and "wander-cop-ambient" or "wander-standard",
         gang = gang,
-        targets = {civilian = selection.civilianTarget, dealer = selection.dealerTarget, gang = selection.gangTarget},
-        live_before = {civilian = selection.civilianCount, dealer = selection.dealerCount, gang = selection.totalGangCount},
-        deficits = {civilian = selection.civilianDeficit, dealer = selection.dealerDeficit, gang = selection.gangDeficit},
+        targets = {civilian = selection.civilianTarget, dealer = selection.dealerTarget, cop = selection.copTarget, gang = selection.gangTarget},
+        live_before = {civilian = selection.civilianCount, dealer = selection.dealerCount, cop = selection.copCount, gang = selection.totalGangCount},
+        deficits = {civilian = selection.civilianDeficit, dealer = selection.dealerDeficit, cop = selection.copDeficit, gang = selection.gangDeficit},
         position = {x = candidate.x, y = candidate.y, z = candidate.z},
     })
     return true
@@ -5084,6 +5084,12 @@ local function finishCopTest(result, reason)
         initial_epoch = test.initialEpoch or false,
         final_epoch = test.record and test.record.epoch or false,
         cleanup_acks = test.cleanupAcks or 0,
+        patrol_distance = test.patrolDistance or 0,
+        patrol_observed = (test.patrolDistance or 0) >= 3 and test.branches and test.branches.go_to == true or false,
+        observed_branches = test.branches or {},
+        forbidden_path_seen = test.forbiddenPathSeen == true,
+        wanted_changed = test.wantedChanged == true,
+        double_owner_seen = test.doubleOwnerSeen == true,
     })
     local message = ("Cop test %s: %s (scenario %d)"):format(result, tostring(reason), test.id)
     outputChatBox(message, root, result == "PASS" and 80 or 255, result == "PASS" and 220 or 80, 120)
@@ -5091,13 +5097,14 @@ local function finishCopTest(result, reason)
 end
 
 local function requestCopTestSamples(test, phase)
-    test.samples[phase] = {}
+    test.sampleSequence = (test.sampleSequence or 0) + 1
+    test.pendingSample = {id = test.sampleSequence, phase = phase, samples = {}}
     for _, player in ipairs(test.players) do
-        triggerClientEvent(player, "pedTraffic:copTestSample", resourceRoot, test.id, test.record.ped, test.record.epoch, phase)
+        triggerClientEvent(player, "pedTraffic:copTestSample", resourceRoot, test.id, test.sampleSequence, test.record.ped, test.record.epoch, phase)
     end
 end
 
-local function scheduleCopTestSamples(test, phase, expectedPhase)
+local function scheduleCopTestSamples(test, phase, expectedPhase, delay)
     -- MTA clones table arguments passed through timers. Keep only scalar
     -- identity in the timer and reacquire the live harness state before the
     -- sample request so replies update the same table inspected by the test.
@@ -5105,7 +5112,7 @@ local function scheduleCopTestSamples(test, phase, expectedPhase)
         local activeTest = copTest
         if not activeTest or activeTest.id ~= testId or activeTest.phase ~= requiredPhase then return end
         requestCopTestSamples(activeTest, samplePhase)
-    end, 750, 1, test.id, phase, expectedPhase)
+    end, delay or 750, 1, test.id, phase, expectedPhase)
 end
 
 local function issueCopTestCandidate(test)
@@ -5191,34 +5198,53 @@ local function issueCopTestCandidate(test)
     return true
 end
 
-local function validateCopTestSamples(test, phase)
-    local samples = test.samples[phase]
+local function validateCopTestSamples(test, pending)
+    local phase = pending.phase
+    local samples = pending.samples
     if not samples or not samples[test.players[1]] or not samples[test.players[2]] then return false end
     local expectedOwner = phase == "handoff" and test.ownerB or test.ownerA
+    local activeOwners = 0
     for _, player in ipairs(test.players) do
         local sample = samples[player]
         local isOwner = player == expectedOwner
+        if sample.ambientCopTask then activeOwners = activeOwners + 1 end
+        if sample.wanted ~= test.savedPlayers[player].wanted then test.wantedChanged = true end
+        if sample.forbiddenTask then test.forbiddenPathSeen = true end
         if sample.model ~= 280 or sample.populationClass ~= "cop" or sample.logicalPedType ~= 6 or sample.worldLevel ~= 1 or
             sample.activeWeapon ~= 0 or sample.nightstick ~= 3 or sample.pistol ~= 22 or sample.pistolAmmo ~= 1000 or
             math.abs(sample.pistolSkillStat - 40) > 0.01 or math.abs(sample.armor) > 0.01 or
             sample.wanted ~= test.savedPlayers[player].wanted or sample.syncer ~= isOwner or sample.profilePresent ~= true or
-            sample.assignment ~= isOwner or sample.assignmentAccepted ~= isOwner or sample.profileActive ~= isOwner or
-            (isOwner and (sample.hasWander ~= true or sample.shootingRate ~= 30 or sample.accuracy ~= 60)) then
+            sample.profileName ~= "ambient-cop-safe" or sample.assignment ~= isOwner or sample.assignmentAccepted ~= isOwner or
+            sample.profileActive ~= isOwner or
+            sample.ambientCopTask ~= isOwner or sample.vtableSafe ~= isOwner or sample.forbiddenTask ~= false or
+            (isOwner and (sample.hasWander ~= true or sample.rootTask ~= "TASK_COMPLEX_WANDER" or
+                          sample.shootingRate ~= 30 or sample.accuracy ~= 60)) then
             finishCopTest("FAIL", "cop-sample-mismatch-" .. phase .. "-client-" .. getPopulationClientId(player))
             return false
         end
+    end
+    if activeOwners ~= 1 then
+        test.doubleOwnerSeen = activeOwners > 1
+        finishCopTest("FAIL", activeOwners > 1 and "double-owner-task" or "owner-task-missing")
+        return false
     end
     return true
 end
 
 addEvent("pedTraffic:copTestSampleResult", true)
-addEventHandler("pedTraffic:copTestSampleResult", resourceRoot, function(testId, phase, data)
+addEventHandler("pedTraffic:copTestSampleResult", resourceRoot, function(testId, sampleId, phase, data)
     local test = copTest
-    if not test or test.id ~= testId or type(data) ~= "table" or (phase ~= "initial" and phase ~= "handoff") then return end
+    local pending = test and test.pendingSample
+    if not test or test.id ~= testId or type(data) ~= "table" or (phase ~= "initial" and phase ~= "handoff") or
+        not pending or pending.id ~= sampleId or pending.phase ~= phase then return end
     writePopulationTrace("cop_test_sample", {
         scenario_id = test.id,
+        sample_id = sampleId,
         phase = phase,
         player_id = getPopulationClientId(client),
+        owner_id = getPopulationClientId(phase == "handoff" and test.ownerB or test.ownerA),
+        traffic_id = test.record.id,
+        epoch = test.record.epoch,
         model = data.model,
         population_class = data.populationClass,
         logical_ped_type = data.logicalPedType,
@@ -5236,14 +5262,47 @@ addEventHandler("pedTraffic:copTestSampleResult", resourceRoot, function(testId,
         assignment = data.assignment,
         assignment_accepted = data.assignmentAccepted,
         profile_present = data.profilePresent,
+        profile_name = data.profileName,
         profile_active = data.profileActive,
         has_wander = data.hasWander,
+        root_task = data.rootTask,
+        branch = data.branch,
+        forbidden_task = data.forbiddenTask,
+        ambient_cop_task = data.ambientCopTask,
+        vtable_safe = data.vtableSafe,
+        position = {x = data.x, y = data.y, z = data.z},
     })
-    test.samples[phase][client] = data
-    if not validateCopTestSamples(test, phase) then return end
+    pending.samples[client] = data
+    if not pending.samples[test.players[1]] or not pending.samples[test.players[2]] then return end
+    test.pendingSample = nil
+    if not validateCopTestSamples(test, pending) then return end
     if phase == "initial" then
-        beginHandoff(test.record, test.ownerB, "cop-test-handoff")
-        test.phase = "handoff"
+        local ownerSample = pending.samples[test.ownerA]
+        if ownerSample.branch and not test.branches[ownerSample.branch] then
+            test.branches[ownerSample.branch] = true
+            writePopulationTrace("cop_test_branch", {
+                scenario_id = test.id,
+                sample_id = sampleId,
+                phase = phase,
+                traffic_id = test.record.id,
+                owner_id = getPopulationClientId(test.ownerA),
+                epoch = test.record.epoch,
+                branch = ownerSample.branch,
+            })
+        end
+        if test.patrolLastPosition then
+            local dx = ownerSample.x - test.patrolLastPosition.x
+            local dy = ownerSample.y - test.patrolLastPosition.y
+            local dz = ownerSample.z - test.patrolLastPosition.z
+            test.patrolDistance = test.patrolDistance + math.sqrt(dx * dx + dy * dy + dz * dz)
+        end
+        test.patrolLastPosition = {x = ownerSample.x, y = ownerSample.y, z = ownerSample.z}
+        if test.patrolDistance >= 3 and test.branches.go_to then
+            beginHandoff(test.record, test.ownerB, "cop-test-handoff")
+            test.phase = "handoff"
+        else
+            scheduleCopTestSamples(test, "initial", "initial-patrol", 250)
+        end
     else
         test.phase = "cleanup"
         local trafficId = test.record.id
@@ -5264,8 +5323,14 @@ addEventHandler("pedTraffic:copTestCleanupResult", resourceRoot, function(testId
     if not test.cleanupPlayers[client] then
         test.cleanupPlayers[client] = true
         test.cleanupAcks = test.cleanupAcks + 1
+        writePopulationTrace("cop_test_cleanup_ack", {
+            scenario_id = test.id,
+            traffic_id = trafficId,
+            player_id = getPopulationClientId(client),
+            accepted = true,
+        })
     end
-    if test.cleanupAcks == 2 then finishCopTest("PASS", "cop-presence-handoff-wanted-cleanup") end
+    if test.cleanupAcks == 2 then finishCopTest("PASS", "cop-native-locomotion-handoff-wanted-cleanup") end
 end)
 
 local function startCopTest(player)
@@ -5287,8 +5352,13 @@ local function startCopTest(player)
     nextCopTestId = nextCopTestId + 1
     local hour, minute = getTime()
     local test = {id = nextCopTestId, players = players, savedPlayers = {}, savedTime = {hour, minute}, startedAt = getTickCount(),
-                  phase = "await-profile", samples = {}, cleanupPlayers = {}, cleanupAcks = 0, requestIds = {}}
+                  phase = "await-profile", cleanupPlayers = {}, cleanupAcks = 0, requestIds = {}, sampleSequence = 0,
+                  patrolDistance = 0, branches = {}, forbiddenPathSeen = false, wantedChanged = false, doubleOwnerSeen = false}
     copTest = test
+    writePopulationTrace("cop_test_started", {
+        scenario_id = test.id,
+        player_ids = {getPopulationClientId(players[1]), getPopulationClientId(players[2])},
+    })
     setTime(12, 0)
     for index, candidate in ipairs(players) do
         local x, y, z = getElementPosition(candidate)
@@ -5330,8 +5400,8 @@ setTimer(function()
                 test.ownerB = test.players[1] == test.ownerA and test.players[2] or test.players[1]
                 test.initialEpoch = record.epoch
                 for _, player in ipairs(test.players) do setElementFrozen(player, true) end
-                test.phase = "initial"
-                scheduleCopTestSamples(test, "initial", "initial")
+                test.phase = "initial-patrol"
+                scheduleCopTestSamples(test, "initial", "initial-patrol")
                 return
             end
         end

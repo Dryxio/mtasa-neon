@@ -108,6 +108,25 @@ CTaskComplexWanderStandard* CTasksSA::CreateTaskComplexWanderStandard(const int 
     return pTask;
 }
 
+CTaskComplexWander* CTasksSA::CreateTaskComplexWanderCopAmbient(const int iMoveState, const char iDir)
+{
+    const char iNativeDir = iDir < 0 ? static_cast<char>(((int(__cdecl*)(int, int))0x407180)(0, 8)) : iDir;
+    if (!IsTaskComplexWanderCopAmbientVTableSafe())
+        return nullptr;
+
+    auto* pTask = NewTask<CTaskComplexWanderCopAmbientSA>(iMoveState, iNativeDir);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
+bool CTasksSA::IsTaskComplexWanderCopAmbient(const CTask* pTask) const
+{
+    // CTask already exposes its native interface. Avoid RTTI across the SDK /
+    // Game SA module boundary: the live wrapper may be viewed through a
+    // different virtual base even though it owns the exact ambient vtable.
+    return pTask && IsTaskComplexWanderCopAmbientVTableSafe() && IsTaskComplexWanderCopAmbientInterface(pTask->GetInterface());
+}
+
 CTaskComplexGoToPointAndStandStill* CTasksSA::CreateTaskComplexGoToPointAndStandStill(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
                                                                                       const float fSlowDownDistance, const int iTime)
 {

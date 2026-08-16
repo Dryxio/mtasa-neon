@@ -135,12 +135,15 @@ CTaskSA* CTaskManagementSystemSA::GetTask(CTaskSAInterface* pTaskInterface)
     if (!pVTBL)
         return nullptr;
 
-    // Vtable should be in executable memory range (.text/.rdata sections)
-    // GTA SA base is around 0x400000-0x900000 range
+    // GTA tasks normally use a vtable in the executable. AmbientCopWander is
+    // the one deliberately constructed exception: whitelist its exact table,
+    // never an entire module range, so a corrupt task still cannot dispatch
+    // through an arbitrary Game SA address.
     constexpr DWORD GTA_BASE_MIN = 0x400000;
     constexpr DWORD GTA_BASE_MAX = 0x900000;
     DWORD           dwVTableAddr = reinterpret_cast<DWORD>(pVTBL);
-    if (dwVTableAddr < GTA_BASE_MIN || dwVTableAddr > GTA_BASE_MAX)
+    const bool      gtaVTable = dwVTableAddr >= GTA_BASE_MIN && dwVTableAddr <= GTA_BASE_MAX;
+    if (!gtaVTable && !IsTaskComplexWanderCopAmbientInterface(pTaskInterface))
         return nullptr;
 
     // Find it in our list

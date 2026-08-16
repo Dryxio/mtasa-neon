@@ -306,6 +306,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedGoToOffset", ArgumentParser<SetPedGoToOffset>},
         {"setPedKillOnFoot", ArgumentParser<SetPedKillOnFoot>},
         {"setPedWander", ArgumentParser<SetPedWander>},
+        {"isPedNativeAmbientCopWanderTask", ArgumentParser<IsPedNativeAmbientCopWanderTask>},
         {"setPedJump", ArgumentParser<SetPedJump>},
         {"setPedScriptedSpeechMuted", ArgumentParser<SetPedScriptedSpeechMuted>},
         {"setPedFacialTalk", ArgumentParser<SetPedFacialTalk>},
@@ -3070,8 +3071,40 @@ bool CLuaPedDefs::SetPedWander(CClientPed* ped, std::optional<std::string> movem
     if (taskDirection < -1 || taskDirection > 7)
         return false;
 
-    auto* task = g_pGame->GetTasks()->CreateTaskComplexWanderStandard(moveState, static_cast<char>(taskDirection), wanderSensibly.value_or(true));
+    CTask* task = nullptr;
+    if (ped->IsNativeEventProfileSelected(ePedNativeEventProfile::AMBIENT_COP_SAFE))
+    {
+        // Retail WanderCop hardcodes sensible walking. Refusing false avoids
+        // exposing a hybrid state which neither the retail cop nor this safe
+        // locomotion profile can produce.
+        if (!wanderSensibly.value_or(true))
+            return false;
+        task = g_pGame->GetTasks()->CreateTaskComplexWanderCopAmbient(moveState, static_cast<char>(taskDirection));
+    }
+    else
+    {
+        task = g_pGame->GetTasks()->CreateTaskComplexWanderStandard(moveState, static_cast<char>(taskDirection), wanderSensibly.value_or(true));
+    }
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::IsPedNativeAmbientCopWanderTask(CClientPed* ped)
+{
+    if (!ped || !ped->IsStreamedIn() || !ped->GetGamePlayer() || !ped->GetTaskManager())
+        return false;
+
+    // The primary task survives temporary event-response overlays. Inspect
+    // every primary slot so diagnostics remain truthful while a native hit or
+    // avoidance response temporarily becomes the active leaf.
+    for (int priority = TASK_PRIORITY_PHYSICAL_RESPONSE; priority <= TASK_PRIORITY_PRIMARY; ++priority)
+    {
+        for (CTask* task = ped->GetTaskManager()->GetTask(priority); task; task = task->GetSubTask())
+        {
+            if (g_pGame->GetTasks()->IsTaskComplexWanderCopAmbient(task))
+                return true;
+        }
+    }
+    return false;
 }
 
 bool CLuaPedDefs::SetPedJump(CClientPed* ped, std::optional<bool> allowClimb)

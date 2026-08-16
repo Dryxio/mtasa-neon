@@ -105,6 +105,15 @@ owner-side divergence. Population JSONL complements this with
 `group_handoff_started` and `group_handoff_assigned`, including stable member
 IDs, epochs, anonymous owner IDs, distances, and the handoff reason.
 
+The ambient population JSONL also records the two-client cop-locomotion oracle.
+`cop_test_sample` distinguishes the exact custom ambient-cop vtable from another
+task sharing `TASK_COMPLEX_WANDER`, records the current native locomotion branch,
+position, owner/epoch and any forbidden police task. `cop_test_branch` captures
+new GO_TO, pause, scratch-head, traffic-light and road-cross observations.
+`cop_test_result` requires three metres of native patrol, one owner at a time,
+unchanged wanted, no forbidden task, one handoff epoch and two cleanup ACKs.
+Rare path/RNG branches remain evidence rather than mandatory PASS conditions.
+
 ## Deterministic workflow
 
 Use `native-ai-test-harness` for regressions that cross AI, network ownership

@@ -30,6 +30,7 @@ class CTaskComplexPartnerChat;
 class CTaskComplexSeekEntityRadiusAngleOffset;
 class CTaskComplexSunbathe;
 class CTaskComplexUseMobilePhone;
+class CTaskComplexWander;
 class CTaskComplexWanderStandard;
 class CTaskSimpleAnim;
 class CTaskSimpleBeHit;
@@ -193,4 +194,10 @@ public:
     // Appended for owner-routed motorcycle ejections. GTA owns the animation,
     // safe references and knock-off event after construction.
     virtual CTaskSimpleBikeJacked* CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver) = 0;
+
+    // Appended for city-cop presence without CCopPed/wanted behavior. The
+    // read-only predicate recognizes the exact custom vtable, including GTA's
+    // script-command clone, rather than trusting the shared Wander task ID.
+    virtual CTaskComplexWander* CreateTaskComplexWanderCopAmbient(const int iMoveState, const char iDir) = 0;
+    virtual bool                IsTaskComplexWanderCopAmbient(const CTask* pTask) const = 0;
 };

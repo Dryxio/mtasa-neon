@@ -9,6 +9,7 @@ local assignments = {}
 local groupAssignments = {}
 local groupByPed = {}
 local nativeEventProfiles = {}
+local nativeEventProfileNames = {}
 local avoidanceStates = {}
 local threatStates = {}
 local vehicleReactionStates = {}
@@ -219,23 +220,41 @@ local function report(task, evidence, data)
 end
 
 local function acquireTrafficEventProfile(ped)
-    if nativeEventProfiles[ped] then
-        return true
-    end
     if not isElement(ped) or getElementData(ped, "neon:ambientPedTraffic") ~= true or
         type(acquirePedNativeEventProfile) ~= "function" then
         return false
     end
 
-    local profileName = getElementData(ped, "neon:ambientPedPopulationClass") == "cop" and "ambient-cop-safe" or "ambient-wander"
+    local populationClass = getElementData(ped, "neon:ambientPedPopulationClass")
+    if populationClass ~= "civilian" and populationClass ~= "gang" and populationClass ~= "dealer" and populationClass ~= "cop" then
+        return false
+    end
+    local profileName = populationClass == "cop" and "ambient-cop-safe" or "ambient-wander"
+    local existingToken = nativeEventProfiles[ped]
+    if existingToken then
+        if nativeEventProfileNames[ped] == profileName then
+            return true
+        end
+
+        -- Element data can arrive after the ped itself streams in. Replace an
+        -- early generic lease once the immutable server-authenticated class is
+        -- known; otherwise a cop would keep WanderStandard for its lifetime.
+        if type(releasePedNativeEventProfile) ~= "function" or not releasePedNativeEventProfile(existingToken) then
+            return false
+        end
+        nativeEventProfiles[ped] = nil
+        nativeEventProfileNames[ped] = nil
+    end
+
     local token = acquirePedNativeEventProfile(ped, profileName)
     if not token then
         return false
     end
     nativeEventProfiles[ped] = token
+    nativeEventProfileNames[ped] = profileName
     healthStates[ped] = getElementHealth(ped)
-    log(("profile-acquired id=%s syncer=%s"):format(tostring(getElementData(ped, "neon:ambientPedTrafficId")),
-                                                      tostring(isElementSyncer(ped))))
+    log(("profile-acquired id=%s profile=%s syncer=%s"):format(tostring(getElementData(ped, "neon:ambientPedTrafficId")),
+                                                                 profileName, tostring(isElementSyncer(ped))))
     return true
 end
 
@@ -248,6 +267,7 @@ local function releaseTrafficEventProfile(ped)
         releasePedNativeEventProfile(token)
     end
     nativeEventProfiles[ped] = nil
+    nativeEventProfileNames[ped] = nil
     avoidanceStates[ped] = nil
     threatStates[ped] = nil
     vehicleReactionStates[ped] = nil
@@ -1178,6 +1198,52 @@ local function collectDealerTestTasks(ped)
     return tasks, hasWander
 end
 
+local copTestBranches = {
+    TASK_SIMPLE_GO_TO_POINT = "go_to",
+    TASK_SIMPLE_STAND_STILL = "stand_still",
+    TASK_SIMPLE_SCRATCH_HEAD = "scratch_head",
+    TASK_COMPLEX_OBSERVE_TRAFFIC_LIGHTS_AND_ACHIEVE_HEADING = "traffic_light",
+    TASK_COMPLEX_CROSS_ROAD_LOOK_AND_ACHIEVE_HEADING = "cross_road",
+    TASK_COMPLEX_SEQUENCE = "roadcross_sequence",
+}
+
+local copForbiddenTasks = {
+    TASK_SIMPLE_ARREST_PED = true,
+    TASK_COMPLEX_ARREST_PED = true,
+    TASK_SIMPLE_BE_ARRESTED = true,
+    TASK_COMPLEX_POLICE_PURSUIT = true,
+    TASK_COMPLEX_BE_COP = true,
+    TASK_COMPLEX_KILL_CRIMINAL = true,
+    TASK_COMPLEX_COP_IN_CAR = true,
+}
+
+local function collectCopTestTaskState(ped)
+    local tasks = {}
+    local hasWander = false
+    local rootTask = false
+    local branch = false
+    local forbiddenTask = false
+    if type(getPedTask) ~= "function" then
+        return tasks, hasWander, rootTask, branch, forbiddenTask
+    end
+
+    for slot = 0, 3 do
+        local hierarchy = {getPedTask(ped, "primary", slot)}
+        if hierarchy[1] ~= false then
+            if slot == 3 then rootTask = hierarchy[1] end
+            for _, taskName in ipairs(hierarchy) do
+                tasks[#tasks + 1] = ("%d:%s"):format(slot, tostring(taskName))
+                if taskName == "TASK_COMPLEX_WANDER" or taskName == "TASK_COMPLEX_WANDER_STANDARD" then
+                    hasWander = true
+                end
+                branch = branch or copTestBranches[taskName]
+                if copForbiddenTasks[taskName] then forbiddenTask = taskName end
+            end
+        end
+    end
+    return tasks, hasWander, rootTask, branch, forbiddenTask
+end
+
 addEvent("pedTraffic:dealerTestSample", true)
 addEventHandler("pedTraffic:dealerTestSample", resourceRoot, function(testId, ped, epoch, phase)
     if not enabled or not isElement(ped) or getElementType(ped) ~= "ped" or
@@ -1206,6 +1272,7 @@ addEventHandler("pedTraffic:dealerTestSample", resourceRoot, function(testId, pe
         assignment = task ~= nil and task.epoch == epoch,
         assignmentAccepted = task ~= nil and task.epoch == epoch and task.accepted == true,
         profilePresent = token ~= nil,
+        profileName = nativeEventProfileNames[ped],
         profileActive = token ~= nil and isPedNativeEventProfileActive(ped, token) == true,
         hasWander = hasWander,
         hasFight = hasFight == true,
@@ -1245,12 +1312,14 @@ addEventHandler("pedTraffic:dealerTestCleanup", resourceRoot, function(testId, t
 end)
 
 addEvent("pedTraffic:copTestSample", true)
-addEventHandler("pedTraffic:copTestSample", resourceRoot, function(testId, ped, epoch, phase)
+addEventHandler("pedTraffic:copTestSample", resourceRoot, function(testId, sampleId, ped, epoch, phase)
     if not enabled or not isElement(ped) then return end
     local task = assignments[ped]
     local token = nativeEventProfiles[ped]
-    local tasks, hasWander = collectDealerTestTasks(ped)
-    triggerServerEvent("pedTraffic:copTestSampleResult", resourceRoot, testId, phase, {
+    local tasks, hasWander, rootTask, branch, forbiddenTask = collectCopTestTaskState(ped)
+    local ambientCopTask = type(isPedNativeAmbientCopWanderTask) == "function" and isPedNativeAmbientCopWanderTask(ped) == true
+    local x, y, z = getElementPosition(ped)
+    triggerServerEvent("pedTraffic:copTestSampleResult", resourceRoot, testId, sampleId, phase, {
         model = getElementModel(ped),
         populationClass = getElementData(ped, "neon:ambientPedPopulationClass"),
         logicalPedType = getElementData(ped, "neon:ambientPedLogicalType"),
@@ -1269,8 +1338,17 @@ addEventHandler("pedTraffic:copTestSample", resourceRoot, function(testId, ped, 
         assignment = task ~= nil and task.epoch == epoch,
         assignmentAccepted = task ~= nil and task.epoch == epoch and task.accepted == true,
         profilePresent = token ~= nil,
+        profileName = nativeEventProfileNames[ped],
         profileActive = token ~= nil and isPedNativeEventProfileActive(ped, token) == true,
         hasWander = hasWander,
+        rootTask = rootTask,
+        branch = branch,
+        forbiddenTask = forbiddenTask,
+        ambientCopTask = ambientCopTask,
+        vtableSafe = ambientCopTask,
+        x = x,
+        y = y,
+        z = z,
         tasks = tasks,
     })
 end)
@@ -1838,13 +1916,16 @@ addEventHandler("onClientElementDestroy", root, function()
 end)
 
 addEventHandler("onClientElementDataChange", root, function(dataName)
-    if dataName ~= "neon:ambientPedTraffic" or getElementType(source) ~= "ped" then
+    if getElementType(source) ~= "ped" then
         return
     end
-    if getElementData(source, dataName) == true then
+
+    if dataName == "neon:ambientPedTraffic" and getElementData(source, dataName) == true then
         acquireTrafficEventProfile(source)
-    else
+    elseif dataName == "neon:ambientPedTraffic" then
         releaseTrafficEventProfile(source)
+    elseif dataName == "neon:ambientPedPopulationClass" and getElementData(source, "neon:ambientPedTraffic") == true then
+        acquireTrafficEventProfile(source)
     end
 end)
 

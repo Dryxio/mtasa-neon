@@ -109,6 +109,17 @@ Lua should orchestrate behavior, but it should not reimplement GTA pathfinding o
 
 The reverse-engineered `gta-reversed-dryxio` working tree at `/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio` is a semantic oracle for mapping opcodes to GTA classes, flags, parameters, and completion rules. Implementations still need to be adapted to MTA's abstractions and network model rather than copied blindly.
 
+Ambient city cops use the same rule. MTA peds are physically `CPlayerPed`, so
+retail `CTaskComplexWanderCop` cannot safely run on them: its first/next/control
+paths read `CCopPed`-only storage and can enter wanted and pursuit systems. Neon
+instead reuses GTA's verified base `CTaskComplexWander` locomotion vtable slots,
+identifies the task as `WANDER_TYPE_COP`, and supplies a no-op scanner. This
+preserves path nodes, walking, pauses, road crossing and blocked-node avoidance
+while making wanted, alarms, criminal scans, pursuit and arrest unreachable by
+construction. The semantic walk/direction is reconstructed only on the current
+owner after handoff; native nodes, subtasks, timers and RNG state never cross
+processes.
+
 Reverse-engineered functions are not accepted as ground truth without verification. Before a native behavior is implemented in Neon, its relevant `gta-reversed-dryxio` code must be checked against the target GTA:SA assembly. The tooling for this gate is available at `/Users/salimtrouve/Documents/GitHub/auto-re-agent`. Contributors must read that project's local instructions, identify the exact executable address/version being compared, inspect control flow and parameter use, and record any discrepancy or remaining uncertainty before modifying MTA. A plausible C++ reconstruction alone is insufficient evidence. Any discrepancy conclusively established by the assembly must also be corrected in the canonical `/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio` working tree rather than documented only in Neon. The reverse-side correction must preserve the assembly evidence in its commit or accompanying documentation and add or update size/offset validation when the discrepancy affects a native layout.
 
 MTA already contains task wrappers and a disabled historical Lua task surface. That code is useful reference material, but merely re-enabling it is not sufficient: the old interface does not define server authority, syncer migration, validation, or resource-scoped cleanup.

@@ -12,6 +12,92 @@
 #include "StdInc.h"
 #include "TaskGoToSA.h"
 
+namespace
+{
+    constexpr DWORD FUNC_CTaskComplex__GetSubTask = 0x421190;
+    constexpr DWORD FUNC_CTaskComplex__IsSimpleTask = 0x4211A0;
+    constexpr DWORD FUNC_CTaskComplexWander__GetTaskType = 0x460CD0;
+    constexpr DWORD FUNC_CTask__StopTimer = 0x421180;
+    constexpr DWORD FUNC_CTask__MakeAbortable = 0x4211B0;
+    constexpr DWORD FUNC_CTaskComplex__SetSubTask = 0x61A430;
+
+    constexpr DWORD FUNC_CTaskComplexWanderCop__CreateNextSubTask = 0x674860;
+    constexpr DWORD FUNC_CTaskComplexWanderCop__CreateFirstSubTask = 0x674750;
+    constexpr DWORD FUNC_CTaskComplexWanderCop__ControlSubTask = 0x674D80;
+    constexpr DWORD FUNC_CTaskComplexWanderCop__ScanForStuff = 0x6702B0;
+
+    void ConstructTaskComplexWanderCopAmbient(CTaskComplexWanderSAInterface* task, int moveState, unsigned char direction)
+    {
+        using WanderConstructor = void(__thiscall*)(CTaskComplexWanderSAInterface*, int, unsigned char, bool, float);
+        reinterpret_cast<WanderConstructor>(FUNC_CTaskComplexWander__Constructor)(task, moveState, direction, true, 0.5f);
+        task->VTBL = GetTaskComplexWanderCopAmbientVTable();
+    }
+
+    CTaskSAInterface* __fastcall CloneTaskComplexWanderCopAmbient(CTaskComplexWanderSAInterface* task, void*)
+    {
+        using TaskOperatorNew = void*(__cdecl*)(size_t);
+        auto* clone =
+            static_cast<CTaskComplexWanderSAInterface*>(reinterpret_cast<TaskOperatorNew>(FUNC_CTask__Operator_New)(sizeof(CTaskComplexWanderSAInterface)));
+        if (!clone)
+            return nullptr;
+
+        // GTA clones WanderCop from semantic constructor inputs, not from its
+        // live nodes, subtask or timers. Do the same so owner reconstruction
+        // and CEventScriptCommand never transfer process-local task state.
+        ConstructTaskComplexWanderCopAmbient(clone, task->m_iMoveState, task->m_iDir);
+        return clone;
+    }
+
+    int __fastcall GetTaskComplexWanderCopAmbientType(CTaskComplexWanderSAInterface*, void*)
+    {
+        return WANDER_TYPE_COP;
+    }
+
+    void __fastcall ScanTaskComplexWanderCopAmbient(CTaskComplexWanderSAInterface*, void*, void*)
+    {
+        // Deliberately empty. Retail WanderCop's scanner can create wanted,
+        // pursuit and criminal chase events and requires a real CCopPed layout.
+    }
+}
+
+TaskComplexWanderVTBL* GetTaskComplexWanderCopAmbientVTable() noexcept
+{
+    static TaskComplexWanderVTBL vtable = []
+    {
+        TaskComplexWanderVTBL value = *reinterpret_cast<const TaskComplexWanderVTBL*>(VTBL_CTaskComplexWander);
+        value.Clone = (DWORD)&CloneTaskComplexWanderCopAmbient;
+        value.GetWanderType = (DWORD)&GetTaskComplexWanderCopAmbientType;
+        value.ScanForStuff = (DWORD)&ScanTaskComplexWanderCopAmbient;
+        return value;
+    }();
+    return &vtable;
+}
+
+bool IsTaskComplexWanderCopAmbientInterface(const CTaskSAInterface* task) noexcept
+{
+    return task && task->VTBL == GetTaskComplexWanderCopAmbientVTable();
+}
+
+bool IsTaskComplexWanderCopAmbientVTableSafe() noexcept
+{
+    const TaskComplexWanderVTBL* vtable = GetTaskComplexWanderCopAmbientVTable();
+    const bool                   baseWanderMachine =
+        vtable->DeletingDestructor == FUNC_CTaskComplexWander__DeletingDestructor && vtable->GetSubTask == FUNC_CTaskComplex__GetSubTask &&
+        vtable->IsSimpleTask == FUNC_CTaskComplex__IsSimpleTask && vtable->GetTaskType == FUNC_CTaskComplexWander__GetTaskType &&
+        vtable->StopTimer == FUNC_CTask__StopTimer && vtable->MakeAbortable == FUNC_CTask__MakeAbortable &&
+        vtable->SetSubTask == FUNC_CTaskComplex__SetSubTask && vtable->CreateNextSubTask == FUNC_CTaskComplexWander__CreateNextSubTask &&
+        vtable->CreateFirstSubTask == FUNC_CTaskComplexWander__CreateFirstSubTask && vtable->ControlSubTask == FUNC_CTaskComplexWander__ControlSubTask &&
+        vtable->UpdateDir == FUNC_CTaskComplexWander__UpdateDir && vtable->UpdatePathNodes == FUNC_CTaskComplexWander__UpdatePathNodes;
+    const bool ambientOverrides = vtable->Clone == (DWORD)&CloneTaskComplexWanderCopAmbient &&
+                                  vtable->GetWanderType == (DWORD)&GetTaskComplexWanderCopAmbientType &&
+                                  vtable->ScanForStuff == (DWORD)&ScanTaskComplexWanderCopAmbient;
+    const bool noRetailCopDispatch = vtable->CreateNextSubTask != FUNC_CTaskComplexWanderCop__CreateNextSubTask &&
+                                     vtable->CreateFirstSubTask != FUNC_CTaskComplexWanderCop__CreateFirstSubTask &&
+                                     vtable->ControlSubTask != FUNC_CTaskComplexWanderCop__ControlSubTask &&
+                                     vtable->ScanForStuff != FUNC_CTaskComplexWanderCop__ScanForStuff;
+    return baseWanderMachine && ambientOverrides && noRetailCopDispatch;
+}
+
 // ##############################################################################
 // ## Name:    CTaskComplexWander
 // ## Purpose: Generic task that makes peds wander around. Can't be used
@@ -81,6 +167,15 @@ CTaskComplexWanderGangSA::CTaskComplexWanderGangSA(int moveState, unsigned char 
     auto* task = GetInterface();
     reinterpret_cast<void(__thiscall*)(CTaskSAInterface*, int, unsigned char, unsigned int, bool, float)>(FUNC_CTaskComplexWanderGang__Constructor)(
         task, moveState, direction, scanTime, wanderSensibly, targetRadius);
+}
+
+CTaskComplexWanderCopAmbientSA::CTaskComplexWanderCopAmbientSA(int moveState, unsigned char direction)
+{
+    CreateTaskInterface(sizeof(CTaskComplexWanderSAInterface));
+    if (!IsValid())
+        return;
+
+    ConstructTaskComplexWanderCopAmbient(static_cast<CTaskComplexWanderSAInterface*>(GetInterface()), moveState, direction);
 }
 
 CTaskComplexBeInGroupSA::CTaskComplexBeInGroupSA(int groupId, bool isLeader)

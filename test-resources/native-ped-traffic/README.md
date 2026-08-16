@@ -188,12 +188,16 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   player-attributed `DealerStrength` decrement, restores its zone fixture, then
   requires cleanup ACKs from both clients. Time, transforms and frozen states
   are restored on PASS, FAIL or cancellation.
-- `/pedtraffic coptest` is the two-client ambient-cop presence harness. It uses
+- `/pedtraffic coptest` is the two-client ambient-cop locomotion harness. It uses
   a runtime-validated south-LS fixture and the public candidate/traffic
   pipeline, then verifies model 280 and logical type COP,
   nightstick/pistol inventory, slot 0, armor 0, rate 30, accuracy 60,
-  owner-only `ambient-cop-safe` WanderStandard, a handoff, unchanged wanted on
-  both clients, and two cleanup acknowledgements.
+  the exact owner-only `ambient-cop-safe` task vtable, at least three metres of
+  GTA path-node patrol, a native GO_TO branch, a handoff, unchanged wanted on
+  both clients, no arrest/pursuit/cop task, and two cleanup acknowledgements.
+  Pause, scratch-head, traffic-light and road-cross branches are recorded when
+  GTA selects them but are not required for PASS because their occurrence
+  depends on native path topology and process-global RNG.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
 and now admits GTA's civilian, dealer, regional city-cop and resident-gang
@@ -206,7 +210,7 @@ task, their immutable server seed reproduces `m_nRandomSeed & 0x3FF`: below
 independent pistol attempt; 200..399 gives the pistol; 400..1023 stays
 unarmed. Grants use 50 ammo and the pistol STD stat. Dealer sales remain
 deferred. Ambient
-vehicle population, full police behavior, couples, attractors, conversations,
+vehicle population, wanted/pursuit/arrest police behavior, couples, attractors, conversations,
 headless/offline simulation, custom weather rules and public server density
 controls remain outside this checkpoint. GTA's stock rain reduction is already
 reflected in the native target. The optional command above creates a test

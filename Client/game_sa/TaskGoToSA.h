@@ -25,6 +25,15 @@ typedef DWORD CTaskUtilityLineUpPedWithCar;
 #define FUNC_CTaskComplexWanderGang__Constructor     0x66F5C0
 #define FUNC_CTaskComplexBeInGroup__Constructor      0x632E50
 
+#define FUNC_CTaskComplexWander__Constructor        0x66F450
+#define FUNC_CTaskComplexWander__DeletingDestructor 0x66F4A0
+#define FUNC_CTaskComplexWander__CreateNextSubTask  0x674140
+#define FUNC_CTaskComplexWander__CreateFirstSubTask 0x6740E0
+#define FUNC_CTaskComplexWander__ControlSubTask     0x674C30
+#define FUNC_CTaskComplexWander__UpdateDir          0x669DA0
+#define FUNC_CTaskComplexWander__UpdatePathNodes    0x669ED0
+#define VTBL_CTaskComplexWander                     0x86FE84
+
 #define FUNC_CTaskComplexGoToPointAndStandStill__Constructor      0x668120
 #define FUNC_CTaskComplexGoToPointAndStandStillTimed__Constructor 0x6685E0
 #define FUNC_CTaskComplexSeekEntityRadiusAngleOffset__Constructor 0x493730
@@ -132,6 +141,20 @@ class CTaskComplexWanderGangSA : public virtual CTaskComplexWanderSA
 public:
     CTaskComplexWanderGangSA(int moveState, unsigned char direction, unsigned int scanTime, bool wanderSensibly, float targetRadius);
 };
+
+// MTA peds are physically CPlayerPed instances, so GTA's retail WanderCop is
+// unsafe: its first/next/control paths read CCopPed-only state and can enter
+// wanted/pursuit code. This task keeps the retail Wander locomotion machine but
+// supplies only the COP wander identity and an intentionally empty scanner.
+class CTaskComplexWanderCopAmbientSA : public virtual CTaskComplexWanderSA
+{
+public:
+    CTaskComplexWanderCopAmbientSA(int moveState, unsigned char direction);
+};
+
+TaskComplexWanderVTBL* GetTaskComplexWanderCopAmbientVTable() noexcept;
+bool                   IsTaskComplexWanderCopAmbientInterface(const CTaskSAInterface* task) noexcept;
+bool                   IsTaskComplexWanderCopAmbientVTableSafe() noexcept;
 
 class CTaskComplexBeInGroupSA : public virtual CTaskComplexSA
 {

@@ -1009,6 +1009,7 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
     despawned_peds = 0
     despawned_groups = 0
     dealer_tests: dict[str, dict[str, Any]] = {}
+    cop_tests: dict[str, dict[str, Any]] = {}
     residency_tests: dict[str, dict[str, Any]] = {}
 
     def warning(record: dict[str, Any], stage: str, message: str, extra: dict[str, Any] | None = None) -> None:
@@ -1163,7 +1164,7 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                     "Physical live count does not equal stock-counted live plus dealers",
                     {"physical_live": physical_live, "stock_counted_live": live, "dealer_live": dealer_live},
                 )
-            for population_class in ("total", "civilian", "dealer", "gang"):
+            for population_class in ("total", "civilian", "dealer", "cop", "gang"):
                 class_target = nested_number(record, "targets", population_class)
                 class_live = nested_number(record, "live", population_class)
                 class_deficit = nested_number(record, "deficits", population_class)
@@ -1248,6 +1249,15 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                         record,
                         "population_request",
                         "Dealer candidate requested without a positive dealer deficit",
+                        {"deficit": deficit},
+                    )
+            elif population_class == "cop":
+                deficit = nested_number(record, "deficits", "cop")
+                if deficit is not None and deficit <= 0:
+                    error(
+                        record,
+                        "population_request",
+                        "Cop candidate requested without a positive cop deficit",
                         {"deficit": deficit},
                     )
 
@@ -1411,6 +1421,15 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                     error(record, "population_dealer", "Dealer received a non-vanilla initial weapon")
                 if record.get("task_profile") != "wander-standard":
                     error(record, "population_dealer", "Dealer did not enter the vanilla WanderStandard profile")
+            elif record.get("population_class") == "cop":
+                if record.get("model") not in {280, 281, 282, 283}:
+                    error(record, "population_cop", "Ambient city cop spawned with a model outside the regional retail table")
+                if record.get("logical_ped_type") != 6:
+                    error(record, "population_cop", "Ambient city cop does not carry logical PED_TYPE_COP")
+                if record.get("initial_weapon") != 0:
+                    error(record, "population_cop", "Ambient city cop did not start on the unarmed slot")
+                if record.get("task_profile") != "wander-cop-ambient":
+                    error(record, "population_cop", "Ambient city cop did not enter the native-safe cop wander profile")
         elif event == "group_spawn":
             spawned_groups += 1
             members = finite_number(record.get("member_count"))
@@ -1647,6 +1666,59 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                 else:
                     test["result"] = record
 
+        if event == "cop_test_started":
+            scenario_id = str(record.get("scenario_id"))
+            cop_tests[scenario_id] = {"record": record, "samples": [], "branches": [], "cleanup_acks": [], "result": None}
+        elif event in {"cop_test_sample", "cop_test_branch", "cop_test_cleanup_ack", "cop_test_result"}:
+            scenario_id = str(record.get("scenario_id"))
+            test = cop_tests.get(scenario_id)
+            if test is None:
+                warning(record, "population_gap", f"{event} has no cop_test_started record")
+            elif event == "cop_test_sample":
+                test["samples"].append(record)
+                is_owner = record.get("player_id") == record.get("owner_id")
+                if (
+                    record.get("model") != 280
+                    or record.get("population_class") != "cop"
+                    or record.get("logical_ped_type") != 6
+                    or record.get("world_level") != 1
+                ):
+                    error(record, "population_cop_test", "Cop sample has invalid regional or logical identity")
+                if (
+                    record.get("active_weapon") != 0
+                    or record.get("nightstick") != 3
+                    or record.get("pistol") != 22
+                    or record.get("pistol_ammo") != 1000
+                    or finite_number(record.get("armor")) != 0
+                ):
+                    error(record, "population_cop_test", "Cop sample has non-retail presence equipment or stats")
+                if is_owner and (record.get("shooting_rate") != 30 or record.get("accuracy") != 60):
+                    error(record, "population_cop_test", "Cop owner has non-retail weapon handling stats")
+                if (
+                    record.get("syncer") is not is_owner
+                    or record.get("assignment") is not is_owner
+                    or record.get("assignment_accepted") is not is_owner
+                    or record.get("profile_name") != "ambient-cop-safe"
+                    or record.get("profile_active") is not is_owner
+                    or record.get("ambient_cop_task") is not is_owner
+                    or record.get("vtable_safe") is not is_owner
+                ):
+                    error(record, "population_cop_test", "Cop sample violates owner-only native-safe task authority")
+                if is_owner and (record.get("has_wander") is not True or record.get("root_task") != "TASK_COMPLEX_WANDER"):
+                    error(record, "population_cop_test", "Cop owner does not expose the retail Wander root")
+                if record.get("forbidden_task") is not False:
+                    error(record, "population_cop_test", "Cop entered a forbidden police task")
+            elif event == "cop_test_branch":
+                test["branches"].append(record)
+            elif event == "cop_test_cleanup_ack":
+                test["cleanup_acks"].append(record)
+                if record.get("accepted") is not True:
+                    error(record, "population_cop_test", "Cop cleanup acknowledgement reports leaked client state")
+            else:
+                test["result"] = record
+                if record.get("result") != "PASS":
+                    error(record, "population_cop_test", "Cop native-locomotion harness did not pass")
+
     clocks = [population_clock(record) for record in population if math.isfinite(population_clock(record))]
     trace_end = max(clocks, default=math.inf)
     pending_requests: list[dict[str, Any]] = []
@@ -1777,6 +1849,28 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                 },
             )
 
+    for scenario_id, test in cop_tests.items():
+        result = test["result"]
+        if result is None:
+            error(test["record"], "population_cop_test", "Cop harness has no terminal result", {"scenario_id": scenario_id})
+            continue
+        if result.get("result") != "PASS":
+            continue
+        initial_epoch = finite_number(result.get("initial_epoch"))
+        final_epoch = finite_number(result.get("final_epoch"))
+        cleanup_players = {record.get("player_id") for record in test["cleanup_acks"]}
+        observed_branches = result.get("observed_branches")
+        if initial_epoch is None or final_epoch != initial_epoch + 1:
+            error(result, "population_cop_test", "Passing cop harness did not advance the owner epoch exactly once")
+        if len(cleanup_players) != 2 or result.get("cleanup_acks") != 2:
+            error(result, "population_cop_test", "Passing cop harness does not have two distinct cleanup acknowledgements")
+        if finite_number(result.get("patrol_distance")) is None or result.get("patrol_distance", 0) < 3 or result.get("patrol_observed") is not True:
+            error(result, "population_cop_test", "Passing cop harness did not observe three metres of native patrol")
+        if not isinstance(observed_branches, dict) or observed_branches.get("go_to") is not True:
+            error(result, "population_cop_test", "Passing cop harness did not observe the native GO_TO branch")
+        if result.get("forbidden_path_seen") is not False or result.get("wanted_changed") is not False or result.get("double_owner_seen") is not False:
+            error(result, "population_cop_test", "Passing cop harness reports a forbidden path, wanted mutation or double owner")
+
     player_summaries: dict[str, Any] = {}
     for player in sorted(set(profiles_by_player) | set(convergence_by_player)):
         profiles = profiles_by_player.get(player, [])
@@ -1858,6 +1952,16 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                 "reason": test["result"].get("reason") if test["result"] else None,
             }
             for scenario_id, test in dealer_tests.items()
+        },
+        "cop_tests": {
+            scenario_id: {
+                "samples": len(test["samples"]),
+                "branches": sorted({record.get("branch") for record in test["branches"] if record.get("branch")}),
+                "cleanup_acks": len({record.get("player_id") for record in test["cleanup_acks"]}),
+                "result": test["result"].get("result") if test["result"] else None,
+                "reason": test["result"].get("reason") if test["result"] else None,
+            }
+            for scenario_id, test in cop_tests.items()
         },
         "residency_tests": {
             scenario_id: {

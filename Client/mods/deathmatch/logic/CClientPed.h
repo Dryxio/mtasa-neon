@@ -471,6 +471,10 @@ public:
     bool AcquireNativeEventProfile(CResource* owner, unsigned int token, ePedNativeEventProfile profile);
     bool ReleaseNativeEventProfile(CResource* owner, unsigned int token, ePedNativeEventProfile profile);
     bool IsNativeEventProfileActive(const CResource* owner, unsigned int token, ePedNativeEventProfile profile) const;
+    bool IsNativeEventProfileSelected(ePedNativeEventProfile profile) const noexcept
+    {
+        return m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0 && m_nativeEventProfile == profile;
+    }
     bool AddNativeGunAimedAtEvent(CClientPed* aimingPed);
     bool AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone);
     bool AddNativeDamageEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction);

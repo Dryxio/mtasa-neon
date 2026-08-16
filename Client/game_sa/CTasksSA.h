@@ -24,6 +24,7 @@ class CTaskComplexGoToPointAndStandStill;
 class CTaskComplexPartnerChat;
 class CTaskComplexSunbathe;
 class CTaskComplexUseMobilePhone;
+class CTaskComplexWander;
 class CTaskComplexWanderStandard;
 class CTaskManagementSystemSA;
 class CTaskSimpleBeHit;
@@ -139,6 +140,8 @@ public:
     CTaskComplex*                CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state);
     CTaskComplex*                CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true);
     CTaskSimpleBikeJacked*       CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver);
+    CTaskComplexWander*          CreateTaskComplexWanderCopAmbient(const int iMoveState, const char iDir);
+    bool                         IsTaskComplexWanderCopAmbient(const CTask* pTask) const;
 
     static void StaticSetHooks();
 };
