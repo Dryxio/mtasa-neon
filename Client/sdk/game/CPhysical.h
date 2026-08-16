@@ -13,6 +13,15 @@
 
 #include "CEntity.h"
 
+struct SPhysicalProofs
+{
+    bool bullet{};
+    bool fire{};
+    bool explosion{};
+    bool collision{};
+    bool melee{};
+};
+
 class CPhysical : public virtual CEntity
 {
 public:
@@ -55,4 +64,9 @@ public:
     virtual void  SetLighting(float fLighting) = 0;
 
     virtual void SetFrozen(bool bFrozen) = 0;
+
+    // Append only: CPhysical crosses module boundaries. These flags map to
+    // GTA CPhysical byte 0x42 and are reused by peds, vehicles and objects.
+    virtual SPhysicalProofs GetPhysicalProofs() const = 0;
+    virtual void            SetPhysicalProofs(const SPhysicalProofs& proofs) = 0;
 };
