@@ -2,7 +2,7 @@
 -- Inputs are the retail GTA SA 1.0 US data files and Neon's audited main.scm zone bootstrap.
 PedTrafficPopulationCatalog = {
     schema = 1,
-    revision = "688ca098294a4f7af39edd61d71197c597ead9e491701343b046bcde407029ad",
+    revision = "35299d6f0c0f67d2cd1ffba1da1e1085fd6ae7ccea7e7435d6550bedf3e5892b",
     sources = {
         ["AmbientPedPopulationZonesSA.inc"] = "fb31297610a74b948af5b51849068752f6d7fb72bf1e30fa9802c46e609cfdf2",
         ["ped.dat"] = "fa4a2636ba772080c75d0986379a862c4c2f7cf7bf6c1550557f3557236b450e",
@@ -449,6 +449,12 @@ PedTrafficPopulationCatalog = {
         [2] = 29,
         [3] = 30,
         [4] = 254,
+    },
+    copModelsByLevel = {
+        [0] = 283,
+        [1] = 280,
+        [2] = 281,
+        [3] = 282,
     },
     zones = {
         ["ALDEA"] = {populationType = 1, races = 15, dealerStrength = 0, noCops = false, gangStrengths = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},

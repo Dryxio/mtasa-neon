@@ -6725,7 +6725,7 @@ bool CClientPed::AcquireNativeEventProfile(CResource* owner, unsigned int token,
         return false;
     if (profile == ePedNativeEventProfile::MISSION && !m_bMissionActor)
         return false;
-    if (profile == ePedNativeEventProfile::AMBIENT_WANDER && m_bMissionActor)
+    if ((profile == ePedNativeEventProfile::AMBIENT_WANDER || profile == ePedNativeEventProfile::AMBIENT_COP_SAFE) && m_bMissionActor)
         return false;
 
     // Every client remembers the resource-scoped lease, including before it
@@ -6758,7 +6758,7 @@ bool CClientPed::IsNativeEventProfileActive(const CResource* owner, unsigned int
 
     if (profile == ePedNativeEventProfile::MISSION)
         return m_bMissionActor && m_pPlayerPed->IsNativeMissionEventProfileActive();
-    if (profile == ePedNativeEventProfile::AMBIENT_WANDER)
+    if (profile == ePedNativeEventProfile::AMBIENT_WANDER || profile == ePedNativeEventProfile::AMBIENT_COP_SAFE)
         return m_pPlayerPed->IsNativeAmbientWanderEventProfileActive();
     return false;
 }
@@ -6821,7 +6821,8 @@ void CClientPed::ApplyNativeEventProfileState()
     const bool leased = m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0;
     const bool missionActive =
         leased && m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor && m_bIsSyncing && m_nativeCollisionResidencyReady;
-    const bool ambientSelected = leased && m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER;
+    const bool ambientSelected =
+        leased && (m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER || m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_COP_SAFE);
     const bool ambientActive = ambientSelected && !m_bMissionActor && m_bIsSyncing && m_nativeCollisionResidencyReady;
     dassert((!missionActive && !ambientActive) || (m_nativeCollisionResidency != 0 && m_nativeCollisionResidencyReady));
 
@@ -6854,9 +6855,11 @@ bool CClientPed::RefreshNativeCollisionResidency()
     CColStore* collisionStore = g_pGame ? g_pGame->GetCollisionStore() : nullptr;
     bool       markedNativeAgent = false;
     GetCustomDataBool(CStringName("neon:ambientPedTraffic"), markedNativeAgent, false);
-    const bool validProfile = m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0 &&
-                              ((m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER && !m_bMissionActor) ||
-                               (m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor));
+    const bool validProfile =
+        m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0 &&
+        (((m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_WANDER || m_nativeEventProfile == ePedNativeEventProfile::AMBIENT_COP_SAFE) &&
+          !m_bMissionActor) ||
+         (m_nativeEventProfile == ePedNativeEventProfile::MISSION && m_bMissionActor));
     const bool physicalTakeover = m_nativeTaskPhysicalTakeoverPending || m_nativeTaskAirbornePresentationActive;
     const bool wantsNativeAuthority =
         m_pPlayerPed && GetType() == CCLIENTPED && !m_bIsLocalPlayer && m_bIsSyncing && (markedNativeAgent || validProfile || physicalTakeover);

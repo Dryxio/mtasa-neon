@@ -16,4 +16,5 @@ enum class ePedNativeEventProfile : std::uint8_t
     NONE,
     MISSION,
     AMBIENT_WANDER,
+    AMBIENT_COP_SAFE,
 };

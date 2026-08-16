@@ -1129,21 +1129,21 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             gang = finite_number(record.get("gang_target"))
             cop = finite_number(record.get("cop_target"))
             dealer = finite_number(record.get("dealer_target"))
-            if None not in (supported, civilian, dealer, gang) and not math.isclose(
-                supported, civilian + dealer + gang, abs_tol=0.02
+            if None not in (supported, civilian, dealer, cop, gang) and not math.isclose(
+                supported, civilian + dealer + cop + gang, abs_tol=0.02
             ):
                 error(
                     record,
                     "population_profile",
-                    "supported_target does not equal civilian_target + dealer_target + gang_target",
-                    {"supported_target": supported, "supported_components": civilian + dealer + gang},
+                    "supported_target does not equal civilian_target + dealer_target + cop_target + gang_target",
+                    {"supported_target": supported, "supported_components": civilian + dealer + cop + gang},
                 )
-            if None not in (target, supported, cop) and not math.isclose(target, supported + cop, abs_tol=0.02):
+            if None not in (target, supported) and not math.isclose(target, supported, abs_tol=0.02):
                 error(
                     record,
                     "population_profile",
-                    "target does not equal supported_target + cop_target",
-                    {"target": target, "component_total": supported + cop},
+                    "target does not equal supported_target",
+                    {"target": target, "supported_target": supported},
                 )
 
         if event in {"population_snapshot", "population_convergence", "candidate_request"}:

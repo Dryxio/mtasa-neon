@@ -173,6 +173,7 @@ enum class EAmbientPedPopulationClass : unsigned char
     Civilian,
     Gang,
     Dealer,
+    Cop,
 };
 
 enum class EAmbientPedPopulationSelection : unsigned char
@@ -181,6 +182,15 @@ enum class EAmbientPedPopulationSelection : unsigned char
     Civilian,
     Gang,
     Dealer,
+    Cop,
+};
+
+enum class EAmbientPedCopSuppression : unsigned char
+{
+    ZoneNoCops = 1 << 0,
+    RandomCopsDisabled = 1 << 1,
+    GangWarFighting = 1 << 2,
+    HighAltitude = 1 << 3,
 };
 
 enum class EAmbientPedPopulationZoneField : unsigned int
@@ -205,9 +215,9 @@ static_assert(sizeof(SAmbientPedPopulationZoneState) == 20, "Ambient population 
 
 // Read directly from GTA's active popcycle state after Neon's reversible
 // vanilla zone bootstrap and authoritative campaign mutations have been
-// applied. supportedTarget names the civilian/gang/dealer subset implemented
-// by the current traffic checkpoint; target still reports all four vanilla
-// classes.
+// applied. supportedTarget names the four vanilla population classes exposed
+// by the current traffic checkpoint. rawCopTarget retains the popcycle result
+// while copTarget applies only the normal ambient-cop suppression guards.
 struct SAmbientPedPopulationProfile
 {
     float         target{};
@@ -228,10 +238,12 @@ struct SAmbientPedPopulationProfile
     unsigned char dealerStrength{};
     unsigned char raceFlags{};
     unsigned char noCops{};
+    unsigned char worldLevel{};
+    unsigned char copSuppressionFlags{};
     unsigned char gangWeights[10]{};
     char          zoneLabel[8]{};
 };
-static_assert(sizeof(SAmbientPedPopulationProfile) == 72, "Ambient population profile ABI changed");
+static_assert(sizeof(SAmbientPedPopulationProfile) == 76, "Ambient population profile ABI changed");
 
 // A read-only proposal produced by GTA's stock population rules. The caller
 // still owns the network element and its lifetime; Game SA never creates an
@@ -246,6 +258,7 @@ struct SAmbientPedSpawnCandidate
     float                      headingDegrees{};
     EAmbientPedPopulationClass populationClass{EAmbientPedPopulationClass::Civilian};
     unsigned char              gangId{0xFF};
+    unsigned char              worldLevel{};
 };
 static_assert(sizeof(SAmbientPedSpawnCandidate) == 32, "Ambient population candidate ABI changed");
 static_assert(offsetof(SAmbientPedSpawnCandidate, pathLerp) == 20, "Ambient population candidate path ABI changed");

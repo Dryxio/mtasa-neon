@@ -220,9 +220,11 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
         selection = EAmbientPedPopulationSelection::Gang;
     else if (selectionName == "dealer")
         selection = EAmbientPedPopulationSelection::Dealer;
+    else if (selectionName == "cop")
+        selection = EAmbientPedPopulationSelection::Cop;
     else if (selectionName != "auto")
     {
-        m_pScriptDebugging->LogCustom(luaVM, "Population selection must be auto, civilian, gang or dealer");
+        m_pScriptDebugging->LogCustom(luaVM, "Population selection must be auto, civilian, gang, dealer or cop");
         lua_pushboolean(luaVM, false);
         return 1;
     }
@@ -292,6 +294,7 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     lua_setfield(luaVM, -2, "pathLerp");
     const char* populationClass = candidate.populationClass == EAmbientPedPopulationClass::Gang     ? "gang"
                                   : candidate.populationClass == EAmbientPedPopulationClass::Dealer ? "dealer"
+                                  : candidate.populationClass == EAmbientPedPopulationClass::Cop    ? "cop"
                                                                                                     : "civilian";
     lua_pushstring(luaVM, populationClass);
     lua_setfield(luaVM, -2, "populationClass");
@@ -300,6 +303,8 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     else
         lua_pushboolean(luaVM, false);
     lua_setfield(luaVM, -2, "gang");
+    lua_pushinteger(luaVM, candidate.worldLevel);
+    lua_setfield(luaVM, -2, "worldLevel");
     return 1;
 }
 
@@ -414,6 +419,10 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
     lua_setfield(luaVM, -2, "raceFlags");
     lua_pushboolean(luaVM, profile.noCops != 0);
     lua_setfield(luaVM, -2, "noCops");
+    lua_pushinteger(luaVM, profile.worldLevel);
+    lua_setfield(luaVM, -2, "worldLevel");
+    lua_pushinteger(luaVM, profile.copSuppressionFlags);
+    lua_setfield(luaVM, -2, "copSuppressionFlags");
     std::size_t zoneLabelLength = 0;
     while (zoneLabelLength < sizeof(profile.zoneLabel) && profile.zoneLabel[zoneLabelLength] != '\0')
         ++zoneLabelLength;

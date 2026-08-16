@@ -13,6 +13,7 @@ from pathlib import Path
 ZONE_PATTERN = re.compile(
     r'^\s*\{"([A-Z0-9]+)",\s*(\d+),\s*(\d+),\s*(\d+),\s*(true|false),\s*\{([^}]*)\}\},\s*$'
 )
+COP_MODELS_BY_LEVEL = [283, 280, 281, 282]
 
 
 def sha256(path: Path) -> str:
@@ -124,6 +125,7 @@ def render_catalog(
         "models": model_rows,
         "gangByModel": gang_by_model,
         "dealerModels": dealer_models,
+        "copModelsByLevel": COP_MODELS_BY_LEVEL,
         "civilianPedTypeByModel": civilian_types,
         "zones": zones,
         "sources": source_hashes,
@@ -156,6 +158,9 @@ def render_catalog(
     lines.extend(["    },", "    dealerModels = {"])
     for index, model_id in enumerate(dealer_models, 1):
         lines.append(f"        [{index}] = {model_id},")
+    lines.extend(["    },", "    copModelsByLevel = {"])
+    for level, model_id in enumerate(COP_MODELS_BY_LEVEL):
+        lines.append(f"        [{level}] = {model_id},")
     lines.extend(["    },", "    zones = {"])
     for label, zone in sorted(zones.items()):
         gangs = ", ".join(str(value) for value in zone["gangStrengths"])
@@ -198,6 +203,10 @@ def main() -> None:
     zones = parse_zones(args.zones)
     if dealer_models != [28, 29, 30, 254]:
         raise ValueError(f"unexpected DEALERS group: {dealer_models}")
+    for model_id in COP_MODELS_BY_LEVEL:
+        model = next((entry for entry in models.values() if entry["id"] == model_id), None)
+        if not model or model["nativePedType"] != "COP":
+            raise ValueError(f"unexpected city-cop model {model_id}: {model}")
     if len(zones) != 336:
         raise ValueError(f"unexpected zone count: {len(zones)}")
 

@@ -129,8 +129,11 @@ namespace
     constexpr std::uintptr_t GTA_PED_GROUP_TRANSLATION = 0x8D2540;
     constexpr std::uintptr_t GTA_PED_GROUP_COUNTS = 0xC0ECC0;
     constexpr std::uintptr_t GTA_PED_GROUP_MODELS = 0xC0F358;
+    constexpr std::uintptr_t GTA_DONT_CREATE_RANDOM_COPS = 0xC0FCB4;
     constexpr std::uintptr_t GTA_CURRENT_WORLD_ZONE = 0xC0FCBC;
     constexpr std::uintptr_t GTA_WEATHER_REGION = 0xC81314;
+    constexpr std::uintptr_t GTA_CURRENT_LEVEL = 0xBA6718;
+    constexpr std::uintptr_t FUNC_GangWarFightingGoingOn = 0x443AC0;
     constexpr unsigned int   POPCYCLE_GANG_GROUP_BASE = 18;
     constexpr unsigned int   POPCYCLE_TIME_COUNT = 12;
     constexpr unsigned int   POPCYCLE_WEEK_COUNT = 2;
@@ -146,12 +149,16 @@ namespace
     constexpr unsigned int   AMBIENT_PED_GANG_ROTATION_TICKS = 550;
     constexpr unsigned int   AMBIENT_PED_STOCK_MODEL_COUNT = 289;
     constexpr int            AMBIENT_PED_DEALER_MODELS[] = {28, 29, 30, 254};
+    // CStreaming::ms_aDefaultCopModel at 0x8A5AA0 is indexed by
+    // CTheZones::m_CurrLevel: countryside, LS, SF, then LV.
+    constexpr int            AMBIENT_PED_COP_MODELS[] = {283, 280, 281, 282};
     constexpr unsigned int   STREAMING_GAME_REQUIRED = 0x2;
     constexpr unsigned int   STREAMING_KEEP_IN_MEMORY = 0x8;
     constexpr unsigned int   AMBIENT_PED_STREAMING_FLAG_MASK = STREAMING_GAME_REQUIRED | STREAMING_KEEP_IN_MEMORY;
     constexpr unsigned int   ZONE_TYPE_INFO = 2;
     constexpr unsigned int   PED_TYPE_CIVMALE = 4;
     constexpr unsigned int   PED_TYPE_CIVFEMALE = 5;
+    constexpr unsigned int   PED_TYPE_COP = 6;
     constexpr unsigned int   PED_TYPE_GANG1 = 7;
     constexpr unsigned int   PED_TYPE_DEALER = 17;
     constexpr short          WEATHER_REGION_SF = 2;
@@ -1232,9 +1239,11 @@ void CGameSA::UpdateAmbientPedPopulationModels(const CVector& origin)
         InitializeAmbientPedPopulationStreamingLease();
         std::fill(&m_ambientPedGangModels[0][0], &m_ambientPedGangModels[0][0] + AMBIENT_PED_GANG_COUNT * AMBIENT_PED_GANG_MODELS_PER_GANG, -1);
         m_ambientPedDealerModel = -1;
+        m_ambientPedCopModel = -1;
         m_ambientPedGangModelUpdateCounter = 0;
         m_ambientPedGangModelRotation = 0;
     }
+    m_ambientPedPopulationOriginZ = origin.fZ;
 
     // MTA skips GTA's ambient StreamZoneModels caller so unmanaged population
     // cannot appear. Calling the intact ped-only pass preserves the stock zone
@@ -1277,6 +1286,7 @@ void CGameSA::UpdateAmbientPedPopulationModels(const CVector& origin)
         }
     }
     ProtectAmbientPedPopulationStreamingRequests();
+    UpdateAmbientPedCopModel();
     UpdateAmbientPedDealerModel();
     UpdateAmbientPedGangModels();
     PreserveAmbientPedPopulationStreamingFlags();
@@ -1291,6 +1301,7 @@ void CGameSA::ResetAmbientPedPopulationModels()
     }
 
     ProtectAmbientPedPopulationStreamingRequests();
+    ResetAmbientPedCopModel();
     ResetAmbientPedDealerModel();
     ResetAmbientPedGangModels();
 
@@ -1649,6 +1660,42 @@ void CGameSA::ResetAmbientPedDealerModel()
     m_ambientPedDealerModel = -1;
 }
 
+void CGameSA::UpdateAmbientPedCopModel()
+{
+    for (const int modelId : AMBIENT_PED_COP_MODELS)
+        m_ambientPedPopulationStreamingTouched[modelId] = true;
+
+    int       desiredModel = -1;
+    const int currentLevel = *reinterpret_cast<const unsigned char*>(GTA_CURRENT_LEVEL);
+    if (currentLevel >= 0 && currentLevel < static_cast<int>(std::size(AMBIENT_PED_COP_MODELS)))
+    {
+        // StreamCopModels also consults wanted state, alternates a bike cop and
+        // requests police vehicles. The traffic lease needs only the regional
+        // city-cop model, so reproduce that one reversible request here.
+        desiredModel = AMBIENT_PED_COP_MODELS[currentLevel];
+        m_pStreaming->RequestModel(desiredModel, STREAMING_GAME_REQUIRED);
+    }
+
+    for (const int modelId : AMBIENT_PED_COP_MODELS)
+    {
+        if (modelId == desiredModel)
+            continue;
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelIsDeletable)(modelId);
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelTxdIsDeletable)(modelId);
+    }
+    m_ambientPedCopModel = desiredModel;
+}
+
+void CGameSA::ResetAmbientPedCopModel()
+{
+    for (const int modelId : AMBIENT_PED_COP_MODELS)
+    {
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelIsDeletable)(modelId);
+        reinterpret_cast<void(__cdecl*)(int)>(FUNC_SetModelTxdIsDeletable)(modelId);
+    }
+    m_ambientPedCopModel = -1;
+}
+
 void CGameSA::UpdateAmbientPedGangModels()
 {
     const auto* const zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
@@ -1794,16 +1841,28 @@ bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profi
     profile.maximumPedsInUse = maximumPedsInUse;
     profile.creationDistanceMultiplier = creationDistanceMultiplier;
     profile.generationDistanceMultiplier = generationDistanceMultiplier;
-    profile.supportedTarget = targets.civilian + targets.gang + targets.dealer;
     profile.zoneType = static_cast<unsigned char>(zoneType);
     profile.timeIndex = static_cast<unsigned char>(timeIndex);
     profile.weekend = static_cast<unsigned char>(weekend);
     profile.dealerStrength = zoneInfo->dealerStrength;
     profile.raceFlags = zoneInfo->raceFlags & 0x0F;
     profile.noCops = (zoneInfo->populationFlags & 0x80) != 0;
+    const int currentLevel = *reinterpret_cast<const unsigned char*>(GTA_CURRENT_LEVEL);
+    if (currentLevel < 0 || currentLevel >= static_cast<int>(std::size(AMBIENT_PED_COP_MODELS)))
+        return false;
+    profile.worldLevel = static_cast<unsigned char>(currentLevel);
+    if (profile.noCops)
+        profile.copSuppressionFlags |= static_cast<unsigned char>(EAmbientPedCopSuppression::ZoneNoCops);
+    if (*reinterpret_cast<const bool*>(GTA_DONT_CREATE_RANDOM_COPS))
+        profile.copSuppressionFlags |= static_cast<unsigned char>(EAmbientPedCopSuppression::RandomCopsDisabled);
+    if (reinterpret_cast<bool(__cdecl*)()>(FUNC_GangWarFightingGoingOn)())
+        profile.copSuppressionFlags |= static_cast<unsigned char>(EAmbientPedCopSuppression::GangWarFighting);
+    if (m_ambientPedPopulationOriginZ >= 950.0f)
+        profile.copSuppressionFlags |= static_cast<unsigned char>(EAmbientPedCopSuppression::HighAltitude);
     profile.rawCopTarget = targets.cop;
-    profile.copTarget = profile.noCops ? 0.0f : targets.cop;
-    profile.target = profile.supportedTarget + profile.copTarget;
+    profile.copTarget = profile.copSuppressionFlags == 0 ? targets.cop : 0.0f;
+    profile.supportedTarget = targets.civilian + targets.gang + targets.dealer + profile.copTarget;
+    profile.target = profile.supportedTarget;
     std::copy(std::begin(zoneInfo->gangStrength), std::end(zoneInfo->gangStrength), std::begin(profile.gangWeights));
     std::copy(std::begin(zone->infoLabel), std::end(zone->infoLabel), std::begin(profile.zoneLabel));
     return std::isfinite(profile.target) && std::isfinite(profile.supportedTarget) && profile.target <= 110.0f;
@@ -1829,7 +1888,8 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
 {
     candidate = {};
     if (selection != EAmbientPedPopulationSelection::Automatic && selection != EAmbientPedPopulationSelection::Civilian &&
-        selection != EAmbientPedPopulationSelection::Gang && selection != EAmbientPedPopulationSelection::Dealer)
+        selection != EAmbientPedPopulationSelection::Gang && selection != EAmbientPedPopulationSelection::Dealer &&
+        selection != EAmbientPedPopulationSelection::Cop)
     {
         return EAmbientPedSpawnCandidateResult::NoModel;
     }
@@ -1860,6 +1920,9 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
     const bool chooseGang = selection == EAmbientPedPopulationSelection::Gang ||
                             (selection == EAmbientPedPopulationSelection::Automatic && automaticTicket >= profile.dealerTarget &&
                              automaticTicket < profile.dealerTarget + profile.gangTarget);
+    const bool chooseCop = selection == EAmbientPedPopulationSelection::Cop ||
+                           (selection == EAmbientPedPopulationSelection::Automatic && automaticTicket >= profile.dealerTarget + profile.gangTarget &&
+                            automaticTicket < profile.dealerTarget + profile.gangTarget + profile.copTarget);
     if (chooseDealer)
     {
         const int proposedModel = m_ambientPedDealerModel;
@@ -1926,7 +1989,28 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
             return EAmbientPedSpawnCandidateResult::NoModel;
     }
 
-    if (modelId < 0 && selection != EAmbientPedPopulationSelection::Gang && selection != EAmbientPedPopulationSelection::Dealer)
+    if (chooseCop)
+    {
+        const int currentLevel = *reinterpret_cast<const unsigned char*>(GTA_CURRENT_LEVEL);
+        const int proposedModel = currentLevel >= 0 && currentLevel < static_cast<int>(std::size(AMBIENT_PED_COP_MODELS)) ? m_ambientPedCopModel : -1;
+        if (proposedModel >= 0 && proposedModel == AMBIENT_PED_COP_MODELS[currentLevel])
+        {
+            auto* proposedInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(proposedModel));
+            if (proposedInfo && proposedInfo->pRwObject && proposedInfo->pedType == PED_TYPE_COP)
+            {
+                modelId = proposedModel;
+                modelInfo = proposedInfo;
+                candidate.populationClass = EAmbientPedPopulationClass::Cop;
+                candidate.gangId = 0xFF;
+                candidate.worldLevel = static_cast<unsigned char>(currentLevel);
+            }
+        }
+        if (selection == EAmbientPedPopulationSelection::Cop && modelId < 0)
+            return EAmbientPedSpawnCandidateResult::NoModel;
+    }
+
+    if (modelId < 0 && selection != EAmbientPedPopulationSelection::Gang && selection != EAmbientPedPopulationSelection::Dealer &&
+        selection != EAmbientPedPopulationSelection::Cop)
     {
         const auto chooseCivilian = reinterpret_cast<int(__cdecl*)(bool, bool, int, int, int, bool, bool, bool, const char*)>(FUNC_ChooseCivilianOccupation);
         modelId = chooseCivilian(false, false, -1, -1, -1, false, true, false, nullptr);
@@ -1948,7 +2032,10 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidateForPopulatio
         (candidate.populationClass == EAmbientPedPopulationClass::Civilian && modelInfo->pedType != PED_TYPE_CIVMALE &&
          modelInfo->pedType != PED_TYPE_CIVFEMALE) ||
         (candidate.populationClass == EAmbientPedPopulationClass::Dealer &&
-         std::find(std::begin(AMBIENT_PED_DEALER_MODELS), std::end(AMBIENT_PED_DEALER_MODELS), modelId) == std::end(AMBIENT_PED_DEALER_MODELS)))
+         std::find(std::begin(AMBIENT_PED_DEALER_MODELS), std::end(AMBIENT_PED_DEALER_MODELS), modelId) == std::end(AMBIENT_PED_DEALER_MODELS)) ||
+        (candidate.populationClass == EAmbientPedPopulationClass::Cop &&
+         (candidate.worldLevel >= std::size(AMBIENT_PED_COP_MODELS) || modelId != AMBIENT_PED_COP_MODELS[candidate.worldLevel] ||
+          modelInfo->pedType != PED_TYPE_COP)))
     {
         return EAmbientPedSpawnCandidateResult::UnsupportedModel;
     }

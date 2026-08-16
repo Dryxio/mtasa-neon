@@ -227,7 +227,8 @@ local function acquireTrafficEventProfile(ped)
         return false
     end
 
-    local token = acquirePedNativeEventProfile(ped, "ambient-wander")
+    local profileName = getElementData(ped, "neon:ambientPedPopulationClass") == "cop" and "ambient-cop-safe" or "ambient-wander"
+    local token = acquirePedNativeEventProfile(ped, profileName)
     if not token then
         return false
     end
@@ -714,6 +715,12 @@ local function beginAssignment(task)
     if not setPedUseNativeWalkingStyle(task.ped, true) then
         return fail(task, "native-walking-style-refused")
     end
+    if getElementData(task.ped, "neon:ambientPedPopulationClass") == "cop" then
+        if type(setPedWeaponShootingRate) ~= "function" or type(setPedWeaponAccuracy) ~= "function" or
+            not setPedWeaponShootingRate(task.ped, 30) or not setPedWeaponAccuracy(task.ped, 60) then
+            return fail(task, "cop-safe-attributes-refused")
+        end
+    end
     local function installWander()
         if assignments[task.ped] ~= task or not isElement(task.ped) or not isElementSyncer(task.ped) then
             return
@@ -948,7 +955,7 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         return
     end
 
-    if populationClass ~= "civilian" and populationClass ~= "gang" and populationClass ~= "dealer" or
+    if populationClass ~= "civilian" and populationClass ~= "gang" and populationClass ~= "dealer" and populationClass ~= "cop" or
         (populationClass == "gang" and (type(gang) ~= "number" or gang ~= math.floor(gang) or gang < 0 or gang > 7)) or
         (populationClass ~= "gang" and gang ~= false) then
         stats.candidateMisses = stats.candidateMisses + 1
@@ -1229,6 +1236,68 @@ addEventHandler("pedTraffic:dealerTestCleanup", resourceRoot, function(testId, t
             return
         end
         triggerServerEvent("pedTraffic:dealerTestCleanupResult", resourceRoot, testId, trafficId, {
+            elementPresent = elementPresent,
+            assignmentPresent = assignmentPresent,
+            profilePresent = profilePresent,
+        })
+    end
+    reportCleanup(1)
+end)
+
+addEvent("pedTraffic:copTestSample", true)
+addEventHandler("pedTraffic:copTestSample", resourceRoot, function(testId, ped, epoch, phase)
+    if not enabled or not isElement(ped) then return end
+    local task = assignments[ped]
+    local token = nativeEventProfiles[ped]
+    local tasks, hasWander = collectDealerTestTasks(ped)
+    triggerServerEvent("pedTraffic:copTestSampleResult", resourceRoot, testId, phase, {
+        model = getElementModel(ped),
+        populationClass = getElementData(ped, "neon:ambientPedPopulationClass"),
+        logicalPedType = getElementData(ped, "neon:ambientPedLogicalType"),
+        worldLevel = getElementData(ped, "neon:ambientPedCopLevel"),
+        activeWeapon = getPedWeapon(ped),
+        nightstick = getPedWeapon(ped, 1),
+        pistol = getPedWeapon(ped, 2),
+        pistolAmmo = getPedTotalAmmo(ped, 2),
+        pistolSkillStat = getPedStat(ped, 69),
+        armor = getPedArmor(ped),
+        shootingRate = type(getPedWeaponShootingRate) == "function" and getPedWeaponShootingRate(ped) or -1,
+        accuracy = type(getPedWeaponAccuracy) == "function" and getPedWeaponAccuracy(ped) or -1,
+        wanted = getPlayerWantedLevel(localPlayer),
+        epoch = epoch,
+        syncer = isElementSyncer(ped),
+        assignment = task ~= nil and task.epoch == epoch,
+        assignmentAccepted = task ~= nil and task.epoch == epoch and task.accepted == true,
+        profilePresent = token ~= nil,
+        profileActive = token ~= nil and isPedNativeEventProfileActive(ped, token) == true,
+        hasWander = hasWander,
+        tasks = tasks,
+    })
+end)
+
+addEvent("pedTraffic:copTestCleanup", true)
+addEventHandler("pedTraffic:copTestCleanup", resourceRoot, function(testId, trafficId)
+    local function reportCleanup(attempt)
+        local elementPresent = false
+        local assignmentPresent = false
+        local profilePresent = false
+        for ped, task in pairs(assignments) do
+            if isElement(ped) and tonumber(getElementData(ped, "neon:ambientPedTrafficId")) == trafficId then
+                elementPresent = true
+                assignmentPresent = task ~= nil
+            end
+        end
+        for ped in pairs(nativeEventProfiles) do
+            if isElement(ped) and tonumber(getElementData(ped, "neon:ambientPedTrafficId")) == trafficId then
+                elementPresent = true
+                profilePresent = true
+            end
+        end
+        if elementPresent and attempt < 20 then
+            setTimer(reportCleanup, 100, 1, attempt + 1)
+            return
+        end
+        triggerServerEvent("pedTraffic:copTestCleanupResult", resourceRoot, testId, trafficId, {
             elementPresent = elementPresent,
             assignmentPresent = assignmentPresent,
             profilePresent = profilePresent,

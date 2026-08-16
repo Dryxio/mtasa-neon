@@ -15,7 +15,7 @@ GTA's read-only population targets for the current zone, two-hour time bucket,
 weekday/weekend state and current rain adjustment. The server applies GTA's
 live density multiplier, cull-zone reduction and maximum-ped gate, then
 reproduces `FindNewPedType` from the shared live population before requesting a
-native civilian, dealer or exact-gang placement
+native civilian, dealer, regional city-cop or exact-gang placement
 candidate. GTA still chooses the model from its loaded `pedgrp.dat` entries;
 the server validates the result, creates the real MTA ped, and assigns one persistent
 syncer. Only that owner runs
@@ -188,9 +188,16 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   player-attributed `DealerStrength` decrement, restores its zone fixture, then
   requires cleanup ACKs from both clients. Time, transforms and frozen states
   are restored on PASS, FAIL or cancellation.
+- `/pedtraffic coptest` is the two-client ambient-cop presence harness. It uses
+  a runtime-validated south-LS fixture and the public candidate/traffic
+  pipeline, then verifies model 280 and logical type COP,
+  nightstick/pistol inventory, slot 0, armor 0, rate 30, accuracy 60,
+  owner-only `ambient-cop-safe` WanderStandard, a handoff, unchanged wanted on
+  both clients, and two cleanup acknowledgements.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
-and now admits GTA's civilian, dealer and resident-gang population classes.
+and now admits GTA's civilian, dealer, regional city-cop and resident-gang
+population classes.
 Dealers are solo, use the exact retail `DEALERS` group `{28,29,30,254}`, carry
 logical `PED_TYPE_DEALER` even when `peds.ide` says criminal/civilian, receive
 no initial weapon, and start in WanderStandard. On the first real fight-control
@@ -199,7 +206,7 @@ task, their immutable server seed reproduces `m_nRandomSeed & 0x3FF`: below
 independent pistol attempt; 200..399 gives the pistol; 400..1023 stays
 unarmed. Grants use 50 ammo and the pistol STD stat. Dealer sales remain
 deferred. Ambient
-vehicle population, cops, couples, attractors, conversations,
+vehicle population, full police behavior, couples, attractors, conversations,
 headless/offline simulation, custom weather rules and public server density
 controls remain outside this checkpoint. GTA's stock rain reduction is already
 reflected in the native target. The optional command above creates a test
@@ -216,12 +223,12 @@ covered by those scopes remain a later behavior checkpoint.
   `model`, `pedType`, `populationClass`, `gang`, `x`, `y`, `z`, `direction`,
   and `pathLerp`, or `false` plus a bounded miss reason. It never creates an
   unmanaged GTA ped. Omit the optional arguments for GTA's local automatic
-  choice; pass `"civilian", -1`, `"dealer", -1` or `"gang", 0..7` when a
+  choice; pass `"civilian", -1`, `"dealer", -1`, `"cop", -1` or `"gang", 0..7` when a
   server has already arbitrated the class from synchronized live counts. A
   forced dealer or gang miss never falls back to a civilian.
 - `getAmbientPedPopulationProfile()` returns GTA's current supported target as
-  `supportedTarget`, split into `civilianTarget`, `dealerTarget` and
-  `gangTarget`. `target` also includes the effective `copTarget`; `rawCopTarget`
+  `supportedTarget`, split into `civilianTarget`, `dealerTarget`, `copTarget`
+  and `gangTarget`. `rawCopTarget`
   preserves the pre-`noCops` popcycle value for diagnostics. Zone metadata includes
   `zoneLabel`, `zoneType`, `dealerStrength`, `raceFlags`, `noCops`, `timeIndex`,
   `weekend`, and the ten native `gangWeights`. Runtime density/lifecycle fields expose

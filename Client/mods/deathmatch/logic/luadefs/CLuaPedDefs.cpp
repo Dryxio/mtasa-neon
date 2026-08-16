@@ -377,6 +377,7 @@ void CLuaPedDefs::LoadFunctions()
         {"getPedTargetCollision", GetPedTargetCollision},
         {"getPedWeapon", GetPedWeapon},
         {"getPedWeaponShootingRate", ArgumentParser<GetPedWeaponShootingRate>},
+        {"getPedWeaponAccuracy", ArgumentParser<GetPedWeaponAccuracy>},
         {"getPedAmmoInClip", GetPedAmmoInClip},
         {"getPedTotalAmmo", GetPedTotalAmmo},
         {"getPedOccupiedVehicle", GetPedOccupiedVehicle},
@@ -2918,6 +2919,15 @@ int CLuaPedDefs::GetPedWeaponShootingRate(CClientPed* ped)
     return gamePed->GetWeaponShootingRate();
 }
 
+int CLuaPedDefs::GetPedWeaponAccuracy(CClientPed* ped)
+{
+    if (!ped || !ped->IsStreamedIn())
+        return -1;
+
+    CPlayerPed* gamePed = ped->GetGamePlayer();
+    return gamePed ? gamePed->GetWeaponAccuracy() : -1;
+}
+
 bool CLuaPedDefs::SetPedWeaponShootingRate(CClientPed* ped, int rate)
 {
     if (!ped->IsStreamedIn() || ped->IsDead() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || rate < 0 || rate > 255)
@@ -3539,6 +3549,8 @@ int CLuaPedDefs::AcquirePedNativeEventProfile(lua_State* luaVM)
             profile = ePedNativeEventProfile::MISSION;
         else if (strProfile == "ambient-wander")
             profile = ePedNativeEventProfile::AMBIENT_WANDER;
+        else if (strProfile == "ambient-cop-safe")
+            profile = ePedNativeEventProfile::AMBIENT_COP_SAFE;
 
         if (pResource && pPed && pPed->GetType() == CCLIENTPED && profile != ePedNativeEventProfile::NONE)
         {

@@ -94,6 +94,7 @@ local gangByModel = populationCatalog.gangByModel
 local civilianPedTypeByModel = populationCatalog.civilianPedTypeByModel
 local dealerModels = {}
 for _, model in ipairs(populationCatalog.dealerModels) do dealerModels[model] = true end
+local copModelsByLevel = populationCatalog.copModelsByLevel
 
 -- CPopulation::AddPed performs two independent CGeneral rolls for every gang
 -- ped: the first arms it when [0, 100) is below 33, then the second selects
@@ -241,6 +242,8 @@ local residencyTest = false
 local nextResidencyTestId = 0
 local dealerTest = false
 local nextDealerTestId = 0
+local copTest = false
+local nextCopTestId = 0
 local stopResidencyTest
 local stopBikeJackTest
 local stopDealerTest
@@ -255,7 +258,7 @@ local stats = {
     despawned = 0,
     missReasons = {},
     rejectionReasons = {},
-    populationSelections = {civilian = 0, gang = 0, dealer = 0},
+    populationSelections = {civilian = 0, gang = 0, dealer = 0, cop = 0},
     gangSelections = {[0] = 0, [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0, [6] = 0, [7] = 0, [8] = 0, [9] = 0},
     spawnedModels = {},
     groupSpawns = 0,
@@ -406,7 +409,8 @@ local function validatePopulationProfile(profile)
         not isIntegerInRange(profile.zoneType, 0, 19) or
         not isIntegerInRange(profile.timeIndex, 0, 11) or type(profile.weekend) ~= "boolean" or
         not isIntegerInRange(profile.dealerStrength, 0, 255) or not isIntegerInRange(profile.raceFlags, 0, 15) or
-        type(profile.noCops) ~= "boolean" or type(profile.gangWeights) ~= "table" then
+        type(profile.noCops) ~= "boolean" or not isIntegerInRange(profile.worldLevel, 0, 3) or
+        not isIntegerInRange(profile.copSuppressionFlags, 0, 15) or type(profile.gangWeights) ~= "table" then
         return false
     end
 
@@ -414,9 +418,11 @@ local function validatePopulationProfile(profile)
         profile.civilianTarget < 0 or profile.civilianTarget > 110 or profile.rawCopTarget < 0 or profile.rawCopTarget > 110 or
         profile.copTarget < 0 or profile.copTarget > 110 or
         profile.gangTarget < 0 or profile.gangTarget > 110 or profile.dealerTarget < 0 or profile.dealerTarget > 110 or
-        math.abs(profile.supportedTarget - profile.civilianTarget - profile.gangTarget - profile.dealerTarget) > 0.05 or
-        math.abs(profile.target - profile.supportedTarget - profile.copTarget) > 0.05 or
-        (profile.noCops and profile.copTarget > 0.05) or (not profile.noCops and math.abs(profile.copTarget - profile.rawCopTarget) > 0.05) or
+        math.abs(profile.supportedTarget - profile.civilianTarget - profile.gangTarget - profile.dealerTarget - profile.copTarget) > 0.05 or
+        math.abs(profile.target - profile.supportedTarget) > 0.05 or
+        ((profile.copSuppressionFlags ~= 0) and profile.copTarget > 0.05) or
+        ((profile.copSuppressionFlags == 0) and math.abs(profile.copTarget - profile.rawCopTarget) > 0.05) or
+        (((profile.copSuppressionFlags % 2) == 1) ~= profile.noCops) or
         profile.pedDensityMultiplier < 0 or profile.pedDensityMultiplier > 10 or profile.fewerPedsMultiplier < 0 or
         profile.fewerPedsMultiplier > 10 or profile.creationDistanceMultiplier < 0.999 or profile.creationDistanceMultiplier > 1.501 or
         profile.generationDistanceMultiplier <= 0 or profile.generationDistanceMultiplier > 10 then
@@ -468,6 +474,8 @@ local function validatePopulationProfile(profile)
         zoneLabel = profile.zoneLabel,
         raceFlags = profile.raceFlags,
         noCops = profile.noCops,
+        worldLevel = profile.worldLevel,
+        copSuppressionFlags = profile.copSuppressionFlags,
         gangWeights = gangWeights,
         totalGangWeight = totalGangWeight,
         pedDensityMultiplier = profile.pedDensityMultiplier,
@@ -483,8 +491,8 @@ end
 local function calculateNativeTargets(profile)
     -- Retail gates AddToPopulation with ms_nTotalPeds, which deliberately
     -- excludes dealers, and only then compares each family's own deficit.
-    -- Preserve those two notions instead of redistributing unsupported cops
-    -- or charging dealers against the stock-counted gate.
+    -- Preserve those two notions instead of charging dealers against the
+    -- stock-counted gate.
     local civilianNativeTarget = profile.civilianTarget * populationWorld.densityMultiplier
     local dealerNativeTarget = profile.dealerTarget * populationWorld.densityMultiplier
     local gangNativeTarget = populationWorld.randomGangMembers and profile.gangTarget * populationWorld.densityMultiplier or 0
@@ -496,7 +504,7 @@ local function calculateNativeTargets(profile)
         gangNativeTarget = gangNativeTarget * supportedGangWeight / profile.totalGangWeight
     end
     if fullPopulationTarget <= 0 then
-        return 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+        return 0, 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     end
 
     local fullPopulationGate = profile.pedDensityMultiplier * profile.fewerPedsMultiplier *
@@ -508,7 +516,7 @@ local function calculateNativeTargets(profile)
             gangTargets[index] = gangNativeTarget * profile.gangWeights[index] / supportedGangWeight
         end
     end
-    return total, civilianNativeTarget, dealerNativeTarget, gangNativeTarget, gangTargets
+    return total, civilianNativeTarget, dealerNativeTarget, copNativeTarget, gangNativeTarget, gangTargets
 end
 
 local function getPopulationRadii(profile)
@@ -619,7 +627,7 @@ local function getPopulationCountsNearPlayer(player)
     local profile = populationProfiles[player]
     local radii = getPopulationRadii(profile)
     if not radii then
-        return 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+        return 0, 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     end
 
     local x, y, z = getElementPosition(player)
@@ -627,6 +635,7 @@ local function getPopulationCountsNearPlayer(player)
     local physical = 0
     local civilians = 0
     local dealers = 0
+    local cops = 0
     local gangs = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     for ped, record in pairs(trafficPeds) do
         if isElement(ped) then
@@ -639,6 +648,9 @@ local function getPopulationCountsNearPlayer(player)
                     gangs[record.gang + 1] = gangs[record.gang + 1] + 1
                 elseif record.populationClass == "dealer" then
                     dealers = dealers + 1
+                elseif record.populationClass == "cop" then
+                    stockCounted = stockCounted + 1
+                    cops = cops + 1
                 else
                     stockCounted = stockCounted + 1
                     civilians = civilians + 1
@@ -646,7 +658,7 @@ local function getPopulationCountsNearPlayer(player)
             end
         end
     end
-    return stockCounted, physical, civilians, dealers, gangs
+    return stockCounted, physical, civilians, dealers, cops, gangs
 end
 
 local function chooseGangFromDeficit(profile, gangTarget, gangCounts)
@@ -681,12 +693,12 @@ end
 
 local function selectPopulationForPlayer(player)
     local profile = populationProfiles[player]
-    local totalTarget, civilianTarget, dealerTarget, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
+    local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
     if totalTarget == false or not profile then
         return false
     end
 
-    local stockCountedLive, physicalLive, civilianCount, dealerCount, gangCounts = getPopulationCountsNearPlayer(player)
+    local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
     if stockCountedLive >= totalTarget then
         return false
     end
@@ -698,16 +710,19 @@ local function selectPopulationForPlayer(player)
     local civilianDeficit = civilianTarget - civilianCount
     local dealerDeficit = dealerTarget - dealerCount
     local gangDeficit = gangTarget - totalGangCount
+    local copDeficit = copTarget - copCount
     local civilianChance = civilianDeficit
     local dealerChance = dealerDeficit
     local gangChance = gangDeficit
+    local copChance = copDeficit
     -- This small independent randomization is part of FindNewPedType itself;
     -- it prevents low remaining deficits from producing a rigid cadence.
     if civilianChance < 2 then civilianChance = civilianChance * math.random() end
     if dealerChance < 2 then dealerChance = dealerChance * math.random() end
     if gangChance < 2 then gangChance = gangChance * math.random() end
+    if copChance < 2 then copChance = copChance * math.random() end
 
-    if math.max(civilianChance, dealerChance, gangChance) <= 0 then
+    if math.max(civilianChance, dealerChance, gangChance, copChance) <= 0 then
         return false
     end
 
@@ -716,27 +731,30 @@ local function selectPopulationForPlayer(player)
         totalTarget = totalTarget,
         civilianTarget = civilianTarget,
         dealerTarget = dealerTarget,
+        copTarget = copTarget,
         gangTarget = gangTarget,
         gangTargets = gangTargets,
         totalCount = stockCountedLive,
         physicalCount = physicalLive,
         civilianCount = civilianCount,
         dealerCount = dealerCount,
+        copCount = copCount,
         gangCounts = gangCounts,
         totalGangCount = totalGangCount,
         civilianDeficit = civilianDeficit,
         dealerDeficit = dealerDeficit,
         gangDeficit = gangDeficit,
+        copDeficit = copDeficit,
         civilianChance = civilianChance,
         dealerChance = dealerChance,
         gangChance = gangChance,
+        copChance = copChance,
     }
-    -- FindNewPedType's strict tie order is dealer, gang, cop, civilian. Cops
-    -- remain unsupported here, leaving dealer before gang before civilian.
-    if dealerChance >= gangChance and dealerChance >= civilianChance then
+    -- FindNewPedType's strict tie order is dealer, gang, cop, civilian.
+    if dealerChance >= gangChance and dealerChance >= copChance and dealerChance >= civilianChance then
         selection.populationClass = "dealer"
         selection.gang = false
-    elseif gangChance >= civilianChance then
+    elseif gangChance >= copChance and gangChance >= civilianChance then
         local gang, scores = chooseGangFromDeficit(profile, gangTarget, gangCounts)
         if gang == false then
             return false
@@ -745,6 +763,9 @@ local function selectPopulationForPlayer(player)
         selection.gang = gang
         selection.gangScores = scores
         selection.gangScore = scores[gang + 1]
+    elseif copChance >= civilianChance then
+        selection.populationClass = "cop"
+        selection.gang = false
     else
         selection.populationClass = "civilian"
         selection.gang = false
@@ -754,14 +775,14 @@ end
 
 local function isSelectionStillNeeded(player, selection)
     local profile = populationProfiles[player]
-    local totalTarget, civilianTarget, dealerTarget, gangTarget = getNativeTargetsNearPlayer(player)
+    local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget = getNativeTargetsNearPlayer(player)
     if totalTarget == false or not profile or profile.signature ~= selection.profileSignature then
         return false, "stale-population-profile"
     end
 
-    local stockCountedLive, physicalLive, civilianCount, dealerCount, gangCounts = getPopulationCountsNearPlayer(player)
+    local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
     if stockCountedLive ~= selection.totalCount or physicalLive ~= selection.physicalCount or civilianCount ~= selection.civilianCount or
-        dealerCount ~= selection.dealerCount then
+        dealerCount ~= selection.dealerCount or copCount ~= selection.copCount then
         return false, "population-selection-stale"
     end
     for index = 1, 10 do
@@ -780,6 +801,12 @@ local function isSelectionStillNeeded(player, selection)
     end
     if selection.populationClass == "dealer" then
         if dealerTarget - dealerCount <= 0 then
+            return false, "population-selection-stale"
+        end
+        return true
+    end
+    if selection.populationClass == "cop" then
+        if copTarget - copCount <= 0 then
             return false, "population-selection-stale"
         end
         return true
@@ -809,17 +836,21 @@ local function isPopulationPedSurplusForAllResidents(record)
         local radius = getPopulationRadiusForClass(populationProfiles[player], record.populationClass)
         if radius and squaredDistance2D(pedX, pedY, playerX, playerY) <= radius * radius then
             residentCount = residentCount + 1
-            local nativeTarget, civilianTarget, dealerTarget, _, gangTargets = getNativeTargetsNearPlayer(player)
+            local nativeTarget, civilianTarget, dealerTarget, copTarget, _, gangTargets = getNativeTargetsNearPlayer(player)
             if nativeTarget == false then
                 return false
             end
-            local _, _, civilianCount, dealerCount, gangCounts = getPopulationCountsNearPlayer(player)
+            local _, _, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
             if record.populationClass == "gang" then
                 if gangCounts[record.gang + 1] - gangTargets[record.gang + 1] < 1 then
                     return false
                 end
             elseif record.populationClass == "dealer" then
                 if dealerCount - dealerTarget < 1 then
+                    return false
+                end
+            elseif record.populationClass == "cop" then
+                if copCount - copTarget < 1 then
                     return false
                 end
             elseif civilianCount - civilianTarget < 1 then
@@ -911,12 +942,12 @@ local function findFurthestSurplusPopulationGroup(x, y, z, radius, gang, require
                     local radii = getPopulationRadii(populationProfiles[player])
                     if radii and residentDistanceSquared and residentDistanceSquared <= radii.gang * radii.gang then
                         residentCount = residentCount + 1
-                        local nativeTarget, _, _, _, gangTargets = getNativeTargetsNearPlayer(player)
+                        local nativeTarget, _, _, _, _, gangTargets = getNativeTargetsNearPlayer(player)
                         if nativeTarget == false then
                             surplusForEveryResident = false
                             break
                         end
-                        local stockCountedLive, _, _, _, gangCounts = getPopulationCountsNearPlayer(player)
+                        local stockCountedLive, _, _, _, _, gangCounts = getPopulationCountsNearPlayer(player)
                         if (requireTotalSurplus and stockCountedLive - nativeTarget < memberCount) or
                             gangCounts[group.gang + 1] - gangTargets[group.gang + 1] < memberCount then
                             surplusForEveryResident = false
@@ -977,6 +1008,7 @@ end
 local function getActivePopulationSummary()
     local civilians = 0
     local dealers = 0
+    local cops = 0
     local gangs = {[0] = 0, [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0, [6] = 0, [7] = 0, [8] = 0, [9] = 0}
     for ped, record in pairs(trafficPeds) do
         if isElement(ped) then
@@ -984,12 +1016,14 @@ local function getActivePopulationSummary()
                 gangs[record.gang] = gangs[record.gang] + 1
             elseif record.populationClass == "dealer" then
                 dealers = dealers + 1
+            elseif record.populationClass == "cop" then
+                cops = cops + 1
             else
                 civilians = civilians + 1
             end
         end
     end
-    return civilians, dealers, gangs
+    return civilians, dealers, cops, gangs
 end
 
 local function hasNearbyTrafficPed(x, y, z)
@@ -1953,6 +1987,14 @@ local function validateCandidate(player, candidate)
             return false, "dealer-contract"
         end
         gang = false
+    elseif populationClass == "cop" then
+        local profile = populationProfiles[player]
+        if pedType ~= 6 or (gang ~= false and gang ~= -1) or not profile or
+            not isIntegerInRange(candidate.worldLevel, 0, 3) or candidate.worldLevel ~= profile.worldLevel or
+            copModelsByLevel[candidate.worldLevel] ~= model then
+            return false, "cop-contract"
+        end
+        gang = false
     else
         return false, "population-class"
     end
@@ -2232,6 +2274,7 @@ local function spawnCandidate(player, candidate, selection)
         state = "created",
         createdAt = getTickCount(),
         catalogRevision = populationCatalog.revision,
+        worldLevel = candidate.worldLevel,
     }
     if populationClass == "dealer" then
         record.dealerFightSeed = math.random(0, 1023)
@@ -2256,6 +2299,15 @@ local function spawnCandidate(player, candidate, selection)
         setElementData(ped, "neon:ambientPedDealerKnife", false)
         setElementData(ped, "neon:ambientPedDealerPistol", false)
         setElementData(ped, "neon:ambientPedDealerFightArmed", false)
+    elseif populationClass == "cop" then
+        setElementData(ped, "neon:ambientPedCopLevel", record.worldLevel)
+        giveWeapon(ped, 3, 1000, false)
+        giveWeapon(ped, 22, 1000, false)
+        setPedWeaponSlot(ped, 0)
+        setPedArmor(ped, 0)
+        setPedStat(ped, 69, 40)
+        setElementData(ped, "neon:ambientPedWeapon", 0)
+        setElementData(ped, "neon:ambientPedCopSafe", true)
     end
     beginSpawnFade({ped})
 
@@ -3563,13 +3615,13 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
         return
     end
 
-    local totalTarget, civilianTarget, dealerTarget, gangTarget, gangTargets = calculateNativeTargets(validated)
+    local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets = calculateNativeTargets(validated)
     local targetSignature = {}
     for index = 1, 10 do targetSignature[index] = ("%.3f"):format(gangTargets[index]) end
-    validated.signature = ("%d:%.3f:%.3f:%.3f:%s:%s:%d:%d:%s:%d:%.3f:%.3f:%s:%.3f:%.3f:%d:%.3f:%.3f"):format(
-        totalTarget, civilianTarget, dealerTarget, gangTarget, table.concat(targetSignature, ","), validated.zoneLabel, validated.zoneType,
+    validated.signature = ("%d:%.3f:%.3f:%.3f:%.3f:%s:%s:%d:%d:%s:%d:%.3f:%.3f:%s:%d:%d:%.3f:%.3f:%d:%.3f:%.3f"):format(
+        totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, table.concat(targetSignature, ","), validated.zoneLabel, validated.zoneType,
         validated.timeIndex, tostring(validated.weekend), validated.worldRevision, validated.effectiveCopTarget, validated.dealerTarget,
-        tostring(validated.noCops),
+        tostring(validated.noCops), validated.worldLevel, validated.copSuppressionFlags,
         validated.pedDensityMultiplier, validated.fewerPedsMultiplier, validated.maximumPedsInUse,
         validated.creationDistanceMultiplier, validated.generationDistanceMultiplier)
     local previous = populationProfiles[client]
@@ -3593,6 +3645,9 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
             civilian_target = validated.civilianTarget,
             gang_target = validated.gangTarget,
             cop_target = validated.effectiveCopTarget,
+            raw_cop_target = validated.rawCopTarget,
+            cop_suppression_flags = validated.copSuppressionFlags,
+            world_level = validated.worldLevel,
             dealer_target = validated.dealerTarget,
             gang_weights = validated.gangWeights,
             zone_label = validated.zoneLabel,
@@ -4659,7 +4714,7 @@ setTimer(function()
         clearTraffic(convergingPlayers > 0 and "world-convergence-timeout" or "no-eligible-player")
         return
     end
-    if dealerTest then
+    if dealerTest or copTest then
         return
     end
 
@@ -4668,17 +4723,18 @@ setTimer(function()
         local player = players[(requestCursor + offset - 1) % #players + 1]
         local x, y, z = getElementPosition(player)
         local radii = getPopulationRadii(populationProfiles[player])
-        local nativeTarget, civilianTarget, dealerTarget, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
+        local nativeTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
         local request = pendingRequests[player]
         if request and getTickCount() - request.issuedAt > config.requestTimeout then
             pendingRequests[player] = nil
             request = nil
         end
 
-        local stockCountedLive, physicalLive, civilianCount, dealerCount, gangCounts = getPopulationCountsNearPlayer(player)
+        local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
         local totalGangCount = 0
         for index = 1, 10 do totalGangCount = totalGangCount + gangCounts[index] end
-        local classDeficit = nativeTarget and (civilianTarget - civilianCount >= 1 or dealerTarget - dealerCount >= 1)
+        local classDeficit = nativeTarget and (civilianTarget - civilianCount >= 1 or dealerTarget - dealerCount >= 1 or
+            copTarget - copCount >= 1)
         local familyDeficit = false
         if nativeTarget then
             for index = 1, 10 do
@@ -4696,7 +4752,8 @@ setTimer(function()
         local profile = populationProfiles[player]
         local now = getTickCount()
         if nativeTarget and profile and now >= (profile.nextRebalanceAt or 0) and
-            (stockCountedLive > nativeTarget or (stockCountedLive >= nativeTarget and classDeficit) or dealerCount - dealerTarget >= 1) then
+            (stockCountedLive > nativeTarget or (stockCountedLive >= nativeTarget and classDeficit) or dealerCount - dealerTarget >= 1 or
+                copCount - copTarget >= 1) then
             local surplus = false
             local surplusGroup = false
             if civilianCount - civilianTarget >= 1 then
@@ -4707,6 +4764,11 @@ setTimer(function()
             if not surplus and dealerCount - dealerTarget >= 1 then
                 surplus = findFurthestPopulationPed(x, y, z, radii.civilian, function(record)
                     return record.populationClass == "dealer"
+                end)
+            end
+            if not surplus and copCount - copTarget >= 1 then
+                surplus = findFurthestPopulationPed(x, y, z, radii.civilian, function(record)
+                    return record.populationClass == "cop"
                 end)
             end
             if not surplus then
@@ -4784,15 +4846,18 @@ setTimer(function()
                 population_class = selection.populationClass,
                 gang = selection.gang,
                 maximum_group_members = selection.maximumGroupMembers or 1,
-                targets = {total = selection.totalTarget, civilian = selection.civilianTarget, dealer = selection.dealerTarget, gang = selection.gangTarget},
+                targets = {total = selection.totalTarget, civilian = selection.civilianTarget, dealer = selection.dealerTarget,
+                           cop = selection.copTarget, gang = selection.gangTarget},
                 live = {
                     total = selection.totalCount,
                     physical = selection.physicalCount,
                     civilian = selection.civilianCount,
                     dealer = selection.dealerCount,
+                    cop = selection.copCount,
                     gang = selection.totalGangCount,
                 },
-                deficits = {civilian = selection.civilianDeficit, dealer = selection.dealerDeficit, gang = selection.gangDeficit},
+                deficits = {civilian = selection.civilianDeficit, dealer = selection.dealerDeficit, cop = selection.copDeficit,
+                            gang = selection.gangDeficit},
             })
             triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision,
                                selection.populationClass, selection.gang, selection.maximumGroupMembers or 1)
@@ -4977,26 +5042,330 @@ setTimer(function()
     end
 end, 1000, 0)
 
+local COP_TEST_CANDIDATE_RETRY = 750
+-- This south-LS fixture produced a stable post_home_coming profile with a
+-- positive normal cop target and no no-cops suppression on both clients. The
+-- old City Hall point could leave GTA's popcycle producer stale after a
+-- scripted teleport and turn the harness into a timeout-only test.
+local COP_TEST_POSITION = {x = 2526.7, y = -1773, z = 13.38}
+
+local function restoreCopTestPlayers(test)
+    for player, state in pairs(test.savedPlayers or {}) do
+        if isElement(player) then
+            setElementDimension(player, state.dimension)
+            setElementInterior(player, state.interior)
+            setElementPosition(player, state.x, state.y, state.z)
+            setElementRotation(player, state.rx, state.ry, state.rz)
+            setElementFrozen(player, state.frozen)
+        end
+    end
+    if test.savedTime then setTime(test.savedTime[1], test.savedTime[2]) end
+end
+
+local function finishCopTest(result, reason)
+    local test = copTest
+    if not test then return end
+    copTest = false
+    for player, request in pairs(pendingRequests) do
+        if test.requestIds and test.requestIds[request.id] then pendingRequests[player] = nil end
+    end
+    for checkId, check in pairs(pendingVisibilityChecks) do
+        if check.kind == "candidate" and check.request and test.requestIds and test.requestIds[check.request.id] then
+            pendingVisibilityChecks[checkId] = nil
+        end
+    end
+    if result ~= "PASS" and test.record and not test.record.removing then
+        removeRecord(test.record, "cop-test-" .. tostring(result):lower())
+    end
+    restoreCopTestPlayers(test)
+    writePopulationTrace("cop_test_result", {
+        scenario_id = test.id, result = result, reason = reason,
+        traffic_id = test.record and test.record.id or false,
+        initial_epoch = test.initialEpoch or false,
+        final_epoch = test.record and test.record.epoch or false,
+        cleanup_acks = test.cleanupAcks or 0,
+    })
+    local message = ("Cop test %s: %s (scenario %d)"):format(result, tostring(reason), test.id)
+    outputChatBox(message, root, result == "PASS" and 80 or 255, result == "PASS" and 220 or 80, 120)
+    log(message, true)
+end
+
+local function requestCopTestSamples(test, phase)
+    test.samples[phase] = {}
+    for _, player in ipairs(test.players) do
+        triggerClientEvent(player, "pedTraffic:copTestSample", resourceRoot, test.id, test.record.ped, test.record.epoch, phase)
+    end
+end
+
+local function scheduleCopTestSamples(test, phase, expectedPhase)
+    -- MTA clones table arguments passed through timers. Keep only scalar
+    -- identity in the timer and reacquire the live harness state before the
+    -- sample request so replies update the same table inspected by the test.
+    setTimer(function(testId, samplePhase, requiredPhase)
+        local activeTest = copTest
+        if not activeTest or activeTest.id ~= testId or activeTest.phase ~= requiredPhase then return end
+        requestCopTestSamples(activeTest, samplePhase)
+    end, 750, 1, test.id, phase, expectedPhase)
+end
+
+local function issueCopTestCandidate(test)
+    if next(pendingRequests) or next(pendingVisibilityChecks) then return false end
+    local player = test.players[1]
+    local profile = populationProfiles[player]
+    local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
+    if not profile or profile.receivedAt < test.startedAt or totalTarget == false or copTarget <= 0 or profile.worldLevel ~= 1 or
+        profile.copSuppressionFlags ~= 0 then
+        return false
+    end
+
+    local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
+    local totalGangCount = 0
+    for index = 1, 10 do totalGangCount = totalGangCount + gangCounts[index] end
+    if stockCountedLive >= totalTarget or copCount >= copTarget then
+        return finishCopTest("FAIL", "cop-deficit-unavailable")
+    end
+
+    nextRequestId = nextRequestId + 1
+    local selection = {
+        requestId = nextRequestId,
+        populationClass = "cop",
+        gang = false,
+        maximumGroupMembers = 1,
+        profileSignature = profile.signature,
+        totalTarget = totalTarget,
+        civilianTarget = civilianTarget,
+        dealerTarget = dealerTarget,
+        copTarget = copTarget,
+        gangTarget = gangTarget,
+        gangTargets = gangTargets,
+        totalCount = stockCountedLive,
+        physicalCount = physicalLive,
+        civilianCount = civilianCount,
+        dealerCount = dealerCount,
+        copCount = copCount,
+        gangCounts = gangCounts,
+        totalGangCount = totalGangCount,
+        civilianDeficit = civilianTarget - civilianCount,
+        dealerDeficit = dealerTarget - dealerCount,
+        copDeficit = copTarget - copCount,
+        gangDeficit = gangTarget - totalGangCount,
+        civilianChance = math.min(100, math.max(0, civilianTarget - civilianCount) * 100),
+        dealerChance = math.min(100, math.max(0, dealerTarget - dealerCount) * 100),
+        copChance = math.min(100, math.max(0, copTarget - copCount) * 100),
+        gangChance = math.min(100, math.max(0, gangTarget - totalGangCount) * 100),
+    }
+    pendingRequests[player] = {
+        id = nextRequestId,
+        issuedAt = getTickCount(),
+        worldRevision = populationWorld.revision,
+        selection = selection,
+    }
+    test.lastRequestAt = getTickCount()
+    test.requestIds[nextRequestId] = true
+    stats.requests = stats.requests + 1
+    stats.populationSelections.cop = stats.populationSelections.cop + 1
+    writePopulationTrace("candidate_request", {
+        request_id = nextRequestId,
+        player_id = getPopulationClientId(player),
+        population_class = "cop",
+        gang = false,
+        maximum_group_members = 1,
+        scenario_id = test.id,
+        targets = {total = totalTarget, civilian = civilianTarget, dealer = dealerTarget, cop = copTarget, gang = gangTarget},
+        live = {
+            total = stockCountedLive,
+            physical = physicalLive,
+            civilian = civilianCount,
+            dealer = dealerCount,
+            cop = copCount,
+            gang = totalGangCount,
+        },
+        deficits = {
+            civilian = selection.civilianDeficit,
+            dealer = selection.dealerDeficit,
+            cop = selection.copDeficit,
+            gang = selection.gangDeficit,
+        },
+    })
+    triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision, "cop", false, 1)
+    return true
+end
+
+local function validateCopTestSamples(test, phase)
+    local samples = test.samples[phase]
+    if not samples or not samples[test.players[1]] or not samples[test.players[2]] then return false end
+    local expectedOwner = phase == "handoff" and test.ownerB or test.ownerA
+    for _, player in ipairs(test.players) do
+        local sample = samples[player]
+        local isOwner = player == expectedOwner
+        if sample.model ~= 280 or sample.populationClass ~= "cop" or sample.logicalPedType ~= 6 or sample.worldLevel ~= 1 or
+            sample.activeWeapon ~= 0 or sample.nightstick ~= 3 or sample.pistol ~= 22 or sample.pistolAmmo ~= 1000 or
+            math.abs(sample.pistolSkillStat - 40) > 0.01 or math.abs(sample.armor) > 0.01 or
+            sample.wanted ~= test.savedPlayers[player].wanted or sample.syncer ~= isOwner or sample.profilePresent ~= true or
+            sample.assignment ~= isOwner or sample.assignmentAccepted ~= isOwner or sample.profileActive ~= isOwner or
+            (isOwner and (sample.hasWander ~= true or sample.shootingRate ~= 30 or sample.accuracy ~= 60)) then
+            finishCopTest("FAIL", "cop-sample-mismatch-" .. phase .. "-client-" .. getPopulationClientId(player))
+            return false
+        end
+    end
+    return true
+end
+
+addEvent("pedTraffic:copTestSampleResult", true)
+addEventHandler("pedTraffic:copTestSampleResult", resourceRoot, function(testId, phase, data)
+    local test = copTest
+    if not test or test.id ~= testId or type(data) ~= "table" or (phase ~= "initial" and phase ~= "handoff") then return end
+    writePopulationTrace("cop_test_sample", {
+        scenario_id = test.id,
+        phase = phase,
+        player_id = getPopulationClientId(client),
+        model = data.model,
+        population_class = data.populationClass,
+        logical_ped_type = data.logicalPedType,
+        world_level = data.worldLevel,
+        active_weapon = data.activeWeapon,
+        nightstick = data.nightstick,
+        pistol = data.pistol,
+        pistol_ammo = data.pistolAmmo,
+        pistol_skill_stat = data.pistolSkillStat,
+        armor = data.armor,
+        shooting_rate = data.shootingRate,
+        accuracy = data.accuracy,
+        wanted = data.wanted,
+        syncer = data.syncer,
+        assignment = data.assignment,
+        assignment_accepted = data.assignmentAccepted,
+        profile_present = data.profilePresent,
+        profile_active = data.profileActive,
+        has_wander = data.hasWander,
+    })
+    test.samples[phase][client] = data
+    if not validateCopTestSamples(test, phase) then return end
+    if phase == "initial" then
+        beginHandoff(test.record, test.ownerB, "cop-test-handoff")
+        test.phase = "handoff"
+    else
+        test.phase = "cleanup"
+        local trafficId = test.record.id
+        removeRecord(test.record, "cop-test-cleanup")
+        for _, player in ipairs(test.players) do
+            triggerClientEvent(player, "pedTraffic:copTestCleanup", resourceRoot, test.id, trafficId)
+        end
+    end
+end)
+
+addEvent("pedTraffic:copTestCleanupResult", true)
+addEventHandler("pedTraffic:copTestCleanupResult", resourceRoot, function(testId, trafficId, data)
+    local test = copTest
+    if not test or test.id ~= testId or test.phase ~= "cleanup" or trafficId ~= test.record.id or type(data) ~= "table" then return end
+    if data.elementPresent or data.assignmentPresent or data.profilePresent then
+        return finishCopTest("FAIL", "cop-cleanup-residual-client-" .. getPopulationClientId(client))
+    end
+    if not test.cleanupPlayers[client] then
+        test.cleanupPlayers[client] = true
+        test.cleanupAcks = test.cleanupAcks + 1
+    end
+    if test.cleanupAcks == 2 then finishCopTest("PASS", "cop-presence-handoff-wanted-cleanup") end
+end)
+
+local function startCopTest(player)
+    if copTest then return outputChatBox("A cop test is already running", player, 255, 160, 80) end
+    local players = getElementsByType("player")
+    if #players ~= 2 then return outputChatBox("The cop test requires exactly two connected clients", player, 255, 160, 80) end
+    for _, candidate in ipairs(players) do
+        if isPedDead(candidate) or isPedInVehicle(candidate) then
+            return outputChatBox("Both cop-test clients must be alive and on foot", player, 255, 160, 80)
+        end
+    end
+    if not debugEnabled then
+        debugEnabled = true
+        triggerClientEvent(root, "pedTraffic:setDebug", resourceRoot, true)
+    end
+    resetPopulationTrace()
+    clearTraffic("cop-test-reset")
+    if not enabled then setEnabled(true, player) end
+    nextCopTestId = nextCopTestId + 1
+    local hour, minute = getTime()
+    local test = {id = nextCopTestId, players = players, savedPlayers = {}, savedTime = {hour, minute}, startedAt = getTickCount(),
+                  phase = "await-profile", samples = {}, cleanupPlayers = {}, cleanupAcks = 0, requestIds = {}}
+    copTest = test
+    setTime(12, 0)
+    for index, candidate in ipairs(players) do
+        local x, y, z = getElementPosition(candidate)
+        local rx, ry, rz = getElementRotation(candidate)
+        test.savedPlayers[candidate] = {x = x, y = y, z = z, rx = rx, ry = ry, rz = rz, dimension = getElementDimension(candidate),
+                                        interior = getElementInterior(candidate), frozen = isElementFrozen(candidate),
+                                        wanted = getPlayerWantedLevel(candidate)}
+        setElementDimension(candidate, 0)
+        setElementInterior(candidate, 0)
+        setElementPosition(candidate, COP_TEST_POSITION.x + (index - 1) * 2, COP_TEST_POSITION.y, COP_TEST_POSITION.z)
+    end
+    outputChatBox("Cop test started: converging the LS profile and authentic cop candidate", root, 120, 220, 255)
+end
+
+setTimer(function()
+    local test = copTest
+    if not test then return end
+    if getTickCount() - test.startedAt > 60000 then return finishCopTest("FAIL", "cop-test-timeout-" .. test.phase) end
+    if test.phase == "await-profile" then
+        local ready = true
+        for _, player in ipairs(test.players) do
+            local profile = populationProfiles[player]
+            local totalTarget, _, _, copTarget = getNativeTargetsNearPlayer(player)
+            if not profile or profile.receivedAt < test.startedAt or profile.worldLevel ~= 1 or profile.copSuppressionFlags ~= 0 or
+                totalTarget == false or type(copTarget) ~= "number" or copTarget <= 0 then
+                ready = false
+                break
+            end
+        end
+        if ready then
+            test.phase = "await-cop"
+            issueCopTestCandidate(test)
+        end
+    elseif test.phase == "await-cop" then
+        for _, record in pairs(trafficPeds) do
+            if record.populationClass == "cop" and record.createdAt >= test.startedAt and record.state == "active" then
+                test.record = record
+                test.ownerA = record.owner
+                test.ownerB = test.players[1] == test.ownerA and test.players[2] or test.players[1]
+                test.initialEpoch = record.epoch
+                for _, player in ipairs(test.players) do setElementFrozen(player, true) end
+                test.phase = "initial"
+                scheduleCopTestSamples(test, "initial", "initial")
+                return
+            end
+        end
+        if not test.lastRequestAt or getTickCount() - test.lastRequestAt >= COP_TEST_CANDIDATE_RETRY then
+            issueCopTestCandidate(test)
+        end
+    elseif test.phase == "handoff" and test.record.state == "active" and test.record.owner == test.ownerB and
+        test.record.epoch == test.initialEpoch + 1 then
+        test.phase = "handoff-sample"
+        scheduleCopTestSamples(test, "handoff", "handoff-sample")
+    end
+end, 200, 0)
+
 setTimer(function()
     if not debugEnabled then
         return
     end
     for _, player in ipairs(getEligiblePlayers()) do
-        local totalTarget, civilianTarget, dealerTarget, gangTarget = getNativeTargetsNearPlayer(player)
+        local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget = getNativeTargetsNearPlayer(player)
         if totalTarget then
-            local stockCountedLive, physicalLive, civilianCount, dealerCount, gangCounts = getPopulationCountsNearPlayer(player)
+            local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
             local totalGangCount = 0
             for index = 1, 10 do totalGangCount = totalGangCount + gangCounts[index] end
             local profile = populationProfiles[player]
             local radii = getPopulationRadii(profile)
             writePopulationTrace("population_snapshot", {
                 player_id = getPopulationClientId(player),
-                targets = {total = totalTarget, civilian = civilianTarget, dealer = dealerTarget, gang = gangTarget},
+                targets = {total = totalTarget, civilian = civilianTarget, dealer = dealerTarget, cop = copTarget, gang = gangTarget},
                 live = {
                     total = stockCountedLive,
                     physical = physicalLive,
                     civilian = civilianCount,
                     dealer = dealerCount,
+                    cop = copCount,
                     gang = totalGangCount,
                     gang_families = gangCounts,
                 },
@@ -5004,6 +5373,7 @@ setTimer(function()
                     total = totalTarget - stockCountedLive,
                     civilian = civilianTarget - civilianCount,
                     dealer = dealerTarget - dealerCount,
+                    cop = copTarget - copCount,
                     gang = gangTarget - totalGangCount,
                 },
                 radii = {civilian = radii.civilian, gang = radii.gang},
@@ -5015,10 +5385,10 @@ end, 2000, 0)
 
 setTimer(function()
     if debugEnabled then
-        local activeCivilians, activeDealers, activeGangs = getActivePopulationSummary()
+        local activeCivilians, activeDealers, activeCops, activeGangs = getActivePopulationSummary()
         local activeGroups = getTrafficGroupCount()
-        log(("telemetry active=%d activeCiv=%d activeDealers=%d activeGangs=%s groups=%d groupSpawns=%d groupHandoffs=%d groupPromotions=%d groupRemovals=%d ready=%d preset=%s revision=%d requests=%d misses=%d rejected=%d spawned=%d despawned=%d handoffs=%d selections=%s selectedGangs=%s models=%s missReasons=%s rejectionReasons=%s"):format(
-                getTrafficPedCount(), activeCivilians, activeDealers, formatNumericMap(activeGangs), activeGroups, stats.groupSpawns,
+        log(("telemetry active=%d activeCiv=%d activeDealers=%d activeCops=%d activeGangs=%s groups=%d groupSpawns=%d groupHandoffs=%d groupPromotions=%d groupRemovals=%d ready=%d preset=%s revision=%d requests=%d misses=%d rejected=%d spawned=%d despawned=%d handoffs=%d selections=%s selectedGangs=%s models=%s missReasons=%s rejectionReasons=%s"):format(
+                getTrafficPedCount(), activeCivilians, activeDealers, activeCops, formatNumericMap(activeGangs), activeGroups, stats.groupSpawns,
                 stats.groupHandoffs, stats.groupPromotions, stats.groupRemovals,
                 #getEligiblePlayers(), populationWorld.preset, populationWorld.revision, stats.requests, stats.candidateMisses,
                 stats.rejected, stats.spawned, stats.despawned, stats.handoffs,
@@ -5112,11 +5482,11 @@ local function issueDealerTestCandidate(test)
     end
     local player = test.players[1]
     local profile = populationProfiles[player]
-    local totalTarget, civilianTarget, dealerTarget, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
+    local totalTarget, civilianTarget, dealerTarget, _, gangTarget, gangTargets = getNativeTargetsNearPlayer(player)
     if not profile or totalTarget == false or dealerTarget <= 0.03 then
         return false
     end
-    local stockCountedLive, physicalLive, civilianCount, dealerCount, gangCounts = getPopulationCountsNearPlayer(player)
+    local stockCountedLive, physicalLive, civilianCount, dealerCount, _, gangCounts = getPopulationCountsNearPlayer(player)
     local totalGangCount = 0
     for index = 1, 10 do totalGangCount = totalGangCount + gangCounts[index] end
     if stockCountedLive >= totalTarget or dealerCount >= dealerTarget then
@@ -5687,6 +6057,8 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         startBikeJackTest(player)
     elseif action == "dealertest" and isElement(player) then
         startDealerTest(player)
+    elseif action == "coptest" and isElement(player) then
+        startCopTest(player)
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do
@@ -5705,6 +6077,9 @@ addEventHandler("onResourceStart", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
+    if copTest then
+        finishCopTest("CANCEL", "resource-stop")
+    end
     if stopDealerTest then
         stopDealerTest("CANCEL", "resource-stop")
     end
