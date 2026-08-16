@@ -18,12 +18,14 @@
 
 // temporary
 class CAnimBlendAssociation;
+class CPedSAInterface;
 typedef DWORD CTaskUtilityLineUpPedWithCar;
 
 #define FUNC_CTaskComplexWanderStandard__Constructor 0x48E4F0
 #define FUNC_CTaskComplexWanderStandard__Destructor  0x48E600
 #define FUNC_CTaskComplexWanderGang__Constructor     0x66F5C0
 #define FUNC_CTaskComplexBeInGroup__Constructor      0x632E50
+#define FUNC_CTaskComplexBeInCouple__Constructor     0x6836F0
 
 #define FUNC_CTaskComplexWander__Constructor        0x66F450
 #define FUNC_CTaskComplexWander__DeletingDestructor 0x66F4A0
@@ -160,6 +162,30 @@ class CTaskComplexBeInGroupSA : public virtual CTaskComplexSA
 {
 public:
     CTaskComplexBeInGroupSA(int groupId, bool isLeader);
+};
+
+class CTaskComplexBeInCoupleSAInterface : public CTaskComplexSAInterface
+{
+public:
+    std::uint32_t    m_opaqueWalkSide;
+    CPedSAInterface* m_partner;
+    bool             m_isLeader;
+    bool             m_holdHands;
+    bool             m_lookAtEachOther;
+    unsigned char    m_padding17;
+    float            m_giveUpDistance;
+    unsigned char    m_previousSide;
+    unsigned char    m_padding1D[3];
+};
+static_assert(offsetof(CTaskComplexBeInCoupleSAInterface, m_partner) == 0x10, "Invalid BeInCouple partner offset");
+static_assert(offsetof(CTaskComplexBeInCoupleSAInterface, m_isLeader) == 0x14, "Invalid BeInCouple leader offset");
+static_assert(offsetof(CTaskComplexBeInCoupleSAInterface, m_giveUpDistance) == 0x18, "Invalid BeInCouple distance offset");
+static_assert(sizeof(CTaskComplexBeInCoupleSAInterface) == 0x20, "Invalid BeInCouple task size");
+
+class CTaskComplexBeInCoupleSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexBeInCoupleSA(CPed* partner, bool isLeader, bool holdHands = true, bool lookAtEachOther = true, float giveUpDistance = 10.0f);
 };
 
 // Keep these layouts explicit: GTA's constructors initialise memory allocated by

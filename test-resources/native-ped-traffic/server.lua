@@ -244,10 +244,14 @@ local dealerTest = false
 local nextDealerTestId = 0
 local copTest = false
 local nextCopTestId = 0
+local coupleTest = false
+local nextCoupleTestId = 0
+local nextCoupleRelationId = 0
 local stopResidencyTest
 local stopBikeJackTest
 local stopDealerTest
 local failDealerTest
+local finishCoupleTest
 local startBikeJackSeatConvergence
 local stats = {
     requests = 0,
@@ -3035,6 +3039,7 @@ local function setEnabled(value, actor)
             pendingNativeBikeJacks = {}
             populationProfiles = {}
             populationWorldRevisions = {}
+            if coupleTest then finishCoupleTest("CANCEL", "traffic-disabled") end
         end
         return
     end
@@ -3043,6 +3048,9 @@ local function setEnabled(value, actor)
         sendPopulationWorldState(root)
     end
     if not enabled then
+        if coupleTest then
+            finishCoupleTest("CANCEL", "traffic-disabled")
+        end
         if stopDealerTest then
             stopDealerTest("CANCEL", "traffic-disabled")
         end
@@ -4611,6 +4619,9 @@ addEventHandler("onElementDestroy", root, function()
 end)
 
 addEventHandler("onPlayerQuit", root, function()
+    if coupleTest and (source == coupleTest.players[1] or source == coupleTest.players[2]) then
+        finishCoupleTest("FAIL", "client-left")
+    end
     if dealerTest and (source == dealerTest.players[1] or source == dealerTest.players[2]) then
         failDealerTest("client-left")
     end
@@ -4714,7 +4725,7 @@ setTimer(function()
         clearTraffic(convergingPlayers > 0 and "world-convergence-timeout" or "no-eligible-player")
         return
     end
-    if dealerTest or copTest then
+    if dealerTest or copTest or coupleTest then
         return
     end
 
@@ -5057,6 +5068,7 @@ local function restoreCopTestPlayers(test)
             setElementPosition(player, state.x, state.y, state.z)
             setElementRotation(player, state.rx, state.ry, state.rz)
             setElementFrozen(player, state.frozen)
+            setCameraTarget(player, player)
         end
     end
     if test.savedTime then setTime(test.savedTime[1], test.savedTime[2]) end
@@ -5413,6 +5425,477 @@ setTimer(function()
         test.phase = "handoff-sample"
         scheduleCopTestSamples(test, "handoff", "handoff-sample")
     end
+end, 200, 0)
+
+local COUPLE_TEST_POSITION = {x = 2528.5, y = -1767.5, z = 13.38}
+
+local function restoreCoupleTestPlayers(test)
+    for player, state in pairs(test.savedPlayers or {}) do
+        if isElement(player) then
+            setElementDimension(player, state.dimension)
+            setElementInterior(player, state.interior)
+            setElementPosition(player, state.x, state.y, state.z)
+            setElementRotation(player, state.rx, state.ry, state.rz)
+            setElementFrozen(player, state.frozen)
+            setCameraTarget(player, player)
+        end
+    end
+    if test.savedTime then setTime(test.savedTime[1], test.savedTime[2]) end
+end
+
+local function destroyCoupleTestPeds(test)
+    for _, ped in ipairs(test.peds or {}) do
+        if isElement(ped) then destroyElement(ped) end
+    end
+end
+
+finishCoupleTest = function(result, reason)
+    local test = coupleTest
+    if not test then return end
+    coupleTest = false
+    if result ~= "PASS" then
+        if isElement(test.owner) then
+            triggerClientEvent(test.owner, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
+                               "couple-test-failed")
+        end
+        destroyCoupleTestPeds(test)
+    end
+    restoreCoupleTestPlayers(test)
+    writePopulationTrace("couple_test_result", {
+        scenario_id = test.id,
+        result = result,
+        reason = reason,
+        relation_id = test.relationId,
+        initial_epoch = 1,
+        final_epoch = test.relationEpoch,
+        leader_index = test.leaderIndex or false,
+        cleanup_acks = test.cleanupAckCount or 0,
+        pair_cardinality = #test.peds,
+        owner_release_before_acquire = test.ownerAReleased == true,
+        initial_active = test.initialActive == true,
+        handoff_active = test.handoffActive == true,
+        initial_soak_samples = test.soakCounts and test.soakCounts.initial or 0,
+        handoff_soak_samples = test.soakCounts and test.soakCounts.handoff or 0,
+        initial_distance_travelled = test.soakDistanceTravelled and test.soakDistanceTravelled.initial or 0,
+        handoff_distance_travelled = test.soakDistanceTravelled and test.soakDistanceTravelled.handoff or 0,
+        max_pair_distance = test.maxPairDistance or 0,
+        follower_sprint_samples = test.followerSprintSamples or 0,
+        observer_fast_gait_samples_initial = test.observerFastGaitSamples and test.observerFastGaitSamples.initial or 0,
+        observer_fast_gait_samples_handoff = test.observerFastGaitSamples and test.observerFastGaitSamples.handoff or 0,
+        dissolved = test.dissolved == true,
+    })
+    local message = ("Couple test %s: %s (scenario %d)"):format(result, tostring(reason), test.id)
+    outputChatBox(message, root, result == "PASS" and 80 or 255, result == "PASS" and 220 or 80, 120)
+    log(message, true)
+end
+
+local function beginCoupleTestCleanup(test)
+    if coupleTest ~= test or test.phase == "cleanup" then return end
+    test.phase = "cleanup"
+    destroyCoupleTestPeds(test)
+    local trafficIds = {test.trafficIds[1], test.trafficIds[2]}
+    for _, player in ipairs(test.players) do
+        triggerClientEvent(player, "pedTraffic:coupleTestCleanup", resourceRoot, test.id, test.relationId, trafficIds)
+    end
+end
+
+local function requestCoupleTestSamples(test, phase)
+    test.sampleSequence = test.sampleSequence + 1
+    test.pendingSample = {id = test.sampleSequence, phase = phase, samples = {}, requestedAt = getTickCount()}
+    for _, player in ipairs(test.players) do
+        triggerClientEvent(player, "pedTraffic:coupleTestSample", resourceRoot, test.id, test.sampleSequence, test.relationId,
+                           test.relationEpoch, test.peds[1], test.peds[2], phase)
+    end
+end
+
+local function scheduleCoupleTestSamples(test, phase, delay)
+    setTimer(function()
+        if coupleTest == test and not test.pendingSample then requestCoupleTestSamples(test, phase) end
+    end, delay or 250, 1)
+end
+
+addEvent("pedTraffic:coupleEvidence", true)
+addEventHandler("pedTraffic:coupleEvidence", resourceRoot, function(relationId, relationEpoch, evidence, data)
+    local test = coupleTest
+    if not test or relationId ~= test.relationId or relationEpoch ~= test.relationEpoch or client ~= test.owner or
+        type(data) ~= "table" then
+        return
+    end
+    writePopulationTrace("couple_test_evidence", {
+        scenario_id = test.id,
+        relation_id = relationId,
+        relation_epoch = relationEpoch,
+        owner_id = getPopulationClientId(client),
+        phase = test.phase,
+        evidence = evidence,
+        leader_index = data.leaderIndex or false,
+        walk_speeds = data.walkSpeeds or false,
+        native_diagnostic = data.nativeDiagnostic or false,
+    })
+    if evidence == "failure" or evidence == "ownership-lost" then
+        return finishCoupleTest("FAIL", tostring(data.reason or evidence))
+    end
+    if evidence == "accepted" then
+        local leaderIndex = tonumber(data.leaderIndex)
+        local speeds = data.walkSpeeds
+        if (leaderIndex ~= 1 and leaderIndex ~= 2) or type(speeds) ~= "table" or tonumber(speeds[1]) == nil or
+            tonumber(speeds[2]) == nil then
+            return finishCoupleTest("FAIL", "invalid-couple-readiness")
+        end
+        if test.leaderIndex and test.leaderIndex ~= leaderIndex then
+            return finishCoupleTest("FAIL", "leader-changed-during-handoff")
+        end
+        test.leaderIndex = leaderIndex
+        test.walkSpeeds = {tonumber(speeds[1]), tonumber(speeds[2])}
+        if test.phase == "await-owner-a" then
+            test.phase = "soak-initial"
+            scheduleCoupleTestSamples(test, "soak-initial", 500)
+        elseif test.phase == "await-owner-b" then
+            test.phase = "soak-handoff"
+            scheduleCoupleTestSamples(test, "soak-handoff", 500)
+        end
+    elseif evidence == "released" and test.phase == "revoke-owner-a" and client == test.ownerA then
+        test.ownerAReleased = true
+        test.owner = test.ownerB
+        test.relationEpoch = test.relationEpoch + 1
+        for _, ped in ipairs(test.peds) do
+            setElementData(ped, "neon:ambientPedRelationEpoch", test.relationEpoch)
+            if not setElementSyncer(ped, test.ownerB, true) then
+                return finishCoupleTest("FAIL", "couple-handoff-syncer-refused")
+            end
+        end
+        test.phase = "await-owner-b"
+        triggerClientEvent(test.ownerB, "pedTraffic:assignCouple", resourceRoot, test.relationId, test.relationEpoch,
+                           test.peds[1], test.peds[2], test.leaderIndex, "couple-test-handoff")
+        triggerClientEvent(test.ownerA, "pedTraffic:assignCouplePresentation", resourceRoot, test.relationId,
+                           test.relationEpoch, test.peds[1], test.peds[2], "couple-test-handoff-observer")
+    elseif evidence == "dissolved" and test.phase == "await-dissolution" then
+        test.dissolved = true
+        writePopulationTrace("couple_test_dissolved", {
+            scenario_id = test.id,
+            relation_id = test.relationId,
+            relation_epoch = test.relationEpoch,
+            owner_id = getPopulationClientId(client),
+            reason = data.nativeDiagnostic and data.nativeDiagnostic.reason or "native-task-ended",
+        })
+        setTimer(function()
+            if coupleTest == test then beginCoupleTestCleanup(test) end
+        end, 250, 1)
+    end
+end)
+
+local function validateCoupleTestSample(test, player, data, owner)
+    if type(data) ~= "table" or data.relationId ~= test.relationId or data.relationEpoch ~= test.relationEpoch or
+        type(data.members) ~= "table" or type(data.members[1]) ~= "table" or type(data.members[2]) ~= "table" then
+        return false, "malformed-sample"
+    end
+    if owner then
+        if not data.assignment or not data.assignmentAccepted or not data.active or data.leaderIndex ~= test.leaderIndex then
+            return false, "owner-relation-inactive"
+        end
+        local diagnostic = data.diagnostic
+        if type(diagnostic) ~= "table" or not diagnostic.active or type(diagnostic.members) ~= "table" then
+            return false, "owner-diagnostic-inactive"
+        end
+        for index = 1, 2 do
+            local member = data.members[index]
+            local nativeMember = diagnostic.members[index]
+            if not member.present or not member.syncer or not member.profileActive or not member.hasCouple or
+                type(nativeMember) ~= "table" or nativeMember.primaryTaskType ~= 1215 or not nativeMember.primaryTaskMatchesLease or
+                not nativeMember.reciprocalPartner or not nativeMember.leaderRoleMatches then
+                return false, "owner-member-mismatch-" .. tostring(index)
+            end
+        end
+        local leader = diagnostic.members[test.leaderIndex]
+        local follower = diagnostic.members[test.leaderIndex == 1 and 2 or 1]
+        if leader.subTaskType ~= 912 or follower.subTaskType ~= 1208 then
+            return false, "native-subtasks-not-ready"
+        end
+    else
+        if data.assignment or data.assignmentAccepted or data.active then
+            return false, "observer-native-ai-active"
+        end
+        if not data.presentation or data.presentationActive then return false, "observer-presentation-unsafe" end
+        for index = 1, 2 do
+            if data.members[index].syncer or data.members[index].hasCouple or data.members[index].hasWalkAlongside or
+                data.members[index].hasWander then
+                return false, "observer-native-task-active-" .. tostring(index)
+            end
+        end
+    end
+    return true
+end
+
+local function recordCoupleSoakSample(test, phase, data, observerData)
+    local key = phase == "soak-initial" and "initial" or "handoff"
+    local leader = data.members[test.leaderIndex]
+    local follower = data.members[test.leaderIndex == 1 and 2 or 1]
+    local observerFollower = type(observerData) == "table" and type(observerData.members) == "table" and
+                                 observerData.members[test.leaderIndex == 1 and 2 or 1] or false
+    local pairDistance = tonumber(data.pairDistance)
+    if not pairDistance or pairDistance < 0 or pairDistance > 10 then
+        return false, "couple-soak-distance-invalid"
+    end
+    test.maxPairDistance = math.max(test.maxPairDistance or 0, pairDistance)
+    if tostring(follower.moveState) == "sprint" then
+        test.followerSprintSamples = (test.followerSprintSamples or 0) + 1
+    end
+    local observerMoveState = observerFollower and tostring(observerFollower.moveState) or "unavailable"
+    if observerMoveState == "run" or observerMoveState == "sprint" then
+        test.observerFastGaitSamples[key] = test.observerFastGaitSamples[key] + 1
+    end
+
+    local x, y = tonumber(leader.x), tonumber(leader.y)
+    if not x or not y then return false, "couple-soak-position-missing" end
+    local previous = test.lastSoakLeaderPosition[key]
+    if previous then
+        local stepDistance = getDistanceBetweenPoints2D(previous.x, previous.y, x, y)
+        -- The harness samples once per second. A multi-metre discontinuity
+        -- here is a sync/ownership jump, not ordinary couple locomotion.
+        if stepDistance > 5 then return false, "couple-soak-transform-jump" end
+        test.soakDistanceTravelled[key] = test.soakDistanceTravelled[key] + stepDistance
+    end
+    test.lastSoakLeaderPosition[key] = {x = x, y = y}
+    test.soakCounts[key] = test.soakCounts[key] + 1
+    writePopulationTrace("couple_test_soak", {
+        scenario_id = test.id,
+        relation_id = test.relationId,
+        relation_epoch = test.relationEpoch,
+        owner_id = getPopulationClientId(test.owner),
+        phase = key,
+        sample = test.soakCounts[key],
+        pair_distance = pairDistance,
+        leader_move_state = leader.moveState,
+        follower_move_state = follower.moveState,
+        observer_follower_move_state = observerMoveState,
+        leader_speed = leader.speed,
+        follower_speed = follower.speed,
+        distance_travelled = test.soakDistanceTravelled[key],
+    })
+    return true
+end
+
+addEvent("pedTraffic:coupleTestSampleResult", true)
+addEventHandler("pedTraffic:coupleTestSampleResult", resourceRoot, function(testId, sampleId, phase, data)
+    local test = coupleTest
+    local pending = test and test.pendingSample or false
+    if not test or test.id ~= testId or not pending or pending.id ~= sampleId or pending.phase ~= phase or
+        (client ~= test.players[1] and client ~= test.players[2]) or pending.samples[client] then
+        return
+    end
+    pending.samples[client] = data
+    writePopulationTrace("couple_test_sample", {
+        scenario_id = test.id,
+        sample_id = sampleId,
+        phase = phase,
+        relation_id = test.relationId,
+        relation_epoch = test.relationEpoch,
+        player_id = getPopulationClientId(client),
+        owner = client == test.owner,
+        data = data,
+    })
+    if not pending.samples[test.players[1]] or not pending.samples[test.players[2]] then return end
+    test.pendingSample = nil
+
+    local allValid = true
+    local firstReason = false
+    for _, player in ipairs(test.players) do
+        local valid, reason = validateCoupleTestSample(test, player, pending.samples[player], player == test.owner)
+        if not valid then
+            allValid = false
+            firstReason = firstReason or reason
+        end
+    end
+    if not allValid then
+        test.sampleRetries = (test.sampleRetries or 0) + 1
+        if firstReason == "native-subtasks-not-ready" and test.sampleRetries <= 20 then
+            scheduleCoupleTestSamples(test, phase, 250)
+            return
+        end
+        return finishCoupleTest("FAIL", firstReason or "sample-mismatch")
+    end
+    test.sampleRetries = 0
+
+    if phase == "soak-initial" or phase == "soak-handoff" then
+        local observer = test.owner == test.players[1] and test.players[2] or test.players[1]
+        local recorded, recordReason = recordCoupleSoakSample(test, phase, pending.samples[test.owner], pending.samples[observer])
+        if not recorded then return finishCoupleTest("FAIL", recordReason) end
+        local key = phase == "soak-initial" and "initial" or "handoff"
+        if test.soakCounts[key] < 8 then
+            scheduleCoupleTestSamples(test, phase, 1000)
+        elseif test.observerFastGaitSamples[key] > 1 then
+            return finishCoupleTest("FAIL", "couple-follower-fast-gait-" .. key)
+        elseif phase == "soak-initial" then
+            test.initialActive = true
+            test.phase = "revoke-owner-a"
+            triggerClientEvent(test.ownerA, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
+                               "couple-test-handoff")
+        else
+            test.handoffActive = true
+            test.phase = "separating"
+            triggerClientEvent(test.ownerB, "pedTraffic:coupleTestSeparate", resourceRoot, test.id, test.relationId,
+                               test.relationEpoch, test.peds[1], test.peds[2])
+        end
+    end
+end)
+
+addEvent("pedTraffic:coupleTestSeparated", true)
+addEventHandler("pedTraffic:coupleTestSeparated", resourceRoot, function(testId, relationId, relationEpoch, moved)
+    local test = coupleTest
+    if not test or test.id ~= testId or relationId ~= test.relationId or relationEpoch ~= test.relationEpoch or
+        client ~= test.ownerB or test.phase ~= "separating" then
+        return
+    end
+    if moved ~= true then return finishCoupleTest("FAIL", "separation-stimulus-refused") end
+    test.phase = "await-dissolution"
+    writePopulationTrace("couple_test_separation", {
+        scenario_id = test.id,
+        relation_id = test.relationId,
+        relation_epoch = test.relationEpoch,
+        distance = 10.25,
+    })
+end)
+
+addEvent("pedTraffic:coupleTestCleanupResult", true)
+addEventHandler("pedTraffic:coupleTestCleanupResult", resourceRoot, function(testId, relationId, data)
+    local test = coupleTest
+    if not test or test.id ~= testId or relationId ~= test.relationId or test.phase ~= "cleanup" or
+        (client ~= test.players[1] and client ~= test.players[2]) or test.cleanupAcks[client] or type(data) ~= "table" then
+        return
+    end
+    if data.elementPresent or data.assignmentPresent or data.profilePresent then
+        return finishCoupleTest("FAIL", "couple-cleanup-residual-client-" .. tostring(getPopulationClientId(client)))
+    end
+    test.cleanupAcks[client] = true
+    test.cleanupAckCount = test.cleanupAckCount + 1
+    writePopulationTrace("couple_test_cleanup_ack", {
+        scenario_id = test.id,
+        relation_id = test.relationId,
+        player_id = getPopulationClientId(client),
+        accepted = true,
+    })
+    if test.cleanupAckCount == 2 then finishCoupleTest("PASS", "couple-presentation-soak-handoff-dissolution-cleanup") end
+end)
+
+local function startCoupleTest(player)
+    if coupleTest or dealerTest or copTest then
+        return outputChatBox("Another population harness is already running", player, 255, 160, 80)
+    end
+    local players = getElementsByType("player")
+    if #players ~= 2 then return outputChatBox("The couple test requires exactly two connected clients", player, 255, 160, 80) end
+    for _, candidate in ipairs(players) do
+        if isPedDead(candidate) or isPedInVehicle(candidate) then
+            return outputChatBox("Both couple-test clients must be alive and on foot", player, 255, 160, 80)
+        end
+    end
+    if not debugEnabled then
+        debugEnabled = true
+        triggerClientEvent(root, "pedTraffic:setDebug", resourceRoot, true)
+    end
+    resetPopulationTrace()
+    clearTraffic("couple-test-reset")
+    if not enabled then setEnabled(true, player) end
+
+    nextCoupleTestId = nextCoupleTestId + 1
+    nextCoupleRelationId = nextCoupleRelationId + 1
+    local hour, minute = getTime()
+    local test = {
+        id = nextCoupleTestId,
+        relationId = nextCoupleRelationId,
+        relationEpoch = 1,
+        players = players,
+        ownerA = players[1],
+        ownerB = players[2],
+        owner = players[1],
+        peds = {},
+        trafficIds = {},
+        savedPlayers = {},
+        savedTime = {hour, minute},
+        startedAt = getTickCount(),
+        phase = "creating",
+        sampleSequence = 0,
+        cleanupAcks = {},
+        cleanupAckCount = 0,
+        soakCounts = {initial = 0, handoff = 0},
+        soakDistanceTravelled = {initial = 0, handoff = 0},
+        lastSoakLeaderPosition = {},
+        maxPairDistance = 0,
+        followerSprintSamples = 0,
+        observerFastGaitSamples = {initial = 0, handoff = 0},
+    }
+    coupleTest = test
+    setTime(12, 0)
+    for index, candidate in ipairs(players) do
+        local x, y, z = getElementPosition(candidate)
+        local rx, ry, rz = getElementRotation(candidate)
+        test.savedPlayers[candidate] = {x = x, y = y, z = z, rx = rx, ry = ry, rz = rz, dimension = getElementDimension(candidate),
+                                        interior = getElementInterior(candidate), frozen = isElementFrozen(candidate)}
+        setElementDimension(candidate, 0)
+        setElementInterior(candidate, 0)
+        -- A nearby frozen player is still a real ped to GTA's wander scanner.
+        -- The former four-metre viewing position made the leader enter
+        -- AvoidOtherPedWhileWandering and abort the retail relation before the
+        -- locomotion soak had even started. Keep the actors physically remote
+        -- and give both clients a non-physical camera view of the fixture.
+        setElementPosition(candidate, COUPLE_TEST_POSITION.x - 45 + (index - 1) * 2, COUPLE_TEST_POSITION.y - 45,
+                           COUPLE_TEST_POSITION.z)
+        setElementFrozen(candidate, true)
+        setCameraMatrix(candidate, COUPLE_TEST_POSITION.x, COUPLE_TEST_POSITION.y - 8, COUPLE_TEST_POSITION.z + 5,
+                        COUPLE_TEST_POSITION.x, COUPLE_TEST_POSITION.y, COUPLE_TEST_POSITION.z + 0.8)
+    end
+
+    -- MALE01/SENSIBLE_GUY and VBFYCRP/SUIT_GIRL pass the retail declared-sex,
+    -- pedstat and non-skater filters. BFORI/COWARD was useful visually but is
+    -- rejected by ArePedStatsCompatible and could never be an automatic pair.
+    local models = {7, 11}
+    for index = 1, 2 do
+        local ped = createPed(models[index], COUPLE_TEST_POSITION.x + (index - 1), COUPLE_TEST_POSITION.y,
+                              COUPLE_TEST_POSITION.z, 0)
+        if not ped then
+            destroyCoupleTestPeds(test)
+            return finishCoupleTest("FAIL", "couple-create-ped-" .. tostring(index))
+        end
+        nextPedId = nextPedId + 1
+        test.peds[index] = ped
+        test.trafficIds[index] = nextPedId
+        setElementDimension(ped, 0)
+        setElementInterior(ped, 0)
+        setElementData(ped, "neon:ambientPedPopulationClass", "civilian")
+        setElementData(ped, "neon:ambientPedLogicalType", index == 1 and 4 or 5)
+        setElementData(ped, "neon:ambientPedTrafficId", nextPedId)
+        setElementData(ped, "neon:ambientPedCatalogRevision", populationCatalog.revision)
+        setElementData(ped, "neon:ambientPedRelationId", test.relationId)
+        setElementData(ped, "neon:ambientPedRelationEpoch", test.relationEpoch)
+        setElementData(ped, "neon:ambientPedRelationRole", index == 1 and "a" or "b")
+        setElementData(ped, "neon:ambientPedTraffic", true)
+        if not setPedFightingStyle(ped, 4) or not setPedUseNativeWalkingStyle(ped, true) or
+            not setElementSyncer(ped, test.ownerA, true) then
+            destroyCoupleTestPeds(test)
+            return finishCoupleTest("FAIL", "couple-initialization-refused-" .. tostring(index))
+        end
+    end
+
+    test.phase = "await-owner-a"
+    writePopulationTrace("couple_test_started", {
+        scenario_id = test.id,
+        relation_id = test.relationId,
+        relation_epoch = test.relationEpoch,
+        traffic_ids = test.trafficIds,
+        models = models,
+        owner_a = getPopulationClientId(test.ownerA),
+        owner_b = getPopulationClientId(test.ownerB),
+    })
+    triggerClientEvent(test.ownerA, "pedTraffic:assignCouple", resourceRoot, test.relationId, test.relationEpoch,
+                       test.peds[1], test.peds[2], false, "couple-test-initial")
+    triggerClientEvent(test.ownerB, "pedTraffic:assignCouplePresentation", resourceRoot, test.relationId,
+                       test.relationEpoch, test.peds[1], test.peds[2], "couple-test-initial-observer")
+    outputChatBox("Couple test started: two walking soak phases, handoff and strict 10m dissolution", root, 120, 220, 255)
+end
+
+setTimer(function()
+    local test = coupleTest
+    if not test then return end
+    if getTickCount() - test.startedAt > 45000 then finishCoupleTest("FAIL", "couple-test-timeout-" .. test.phase) end
 end, 200, 0)
 
 setTimer(function()
@@ -6129,6 +6612,8 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         startDealerTest(player)
     elseif action == "coptest" and isElement(player) then
         startCopTest(player)
+    elseif action == "coupletest" and isElement(player) then
+        startCoupleTest(player)
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do
@@ -6147,6 +6632,9 @@ addEventHandler("onResourceStart", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
+    if coupleTest then
+        finishCoupleTest("CANCEL", "resource-stop")
+    end
     if copTest then
         finishCopTest("CANCEL", "resource-stop")
     end

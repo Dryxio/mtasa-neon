@@ -318,6 +318,65 @@ struct SAmbientPedNativeGroupDiagnostic
     SAmbientPedNativeGroupMemberDiagnostic members[AMBIENT_PED_GROUP_MAX_MEMBERS]{};
 };
 
+enum class EAmbientPedNativeCoupleDiagnosticStatus : unsigned char
+{
+    Active,
+    ResourceLeaseMissing,
+    ResourceElementMissing,
+    ResourceElementNotPed,
+    ResourcePedNotSyncing,
+    ResourceGamePedMissing,
+    GameLeaseMissing,
+    LeaseMemberMismatch,
+    PrimaryTaskMissing,
+    PrimaryTaskReplaced,
+    PartnerMismatch,
+    RoleMismatch,
+};
+
+struct SAmbientPedNativeCoupleValidation
+{
+    bool  compatible{};
+    bool  aLeader{};
+    float walkSpeedA{};
+    float walkSpeedB{};
+};
+
+struct SAmbientPedNativeCoupleMemberDiagnostic
+{
+    bool          resourceElementPresent{};
+    bool          resourceElementIsPed{};
+    bool          resourcePedSyncing{};
+    bool          gamePedPresent{};
+    bool          leaseMemberMatches{};
+    bool          primaryTaskMatchesLease{};
+    bool          reciprocalPartner{};
+    bool          leaderRoleMatches{};
+    std::uint32_t gamePedAddress{};
+    std::uint32_t expectedGamePedAddress{};
+    std::uint32_t partnerAddress{};
+    std::uint32_t expectedPartnerAddress{};
+    std::uint32_t primaryTaskAddress{};
+    std::uint32_t expectedPrimaryTaskAddress{};
+    int           primaryTaskType{-1};
+    int           subTaskType{-1};
+    float         walkSpeed{};
+};
+
+// Pair tasks contain GTA safe references and therefore remain strictly local
+// to one process. This pull-only snapshot exposes scalar evidence for handoff
+// and cleanup without ever serializing a CPed or CTask pointer.
+struct SAmbientPedNativeCoupleDiagnostic
+{
+    EAmbientPedNativeCoupleDiagnosticStatus status{EAmbientPedNativeCoupleDiagnosticStatus::ResourceLeaseMissing};
+    bool                                    active{};
+    bool                                    resourceLeasePresent{};
+    bool                                    gameLeasePresent{};
+    bool                                    aLeader{};
+    unsigned int                            nativeCoupleId{};
+    SAmbientPedNativeCoupleMemberDiagnostic members[2]{};
+};
+
 // PlaceRandomGroup normally creates local CPeds. Neon only asks GTA for the
 // placement/model proposal, then lets the server create the network elements.
 struct SAmbientPedGroupSpawnCandidate
@@ -662,4 +721,20 @@ public:
     // oracle lets a resource collect a veto from every nearby client without
     // creating an unmanaged GTA entity.
     virtual bool IsAmbientPedSphereVisible(const CVector& position, float radius) = 0;
+
+    // Append-only pair lease for wrapper-safe civilian couples. The server
+    // owns relation identity and epochs; Game SA owns only process-local GTA
+    // tasks and safe references for the current syncer.
+    virtual bool ValidateAmbientPedCivilianCouple(CPed* a, CPed* b, SAmbientPedNativeCoupleValidation& validation) const = 0;
+    virtual bool AcquireAmbientPedCivilianCouple(CPed* a, CPed* b, bool aLeader, unsigned int& nativeCoupleId) = 0;
+    virtual bool ReleaseAmbientPedCivilianCouple(unsigned int nativeCoupleId, CPed* a, CPed* b) = 0;
+    virtual bool IsAmbientPedCivilianCoupleActive(unsigned int nativeCoupleId, CPed* a, CPed* b) const = 0;
+    virtual void GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId, CPed* a, CPed* b, SAmbientPedNativeCoupleDiagnostic& diagnostic) const = 0;
+
+    // Observers reproduce only the retail hand IK. They never receive either
+    // BeInCouple primary task, so relation presentation cannot execute AI.
+    virtual bool AcquireAmbientPedCivilianCouplePresentation(CPed* a, CPed* b, unsigned int& nativePresentationId) = 0;
+    virtual bool UpdateAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) = 0;
+    virtual bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) = 0;
+    virtual bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const = 0;
 };

@@ -8,6 +8,8 @@ local latestPopulationProfile = false
 local assignments = {}
 local groupAssignments = {}
 local groupByPed = {}
+local coupleAssignments = {}
+local coupleByPed = {}
 local nativeEventProfiles = {}
 local nativeEventProfileNames = {}
 local avoidanceStates = {}
@@ -529,6 +531,180 @@ local function releaseGroupAssignment(task, releaseNativeGroup)
     end
 end
 
+local function reportCouple(task, evidence, data)
+    triggerServerEvent("pedTraffic:coupleEvidence", resourceRoot, task.id, task.epoch, evidence, data or {})
+end
+
+local function captureCoupleDiagnostic(task)
+    if not task.token or type(getPedNativeCoupleDiagnostic) ~= "function" then
+        return false
+    end
+    local diagnostic = getPedNativeCoupleDiagnostic(task.token)
+    if type(diagnostic) ~= "table" then
+        return false
+    end
+    local compact = {
+        active = diagnostic.active == true,
+        reason = tostring(diagnostic.reason or "unknown"),
+        nativeCoupleId = tonumber(diagnostic.nativeCoupleId) or -1,
+        resourceLeasePresent = diagnostic.resourceLeasePresent == true,
+        gameLeasePresent = diagnostic.gameLeasePresent == true,
+        aLeader = diagnostic.aLeader == true,
+        members = {},
+    }
+    for index, member in ipairs(diagnostic.members or {}) do
+        compact.members[index] = {
+            resourceElementPresent = member.resourceElementPresent == true,
+            resourceElementIsPed = member.resourceElementIsPed == true,
+            resourcePedSyncing = member.resourcePedSyncing == true,
+            gamePedPresent = member.gamePedPresent == true,
+            leaseMemberMatches = member.leaseMemberMatches == true,
+            primaryTaskMatchesLease = member.primaryTaskMatchesLease == true,
+            reciprocalPartner = member.reciprocalPartner == true,
+            leaderRoleMatches = member.leaderRoleMatches == true,
+            primaryTaskType = tonumber(member.primaryTaskType) or -1,
+            subTaskType = tonumber(member.subTaskType) or -1,
+            walkSpeed = tonumber(member.walkSpeed) or -1,
+        }
+    end
+    return compact
+end
+
+local function releaseCoupleAssignment(task, releaseNative)
+    clearTimer(task, "retryTimer")
+    clearTimer(task, "monitorTimer")
+    if releaseNative and task.token then
+        if task.presentation and type(releasePedNativeCouplePresentation) == "function" then
+            releasePedNativeCouplePresentation(task.token)
+        elseif not task.presentation and type(releasePedNativeCouple) == "function" then
+            releasePedNativeCouple(task.token)
+        end
+    end
+    task.token = nil
+    task.accepted = false
+    for _, ped in ipairs(task.peds) do
+        if task.leases[ped] then
+            releaseElementStreamingLease(task.leases[ped])
+            task.leases[ped] = nil
+        end
+        if coupleByPed[ped] == task then
+            coupleByPed[ped] = nil
+        end
+    end
+    if coupleAssignments[task.id] == task then
+        coupleAssignments[task.id] = nil
+    end
+end
+
+local function failCoupleAssignment(task, reason)
+    stats.failures = stats.failures + 1
+    local diagnostic = captureCoupleDiagnostic(task)
+    reportCouple(task, "failure", {reason = reason, nativeDiagnostic = diagnostic or nil})
+    releaseCoupleAssignment(task, true)
+end
+
+local function beginCoupleAssignment(task)
+    if coupleAssignments[task.id] ~= task then
+        return
+    end
+    if task.presentation then
+        -- Observer-side PointArm cannot safely create its secondary IK task on
+        -- CPlayerPed wrappers. Keep this assignment as presentation metadata
+        -- only until a task-free observer implementation exists.
+        task.accepted = true
+        return
+    end
+    if type(acquireElementStreamingLease) ~= "function" or type(releaseElementStreamingLease) ~= "function" or
+        type(setPedUseNativeWalkingStyle) ~= "function" or type(isPedNativeEventProfileActive) ~= "function" or
+        type(validatePedNativeCouple) ~= "function" or type(acquirePedNativeCouple) ~= "function" or
+        type(releasePedNativeCouple) ~= "function" or type(isPedNativeCoupleActive) ~= "function" or
+        type(getPedNativeCoupleDiagnostic) ~= "function" then
+        return failCoupleAssignment(task, "couple-native-api-missing")
+    end
+
+    local ready = true
+    for _, ped in ipairs(task.peds) do
+        if not isElement(ped) then
+            return failCoupleAssignment(task, "couple-member-missing")
+        end
+        if not acquireTrafficEventProfile(ped) then
+            return failCoupleAssignment(task, "couple-profile-refused")
+        end
+        if not task.leases[ped] then
+            task.leases[ped] = acquireElementStreamingLease(ped)
+        end
+        if not task.leases[ped] then
+            return failCoupleAssignment(task, "couple-streaming-lease-refused")
+        end
+        if not isElementStreamedIn(ped) or not isElementSyncer(ped) or
+            not isPedNativeEventProfileActive(ped, nativeEventProfiles[ped]) then
+            ready = false
+        end
+    end
+
+    if not ready then
+        if getTickCount() - task.requestedAt < 10000 then
+            clearTimer(task, "retryTimer")
+            task.retryTimer = setTimer(function() beginCoupleAssignment(task) end, 200, 1)
+            return
+        end
+        return failCoupleAssignment(task, "couple-stream-or-syncer-timeout")
+    end
+
+    for _, ped in ipairs(task.peds) do
+        if not setPedUseNativeWalkingStyle(ped, true) then
+            return failCoupleAssignment(task, "couple-native-walking-style-refused")
+        end
+    end
+
+    local validation = validatePedNativeCouple(task.peds[1], task.peds[2])
+    if type(validation) ~= "table" or validation.compatible ~= true or
+        (task.leaderIndex and tonumber(validation.leaderIndex) ~= task.leaderIndex) then
+        return failCoupleAssignment(task, "couple-native-validation-refused")
+    end
+    task.leaderIndex = tonumber(validation.leaderIndex)
+    task.walkSpeeds = {tonumber(validation.walkSpeedA) or -1, tonumber(validation.walkSpeedB) or -1}
+    task.token = acquirePedNativeCouple(task.peds[1], task.peds[2], task.leaderIndex)
+    if not task.token or not isPedNativeCoupleActive(task.token) then
+        return failCoupleAssignment(task, "couple-acquire-refused")
+    end
+
+    local diagnostic = captureCoupleDiagnostic(task)
+    if not diagnostic or not diagnostic.active then
+        return failCoupleAssignment(task, "couple-diagnostic-inactive")
+    end
+    task.accepted = true
+    reportCouple(task, "accepted", {
+        leaderIndex = task.leaderIndex,
+        walkSpeeds = task.walkSpeeds,
+        nativeDiagnostic = diagnostic,
+    })
+    task.monitorTimer = setTimer(function()
+        if coupleAssignments[task.id] ~= task then
+            return
+        end
+        for _, ped in ipairs(task.peds) do
+            if not isElement(ped) then
+                return releaseCoupleAssignment(task, true)
+            end
+            if not isElementSyncer(ped) then
+                reportCouple(task, "ownership-lost", {})
+                return releaseCoupleAssignment(task, true)
+            end
+        end
+        if not isPedNativeCoupleActive(task.token) then
+            local ended = captureCoupleDiagnostic(task)
+            reportCouple(task, "dissolved", {nativeDiagnostic = ended or nil})
+            releaseCoupleAssignment(task, true)
+            for _, ped in ipairs(task.peds) do
+                if isElement(ped) and isElementSyncer(ped) then
+                    setPedWander(ped, "walk", math.random(0, 7), true)
+                end
+            end
+        end
+    end, 100, 0)
+end
+
 local function failGroupAssignment(task, reason)
     stats.failures = stats.failures + 1
     stats.groupFailures = stats.groupFailures + 1
@@ -945,6 +1121,9 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
         airTestSessions = {}
         climbTestSessions = {}
         nativeDamageReplayReceipts = {}
+        local couples = {}
+        for _, task in pairs(coupleAssignments) do couples[#couples + 1] = task end
+        for _, task in ipairs(couples) do releaseCoupleAssignment(task, true) end
         local groups = {}
         for _, task in pairs(groupAssignments) do groups[#groups + 1] = task end
         for _, task in ipairs(groups) do releaseGroupAssignment(task, true) end
@@ -1376,6 +1555,204 @@ addEventHandler("pedTraffic:copTestCleanup", resourceRoot, function(testId, traf
             return
         end
         triggerServerEvent("pedTraffic:copTestCleanupResult", resourceRoot, testId, trafficId, {
+            elementPresent = elementPresent,
+            assignmentPresent = assignmentPresent,
+            profilePresent = profilePresent,
+        })
+    end
+    reportCleanup(1)
+end)
+
+addEvent("pedTraffic:assignCouple", true)
+addEventHandler("pedTraffic:assignCouple", resourceRoot, function(relationId, relationEpoch, pedA, pedB, leaderIndex, reason)
+    if not enabled or not isIntegerInRange(relationId, 1, 2147483647) or
+        not isIntegerInRange(relationEpoch, 1, 2147483647) or not isElement(pedA) or not isElement(pedB) or pedA == pedB or
+        leaderIndex ~= false and not isIntegerInRange(leaderIndex, 1, 2) then
+        return
+    end
+    local old = coupleAssignments[relationId]
+    if old then
+        if old.epoch == relationEpoch then
+            if old.accepted then
+                reportCouple(old, "accepted", {
+                    leaderIndex = old.leaderIndex,
+                    walkSpeeds = old.walkSpeeds,
+                    nativeDiagnostic = captureCoupleDiagnostic(old) or nil,
+                })
+            else
+                beginCoupleAssignment(old)
+            end
+            return
+        end
+        releaseCoupleAssignment(old, true)
+    end
+
+    local task = {
+        id = relationId,
+        epoch = relationEpoch,
+        peds = {pedA, pedB},
+        leaderIndex = leaderIndex ~= false and leaderIndex or nil,
+        reason = reason,
+        requestedAt = getTickCount(),
+        accepted = false,
+        leases = {},
+    }
+    coupleAssignments[relationId] = task
+    coupleByPed[pedA] = task
+    coupleByPed[pedB] = task
+    beginCoupleAssignment(task)
+end)
+
+addEvent("pedTraffic:assignCouplePresentation", true)
+addEventHandler("pedTraffic:assignCouplePresentation", resourceRoot, function(relationId, relationEpoch, pedA, pedB, reason)
+    if not enabled or not isIntegerInRange(relationId, 1, 2147483647) or
+        not isIntegerInRange(relationEpoch, 1, 2147483647) or not isElement(pedA) or not isElement(pedB) or pedA == pedB then
+        return
+    end
+    local old = coupleAssignments[relationId]
+    if old then
+        if old.epoch == relationEpoch and old.presentation then
+            if not old.accepted then beginCoupleAssignment(old) end
+            return
+        end
+        releaseCoupleAssignment(old, true)
+    end
+    local task = {
+        id = relationId,
+        epoch = relationEpoch,
+        peds = {pedA, pedB},
+        reason = reason,
+        requestedAt = getTickCount(),
+        accepted = false,
+        presentation = true,
+        leases = {},
+    }
+    coupleAssignments[relationId] = task
+    coupleByPed[pedA] = task
+    coupleByPed[pedB] = task
+    beginCoupleAssignment(task)
+end)
+
+addEvent("pedTraffic:revokeCouple", true)
+addEventHandler("pedTraffic:revokeCouple", resourceRoot, function(relationId, relationEpoch, reason)
+    local task = coupleAssignments[relationId]
+    if not task or task.epoch ~= relationEpoch then
+        return
+    end
+    local diagnostic = captureCoupleDiagnostic(task)
+    releaseCoupleAssignment(task, true)
+    reportCouple(task, "released", {reason = reason, nativeDiagnostic = diagnostic or nil})
+end)
+
+local function collectCoupleTestTasks(ped)
+    local tasks = {}
+    local hasCouple = false
+    local hasWalkAlongside = false
+    local hasWander = false
+    if type(getPedTask) ~= "function" or not isElement(ped) then
+        return tasks, hasCouple, hasWalkAlongside, hasWander
+    end
+    for slot = 0, 3 do
+        local hierarchy = {getPedTask(ped, "primary", slot)}
+        if hierarchy[1] ~= false then
+            for _, taskName in ipairs(hierarchy) do
+                tasks[#tasks + 1] = ("%d:%s"):format(slot, tostring(taskName))
+                hasCouple = hasCouple or taskName == "TASK_COMPLEX_BE_IN_COUPLE"
+                hasWalkAlongside = hasWalkAlongside or taskName == "TASK_COMPLEX_WALK_ALONGSIDE_PED"
+                hasWander = hasWander or taskName == "TASK_COMPLEX_WANDER" or taskName == "TASK_COMPLEX_WANDER_STANDARD"
+            end
+        end
+    end
+    return tasks, hasCouple, hasWalkAlongside, hasWander
+end
+
+addEvent("pedTraffic:coupleTestSample", true)
+addEventHandler("pedTraffic:coupleTestSample", resourceRoot, function(testId, sampleId, relationId, relationEpoch, pedA, pedB, phase)
+    local task = coupleAssignments[relationId]
+    local diagnostic = task and task.epoch == relationEpoch and captureCoupleDiagnostic(task) or false
+    local members = {}
+    for index, ped in ipairs({pedA, pedB}) do
+        local tasks, hasCouple, hasWalkAlongside, hasWander = collectCoupleTestTasks(ped)
+        local x, y, z = false, false, false
+        local vx, vy, vz = false, false, false
+        local speed = false
+        if isElement(ped) then
+            x, y, z = getElementPosition(ped)
+            vx, vy, vz = getElementVelocity(ped)
+            speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        end
+        members[index] = {
+            present = isElement(ped),
+            trafficId = isElement(ped) and getElementData(ped, "neon:ambientPedTrafficId") or false,
+            syncer = isElement(ped) and isElementSyncer(ped) or false,
+            profilePresent = isElement(ped) and nativeEventProfiles[ped] ~= nil or false,
+            profileActive = isElement(ped) and nativeEventProfiles[ped] ~= nil and
+                isPedNativeEventProfileActive(ped, nativeEventProfiles[ped]) == true or false,
+            hasCouple = hasCouple,
+            hasWalkAlongside = hasWalkAlongside,
+            hasWander = hasWander,
+            moveState = isElement(ped) and getPedMoveState(ped) or false,
+            x = x,
+            y = y,
+            z = z,
+            vx = vx,
+            vy = vy,
+            vz = vz,
+            speed = speed,
+            tasks = tasks,
+        }
+    end
+    local pairDistance = false
+    if members[1].x and members[2].x then
+        pairDistance = getDistanceBetweenPoints2D(members[1].x, members[1].y, members[2].x, members[2].y)
+    end
+    triggerServerEvent("pedTraffic:coupleTestSampleResult", resourceRoot, testId, sampleId, phase, {
+        relationId = relationId,
+        relationEpoch = relationEpoch,
+        assignment = task ~= nil and task.epoch == relationEpoch and not task.presentation,
+        assignmentAccepted = task ~= nil and task.epoch == relationEpoch and not task.presentation and task.accepted == true,
+        presentation = task ~= nil and task.epoch == relationEpoch and task.presentation == true,
+        presentationActive = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.accepted == true and
+            task.token ~= nil and isPedNativeCouplePresentationActive(task.token) == true or false,
+        leaderIndex = task and not task.presentation and task.leaderIndex or false,
+        active = diagnostic and diagnostic.active == true or false,
+        diagnostic = diagnostic or false,
+        pairDistance = pairDistance,
+        members = members,
+    })
+end)
+
+addEvent("pedTraffic:coupleTestSeparate", true)
+addEventHandler("pedTraffic:coupleTestSeparate", resourceRoot, function(testId, relationId, relationEpoch, pedA, pedB)
+    local task = coupleAssignments[relationId]
+    if not task or task.epoch ~= relationEpoch or not task.accepted or not isElement(pedA) or not isElement(pedB) or
+        not isElementSyncer(pedA) or not isElementSyncer(pedB) then
+        triggerServerEvent("pedTraffic:coupleTestSeparated", resourceRoot, testId, relationId, relationEpoch, false)
+        return
+    end
+    local x, y, z = getElementPosition(pedA)
+    local moved = setElementPosition(pedB, x + 10.25, y, z, false)
+    triggerServerEvent("pedTraffic:coupleTestSeparated", resourceRoot, testId, relationId, relationEpoch, moved == true)
+end)
+
+addEvent("pedTraffic:coupleTestCleanup", true)
+addEventHandler("pedTraffic:coupleTestCleanup", resourceRoot, function(testId, relationId, trafficIds)
+    local function reportCleanup(attempt)
+        local assignmentPresent = coupleAssignments[relationId] ~= nil
+        local elementPresent = false
+        local profilePresent = false
+        for ped in pairs(nativeEventProfiles) do
+            local trafficId = isElement(ped) and tonumber(getElementData(ped, "neon:ambientPedTrafficId")) or false
+            if trafficId and (trafficId == trafficIds[1] or trafficId == trafficIds[2]) then
+                elementPresent = true
+                profilePresent = true
+            end
+        end
+        if (elementPresent or assignmentPresent) and attempt < 20 then
+            setTimer(reportCleanup, 100, 1, attempt + 1)
+            return
+        end
+        triggerServerEvent("pedTraffic:coupleTestCleanupResult", resourceRoot, testId, relationId, {
             elementPresent = elementPresent,
             assignmentPresent = assignmentPresent,
             profilePresent = profilePresent,
@@ -1863,6 +2240,11 @@ end
 
 addEventHandler("onClientPreRender", root, function()
     local now = getTickCount()
+    for _, task in pairs(coupleAssignments) do
+        if task.presentation and task.accepted and task.token and type(updatePedNativeCouplePresentation) == "function" then
+            if not updatePedNativeCouplePresentation(task.token) then releaseCoupleAssignment(task, true) end
+        end
+    end
     for ped, fade in pairs(spawnFades) do
         if not isElement(ped) then
             spawnFades[ped] = nil
@@ -1910,6 +2292,8 @@ addEventHandler("onClientElementDestroy", root, function()
     climbTestSessions[source] = nil
     local groupTask = groupByPed[source]
     if groupTask then releaseGroupAssignment(groupTask, true) end
+    local coupleTask = coupleByPed[source]
+    if coupleTask then releaseCoupleAssignment(coupleTask, true) end
     local task = assignments[source]
     if task then releaseTask(task, false) end
     releaseTrafficEventProfile(source)
@@ -1937,6 +2321,9 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     nativeDamageReplayReceipts = {}
     nativePlayerDamageReceipts = {}
     nativeBikeJackReceipts = {}
+    local couples = {}
+    for _, task in pairs(coupleAssignments) do couples[#couples + 1] = task end
+    for _, task in ipairs(couples) do releaseCoupleAssignment(task, true) end
     local groups = {}
     for _, task in pairs(groupAssignments) do groups[#groups + 1] = task end
     for _, task in ipairs(groups) do releaseGroupAssignment(task, true) end

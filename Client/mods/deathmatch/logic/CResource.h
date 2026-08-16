@@ -74,6 +74,17 @@ public:
     bool                             IsPedNativeGroupActive(unsigned int uiToken) const;
     SAmbientPedNativeGroupDiagnostic GetPedNativeGroupDiagnostic(unsigned int uiToken) const;
     void                             ReleaseAllPedNativeGroups();
+    bool         ValidatePedNativeCouple(class CClientPed* pPedA, class CClientPed* pPedB, SAmbientPedNativeCoupleValidation& validation) const;
+    unsigned int AcquirePedNativeCouple(class CClientPed* pPedA, class CClientPed* pPedB, bool aLeader);
+    bool         ReleasePedNativeCouple(unsigned int uiToken);
+    bool         IsPedNativeCoupleActive(unsigned int uiToken) const;
+    SAmbientPedNativeCoupleDiagnostic GetPedNativeCoupleDiagnostic(unsigned int uiToken) const;
+    void                              ReleaseAllPedNativeCouples();
+    unsigned int                      AcquirePedNativeCouplePresentation(class CClientPed* pPedA, class CClientPed* pPedB);
+    bool                              UpdatePedNativeCouplePresentation(unsigned int uiToken);
+    bool                              ReleasePedNativeCouplePresentation(unsigned int uiToken);
+    bool                              IsPedNativeCouplePresentationActive(unsigned int uiToken) const;
+    void                              ReleaseAllPedNativeCouplePresentations();
 
     CDownloadableResource* AddResourceFile(CDownloadableResource::eResourceType resourceType, const char* szFileName, uint uiDownloadSize,
                                            CChecksum serverChecksum, bool bAutoDownload);
@@ -213,6 +224,25 @@ private:
 
     unsigned int                                                            m_uiNextPedNativeGroupToken{1};
     std::unordered_map<unsigned int, std::unique_ptr<SPedNativeGroupLease>> m_pedNativeGroupLeases;
+
+    struct SPedNativeCoupleLease
+    {
+        CClientEntityPtr peds[2];
+        unsigned int     nativeCoupleId{};
+        bool             aLeader{};
+    };
+
+    unsigned int                                                             m_uiNextPedNativeCoupleToken{1};
+    std::unordered_map<unsigned int, std::unique_ptr<SPedNativeCoupleLease>> m_pedNativeCoupleLeases;
+
+    struct SPedNativeCouplePresentationLease
+    {
+        CClientEntityPtr peds[2];
+        unsigned int     nativePresentationId{};
+    };
+
+    unsigned int                                                                         m_uiNextPedNativeCouplePresentationToken{1};
+    std::unordered_map<unsigned int, std::unique_ptr<SPedNativeCouplePresentationLease>> m_pedNativeCouplePresentationLeases;
 
     struct
     {

@@ -324,6 +324,15 @@ void CLuaPedDefs::LoadFunctions()
         {"releasePedNativeGroup", ReleasePedNativeGroup},
         {"isPedNativeGroupActive", IsPedNativeGroupActive},
         {"getPedNativeGroupDiagnostic", GetPedNativeGroupDiagnostic},
+        {"validatePedNativeCouple", ValidatePedNativeCouple},
+        {"acquirePedNativeCouple", AcquirePedNativeCouple},
+        {"releasePedNativeCouple", ReleasePedNativeCouple},
+        {"isPedNativeCoupleActive", IsPedNativeCoupleActive},
+        {"getPedNativeCoupleDiagnostic", GetPedNativeCoupleDiagnostic},
+        {"acquirePedNativeCouplePresentation", AcquirePedNativeCouplePresentation},
+        {"updatePedNativeCouplePresentation", UpdatePedNativeCouplePresentation},
+        {"releasePedNativeCouplePresentation", ReleasePedNativeCouplePresentation},
+        {"isPedNativeCouplePresentationActive", IsPedNativeCouplePresentationActive},
         {"addPedNativeGunAimedAtEvent", AddPedNativeGunAimedAtEvent},
         {"addPedNativeDamageResponseEvent", AddPedNativeDamageResponseEvent},
         {"addPedNativeDamageEvent", AddPedNativeDamageEvent},
@@ -3811,6 +3820,220 @@ int CLuaPedDefs::GetPedNativeGroupDiagnostic(lua_State* luaVM)
         lua_rawseti(luaVM, -2, index + 1);
     }
     lua_setfield(luaVM, -2, "members");
+    return 1;
+}
+
+int CLuaPedDefs::ValidatePedNativeCouple(lua_State* luaVM)
+{
+    CClientPed*      pedA = nullptr;
+    CClientPed*      pedB = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pedA);
+    argStream.ReadUserData(pedB);
+    CLuaMain*                         pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource*                        pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    SAmbientPedNativeCoupleValidation validation;
+    if (!pResource || !pResource->ValidatePedNativeCouple(pedA, pedB, validation))
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    lua_createtable(luaVM, 0, 5);
+    lua_pushboolean(luaVM, validation.compatible);
+    lua_setfield(luaVM, -2, "compatible");
+    lua_pushboolean(luaVM, validation.aLeader);
+    lua_setfield(luaVM, -2, "aLeader");
+    lua_pushnumber(luaVM, validation.aLeader ? 1 : 2);
+    lua_setfield(luaVM, -2, "leaderIndex");
+    lua_pushnumber(luaVM, validation.walkSpeedA);
+    lua_setfield(luaVM, -2, "walkSpeedA");
+    lua_pushnumber(luaVM, validation.walkSpeedB);
+    lua_setfield(luaVM, -2, "walkSpeedB");
+    return 1;
+}
+
+int CLuaPedDefs::AcquirePedNativeCouple(lua_State* luaVM)
+{
+    CClientPed*      pedA = nullptr;
+    CClientPed*      pedB = nullptr;
+    unsigned int     leaderIndex = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pedA);
+    argStream.ReadUserData(pedB);
+    argStream.ReadNumber(leaderIndex);
+    if (argStream.HasErrors() || (leaderIndex != 1 && leaderIndex != 2))
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    CLuaMain*          pLuaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource*         pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    const unsigned int token = pResource ? pResource->AcquirePedNativeCouple(pedA, pedB, leaderIndex == 1) : 0;
+    if (token != 0)
+        lua_pushnumber(luaVM, token);
+    else
+        lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::ReleasePedNativeCouple(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->ReleasePedNativeCouple(token));
+    return 1;
+}
+
+int CLuaPedDefs::IsPedNativeCoupleActive(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->IsPedNativeCoupleActive(token));
+    return 1;
+}
+
+int CLuaPedDefs::GetPedNativeCoupleDiagnostic(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    if (!pResource)
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    const SAmbientPedNativeCoupleDiagnostic diagnostic = pResource->GetPedNativeCoupleDiagnostic(token);
+    const auto                              getStatusName = [](EAmbientPedNativeCoupleDiagnosticStatus status) -> const char*
+    {
+        switch (status)
+        {
+            case EAmbientPedNativeCoupleDiagnosticStatus::Active:
+                return "active";
+            case EAmbientPedNativeCoupleDiagnosticStatus::ResourceLeaseMissing:
+                return "resource-lease-missing";
+            case EAmbientPedNativeCoupleDiagnosticStatus::ResourceElementMissing:
+                return "resource-element-missing";
+            case EAmbientPedNativeCoupleDiagnosticStatus::ResourceElementNotPed:
+                return "resource-element-not-ped";
+            case EAmbientPedNativeCoupleDiagnosticStatus::ResourcePedNotSyncing:
+                return "resource-ped-not-syncing";
+            case EAmbientPedNativeCoupleDiagnosticStatus::ResourceGamePedMissing:
+                return "resource-game-ped-missing";
+            case EAmbientPedNativeCoupleDiagnosticStatus::GameLeaseMissing:
+                return "game-lease-missing";
+            case EAmbientPedNativeCoupleDiagnosticStatus::LeaseMemberMismatch:
+                return "lease-member-mismatch";
+            case EAmbientPedNativeCoupleDiagnosticStatus::PrimaryTaskMissing:
+                return "primary-task-missing";
+            case EAmbientPedNativeCoupleDiagnosticStatus::PrimaryTaskReplaced:
+                return "primary-task-replaced";
+            case EAmbientPedNativeCoupleDiagnosticStatus::PartnerMismatch:
+                return "partner-mismatch";
+            case EAmbientPedNativeCoupleDiagnosticStatus::RoleMismatch:
+                return "role-mismatch";
+        }
+        return "unknown";
+    };
+    const auto setBoolean = [luaVM](const char* name, bool value)
+    {
+        lua_pushboolean(luaVM, value);
+        lua_setfield(luaVM, -2, name);
+    };
+    const auto setNumber = [luaVM](const char* name, double value)
+    {
+        lua_pushnumber(luaVM, value);
+        lua_setfield(luaVM, -2, name);
+    };
+
+    lua_createtable(luaVM, 0, 6);
+    setBoolean("active", diagnostic.active);
+    lua_pushstring(luaVM, getStatusName(diagnostic.status));
+    lua_setfield(luaVM, -2, "reason");
+    setNumber("nativeCoupleId", diagnostic.nativeCoupleId);
+    setBoolean("resourceLeasePresent", diagnostic.resourceLeasePresent);
+    setBoolean("gameLeasePresent", diagnostic.gameLeasePresent);
+    setBoolean("aLeader", diagnostic.aLeader);
+
+    lua_createtable(luaVM, 2, 0);
+    for (unsigned int index = 0; index < 2; ++index)
+    {
+        const auto& member = diagnostic.members[index];
+        lua_createtable(luaVM, 0, 13);
+        setBoolean("resourceElementPresent", member.resourceElementPresent);
+        setBoolean("resourceElementIsPed", member.resourceElementIsPed);
+        setBoolean("resourcePedSyncing", member.resourcePedSyncing);
+        setBoolean("gamePedPresent", member.gamePedPresent);
+        setBoolean("leaseMemberMatches", member.leaseMemberMatches);
+        setBoolean("primaryTaskMatchesLease", member.primaryTaskMatchesLease);
+        setBoolean("reciprocalPartner", member.reciprocalPartner);
+        setBoolean("leaderRoleMatches", member.leaderRoleMatches);
+        setNumber("primaryTaskType", member.primaryTaskType);
+        setNumber("subTaskType", member.subTaskType);
+        setNumber("walkSpeed", member.walkSpeed);
+        lua_rawseti(luaVM, -2, index + 1);
+    }
+    lua_setfield(luaVM, -2, "members");
+    return 1;
+}
+
+int CLuaPedDefs::AcquirePedNativeCouplePresentation(lua_State* luaVM)
+{
+    CClientPed*      pedA = nullptr;
+    CClientPed*      pedB = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(pedA);
+    argStream.ReadUserData(pedB);
+    CLuaMain*          pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource*         pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    const unsigned int token = pResource ? pResource->AcquirePedNativeCouplePresentation(pedA, pedB) : 0;
+    if (token != 0)
+        lua_pushnumber(luaVM, token);
+    else
+        lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::UpdatePedNativeCouplePresentation(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->UpdatePedNativeCouplePresentation(token));
+    return 1;
+}
+
+int CLuaPedDefs::ReleasePedNativeCouplePresentation(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->ReleasePedNativeCouplePresentation(token));
+    return 1;
+}
+
+int CLuaPedDefs::IsPedNativeCouplePresentationActive(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->IsPedNativeCouplePresentationActive(token));
     return 1;
 }
 

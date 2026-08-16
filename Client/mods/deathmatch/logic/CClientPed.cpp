@@ -389,8 +389,32 @@ namespace
         return std::nullopt;
     }
 
+    bool HasWalkAlongsidePedAncestor(CTask* pTask)
+    {
+        for (CTask* current = pTask; current; current = current->GetParent())
+        {
+            if (current->GetTaskType() == TASK_COMPLEX_WALK_ALONGSIDE_PED)
+                return true;
+        }
+        return false;
+    }
+
     std::optional<PedMoveState::Enum> GetNativeTaskLocomotionCommandMoveState(CTask* pTask)
     {
+        // WalkAlongside keeps its durable Seek/GoTo parent at SPRINT so a
+        // distant partner can catch up. Retail SelectMoveState independently
+        // downshifts the live SimpleGoTo child to WALK below five metres.
+        // Script peds are CPlayerPed wrappers, so treating the parent intent as
+        // the effective command makes the owner synthesize sprint input and
+        // defeats that stock distance controller.
+        if (HasWalkAlongsidePedAncestor(pTask) && pTask &&
+            (pTask->GetTaskType() == TASK_SIMPLE_GO_TO_POINT || pTask->GetTaskType() == TASK_SIMPLE_GO_TO_POINT_FINE))
+        {
+            auto* pSimpleGoTo = dynamic_cast<CTaskSimpleGoTo*>(pTask);
+            if (pSimpleGoTo)
+                return static_cast<PedMoveState::Enum>(pSimpleGoTo->GetMoveState());
+        }
+
         // Preserve the durable complex command first. Story go-to tasks rely
         // on that intent while GTA blends or slows their active subtask.
         if (const auto parentMoveState = GetNativeTaskLocomotionParentMoveState(pTask))
@@ -434,14 +458,18 @@ namespace
         const PedMoveState::Enum moveState = GetNativeTaskLocomotionMoveState(pPed);
         const auto               commandMoveState = GetNativeTaskLocomotionCommandMoveState(pSimplestTask);
         const auto               parentMoveState = GetNativeTaskLocomotionParentMoveState(pSimplestTask);
-        const char*              commandSource = parentMoveState ? "complex-parent" : (commandMoveState ? "simple-go-to" : "live-ped");
-        CTask*                   pSimplestParentTask = pSimplestTask ? pSimplestTask->GetParent() : nullptr;
-        const int                primaryType = pPrimaryTask ? static_cast<int>(pPrimaryTask->GetTaskType()) : -1;
-        const int                simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
-        const int                simplestParentType = pSimplestParentTask ? static_cast<int>(pSimplestParentTask->GetTaskType()) : -1;
-        const SString            signature("%s:%u:%d:%d:%d:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState),
+        const bool               walkAlongsideChild =
+            commandMoveState && HasWalkAlongsidePedAncestor(pSimplestTask) && pSimplestTask &&
+            (pSimplestTask->GetTaskType() == TASK_SIMPLE_GO_TO_POINT || pSimplestTask->GetTaskType() == TASK_SIMPLE_GO_TO_POINT_FINE);
+        const char* commandSource =
+            walkAlongsideChild ? "walk-alongside-child" : (parentMoveState ? "complex-parent" : (commandMoveState ? "simple-go-to" : "live-ped"));
+        CTask*        pSimplestParentTask = pSimplestTask ? pSimplestTask->GetParent() : nullptr;
+        const int     primaryType = pPrimaryTask ? static_cast<int>(pPrimaryTask->GetTaskType()) : -1;
+        const int     simplestType = pSimplestTask ? static_cast<int>(pSimplestTask->GetTaskType()) : -1;
+        const int     simplestParentType = pSimplestParentTask ? static_cast<int>(pSimplestParentTask->GetTaskType()) : -1;
+        const SString signature("%s:%u:%d:%d:%d:%d:%d:%d:%d", reason, locomotion.data.uiMode, static_cast<int>(moveState),
                                 commandMoveState ? static_cast<int>(*commandMoveState) : -1, parentMoveState ? static_cast<int>(*parentMoveState) : -1,
-                                           primaryType, simplestType, simplestParentType, controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
+                                primaryType, simplestType, simplestParentType, controllerState.LeftStickX != 0 || controllerState.LeftStickY != 0);
         if (!ShouldTraceNativeTaskLocomotion(pPed, ENativeTaskLocomotionTraceChannel::PRODUCER, signature))
             return;
 

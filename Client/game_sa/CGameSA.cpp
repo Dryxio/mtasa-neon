@@ -2388,6 +2388,285 @@ void CGameSA::GetAmbientPedNativeGroupDiagnostic(unsigned int nativeGroupId, CPe
     }
 }
 
+bool CGameSA::ValidateAmbientPedCivilianCouple(CPed* a, CPed* b, SAmbientPedNativeCoupleValidation& validation) const
+{
+    validation = {};
+    if (m_eGameVersion != VERSION_US_10 || !a || !b || a == b)
+        return false;
+
+    auto* pedA = dynamic_cast<CPedSA*>(a);
+    auto* pedB = dynamic_cast<CPedSA*>(b);
+    if (!pedA || !pedB || !pedA->GetPedInterface() || !pedB->GetPedInterface() || pedA->IsNativeAmbientGroupActive() || pedB->IsNativeAmbientGroupActive())
+    {
+        return false;
+    }
+
+    using GetWalkAnimSpeed = float(__thiscall*)(CPedSAInterface*);
+    validation.walkSpeedA = reinterpret_cast<GetWalkAnimSpeed>(0x5E04B0)(pedA->GetPedInterface());
+    validation.walkSpeedB = reinterpret_cast<GetWalkAnimSpeed>(0x5E04B0)(pedB->GetPedInterface());
+    if (!std::isfinite(validation.walkSpeedA) || !std::isfinite(validation.walkSpeedB))
+        return false;
+
+    validation.compatible =
+        validation.walkSpeedA >= 0.75f && validation.walkSpeedB >= 0.75f && std::abs(validation.walkSpeedA - validation.walkSpeedB) <= 0.45f;
+    // Retail makes B leader only when B is strictly faster. A wins an exact
+    // tie, which matters when both actors share the same animation group.
+    validation.aLeader = !(validation.walkSpeedB > validation.walkSpeedA);
+    return true;
+}
+
+bool CGameSA::AcquireAmbientPedCivilianCouple(CPed* a, CPed* b, bool aLeader, unsigned int& nativeCoupleId)
+{
+    nativeCoupleId = 0;
+    SAmbientPedNativeCoupleValidation validation;
+    if (!ValidateAmbientPedCivilianCouple(a, b, validation) || !validation.compatible || validation.aLeader != aLeader)
+        return false;
+
+    auto* pedA = dynamic_cast<CPedSA*>(a);
+    auto* pedB = dynamic_cast<CPedSA*>(b);
+    for (const auto& [id, lease] : m_ambientPedNativeCoupleLeases)
+    {
+        if (lease.members[0] == a || lease.members[1] == a || lease.members[0] == b || lease.members[1] == b)
+            return false;
+    }
+    for (const auto& [id, lease] : m_ambientPedNativeCouplePresentationLeases)
+    {
+        if (lease.members[0] == a || lease.members[1] == a || lease.members[0] == b || lease.members[1] == b)
+            return false;
+    }
+
+    auto* taskA = new CTaskComplexBeInCoupleSA(pedB, aLeader);
+    auto* taskB = new CTaskComplexBeInCoupleSA(pedA, !aLeader);
+    auto* taskManagerA = static_cast<CTaskManagerSA*>(pedA->GetPedIntelligence()->GetTaskManager());
+    auto* taskManagerB = static_cast<CTaskManagerSA*>(pedB->GetPedIntelligence()->GetTaskManager());
+    if (!taskA->IsValid() || !taskB->IsValid() || !taskManagerA || !taskManagerB)
+    {
+        delete taskA;
+        delete taskB;
+        return false;
+    }
+
+    unsigned int leaseId = 0;
+    do
+    {
+        leaseId = m_nextAmbientPedNativeCoupleId++;
+    } while (leaseId == 0 || m_ambientPedNativeCoupleLeases.contains(leaseId));
+
+    SAmbientPedNativeCoupleLease lease;
+    lease.members = {a, b};
+    lease.primaryTasks = {taskA->GetInterface(), taskB->GetInterface()};
+    lease.aLeader = aLeader;
+    const auto [leaseIter, inserted] = m_ambientPedNativeCoupleLeases.emplace(leaseId, lease);
+    if (!inserted)
+    {
+        delete taskA;
+        delete taskB;
+        return false;
+    }
+
+    m_pTaskManagementSystem->AddTask(taskA);
+    m_pTaskManagementSystem->AddTask(taskB);
+    taskManagerA->SetTask(taskA, TASK_PRIORITY_PRIMARY, true);
+    taskManagerB->SetTask(taskB, TASK_PRIORITY_PRIMARY, true);
+    const CTask* installedA = taskManagerA->GetTask(TASK_PRIORITY_PRIMARY);
+    const CTask* installedB = taskManagerB->GetTask(TASK_PRIORITY_PRIMARY);
+    if (!installedA || !installedB || installedA->GetInterface() != leaseIter->second.primaryTasks[0] ||
+        installedB->GetInterface() != leaseIter->second.primaryTasks[1])
+    {
+        ReleaseAmbientPedCivilianCouple(leaseId, a, b);
+        return false;
+    }
+
+    nativeCoupleId = leaseId;
+    return true;
+}
+
+bool CGameSA::ReleaseAmbientPedCivilianCouple(unsigned int nativeCoupleId, CPed* a, CPed* b)
+{
+    const auto leaseIter = m_ambientPedNativeCoupleLeases.find(nativeCoupleId);
+    if (leaseIter == m_ambientPedNativeCoupleLeases.end() || (a && a != leaseIter->second.members[0]) || (b && b != leaseIter->second.members[1]))
+        return false;
+
+    const std::array<CPed*, 2> members = {a, b};
+    for (std::size_t index = 0; index < members.size(); ++index)
+    {
+        auto* ped = dynamic_cast<CPedSA*>(members[index]);
+        if (!ped || !ped->GetPedInterface())
+            continue;
+        auto* taskManager = static_cast<CTaskManagerSA*>(ped->GetPedIntelligence()->GetTaskManager());
+        if (!taskManager)
+            continue;
+        CTask* primaryTask = taskManager->GetTask(TASK_PRIORITY_PRIMARY);
+        if (primaryTask && primaryTask->GetInterface() == leaseIter->second.primaryTasks[index])
+            taskManager->SetTask(nullptr, TASK_PRIORITY_PRIMARY, true);
+    }
+    m_ambientPedNativeCoupleLeases.erase(leaseIter);
+    return true;
+}
+
+bool CGameSA::IsAmbientPedCivilianCoupleActive(unsigned int nativeCoupleId, CPed* a, CPed* b) const
+{
+    SAmbientPedNativeCoupleDiagnostic diagnostic;
+    GetAmbientPedCivilianCoupleDiagnostic(nativeCoupleId, a, b, diagnostic);
+    return diagnostic.active;
+}
+
+void CGameSA::GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId, CPed* a, CPed* b, SAmbientPedNativeCoupleDiagnostic& diagnostic) const
+{
+    diagnostic.nativeCoupleId = nativeCoupleId;
+    const auto leaseIter = m_ambientPedNativeCoupleLeases.find(nativeCoupleId);
+    diagnostic.gameLeasePresent = leaseIter != m_ambientPedNativeCoupleLeases.end();
+    if (!diagnostic.gameLeasePresent)
+        return;
+
+    diagnostic.aLeader = leaseIter->second.aLeader;
+    const std::array<CPed*, 2> members = {a, b};
+    bool                       allMembersMatch = true;
+    bool                       allPrimaryTasksMatch = true;
+    bool                       allPartnersMatch = true;
+    bool                       allRolesMatch = true;
+    for (std::size_t index = 0; index < members.size(); ++index)
+    {
+        auto& member = diagnostic.members[index];
+        auto* ped = dynamic_cast<CPedSA*>(members[index]);
+        auto* partnerPed = dynamic_cast<CPedSA*>(members[index == 0 ? 1 : 0]);
+        auto* expectedPartnerPed = dynamic_cast<CPedSA*>(leaseIter->second.members[index == 0 ? 1 : 0]);
+        member.leaseMemberMatches = ped && ped == leaseIter->second.members[index];
+        member.expectedGamePedAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(leaseIter->second.members[index]));
+        member.expectedPartnerAddress =
+            expectedPartnerPed ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(expectedPartnerPed->GetPedInterface())) : 0;
+        member.expectedPrimaryTaskAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(leaseIter->second.primaryTasks[index]));
+        allMembersMatch = allMembersMatch && member.leaseMemberMatches;
+        if (!ped || !ped->GetPedInterface())
+        {
+            allPrimaryTasksMatch = false;
+            allPartnersMatch = false;
+            allRolesMatch = false;
+            continue;
+        }
+
+        member.gamePedAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(ped));
+        using GetWalkAnimSpeed = float(__thiscall*)(CPedSAInterface*);
+        member.walkSpeed = reinterpret_cast<GetWalkAnimSpeed>(0x5E04B0)(ped->GetPedInterface());
+        auto* taskManager = static_cast<CTaskManagerSA*>(ped->GetPedIntelligence()->GetTaskManager());
+        auto* taskManagerInterface = taskManager ? taskManager->GetInterface() : nullptr;
+        auto* primaryTask = taskManagerInterface ? taskManagerInterface->m_tasks[TASK_PRIORITY_PRIMARY] : nullptr;
+        member.primaryTaskAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(primaryTask));
+        member.primaryTaskType = GetPedTaskType(primaryTask);
+        member.primaryTaskMatchesLease = primaryTask && primaryTask == leaseIter->second.primaryTasks[index];
+        allPrimaryTasksMatch = allPrimaryTasksMatch && member.primaryTaskMatchesLease;
+        if (!primaryTask || member.primaryTaskType != TASK_COMPLEX_BE_IN_COUPLE)
+        {
+            allPartnersMatch = false;
+            allRolesMatch = false;
+            continue;
+        }
+
+        const auto* coupleTask = static_cast<const CTaskComplexBeInCoupleSAInterface*>(primaryTask);
+        member.partnerAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(coupleTask->m_partner));
+        member.reciprocalPartner = partnerPed && coupleTask->m_partner == partnerPed->GetPedInterface();
+        member.leaderRoleMatches = coupleTask->m_isLeader == (index == 0 ? leaseIter->second.aLeader : !leaseIter->second.aLeader);
+        member.subTaskType = GetPedTaskType(reinterpret_cast<CTaskSAInterface*>(coupleTask->m_pSubTask));
+        allPartnersMatch = allPartnersMatch && member.reciprocalPartner;
+        allRolesMatch = allRolesMatch && member.leaderRoleMatches;
+    }
+
+    if (!allMembersMatch)
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::LeaseMemberMismatch;
+    else if (!diagnostic.members[0].primaryTaskAddress || !diagnostic.members[1].primaryTaskAddress)
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::PrimaryTaskMissing;
+    else if (!allPrimaryTasksMatch)
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::PrimaryTaskReplaced;
+    else if (!allPartnersMatch)
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::PartnerMismatch;
+    else if (!allRolesMatch)
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::RoleMismatch;
+    else
+    {
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::Active;
+        diagnostic.active = true;
+    }
+}
+
+bool CGameSA::AcquireAmbientPedCivilianCouplePresentation(CPed* a, CPed* b, unsigned int& nativePresentationId)
+{
+    nativePresentationId = 0;
+    if (m_eGameVersion != VERSION_US_10 || !a || !b || a == b)
+        return false;
+
+    auto* pedA = dynamic_cast<CPedSA*>(a);
+    auto* pedB = dynamic_cast<CPedSA*>(b);
+    if (!pedA || !pedB || !pedA->GetPedInterface() || !pedB->GetPedInterface())
+        return false;
+
+    for (const auto& [id, lease] : m_ambientPedNativeCoupleLeases)
+    {
+        if (lease.members[0] == a || lease.members[1] == a || lease.members[0] == b || lease.members[1] == b)
+            return false;
+    }
+    for (const auto& [id, lease] : m_ambientPedNativeCouplePresentationLeases)
+    {
+        if (lease.members[0] == a || lease.members[1] == a || lease.members[0] == b || lease.members[1] == b)
+            return false;
+    }
+
+    unsigned int leaseId = 0;
+    do
+    {
+        leaseId = m_nextAmbientPedNativeCouplePresentationId++;
+    } while (leaseId == 0 || m_ambientPedNativeCouplePresentationLeases.contains(leaseId));
+
+    SAmbientPedNativeCouplePresentationLease lease;
+    lease.members = {a, b};
+    if (!m_ambientPedNativeCouplePresentationLeases.emplace(leaseId, lease).second)
+        return false;
+
+    nativePresentationId = leaseId;
+    return true;
+}
+
+bool CGameSA::UpdateAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b)
+{
+    const auto leaseIter = m_ambientPedNativeCouplePresentationLeases.find(nativePresentationId);
+    if (leaseIter == m_ambientPedNativeCouplePresentationLeases.end() || a != leaseIter->second.members[0] || b != leaseIter->second.members[1])
+        return false;
+
+    // PointArm assumes its secondary IK task was accepted by the ped task
+    // manager. Observer CPlayerPed wrappers reject that task, after which the
+    // retail function dereferences a null IK task at 0x6339B4. Never enter that
+    // unsafe retail path; observer couple presentation remains deferred until
+    // it has a task-free implementation.
+    return false;
+}
+
+bool CGameSA::ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b)
+{
+    const auto leaseIter = m_ambientPedNativeCouplePresentationLeases.find(nativePresentationId);
+    if (leaseIter == m_ambientPedNativeCouplePresentationLeases.end() || (a && a != leaseIter->second.members[0]) || (b && b != leaseIter->second.members[1]))
+    {
+        return false;
+    }
+
+    using AbortPointArm = void(__stdcall*)(int, CPedSAInterface*, int);
+    const std::array<CPed*, 2> members = {a, b};
+    for (std::size_t index = 0; index < members.size(); ++index)
+    {
+        auto* ped = dynamic_cast<CPedSA*>(members[index]);
+        if (!ped || !ped->GetPedInterface() || leaseIter->second.activeArms[index] == 0)
+            continue;
+        reinterpret_cast<AbortPointArm>(0x6182F0)(0, ped->GetPedInterface(), 250);
+        reinterpret_cast<AbortPointArm>(0x6182F0)(1, ped->GetPedInterface(), 250);
+    }
+    m_ambientPedNativeCouplePresentationLeases.erase(leaseIter);
+    return true;
+}
+
+bool CGameSA::IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const
+{
+    const auto leaseIter = m_ambientPedNativeCouplePresentationLeases.find(nativePresentationId);
+    return leaseIter != m_ambientPedNativeCouplePresentationLeases.end() && a == leaseIter->second.members[0] && b == leaseIter->second.members[1];
+}
+
 eGameVersion CGameSA::FindGameVersion()
 {
     unsigned char ucA = *reinterpret_cast<unsigned char*>(0x748ADD);

@@ -156,6 +156,15 @@ public:
     LUA_DECLARE(ReleasePedNativeGroup);
     LUA_DECLARE(IsPedNativeGroupActive);
     LUA_DECLARE(GetPedNativeGroupDiagnostic);
+    LUA_DECLARE(ValidatePedNativeCouple);
+    LUA_DECLARE(AcquirePedNativeCouple);
+    LUA_DECLARE(ReleasePedNativeCouple);
+    LUA_DECLARE(IsPedNativeCoupleActive);
+    LUA_DECLARE(GetPedNativeCoupleDiagnostic);
+    LUA_DECLARE(AcquirePedNativeCouplePresentation);
+    LUA_DECLARE(UpdatePedNativeCouplePresentation);
+    LUA_DECLARE(ReleasePedNativeCouplePresentation);
+    LUA_DECLARE(IsPedNativeCouplePresentationActive);
     LUA_DECLARE(AddPedNativeGunAimedAtEvent);
     LUA_DECLARE(AddPedNativeDamageResponseEvent);
     LUA_DECLARE(AddPedNativeDamageEvent);

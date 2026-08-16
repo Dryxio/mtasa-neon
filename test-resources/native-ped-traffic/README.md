@@ -198,6 +198,20 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   Pause, scratch-head, traffic-light and road-cross branches are recorded when
   GTA selects them but are not required for PASS because their occurrence
   depends on native path topology and process-global RNG.
+- `/pedtraffic coupletest` creates one deterministic civilian pair for the
+  first atomic-couple checkpoint. The common owner validates both retail walk
+  speeds, chooses the faster actor as leader (A wins a tie), and acquires both
+  reciprocal `CTaskComplexBeInCouple` tasks as one resource-scoped lease. The
+  harness proves leader WanderStandard and follower WalkAlongside, records
+  eight one-second locomotion samples before and after a release-before-acquire
+  handoff, then moves the pair to 10.25 m to exercise retail's strict `>10 m`
+  dissolution. The soak trace includes pair distance, movement states,
+  travelled distance and the follower gait seen by the observer. WalkAlongside
+  keeps a durable SPRINT-capable parent, but retail downshifts its live
+  SimpleGoTo child to WALK below five metres; the harness therefore rejects
+  more than one remote RUN/SPRINT grace sample in either owner epoch. It
+  requires two clean client acknowledgements and does not yet enable the automatic
+  post-civilian `RNG > 0.9` producer.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
 and now admits GTA's civilian, dealer, regional city-cop and resident-gang
@@ -210,7 +224,7 @@ task, their immutable server seed reproduces `m_nRandomSeed & 0x3FF`: below
 independent pistol attempt; 200..399 gives the pistol; 400..1023 stays
 unarmed. Grants use 50 ammo and the pistol STD stat. Dealer sales remain
 deferred. Ambient
-vehicle population, wanted/pursuit/arrest police behavior, couples, attractors, conversations,
+vehicle population, wanted/pursuit/arrest police behavior, automatic couple generation, attractors, conversations,
 headless/offline simulation, custom weather rules and public server density
 controls remain outside this checkpoint. GTA's stock rain reduction is already
 reflected in the native target. The optional command above creates a test

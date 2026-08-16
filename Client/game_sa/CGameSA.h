@@ -378,6 +378,15 @@ public:
     bool                                  IsAmbientPedNativeGroupActive(unsigned int nativeGroupId, CPed* const* members, unsigned char count) const override;
     void                                  GetAmbientPedNativeGroupDiagnostic(unsigned int nativeGroupId, CPed* const* members, unsigned char count,
                                                                              SAmbientPedNativeGroupDiagnostic& diagnostic) const override;
+    bool                                  ValidateAmbientPedCivilianCouple(CPed* a, CPed* b, SAmbientPedNativeCoupleValidation& validation) const override;
+    bool                                  AcquireAmbientPedCivilianCouple(CPed* a, CPed* b, bool aLeader, unsigned int& nativeCoupleId) override;
+    bool                                  ReleaseAmbientPedCivilianCouple(unsigned int nativeCoupleId, CPed* a, CPed* b) override;
+    bool                                  IsAmbientPedCivilianCoupleActive(unsigned int nativeCoupleId, CPed* a, CPed* b) const override;
+    void GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId, CPed* a, CPed* b, SAmbientPedNativeCoupleDiagnostic& diagnostic) const override;
+    bool AcquireAmbientPedCivilianCouplePresentation(CPed* a, CPed* b, unsigned int& nativePresentationId) override;
+    bool UpdateAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) override;
+    bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) override;
+    bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const override;
 
 private:
     struct SAmbientPedNativeGroupLease
@@ -389,42 +398,61 @@ private:
     };
 
     std::unordered_map<unsigned int, SAmbientPedNativeGroupLease> m_ambientPedNativeGroupLeases;
-    std::unique_ptr<CPools>                                       m_Pools;
-    CPlayerInfo*                                                  m_pPlayerInfo;
-    CProjectileInfo*                                              m_pProjectileInfo;
-    CRadar*                                                       m_pRadar;
-    CClock*                                                       m_pClock;
-    CCoronas*                                                     m_pCoronas;
-    CCheckpoints*                                                 m_pCheckpoints;
-    CEventList*                                                   m_pEventList;
-    CFireManager*                                                 m_pFireManager;
-    CGarages*                                                     m_pGarages;
-    CHud*                                                         m_pHud;
-    CWeather*                                                     m_pWeather;
-    CWorld*                                                       m_pWorld;
-    CCamera*                                                      m_pCamera;
-    CModelInfo*                                                   m_pModelInfo;
-    CPickups*                                                     m_pPickups;
-    CWeaponInfo*                                                  m_pWeaponInfo;
-    CExplosionManager*                                            m_pExplosionManager;
-    C3DMarkers*                                                   m_p3DMarkers;
-    CRenderWareSA*                                                m_pRenderWare;
-    std::unique_ptr<CHandlingManager>                             m_HandlingManager;
-    CAnimManager*                                                 m_pAnimManager;
-    CStreaming*                                                   m_pStreaming;
-    CVisibilityPlugins*                                           m_pVisibilityPlugins;
-    CKeyGen*                                                      m_pKeyGen;
-    CRopes*                                                       m_pRopes;
-    CFx*                                                          m_pFx;
-    CFxManagerSA*                                                 m_pFxManager;
-    CWaterManager*                                                m_pWaterManager;
-    CWeaponStatManager*                                           m_pWeaponStatsManager;
-    CPointLights*                                                 m_pPointLights;
-    CColStore*                                                    m_collisionStore;
-    CObjectGroupPhysicalProperties*                               m_pObjectGroupPhysicalProperties;
-    CCoverManagerSA*                                              m_pCoverManager;
-    CPlantManagerSA*                                              m_pPlantManager;
-    CBuildingRemoval*                                             m_pBuildingRemoval;
+
+    struct SAmbientPedNativeCoupleLease
+    {
+        std::array<CPed*, 2> members{};
+        std::array<void*, 2> primaryTasks{};
+        bool                 aLeader{};
+    };
+
+    unsigned int                                                   m_nextAmbientPedNativeCoupleId{1};
+    std::unordered_map<unsigned int, SAmbientPedNativeCoupleLease> m_ambientPedNativeCoupleLeases;
+
+    struct SAmbientPedNativeCouplePresentationLease
+    {
+        std::array<CPed*, 2>         members{};
+        std::array<unsigned char, 2> activeArms{};
+    };
+
+    unsigned int                                                               m_nextAmbientPedNativeCouplePresentationId{1};
+    std::unordered_map<unsigned int, SAmbientPedNativeCouplePresentationLease> m_ambientPedNativeCouplePresentationLeases;
+    std::unique_ptr<CPools>                                                    m_Pools;
+    CPlayerInfo*                                                               m_pPlayerInfo;
+    CProjectileInfo*                                                           m_pProjectileInfo;
+    CRadar*                                                                    m_pRadar;
+    CClock*                                                                    m_pClock;
+    CCoronas*                                                                  m_pCoronas;
+    CCheckpoints*                                                              m_pCheckpoints;
+    CEventList*                                                                m_pEventList;
+    CFireManager*                                                              m_pFireManager;
+    CGarages*                                                                  m_pGarages;
+    CHud*                                                                      m_pHud;
+    CWeather*                                                                  m_pWeather;
+    CWorld*                                                                    m_pWorld;
+    CCamera*                                                                   m_pCamera;
+    CModelInfo*                                                                m_pModelInfo;
+    CPickups*                                                                  m_pPickups;
+    CWeaponInfo*                                                               m_pWeaponInfo;
+    CExplosionManager*                                                         m_pExplosionManager;
+    C3DMarkers*                                                                m_p3DMarkers;
+    CRenderWareSA*                                                             m_pRenderWare;
+    std::unique_ptr<CHandlingManager>                                          m_HandlingManager;
+    CAnimManager*                                                              m_pAnimManager;
+    CStreaming*                                                                m_pStreaming;
+    CVisibilityPlugins*                                                        m_pVisibilityPlugins;
+    CKeyGen*                                                                   m_pKeyGen;
+    CRopes*                                                                    m_pRopes;
+    CFx*                                                                       m_pFx;
+    CFxManagerSA*                                                              m_pFxManager;
+    CWaterManager*                                                             m_pWaterManager;
+    CWeaponStatManager*                                                        m_pWeaponStatsManager;
+    CPointLights*                                                              m_pPointLights;
+    CColStore*                                                                 m_collisionStore;
+    CObjectGroupPhysicalProperties*                                            m_pObjectGroupPhysicalProperties;
+    CCoverManagerSA*                                                           m_pCoverManager;
+    CPlantManagerSA*                                                           m_pPlantManager;
+    CBuildingRemoval*                                                          m_pBuildingRemoval;
 
     std::unique_ptr<CVehicleAudioSettingsManagerSA> m_pVehicleAudioSettingsManager;
 

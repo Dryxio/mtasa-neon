@@ -111,9 +111,11 @@ CResource::~CResource()
     if (m_nativeWorldTransport.publication.valid())
         g_pClientGame->GetResourceManager()->RetireNativeWorldTransportPublication(std::move(m_nativeWorldTransport.publication));
 
-    // Native groups own tasks which dereference GTA-global group slots. Tear
+    // Native relationships own tasks containing GTA safe references. Tear
     // them down while their member streaming leases still guarantee live game
     // interfaces, then revoke event policy before dropping those references.
+    ReleaseAllPedNativeCouplePresentations();
+    ReleaseAllPedNativeCouples();
     ReleaseAllPedNativeGroups();
     ReleaseAllPedNativeEventProfiles();
     ReleaseAllElementStreamingLeases();
@@ -517,6 +519,233 @@ void CResource::ReleaseAllPedNativeGroups()
 {
     while (!m_pedNativeGroupLeases.empty())
         ReleasePedNativeGroup(m_pedNativeGroupLeases.begin()->first);
+}
+
+bool CResource::ValidatePedNativeCouple(CClientPed* pPedA, CClientPed* pPedB, SAmbientPedNativeCoupleValidation& validation) const
+{
+    validation = {};
+    const auto isReadyCivilian = [this](CClientPed* ped)
+    {
+        if (!ped || ped->GetType() != CCLIENTPED || !ped->IsSyncing() || !ped->GetGamePlayer())
+            return false;
+        const auto profileIter = std::find_if(m_pedNativeEventProfileLeases.begin(), m_pedNativeEventProfileLeases.end(), [ped](const auto& lease)
+                                              { return lease.second->ped == ped && lease.second->profile == ePedNativeEventProfile::AMBIENT_WANDER; });
+        return profileIter != m_pedNativeEventProfileLeases.end() &&
+               ped->IsNativeEventProfileActive(this, profileIter->first, ePedNativeEventProfile::AMBIENT_WANDER);
+    };
+    return pPedA != pPedB && isReadyCivilian(pPedA) && isReadyCivilian(pPedB) &&
+           g_pGame->ValidateAmbientPedCivilianCouple(pPedA->GetGamePlayer(), pPedB->GetGamePlayer(), validation);
+}
+
+unsigned int CResource::AcquirePedNativeCouple(CClientPed* pPedA, CClientPed* pPedB, bool aLeader)
+{
+    SAmbientPedNativeCoupleValidation validation;
+    if (!ValidatePedNativeCouple(pPedA, pPedB, validation) || !validation.compatible || validation.aLeader != aLeader)
+        return 0;
+
+    unsigned int nativeCoupleId = 0;
+    if (!g_pGame->AcquireAmbientPedCivilianCouple(pPedA->GetGamePlayer(), pPedB->GetGamePlayer(), aLeader, nativeCoupleId))
+        return 0;
+
+    unsigned int uiToken = 0;
+    do
+    {
+        uiToken = m_uiNextPedNativeCoupleToken++;
+    } while (uiToken == 0 || m_pedNativeCoupleLeases.contains(uiToken));
+
+    auto lease = std::make_unique<SPedNativeCoupleLease>();
+    lease->peds[0] = pPedA;
+    lease->peds[1] = pPedB;
+    lease->nativeCoupleId = nativeCoupleId;
+    lease->aLeader = aLeader;
+    m_pedNativeCoupleLeases.emplace(uiToken, std::move(lease));
+    return uiToken;
+}
+
+bool CResource::ReleasePedNativeCouple(unsigned int uiToken)
+{
+    const auto iter = m_pedNativeCoupleLeases.find(uiToken);
+    if (iter == m_pedNativeCoupleLeases.end())
+        return false;
+
+    CPed* gamePeds[2]{};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        auto* ped = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        gamePeds[index] = ped ? ped->GetGamePlayer() : nullptr;
+    }
+    const bool released = g_pGame->ReleaseAmbientPedCivilianCouple(iter->second->nativeCoupleId, gamePeds[0], gamePeds[1]);
+    m_pedNativeCoupleLeases.erase(iter);
+    return released;
+}
+
+bool CResource::IsPedNativeCoupleActive(unsigned int uiToken) const
+{
+    const auto iter = m_pedNativeCoupleLeases.find(uiToken);
+    if (iter == m_pedNativeCoupleLeases.end())
+        return false;
+
+    CClientPed* peds[2]{};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        peds[index] = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        if (!peds[index] || !peds[index]->IsSyncing() || !peds[index]->GetGamePlayer())
+            return false;
+    }
+    return g_pGame->IsAmbientPedCivilianCoupleActive(iter->second->nativeCoupleId, peds[0]->GetGamePlayer(), peds[1]->GetGamePlayer());
+}
+
+SAmbientPedNativeCoupleDiagnostic CResource::GetPedNativeCoupleDiagnostic(unsigned int uiToken) const
+{
+    SAmbientPedNativeCoupleDiagnostic diagnostic;
+    const auto                        iter = m_pedNativeCoupleLeases.find(uiToken);
+    if (iter == m_pedNativeCoupleLeases.end())
+        return diagnostic;
+
+    diagnostic.resourceLeasePresent = true;
+    diagnostic.nativeCoupleId = iter->second->nativeCoupleId;
+    diagnostic.aLeader = iter->second->aLeader;
+    CPed* gamePeds[2]{};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        auto& member = diagnostic.members[index];
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        member.resourceElementPresent = entity != nullptr;
+        member.resourceElementIsPed = entity && entity->GetType() == CCLIENTPED;
+        auto* ped = member.resourceElementIsPed ? static_cast<CClientPed*>(entity) : nullptr;
+        member.resourcePedSyncing = ped && ped->IsSyncing();
+        gamePeds[index] = ped ? ped->GetGamePlayer() : nullptr;
+        member.gamePedPresent = gamePeds[index] != nullptr;
+        member.gamePedAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gamePeds[index]));
+    }
+
+    g_pGame->GetAmbientPedCivilianCoupleDiagnostic(diagnostic.nativeCoupleId, gamePeds[0], gamePeds[1], diagnostic);
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        const auto& member = diagnostic.members[index];
+        if (!member.resourceElementPresent)
+        {
+            diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::ResourceElementMissing;
+            diagnostic.active = false;
+            return diagnostic;
+        }
+        if (!member.resourceElementIsPed)
+        {
+            diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::ResourceElementNotPed;
+            diagnostic.active = false;
+            return diagnostic;
+        }
+        if (!member.resourcePedSyncing)
+        {
+            diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::ResourcePedNotSyncing;
+            diagnostic.active = false;
+            return diagnostic;
+        }
+        if (!member.gamePedPresent)
+        {
+            diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::ResourceGamePedMissing;
+            diagnostic.active = false;
+            return diagnostic;
+        }
+    }
+    if (!diagnostic.gameLeasePresent)
+    {
+        diagnostic.status = EAmbientPedNativeCoupleDiagnosticStatus::GameLeaseMissing;
+        diagnostic.active = false;
+    }
+    return diagnostic;
+}
+
+void CResource::ReleaseAllPedNativeCouples()
+{
+    while (!m_pedNativeCoupleLeases.empty())
+        ReleasePedNativeCouple(m_pedNativeCoupleLeases.begin()->first);
+}
+
+unsigned int CResource::AcquirePedNativeCouplePresentation(CClientPed* pPedA, CClientPed* pPedB)
+{
+    if (!pPedA || !pPedB || pPedA == pPedB || pPedA->GetType() != CCLIENTPED || pPedB->GetType() != CCLIENTPED || pPedA->IsSyncing() || pPedB->IsSyncing() ||
+        !pPedA->GetGamePlayer() || !pPedB->GetGamePlayer())
+    {
+        return 0;
+    }
+
+    unsigned int nativePresentationId = 0;
+    if (!g_pGame->AcquireAmbientPedCivilianCouplePresentation(pPedA->GetGamePlayer(), pPedB->GetGamePlayer(), nativePresentationId))
+        return 0;
+
+    unsigned int uiToken = 0;
+    do
+    {
+        uiToken = m_uiNextPedNativeCouplePresentationToken++;
+    } while (uiToken == 0 || m_pedNativeCouplePresentationLeases.contains(uiToken));
+
+    auto lease = std::make_unique<SPedNativeCouplePresentationLease>();
+    lease->peds[0] = pPedA;
+    lease->peds[1] = pPedB;
+    lease->nativePresentationId = nativePresentationId;
+    m_pedNativeCouplePresentationLeases.emplace(uiToken, std::move(lease));
+    return uiToken;
+}
+
+bool CResource::UpdatePedNativeCouplePresentation(unsigned int uiToken)
+{
+    const auto iter = m_pedNativeCouplePresentationLeases.find(uiToken);
+    if (iter == m_pedNativeCouplePresentationLeases.end())
+        return false;
+
+    CClientPed* peds[2]{};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        peds[index] = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        if (!peds[index] || peds[index]->IsSyncing() || !peds[index]->GetGamePlayer())
+            return false;
+    }
+    return g_pGame->UpdateAmbientPedCivilianCouplePresentation(iter->second->nativePresentationId, peds[0]->GetGamePlayer(), peds[1]->GetGamePlayer());
+}
+
+bool CResource::ReleasePedNativeCouplePresentation(unsigned int uiToken)
+{
+    const auto iter = m_pedNativeCouplePresentationLeases.find(uiToken);
+    if (iter == m_pedNativeCouplePresentationLeases.end())
+        return false;
+
+    CPed* gamePeds[2]{};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        auto* ped = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        gamePeds[index] = ped ? ped->GetGamePlayer() : nullptr;
+    }
+    const bool released = g_pGame->ReleaseAmbientPedCivilianCouplePresentation(iter->second->nativePresentationId, gamePeds[0], gamePeds[1]);
+    m_pedNativeCouplePresentationLeases.erase(iter);
+    return released;
+}
+
+bool CResource::IsPedNativeCouplePresentationActive(unsigned int uiToken) const
+{
+    const auto iter = m_pedNativeCouplePresentationLeases.find(uiToken);
+    if (iter == m_pedNativeCouplePresentationLeases.end())
+        return false;
+
+    CClientPed* peds[2]{};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        auto* entity = static_cast<CClientEntity*>(iter->second->peds[index]);
+        peds[index] = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
+        if (!peds[index] || peds[index]->IsSyncing() || !peds[index]->GetGamePlayer())
+            return false;
+    }
+    return g_pGame->IsAmbientPedCivilianCouplePresentationActive(iter->second->nativePresentationId, peds[0]->GetGamePlayer(), peds[1]->GetGamePlayer());
+}
+
+void CResource::ReleaseAllPedNativeCouplePresentations()
+{
+    while (!m_pedNativeCouplePresentationLeases.empty())
+        ReleasePedNativeCouplePresentation(m_pedNativeCouplePresentationLeases.begin()->first);
 }
 
 CDownloadableResource* CResource::AddResourceFile(CDownloadableResource::eResourceType resourceType, const char* szFileName, uint uiDownloadSize,

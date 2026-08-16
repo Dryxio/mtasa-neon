@@ -188,6 +188,17 @@ CTaskComplexBeInGroupSA::CTaskComplexBeInGroupSA(int groupId, bool isLeader)
     reinterpret_cast<void(__thiscall*)(CTaskSAInterface*, int, bool)>(FUNC_CTaskComplexBeInGroup__Constructor)(task, groupId, isLeader);
 }
 
+CTaskComplexBeInCoupleSA::CTaskComplexBeInCoupleSA(CPed* partner, bool isLeader, bool holdHands, bool lookAtEachOther, float giveUpDistance)
+{
+    CreateTaskInterface(sizeof(CTaskComplexBeInCoupleSAInterface));
+    if (!IsValid() || !partner || !partner->GetPedInterface())
+        return;
+
+    auto* task = GetInterface();
+    reinterpret_cast<void(__thiscall*)(CTaskSAInterface*, CPedSAInterface*, bool, bool, bool, float)>(FUNC_CTaskComplexBeInCouple__Constructor)(
+        task, static_cast<CPedSAInterface*>(partner->GetPedInterface()), isLeader, holdHands, lookAtEachOther, giveUpDistance);
+}
+
 CTaskComplexGoToPointAndStandStillSA::CTaskComplexGoToPointAndStandStillSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
                                                                            const float fSlowDownDistance)
 {
