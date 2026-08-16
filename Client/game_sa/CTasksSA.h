@@ -139,6 +139,7 @@ public:
     CTaskComplex*                CreateTaskSimpleClimbTakeover(CPed* pPed, const SClimbTaskState& state);
     CTaskComplex*                CreateTaskComplexJumpForScriptPed(bool bAllowClimb = true);
     CTaskSimpleBikeJacked*       CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver);
+    CTaskComplex*                CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed);
 
     static void StaticSetHooks();
 };

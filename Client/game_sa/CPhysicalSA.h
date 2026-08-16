@@ -162,4 +162,8 @@ public:
     void  SetLighting(float fLighting);
 
     void SetFrozen(bool bFrozen);
+
+    // Appended through CPhysical so existing cross-module vtable slots remain stable.
+    SPhysicalProofs GetPhysicalProofs() const;
+    void            SetPhysicalProofs(const SPhysicalProofs& proofs);
 };

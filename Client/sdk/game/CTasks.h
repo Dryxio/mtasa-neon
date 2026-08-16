@@ -193,4 +193,8 @@ public:
     // Appended for owner-routed motorcycle ejections. GTA owns the animation,
     // safe references and knock-off event after construction.
     virtual CTaskSimpleBikeJacked* CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver) = 0;
+
+    // INTRO1 first consumer. Keep this appended to preserve every established
+    // cross-module vtable slot; Lua currently exposes only MISSION_ESCORT_LEFT.
+    virtual CTaskComplex* CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed) = 0;
 };

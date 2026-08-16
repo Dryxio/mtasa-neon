@@ -1,0 +1,16 @@
+VOODOO_TEST = {
+    targetModel = 492,
+    voodooModel = 412,
+    driverModel = 102,
+    passengerModel = 103,
+    weapon = 28,
+    target = {2492.0, -1668.5, 13.0, 90.0},
+    voodoo = {2448.0, -1668.5, 13.0, 90.0},
+    mission = "escort_left",
+    speed = 30.0,
+    drivingStyle = "avoid_cars",
+    driveByRange = 5000.0,
+    driveByStyle = "ai_all_directions",
+    driveByRhs = true,
+    driveByFrequency = 40,
+}
