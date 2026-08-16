@@ -27,6 +27,7 @@ Start the resource, connect two clients and run one of:
 /nativeai run gang_unarmed_flee
 /nativeai run gang_armed_leader
 /nativeai run gang_armed_member
+/nativeai run gang_two_armed_two_unarmed_melee
 /nativeai run gang_armed_handoff
 /nativeai run gang_friendly_source
 /nativeai status
@@ -131,8 +132,14 @@ claim to seed GTA's process-global random generator; future scenarios which
 exercise a random decision must record the selected native branch or add a
 dedicated engine seed/capture facility before claiming deterministic replay.
 
-The combat scenarios use three fixed Ballas actors; the classification case
-uses two separate Ballas groups (three target members plus two source members).
+The ordinary combat scenarios use three fixed Ballas actors. The
+`gang_two_armed_two_unarmed_melee` fixture creates four Ballas with exactly two
+Colts and two unarmed members, then injects one melee-source damage event. It
+does not depend on ambient spawn or weapon RNG. Retail should assign KILL to
+all four members; `group_member_allocator_assignment` is the authoritative
+oracle when an individual DUCK temporarily hides that group primary task. The
+classification case uses two separate Ballas groups (three target members plus
+two source members).
 Every actor uses the exact ambient CPed
 weapon state: total ammo `25001`, STD skill thresholds, and full clips. They
 inject one real native damage-response event into GTA's group instead of
@@ -142,8 +149,9 @@ cannot turn an aim or impact check into a different run.
 
 The decision oracle is branch-aware because GTA's weighted group decision uses
 the process-global RNG. A selected `TASK_GROUP_FLEE_THREAT` must allocate flee
-tasks. A selected `TASK_GROUP_KILL_THREATS_BASIC` makes armed members attack and
-assigns `TASK_SEEK_COVER_UNTIL_TARGET_DEAD` to participating unarmed members;
+tasks. Against a firearm, a selected `TASK_GROUP_KILL_THREATS_BASIC` makes armed
+members attack and assigns `TASK_SEEK_COVER_UNTIL_TARGET_DEAD` to participating
+unarmed members. Against a melee source, all members receive a kill task;
 an all-unarmed firearm response is converted to flee by GTA's appropriateness
 check. The analyzer correlates the selected C++ task with the allocation seen
 by the harness. Only an actually selected fight branch requires the owner →

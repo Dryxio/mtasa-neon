@@ -664,6 +664,11 @@ namespace
                 AppendInteger(output, "task_type", groupDecision->taskType, decisionFirst);
                 AppendBoolean(output, "threatened", groupDecision->threatened, decisionFirst);
                 AppendBoolean(output, "friendly", groupDecision->friendly, decisionFirst);
+                if (groupDecision->allocationType != 0)
+                {
+                    AppendString(output, "allocation", groupDecision->allocationType == 1 ? "kill" : "seek_cover", decisionFirst);
+                    AppendInteger(output, "member_weapon", groupDecision->memberWeaponType, decisionFirst);
+                }
 
                 AppendKey(output, "representative", decisionFirst);
                 output.push_back('{');
@@ -856,8 +861,8 @@ void CNativeAITelemetry::RecordGroupDecision(const SNativeAIGroupDecision& decis
         if (representative->GetCustomDataInt(CStringName("neon:ambientPedTrafficId"), trafficId, false) && !representative->IsSyncing())
             return;
 
-        GetWriter().Write(ENativeAITelemetryCategory::GROUP_DECISION, "group_response_selected", representative, nullptr, &decision,
-                          resolveClientPed(decision.sourcePed));
+        const char* event = decision.allocationType == 0 ? "group_response_selected" : "group_member_allocator_assignment";
+        GetWriter().Write(ENativeAITelemetryCategory::GROUP_DECISION, event, representative, nullptr, &decision, resolveClientPed(decision.sourcePed));
     }
     catch (...)
     {

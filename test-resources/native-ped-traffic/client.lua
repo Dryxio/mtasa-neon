@@ -3,6 +3,7 @@ local debugEnabled = false
 local populationWorldReady = false
 local populationWorldRevision = 0
 local populationWorldPreset = "none"
+local populationCatalogRevision = "none"
 local latestPopulationProfile = false
 local assignments = {}
 local groupAssignments = {}
@@ -17,12 +18,14 @@ local healthStates = {}
 local observedAimTargets = {}
 local nativeDamageObservations = {}
 local nativeDamageTraceTimes = {}
+local nativeDamageReplayReceipts = {}
 local nativePlayerDamageReceipts = {}
 local nativeBikeJackReceipts = {}
 local spawnFades = {}
 local residencyTest = false
 local nextNativePlayerDamageNonce = 0
 local nextNativeBikeJackNonce = 0
+local nextObservedDamageNonce = 0
 local stats = {
     candidateHits = 0,
     candidateMisses = 0,
@@ -42,6 +45,7 @@ local gangStandardWeaponStats = {
 
 local trafficNativeDamageWeapons = {
     [0] = true,
+    [4] = true,
     [22] = true,
     [24] = true,
     [28] = true,
@@ -135,6 +139,7 @@ end
 
 local function validatePopulationWorldState(snapshot)
     if type(snapshot) ~= "table" or snapshot.schema ~= 1 or snapshot.baseline ~= "stock-main-scm-bootstrap-601def3b" or
+        type(snapshot.catalogRevision) ~= "string" or #snapshot.catalogRevision ~= 64 or snapshot.catalogRevision:find("[^0-9a-f]") or
         not isIntegerInRange(snapshot.revision, 1, 2147483647) or type(snapshot.preset) ~= "string" or
         type(snapshot.capabilities) ~= "table" or snapshot.capabilities.zones ~= true or type(snapshot.zones) ~= "table" then
         return false, "invalid-header"
@@ -197,6 +202,7 @@ local function applyPopulationWorldState(snapshot)
 
     populationWorldRevision = snapshot.revision
     populationWorldPreset = snapshot.preset
+    populationCatalogRevision = snapshot.catalogRevision
     populationWorldReady = true
     return true
 end
@@ -299,6 +305,23 @@ local function getThreatState(ped)
         end
     end
     return false, false
+end
+
+local function hasDealerFightingControl(ped)
+    if type(getPedTask) ~= "function" then
+        return false
+    end
+    for slot = 0, 3 do
+        local hierarchy = {getPedTask(ped, "primary", slot)}
+        if hierarchy[1] ~= false then
+            for _, taskName in ipairs(hierarchy) do
+                if taskName == "TASK_SIMPLE_FIGHT_CTRL" then
+                    return true, hierarchy
+                end
+            end
+        end
+    end
+    return false
 end
 
 local vehicleReactionTaskNames = {
@@ -720,9 +743,18 @@ local function beginAssignment(task)
                 return releaseTask(task, true)
             end
             if isPedDead(task.ped) then
-                releaseTask(task, false)
+                return releaseTask(task, false)
             end
-        end, 1000, 0)
+            if not task.dealerFightReported and getElementData(task.ped, "neon:ambientPedPopulationClass") == "dealer" then
+                local fighting, hierarchy = hasDealerFightingControl(task.ped)
+                if fighting then
+                    task.dealerFightReported = true
+                    local knifeModelLoaded = type(engineStreamingGetModelLoadState) == "function" and
+                        engineStreamingGetModelLoadState(335) == "loaded"
+                    triggerServerEvent("pedTraffic:dealerFightStarted", resourceRoot, task.ped, task.epoch, knifeModelLoaded, hierarchy)
+                end
+            end
+        end, 250, 0)
     end
 
     if task.resumePhysical then
@@ -845,7 +877,11 @@ addEventHandler("pedTraffic:residencyObserve", resourceRoot, function(id, peds)
         end
     end
     sampleResidencyTest(test)
-    test.timer = setTimer(sampleResidencyTest, 100, 0, test)
+    -- MTA clones table arguments passed through timers, which would break the
+    -- identity guard in sampleResidencyTest and silently stop sampling.
+    test.timer = setTimer(function()
+        sampleResidencyTest(test)
+    end, 100, 0)
 end)
 
 addEvent("pedTraffic:residencyStop", true)
@@ -859,9 +895,11 @@ addEvent("pedTraffic:populationWorldState", true)
 addEventHandler("pedTraffic:populationWorldState", resourceRoot, function(snapshot)
     local revision = type(snapshot) == "table" and snapshot.revision or false
     local success, reason = applyPopulationWorldState(snapshot)
-    triggerServerEvent("pedTraffic:populationWorldApplied", resourceRoot, revision, {zones = success == true}, success, reason)
+    triggerServerEvent("pedTraffic:populationWorldApplied", resourceRoot, revision,
+                       {zones = success == true, catalogRevision = success and populationCatalogRevision or false}, success, reason)
     if success then
-        log(("population-world-applied revision=%d preset=%s"):format(populationWorldRevision, populationWorldPreset), 3)
+        log(("population-world-applied revision=%d preset=%s catalog=%s"):format(
+                populationWorldRevision, populationWorldPreset, populationCatalogRevision), 3)
     else
         log(("population-world-rejected revision=%s reason=%s"):format(tostring(revision), tostring(reason)), 2)
     end
@@ -879,6 +917,7 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
         latestPopulationProfile = false
         airTestSessions = {}
         climbTestSessions = {}
+        nativeDamageReplayReceipts = {}
         local groups = {}
         for _, task in pairs(groupAssignments) do groups[#groups + 1] = task end
         for _, task in ipairs(groups) do releaseGroupAssignment(task, true) end
@@ -1050,6 +1089,7 @@ setTimer(function()
     local profile = getAmbientPedPopulationProfile()
     if type(profile) == "table" then
         profile.worldRevision = populationWorldRevision
+        profile.catalogRevision = populationCatalogRevision
         profile.capturedAt = getTickCount()
         latestPopulationProfile = profile
     else
@@ -1140,11 +1180,20 @@ addEventHandler("pedTraffic:dealerTestSample", resourceRoot, function(testId, pe
     local task = assignments[ped]
     local token = nativeEventProfiles[ped]
     local tasks, hasWander = collectDealerTestTasks(ped)
+    local hasFight = hasDealerFightingControl(ped)
     triggerServerEvent("pedTraffic:dealerTestSampleResult", resourceRoot, testId, phase, {
         model = getElementModel(ped),
         populationClass = getElementData(ped, "neon:ambientPedPopulationClass"),
         logicalPedType = getElementData(ped, "neon:ambientPedLogicalType"),
         weapon = getPedWeapon(ped),
+        weaponAmmo = getPedTotalAmmo(ped),
+        knifeAmmo = getPedTotalAmmo(ped, 1),
+        pistolAmmo = getPedTotalAmmo(ped, 2),
+        pistolSkillStat = getPedStat(ped, 69),
+        dealerFightArmed = getElementData(ped, "neon:ambientPedDealerFightArmed") == true,
+        dealerHasKnife = getElementData(ped, "neon:ambientPedDealerKnife") == true,
+        dealerHasPistol = getElementData(ped, "neon:ambientPedDealerPistol") == true,
+        catalogRevision = populationCatalogRevision,
         epoch = epoch,
         syncer = isElementSyncer(ped),
         assignment = task ~= nil and task.epoch == epoch,
@@ -1152,6 +1201,7 @@ addEventHandler("pedTraffic:dealerTestSample", resourceRoot, function(testId, pe
         profilePresent = token ~= nil,
         profileActive = token ~= nil and isPedNativeEventProfileActive(ped, token) == true,
         hasWander = hasWander,
+        hasFight = hasFight == true,
         tasks = tasks,
     })
 end)
@@ -1235,8 +1285,12 @@ addEventHandler("pedTraffic:revokeGroup", resourceRoot, function(groupId, epoch,
         return
     end
     log(("group-revoke group=%d epoch=%d reason=%s"):format(groupId, epoch, tostring(reason)))
+    -- The syncer owns GTA's live weapon inventory. Capture it before tearing
+    -- down the native group so shots consumed during this epoch survive the
+    -- authority transfer instead of being reset to the spawn metadata.
+    local _, weaponStates = captureGroupWeaponState(task)
     releaseGroupAssignment(task, true)
-    reportGroup(task, "released", {reason = reason})
+    reportGroup(task, "released", {reason = reason, weapons = weaponStates})
 end)
 
 addEvent("pedTraffic:stopGroup", true)
@@ -1399,16 +1453,33 @@ addEventHandler("pedTraffic:gunAimedAt", resourceRoot, function(ped, aimingPed)
 end)
 
 addEvent("pedTraffic:damageResponse", true)
-addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attackingPed, weapon, bodypart)
+addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attackingPed, weapon, bodypart, damageId)
+    if damageId ~= false and not isIntegerInRange(damageId, 1, 2147483647) then
+        return
+    end
+    if damageId ~= false then
+        local now = getTickCount()
+        for receiptId, receivedAt in pairs(nativeDamageReplayReceipts) do
+            if now - receivedAt > 10000 then
+                nativeDamageReplayReceipts[receiptId] = nil
+            end
+        end
+        if nativeDamageReplayReceipts[damageId] then
+            log(("damage-bridge id=%s damage=%d skipped=duplicate"):format(
+                    tostring(isElement(ped) and getElementData(ped, "neon:ambientPedTrafficId") or false), damageId))
+            return
+        end
+        nativeDamageReplayReceipts[damageId] = now
+    end
     local deadline = getTickCount() + 1000
     local function inject()
         if not isElement(ped) or not isElement(attackingPed) then
             return
         end
         if consumeNativeDamage(ped, attackingPed, weapon, bodypart) then
-            log(("damage-bridge id=%s skipped=local-native source=%s weapon=%s bodypart=%s"):format(
-                    tostring(getElementData(ped, "neon:ambientPedTrafficId")), getPlayerName(attackingPed), tostring(weapon),
-                    tostring(bodypart)))
+            log(("damage-bridge id=%s damage=%s skipped=local-native source=%s weapon=%s bodypart=%s"):format(
+                    tostring(getElementData(ped, "neon:ambientPedTrafficId")), tostring(damageId), getPlayerName(attackingPed),
+                    tostring(weapon), tostring(bodypart)))
             return
         end
 
@@ -1416,16 +1487,16 @@ addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attacki
         if isElement(ped) and isElement(attackingPed) and token and isPedNativeEventProfileActive(ped, token) and
             type(addPedNativeDamageResponseEvent) == "function" then
             local accepted = addPedNativeDamageResponseEvent(ped, attackingPed, weapon, bodypart, token)
-            log(("damage-bridge id=%s accepted=%s source=%s weapon=%s bodypart=%s"):format(
-                    tostring(getElementData(ped, "neon:ambientPedTrafficId")), tostring(accepted), getPlayerName(attackingPed),
-                    tostring(weapon), tostring(bodypart)))
+            log(("damage-bridge id=%s damage=%s accepted=%s source=%s weapon=%s bodypart=%s"):format(
+                    tostring(getElementData(ped, "neon:ambientPedTrafficId")), tostring(damageId), tostring(accepted),
+                    getPlayerName(attackingPed), tostring(weapon), tostring(bodypart)))
             return
         end
         if getTickCount() < deadline then
             setTimer(inject, 100, 1)
         else
-            log(("damage-bridge id=%s accepted=false reason=owner-not-ready"):format(
-                    tostring(isElement(ped) and getElementData(ped, "neon:ambientPedTrafficId") or false)), 2)
+            log(("damage-bridge id=%s damage=%s accepted=false reason=owner-not-ready"):format(
+                    tostring(isElement(ped) and getElementData(ped, "neon:ambientPedTrafficId") or false), tostring(damageId)), 2)
         end
     end
     -- Remote bullet replay normally creates GTA's real CEventDamage on the
@@ -1502,7 +1573,8 @@ addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
     traceNativeDamageSource(source, attacker, weapon, bodypart, "observer")
     log(("damage-observed id=%s role=observer weapon=%s bodypart=%s"):format(
             tostring(getElementData(source, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart)))
-    triggerServerEvent("pedTraffic:damageObserved", resourceRoot, source, weapon, bodypart)
+    nextObservedDamageNonce = nextObservedDamageNonce % 2147483647 + 1
+    triggerServerEvent("pedTraffic:damageObserved", resourceRoot, source, weapon, bodypart, nextObservedDamageNonce)
 end)
 
 addEventHandler("onClientPlayerNativeDamageAttempt", root, function(attacker, weapon, bodypart, damageFactor, direction)
@@ -1712,6 +1784,7 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     airTestSessions = {}
     climbTestSessions = {}
     nativeDamageTraceTimes = {}
+    nativeDamageReplayReceipts = {}
     nativePlayerDamageReceipts = {}
     nativeBikeJackReceipts = {}
     local groups = {}

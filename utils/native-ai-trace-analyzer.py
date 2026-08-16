@@ -504,6 +504,52 @@ def analyze_harness_pipeline(records: list[dict[str, Any]]) -> list[Finding]:
         "gang-one-armed-member-v1": True,
         "gang-one-armed-handoff-v1": True,
     }
+    if scenario == "gang-two-armed-two-unarmed-melee-v1":
+        allocations = [
+            record
+            for record in records
+            if record.get("schema") == SCHEMA
+            and record.get("event") == "group_member_allocator_assignment"
+            and (record.get("trace") or {}).get("scenario_id") == scenario
+            and (record.get("trace") or {}).get("action_id") == "melee-threat"
+        ]
+        decisions = [
+            record
+            for record in records
+            if record.get("schema") == SCHEMA
+            and record.get("event") == "group_response_selected"
+            and (record.get("trace") or {}).get("scenario_id") == scenario
+            and (record.get("trace") or {}).get("action_id") == "melee-threat"
+        ]
+        by_actor: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for allocation in allocations:
+            by_actor[actor_label(allocation)].append(allocation)
+        expected_weapons = {"ped-1": 22, "ped-2": 0, "ped-3": 0, "ped-4": 22}
+        valid = len(decisions) == 1 and set(by_actor) == set(expected_weapons)
+        for actor, weapon in expected_weapons.items():
+            rows = by_actor.get(actor, [])
+            valid = valid and len(rows) == 1
+            if rows:
+                decision_data = rows[0].get("group_decision") or {}
+                valid = valid and decision_data.get("allocation") == "kill" and decision_data.get("member_weapon") == weapon
+        if not valid:
+            terminal = next((record for record in reversed(harness) if record.get("event") == "run_end"), harness[-1])
+            return [
+                Finding(
+                    terminal["_timestamp_ms"],
+                    "group_member_allocator",
+                    "Two-armed/two-unarmed melee fixture did not produce exactly one decision and four KILL assignments",
+                    {
+                        "scenario_id": scenario,
+                        "decision_count": len(decisions),
+                        "allocations": {
+                            actor: [row.get("group_decision") for row in rows] for actor, rows in sorted(by_actor.items())
+                        },
+                        "expected_weapons": expected_weapons,
+                    },
+                )
+            ]
+        return []
     if scenario == "gang-friendly-source-classification-v1":
         decision = next(
             (
@@ -963,6 +1009,7 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
     despawned_peds = 0
     despawned_groups = 0
     dealer_tests: dict[str, dict[str, Any]] = {}
+    residency_tests: dict[str, dict[str, Any]] = {}
 
     def warning(record: dict[str, Any], stage: str, message: str, extra: dict[str, Any] | None = None) -> None:
         evidence = population_evidence(record)
@@ -1434,7 +1481,7 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                     if expected_clip is None or clip_ammo != expected_clip:
                         error(record, "population_weapon", "Gang ped clip differs from the STD weapon row", selection)
 
-        if event == "group_weapon_authority_rejected" or (
+        if event in {"group_weapon_authority_rejected", "group_weapon_state_rejected"} or (
             event == "group_combat_context_restored" and record.get("accepted") is not True
         ):
             error(record, "population_weapon", f"Runtime rejected authoritative gang combat state: {event}")
@@ -1458,8 +1505,25 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
 
         if event == "dealer_test_started":
             scenario_id = str(record.get("scenario_id"))
-            dealer_tests[scenario_id] = {"record": record, "samples": [], "cleanup_acks": [], "result": None}
-        elif event in {"dealer_test_sample", "dealer_test_cleanup_ack", "dealer_test_result"}:
+            dealer_tests[scenario_id] = {
+                "record": record,
+                "samples": [],
+                "cleanup_acks": [],
+                "fight_weapon": None,
+                "growth": None,
+                "death": None,
+                "world_revisions": [],
+                "result": None,
+            }
+        elif event in {
+            "dealer_test_sample",
+            "dealer_test_cleanup_ack",
+            "dealer_test_result",
+            "dealer_fight_weapon_committed",
+            "dealer_test_growth_roll",
+            "dealer_strength_death",
+            "dealer_strength_world_revision",
+        }:
             scenario_id = str(record.get("scenario_id"))
             test = dealer_tests.get(scenario_id)
             if test is None:
@@ -1467,20 +1531,121 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             elif event == "dealer_test_sample":
                 test["samples"].append(record)
                 is_owner = record.get("client_id") == record.get("owner_id")
-                if record.get("population_class") != "dealer" or record.get("logical_ped_type") != 17 or record.get("weapon") != 0:
-                    error(record, "population_dealer_test", "Dealer sample has invalid identity or initial weapon")
+                phase = record.get("phase")
+                if record.get("population_class") != "dealer" or record.get("logical_ped_type") != 17:
+                    error(record, "population_dealer_test", "Dealer sample has invalid logical identity")
+                if not isinstance(record.get("catalog_revision"), str) or len(record["catalog_revision"]) != 64:
+                    error(record, "population_dealer_test", "Dealer sample has no valid catalog revision")
+                if phase == "initial":
+                    if record.get("weapon") != 0 or record.get("dealer_fight_armed") is not False:
+                        error(record, "population_dealer_test", "Dealer was armed before its first real fight")
+                elif phase in {"combat", "handoff"}:
+                    if record.get("dealer_fight_armed") is not True or record.get("weapon") not in {0, 4, 22}:
+                        error(record, "population_dealer_test", "Dealer fight weapon state is not canonical")
+                    weapon = record.get("weapon")
+                    ammo = finite_number(record.get("weapon_ammo"))
+                    if weapon == 4 and ammo != 1:
+                        error(record, "population_dealer_test", "Dealer knife sample does not expose the canonical melee ammo value")
+                    elif weapon == 22 and (ammo is None or ammo < 1 or ammo > 50):
+                        error(record, "population_dealer_test", "Dealer pistol sample is outside the committed 50-round budget")
+                else:
+                    error(record, "population_dealer_test", "Dealer sample has an unknown phase")
                 if record.get("syncer") is not is_owner or record.get("assignment") is not is_owner or record.get("profile_active") is not is_owner:
                     error(record, "population_dealer_test", "Dealer sample violates owner-only native AI authority")
-                if is_owner and record.get("has_wander") is not True:
+                if phase == "initial" and is_owner and record.get("has_wander") is not True:
                     error(record, "population_dealer_test", "Dealer owner has no WanderStandard task")
+                if phase in {"combat", "handoff"} and is_owner and record.get("has_fight") is not True:
+                    error(record, "population_dealer_test", "Dealer owner lost its live combat task")
             elif event == "dealer_test_cleanup_ack":
                 test["cleanup_acks"].append(record)
                 if record.get("accepted") is not True:
                     error(record, "population_dealer_test", "Dealer cleanup acknowledgement reports leaked client state")
+            elif event == "dealer_fight_weapon_committed":
+                test["fight_weapon"] = record
+                seed = finite_number(record.get("seed"))
+                knife_loaded = record.get("knife_model_loaded") is True
+                expected_knife = seed is not None and seed < 200
+                expected_pistol = seed is not None and (seed < 400 and (seed >= 200 or knife_loaded))
+                if (
+                    seed is None
+                    or seed < 0
+                    or seed > 1023
+                    or record.get("has_knife") is not expected_knife
+                    or record.get("has_pistol") is not expected_pistol
+                    or record.get("ammo") != (50 if expected_knife or expected_pistol else 0)
+                ):
+                    error(record, "population_dealer_test", "Dealer fight weapon does not match the retail seed and delayed-slot branch")
+            elif event == "dealer_test_growth_roll":
+                test["growth"] = record
+                if not isinstance(record.get("roll_count"), int) or record.get("roll_count", 0) <= 0:
+                    error(record, "population_dealer_test", "Dealer growth harness observed no eligible retail roll")
+            elif event == "dealer_strength_death":
+                test["death"] = record
+                change = record.get("change")
+                before = finite_number(change.get("before")) if isinstance(change, dict) else None
+                after = finite_number(change.get("after")) if isinstance(change, dict) else None
+                if (
+                    record.get("profile_fresh") is not True
+                    or record.get("applied") is not True
+                    or before is None
+                    or after != before - 1
+                ):
+                    error(record, "population_dealer_test", "Player-attributed dealer death did not decrement DealerStrength exactly once")
+            elif event == "dealer_strength_world_revision":
+                test["world_revisions"].append(record)
             else:
                 test["result"] = record
                 if record.get("result") != "PASS":
                     error(record, "population_dealer_test", "Dealer harness did not pass")
+
+        if event == "residency_test_started":
+            scenario_id = str(record.get("scenario_id"))
+            residency_tests[scenario_id] = {
+                "record": record,
+                "holds_started": [],
+                "holds_released": [],
+                "holds_expired": [],
+                "damage_dispatches": [],
+                "damage_restores": [],
+                "weapon_commits": [],
+                "result": None,
+            }
+        elif event in {
+            "group_collision_residency_hold_started",
+            "group_collision_residency_hold_released",
+            "group_collision_residency_hold_expired",
+            "group_combat_context_dispatched",
+            "group_combat_context_restored",
+            "group_weapon_state_committed",
+            "residency_test_result",
+        }:
+            scenario_id = record.get("scenario_id")
+            test = residency_tests.get(str(scenario_id)) if scenario_id is not None else None
+            if test is None and event == "group_combat_context_restored":
+                damage_id = record.get("damage_id")
+                test = next(
+                    (
+                        candidate
+                        for candidate in residency_tests.values()
+                        if any(row.get("damage_id") == damage_id for row in candidate["damage_dispatches"])
+                    ),
+                    None,
+                )
+            if test is not None:
+                if event == "group_collision_residency_hold_started":
+                    test["holds_started"].append(record)
+                elif event == "group_collision_residency_hold_released":
+                    test["holds_released"].append(record)
+                elif event == "group_collision_residency_hold_expired":
+                    test["holds_expired"].append(record)
+                elif event == "group_combat_context_dispatched":
+                    test["damage_dispatches"].append(record)
+                elif event == "group_combat_context_restored":
+                    test["damage_restores"].append(record)
+                elif event == "group_weapon_state_committed":
+                    test["weapon_commits"].append(record)
+                else:
+                    test["result"] = record
 
     clocks = [population_clock(record) for record in population if math.isfinite(population_clock(record))]
     trace_end = max(clocks, default=math.inf)
@@ -1535,10 +1700,14 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
             error(test["record"], "population_dealer_test", "Dealer harness has no terminal result", {"scenario_id": scenario_id})
             continue
         if result.get("result") == "PASS":
-            if len(test["samples"]) != 4:
-                error(result, "population_dealer_test", "Passing dealer harness does not have four authority samples")
+            if len(test["samples"]) != 6:
+                error(result, "population_dealer_test", "Passing dealer harness does not have six authority samples")
             if len(test["cleanup_acks"]) != 2:
                 error(result, "population_dealer_test", "Passing dealer harness does not have two cleanup acknowledgements")
+            if test["fight_weapon"] is None or test["growth"] is None or test["death"] is None:
+                error(result, "population_dealer_test", "Passing dealer harness is missing combat or ecology evidence")
+            if len(test["world_revisions"]) < 2:
+                error(result, "population_dealer_test", "Passing dealer harness did not publish the death and fixture world revisions")
             initial_epoch = finite_number(result.get("initial_epoch"))
             final_epoch = finite_number(result.get("final_epoch"))
             if initial_epoch is None or final_epoch != initial_epoch + 1:
@@ -1548,6 +1717,65 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                     "Passing dealer harness did not advance the owner epoch exactly once",
                     {"initial_epoch": initial_epoch, "final_epoch": final_epoch},
                 )
+
+    for scenario_id, test in residency_tests.items():
+        result = test["result"]
+        if result is None:
+            error(test["record"], "population_residency_test", "Residency harness has no terminal result", {"scenario_id": scenario_id})
+            continue
+        if result.get("result") != "PASS":
+            error(result, "population_residency_test", "Residency harness did not pass")
+            continue
+        dispatches = test["damage_dispatches"]
+        damage_id = result.get("damage_id")
+        matching_dispatches = [row for row in dispatches if row.get("damage_id") == damage_id]
+        decision_queries = [
+            record
+            for record in records
+            if record.get("schema") == SCHEMA
+            and record.get("event") == "group_response_selected"
+            and (record.get("trace") or {}).get("run_id") == f"pedtraffic-residency-{scenario_id}"
+        ]
+        if result.get("damage_dispatches") != 1 or len(matching_dispatches) != 1 or test["damage_restores"]:
+            error(
+                result,
+                "population_damage_identity",
+                "Passing residency harness did not preserve one dispatch for its authentic damage identity",
+                {
+                    "damage_id": damage_id,
+                    "result_dispatches": result.get("damage_dispatches"),
+                    "trace_dispatches": len(matching_dispatches),
+                    "technical_restores": len(test["damage_restores"]),
+                },
+            )
+        if len(decision_queries) > 1:
+            error(
+                result,
+                "population_damage_identity",
+                "One authentic damage identity queried the native group decision maker more than once",
+                {"damage_id": damage_id, "decision_queries": len(decision_queries)},
+            )
+        if len(test["holds_started"]) != 2 or len(test["holds_released"]) != 1 or len(test["holds_expired"]) != 1:
+            error(
+                result,
+                "population_residency_hold",
+                "Residency harness did not observe one recovered short hold and one expired long hold",
+                {
+                    "holds_started": len(test["holds_started"]),
+                    "holds_released": len(test["holds_released"]),
+                    "holds_expired": len(test["holds_expired"]),
+                },
+            )
+        if result.get("weapon_state_commits") != 3 or len(test["weapon_commits"]) != 3:
+            error(
+                result,
+                "population_weapon",
+                "Residency harness did not commit weapon state at both handoffs and suspension",
+                {
+                    "result_weapon_commits": result.get("weapon_state_commits"),
+                    "trace_weapon_commits": len(test["weapon_commits"]),
+                },
+            )
 
     player_summaries: dict[str, Any] = {}
     for player in sorted(set(profiles_by_player) | set(convergence_by_player)):
@@ -1630,6 +1858,25 @@ def analyze_population(records: list[dict[str, Any]]) -> tuple[list[Finding], di
                 "reason": test["result"].get("reason") if test["result"] else None,
             }
             for scenario_id, test in dealer_tests.items()
+        },
+        "residency_tests": {
+            scenario_id: {
+                "holds_started": len(test["holds_started"]),
+                "holds_released": len(test["holds_released"]),
+                "holds_expired": len(test["holds_expired"]),
+                "damage_dispatches": len(test["damage_dispatches"]),
+                "damage_restores": len(test["damage_restores"]),
+                "weapon_commits": len(test["weapon_commits"]),
+                "decision_queries": sum(
+                    1
+                    for record in records
+                    if record.get("schema") == SCHEMA
+                    and record.get("event") == "group_response_selected"
+                    and (record.get("trace") or {}).get("run_id") == f"pedtraffic-residency-{scenario_id}"
+                ),
+                "result": test["result"].get("result") if test["result"] else None,
+            }
+            for scenario_id, test in residency_tests.items()
         },
     }
     population_serious = sorted(

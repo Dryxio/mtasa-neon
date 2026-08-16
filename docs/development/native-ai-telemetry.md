@@ -88,6 +88,14 @@ server-group ID, member index, role, owner, and epoch. This makes the chain
 from an ambient group event to its exact vanilla response queryable without
 logging raw pointers or player names.
 
+`group_member_allocator_assignment` records the two audited retail callsites
+where `TASK_GROUP_KILL_THREATS_BASIC` assigns either a kill task or
+`TASK_SEEK_COVER_UNTIL_TARGET_DEAD` to an individual member. It contains the
+stable member identity, native group slot, assigned root task type, allocation
+label (`kill` or `seek_cover`) and the member's active weapon scalar. This is
+captured after GTA accepts the task, before a separate personality event such
+as `TASK_SIMPLE_DUCK` can mask it in the member's active task ancestry.
+
 Ownership telemetry also records `owner_collision_hold_started` and
 `owner_collision_hold_released`. These delimit the interval where an ambient
 ped is still authoritative but its local GTA collision sector is unavailable.

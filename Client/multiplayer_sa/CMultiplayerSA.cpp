@@ -86,6 +86,8 @@ DWORD RETURN_FxManager_DestroyFxSystem = 0x4A9817;
 #define CALL_CEventEditableResponse_GroupSourceB                 0x4B5883
 #define CALL_CEventEditableResponse_InformGroupQueueAdd          0x4B7E1E
 #define CALL_CPedGroupIntelligence_AddEvent_ComputeGroupResponse 0x5F74E2
+#define CALL_CTaskAllocatorKillThreatsRandom_AssignSeekCover     0x69D75B
+#define CALL_CTaskAllocatorKillThreatsRandom_AssignKill          0x69D864
 #define CALL_CEventScanner_AddInAirEvent                         0x607F0D
 #define CALL_CEventScanner_AddBuildingCollisionEvent             0x605145
 #define VTBL_CTaskComplexGangLeader_ScanForStuff                 0x86F928
@@ -706,6 +708,10 @@ bool __fastcall  HOOK_CEventGroup_Add_ComputeResponseTaskOfType(void* event, voi
 void __fastcall  HOOK_CEventGroup_Add_ComputeResponseTaskType(void* event, void*, CPedSAInterface* ped, bool decisionMakerTypeInGroup);
 int __cdecl      HOOK_CEventEditableResponse_GroupSource(void* event, CPedSAInterface* ped);
 void __fastcall  HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse(void* event, void*, void* group);
+void __fastcall  HOOK_CTaskAllocatorKillThreatsRandom_AssignSeekCover(void* intelligence, void*, CPedSAInterface* ped, bool hasMainTask, void* mainTask,
+                                                                      bool hasSecondaryTask, void* secondaryTask, int secondarySlot);
+void __fastcall  HOOK_CTaskAllocatorKillThreatsRandom_AssignKill(void* intelligence, void*, CPedSAInterface* ped, bool hasMainTask, void* mainTask,
+                                                                 bool hasSecondaryTask, void* secondaryTask, int secondarySlot);
 bool __cdecl     HOOK_CInformGroupEventQueue_Add(CPedSAInterface* ped, void* group, void* event);
 void __fastcall  HOOK_CTaskComplexGangLeader_ScanForStuff(void* task, void*, CPedSAInterface* ped);
 void* __fastcall HOOK_CEventScanner_AddInAirEvent(void* eventGroup, void*, void* event, bool valid);
@@ -934,6 +940,8 @@ void CMultiplayerSA::InitHooks()
     HookInstallCall(CALL_CEventEditableResponse_GroupSourceB, (DWORD)HOOK_CEventEditableResponse_GroupSource);
     HookInstallCall(CALL_CPedGroupIntelligence_AddEvent_ComputeGroupResponse, (DWORD)HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse);
     HookInstallCall(CALL_CEventEditableResponse_InformGroupQueueAdd, (DWORD)HOOK_CInformGroupEventQueue_Add);
+    HookInstallCall(CALL_CTaskAllocatorKillThreatsRandom_AssignSeekCover, (DWORD)HOOK_CTaskAllocatorKillThreatsRandom_AssignSeekCover);
+    HookInstallCall(CALL_CTaskAllocatorKillThreatsRandom_AssignKill, (DWORD)HOOK_CTaskAllocatorKillThreatsRandom_AssignKill);
     MemPut<DWORD>(VTBL_CTaskComplexGangLeader_ScanForStuff, (DWORD)HOOK_CTaskComplexGangLeader_ScanForStuff);
     HookInstallCall(CALL_CEventScanner_AddInAirEvent, (DWORD)HOOK_CEventScanner_AddInAirEvent);
     HookInstallCall(CALL_CEventScanner_AddBuildingCollisionEvent, (DWORD)HOOK_CEventScanner_AddBuildingCollisionEvent);
@@ -4203,6 +4211,69 @@ void __fastcall HOOK_CPedGroupIntelligence_AddEvent_ComputeGroupResponse(void* e
 
     if (decision.representative)
         pGameInterface->ReportNativeAIGroupDecision(decision);
+}
+
+static void ReportNativeAmbientKillThreatsAllocation(void* intelligence, CPedSAInterface* pedInterface, void* mainTask, int allocationType)
+{
+    constexpr std::uintptr_t GTA_PED_GROUPS = 0xC09920;
+    constexpr std::size_t    PED_GROUP_SIZE = 0x2D4;
+    constexpr unsigned int   PED_GROUP_COUNT = 8;
+    constexpr std::size_t    PED_GROUP_INTELLIGENCE_OFFSET = 0x30;
+
+    if (!pGameInterface || !pGameInterface->HasNativeAIGroupDecisionHandler() || !pedInterface || !mainTask || !IsNativeAmbientGroupMember(pedInterface))
+        return;
+
+    CPed* ped = GetPedFromInterface(pedInterface);
+    if (!ped)
+        return;
+
+    void** taskVtable = *reinterpret_cast<void***>(mainTask);
+    if (!taskVtable || !taskVtable[4])
+        return;
+
+    using GetTaskType = int(__thiscall*)(void*);
+    SNativeAIGroupDecision allocation;
+    allocation.representative = ped;
+    allocation.taskType = reinterpret_cast<GetTaskType>(taskVtable[4])(mainTask);
+    allocation.representativeModel = pedInterface->m_nModelIndex;
+    allocation.representativePedType = pedInterface->bPedType;
+    allocation.allocationType = allocationType;
+    CWeapon* weapon = ped->GetWeapon(ped->GetCurrentWeaponSlot());
+    allocation.memberWeaponType = weapon ? static_cast<int>(weapon->GetType()) : 0;
+
+    const auto intelligenceAddress = reinterpret_cast<std::uintptr_t>(intelligence);
+    if (intelligenceAddress >= GTA_PED_GROUPS + PED_GROUP_INTELLIGENCE_OFFSET)
+    {
+        const auto groupAddress = intelligenceAddress - PED_GROUP_INTELLIGENCE_OFFSET;
+        if (groupAddress >= GTA_PED_GROUPS && groupAddress < GTA_PED_GROUPS + PED_GROUP_SIZE * PED_GROUP_COUNT &&
+            (groupAddress - GTA_PED_GROUPS) % PED_GROUP_SIZE == 0)
+        {
+            allocation.nativeGroupId = static_cast<unsigned int>((groupAddress - GTA_PED_GROUPS) / PED_GROUP_SIZE);
+        }
+    }
+    pGameInterface->ReportNativeAIGroupDecision(allocation);
+}
+
+static void CallNativeKillThreatsAssignment(void* intelligence, CPedSAInterface* ped, bool hasMainTask, void* mainTask, bool hasSecondaryTask,
+                                            void* secondaryTask, int secondarySlot, int allocationType)
+{
+    using SetEventResponseTask = void(__thiscall*)(void*, CPedSAInterface*, bool, void*, bool, void*, int);
+    reinterpret_cast<SetEventResponseTask>(0x5F8510)(intelligence, ped, hasMainTask, mainTask, hasSecondaryTask, secondaryTask, secondarySlot);
+    // This is intentionally after the stock call: a trace record means GTA
+    // actually accepted and cloned the allocator's task for this member.
+    ReportNativeAmbientKillThreatsAllocation(intelligence, ped, mainTask, allocationType);
+}
+
+void __fastcall HOOK_CTaskAllocatorKillThreatsRandom_AssignSeekCover(void* intelligence, void*, CPedSAInterface* ped, bool hasMainTask, void* mainTask,
+                                                                     bool hasSecondaryTask, void* secondaryTask, int secondarySlot)
+{
+    CallNativeKillThreatsAssignment(intelligence, ped, hasMainTask, mainTask, hasSecondaryTask, secondaryTask, secondarySlot, 2);
+}
+
+void __fastcall HOOK_CTaskAllocatorKillThreatsRandom_AssignKill(void* intelligence, void*, CPedSAInterface* ped, bool hasMainTask, void* mainTask,
+                                                                bool hasSecondaryTask, void* secondaryTask, int secondarySlot)
+{
+    CallNativeKillThreatsAssignment(intelligence, ped, hasMainTask, mainTask, hasSecondaryTask, secondaryTask, secondarySlot, 1);
 }
 
 struct CInformGroupEventQueueEntrySAInterface

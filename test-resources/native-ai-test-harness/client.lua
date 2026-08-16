@@ -6,7 +6,7 @@ end
 
 local function isGangDecisionKind(kind)
     return kind == "gang_unarmed_flee" or kind == "gang_armed_leader" or kind == "gang_armed_member" or
-        kind == "gang_armed_handoff" or kind == "gang_friendly_source"
+        kind == "gang_armed_handoff" or kind == "gang_friendly_source" or kind == "gang_two_armed_two_unarmed_melee"
 end
 
 local harnessWeaponClips = {[22] = 17, [24] = 7, [28] = 50, [30] = 30, [32] = 50}
@@ -250,11 +250,17 @@ local function captureCollectiveResponse(run)
         end
         local expectedWeapon = tonumber(run.scenario.pedWeapons and run.scenario.pedWeapons[index]) or 0
         local armed = expectedWeapon ~= 0
-        -- TASK_GROUP_KILL_PLAYER_BASIC allocates the gun task only to armed
-        -- members. Stock unarmed members participate by seeking cover until
-        -- the target dies; accepting a kill task here would hide a wrong
-        -- allocator branch.
-        local fightAllocated = armed and hasFight or not armed and hasCover
+        -- With a firearm threat, melee members seek cover. With the dedicated
+        -- melee-threat fixture, retail assigns KillPedOnFoot to all four
+        -- members; an individual DUCK may mask that primary task temporarily,
+        -- which is why the C++ allocator trace remains the final oracle.
+        local meleeThreat = tonumber(run.scenario.sourceWeapon) == 0
+        local fightAllocated
+        if meleeThreat then
+            fightAllocated = hasFight
+        else
+            fightAllocated = armed and hasFight or not armed and hasCover
+        end
         if armed and hasFight then
             armedFightCount = armedFightCount + 1
         end
@@ -288,8 +294,9 @@ addEventHandler("nativeAIHarness:decisionAttack", resourceRoot,
         return
     end
     local token = run.profileTokens[attackedPed]
+    local sourceWeapon = tonumber(run.scenario.sourceWeapon) or 22
     local accepted = token and isPedNativeEventProfileActive(attackedPed, token) and
-                         addPedNativeDamageResponseEvent(attackedPed, sourcePed, 22, 3, token) == true
+                         addPedNativeDamageResponseEvent(attackedPed, sourcePed, sourceWeapon, 3, token) == true
     run.actionId = tostring(actionId)
     run.expectedResponse = expectedResponse
     report("decision-injected", {
@@ -299,6 +306,7 @@ addEventHandler("nativeAIHarness:decisionAttack", resourceRoot,
         sourceActorId = tostring(getElementData(sourcePed, "neon:nativeAIActorId") or
                                    (sourcePed == run.victim and "victim-player" or "unknown")),
         expectedResponse = expectedResponse,
+        sourceWeapon = sourceWeapon,
     })
     if not accepted then
         return
@@ -318,6 +326,13 @@ addEventHandler("nativeAIHarness:decisionAttack", resourceRoot,
         local response, rows = captureCollectiveResponse(run)
         if response then
             return report("collective-response", {actionId = run.actionId, response = response, members = rows})
+        end
+        if run.kind == "gang_two_armed_two_unarmed_melee" and getTickCount() - startedAt >= 1500 then
+            return report("allocator-capture", {
+                actionId = run.actionId,
+                response = "active-task-masked-or-incomplete",
+                members = rows,
+            })
         end
         if getTickCount() - startedAt >= 5000 then
             return report("collective-response-timeout", {

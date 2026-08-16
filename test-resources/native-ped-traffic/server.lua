@@ -25,6 +25,9 @@ local config = {
     nativeBikeJackMaximumSpeed = 0.12,
     nativeGangWeaponChance = 33,
     nativeGangWeaponAmmo = 25001,
+    nativeDealerFightWeaponAmmo = 50,
+    dealerStrengthGrowthInterval = 60000,
+    populationWorldConvergenceGrace = 5000,
     minimumGangGroupSize = 2,
     maximumGangGroupSize = 4,
     maximumGangGroupSpan = 8,
@@ -43,6 +46,8 @@ local config = {
 -- full melee.dat 1..200 range would let a compromised syncer claim the
 -- UNARMED_4 instant-kill strike for an ordinary traffic ped.
 local stockUnarmedGangDamageFactors = {[5] = true, [6] = true, [9] = true, [15] = true, [25] = true}
+local stockUnarmedDealerDamageFactors = {[6] = true, [7] = true, [10] = true, [18] = true, [30] = true}
+local stockKnifeDealerDamageFactors = {[12] = true, [30] = true}
 local stockUnarmedCivilianDamageFactors = {
     [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true, [8] = true,
     [9] = true, [10] = true, [12] = true, [13] = true, [15] = true, [16] = true, [17] = true,
@@ -60,37 +65,35 @@ local stockGangFirearmDamage = {
 local function getCanonicalTrafficNativeDamage(record, weapon, damageFactor)
     if weapon == 0 then
         if record.populationClass == "gang" and stockUnarmedGangDamageFactors[damageFactor] == true or
+            record.populationClass == "dealer" and stockUnarmedDealerDamageFactors[damageFactor] == true or
             record.populationClass == "civilian" and stockUnarmedCivilianDamageFactors[damageFactor] == true then
             return config.nativeMeleeDamageRadius, config.nativeMeleeDamageInterval
         end
         return false
     end
+    if weapon == 4 and record.populationClass == "dealer" and record.dealerFightArmed == true and
+        record.dealerHasKnife == true and stockKnifeDealerDamageFactors[damageFactor] == true then
+        return config.nativeMeleeDamageRadius, config.nativeMeleeDamageInterval
+    end
     local firearm = record.populationClass == "gang" and stockGangFirearmDamage[weapon] or false
+    if record.populationClass == "dealer" and record.dealerFightArmed == true and record.dealerHasPistol == true and weapon == 22 then
+        firearm = stockGangFirearmDamage[22]
+    end
     if firearm and damageFactor == firearm.factor then
         return firearm.radius, config.nativeFirearmDamageInterval
     end
     return false
 end
 
--- Stock peds.ide/pedgrp.dat mapping. The server cannot inspect a model's native
--- CPedModelInfo type, so this allowlist authenticates the gang identity claimed
--- by an untrusted client candidate before creating shared element metadata.
-local gangByModel = {
-    [102] = 0, [103] = 0, [104] = 0,
-    [105] = 1, [106] = 1, [107] = 1,
-    [108] = 2, [109] = 2, [110] = 2,
-    [173] = 3, [174] = 3, [175] = 3,
-    [121] = 4, [122] = 4, [123] = 4,
-    [124] = 5, [125] = 5, [126] = 5, [127] = 5,
-    [117] = 6, [118] = 6, [120] = 6,
-    [114] = 7, [115] = 7, [116] = 7,
-}
-
--- Retail's DEALERS pedgrp contains these four entries in this exact order.
--- Their peds.ide types are CRIMINAL/CIVMALE, so the shared population
--- contract must authenticate the model separately and require logical type
--- PED_TYPE_DEALER (17) instead of trusting the model-info type.
-local dealerModels = {[28] = true, [29] = true, [30] = true, [254] = true}
+-- Candidate identity is rebuilt from a checked-in catalog generated from the
+-- retail data files. Keeping this mapping in one versioned artifact prevents
+-- cops, special occupations and future relations from accumulating separate
+-- hand-maintained Lua allowlists.
+local populationCatalog = assert(PedTrafficPopulationCatalog, "population catalog missing")
+local gangByModel = populationCatalog.gangByModel
+local civilianPedTypeByModel = populationCatalog.civilianPedTypeByModel
+local dealerModels = {}
+for _, model in ipairs(populationCatalog.dealerModels) do dealerModels[model] = true end
 
 -- CPopulation::AddPed performs two independent CGeneral rolls for every gang
 -- ped: the first arms it when [0, 100) is below 33, then the second selects
@@ -168,23 +171,41 @@ local function applyGangPedWeapon(ped, weapon)
     return setWeaponAmmo(ped, weapon, config.nativeGangWeaponAmmo, clip) == true
 end
 
--- Models reachable from the stock civilian popcycle groups, intersected with
--- peds.ide CIVMALE/CIVFEMALE. This excludes cops, dealers, gangs and specials
--- even when a modified client forges the accompanying pedType field.
-local civilianPedTypeByModel = {}
-for _, model in ipairs({
-    14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 27, 32, 33, 34, 35, 36, 37, 43, 44, 45, 46, 48, 50, 51, 52, 57, 58,
-    59, 60, 61, 71, 72, 73, 77, 78, 79, 82, 83, 84, 94, 95, 96, 98, 99, 101, 128, 132, 133, 134, 135, 136, 137, 142,
-    147, 153, 154, 158, 159, 160, 161, 162, 164, 170, 182, 185, 186, 187, 188, 189, 200, 202, 206, 212, 213, 221, 222,
-    227, 228, 229, 230, 234, 235, 236, 239, 240, 241, 242,
-}) do
-    civilianPedTypeByModel[model] = 4
+local function selectDealerFightWeapons(seed, knifeModelLoaded)
+    if seed < 200 then
+        -- GiveWeaponAtStartOfFight tries the knife first. A resident knife
+        -- model clears GTA's one-entry delayed slot synchronously, allowing
+        -- the independent pistol check to run; a cold knife leaves that slot
+        -- occupied and suppresses the pistol on this first fight.
+        return true, knifeModelLoaded == true
+    end
+    return false, seed < 400
 end
-for _, model in ipairs({
-    9, 10, 12, 13, 31, 38, 39, 40, 41, 53, 54, 55, 56, 69, 76, 88, 89, 90, 91, 92, 93, 129, 130, 131, 138, 139, 140,
-    141, 148, 150, 151, 157, 169, 196, 197, 198, 199, 201, 215, 216, 218, 219, 224, 225, 226, 231, 232, 233, 251,
-}) do
-    civilianPedTypeByModel[model] = 5
+
+local function applyDealerFightWeapons(record, knifeModelLoaded)
+    local ped = record.ped
+    if not isElement(ped) or getPedWeapon(ped) ~= 0 then
+        return false, "dealer-not-unarmed"
+    end
+    local hasKnife, hasPistol = selectDealerFightWeapons(record.dealerFightSeed, knifeModelLoaded)
+    if hasKnife and not giveWeapon(ped, 4, config.nativeDealerFightWeaponAmmo, not hasPistol) then
+        return false, "dealer-knife-grant-refused"
+    end
+    if hasPistol and (not setPedStat(ped, 69, 40) or not giveWeapon(ped, 22, config.nativeDealerFightWeaponAmmo, true) or
+        not setWeaponAmmo(ped, 22, config.nativeDealerFightWeaponAmmo, math.min(17, config.nativeDealerFightWeaponAmmo))) then
+        return false, "dealer-pistol-grant-refused"
+    end
+    record.dealerFightArmed = true
+    record.dealerHasKnife = hasKnife
+    record.dealerHasPistol = hasPistol
+    record.weapon = hasPistol and 22 or (hasKnife and 4 or 0)
+    record.weaponAmmo = record.weapon ~= 0 and config.nativeDealerFightWeaponAmmo or 0
+    setElementData(ped, "neon:ambientPedWeapon", record.weapon)
+    setElementData(ped, "neon:ambientPedWeaponAmmo", record.weaponAmmo)
+    setElementData(ped, "neon:ambientPedDealerKnife", hasKnife)
+    setElementData(ped, "neon:ambientPedDealerPistol", hasPistol)
+    setElementData(ped, "neon:ambientPedDealerFightArmed", true)
+    return true
 end
 
 local enabled = false
@@ -205,9 +226,13 @@ local pendingRequests = {}
 local pendingVisibilityChecks = {}
 local populationProfiles = {}
 local populationWorld = PedTrafficPopulationWorld.create("post_home_coming")
+local lastDealerStrengthMinute = math.floor(getTickCount() / config.dealerStrengthGrowthInterval)
+local populationWorldPublishedAt = getTickCount()
+local populationWorldConvergenceTraceRevision = false
 local populationWorldRevisions = {}
 local trafficPeds = {}
 local trafficGroups = {}
+local nextGroupDamageId = 0
 local testVehicles = {}
 local pendingNativeBikeJacks = {}
 local bikeJackTest = false
@@ -314,6 +339,27 @@ local function sendPopulationWorldState(target)
     triggerClientEvent(target or root, "pedTraffic:populationWorldState", resourceRoot, populationWorld:getClientProjection())
 end
 
+local function publishPopulationWorldMutation(kind, details)
+    pendingRequests = {}
+    -- Keep the last authenticated profile long enough to prove that an
+    -- existing owner is still spatially resident while clients apply the new
+    -- world revision. New admission remains fenced below by an exact profile
+    -- revision check, so this continuity cannot authorize a stale spawn.
+    populationWorldRevisions = {}
+    populationWorldPublishedAt = getTickCount()
+    populationWorldConvergenceTraceRevision = false
+    writePopulationTrace("dealer_strength_world_revision", {
+        scenario_id = dealerTest and dealerTest.id or false,
+        mutation = kind,
+        revision = populationWorld.revision,
+        catalog_revision = populationCatalog.revision,
+        details = details or {},
+    })
+    if enabled then
+        sendPopulationWorldState(root)
+    end
+end
+
 local function countReason(bucket, reason)
     reason = tostring(reason or "unknown")
     bucket[reason] = (bucket[reason] or 0) + 1
@@ -349,6 +395,9 @@ end
 
 local function validatePopulationProfile(profile)
     if type(profile) ~= "table" or profile.worldRevision ~= populationWorld.revision or
+        profile.catalogRevision ~= populationCatalog.revision or type(profile.zoneLabel) ~= "string" or
+        #profile.zoneLabel < 1 or #profile.zoneLabel > 8 or profile.zoneLabel:find("[^A-Z0-9]") or
+        populationWorld.zones[profile.zoneLabel] == nil or
         not isFiniteNumber(profile.target) or not isFiniteNumber(profile.supportedTarget) or not isFiniteNumber(profile.civilianTarget) or
         not isFiniteNumber(profile.rawCopTarget) or not isFiniteNumber(profile.copTarget) or not isFiniteNumber(profile.gangTarget) or
         not isFiniteNumber(profile.dealerTarget) or not isFiniteNumber(profile.pedDensityMultiplier) or
@@ -387,6 +436,16 @@ local function validatePopulationProfile(profile)
     if profile.gangTarget > 0.05 and totalGangWeight == 0 then
         return false
     end
+    local zoneState = populationWorld.zones[profile.zoneLabel]
+    if profile.zoneType ~= zoneState.populationType or profile.dealerStrength ~= zoneState.dealerStrength or
+        profile.raceFlags ~= zoneState.races or profile.noCops ~= zoneState.noCops then
+        return false
+    end
+    for index = 1, 10 do
+        if gangWeights[index] ~= zoneState.gangStrengths[index] then
+            return false
+        end
+    end
 
     -- Enabling territory wars does not mean one is currently being fought.
     -- Vanilla suppresses ambient cops only during an active fight (or through
@@ -406,6 +465,7 @@ local function validatePopulationProfile(profile)
         timeIndex = profile.timeIndex,
         weekend = profile.weekend,
         dealerStrength = profile.dealerStrength,
+        zoneLabel = profile.zoneLabel,
         raceFlags = profile.raceFlags,
         noCops = profile.noCops,
         gangWeights = gangWeights,
@@ -466,7 +526,7 @@ end
 
 local function getNativeTargetsNearPlayer(player)
     local profile = populationProfiles[player]
-    if not profile or getTickCount() - profile.receivedAt > 2500 then
+    if not profile or profile.worldRevision ~= populationWorld.revision or getTickCount() - profile.receivedAt > 2500 then
         return false
     end
     return calculateNativeTargets(profile)
@@ -501,6 +561,16 @@ local function getEligiblePlayers()
     return players
 end
 
+local function getPopulationWorldConvergencePlayerCount()
+    local count = 0
+    for _, player in ipairs(getElementsByType("player")) do
+        if isEligiblePlayer(player) and not isPopulationWorldReady(player) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
 local function getPopulationRadiusForClass(profile, populationClass)
     local radii = getPopulationRadii(profile)
     return radii and (populationClass == "gang" and radii.gang or radii.civilian) or false
@@ -510,7 +580,9 @@ local function findClosestPopulationResident(x, y, z, populationClass, excludedP
     local closest, closestDistanceSquared
     for _, player in ipairs(getEligiblePlayers()) do
         if player ~= excludedPlayer then
-            local radius = getPopulationRadiusForClass(populationProfiles[player], populationClass)
+            local profile = populationProfiles[player]
+            local radius = profile and profile.worldRevision == populationWorld.revision and
+                               getPopulationRadiusForClass(profile, populationClass) or false
             if radius then
                 local px, py, pz = getElementPosition(player)
                 local distanceSquared = squaredDistance2D(x, y, px, py)
@@ -792,6 +864,26 @@ local function getGroupDistanceSquaredToPlayer(group, player)
     return closestDistanceSquared
 end
 
+local function isCurrentPopulationOwnerSpatiallyResident(record)
+    local owner = record and record.owner
+    local profile = isEligiblePlayer(owner) and populationProfiles[owner] or false
+    local radius = profile and getPopulationRadiusForClass(profile, record.populationClass) or false
+    if not radius then
+        return false
+    end
+    local pedX, pedY = getElementPosition(record.ped)
+    local ownerX, ownerY = getElementPosition(owner)
+    return squaredDistance2D(pedX, pedY, ownerX, ownerY) <= radius * radius
+end
+
+local function isCurrentGroupOwnerSpatiallyResident(group)
+    local owner = group and group.owner
+    local profile = isEligiblePlayer(owner) and populationProfiles[owner] or false
+    local radii = profile and getPopulationRadii(profile) or false
+    local distanceSquared = radii and getGroupDistanceSquaredToPlayer(group, owner) or false
+    return distanceSquared and distanceSquared <= radii.gang * radii.gang or false
+end
+
 local function findFurthestSurplusPopulationGroup(x, y, z, radius, gang, requireTotalSurplus)
     local furthestGroup = false
     local furthestDistanceSquared = -1
@@ -1005,42 +1097,143 @@ local function bridgeGunAim(record, aimingPlayer)
     return triggerClientEvent(record.owner, "pedTraffic:gunAimedAt", resourceRoot, record.ped, aimingPlayer)
 end
 
-local function bridgeDamageResponse(record, attackingPlayer, weapon, bodypart, force)
+local function bridgeDamageResponse(record, attackingPlayer, weapon, bodypart, force, damageId)
     if not record or record.removing or record.state ~= "active" or not isElement(record.owner) or not isElement(attackingPlayer) or
         (record.owner == attackingPlayer and force ~= true) then
         return false
     end
 
-    log(("damage-bridge id=%d attacker=%s owner=%s weapon=%d bodypart=%d"):format(
-            record.id, getPlayerName(attackingPlayer), getPlayerName(record.owner), weapon, bodypart))
-    return triggerClientEvent(record.owner, "pedTraffic:damageResponse", resourceRoot, record.ped, attackingPlayer, weapon, bodypart)
+    log(("damage-bridge id=%d damage=%s attacker=%s owner=%s weapon=%d bodypart=%d"):format(
+            record.id, tostring(damageId or false), getPlayerName(attackingPlayer), getPlayerName(record.owner), weapon, bodypart))
+    return triggerClientEvent(record.owner, "pedTraffic:damageResponse", resourceRoot, record.ped, attackingPlayer, weapon, bodypart,
+                              damageId or false)
 end
 
-local function rememberGroupCombatContext(record, attackingPlayer, weapon, bodypart, source)
+local function rememberGroupCombatContext(record, attackingPlayer, weapon, bodypart, source, observerNonce)
     if not record or not record.group or record.group.removing or not isElement(attackingPlayer) or
         getElementType(attackingPlayer) ~= "player" then
         return false
     end
     local group = record.group
-    group.combatContext = {
-        target = record,
+    local now = getTickCount()
+    local canonicalWeapon = math.floor(tonumber(weapon) or 0)
+    local canonicalBodypart = math.floor(tonumber(bodypart) or 0)
+    local sourceName = tostring(source or "unknown")
+    local context = group.combatContext
+    local matchesCurrent = context and context.target == record and context.attacker == attackingPlayer and
+        context.weapon == canonicalWeapon and context.bodypart == canonicalBodypart and now - context.observedAt <= 1000
+    local canMerge = matchesCurrent and
+        (sourceName == "server-ped-damage" and context.serverObserved ~= true or
+         sourceName == "observer-bridge" and context.observerNonce == nil)
+
+    if not canMerge then
+        nextGroupDamageId = nextGroupDamageId % 2147483647 + 1
+        context = {
+            damageId = nextGroupDamageId,
+            target = record,
+            attacker = attackingPlayer,
+            weapon = canonicalWeapon,
+            bodypart = canonicalBodypart,
+            observedAt = now,
+            source = sourceName,
+            decisionState = "pending",
+        }
+        group.combatContext = context
+    end
+    context.observedAt = now
+    context.source = sourceName
+    if sourceName == "server-ped-damage" then
+        context.serverObserved = true
+        -- An active owner receives the authentic GTA damage event through the
+        -- ordinary damage pipeline. Remember it for diagnostics, but never
+        -- turn a later technical rebuild into a second decision-maker query.
+        if group.state == "active" and isElement(group.owner) then
+            context.decisionState = "native-observed"
+        end
+    elseif sourceName == "observer-bridge" then
+        context.observerNonce = observerNonce
+    end
+    writePopulationTrace("group_combat_context", {
+        group_id = group.id,
+        traffic_id = record.id,
+        damage_id = context.damageId,
+        epoch = group.epoch,
+        owner_id = isElement(group.owner) and getPopulationClientId(group.owner) or false,
+        attacker_id = getPopulationClientId(attackingPlayer),
+        weapon = context.weapon,
+        bodypart = context.bodypart,
+        source = context.source,
+        decision_state = context.decisionState,
+        merged = canMerge == true,
+        observer_nonce = observerNonce or false,
+    })
+    return context
+end
+
+local function rememberDealerCombatContext(record, attackingPlayer, weapon, bodypart, source)
+    if not record or record.group or record.populationClass ~= "dealer" or record.removing or not isElement(attackingPlayer) or
+        getElementType(attackingPlayer) ~= "player" then
+        return false
+    end
+    record.combatContext = {
         attacker = attackingPlayer,
         weapon = math.floor(tonumber(weapon) or 0),
         bodypart = math.floor(tonumber(bodypart) or 0),
         observedAt = getTickCount(),
         source = tostring(source or "unknown"),
     }
-    writePopulationTrace("group_combat_context", {
-        group_id = group.id,
+    writePopulationTrace("dealer_combat_context", {
         traffic_id = record.id,
-        epoch = group.epoch,
-        owner_id = isElement(group.owner) and getPopulationClientId(group.owner) or false,
+        epoch = record.epoch,
+        owner_id = isElement(record.owner) and getPopulationClientId(record.owner) or false,
         attacker_id = getPopulationClientId(attackingPlayer),
-        weapon = group.combatContext.weapon,
-        bodypart = group.combatContext.bodypart,
-        source = group.combatContext.source,
+        weapon = record.combatContext.weapon,
+        bodypart = record.combatContext.bodypart,
+        source = record.combatContext.source,
     })
     return true
+end
+
+local function restoreDealerCombatContext(record)
+    local context = record and record.combatContext
+    if not context then
+        return false
+    end
+
+    local pedX, pedY, pedZ
+    local attackerX, attackerY, attackerZ
+    if isElement(record.ped) then
+        pedX, pedY, pedZ = getElementPosition(record.ped)
+    end
+    if isElement(context.attacker) then
+        attackerX, attackerY, attackerZ = getElementPosition(context.attacker)
+    end
+    local contextAge = getTickCount() - context.observedAt
+    if contextAge <= 8000 and not record.removing and isElement(record.ped) and isElement(context.attacker) and
+        getElementHealth(context.attacker) > 0 and getElementDimension(context.attacker) == getElementDimension(record.ped) and
+        getElementInterior(context.attacker) == getElementInterior(record.ped) and pedX and attackerX and
+        squaredDistance(pedX, pedY, pedZ, attackerX, attackerY, attackerZ) <= 250 * 250 then
+        local restored = bridgeDamageResponse(record, context.attacker, context.weapon, context.bodypart, true)
+        writePopulationTrace("dealer_combat_context_restored", {
+            traffic_id = record.id,
+            epoch = record.epoch,
+            owner_id = isElement(record.owner) and getPopulationClientId(record.owner) or false,
+            attacker_id = getPopulationClientId(context.attacker),
+            weapon = context.weapon,
+            bodypart = context.bodypart,
+            accepted = restored == true,
+            context_age_ms = contextAge,
+        })
+        return restored
+    end
+
+    writePopulationTrace("dealer_combat_context_expired", {
+        traffic_id = record.id,
+        epoch = record.epoch,
+        context_age_ms = contextAge,
+    })
+    record.combatContext = nil
+    return false
 end
 
 local function assignOwner(record, owner, reason)
@@ -1285,6 +1478,9 @@ local function beginSuspension(record, reason)
     if not record or record.removing or record.state == "suspending" or record.state == "suspended" or not isElement(record.ped) then
         return
     end
+    if dealerTest and dealerTest.record == record then
+        dealerTest.unexpectedSuspensionReason = tostring(reason)
+    end
     record.pendingOwner = nil
     record.state = "suspending"
     record.handoffDeadline = getTickCount() + config.handoffTimeout
@@ -1358,7 +1554,8 @@ local function findClosestGroupResident(group, excludedPlayer, requireCapacity)
     for _, player in ipairs(getEligiblePlayers()) do
         if player ~= excludedPlayer and
             (not requireCapacity or countNativeGroupsForOwner(player, group) < config.maximumNativeGangGroups) then
-            local radii = getPopulationRadii(populationProfiles[player])
+            local profile = populationProfiles[player]
+            local radii = profile and profile.worldRevision == populationWorld.revision and getPopulationRadii(profile) or false
             local distanceSquared = radii and getGroupDistanceSquaredToPlayer(group, player)
             if distanceSquared and distanceSquared <= radii.gang * radii.gang and
                 (not closestDistanceSquared or distanceSquared < closestDistanceSquared) then
@@ -1530,7 +1727,10 @@ finishGroupSuspension = function(group, reason)
     group.owner = nil
     group.pendingOwner = nil
     group.handoffDeadline = nil
-    group.suspendedAt = group.suspendedAt or getTickCount()
+    group.suspendedAt = getTickCount()
+    -- The three-second active hold is not despawn grace. Start the removal
+    -- window only after the old native owner has actually released the group.
+    group.outsideResidencySince = group.suspendedAt
     setGroupState(group, "suspended")
     for _, record in ipairs(group.members) do
         if isElement(record.ped) then
@@ -1571,6 +1771,57 @@ local function beginGroupSuspension(group, reason)
     else
         finishGroupSuspension(group, "group-owner-departed")
     end
+end
+
+local function clearGroupZeroResidentHold(group, reason)
+    if not group or not group.outsideResidencySince then
+        return
+    end
+    writePopulationTrace("group_collision_residency_hold_released", {
+        scenario_id = residencyTest and residencyTest.group == group and residencyTest.id or false,
+        group_id = group.id,
+        epoch = group.epoch,
+        owner_id = isElement(group.owner) and getPopulationClientId(group.owner) or false,
+        hold_age_ms = getTickCount() - group.outsideResidencySince,
+        reason = tostring(reason),
+    })
+    group.outsideResidencySince = nil
+end
+
+local function updateGroupZeroResidentHold(group, reason, now)
+    if not group or group.removing or group.state ~= "active" then
+        return false
+    end
+    now = now or getTickCount()
+    if not isEligiblePlayer(group.owner) then
+        beginGroupSuspension(group, "group-owner-ineligible")
+        return true
+    end
+    if not group.outsideResidencySince then
+        group.outsideResidencySince = now
+        writePopulationTrace("group_collision_residency_hold_started", {
+            scenario_id = residencyTest and residencyTest.group == group and residencyTest.id or false,
+            group_id = group.id,
+            epoch = group.epoch,
+            owner_id = getPopulationClientId(group.owner),
+            hold_ms = config.handoffHold,
+            reason = tostring(reason),
+        })
+        return false
+    end
+    if now - group.outsideResidencySince < config.handoffHold then
+        return false
+    end
+    writePopulationTrace("group_collision_residency_hold_expired", {
+        scenario_id = residencyTest and residencyTest.group == group and residencyTest.id or false,
+        group_id = group.id,
+        epoch = group.epoch,
+        owner_id = getPopulationClientId(group.owner),
+        hold_age_ms = now - group.outsideResidencySince,
+        reason = tostring(reason),
+    })
+    beginGroupSuspension(group, reason)
+    return true
 end
 
 local function beginGroupHandoff(group, newOwner, reason)
@@ -1615,8 +1866,9 @@ end
 -- current owner has left that bubble: GTA can unload the old collision sector
 -- before the delayed handoff, allowing an authoritative ped to fall and export
 -- that invalid transform. Check this narrow safety condition frequently and
--- transfer immediately to an already-resident peer, or suspend without a
--- syncer when none exists. The slower lifecycle loop below owns resumption,
+-- transfer immediately to an already-resident peer. With no resident, keep
+-- the same owner/epoch/native group for the bounded three-second collision
+-- hold; only a continuous absence may suspend without a syncer. The slower lifecycle loop below owns resumption,
 -- ordinary closer-owner arbitration and despawn decisions.
 setTimer(function()
     if not enabled then
@@ -1629,13 +1881,18 @@ setTimer(function()
         if not group.removing and group.state == "active" then
             local closest = findClosestGroupResident(group, nil, true)
             if not closest then
-                beginGroupSuspension(group, "group-no-collision-resident")
+                if not isCurrentGroupOwnerSpatiallyResident(group) then
+                    updateGroupZeroResidentHold(group, "group-no-collision-resident")
+                end
             elseif closest ~= group.owner then
+                clearGroupZeroResidentHold(group, "resident-returned")
                 local ownerRadii = isEligiblePlayer(group.owner) and getPopulationRadii(populationProfiles[group.owner]) or false
                 local ownerDistanceSquared = ownerRadii and getGroupDistanceSquaredToPlayer(group, group.owner) or false
                 if not ownerDistanceSquared or ownerDistanceSquared > ownerRadii.gang * ownerRadii.gang then
                     beginGroupHandoff(group, closest, "group-owner-left-residency")
                 end
+            else
+                clearGroupZeroResidentHold(group, "owner-resident")
             end
         end
     end
@@ -1647,7 +1904,9 @@ setTimer(function()
             local x, y, z = getElementPosition(record.ped)
             local closest = findClosestPopulationResident(x, y, z, record.populationClass)
             if not closest then
-                beginSuspension(record, "no-collision-resident")
+                if not isCurrentPopulationOwnerSpatiallyResident(record) then
+                    beginSuspension(record, "no-collision-resident")
+                end
             elseif closest ~= record.owner then
                 local ownerRadius = isEligiblePlayer(record.owner) and
                                         getPopulationRadiusForClass(populationProfiles[record.owner], record.populationClass) or false
@@ -1833,6 +2092,7 @@ local function spawnGangGroup(player, candidate, selection)
             armedRoll = armedRoll,
             weaponSlotRoll = slotRoll,
             weaponSlotCount = weaponSlotCount,
+            catalogRevision = populationCatalog.revision,
         }
         group.members[index] = record
         trafficPeds[ped] = record
@@ -1845,6 +2105,7 @@ local function spawnGangGroup(player, candidate, selection)
         setElementData(ped, "neon:ambientPedGroupId", group.id)
         setElementData(ped, "neon:ambientPedGroupIndex", index)
         setElementData(ped, "neon:ambientPedGroupRole", index == 1 and "leader" or "member")
+        setElementData(ped, "neon:ambientPedCatalogRevision", populationCatalog.revision)
         setElementData(ped, "neon:ambientPedWeapon", weapon)
         setElementData(ped, "neon:ambientPedWeaponAmmo", record.weaponAmmo)
         setElementData(ped, "neon:ambientPedWeaponClipAmmo", record.weaponClipAmmo)
@@ -1970,7 +2231,14 @@ local function spawnCandidate(player, candidate, selection)
         gang = gang,
         state = "created",
         createdAt = getTickCount(),
+        catalogRevision = populationCatalog.revision,
     }
+    if populationClass == "dealer" then
+        record.dealerFightSeed = math.random(0, 1023)
+        record.dealerFightArmed = false
+        record.dealerHasKnife = false
+        record.dealerHasPistol = false
+    end
     trafficPeds[ped] = record
     setElementDimension(ped, 0)
     setElementInterior(ped, 0)
@@ -1981,6 +2249,14 @@ local function spawnCandidate(player, candidate, selection)
     setElementData(ped, "neon:ambientPedPopulationClass", populationClass)
     setElementData(ped, "neon:ambientPedLogicalType", record.logicalPedType)
     setElementData(ped, "neon:ambientPedGang", gang)
+    setElementData(ped, "neon:ambientPedCatalogRevision", populationCatalog.revision)
+    if populationClass == "dealer" then
+        setElementData(ped, "neon:ambientPedWeapon", 0)
+        setElementData(ped, "neon:ambientPedWeaponAmmo", 0)
+        setElementData(ped, "neon:ambientPedDealerKnife", false)
+        setElementData(ped, "neon:ambientPedDealerPistol", false)
+        setElementData(ped, "neon:ambientPedDealerFightArmed", false)
+    end
     beginSpawnFade({ped})
 
     if populationClass == "dealer" and getPedWeapon(ped) ~= 0 then
@@ -2017,7 +2293,9 @@ local function spawnCandidate(player, candidate, selection)
         model = modelOrReason,
         population_class = populationClass,
         logical_ped_type = record.logicalPedType,
+        catalog_revision = record.catalogRevision,
         initial_weapon = getPedWeapon(ped),
+        dealer_fight_seed = record.dealerFightSeed or false,
         task_profile = "wander-standard",
         gang = gang,
         targets = {civilian = selection.civilianTarget, dealer = selection.dealerTarget, gang = selection.gangTarget},
@@ -2793,6 +3071,13 @@ end
 local function traceResidencyTestAction(test, action)
     test.action = action
     test.actionStartedAt = getTickCount()
+    for index, record in ipairs(test.group.members) do
+        if isElement(record.ped) then
+            setElementData(record.ped, "neon:nativeAIActorId", "ped-" .. tostring(index))
+            setElementData(record.ped, "neon:nativeAIActionId", action)
+            setElementData(record.ped, "neon:nativeAIStep", action)
+        end
+    end
     writePopulationTrace("residency_test_action", {
         scenario_id = test.id,
         action = action,
@@ -2818,6 +3103,17 @@ stopResidencyTest = function(outcome, reason)
     if test.group and test.group.residencyTestId == test.id then
         test.group.residencyTestId = nil
     end
+    if test.group then
+        for _, record in ipairs(test.group.members) do
+            if isElement(record.ped) then
+                removeElementData(record.ped, "neon:nativeAIRunId")
+                removeElementData(record.ped, "neon:nativeAIScenarioId")
+                removeElementData(record.ped, "neon:nativeAIActorId")
+                removeElementData(record.ped, "neon:nativeAIActionId")
+                removeElementData(record.ped, "neon:nativeAIStep")
+            end
+        end
+    end
     for _, player in ipairs(test.players) do
         if isElement(player) then
             triggerClientEvent(player, "pedTraffic:residencyStop", resourceRoot, test.id)
@@ -2840,6 +3136,9 @@ stopResidencyTest = function(outcome, reason)
         group_id = test.group and test.group.id or false,
         owner_id = test.group and isElement(test.group.owner) and getPopulationClientId(test.group.owner) or false,
         epoch = test.group and test.group.epoch or false,
+        damage_id = test.damageId or false,
+        damage_dispatches = test.damageDispatches or 0,
+        weapon_state_commits = test.weaponStateCommits or 0,
     })
     local message = ("Residency test %s: %s (scenario %d)"):format(outcome, tostring(reason), test.id)
     outputChatBox(message, root, outcome == "PASS" and 80 or 255, outcome == "PASS" and 220 or 80, 120)
@@ -2920,8 +3219,9 @@ local function pulseResidencyTest(test)
 
     local residentA = isResidencyTestPlayerResident(test, test.ownerA)
     local residentB = isResidencyTestPlayerResident(test, test.ownerB)
-    local expectedA = test.action == "prepare" or test.action == "handoff-b-to-a" or test.action == "resume"
-    local expectedB = test.action == "prepare" or test.action == "handoff-a-to-b"
+    local expectedA = test.action == "prepare" or test.action == "damage-settle" or test.action == "handoff-b-to-a" or
+        test.action == "boundary-hold-return" or test.action == "resume"
+    local expectedB = test.action == "prepare" or test.action == "damage-settle" or test.action == "handoff-a-to-b"
     if residentA ~= expectedA or residentB ~= expectedB then
         return failResidencyTest(("resident-layout:%s:a=%s:b=%s"):format(test.action, tostring(residentA), tostring(residentB)))
     end
@@ -2949,6 +3249,33 @@ local function pulseResidencyTest(test)
             test.baselineClientZ[test.ownerB][record.ped] = observerSample.byPed[record.ped].z
         end
         test.firstEpoch = test.group.epoch
+        local target = test.group.members[1]
+        local context = rememberGroupCombatContext(target, test.ownerB, 0, 3, "residency-harness")
+        local dispatched = context and bridgeDamageResponse(target, test.ownerB, 0, 3, false, context.damageId)
+        if not dispatched then
+            return failResidencyTest("damage-context-dispatch-refused")
+        end
+        context.decisionState = "dispatched"
+        context.dispatchedAt = getTickCount()
+        test.damageId = context.damageId
+        test.damageDispatches = 1
+        writePopulationTrace("group_combat_context_dispatched", {
+            scenario_id = test.id,
+            group_id = test.group.id,
+            traffic_id = target.id,
+            damage_id = context.damageId,
+            epoch = test.group.epoch,
+            owner_id = getPopulationClientId(test.group.owner),
+            source = "residency-harness",
+        })
+        traceResidencyTestAction(test, "damage-settle")
+    elseif test.action == "damage-settle" then
+        if test.group.state ~= "active" or test.group.owner ~= test.ownerA or test.group.epoch ~= test.firstEpoch then
+            return failResidencyTest("damage-changed-owner-or-epoch")
+        end
+        if now - test.actionStartedAt < 1200 then
+            return
+        end
         moveResidencyTestPlayer(test, test.ownerA, test.farDistance)
         traceResidencyTestAction(test, "handoff-a-to-b")
     elseif test.action == "handoff-a-to-b" then
@@ -2963,12 +3290,38 @@ local function pulseResidencyTest(test)
         if test.group.state == "active" and test.group.owner == test.ownerA and test.group.epoch > test.secondEpoch and
             isResidencyOwnerReady(test, test.ownerA) then
             test.thirdEpoch = test.group.epoch
+            test.boundaryEpoch = test.group.epoch
+            test.boundaryOwner = test.group.owner
             moveResidencyTestPlayer(test, test.ownerA, test.farDistance)
             moveResidencyTestPlayer(test, test.ownerB, -test.farDistance)
+            traceResidencyTestAction(test, "boundary-hold-out")
+        end
+    elseif test.action == "boundary-hold-out" then
+        if test.group.state ~= "active" or test.group.owner ~= test.boundaryOwner or test.group.epoch ~= test.boundaryEpoch then
+            return failResidencyTest("short-hold-revoked-owner-or-epoch")
+        end
+        if now - test.actionStartedAt >= math.floor(config.handoffHold / 2) then
+            moveResidencyTestPlayer(test, test.ownerA, test.nearA)
+            traceResidencyTestAction(test, "boundary-hold-return")
+        end
+    elseif test.action == "boundary-hold-return" then
+        if test.group.state ~= "active" or test.group.owner ~= test.boundaryOwner or test.group.epoch ~= test.boundaryEpoch then
+            return failResidencyTest("short-hold-return-changed-owner-or-epoch")
+        end
+        if test.group.outsideResidencySince then
+            return
+        end
+        if now - test.actionStartedAt >= 500 then
+            moveResidencyTestPlayer(test, test.ownerA, test.farDistance)
+            moveResidencyTestPlayer(test, test.ownerB, -test.farDistance)
+            test.longHoldStartedAt = getTickCount()
             traceResidencyTestAction(test, "no-resident")
         end
     elseif test.action == "no-resident" then
         if test.group.state == "suspended" then
+            if test.group.epoch ~= test.boundaryEpoch or now - test.longHoldStartedAt < config.handoffHold then
+                return failResidencyTest("long-hold-suspended-too-early-or-changed-epoch")
+            end
             for _, record in ipairs(test.group.members) do
                 if not isElementFrozen(record.ped) then
                     return failResidencyTest("suspended-ped-not-frozen:id=" .. tostring(record.id))
@@ -2978,8 +3331,15 @@ local function pulseResidencyTest(test)
             traceResidencyTestAction(test, "resume")
         end
     elseif test.action == "resume" and test.group.state == "active" and test.group.owner == test.ownerA and
-        test.group.epoch > test.thirdEpoch and isResidencyOwnerReady(test, test.ownerA) then
-        stopResidencyTest("PASS", "handoff-return-suspend-resume")
+        test.group.epoch > test.boundaryEpoch and isResidencyOwnerReady(test, test.ownerA) then
+        local context = test.group.combatContext
+        if not context or context.damageId ~= test.damageId or context.decisionState ~= "dispatched" or test.damageDispatches ~= 1 then
+            return failResidencyTest("damage-identity-or-dispatch-count-changed")
+        end
+        if test.weaponStateCommits ~= 3 then
+            return failResidencyTest("weapon-state-commit-count:" .. tostring(test.weaponStateCommits or 0))
+        end
+        stopResidencyTest("PASS", "single-damage-short-hold-hard-suspend-resume; analyzer-must-confirm-at-most-one-decision-query")
     end
 end
 
@@ -3047,6 +3407,15 @@ local function startResidencyTest(player)
     -- Keep population rebalancing from deleting the oracle target while the
     -- harness deliberately moves both residents outside its normal bubble.
     group.residencyTestId = test.id
+    for index, record in ipairs(group.members) do
+        if isElement(record.ped) then
+            setElementData(record.ped, "neon:nativeAIRunId", "pedtraffic-residency-" .. tostring(test.id))
+            setElementData(record.ped, "neon:nativeAIScenarioId", "gang-collision-boundary-hold-v1")
+            setElementData(record.ped, "neon:nativeAIActorId", "ped-" .. tostring(index))
+            setElementData(record.ped, "neon:nativeAIActionId", "prepare")
+            setElementData(record.ped, "neon:nativeAIStep", "prepare")
+        end
+    end
     for _, candidate in ipairs(players) do
         local x, y, z = getElementPosition(candidate)
         local rx, ry, rz = getElementRotation(candidate)
@@ -3076,7 +3445,11 @@ local function startResidencyTest(player)
         second_resident_id = getPopulationClientId(ownerB),
         epoch = group.epoch,
     })
-    test.timer = setTimer(pulseResidencyTest, 100, 0, test)
+    -- MTA clones table arguments passed through timers, which would break the
+    -- identity guard in pulseResidencyTest and silently stop this state machine.
+    test.timer = setTimer(function()
+        pulseResidencyTest(test)
+    end, 100, 0)
     outputChatBox(("Residency test started: scenario %d, group %d"):format(test.id, group.id), root, 120, 220, 255)
     return true
 end
@@ -3176,8 +3549,11 @@ end)
 
 addEvent("pedTraffic:populationProfile", true)
 addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
-    if not enabled or not isEligiblePlayer(client) or not isPopulationWorldReady(client) then
+    if not enabled or not isEligiblePlayer(client) then
         populationProfiles[client] = nil
+        return
+    end
+    if not isPopulationWorldReady(client) then
         return
     end
 
@@ -3190,9 +3566,10 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
     local totalTarget, civilianTarget, dealerTarget, gangTarget, gangTargets = calculateNativeTargets(validated)
     local targetSignature = {}
     for index = 1, 10 do targetSignature[index] = ("%.3f"):format(gangTargets[index]) end
-    validated.signature = ("%d:%.3f:%.3f:%.3f:%s:%d:%d:%s:%d:%.3f:%.3f:%s:%.3f:%.3f:%d:%.3f:%.3f"):format(
-        totalTarget, civilianTarget, dealerTarget, gangTarget, table.concat(targetSignature, ","), validated.zoneType, validated.timeIndex,
-        tostring(validated.weekend), validated.worldRevision, validated.effectiveCopTarget, validated.dealerTarget, tostring(validated.noCops),
+    validated.signature = ("%d:%.3f:%.3f:%.3f:%s:%s:%d:%d:%s:%d:%.3f:%.3f:%s:%.3f:%.3f:%d:%.3f:%.3f"):format(
+        totalTarget, civilianTarget, dealerTarget, gangTarget, table.concat(targetSignature, ","), validated.zoneLabel, validated.zoneType,
+        validated.timeIndex, tostring(validated.weekend), validated.worldRevision, validated.effectiveCopTarget, validated.dealerTarget,
+        tostring(validated.noCops),
         validated.pedDensityMultiplier, validated.fewerPedsMultiplier, validated.maximumPedsInUse,
         validated.creationDistanceMultiplier, validated.generationDistanceMultiplier)
     local previous = populationProfiles[client]
@@ -3205,10 +3582,10 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
     end
     populationProfiles[client] = validated
     if not previous or previous.signature ~= validated.signature then
-        log(("population-profile player=%s revision=%d target=%.1f effective=%.1f supported=%.1f civilian=%.1f gang=%.1f cops=%.1f rawCops=%.1f dealers=%.1f weights=%s zone=%d time=%d weekend=%s noCops=%s"):format(
+        log(("population-profile player=%s revision=%d target=%.1f effective=%.1f supported=%.1f civilian=%.1f gang=%.1f cops=%.1f rawCops=%.1f dealers=%.1f weights=%s zone=%s/%d time=%d weekend=%s noCops=%s"):format(
                 getPlayerName(client), validated.worldRevision, validated.target, validated.effectiveTarget, validated.supportedTarget, validated.civilianTarget,
                 validated.gangTarget, validated.effectiveCopTarget, validated.rawCopTarget, validated.dealerTarget, table.concat(validated.gangWeights, "/"),
-                validated.zoneType, validated.timeIndex, tostring(validated.weekend), tostring(validated.noCops)))
+                validated.zoneLabel, validated.zoneType, validated.timeIndex, tostring(validated.weekend), tostring(validated.noCops)))
         writePopulationTrace("population_profile", {
             player_id = getPopulationClientId(client),
             target = validated.target,
@@ -3218,6 +3595,7 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
             cop_target = validated.effectiveCopTarget,
             dealer_target = validated.dealerTarget,
             gang_weights = validated.gangWeights,
+            zone_label = validated.zoneLabel,
             zone_type = validated.zoneType,
             time_index = validated.timeIndex,
             weekend = validated.weekend,
@@ -3237,7 +3615,8 @@ addEventHandler("pedTraffic:populationWorldApplied", resourceRoot, function(revi
         return
     end
 
-    if success == true and type(capabilities) == "table" and capabilities.zones == true then
+    if success == true and type(capabilities) == "table" and capabilities.zones == true and
+        capabilities.catalogRevision == populationCatalog.revision then
         populationWorldRevisions[client] = revision
         log(("population-world-ready player=%s revision=%d preset=%s"):format(getPlayerName(client), revision, populationWorld.preset), true)
     else
@@ -3367,6 +3746,7 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
             owner_id = getPopulationClientId(client),
         })
         log(("accepted id=%d epoch=%d owner=%s"):format(record.id, epoch, getPlayerName(client)))
+        restoreDealerCombatContext(record)
         for _, player in ipairs(getEligiblePlayers()) do
             -- Reconstruct a still-active threat after an owner handoff, but do
             -- not confuse MTA's permanent shot raycast with actual aiming.
@@ -3430,6 +3810,90 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
 end)
 
 addEvent("pedTraffic:groupEvidence", true)
+local function commitReleasedGroupWeaponState(group, data, releaseReason)
+    local reportedWeapons = type(data) == "table" and type(data.weapons) == "table" and data.weapons or false
+    if not reportedWeapons or #reportedWeapons ~= #group.members then
+        return false, "invalid-row-count"
+    end
+
+    local recordsByTrafficId = {}
+    for _, record in ipairs(group.members) do recordsByTrafficId[record.id] = record end
+
+    local seen = {}
+    local staged = {}
+    for _, row in ipairs(reportedWeapons) do
+        local trafficId = type(row) == "table" and tonumber(row.trafficId) or false
+        local record = trafficId and recordsByTrafficId[trafficId] or false
+        if not record or seen[trafficId] or not isElement(record.ped) then
+            return false, "invalid-member"
+        end
+        seen[trafficId] = true
+
+        local expectedWeapon = tonumber(row.expected)
+        local weapon = tonumber(row.weapon)
+        local serverWeapon = getPedWeapon(record.ped)
+        local serverStatsConverged = true
+        for _, stat in ipairs(gangStandardWeaponStats) do
+            serverStatsConverged = serverStatsConverged and getPedStat(record.ped, stat[1]) == stat[2]
+        end
+        if expectedWeapon ~= record.weapon or weapon ~= record.weapon or serverWeapon ~= record.weapon or
+            row.statsConverged ~= true or not serverStatsConverged then
+            return false, "weapon-or-stats-mismatch"
+        end
+
+        if record.weapon == 0 then
+            staged[#staged + 1] = {record = record, ammo = 0, clipAmmo = 0}
+        else
+            local expectedAmmo = tonumber(row.expectedAmmo)
+            local expectedClipAmmo = tonumber(row.expectedClipAmmo)
+            local ammo = tonumber(row.totalAmmo)
+            local clipAmmo = tonumber(row.clipAmmo)
+            local clipCapacity = gangWeaponClipAmmo[record.weapon]
+            if expectedAmmo ~= record.weaponAmmo or expectedClipAmmo ~= record.weaponClipAmmo or not clipCapacity or
+                not isIntegerInRange(ammo, 0, record.weaponAmmo) or not isIntegerInRange(clipAmmo, 0, clipCapacity) or
+                clipAmmo > ammo then
+                return false, "ammo-mismatch"
+            end
+            staged[#staged + 1] = {record = record, ammo = ammo, clipAmmo = clipAmmo}
+        end
+    end
+
+    local changes = {}
+    for _, state in ipairs(staged) do
+        local record = state.record
+        local previousAmmo = record.weaponAmmo
+        local previousClipAmmo = record.weaponClipAmmo
+        if record.weapon ~= 0 and setWeaponAmmo(record.ped, record.weapon, state.ammo, state.clipAmmo) ~= true then
+            return false, "server-ammo-commit-refused"
+        end
+        record.weaponAmmo = state.ammo
+        record.weaponClipAmmo = state.clipAmmo
+        setElementData(record.ped, "neon:ambientPedWeaponAmmo", state.ammo)
+        setElementData(record.ped, "neon:ambientPedWeaponClipAmmo", state.clipAmmo)
+        changes[#changes + 1] = {
+            traffic_id = record.id,
+            weapon = record.weapon,
+            previous_ammo = previousAmmo,
+            ammo = state.ammo,
+            previous_clip_ammo = previousClipAmmo,
+            clip_ammo = state.clipAmmo,
+        }
+    end
+
+    writePopulationTrace("group_weapon_state_committed", {
+        scenario_id = residencyTest and residencyTest.group == group and residencyTest.id or false,
+        group_id = group.id,
+        epoch = group.epoch,
+        owner_id = getPopulationClientId(client),
+        reason = tostring(releaseReason),
+        weapons = changes,
+    })
+    if residencyTest and residencyTest.group == group then
+        residencyTest.weaponStateCommits = (residencyTest.weaponStateCommits or 0) + 1
+    end
+    return true
+end
+
 addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoch, evidence, data)
     local group = trafficGroups[tonumber(groupId)]
     if not group or group.removing or group.epoch ~= epoch or client ~= group.owner then
@@ -3524,26 +3988,35 @@ addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoc
         if context and isElement(context.attacker) then
             contextAttackerX, contextAttackerY, contextAttackerZ = getElementPosition(context.attacker)
         end
-        if context and getTickCount() - context.observedAt <= 8000 and context.target and not context.target.removing and
+        if context and context.decisionState == "pending" and getTickCount() - context.observedAt <= 8000 and context.target and
+            not context.target.removing and
             isElement(context.target.ped) and isElement(context.attacker) and getElementHealth(context.attacker) > 0 and
             getElementDimension(context.attacker) == getElementDimension(context.target.ped) and
             getElementInterior(context.attacker) == getElementInterior(context.target.ped) and contextTargetX and contextAttackerX and
             squaredDistance(contextTargetX, contextTargetY, contextTargetZ, contextAttackerX, contextAttackerY, contextAttackerZ) <= 250 * 250 then
-            local restored = bridgeDamageResponse(context.target, context.attacker, context.weapon, context.bodypart, true)
+            local restored = bridgeDamageResponse(context.target, context.attacker, context.weapon, context.bodypart, true,
+                                                   context.damageId)
+            if restored then
+                context.decisionState = "dispatched"
+                context.dispatchedAt = getTickCount()
+            end
             writePopulationTrace("group_combat_context_restored", {
                 group_id = group.id,
                 traffic_id = context.target.id,
+                damage_id = context.damageId,
                 epoch = group.epoch,
                 owner_id = getPopulationClientId(client),
                 attacker_id = getPopulationClientId(context.attacker),
                 weapon = context.weapon,
                 bodypart = context.bodypart,
                 accepted = restored == true,
+                decision_state = context.decisionState,
                 context_age_ms = getTickCount() - context.observedAt,
             })
-        elseif context then
+        elseif context and getTickCount() - context.observedAt > 8000 then
             writePopulationTrace("group_combat_context_expired", {
                 group_id = group.id,
+                damage_id = context.damageId,
                 epoch = group.epoch,
                 context_age_ms = getTickCount() - context.observedAt,
             })
@@ -3558,10 +4031,25 @@ addEventHandler("pedTraffic:groupEvidence", resourceRoot, function(groupId, epoc
                 end
             end
         end
-    elseif evidence == "released" and group.state == "revoking" then
-        finishGroupHandoff(group, "group-release-ack")
-    elseif evidence == "released" and group.state == "suspending" then
-        finishGroupSuspension(group, "group-suspension-release-ack")
+    elseif evidence == "released" and (group.state == "revoking" or group.state == "suspending") then
+        local committed, rejectionReason =
+            commitReleasedGroupWeaponState(group, data, type(data) == "table" and data.reason or evidence)
+        if not committed then
+            writePopulationTrace("group_weapon_state_rejected", {
+                scenario_id = residencyTest and residencyTest.group == group and residencyTest.id or false,
+                group_id = group.id,
+                epoch = group.epoch,
+                owner_id = getPopulationClientId(client),
+                reason = tostring(rejectionReason),
+            })
+            removeGroup(group, "group-release-weapon-state-invalid")
+            return
+        end
+        if group.state == "revoking" then
+            finishGroupHandoff(group, "group-release-ack")
+        else
+            finishGroupSuspension(group, "group-suspension-release-ack")
+        end
     elseif evidence == "failure" then
         local diagnostic = type(data) == "table" and type(data.nativeDiagnostic) == "table" and data.nativeDiagnostic or false
         log(("group-client-failure group=%d epoch=%d owner=%s reason=%s nativeReason=%s nativeGroup=%s slotActive=%s tracked=%s"):format(
@@ -3586,12 +4074,14 @@ addEventHandler("pedTraffic:gunAimObserved", resourceRoot, function(ped)
 end)
 
 addEvent("pedTraffic:damageObserved", true)
-addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon, bodypart)
+addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon, bodypart, observerNonce)
     local record = trafficPeds[ped]
     weapon = tonumber(weapon)
     bodypart = tonumber(bodypart)
+    observerNonce = tonumber(observerNonce)
     if not record or not isElement(client) or not weapon or not bodypart or weapon < 0 or weapon > 54 or
-        (bodypart ~= 0 and (bodypart < 3 or bodypart > 9)) then
+        (bodypart ~= 0 and (bodypart < 3 or bodypart > 9)) or not isIntegerInRange(observerNonce, 1, 2147483647) or
+        observerNonce <= (record.damageObserverNonces and record.damageObserverNonces[client] or 0) then
         return
     end
 
@@ -3603,8 +4093,23 @@ addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon,
     end
 
     record.lastInteractionAt = getTickCount()
-    rememberGroupCombatContext(record, client, weapon, bodypart, "observer-bridge")
-    bridgeDamageResponse(record, client, math.floor(weapon), math.floor(bodypart))
+    record.damageObserverNonces = record.damageObserverNonces or {}
+    record.damageObserverNonces[client] = observerNonce
+    local context = rememberGroupCombatContext(record, client, weapon, bodypart, "observer-bridge", observerNonce)
+    local dispatched = bridgeDamageResponse(record, client, math.floor(weapon), math.floor(bodypart), false,
+                                            context and context.damageId or false)
+    if context and dispatched then
+        context.decisionState = "dispatched"
+        context.dispatchedAt = getTickCount()
+        writePopulationTrace("group_combat_context_dispatched", {
+            group_id = record.group and record.group.id or false,
+            traffic_id = record.id,
+            damage_id = context.damageId,
+            epoch = record.group and record.group.epoch or record.epoch,
+            owner_id = isElement(record.owner) and getPopulationClientId(record.owner) or false,
+            observer_nonce = observerNonce,
+        })
+    end
 end)
 
 addEvent("pedTraffic:nativePlayerDamageObserved", true)
@@ -3920,12 +4425,80 @@ addEventHandler("onPedDamage", root, function(attacker, weapon, bodypart)
     end
     record.lastInteractionAt = getTickCount()
     rememberGroupCombatContext(record, attacker, weapon, bodypart, "server-ped-damage")
+    rememberDealerCombatContext(record, attacker, weapon, bodypart, "server-ped-damage")
 end)
 
-addEventHandler("onPedWasted", root, function()
+addEvent("pedTraffic:dealerFightStarted", true)
+addEventHandler("pedTraffic:dealerFightStarted", resourceRoot, function(ped, epoch, knifeModelLoaded, hierarchy)
+    local record = trafficPeds[ped]
+    if not record or record.removing or record.populationClass ~= "dealer" or client ~= record.owner or
+        record.epoch ~= epoch or record.state ~= "active" or type(knifeModelLoaded) ~= "boolean" or record.dealerFightArmed then
+        return
+    end
+    local traceHierarchy = {}
+    if type(hierarchy) == "table" then
+        for index = 1, math.min(#hierarchy, 12) do
+            local taskName = tostring(hierarchy[index])
+            if #taskName <= 80 then traceHierarchy[index] = taskName end
+        end
+    end
+    local accepted, reason = applyDealerFightWeapons(record, knifeModelLoaded)
+    if not accepted then
+        writePopulationTrace("dealer_fight_weapon_rejected", {
+            traffic_id = record.id,
+            epoch = epoch,
+            owner_id = getPopulationClientId(client),
+            reason = reason,
+        })
+        removeRecord(record, reason)
+        return
+    end
+    writePopulationTrace("dealer_fight_weapon_committed", {
+        scenario_id = dealerTest and dealerTest.record == record and dealerTest.id or false,
+        traffic_id = record.id,
+        epoch = epoch,
+        owner_id = getPopulationClientId(client),
+        seed = record.dealerFightSeed,
+        knife_model_loaded = knifeModelLoaded,
+        has_knife = record.dealerHasKnife,
+        has_pistol = record.dealerHasPistol,
+        active_weapon = record.weapon,
+        ammo = record.weaponAmmo,
+        task_hierarchy = traceHierarchy,
+    })
+end)
+
+addEventHandler("onPedWasted", root, function(_, killer, weapon, bodypart)
     local record = trafficPeds[source]
     if not record then
         return
+    end
+    if record.populationClass == "dealer" and not record.dealerDeathApplied and isElement(killer) and
+        getElementType(killer) == "player" then
+        record.dealerDeathApplied = true
+        local profile = populationProfiles[killer]
+        local freshProfile = profile and profile.worldRevision == populationWorld.revision and
+            getTickCount() - profile.receivedAt <= 2500
+        local change = freshProfile and populationWorld:decrementDealerStrength(profile.zoneLabel) or false
+        if dealerTest and dealerTest.record == record then
+            dealerTest.deathEventObserved = true
+            dealerTest.deathChange = change or false
+        end
+        writePopulationTrace("dealer_strength_death", {
+            scenario_id = dealerTest and dealerTest.record == record and dealerTest.id or false,
+            traffic_id = record.id,
+            killer_id = getPopulationClientId(killer),
+            weapon = tonumber(weapon) or false,
+            bodypart = tonumber(bodypart) or false,
+            zone_label = profile and profile.zoneLabel or false,
+            profile_fresh = freshProfile == true,
+            applied = change ~= false,
+            change = change or false,
+            revision = populationWorld.revision,
+        })
+        if change then
+            publishPopulationWorldMutation("player-killed-dealer", change)
+        end
     end
     if record.group and record.group.leader == record then
         local replacement = false
@@ -4059,13 +4632,34 @@ setTimer(function()
 end, 100, 0)
 
 setTimer(function()
-    if not enabled or dealerTest then
+    if not enabled then
         return
     end
 
     local players = getEligiblePlayers()
     if #players == 0 then
-        clearTraffic("no-eligible-player")
+        local convergingPlayers = getPopulationWorldConvergencePlayerCount()
+        local convergenceAge = getTickCount() - populationWorldPublishedAt
+        if convergingPlayers > 0 and convergenceAge <= config.populationWorldConvergenceGrace then
+            -- A world mutation invalidates every ACK together. Existing
+            -- traffic must survive that bounded convergence window; only new
+            -- admission remains fenced by getEligiblePlayers(). Clearing here
+            -- would bypass the camera veto and visibly pop every nearby ped.
+            if populationWorldConvergenceTraceRevision ~= populationWorld.revision then
+                populationWorldConvergenceTraceRevision = populationWorld.revision
+                writePopulationTrace("population_world_convergence_hold", {
+                    scenario_id = dealerTest and dealerTest.id or false,
+                    revision = populationWorld.revision,
+                    players = convergingPlayers,
+                    grace_ms = config.populationWorldConvergenceGrace,
+                })
+            end
+            return
+        end
+        clearTraffic(convergingPlayers > 0 and "world-convergence-timeout" or "no-eligible-player")
+        return
+    end
+    if dealerTest then
         return
     end
 
@@ -4253,12 +4847,14 @@ setTimer(function()
                 else
                     local resident = findClosestGroupResident(group)
                     if not resident then
-                        beginGroupSuspension(group, "group-no-collision-resident")
+                        if not isCurrentGroupOwnerSpatiallyResident(group) then
+                            updateGroupZeroResidentHold(group, "group-no-collision-resident", now)
+                        end
                     else
                         if group.visibilityCheckId then
                             finishRemovalVisibilityCheck(pendingVisibilityChecks[group.visibilityCheckId], true, "resident-returned")
                         end
-                        group.outsideResidencySince = nil
+                        clearGroupZeroResidentHold(group, "resident-returned")
                         local closest, closestDistanceSquared = findClosestGroupResident(group, nil, true)
                         if not closest then
                             group.handoffCandidate = nil
@@ -4340,7 +4936,9 @@ setTimer(function()
                 local x, y, z = getElementPosition(record.ped)
                 local closest, closestDistanceSquared = findClosestPopulationResident(x, y, z, record.populationClass)
                 if not closest then
-                    beginSuspension(record, "no-collision-resident")
+                    if not isCurrentPopulationOwnerSpatiallyResident(record) then
+                        beginSuspension(record, "no-collision-resident")
+                    end
                 else
                     if record.visibilityCheckId then
                         finishRemovalVisibilityCheck(pendingVisibilityChecks[record.visibilityCheckId], true, "resident-returned")
@@ -4429,7 +5027,7 @@ setTimer(function()
     end
 end, 10000, 0)
 
-local DEALER_TEST_PHASE_TIMEOUT = 20000
+local DEALER_TEST_PHASE_TIMEOUT = 60000
 local DEALER_TEST_CANDIDATE_RETRY = 750
 -- This Grove Street fixture produced the expected post_home_coming profile
 -- (`dealerTarget > 0.03`) on both clients in the runtime logs. The former City
@@ -4461,6 +5059,8 @@ local function restoreDealerTestPlayers(test)
                 setElementInterior(player, saved.interior)
                 setElementPosition(player, saved.x, saved.y, saved.z)
                 setElementRotation(player, saved.rx, saved.ry, saved.rz)
+                setElementHealth(player, saved.health)
+                setPedArmor(player, saved.armor)
                 setElementFrozen(player, saved.frozen)
             end
         end
@@ -4478,6 +5078,12 @@ stopDealerTest = function(outcome, reason)
     end
     if test.record and not test.record.removing then
         removeRecord(test.record, "dealer-test-" .. tostring(outcome):lower())
+    end
+    if test.zoneLabel and test.originalDealerStrength ~= nil then
+        local restored = populationWorld:setDealerStrength(test.zoneLabel, test.originalDealerStrength)
+        if restored and not restored.unchanged then
+            publishPopulationWorldMutation("dealer-test-stop-restore", restored)
+        end
     end
     restoreDealerTestPlayers(test)
     writePopulationTrace("dealer_test_result", {
@@ -4582,18 +5188,38 @@ local function validateDealerTestSamples(test, phase)
     if not samples or not samples[test.ownerA] or not samples[test.ownerB] then
         return false
     end
-    local expectedOwner = phase == "initial" and test.ownerA or test.ownerB
+    local expectedOwner = phase == "handoff" and test.ownerB or test.ownerA
     for _, player in ipairs(test.players) do
         local sample = samples[player]
+        local expectedArmed = phase ~= "initial"
+        local expectedWeapon = expectedArmed and test.record.weapon or 0
+        -- The server-side commit proves that the retail grant requested 50
+        -- rounds. Once the pistol is active, the owner can legitimately spend
+        -- rounds before this asynchronous sample arrives, while an observer
+        -- can still expose the last replicated total. Validate that bounded
+        -- runtime state instead of requiring both peers to remain at exactly
+        -- the pre-fight total. Melee slots canonically expose one through the
+        -- public getter; unarmed exposes the same synthetic value and carries
+        -- no ammo state worth validating.
+        local ammoValid = expectedWeapon == 0 or expectedWeapon == 4 and sample.weaponAmmo == 1 or
+            expectedWeapon == 22 and type(sample.weaponAmmo) == "number" and sample.weaponAmmo >= 1 and
+                sample.weaponAmmo <= config.nativeDealerFightWeaponAmmo
         if sample.model ~= getElementModel(test.record.ped) or dealerModels[sample.model] ~= true or
-            sample.populationClass ~= "dealer" or sample.logicalPedType ~= 17 or sample.weapon ~= 0 or
-            sample.epoch ~= test.record.epoch then
+            sample.populationClass ~= "dealer" or sample.logicalPedType ~= 17 or sample.weapon ~= expectedWeapon or
+            sample.epoch ~= test.record.epoch or sample.catalogRevision ~= populationCatalog.revision or
+            sample.dealerFightArmed ~= expectedArmed or
+            (expectedArmed and (sample.dealerHasKnife ~= test.record.dealerHasKnife or
+                sample.dealerHasPistol ~= test.record.dealerHasPistol or
+                not ammoValid or
+                (test.record.dealerHasPistol and sample.pistolSkillStat ~= 40))) then
             failDealerTest(("invalid-sample:%s:client=%d"):format(phase, getPopulationClientId(player)))
             return false
         end
         local isOwner = player == expectedOwner
         if sample.syncer ~= isOwner or sample.assignment ~= isOwner or sample.assignmentAccepted ~= isOwner or
-            sample.profilePresent ~= true or sample.profileActive ~= isOwner or (isOwner and sample.hasWander ~= true) then
+            sample.profilePresent ~= true or sample.profileActive ~= isOwner or
+            (phase == "initial" and isOwner and sample.hasWander ~= true) or
+            ((phase == "combat" or phase == "handoff") and isOwner and sample.hasFight ~= true) then
             failDealerTest(("authority-sample:%s:client=%d"):format(phase, getPopulationClientId(player)))
             return false
         end
@@ -4629,14 +5255,38 @@ local function pulseDealerTest(testId)
             return failDealerTest("client-left")
         end
     end
+    if test.unexpectedSuspensionReason then
+        return failDealerTest("unexpected-suspension:" .. test.unexpectedSuspensionReason)
+    end
     if getTickCount() - test.actionStartedAt > DEALER_TEST_PHASE_TIMEOUT then
         return failDealerTest("phase-timeout:" .. test.action)
     end
 
     if test.action == "await-profile" then
+        local first = populationProfiles[test.players[1]]
+        local second = populationProfiles[test.players[2]]
+        if not isPopulationWorldReady(test.players[1]) or not isPopulationWorldReady(test.players[2]) or
+            not first or not second or first.zoneLabel ~= second.zoneLabel then
+            return
+        end
+        test.zoneLabel = first.zoneLabel
+        test.originalDealerStrength = populationWorld.zones[test.zoneLabel].dealerStrength
+        local fixture = populationWorld:setDealerStrength(test.zoneLabel, 6)
+        writePopulationTrace("dealer_test_strength_fixture", {
+            scenario_id = test.id,
+            zone_label = test.zoneLabel,
+            change = fixture,
+            revision = populationWorld.revision,
+        })
+        if fixture and not fixture.unchanged then
+            publishPopulationWorldMutation("dealer-test-fixture", fixture)
+        end
+        traceDealerTestAction(test, "await-fixture")
+    elseif test.action == "await-fixture" then
         for _, player in ipairs(test.players) do
             local profile = populationProfiles[player]
-            if not isPopulationWorldReady(player) or not profile or profile.dealerTarget <= 0.03 then
+            if not isPopulationWorldReady(player) or not profile or profile.worldRevision ~= populationWorld.revision or
+                profile.zoneLabel ~= test.zoneLabel or profile.dealerStrength ~= 6 or profile.dealerTarget <= 0.03 then
                 return
             end
         end
@@ -4670,6 +5320,38 @@ local function pulseDealerTest(testId)
         end
     elseif test.action == "sample-initial" then
         if validateDealerTestSamples(test, "initial") then
+            local x, y, z = getElementPosition(test.record.ped)
+            setElementPosition(test.ownerA, x + 1.25, y, z + 0.2)
+            setElementRotation(test.ownerA, 0, 0, 90)
+            test.combatAttempts = 0
+            test.nextCombatAttemptAt = 0
+            traceDealerTestAction(test, "await-combat")
+        end
+    elseif test.action == "await-combat" then
+        if test.record.dealerFightArmed then
+            test.combatStableAt = test.combatStableAt or getTickCount() + 750
+            if getTickCount() >= test.combatStableAt then
+                traceDealerTestAction(test, "sample-combat")
+                requestDealerTestSamples(test, "combat")
+            end
+        elseif getTickCount() >= test.nextCombatAttemptAt and test.record.state == "active" and test.record.owner == test.ownerA then
+            test.combatAttempts = test.combatAttempts + 1
+            test.nextCombatAttemptAt = getTickCount() + 1500
+            writePopulationTrace("dealer_test_combat_stimulus", {
+                scenario_id = test.id,
+                attempt = test.combatAttempts,
+                traffic_id = test.record.id,
+                epoch = test.record.epoch,
+                owner_id = getPopulationClientId(test.ownerA),
+            })
+            rememberDealerCombatContext(test.record, test.ownerA, 0, 3, "dealer-test-stimulus")
+            -- Dealer combat has its own single-actor context lifecycle. Pass an
+            -- explicit untracked identity so the group-only replay guard does
+            -- not reject this deterministic harness stimulus.
+            triggerClientEvent(test.ownerA, "pedTraffic:damageResponse", resourceRoot, test.record.ped, test.ownerA, 0, 3, false)
+        end
+    elseif test.action == "sample-combat" then
+        if validateDealerTestSamples(test, "combat") then
             traceDealerTestAction(test, "handoff")
             beginHandoff(test.record, test.ownerB, "dealer-test-handoff")
         end
@@ -4678,15 +5360,90 @@ local function pulseDealerTest(testId)
             return failDealerTest("dealer-removed-during-handoff")
         end
         if test.record.state == "active" and test.record.owner == test.ownerB and test.record.epoch == test.initialEpoch + 1 then
-            traceDealerTestAction(test, "sample-handoff")
-            requestDealerTestSamples(test, "handoff")
+            test.handoffStableAt = test.handoffStableAt or getTickCount() + 750
+            if getTickCount() >= test.handoffStableAt then
+                traceDealerTestAction(test, "sample-handoff")
+                requestDealerTestSamples(test, "handoff")
+            end
         end
     elseif test.action == "sample-handoff" then
         if validateDealerTestSamples(test, "handoff") then
-            beginDealerTestCleanup(test)
+            local changes, rolls = populationWorld:advanceDealerStrengths(math.random)
+            writePopulationTrace("dealer_test_growth_roll", {
+                scenario_id = test.id,
+                roll_count = #rolls,
+                changes = changes,
+                revision = populationWorld.revision,
+            })
+            if #changes > 0 then
+                publishPopulationWorldMutation("dealer-test-minute-growth", changes)
+            end
+            test.growthRevision = populationWorld.revision
+            traceDealerTestAction(test, "await-growth")
         end
+    elseif test.action == "await-growth" then
+        for _, player in ipairs(test.players) do
+            local profile = populationProfiles[player]
+            if not isPopulationWorldReady(player) or not profile or profile.worldRevision ~= test.growthRevision then
+                return
+            end
+        end
+        if test.record.state ~= "active" or test.record.owner ~= test.ownerB then
+            return
+        end
+        test.deathBefore = populationWorld.zones[test.zoneLabel].dealerStrength
+        if test.deathBefore <= 0 or not killPed(test.record.ped, test.ownerA, 22, 3, false) then
+            return failDealerTest("dealer-test-kill-refused")
+        end
+        test.deathAfter = test.deathBefore - 1
+        writePopulationTrace("dealer_test_kill_requested", {
+            scenario_id = test.id,
+            traffic_id = test.record.id,
+            killer_id = getPopulationClientId(test.ownerA),
+            before = test.deathBefore,
+            expected_after = test.deathAfter,
+        })
+        traceDealerTestAction(test, "await-death-event")
+    elseif test.action == "await-death-event" then
+        if not test.deathEventObserved then
+            return
+        end
+        if test.deathChange == false or populationWorld.zones[test.zoneLabel].dealerStrength ~= test.deathAfter then
+            return failDealerTest("dealer-strength-decrement-mismatch")
+        end
+        test.deathRevision = populationWorld.revision
+        traceDealerTestAction(test, "await-death-revision")
+    elseif test.action == "await-death-revision" then
+        if populationWorld.zones[test.zoneLabel].dealerStrength ~= test.deathAfter then
+            return failDealerTest("dealer-strength-decrement-mismatch")
+        end
+        for _, player in ipairs(test.players) do
+            local profile = populationProfiles[player]
+            if not isPopulationWorldReady(player) or not profile or profile.worldRevision ~= test.deathRevision or
+                profile.dealerStrength ~= test.deathAfter then
+                return
+            end
+        end
+        local restored = populationWorld:setDealerStrength(test.zoneLabel, test.originalDealerStrength)
+        if not restored then
+            return failDealerTest("dealer-strength-restore-refused")
+        end
+        if not restored.unchanged then
+            publishPopulationWorldMutation("dealer-test-restore", restored)
+        end
+        test.restoreRevision = populationWorld.revision
+        traceDealerTestAction(test, "await-restore")
+    elseif test.action == "await-restore" then
+        for _, player in ipairs(test.players) do
+            local profile = populationProfiles[player]
+            if not isPopulationWorldReady(player) or not profile or profile.worldRevision ~= test.restoreRevision or
+                profile.dealerStrength ~= test.originalDealerStrength then
+                return
+            end
+        end
+        beginDealerTestCleanup(test)
     elseif test.action == "cleanup" and test.cleanupAckCount == #test.players then
-        stopDealerTest("PASS", "dealer-residency-owner-handoff-cleanup")
+        stopDealerTest("PASS", "dealer-catalog-combat-ecology-handoff-cleanup")
     end
 end
 
@@ -4737,11 +5494,14 @@ local function startDealerTest(player)
         test.savedPlayers[candidate] = {
             x = x, y = y, z = z, rx = rx, ry = ry, rz = rz,
             dimension = getElementDimension(candidate), interior = getElementInterior(candidate), frozen = isElementFrozen(candidate),
+            health = getElementHealth(candidate), armor = getPedArmor(candidate),
         }
         setElementDimension(candidate, 0)
         setElementInterior(candidate, 0)
         setElementPosition(candidate, DEALER_TEST_POSITION.x + (index - 1) * 4, DEALER_TEST_POSITION.y, DEALER_TEST_POSITION.z)
         setElementRotation(candidate, 0, 0, 0)
+        setElementHealth(candidate, 100)
+        setPedArmor(candidate, 100)
         -- Require a report captured after this teleport instead of accepting
         -- a still-fresh profile from the player's previous zone.
         populationProfiles[candidate] = nil
@@ -4763,7 +5523,7 @@ addEvent("pedTraffic:dealerTestSampleResult", true)
 addEventHandler("pedTraffic:dealerTestSampleResult", resourceRoot, function(testId, phase, data)
     local test = dealerTest
     if not test or test.id ~= testId or (client ~= test.players[1] and client ~= test.players[2]) or
-        (phase ~= "initial" and phase ~= "handoff") or type(data) ~= "table" or test.action ~= "sample-" .. phase then
+        (phase ~= "initial" and phase ~= "combat" and phase ~= "handoff") or type(data) ~= "table" or test.action ~= "sample-" .. phase then
         return
     end
     test.samples[phase][client] = {
@@ -4771,6 +5531,14 @@ addEventHandler("pedTraffic:dealerTestSampleResult", resourceRoot, function(test
         populationClass = tostring(data.populationClass),
         logicalPedType = tonumber(data.logicalPedType),
         weapon = tonumber(data.weapon),
+        weaponAmmo = tonumber(data.weaponAmmo),
+        knifeAmmo = tonumber(data.knifeAmmo),
+        pistolAmmo = tonumber(data.pistolAmmo),
+        pistolSkillStat = tonumber(data.pistolSkillStat),
+        dealerFightArmed = data.dealerFightArmed == true,
+        dealerHasKnife = data.dealerHasKnife == true,
+        dealerHasPistol = data.dealerHasPistol == true,
+        catalogRevision = tostring(data.catalogRevision),
         epoch = tonumber(data.epoch),
         syncer = data.syncer == true,
         assignment = data.assignment == true,
@@ -4778,6 +5546,7 @@ addEventHandler("pedTraffic:dealerTestSampleResult", resourceRoot, function(test
         profilePresent = data.profilePresent == true,
         profileActive = data.profileActive == true,
         hasWander = data.hasWander == true,
+        hasFight = data.hasFight == true,
     }
     writePopulationTrace("dealer_test_sample", {
         scenario_id = test.id,
@@ -4792,10 +5561,19 @@ addEventHandler("pedTraffic:dealerTestSampleResult", resourceRoot, function(test
         profile_present = data.profilePresent == true,
         profile_active = data.profileActive == true,
         has_wander = data.hasWander == true,
+        has_fight = data.hasFight == true,
         model = tonumber(data.model),
         population_class = tostring(data.populationClass),
         logical_ped_type = tonumber(data.logicalPedType),
         weapon = tonumber(data.weapon),
+        weapon_ammo = tonumber(data.weaponAmmo),
+        knife_ammo = tonumber(data.knifeAmmo),
+        pistol_ammo = tonumber(data.pistolAmmo),
+        pistol_skill_stat = tonumber(data.pistolSkillStat),
+        dealer_fight_armed = data.dealerFightArmed == true,
+        dealer_has_knife = data.dealerHasKnife == true,
+        dealer_has_pistol = data.dealerHasPistol == true,
+        catalog_revision = tostring(data.catalogRevision),
         tasks = data.tasks,
     })
 end)
@@ -4823,6 +5601,32 @@ addEventHandler("pedTraffic:dealerTestCleanupResult", resourceRoot, function(tes
         failDealerTest("cleanup-leak:client=" .. tostring(getPopulationClientId(client)))
     end
 end)
+
+-- Retail advances dealer ecology only when the 60-second game-timer bucket
+-- changes and territory wars are enabled. GTA's local update is suppressed by
+-- Neon, so the server performs the same bounded rolls once and republishes the
+-- resulting world revision to every client.
+setTimer(function()
+    if dealerTest then
+        return
+    end
+    local currentMinute = math.floor(getTickCount() / config.dealerStrengthGrowthInterval)
+    if currentMinute == lastDealerStrengthMinute then
+        return
+    end
+    lastDealerStrengthMinute = currentMinute
+    local changes, rolls = populationWorld:advanceDealerStrengths(math.random)
+    writePopulationTrace("dealer_strength_growth_boundary", {
+        minute = currentMinute,
+        gang_wars_active = populationWorld.gangWarsActive,
+        roll_count = #rolls,
+        changes = changes,
+        revision = populationWorld.revision,
+    })
+    if #changes > 0 then
+        publishPopulationWorldMutation("minute-growth", changes)
+    end
+end, 1000, 0)
 
 addCommandHandler("pedtraffic", function(player, _, action, value)
     action = tostring(action or "status"):lower()

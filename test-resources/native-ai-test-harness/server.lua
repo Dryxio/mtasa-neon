@@ -12,7 +12,7 @@ end
 
 local function isGangDecisionKind(kind)
     return kind == "gang_unarmed_flee" or kind == "gang_armed_leader" or kind == "gang_armed_member" or
-        kind == "gang_armed_handoff" or kind == "gang_friendly_source"
+        kind == "gang_armed_handoff" or kind == "gang_friendly_source" or kind == "gang_two_armed_two_unarmed_melee"
 end
 
 -- GetStrikeDamage (GTA 1.0 US 0x61C740) reads the current move's damage byte
@@ -294,7 +294,7 @@ local function finishRun(passed, reason)
     -- run_end while the short visual-cleanup grace period is still active.
     cancelRunTimers(run)
     if run.kind == "melee" or (isGangDecisionKind(run.kind) and run.selectedResponse == "fight" and
-        run.kind ~= "gang_armed_handoff") then
+        run.kind ~= "gang_armed_handoff" and run.kind ~= "gang_two_armed_two_unarmed_melee") then
         local missing = {}
         for _, stage in ipairs(meleeStages) do
             if not run.stages[stage] then
@@ -458,7 +458,8 @@ local function beginScheduledAction()
     end
     if isGangDecisionKind(run.kind) and run.kind ~= "gang_armed_handoff" then
         setRunStep("prepare", "settle")
-        run.pendingActionId = run.kind == "gang_friendly_source" and "friendly-source" or "firearm-threat"
+        run.pendingActionId = run.kind == "gang_friendly_source" and "friendly-source" or
+            (run.kind == "gang_two_armed_two_unarmed_melee" and "melee-threat" or "firearm-threat")
         run.actionDueAt = getTickCount() + NATIVE_AI_HARNESS.traceLeadTime
         writeTrace("action_scheduled", {
             action_id = run.pendingActionId,
@@ -481,6 +482,8 @@ local function beginScheduledAction()
                 source_actor_id = active.actorByPed[sourcePed] or "victim-player",
                 expected_response = active.scenario.expectedResponse or false,
                 expected_source_type = active.scenario.expectedSourceType or false,
+                expected_allocator = active.scenario.expectedAllocator or false,
+                source_weapon = active.scenario.sourceWeapon or 22,
             })
         end, NATIVE_AI_HARNESS.traceLeadTime, 1, run.id)
     elseif run.kind == "melee" then
@@ -604,12 +607,16 @@ local function startRun(caller, kind, ownerName, victimName)
     placePlayer(victim, scenario.victim)
     if isGangDecisionKind(kind) and kind ~= "gang_friendly_source" then
         -- IsKillTaskAppropriate reads the threat ped's active weapon, not the
-        -- weapon field carried by CEventDamage. Pin the player source so the
-        -- all-unarmed group deterministically takes the firearm-threat branch.
+        -- weapon field carried by CEventDamage. Pin the player source to the
+        -- exact firearm/melee branch named by this fixture.
         takeAllWeapons(victim)
-        if not giveWeapon(victim, 22, 17, true) or getPedWeapon(victim) ~= 22 then
-            assertion("threat-active-firearm", false, 22, getPedWeapon(victim))
-            return finishRun(false, "failed to pin the deterministic firearm threat")
+        local sourceWeapon = tonumber(scenario.sourceWeapon) or 22
+        if sourceWeapon ~= 0 and (not giveWeapon(victim, sourceWeapon, 17, true) or getPedWeapon(victim) ~= sourceWeapon) then
+            assertion("threat-active-weapon", false, sourceWeapon, getPedWeapon(victim))
+            return finishRun(false, "failed to pin the deterministic threat weapon")
+        elseif sourceWeapon == 0 and getPedWeapon(victim) ~= 0 then
+            assertion("threat-active-weapon", false, 0, getPedWeapon(victim))
+            return finishRun(false, "failed to pin the deterministic melee threat")
         end
         -- The native decision is intentionally random, but the resulting
         -- bullet path must not depend on human movement during the capture.
@@ -719,7 +726,7 @@ addCommandHandler("nativeai", function(player, _, action, kind, ownerName, victi
                               activeRun.id, activeRun.scenario.id, activeRun.step, activeRun.actionId,
                               getPlayerName(activeRun.owner), getPlayerName(activeRun.victim)), player, 180, 220, 255)
         else
-            outputChatBox("[native AI] No active run. Core: melee, handoff, rotation, rotation_handoff. Gang: gang_unarmed_flee, gang_armed_leader, gang_armed_member, gang_armed_handoff, gang_friendly_source.", player, 180, 220, 255)
+            outputChatBox("[native AI] No active run. Core: melee, handoff, rotation, rotation_handoff. Gang: gang_unarmed_flee, gang_armed_leader, gang_armed_member, gang_armed_handoff, gang_friendly_source, gang_two_armed_two_unarmed_melee.", player, 180, 220, 255)
         end
     else
         outputChatBox("[native AI] /nativeai run <scenario> [owner] [victim-or-next-owner]", player, 255, 180, 80)
@@ -878,6 +885,13 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
     elseif evidence == "collective-response-timeout" and client == run.owner and isGangDecisionKind(run.kind) then
         assertion("collective-" .. tostring(data.response), false, "every group member", data.members, data)
         finishRun(false, "group did not reach the expected collective response")
+    elseif evidence == "allocator-capture" and client == run.owner and run.kind == "gang_two_armed_two_unarmed_melee" then
+        writeStage("allocator_capture_complete", {
+            action_id = run.actionId,
+            members = data.members,
+            epoch = run.epoch,
+        })
+        finishRun(true, "active tasks were masked or incomplete; allocator JSONL is the authoritative verdict")
     elseif evidence == "collective-response" and client == run.owner and isGangDecisionKind(run.kind) then
         local response = tostring(data.response)
         local responseAllowed = response == run.scenario.expectedResponse or
@@ -893,14 +907,17 @@ addEventHandler("nativeAIHarness:evidence", resourceRoot, function(runId, epoch,
             epoch = run.epoch,
         })
         run.selectedResponse = response
-        assertion("collective-" .. response, true, response == "fight" and "armed attack plus unarmed cover" or
-                      "every group member", "matched", data)
+        local expectedAllocation = run.scenario.expectedAllocator == "all-kill" and "all four members assigned kill" or
+            (response == "fight" and "armed attack plus unarmed cover" or "every group member")
+        assertion("collective-" .. response, true, expectedAllocation, "matched", data)
         if response == "flee" and run.scenario.branchAware then
             finishRun(true, "weighted native decision selected the collective flee branch; damage chain not exercised")
         elseif run.scenario.expectedResponse == "flee" then
             finishRun(true, "unarmed group selected the collective firearm-threat flee path")
         elseif run.kind == "gang_armed_handoff" then
             finishRun(true, "armed collective fight response survived the owner handoff")
+        elseif run.kind == "gang_two_armed_two_unarmed_melee" then
+            finishRun(true, "four-member melee allocation captured; analyzer must confirm four kill assignments and any DUCK overlay")
         end
     elseif evidence == "classification-captured" and client == run.owner and run.kind == "gang_friendly_source" then
         writeStage("classification_trace_captured", {
@@ -1094,4 +1111,4 @@ addEventHandler("onResourceStop", resourceRoot, function()
     cleanupRun("resource-stop", true)
 end)
 
-outputServerLog("[native-ai-harness] Ready: core melee/handoff/rotation plus gang_unarmed_flee, gang_armed_leader, gang_armed_member, gang_armed_handoff, gang_friendly_source")
+outputServerLog("[native-ai-harness] Ready: core melee/handoff/rotation plus gang_unarmed_flee, gang_armed_leader, gang_armed_member, gang_armed_handoff, gang_friendly_source, gang_two_armed_two_unarmed_melee")

@@ -377,7 +377,7 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
         return 1;
     }
 
-    lua_createtable(luaVM, 0, 19);
+    lua_createtable(luaVM, 0, 20);
     lua_pushnumber(luaVM, profile.target);
     lua_setfield(luaVM, -2, "target");
     lua_pushnumber(luaVM, profile.supportedTarget);
@@ -414,6 +414,11 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
     lua_setfield(luaVM, -2, "raceFlags");
     lua_pushboolean(luaVM, profile.noCops != 0);
     lua_setfield(luaVM, -2, "noCops");
+    std::size_t zoneLabelLength = 0;
+    while (zoneLabelLength < sizeof(profile.zoneLabel) && profile.zoneLabel[zoneLabelLength] != '\0')
+        ++zoneLabelLength;
+    lua_pushlstring(luaVM, profile.zoneLabel, zoneLabelLength);
+    lua_setfield(luaVM, -2, "zoneLabel");
     lua_createtable(luaVM, 10, 0);
     for (int gangId = 0; gangId < 10; ++gangId)
     {

@@ -116,6 +116,7 @@ namespace
     constexpr std::uintptr_t GTA_LOADED_PED_MODELS = 0x8E4C00;
     constexpr std::uintptr_t GTA_NAVIGATION_ZONE_ARRAY = 0xBA3798;
     constexpr std::uintptr_t GTA_ZONE_INFO_ARRAY = 0xBA1DF0;
+    constexpr std::uintptr_t GTA_CURRENT_POPCYCLE_ZONE = 0xC0BC64;
     constexpr std::uintptr_t GTA_CURRENT_POPCYCLE_ZONE_INFO = 0xC0BC68;
     constexpr std::uintptr_t GTA_POPCYCLE_ZONE_TYPE = 0xC0BC6C;
     constexpr std::uintptr_t GTA_POPCYCLE_WEEKEND = 0xC0BC70;
@@ -1755,17 +1756,25 @@ void CGameSA::ResetAmbientPedGangModels()
 bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profile) const
 {
     profile = {};
-    if (!m_areAmbientPedPopulationModelsActive || !*reinterpret_cast<void**>(GTA_CURRENT_POPCYCLE_ZONE_INFO))
+    if (!m_areAmbientPedPopulationModelsActive || !*reinterpret_cast<void**>(GTA_CURRENT_POPCYCLE_ZONE) ||
+        !*reinterpret_cast<void**>(GTA_CURRENT_POPCYCLE_ZONE_INFO))
         return false;
 
-    const float                    pedDensityMultiplier = *reinterpret_cast<const float*>(GTA_PED_DENSITY_MULTIPLIER);
-    const auto                     maximumPedsInUse = *reinterpret_cast<const unsigned int*>(GTA_MAX_PEDS_IN_USE);
-    const float                    creationDistanceMultiplier = reinterpret_cast<float(__cdecl*)()>(FUNC_PedCreationDistMultiplier)();
-    const float                    generationDistanceMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
-    const int                      zoneType = *reinterpret_cast<const int*>(GTA_POPCYCLE_ZONE_TYPE);
-    const int                      timeIndex = *reinterpret_cast<const int*>(GTA_POPCYCLE_TIME_INDEX);
-    const int                      weekend = *reinterpret_cast<const int*>(GTA_POPCYCLE_WEEKEND);
-    const auto*                    zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
+    const float pedDensityMultiplier = *reinterpret_cast<const float*>(GTA_PED_DENSITY_MULTIPLIER);
+    const auto  maximumPedsInUse = *reinterpret_cast<const unsigned int*>(GTA_MAX_PEDS_IN_USE);
+    const float creationDistanceMultiplier = reinterpret_cast<float(__cdecl*)()>(FUNC_PedCreationDistMultiplier)();
+    const float generationDistanceMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
+    const int   zoneType = *reinterpret_cast<const int*>(GTA_POPCYCLE_ZONE_TYPE);
+    const int   timeIndex = *reinterpret_cast<const int*>(GTA_POPCYCLE_TIME_INDEX);
+    const int   weekend = *reinterpret_cast<const int*>(GTA_POPCYCLE_WEEKEND);
+    const auto* zone = *reinterpret_cast<const SAmbientPedNavigationZoneSA**>(GTA_CURRENT_POPCYCLE_ZONE);
+    const auto* zoneInfo = *reinterpret_cast<SAmbientPedPopulationZoneInfoSA**>(GTA_CURRENT_POPCYCLE_ZONE_INFO);
+    const auto  zoneAddress = reinterpret_cast<std::uintptr_t>(zone);
+    if (zoneAddress < GTA_NAVIGATION_ZONE_ARRAY || zoneAddress >= GTA_NAVIGATION_ZONE_ARRAY + 380 * sizeof(SAmbientPedNavigationZoneSA) ||
+        (zoneAddress - GTA_NAVIGATION_ZONE_ARRAY) % sizeof(SAmbientPedNavigationZoneSA) != 0)
+    {
+        return false;
+    }
     SAmbientPedPopulationTargetsSA targets;
     if (!CalculateAmbientPedPopulationTargets(zoneInfo, timeIndex, weekend, zoneType, targets) || !std::isfinite(pedDensityMultiplier) ||
         !std::isfinite(creationDistanceMultiplier) || !std::isfinite(generationDistanceMultiplier) || targets.civilian < 0.0f || targets.civilian > 110.0f ||
@@ -1796,6 +1805,7 @@ bool CGameSA::GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profi
     profile.copTarget = profile.noCops ? 0.0f : targets.cop;
     profile.target = profile.supportedTarget + profile.copTarget;
     std::copy(std::begin(zoneInfo->gangStrength), std::end(zoneInfo->gangStrength), std::begin(profile.gangWeights));
+    std::copy(std::begin(zone->infoLabel), std::end(zone->infoLabel), std::begin(profile.zoneLabel));
     return std::isfinite(profile.target) && std::isfinite(profile.supportedTarget) && profile.target <= 110.0f;
 }
 

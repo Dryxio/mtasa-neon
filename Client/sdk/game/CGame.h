@@ -104,6 +104,12 @@ struct SNativeAIGroupDecision
     bool         sourceIsPlayer{};
     bool         threatened{};
     bool         friendly{};
+    // The same bounded telemetry envelope also records the two audited
+    // KillThreats allocator callsites. A non-zero allocationType identifies
+    // the exact task GTA assigned to this member before any individual DUCK
+    // event can temporarily mask the group primary task.
+    int allocationType{};  // 0 decision, 1 kill, 2 seek-cover
+    int memberWeaponType{-1};
 };
 
 typedef void(NativeAIGroupDecisionHandler)(const SNativeAIGroupDecision& decision);
@@ -223,8 +229,9 @@ struct SAmbientPedPopulationProfile
     unsigned char raceFlags{};
     unsigned char noCops{};
     unsigned char gangWeights[10]{};
+    char          zoneLabel[8]{};
 };
-static_assert(sizeof(SAmbientPedPopulationProfile) == 64, "Ambient population profile ABI changed");
+static_assert(sizeof(SAmbientPedPopulationProfile) == 72, "Ambient population profile ABI changed");
 
 // A read-only proposal produced by GTA's stock population rules. The caller
 // still owns the network element and its lifetime; Game SA never creates an

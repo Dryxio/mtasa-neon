@@ -5,7 +5,9 @@
 -- canonical copy of the 336-zone bootstrap while still giving every client an
 -- explicit, versioned world state.
 
+local catalog = assert(PedTrafficPopulationCatalog, "population_catalog.lua must load before population_world.lua")
 local BASELINE = "stock-main-scm-bootstrap-601def3b"
+local DEALER_GROWTH_CHANCES = {0.05, 0.20, 0.30, 0.35, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70}
 -- main.scm zone strengths are 1-based family columns, while CGangs' runtime
 -- weapon table is 0-based. Keep the domains explicit so a story mutation can
 -- never silently write Vagos weapons while changing Grove territory.
@@ -147,6 +149,19 @@ local function deepCopy(value)
     return copy
 end
 
+local function overlayZones(destination, overlay)
+    for label, mutation in pairs(overlay or {}) do
+        local state = assert(destination[label], "unknown stock population zone " .. tostring(label))
+        if mutation.populationType ~= nil then state.populationType = mutation.populationType end
+        if mutation.races ~= nil then state.races = mutation.races end
+        if mutation.dealerStrength ~= nil then state.dealerStrength = mutation.dealerStrength end
+        if mutation.noCops ~= nil then state.noCops = mutation.noCops end
+        for index, strength in pairs(mutation.gangStrengths or {}) do
+            state.gangStrengths[index] = strength
+        end
+    end
+end
+
 PedTrafficPopulationWorld = {}
 PedTrafficPopulationWorld.__index = PedTrafficPopulationWorld
 
@@ -171,7 +186,12 @@ function PedTrafficPopulationWorld:setPreset(name)
     local preset = builder()
     self.revision = self.revision + 1
     self.preset = name
-    self.zones = preset.zones
+    -- DealerStrength evolves at runtime, so the server needs the complete
+    -- stock zone table rather than the former sparse campaign overlay. Each
+    -- preset begins from the generated retail catalog and applies main.scm's
+    -- later story mutations in the same field domain.
+    self.zones = deepCopy(catalog.zones)
+    overlayZones(self.zones, preset.zones)
     self.densityMultiplier = 1.0
     self.randomGangMembers = true
     self.riots = false
@@ -183,10 +203,66 @@ function PedTrafficPopulationWorld:setPreset(name)
     return true
 end
 
+function PedTrafficPopulationWorld:decrementDealerStrength(label)
+    local state = self.zones[tostring(label or "")]
+    if not state or state.dealerStrength <= 0 then
+        return false
+    end
+    local before = state.dealerStrength
+    state.dealerStrength = before - 1
+    self.revision = self.revision + 1
+    return {label = label, before = before, after = state.dealerStrength}
+end
+
+function PedTrafficPopulationWorld:setDealerStrength(label, strength)
+    local state = self.zones[tostring(label or "")]
+    if not state or type(strength) ~= "number" or strength ~= math.floor(strength) or strength < 0 or strength > 15 then
+        return false
+    end
+    if state.dealerStrength == strength then
+        return {label = label, before = strength, after = strength, unchanged = true}
+    end
+    local before = state.dealerStrength
+    state.dealerStrength = strength
+    self.revision = self.revision + 1
+    return {label = label, before = before, after = strength}
+end
+
+function PedTrafficPopulationWorld:advanceDealerStrengths(random)
+    if not self.gangWarsActive then
+        return {}, {}
+    end
+    random = random or math.random
+    local changes = {}
+    local rolls = {}
+    local labels = {}
+    for label in pairs(self.zones) do labels[#labels + 1] = label end
+    table.sort(labels)
+    for _, label in ipairs(labels) do
+        local state = self.zones[label]
+        local eligible = state.gangStrengths[1] > 10 or state.gangStrengths[2] > 10 or state.gangStrengths[3] > 10
+        if eligible and state.dealerStrength < 15 then
+            local chance = DEALER_GROWTH_CHANCES[state.dealerStrength + 1]
+            local roll = random()
+            rolls[#rolls + 1] = {label = label, strength = state.dealerStrength, chance = chance, roll = roll}
+            if roll < chance then
+                local before = state.dealerStrength
+                state.dealerStrength = before + 1
+                changes[#changes + 1] = {label = label, before = before, after = state.dealerStrength, chance = chance, roll = roll}
+            end
+        end
+    end
+    if #changes > 0 then
+        self.revision = self.revision + 1
+    end
+    return changes, rolls
+end
+
 function PedTrafficPopulationWorld:getSnapshot()
     return deepCopy({
         schema = 1,
         baseline = BASELINE,
+        catalogRevision = catalog.revision,
         revision = self.revision,
         preset = self.preset,
         densityMultiplier = self.densityMultiplier,
@@ -202,6 +278,7 @@ function PedTrafficPopulationWorld:getClientProjection()
     return deepCopy({
         schema = 1,
         baseline = BASELINE,
+        catalogRevision = catalog.revision,
         revision = self.revision,
         preset = self.preset,
         capabilities = {zones = true},

@@ -110,6 +110,12 @@ cell guard of 12 and a 2 m
 server separation check are only final abuse/saturation bounds; GTA's path-node
 density and collision query still decide normal placement.
 
+Model identity now comes from the checked-in `population_catalog.lua`,
+generated from retail `PEDGRP.DAT`, `PEDS.IDE`, `PEDSTATS.DAT`, `PED.DAT` and
+the audited 336-zone main.scm bootstrap. Its SHA-256 revision is carried by
+world snapshots, profiles and every ambient actor; the server reconstructs
+class/type from this catalog instead of trusting client metadata.
+
 Each player owns a local population bubble derived from that client's live GTA
 creation and camera-generation multipliers. Civilian/dealer residency ends at
 the stock 54.5 multiplier; gangs retain GTA's extra 30 m. Overlapping players share
@@ -162,8 +168,8 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   active ped and makes it enter GTA's native climb/vault task; add `handoff` to
   transfer ownership while `TASK_SIMPLE_CLIMB` is active. The resource removes
   the temporary barrier on completion, failure, `off` or resource shutdown.
-- `/pedtraffic residency` runs the fail-fast two-client collision-residency
-  handoff, suspension and resumption checkpoint described below.
+- `/pedtraffic residency` runs the fail-fast two-client collision-residency,
+  stable-damage identity, hold, suspension and resumption checkpoint below.
 - `/pedtraffic bikejack` requires the two clients to already occupy seats 0
   and 1 of the same stationary motorcycle. It clears only this resource's
   ambient population, spawns a deterministic three-member gang five metres
@@ -174,21 +180,25 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   If vanilla selects task 1505, rerun the command; the resource deliberately
   does not override the stock 50/50 fight/flee draw.
 - `/pedtraffic dealertest` is a fail-fast two-client harness for the complete
-  dealer core. It temporarily moves and freezes both on-foot clients in a
-  daytime business zone, requests a real dealer through the C++ population
-  oracle, verifies the retail model set, logical type 17, no initial weapon and
-  owner-only WanderStandard, forces one owner handoff, then requires cleanup
-  ACKs from both clients. Time, transforms and frozen states are restored on
-  PASS, FAIL or cancellation. The timer is keyed by the scalar scenario ID;
-  MTA clones table arguments passed to `setTimer`, so table identity must not
-  be used to drive harness progress.
+  dealer checkpoint. It requests a real dealer, verifies catalog identity,
+  logical type 17, no initial weapon and owner-only WanderStandard, feeds
+  repeated real native damage-response stimuli until GTA itself enters
+  `TASK_SIMPLE_FIGHT_CTRL`, validates the delayed knife/pistol branch, forces
+  one owner handoff without rerolling, exercises a minute growth pass and one
+  player-attributed `DealerStrength` decrement, restores its zone fixture, then
+  requires cleanup ACKs from both clients. Time, transforms and frozen states
+  are restored on PASS, FAIL or cancellation.
 
 The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
 and now admits GTA's civilian, dealer and resident-gang population classes.
 Dealers are solo, use the exact retail `DEALERS` group `{28,29,30,254}`, carry
 logical `PED_TYPE_DEALER` even when `peds.ide` says criminal/civilian, receive
-no initial weapon, and start in WanderStandard. Dealer sales, later combat
-arming and authoritative `DealerStrength` ecology remain deferred. Ambient
+no initial weapon, and start in WanderStandard. On the first real fight-control
+task, their immutable server seed reproduces `m_nRandomSeed & 0x3FF`: below
+200 the knife is attempted first and a resident knife model permits the
+independent pistol attempt; 200..399 gives the pistol; 400..1023 stays
+unarmed. Grants use 50 ammo and the pistol STD stat. Dealer sales remain
+deferred. Ambient
 vehicle population, cops, couples, attractors, conversations,
 headless/offline simulation, custom weather rules and public server density
 controls remain outside this checkpoint. GTA's stock rain reduction is already
@@ -213,8 +223,8 @@ covered by those scopes remain a later behavior checkpoint.
   `supportedTarget`, split into `civilianTarget`, `dealerTarget` and
   `gangTarget`. `target` also includes the effective `copTarget`; `rawCopTarget`
   preserves the pre-`noCops` popcycle value for diagnostics. Zone metadata includes
-  `zoneType`, `dealerStrength`, `raceFlags`, `noCops`, `timeIndex`, `weekend`,
-  and the ten native `gangWeights`. Runtime density/lifecycle fields expose
+  `zoneLabel`, `zoneType`, `dealerStrength`, `raceFlags`, `noCops`, `timeIndex`,
+  `weekend`, and the ten native `gangWeights`. Runtime density/lifecycle fields expose
   `pedDensityMultiplier`, `fewerPedsMultiplier`, `maximumPedsInUse`,
   `creationDistanceMultiplier` and `generationDistanceMultiplier`. The
   civilian target already contains GTA's stock rain adjustment.
@@ -324,9 +334,16 @@ either client:
 
 The harness enables and resets the population JSONL trace, preserves both
 player transforms, then drives one existing group through the shortest causal
-sequence: owner A and resident B near the group, A outside its residency radius
-for an A-to-B handoff, the inverse B-to-A handoff, both clients outside for a
-mandatory `suspended` state, and finally A returning for resumption. Player
+sequence: one damage identity and decision, owner A and resident B near the
+group, A outside its residency radius for an A-to-B handoff, the inverse
+B-to-A handoff, a short no-resident interval of 1.5 seconds which must preserve
+the owner, epoch and native group, then a continuous three-second absence which
+may enter `suspended`, and finally A returning for resumption. The original
+damage context is never reinjected after either technical transition. Before
+each real release, the outgoing owner reports GTA's live weapon/ammo snapshot;
+the server accepts only the canonical weapon with non-increasing total ammo and
+a clip within the audited capacity, then publishes that state to the next
+owner. This prevents both ammo resurrection and client-minted ammo. Player
 transforms and frozen states are restored on PASS, FAIL, cancellation, or a
 client departure.
 
@@ -335,10 +352,13 @@ elapsed tick with group owner/epoch/state and each ped's Z/frozen state. Both
 clients add their local Z, vertical velocity, grounded/syncer/collision-ready
 flags, and physical task phase. The scenario stops at the first Z drop greater
 than 0.5, `IN_AIR`/fall task, active-owner sample without collision readiness,
-acceptance without the readiness proof, missing frozen suspension, missing
-client, or seven-second phase timeout. A successful terminal row is
-`residency_test_result` with `result=PASS` and
-`reason=handoff-return-suspend-resume`.
+acceptance without the readiness proof, owner/epoch change during the short
+hold, suspension before three seconds, duplicate damage dispatch, missing
+frozen suspension, missing client, or seven-second phase timeout. A successful
+terminal row is `residency_test_result` with `result=PASS`; the offline analyzer
+also requires two hold starts, one short-hold release, one long-hold expiry,
+one damage dispatch, no technical restore for that `damage_id`, and three
+bounded weapon-state commits for the two handoffs plus the real suspension.
 
 ## Deterministic dealer checkpoint
 
@@ -351,9 +371,11 @@ Connect exactly two clients alive and on foot, then run from either client:
 The command enables debug/traffic when needed and resets
 `@population-server.jsonl`. No manual search for a dealer is required. A PASS
 contains one `spawn` with `population_class=dealer`, `logical_ped_type=17`,
-`initial_weapon=0` and `task_profile=wander-standard`; four
-`dealer_test_sample` rows covering both clients before and after the handoff;
-two accepted `dealer_test_cleanup_ack` rows; and a final
+`initial_weapon=0` and `task_profile=wander-standard`; one
+`dealer_fight_weapon_committed` matching its seed and knife-model residency;
+one `dealer_test_growth_roll`; one applied `dealer_strength_death`; six
+`dealer_test_sample` rows covering both clients before combat, after combat and
+after the handoff; two accepted `dealer_test_cleanup_ack` rows; and a final
 `dealer_test_result` with `result=PASS`.
 
 The clients are placed at the validated Grove Street fixture and remain
@@ -368,6 +390,12 @@ one-second profile timer. This keeps a minimized or unfocused second client
 eligible for the two-client profile and authority assertions even when MTA
 throttles `onClientPreRender` for that window.
 
+A `DealerStrength` revision fences new admission while clients apply the new
+zone snapshot, but it does not invalidate already resident traffic during the
+bounded ACK window. The dealer harness traverses this same runtime guard and
+also requires a live combat context to be restored after its forced owner
+handoff; a return to `WanderStandard` is not accepted as continuity.
+
 Run the analyzer with:
 
 ```text
@@ -375,10 +403,11 @@ python3 utils/native-ai-trace-analyzer.py \
   --population path/to/@population-server.jsonl
 ```
 
-The owner sample must be the only one with syncer, accepted assignment, active
-native profile and Wander task. The observer still holds the passive profile
-lease but must not own an assignment or active native AI. The epoch advances
-exactly once during the forced handoff.
+The owner sample must be the only one with syncer, accepted assignment and an
+active native profile. It owns WanderStandard initially, then a live combat
+task in both the combat and post-handoff samples. The observer still holds the
+passive profile lease but must not own an assignment or active native AI. The
+epoch advances exactly once during the forced handoff.
 
 ## Population world-state checkpoint
 
