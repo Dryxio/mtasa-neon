@@ -23,7 +23,7 @@ public:
     CClientFoliage(CClientManager* pManager, ElementID ID);
     ~CClientFoliage();
 
-    eClientEntityType GetType() const { return CCLIENTUNKNOWN; }
+    eClientEntityType GetType() const { return CCLIENTDUMMY; }
 
     bool Initialize(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density);
 
