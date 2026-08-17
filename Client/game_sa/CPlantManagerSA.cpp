@@ -59,13 +59,13 @@ namespace
     }
 }
 
-bool CPlantManager::IsValidSurface(std::uint8_t surface)
+bool CPlantManagerSA::IsValidSurface(std::uint8_t surface)
 {
     using GetSurfProperties = void*(__cdecl*)(uint16);
     return reinterpret_cast<GetSurfProperties>(FUNC_GET_SURF_PROPERTIES)(surface) != nullptr;
 }
 
-bool CPlantManager::IsValidTriangle(const CVector& v1, const CVector& v2, const CVector& v3)
+bool CPlantManagerSA::IsValidTriangle(const CVector& v1, const CVector& v2, const CVector& v3)
 {
     if (!IsFiniteVector(v1) || !IsFiniteVector(v2) || !IsFiniteVector(v3))
         return false;
@@ -85,7 +85,7 @@ bool CPlantManager::IsValidTriangle(const CVector& v1, const CVector& v2, const 
     return std::isfinite(crossLengthSquared) && crossLengthSquared > 1.0e-8f;
 }
 
-PlantTriangleHandle CPlantManager::CreateTriangle(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density)
+PlantTriangleHandle CPlantManagerSA::CreateTriangle(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density)
 {
     if (!IsValidTriangle(v1, v2, v3) || !IsValidSurface(surface) || !std::isfinite(density) || density < 0.0f || density > MAX_CUSTOM_DENSITY)
         return nullptr;
@@ -108,7 +108,7 @@ PlantTriangleHandle CPlantManager::CreateTriangle(const CVector& v1, const CVect
     return result;
 }
 
-void CPlantManager::DestroyTriangle(PlantTriangleHandle handle)
+void CPlantManagerSA::DestroyTriangle(PlantTriangleHandle handle)
 {
     if (!handle)
         return;

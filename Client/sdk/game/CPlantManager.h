@@ -17,9 +17,11 @@ using PlantTriangleHandle = void*;
 class CPlantManager
 {
 public:
-    static PlantTriangleHandle CreateTriangle(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density);
-    static void                DestroyTriangle(PlantTriangleHandle handle);
+    virtual ~CPlantManager() = default;
 
-    static bool IsValidSurface(std::uint8_t surface);
-    static bool IsValidTriangle(const CVector& v1, const CVector& v2, const CVector& v3);
+    virtual PlantTriangleHandle CreateTriangle(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density) = 0;
+    virtual void                DestroyTriangle(PlantTriangleHandle handle) = 0;
+
+    virtual bool IsValidSurface(std::uint8_t surface) = 0;
+    virtual bool IsValidTriangle(const CVector& v1, const CVector& v2, const CVector& v3) = 0;
 };

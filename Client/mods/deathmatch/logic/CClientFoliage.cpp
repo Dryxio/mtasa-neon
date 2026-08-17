@@ -28,7 +28,8 @@ CClientFoliage::~CClientFoliage()
 
 bool CClientFoliage::Initialize(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density)
 {
-    if (!CPlantManager::IsValidTriangle(v1, v2, v3) || !CPlantManager::IsValidSurface(surface) || !std::isfinite(density) || density < 0.0f || density > 10.0f)
+    CPlantManager* plantManager = g_pGame->GetPlantManager();
+    if (!plantManager || !plantManager->IsValidTriangle(v1, v2, v3) || !plantManager->IsValidSurface(surface) || !std::isfinite(density) || density < 0.0f || density > 10.0f)
         return false;
 
     m_vecVertices[0] = v1;
@@ -97,7 +98,8 @@ bool CClientFoliage::StreamIn()
     if (m_usDimension != m_pFoliageManager->GetDimension())
         return true;
 
-    m_pNativeTriangle = CPlantManager::CreateTriangle(m_vecVertices[0], m_vecVertices[1], m_vecVertices[2], m_ucSurface, m_fDensity);
+    CPlantManager* plantManager = g_pGame->GetPlantManager();
+    m_pNativeTriangle = plantManager ? plantManager->CreateTriangle(m_vecVertices[0], m_vecVertices[1], m_vecVertices[2], m_ucSurface, m_fDensity) : nullptr;
     return m_pNativeTriangle != nullptr;
 }
 
@@ -106,7 +108,8 @@ void CClientFoliage::StreamOut()
     if (!m_pNativeTriangle)
         return;
 
-    CPlantManager::DestroyTriangle(m_pNativeTriangle);
+    if (CPlantManager* plantManager = g_pGame->GetPlantManager())
+        plantManager->DestroyTriangle(m_pNativeTriangle);
     m_pNativeTriangle = nullptr;
 }
 
@@ -129,7 +132,8 @@ void CClientFoliage::Unlink()
 
 bool CClientFoliage::Rebuild(const CVector& v1, const CVector& v2, const CVector& v3, std::uint8_t surface, float density)
 {
-    if (!CPlantManager::IsValidTriangle(v1, v2, v3) || !CPlantManager::IsValidSurface(surface) || !std::isfinite(density) || density < 0.0f || density > 10.0f)
+    CPlantManager* plantManager = g_pGame->GetPlantManager();
+    if (!plantManager || !plantManager->IsValidTriangle(v1, v2, v3) || !plantManager->IsValidSurface(surface) || !std::isfinite(density) || density < 0.0f || density > 10.0f)
         return false;
 
     const CVector oldVertices[3] = {m_vecVertices[0], m_vecVertices[1], m_vecVertices[2]};
