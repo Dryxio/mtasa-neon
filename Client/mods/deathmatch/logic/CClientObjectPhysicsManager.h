@@ -11,13 +11,23 @@
 
 #include "CClientObject.h"
 #include "CClientObjectManager.h"
+#include "CClientColModel.h"
+#include "CClientColModelManager.h"
+#include "CRuntimeColModel.h"
+#include "../../../game_sa/CColModelSA.h"
+#include "../../../game_sa/CModelInfoSA.h"
 #include "../../../game_sa/CObjectSA.h"
 
+#include <algorithm>
+#include <cmath>
+#include <memory>
 #include <unordered_map>
 
 class CClientObjectPhysicsManager
 {
 private:
+    static constexpr unsigned short INVALID_FALLBACK_MODEL = 0xFFFF;
+
     struct SState
     {
         CObject* pLastGameObject = nullptr;
@@ -34,15 +44,184 @@ private:
         bool  bCanBeCollidedWith = false;
         float fMass = 0.0f;
         float fTurnMass = 0.0f;
+
+        unsigned short usFallbackModel = INVALID_FALLBACK_MODEL;
     };
 
-    static inline std::unordered_map<CClientObject*, SState> ms_Objects;
+    struct SFallbackCollision
+    {
+        std::unique_ptr<CClientColModel> pCollision;
+        std::size_t                      users = 0;
+    };
+
+    static inline std::unordered_map<CClientObject*, SState>             ms_Objects;
+    static inline std::unordered_map<unsigned short, SFallbackCollision> ms_FallbackCollisions;
 
     static CObjectSA* GetObjectSA(CClientObject* pObject)
     {
         if (!pObject || !pObject->GetGameObject())
             return nullptr;
         return dynamic_cast<CObjectSA*>(pObject->GetGameObject());
+    }
+
+    static bool HasCollisionVolumes(unsigned short usModel)
+    {
+        CModelInfo* pModelInfo = g_pGame ? g_pGame->GetModelInfo(usModel) : nullptr;
+        if (!pModelInfo)
+            return false;
+
+        CBaseModelInfoSAInterface* pModelInterface = pModelInfo->GetInterface();
+        CColModelSAInterface*      pColModel = pModelInterface ? pModelInterface->pColModel : nullptr;
+        CColDataSA*                pData = pColModel ? pColModel->m_data : nullptr;
+        return pData && (pData->m_numSpheres != 0 || pData->m_numBoxes != 0 || pData->m_numTriangles != 0);
+    }
+
+    static bool BuildFallbackCollision(unsigned short usModel, std::unique_ptr<CClientColModel>& outCollision)
+    {
+        if (!g_pClientGame || !g_pClientGame->GetManager() || !g_pGame)
+            return false;
+
+        CModelInfo* pModelInfo = g_pGame->GetModelInfo(usModel);
+        if (!pModelInfo)
+            return false;
+
+        CVector center{0.0f, 0.0f, 0.0f};
+        CVector size{1.0f, 0.25f, 0.20f};
+
+        if (CBoundingBox* pBounds = pModelInfo->GetBoundingBox())
+        {
+            const CVector candidateCenter{
+                (pBounds->vecBoundMin.fX + pBounds->vecBoundMax.fX) * 0.5f,
+                (pBounds->vecBoundMin.fY + pBounds->vecBoundMax.fY) * 0.5f,
+                (pBounds->vecBoundMin.fZ + pBounds->vecBoundMax.fZ) * 0.5f,
+            };
+            const CVector candidateSize{
+                pBounds->vecBoundMax.fX - pBounds->vecBoundMin.fX,
+                pBounds->vecBoundMax.fY - pBounds->vecBoundMin.fY,
+                pBounds->vecBoundMax.fZ - pBounds->vecBoundMin.fZ,
+            };
+
+            if (std::isfinite(candidateCenter.fX) && std::isfinite(candidateCenter.fY) && std::isfinite(candidateCenter.fZ) &&
+                std::isfinite(candidateSize.fX) && std::isfinite(candidateSize.fY) && std::isfinite(candidateSize.fZ) &&
+                candidateSize.fX > 0.0f && candidateSize.fY > 0.0f && candidateSize.fZ > 0.0f)
+            {
+                center = candidateCenter;
+                size = candidateSize;
+            }
+        }
+
+        // Thin weapon bounds are easy to tunnel through at GTA's frame step.
+        // Preserve the model dimensions while giving every axis a small, stable
+        // collision thickness.
+        size.fX = std::max(size.fX, 0.12f);
+        size.fY = std::max(size.fY, 0.12f);
+        size.fZ = std::max(size.fZ, 0.12f);
+
+        RuntimeCollision::Model generated;
+        generated.boxes.push_back(RuntimeCollision::Box{center, size, 0});
+
+        std::string buffer;
+        std::string error;
+        if (!RuntimeCollision::BuildCOLBuffer(generated, buffer, error))
+        {
+            if (g_pCore && g_pCore->GetConsole())
+                g_pCore->GetConsole()->Printf("[dynamic-physics] model %u: fallback COL build failed: %s", usModel, error.c_str());
+            return false;
+        }
+
+        auto pCollision = std::make_unique<CClientColModel>(g_pClientGame->GetManager(), INVALID_ELEMENT_ID);
+        SString collisionData;
+        collisionData.assign(buffer.data(), buffer.size());
+        if (!pCollision->LoadGenerated(std::move(collisionData)) || !pCollision->Replace(usModel))
+        {
+            if (g_pCore && g_pCore->GetConsole())
+                g_pCore->GetConsole()->Printf("[dynamic-physics] model %u: fallback COL load/replace failed", usModel);
+            return false;
+        }
+
+        if (g_pCore && g_pCore->GetConsole())
+        {
+            g_pCore->GetConsole()->Printf("[dynamic-physics] model %u: no native collision volumes; fallback box %.3f x %.3f x %.3f installed",
+                                          usModel, size.fX, size.fY, size.fZ);
+        }
+
+        outCollision = std::move(pCollision);
+        return true;
+    }
+
+    static bool EnsureFallbackCollision(CClientObject* pObject, SState& state)
+    {
+        if (!pObject)
+            return false;
+
+        const unsigned short usModel = pObject->GetModel();
+
+        if (state.usFallbackModel != INVALID_FALLBACK_MODEL && state.usFallbackModel != usModel)
+            ReleaseFallbackCollision(state);
+
+        if (state.usFallbackModel == usModel)
+            return true;
+
+        // Another dynamic object may already own the generated collision. Check
+        // this before looking at ModelInfo, because the installed fallback now
+        // appears as a normal collision model there.
+        if (auto iter = ms_FallbackCollisions.find(usModel); iter != ms_FallbackCollisions.end())
+        {
+            ++iter->second.users;
+            state.usFallbackModel = usModel;
+            return true;
+        }
+
+        if (HasCollisionVolumes(usModel))
+            return true;
+
+        CClientColModelManager* pColManager = g_pClientGame && g_pClientGame->GetManager() ? g_pClientGame->GetManager()->GetColModelManager() : nullptr;
+        if (!pColManager)
+            return false;
+
+        // Respect resource-owned engineReplaceCOL state. Dynamic physics only
+        // fills genuinely missing native collision; it must not steal ownership
+        // from a script replacement.
+        if (pColManager->GetElementThatReplaced(usModel))
+        {
+            if (g_pCore && g_pCore->GetConsole())
+                g_pCore->GetConsole()->Printf("[dynamic-physics] model %u: collision has no volumes, but a script COL replacement owns the model", usModel);
+            return false;
+        }
+
+        SFallbackCollision fallback;
+        if (!BuildFallbackCollision(usModel, fallback.pCollision))
+            return false;
+
+        fallback.users = 1;
+        ms_FallbackCollisions.emplace(usModel, std::move(fallback));
+        state.usFallbackModel = usModel;
+        return true;
+    }
+
+    static void ReleaseFallbackCollision(SState& state)
+    {
+        if (state.usFallbackModel == INVALID_FALLBACK_MODEL)
+            return;
+
+        const unsigned short usModel = state.usFallbackModel;
+        state.usFallbackModel = INVALID_FALLBACK_MODEL;
+
+        auto iter = ms_FallbackCollisions.find(usModel);
+        if (iter == ms_FallbackCollisions.end())
+            return;
+
+        if (iter->second.users > 1)
+        {
+            --iter->second.users;
+            return;
+        }
+
+        // CClientColModel's destructor restores the original model collision if
+        // our fallback still owns it. If a script replaced it after us, MTA has
+        // already removed this model from our replacement list, so the script
+        // replacement is left untouched.
+        ms_FallbackCollisions.erase(iter);
     }
 
     static void Snapshot(CObjectSAInterface* pInterface, SState& state)
@@ -79,6 +258,8 @@ private:
 
         state.pLastGameObject = pObject->GetGameObject();
         Snapshot(pInterface, state);
+
+        EnsureFallbackCollision(pObject, state);
 
         pInterface->bApplyGravity = true;
         pInterface->bDisableFriction = false;
@@ -180,6 +361,7 @@ public:
                 return true;
 
             Restore(pObject, iter->second);
+            ReleaseFallbackCollision(iter->second);
             ms_Objects.erase(iter);
             return true;
         }
@@ -209,6 +391,7 @@ public:
             CClientObject* pObject = iter->first;
             if (!pManager->Exists(pObject))
             {
+                ReleaseFallbackCollision(iter->second);
                 iter = ms_Objects.erase(iter);
                 continue;
             }
@@ -229,5 +412,6 @@ public:
     static void Shutdown()
     {
         ms_Objects.clear();
+        ms_FallbackCollisions.clear();
     }
 };
