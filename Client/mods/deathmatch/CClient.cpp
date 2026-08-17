@@ -13,6 +13,7 @@
 #define ALLOC_STATS_MODULE_NAME "client"
 #include "SharedUtil.hpp"
 #include <core/CClientCommands.h>
+#include "logic/CClientWorldObjectManager.h"
 
 CCoreInterface*         g_pCore = NULL;
 CLocalizationInterface* g_pLocalization = NULL;
@@ -192,6 +193,8 @@ void CClient::ClientShutdown()
     g_pCore->GetKeyBinds()->RemoveControlFunction("radio_next", CClientGame::HandleRadioNext);
     g_pCore->GetKeyBinds()->RemoveControlFunction("radio_previous", CClientGame::HandleRadioPrevious);
 
+    CClientWorldObjectManager::Shutdown();
+
     // If the client modification is loaded, delete it
     if (g_pClientGame)
     {
@@ -205,6 +208,7 @@ void CClient::PreFrameExecutionHandler()
     // If the client modification is loaded, pulse it
     if (g_pClientGame)
     {
+        CClientWorldObjectManager::Pulse();
         g_pClientGame->DoPulsePreFrame();
     }
 }
