@@ -11,6 +11,7 @@
 #include <StdInc.h>
 
 void RegisterRadioPlaybackFunctions();
+void RegisterRuntimeCollisionFunctions();
 
 static std::vector<CLuaCFunction*>             m_sFunctions;
 static std::map<lua_CFunction, CLuaCFunction*> ms_Functions;
@@ -126,6 +127,7 @@ bool CLuaCFunctions::IsRestricted(const char* szName)
 void CLuaCFunctions::RegisterFunctionsWithVM(lua_State* luaVM)
 {
     RegisterRadioPlaybackFunctions();
+    RegisterRuntimeCollisionFunctions();
 
     // Register all our functions to a lua VM
     std::vector<CLuaCFunction*>::const_iterator iter = m_sFunctions.begin();

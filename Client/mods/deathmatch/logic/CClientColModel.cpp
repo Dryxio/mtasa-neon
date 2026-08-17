@@ -51,6 +51,37 @@ bool CClientColModel::Load(bool isRaw, SString input)
     }
 }
 
+bool CClientColModel::LoadGenerated(SString buffer)
+{
+    if (m_pColModel)
+        return false;
+
+    m_pColModel = g_pGame->GetRenderWare()->ReadCOL(std::move(buffer));
+    return m_pColModel != nullptr;
+}
+
+bool CClientColModel::SetGenerated(SString buffer)
+{
+    if (!m_pColModel)
+        return false;
+
+    CColModel* pNewColModel = g_pGame->GetRenderWare()->ReadCOL(std::move(buffer));
+    if (!pNewColModel)
+        return false;
+
+    for (unsigned short usModel : m_Replaced)
+    {
+        CModelInfo* pModelInfo = g_pGame->GetModelInfo(usModel);
+        if (pModelInfo)
+            pModelInfo->SetColModel(pNewColModel);
+    }
+
+    CColModel* pOldColModel = m_pColModel;
+    m_pColModel = pNewColModel;
+    pOldColModel->Destroy();
+    return true;
+}
+
 bool CClientColModel::LoadFromFile(SString filePath)
 {
     SString buffer;

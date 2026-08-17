@@ -24,7 +24,8 @@ project "Tests_Client"
 		"premake5.lua",
 		"**.h",
 		"**.cpp",
-		"../../Client/mods/deathmatch/logic/CSampMapParser.cpp"
+		"../../Client/mods/deathmatch/logic/CSampMapParser.cpp",
+		"../../Client/mods/deathmatch/logic/CRuntimeColModel.cpp"
 	}
 
 	defines {
