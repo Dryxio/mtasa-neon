@@ -102,11 +102,45 @@ private:
 
         if (!pObject->IsFrozen())
         {
-            pObjectSA->AddToMovingList();
             pObjectSA->SetStatic(false);
+            pObjectSA->AddToMovingList();
+
+            // The server can send the toss velocity before GTA has created the
+            // streamed CObject. CClientObject keeps those values cached, so
+            // restore them into every newly-created native instance.
+            pObjectSA->SetMoveSpeed(pObject->m_vecMoveSpeed);
+            CVector vecTurnSpeed = pObject->m_vecTurnSpeed;
+            pObjectSA->SetTurnSpeed(&vecTurnSpeed);
         }
 
         return true;
+    }
+
+    static void CacheLiveState(CClientObject* pObject)
+    {
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return;
+
+        const CVector vecPosition = *pObjectSA->GetPosition();
+        CVector       vecRotation;
+        CVector       vecMoveSpeed;
+        CVector       vecTurnSpeed;
+        pObject->GetRotationRadians(vecRotation);
+        pObjectSA->GetMoveSpeed(&vecMoveSpeed);
+        pObjectSA->GetTurnSpeed(&vecTurnSpeed);
+
+        // Dynamic models such as weapons often have no object.dat group, so the
+        // normal CClientObject::StreamedInPulse path deliberately skips them.
+        // Keep the MTA element/streamer cache following the native GTA physics.
+        if (vecPosition != pObject->m_vecPosition)
+        {
+            pObject->m_vecPosition = vecPosition;
+            pObject->UpdateStreamPosition(vecPosition);
+        }
+        pObject->m_vecRotation = vecRotation;
+        pObject->m_vecMoveSpeed = vecMoveSpeed;
+        pObject->m_vecTurnSpeed = vecTurnSpeed;
     }
 
     static void Restore(CClientObject* pObject, SState& state)
@@ -184,7 +218,16 @@ public:
                 iter->second.bSnapshotValid = false;
                 Apply(pObject, iter->second);
             }
+
+            if (pObject->GetGameObject() && pObject->GetGameObject() == iter->second.pLastGameObject)
+                CacheLiveState(pObject);
+
             ++iter;
         }
+    }
+
+    static void Shutdown()
+    {
+        ms_Objects.clear();
     }
 };
