@@ -38,7 +38,6 @@ local editKeys = {
 local screenW, screenH = guiGetScreenSize()
 
 local function chat(message, r, g, b)
-    outputChatBox("[runtime-wall] " .. message, r or 80, g or 220, b or 255)
 end
 
 local function setEditorInput(enabled)
@@ -356,18 +355,18 @@ local function handleEditKey(keyName, state)
     local down = state == "down"
     if keyName == "e" then
         editKeys.extend = down
-    elseif keyName == "q" then
+    elseif keyName == "a" then
         editKeys.shorten = down
-    elseif keyName == "r" then
+    elseif keyName == "u" then
         editKeys.raise = down
-    elseif keyName == "f" then
+    elseif keyName == "i" then
         editKeys.lower = down
-    elseif keyName == "t" and down then
+    elseif keyName == "p" and down then
         toggleRamp()
     end
 end
 
-for _, keyName in ipairs({ "q", "e", "r", "f", "t" }) do
+for _, keyName in ipairs({ "a", "e", "u", "i", "p" }) do
     bindKey(keyName, "both", handleEditKey)
 end
 
@@ -410,7 +409,7 @@ addEventHandler("onClientClick", root, function(button, state)
         applyWallEndpoint(x, y, true)
         mode = "locked"
         setEditorInput(false)
-        chat("Wall locked. Hold E/Q for length, R/F for height, T to toggle ramp, /wallwire for collision.")
+        chat("Wall locked. Hold A/E for length, U/I for height, P to toggle ramp, /wallwire for collision.")
     end
 end)
 
@@ -528,4 +527,4 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     end
 end)
 
-chat("Ready: /wall. After locking: hold E/Q length, R/F height, T ramp, /wallwire collision.")
+chat("Ready: /wall. After locking: hold A/E length, U/I height, P ramp, /wallwire collision.")

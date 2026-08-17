@@ -19,13 +19,11 @@ addCommandHandler("wallcar", function(player)
 
     local vehicle = createVehicle(411, spawnX, spawnY, z + 0.8, 0, 0, rz)
     if not vehicle then
-        outputChatBox("[runtime-wall] Could not create the test vehicle.", player, 255, 80, 80)
         return
     end
 
     spawnedVehicles[player] = vehicle
     warpPedIntoVehicle(player, vehicle)
-    outputChatBox("[runtime-wall] Test car spawned. Drive straight into the wall.", player, 100, 255, 120)
 end)
 
 addCommandHandler("wallcarclear", function(player)

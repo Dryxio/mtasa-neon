@@ -12,9 +12,9 @@ Use:
 
 - `/wall` - start a new wall and replace the previous demo wall
 - left click - place the first endpoint, then lock the second endpoint
-- hold `E` / `Q` - extend / shorten the locked wall while continuing to move normally
-- hold `R` / `F` - raise / lower the locked wall
-- `T` or `/wallramp` - toggle the locked wall between a vertical wall and a sloped ramp
+- hold `E` / `A` - extend / shorten the locked wall while continuing to move normally
+- hold `U` / `I` - raise / lower the locked wall
+- `P` or `/wallramp` - toggle the locked wall between a vertical wall and a sloped ramp
 - `/wallwire` - toggle the generated collision outline
 - `/wallreset` - remove the wall
 - `/wallcar` - spawn an Infernus and warp into it for an impact test
@@ -26,8 +26,8 @@ Use:
 2. Draw a short, low wall and lock it.
 3. Jump onto it.
 4. Hold `E` while standing/walking on it so the wall extends after creation.
-5. Hold `R` briefly so the top rises while the collision updates.
-6. Press `T` to turn the same runtime model into a small ramp.
+5. Hold `U` briefly so the top rises while the collision updates.
+6. Press `P` to turn the same runtime model into a small ramp.
 7. Walk down the ramp.
 8. Toggle `/wallwire` briefly to show the actual generated collision, then toggle it off.
 
