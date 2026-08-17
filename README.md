@@ -75,7 +75,9 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
-| Shared ambient pedestrian traffic | GTA population remains client-local and disabled by MTA | Server-owned MTA peds proposed from GTA's civilian models and paths, with one native-AI owner, syncer handoff, observer presentation, and deterministic cleanup |
+| Shared ambient pedestrian traffic | GTA population remains client-local and disabled by MTA | Server-owned MTA peds proposed from GTA's civilian, gang, dealer and cop models and paths, with one native-AI owner, syncer handoff, observer presentation, and deterministic cleanup |
+| Ambient couples and city cops | Single-player only | Atomic native couple leases with GTA-owned walk side and hand holding, plus a safe ambient-cop patrol task that keeps real path-node locomotion while making wanted, pursuit and arrest unreachable |
+| GTA's own dynamic physics objects | Never exposed to scripts | Native props published as client `worldobject` elements with live read/write transforms and cancellable damage and break events, while GTA keeps physics ownership |
 | Native ped task primitives | No direct resource API for these GTA tasks | Client-owned native movement/combat/vehicle tasks plus persistent GTA mission-actor classification with verified layouts and lifecycles |
 | Native task presentation to non-syncers | Ordinary element state only | Reusable locomotion, animation, fight/chat, weapon audiovisual, and selected physical-response channels without giving observers AI or gameplay authority |
 | Per-object gang-tag rendering | Single-player tag gameplay disabled by MTA | Opt-in native Grove-material alpha for scripted tag objects without restoring gameplay progress |
@@ -133,6 +135,14 @@ An in-game demonstration of Neon's resource-controlled native CULL-zone editing 
 [![Watch the native CULL-zone editing demo](docs/media/native-cull-zone-demo.png)](https://www.youtube.com/watch?v=17QrE21uDgM)
 
 [Watch on YouTube](https://www.youtube.com/watch?v=17QrE21uDgM)
+
+### Scripting GTA's own physics objects
+
+San Andreas' dynamic props — Grove Street boxes, crates, bins, breakable clutter — are now client `worldobject` elements. A Lua resource binds one, tracks its live transform, and reacts to damage and destruction while GTA keeps simulating the physics.
+
+[![Watch the native world-object scripting demo](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
+
+[Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
 
 ## Selected Neon Lua API additions
 
@@ -218,10 +228,23 @@ The mode follows skin changes, entity recreation, joins, and streaming. The OOP 
 | Function | Side | Description |
 | --- | --- | --- |
 | `updateAmbientPedPopulationModels(origin)` | Client | Runs GTA's ped-only zone-model residency pass around a finite `Vector3` origin without enabling unmanaged population creation. |
-| `getAmbientPedSpawnCandidate(origin)` | Client | Returns one read-only civilian model and native path-placement proposal, or `false` plus a bounded rejection reason. It creates no ped and grants no authority. |
+| `getAmbientPedSpawnCandidate(origin [, selection, gangId])` | Client | Returns one read-only `civilian`, `gang`, `dealer` or `cop` model and native path-placement proposal, or `false` plus a bounded rejection reason. It creates no ped and grants no authority. |
 | `resetAmbientPedPopulationModels()` | Client | Releases the eight stock population-model slots retained by the update pass; live MTA peds keep their own model references. |
 
 These primitives are deliberately smaller than a population manager. The server must validate proposals against every player and its own caps, create and own the synchronized peds, assign exactly one syncer, advance ownership epochs, and clean up the resource's elements. The reference resource combines them with native Wander, the `"ambient-wander"` event profile, and the two event bridges listed below.
+
+Native gang groups, gang combat, motorcycle carjacks, dealers, city cops, and atomic civilian couples each add their own lease and diagnostic functions on top of these proposals. The complete set, with ownership rules and handoff behavior, is documented on [Synchronized NPCs and traffic](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai).
+
+### Native dynamic world objects
+
+Every dynamic prop San Andreas already streams around the player is a client `worldobject` element, with no placement or setup step. They answer the ordinary transform API, so existing scripting knowledge carries over directly, and Neon adds two events.
+
+| Event | Parameters | Description |
+| --- | --- | --- |
+| `onClientWorldObjectDamage` | `loss, attacker, model, x, y, z` | A native object took damage. `attacker` may be `nil`. Cancelling blocks the health loss. |
+| `onClientWorldObjectBreak` | `attacker, model, x, y, z` | A native object broke. Cancelling blocks the break. |
+
+Elements are discovered with `getElementsByType("worldobject")`, read and written with `getElementPosition` / `getElementMatrix` / `setElementMatrix`, and cannot be destroyed by scripts. The same element survives stream-out and stream-in, and `onClientElementStreamIn` / `onClientElementStreamOut` fire on it. See [Scriptable dynamic objects](https://mtasa-neon-wiki.vercel.app/neon/world-objects).
 
 ### Native vehicle predicates, ped tasks and gang tags
 
