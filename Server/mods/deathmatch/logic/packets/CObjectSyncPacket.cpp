@@ -3,7 +3,7 @@
  *  PROJECT:     Multi Theft Auto v1.0
  *  LICENSE:     See LICENSE in the top level directory
  *  FILE:        mods/deathmatch/logic/packets/CObjectSyncPacket.cpp
- *  PURPOSE:     Object sync packet class
+ *  PURPOSE:     Header for object sync packet class
  *
  *  Multi Theft Auto is available from https://www.multitheftauto.com/
  *
@@ -17,142 +17,116 @@ CObjectSyncPacket::~CObjectSyncPacket()
 {
     std::vector<SyncData*>::const_iterator iter = m_Syncs.begin();
     for (; iter != m_Syncs.end(); ++iter)
+    {
         delete *iter;
+    }
     m_Syncs.clear();
 }
 
 bool CObjectSyncPacket::Read(NetBitStreamInterface& BitStream)
 {
+    // While we're not out of bytes
     while (BitStream.GetNumberOfUnreadBits() > 8)
     {
+        // Read out the sync data
         SyncData* pData = new SyncData;
         pData->bSend = false;
 
-        if (!BitStream.Read(pData->ID) || !BitStream.Read(pData->ucSyncTimeContext))
-        {
-            delete pData;
+        // Read out the ID
+        if (!BitStream.Read(pData->ID))
             return false;
-        }
 
-        SIntegerSync<unsigned char, 5> flags;
-        if (!BitStream.Read(&flags))
-        {
-            delete pData;
+        // Read the sync time context
+        if (!BitStream.Read(pData->ucSyncTimeContext))
             return false;
-        }
+
+        // Read out flags
+        SIntegerSync<unsigned char, 3> flags;
+        if (!BitStream.Read(&flags))
+            return false;
         pData->ucFlags = flags;
 
+        // Read out the position if we need
         if (flags & 0x1)
         {
             SPositionSync position;
             if (!BitStream.Read(&position))
-            {
-                delete pData;
                 return false;
-            }
             pData->vecPosition = position.data.vecPosition;
         }
 
+        // Read out the rotation
         if (flags & 0x2)
         {
             SRotationRadiansSync rotation;
             if (!BitStream.Read(&rotation))
-            {
-                delete pData;
                 return false;
-            }
             pData->vecRotation = rotation.data.vecRotation;
         }
 
+        // Read out the health
         if (flags & 0x4)
         {
             SObjectHealthSync health;
             if (!BitStream.Read(&health))
-            {
-                delete pData;
                 return false;
-            }
             pData->fHealth = health.data.fValue;
         }
 
-        if (flags & 0x8)
-        {
-            SVelocitySync velocity;
-            if (!BitStream.Read(&velocity))
-            {
-                delete pData;
-                return false;
-            }
-            pData->vecVelocity = velocity.data.vecVelocity;
-        }
-
-        if (flags & 0x10)
-        {
-            SVelocitySync turnVelocity;
-            if (!BitStream.Read(&turnVelocity))
-            {
-                delete pData;
-                return false;
-            }
-            pData->vecTurnVelocity = turnVelocity.data.vecVelocity;
-        }
-
+        // Add it to our list
         m_Syncs.push_back(pData);
     }
 
-    return !m_Syncs.empty();
+    return m_Syncs.size() > 0;
 }
 
 bool CObjectSyncPacket::Write(NetBitStreamInterface& BitStream) const
 {
-    bool bSent = false;
-    for (SyncData* pData : m_Syncs)
+    bool                                   bSent = false;
+    std::vector<SyncData*>::const_iterator iter = m_Syncs.begin();
+    // Write syncs
+    for (; iter != m_Syncs.end(); ++iter)
     {
-        if (!pData->bSend || pData->ucFlags == 0)
-            continue;
-
-        BitStream.Write(pData->ID);
-        BitStream.Write(pData->ucSyncTimeContext);
-
-        SIntegerSync<unsigned char, 5> flags(pData->ucFlags);
-        BitStream.Write(&flags);
-
-        if (flags & 0x1)
+        SyncData* pData = *iter;
+        // If we're not supposed to ignore the packet
+        if (pData->bSend)
         {
-            SPositionSync position;
-            position.data.vecPosition = pData->vecPosition;
-            BitStream.Write(&position);
-        }
+            // Write the ID
+            BitStream.Write(pData->ID);
 
-        if (flags & 0x2)
-        {
-            SRotationRadiansSync rotation;
-            rotation.data.vecRotation = pData->vecRotation;
-            BitStream.Write(&rotation);
-        }
+            // Write the sync time context
+            BitStream.Write(pData->ucSyncTimeContext);
 
-        if (flags & 0x4)
-        {
-            SObjectHealthSync health;
-            health.data.fValue = pData->fHealth;
-            BitStream.Write(&health);
-        }
+            // Write flags
+            SIntegerSync<unsigned char, 3> flags(pData->ucFlags);
+            BitStream.Write(&flags);
 
-        if (flags & 0x8)
-        {
-            SVelocitySync velocity;
-            velocity.data.vecVelocity = pData->vecVelocity;
-            BitStream.Write(&velocity);
-        }
+            // Write position if we need
+            if (flags & 0x1)
+            {
+                SPositionSync position;
+                position.data.vecPosition = pData->vecPosition;
+                BitStream.Write(&position);
+            }
 
-        if (flags & 0x10)
-        {
-            SVelocitySync turnVelocity;
-            turnVelocity.data.vecVelocity = pData->vecTurnVelocity;
-            BitStream.Write(&turnVelocity);
-        }
+            // Write rotation
+            if (flags & 0x2)
+            {
+                SRotationRadiansSync rotation;
+                rotation.data.vecRotation = pData->vecRotation;
+                BitStream.Write(&rotation);
+            }
 
-        bSent = true;
+            // Write health
+            if (flags & 0x4)
+            {
+                SObjectHealthSync health;
+                health.data.fValue = pData->fHealth;
+            }
+
+            // We've sent atleast one sync
+            bSent = true;
+        }
     }
 
     return bSent;

@@ -298,7 +298,5 @@ enum eElementRPCFunctions
     ALLOCATE_SERVER_MODEL,
     FREE_SERVER_MODEL,
 
-    SET_OBJECT_DYNAMIC_PHYSICS,
-
     NUM_RPC_FUNCS  // Add above this line
 };

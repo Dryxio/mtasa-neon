@@ -19,25 +19,20 @@ bool CObjectStartSyncPacket::Write(NetBitStreamInterface& BitStream) const
     if (!m_pObject)
         return false;
 
+    // Write the ID
     BitStream.Write(m_pObject->GetID());
-    BitStream.WriteBit(m_pObject->IsDynamicPhysics());
 
+    // Write the position
     SPositionSync position;
     position.data.vecPosition = m_pObject->GetPosition();
     BitStream.Write(&position);
 
+    // Write the rotation
     SRotationRadiansSync rotation;
     m_pObject->GetRotation(rotation.data.vecRotation);
     BitStream.Write(&rotation);
 
-    SVelocitySync velocity;
-    velocity.data.vecVelocity = m_pObject->GetPhysicsVelocity();
-    BitStream.Write(&velocity);
-
-    SVelocitySync turnVelocity;
-    turnVelocity.data.vecVelocity = m_pObject->GetPhysicsTurnVelocity();
-    BitStream.Write(&turnVelocity);
-
+    // Write the health
     SObjectHealthSync health;
     health.data.fValue = m_pObject->GetHealth();
     BitStream.Write(&health);

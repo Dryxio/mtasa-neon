@@ -11,26 +11,12 @@
 
 #include "StdInc.h"
 #include "net/SyncStructures.h"
-#include "CClientObjectPhysicsManager.h"
-
-#include <unordered_map>
 
 #ifdef WITH_OBJECT_SYNC
 
 using std::list;
 
     #define OBJECT_SYNC_RATE (g_TickRateSettings.iObjectSync)
-
-namespace
-{
-    struct SLastPhysicsSync
-    {
-        CVector vecVelocity;
-        CVector vecTurnVelocity;
-    };
-
-    std::unordered_map<CDeathmatchObject*, SLastPhysicsSync> g_LastPhysicsSync;
-}
 
 CObjectSync::CObjectSync(CClientObjectManager* pObjectManager)
 {
@@ -43,14 +29,22 @@ bool CObjectSync::ProcessPacket(unsigned char ucPacketID, NetBitStreamInterface&
     switch (ucPacketID)
     {
         case PACKET_ID_OBJECT_STARTSYNC:
+        {
             Packet_ObjectStartSync(BitStream);
             return true;
+        }
+
         case PACKET_ID_OBJECT_STOPSYNC:
+        {
             Packet_ObjectStopSync(BitStream);
             return true;
+        }
+
         case PACKET_ID_OBJECT_SYNC:
+        {
             Packet_ObjectSync(BitStream);
             return true;
+        }
     }
 
     return false;
@@ -58,8 +52,7 @@ bool CObjectSync::ProcessPacket(unsigned char ucPacketID, NetBitStreamInterface&
 
 void CObjectSync::DoPulse()
 {
-    CClientObjectPhysicsManager::Pulse();
-
+    // Has it been long enough since our last state's sync?
     unsigned long ulCurrentTime = CClientTime::GetTime();
     if (ulCurrentTime >= m_ulLastSyncTime + OBJECT_SYNC_RATE)
     {
@@ -71,26 +64,17 @@ void CObjectSync::DoPulse()
 void CObjectSync::AddObject(CDeathmatchObject* pObject)
 {
     m_List.push_front(pObject);
-
-    if (CClientObjectPhysicsManager::IsEnabled(pObject))
-    {
-        SLastPhysicsSync& state = g_LastPhysicsSync[pObject];
-        pObject->GetMoveSpeed(state.vecVelocity);
-        pObject->GetTurnSpeed(state.vecTurnVelocity);
-    }
 }
 
 void CObjectSync::RemoveObject(CDeathmatchObject* pObject)
 {
     if (!m_List.empty())
         m_List.remove(pObject);
-    g_LastPhysicsSync.erase(pObject);
 }
 
 void CObjectSync::ClearObjects()
 {
     m_List.clear();
-    g_LastPhysicsSync.clear();
 }
 
 bool CObjectSync::Exists(CDeathmatchObject* pObject)
@@ -100,116 +84,135 @@ bool CObjectSync::Exists(CDeathmatchObject* pObject)
 
 void CObjectSync::Packet_ObjectStartSync(NetBitStreamInterface& BitStream)
 {
+    // Read out the ID
     ElementID ID;
-    if (!BitStream.Read(ID))
-        return;
+    if (BitStream.Read(ID))
+    {
+        // Grab the object
+        CDeathmatchObject* pObject = static_cast<CDeathmatchObject*>(m_pObjectManager->Get(ID));
+        if (pObject)
+        {
+            // Read out the position and rotation
+            SPositionSync        position;
+            SRotationRadiansSync rotation;
+            if (BitStream.Read(&position) && BitStream.Read(&rotation))
+            {
+    // Disabled due to problem when attached in the editor - issue #5886
+    #if 0
+                pObject->SetOrientation ( position.data.vecPosition, rotation.data.vecRotation );
+    #endif
+            }
+            // No velocity due to issue #3522
 
-    CDeathmatchObject* pObject = static_cast<CDeathmatchObject*>(m_pObjectManager->Get(ID));
-    const bool         bDynamicPhysics = BitStream.ReadBit();
+            // Read out the health
+            SObjectHealthSync health;
+            if (BitStream.Read(&health))
+            {
+                pObject->SetHealth(health.data.fValue);
+            }
 
-    SPositionSync        position;
-    SRotationRadiansSync rotation;
-    SVelocitySync        velocity;
-    SVelocitySync        turnVelocity;
-    SObjectHealthSync    health;
-    if (!BitStream.Read(&position) || !BitStream.Read(&rotation) || !BitStream.Read(&velocity) || !BitStream.Read(&turnVelocity) || !BitStream.Read(&health))
-        return;
-
-    if (!pObject)
-        return;
-
-    CClientObjectPhysicsManager::SetEnabled(pObject, bDynamicPhysics);
-
-    // Keep the long-standing attached-object orientation workaround intact.
-    // Dynamic objects are already receiving authoritative snapshots before a
-    // syncer migration, so only velocity needs to be restored here.
-    pObject->SetMoveSpeed(velocity.data.vecVelocity);
-    pObject->SetTurnSpeed(turnVelocity.data.vecVelocity);
-    pObject->SetHealth(health.data.fValue);
-
-    AddObject(pObject);
+            AddObject(pObject);
+        }
+    }
 }
 
 void CObjectSync::Packet_ObjectStopSync(NetBitStreamInterface& BitStream)
 {
+    // Read out the ID
     ElementID ID;
-    if (!BitStream.Read(ID))
-        return;
-
-    CDeathmatchObject* pObject = static_cast<CDeathmatchObject*>(m_pObjectManager->Get(ID));
-    if (pObject)
-        RemoveObject(pObject);
+    if (BitStream.Read(ID))
+    {
+        // Grab the object
+        CDeathmatchObject* pObject = static_cast<CDeathmatchObject*>(m_pObjectManager->Get(ID));
+        if (pObject)
+        {
+            RemoveObject(pObject);
+        }
+    }
 }
 
 void CObjectSync::Packet_ObjectSync(NetBitStreamInterface& BitStream)
 {
+    // While we're not out of bytes
     while (BitStream.GetNumberOfUnreadBits() > 8)
     {
+        // Read out the ID
         ElementID ID;
-        unsigned char ucSyncTimeContext;
-        if (!BitStream.Read(ID) || !BitStream.Read(ucSyncTimeContext))
+        if (!BitStream.Read(ID))
             return;
 
-        SIntegerSync<unsigned char, 5> flags(0);
+        // Read out the sync time context. See CClientEntity for documentation on that.
+        unsigned char ucSyncTimeContext;
+        if (!BitStream.Read(ucSyncTimeContext))
+            return;
+
+        // Read out flags
+        SIntegerSync<unsigned char, 3> flags(0);
         if (!BitStream.Read(&flags))
             return;
 
+        // Read out the position if we need
         SPositionSync position;
-        SRotationRadiansSync rotation;
-        SObjectHealthSync health;
-        SVelocitySync velocity;
-        SVelocitySync turnVelocity;
-
-        if ((flags & 0x1) && !BitStream.Read(&position))
-            return;
-        if ((flags & 0x2) && !BitStream.Read(&rotation))
-            return;
-        if ((flags & 0x4) && !BitStream.Read(&health))
-            return;
-        if ((flags & 0x8) && !BitStream.Read(&velocity))
-            return;
-        if ((flags & 0x10) && !BitStream.Read(&turnVelocity))
-            return;
-
-        CDeathmatchObject* pObject = static_cast<CDeathmatchObject*>(m_pObjectManager->Get(ID));
-        if (!pObject || !pObject->CanUpdateSync(ucSyncTimeContext))
-            continue;
-
-        // Velocity fields are accepted by the server only for dynamic objects,
-        // so they also act as a self-describing fallback for clients that joined
-        // after the original SET_OBJECT_DYNAMIC_PHYSICS RPC.
-        if ((flags & 0x18) && !CClientObjectPhysicsManager::IsEnabled(pObject))
-            CClientObjectPhysicsManager::SetEnabled(pObject, true);
-
         if (flags & 0x1)
-            pObject->SetPosition(position.data.vecPosition);
+        {
+            if (!BitStream.Read(&position))
+                return;
+        }
+
+        // Read out the rotation
+        SRotationRadiansSync rotation;
         if (flags & 0x2)
-            pObject->SetRotationRadians(rotation.data.vecRotation);
+        {
+            if (!BitStream.Read(&rotation))
+                return;
+        }
+
+        // Read out the health
+        SObjectHealthSync health;
         if (flags & 0x4)
-            pObject->SetHealth(health.data.fValue);
-        if (flags & 0x8)
-            pObject->SetMoveSpeed(velocity.data.vecVelocity);
-        if (flags & 0x10)
-            pObject->SetTurnSpeed(turnVelocity.data.vecVelocity);
+        {
+            if (!BitStream.Read(&health))
+                return;
+        }
+
+        // Grab the object
+        CDeathmatchObject* pObject = static_cast<CDeathmatchObject*>(m_pObjectManager->Get(ID));
+        // Only update the sync if this packet is from the same context
+        if (pObject && pObject->CanUpdateSync(ucSyncTimeContext))
+        {
+            if (flags & 0x1)
+                pObject->SetPosition(position.data.vecPosition);
+            if (flags & 0x2)
+                pObject->SetRotationRadians(rotation.data.vecRotation);
+            if (flags & 0x4)
+                pObject->SetHealth(health.data.fValue);
+        }
     }
 }
 
 void CObjectSync::Sync()
 {
-    if (m_List.empty())
-        return;
+    // Got any items?
+    if (m_List.size() > 0)
+    {
+        // Write each object to packet
+        CBitStream                               bitStream;
+        list<CDeathmatchObject*>::const_iterator iter = m_List.begin();
+        for (; iter != m_List.end(); iter++)
+        {
+            WriteObjectInformation(bitStream.pBitStream, *iter);
+        }
 
-    CBitStream bitStream;
-    for (CDeathmatchObject* pObject : m_List)
-        WriteObjectInformation(bitStream.pBitStream, pObject);
-
-    g_pNet->SendPacket(PACKET_ID_OBJECT_SYNC, bitStream.pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+        // Send the packet
+        g_pNet->SendPacket(PACKET_ID_OBJECT_SYNC, bitStream.pBitStream, PACKET_PRIORITY_MEDIUM, PACKET_RELIABILITY_UNRELIABLE_SEQUENCED);
+    }
 }
 
 void CObjectSync::WriteObjectInformation(NetBitStreamInterface* pBitStream, CDeathmatchObject* pObject)
 {
     unsigned char ucFlags = 0;
 
+    // What's changed?
     CVector vecPosition, vecRotation;
     pObject->GetPosition(vecPosition);
     pObject->GetRotationRadians(vecRotation);
@@ -221,66 +224,46 @@ void CObjectSync::WriteObjectInformation(NetBitStreamInterface* pBitStream, CDea
     if (pObject->GetHealth() != pObject->m_LastSyncedData.fHealth)
         ucFlags |= 0x4;
 
-    CVector vecVelocity;
-    CVector vecTurnVelocity;
-    if (CClientObjectPhysicsManager::IsEnabled(pObject))
-    {
-        pObject->GetMoveSpeed(vecVelocity);
-        pObject->GetTurnSpeed(vecTurnVelocity);
-        SLastPhysicsSync& state = g_LastPhysicsSync[pObject];
-        if (vecVelocity != state.vecVelocity)
-            ucFlags |= 0x8;
-        if (vecTurnVelocity != state.vecTurnVelocity)
-            ucFlags |= 0x10;
-    }
-
+    // Don't sync if nothing changed
     if (ucFlags == 0)
         return;
 
+    // Write the ID
     pBitStream->Write(pObject->GetID());
+
+    // Write the sync time context
     pBitStream->Write(pObject->GetSyncTimeContext());
 
-    SIntegerSync<unsigned char, 5> flags(ucFlags);
+    // Write flags
+    SIntegerSync<unsigned char, 3> flags(ucFlags);
     pBitStream->Write(&flags);
 
+    // Write changed stuff
+    // Position
     if (ucFlags & 0x1)
     {
         SPositionSync position;
-        position.data.vecPosition = vecPosition;
+        pObject->GetPosition(position.data.vecPosition);
         pBitStream->Write(&position);
-        pObject->m_LastSyncedData.vecPosition = vecPosition;
+        pObject->m_LastSyncedData.vecPosition = position.data.vecPosition;
     }
 
+    // Rotation
     if (ucFlags & 0x2)
     {
         SRotationRadiansSync rotation;
-        rotation.data.vecRotation = vecRotation;
+        pObject->GetRotationRadians(rotation.data.vecRotation);
         pBitStream->Write(&rotation);
-        pObject->m_LastSyncedData.vecRotation = vecRotation;
+        pObject->m_LastSyncedData.vecRotation = rotation.data.vecRotation;
     }
 
+    // Health
     if (ucFlags & 0x4)
     {
         SObjectHealthSync health;
         health.data.fValue = pObject->GetHealth();
         pBitStream->Write(&health);
         pObject->m_LastSyncedData.fHealth = health.data.fValue;
-    }
-
-    if (ucFlags & 0x8)
-    {
-        SVelocitySync velocity;
-        velocity.data.vecVelocity = vecVelocity;
-        pBitStream->Write(&velocity);
-        g_LastPhysicsSync[pObject].vecVelocity = vecVelocity;
-    }
-
-    if (ucFlags & 0x10)
-    {
-        SVelocitySync turnVelocity;
-        turnVelocity.data.vecVelocity = vecTurnVelocity;
-        pBitStream->Write(&turnVelocity);
-        g_LastPhysicsSync[pObject].vecTurnVelocity = vecTurnVelocity;
     }
 }
 

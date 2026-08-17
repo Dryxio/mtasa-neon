@@ -10,7 +10,6 @@
 #include "StdInc.h"
 #include "CClientWorldObjectManager.h"
 #include "CClientWorldObject.h"
-#include "CClientObjectPhysicsManager.h"
 #include "../../../game_sa/CPoolSAInterface.h"
 #include "../../../game_sa/CPoolsSA.h"
 
@@ -126,11 +125,6 @@ void CClientWorldObjectManager::Pulse()
     if (!g_pClientGame || !g_pGame || !g_pMultiplayer)
         return;
 
-    // This manager already owns the unconditional client pre-frame pulse used
-    // by native-object features. Keep MTA-owned dynamic-object physics alive
-    // here too; CObjectSync may be compiled out entirely.
-    CClientObjectPhysicsManager::Pulse();
-
     RegisterForGame(g_pClientGame);
 
     if (g_pGame->GetSystemState() != SystemState::GS_PLAYING_GAME)
@@ -182,7 +176,6 @@ void CClientWorldObjectManager::Pulse()
 
 void CClientWorldObjectManager::Shutdown()
 {
-    CClientObjectPhysicsManager::Shutdown();
     ClearProxies();
 
     if (g_bHandlersInstalled && g_pMultiplayer)

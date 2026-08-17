@@ -29,14 +29,12 @@ public:
     static bool IsObjectBreakable(CObject* const pObject);
     static bool IsObjectMoving(CObject* const pObject);
     static bool IsObjectRespawnable(CObject* const pObject) noexcept;
-    static bool IsObjectDynamicPhysics(CObject* const pObject) noexcept;
 
     // Object set functions
     LUA_DECLARE(SetObjectName);
     LUA_DECLARE(SetObjectRotation);
     LUA_DECLARE(SetObjectScale);
     static bool SetObjectBreakable(CObject* const pObject, const bool bBreakable);
-    static bool SetObjectDynamicPhysics(CObject* const pObject, const bool bEnabled);
     LUA_DECLARE(MoveObject);
     LUA_DECLARE(StopObject);
     static bool BreakObject(CObject* const pObject);
