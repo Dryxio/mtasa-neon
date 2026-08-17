@@ -278,6 +278,10 @@ const char* CLuaClassDefs::GetXmlNodeClass(CXMLNode* pXmlNode)
 const char* CLuaClassDefs::GetEntityClass(CClientEntity* pEntity)
 {
     assert(pEntity);
+
+    if (pEntity->GetTypeHash() == CClientEntity::GetTypeHashFromString("foliage"))
+        return "Foliage";
+
     switch (pEntity->GetType())
     {
         case CCLIENTCAMERA:
