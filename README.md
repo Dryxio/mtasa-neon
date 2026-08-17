@@ -75,6 +75,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
 | Collision authoring | A packaged `.col` file, fixed at build time | Collision serialized from a Lua table of spheres, boxes and meshes, and rebuildable in place on models that are already streamed in |
+| Vegetation placement | Whatever the shipped map contains | Up to 64 resource-owned `foliage` triangles driving GTA's native plant manager, with live surface and density changes and dimension support |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
 | Shared ambient pedestrian traffic | GTA population remains client-local and disabled by MTA | Server-owned MTA peds proposed from GTA's civilian, gang, dealer and cop models and paths, with one native-AI owner, syncer handoff, observer presentation, and deterministic cleanup |
 | Ambient couples and city cops | Single-player only | Atomic native couple leases with GTA-owned walk side and hand holding, plus a safe ambient-cop patrol task that keeps real path-node locomotion while making wanted, pursuit and arrest unreachable |
@@ -152,6 +153,14 @@ A wall drawn in game from a Lua table, then extended, raised and turned into a r
 [![Watch the runtime collision generation demo](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)
 
 [Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)
+
+### Growing GTA's own vegetation
+
+A triangle drawn in game with three clicks, filled with native grass. The surface type and density are changed live and the patch rebuilds each time. GTA renders, animates and fades the plants exactly as it does for the shipped map.
+
+[![Watch the custom foliage demo](docs/media/foliage-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/foliage)
+
+[Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/foliage)
 
 ## Selected Neon Lua API additions
 
@@ -278,6 +287,30 @@ engineSetCOLData(col, {
 ```
 
 Meshes take flat `vertices` and zero-based `indices` triplets, and `material` accepts GTA's surface range `0` to `178`. Validation errors name the exact offending path. See [Runtime collision generation](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision) for the ceilings and the mesh vertex range.
+
+### Custom foliage
+
+GTA's native plant manager decides what grows on each surface, but until now nothing could ask it to grow anywhere new. A resource can hand it a triangle and get real vegetation, rendered and animated by GTA itself.
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `createFoliage(v1, v2, v3, surface [, density])` | Client | Grows native plants inside a world-space triangle. Returns a `foliage` element, or `false` when the triangle, surface or density is rejected. |
+| `getFoliageVertices(foliage)` / `setFoliageVertices(foliage, v1, v2, v3)` | Client | Read or replace the three corners, rebuilding the patch. |
+| `getFoliageSurface(foliage)` / `setFoliageSurface(foliage, surface)` | Client | Read or replace the GTA surface type the patch grows from. |
+| `getFoliageDensity(foliage)` / `setFoliageDensity(foliage, density)` | Client | Read or replace the `0.0` to `10.0` density multiplier, where `1.0` is the native density. |
+
+```lua
+local patch = createFoliage(
+    Vector3(2470, -1650, 12.5),
+    Vector3(2480, -1650, 12.5),
+    Vector3(2475, -1640, 12.5),
+    10, 1.5)
+
+-- OOP form, since foliage is registered as a Foliage class
+patch.density = 2.0
+```
+
+Every setter rebuilds the native triangle atomically, so a rejected change leaves the patch on its previous state. Patches respect element dimensions and are removed when the owning resource stops. Up to 64 exist at a time. See [Custom foliage](https://mtasa-neon-wiki.vercel.app/neon/foliage) for the surface rules and limits.
 
 ### Native vehicle predicates, ped tasks and gang tags
 
