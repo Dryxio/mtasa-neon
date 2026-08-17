@@ -28,10 +28,14 @@ class CClientObjectPhysicsManager
 private:
     static constexpr unsigned short INVALID_FALLBACK_MODEL = 0xFFFF;
     static constexpr unsigned char  SMALLBOX_COLLISION_RESPONSE = 2;
-    static constexpr float          FALLBACK_MASS = 4.0f;
-    static constexpr float          FALLBACK_TURN_MASS = 8.0f;
-    static constexpr float          FALLBACK_AIR_RESISTANCE = 0.99f;
-    static constexpr float          FALLBACK_ELASTICITY = 0.03f;
+
+    // Match GTA's known-good SMALLBOX/cardboardbox2 physical profile. These
+    // values are applied only when we had to generate collision for the model;
+    // native object.dat models keep their own properties untouched.
+    static constexpr float FALLBACK_MASS = 20.0f;
+    static constexpr float FALLBACK_TURN_MASS = 20.0f;
+    static constexpr float FALLBACK_AIR_RESISTANCE = 0.99f;
+    static constexpr float FALLBACK_ELASTICITY = 0.03f;
 
     struct SState
     {
@@ -133,51 +137,39 @@ private:
 
         RuntimeCollision::Model generated;
 
-        // GTA's dynamic CPhysical collision path is sphere-driven. In
-        // CCollision::ProcessColModels the moving model's spheres are tested
-        // against world boxes/triangles; a fallback containing only a box can
-        // therefore fall straight through triangle-based ground geometry.
-        // Approximate the model with an overlapping sphere chain along its
-        // longest axis while keeping the box for bounds/other collision tests.
+        // GTA's dynamic CPhysical/world-triangle path is sphere-driven. A
+        // uniform chain along the long axis behaves like a capsule, which makes
+        // rifles roll/spin unnaturally. Instead approximate the existing box
+        // with eight small support spheres at its corners plus one central
+        // contact sphere. The box remains for broad-phase/box-aware tests, while
+        // the support spheres give triangle floors box-like contact points and a
+        // stable face to settle on.
         const float shortestAxis = std::min({size.fX, size.fY, size.fZ});
-        const float sphereRadius = std::max(0.06f, shortestAxis * 0.30f);
+        const float sphereRadius = std::max(0.04f, shortestAxis * 0.35f);
+        const CVector halfSize{size.fX * 0.5f, size.fY * 0.5f, size.fZ * 0.5f};
+        const CVector supportOffset{
+            std::max(0.0f, halfSize.fX - sphereRadius),
+            std::max(0.0f, halfSize.fY - sphereRadius),
+            std::max(0.0f, halfSize.fZ - sphereRadius),
+        };
 
-        int   longestAxis = 0;
-        float longestSize = size.fX;
-        if (size.fY > longestSize)
+        for (int xSign : {-1, 1})
         {
-            longestAxis = 1;
-            longestSize = size.fY;
-        }
-        if (size.fZ > longestSize)
-        {
-            longestAxis = 2;
-            longestSize = size.fZ;
-        }
-
-        const float halfTravel = std::max(0.0f, longestSize * 0.5f - sphereRadius);
-        std::size_t sphereCount = 1;
-        if (halfTravel > 0.001f)
-        {
-            const float coveredLength = halfTravel * 2.0f;
-            sphereCount = static_cast<std::size_t>(std::ceil(coveredLength / (sphereRadius * 2.0f))) + 1;
-            sphereCount = std::clamp<std::size_t>(sphereCount, 3, 9);
-        }
-
-        for (std::size_t i = 0; i < sphereCount; ++i)
-        {
-            CVector sphereCenter = center;
-            const float offset = sphereCount == 1 ? 0.0f : -halfTravel + (halfTravel * 2.0f * static_cast<float>(i)) / static_cast<float>(sphereCount - 1);
-            if (longestAxis == 0)
-                sphereCenter.fX += offset;
-            else if (longestAxis == 1)
-                sphereCenter.fY += offset;
-            else
-                sphereCenter.fZ += offset;
-
-            generated.spheres.push_back(RuntimeCollision::Sphere{sphereCenter, sphereRadius, 0});
+            for (int ySign : {-1, 1})
+            {
+                for (int zSign : {-1, 1})
+                {
+                    CVector sphereCenter{
+                        center.fX + supportOffset.fX * static_cast<float>(xSign),
+                        center.fY + supportOffset.fY * static_cast<float>(ySign),
+                        center.fZ + supportOffset.fZ * static_cast<float>(zSign),
+                    };
+                    generated.spheres.push_back(RuntimeCollision::Sphere{sphereCenter, sphereRadius, 0});
+                }
+            }
         }
 
+        generated.spheres.push_back(RuntimeCollision::Sphere{center, sphereRadius, 0});
         generated.boxes.push_back(RuntimeCollision::Box{center, size, 0});
 
         std::string buffer;
@@ -202,8 +194,8 @@ private:
         if (g_pCore && g_pCore->GetConsole())
         {
             g_pCore->GetConsole()->Printf(
-                "[dynamic-physics] model %u: no native collision volumes; fallback %u spheres r=%.3f + box %.3f x %.3f x %.3f installed",
-                usModel, static_cast<unsigned int>(sphereCount), sphereRadius, size.fX, size.fY, size.fZ);
+                "[dynamic-physics] model %u: no native collision volumes; fallback box-support proxy 9 spheres r=%.3f + box %.3f x %.3f x %.3f installed",
+                usModel, sphereRadius, size.fX, size.fY, size.fZ);
         }
 
         outCollision = std::move(pCollision);
@@ -350,7 +342,7 @@ private:
         pInterface->bEnableCollision = true;
 
         // Generated collision is used for models that do not have suitable
-        // native object physics. Give only those models a lightweight SMALLBOX
+        // native object physics. Give only those models GTA's stable SMALLBOX
         // profile; native object.dat models keep their original properties.
         if (bFallbackCollision)
         {
