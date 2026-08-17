@@ -25,6 +25,8 @@ public:
     eClientEntityType GetType() const { return CCLIENTCOL; }
 
     bool Load(bool isRaw, SString input);
+    bool LoadGenerated(SString buffer);
+    bool SetGenerated(SString buffer);
 
     bool IsLoaded() { return m_pColModel != NULL; };
 
