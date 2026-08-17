@@ -1,0 +1,4 @@
+<meta>
+    <info author="MTA Neon" name="Custom foliage test and showcase" type="script" version="1.0.0" />
+    <script src="client.lua" type="client" />
+</meta>
