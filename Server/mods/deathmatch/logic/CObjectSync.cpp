@@ -12,10 +12,27 @@
 #include "StdInc.h"
 #include "CObjectSync.h"
 
+#include <cmath>
+
 #ifdef WITH_OBJECT_SYNC
 
     #define SYNC_RATE                500
     #define MAX_PLAYER_SYNC_DISTANCE 100.0f
+
+namespace
+{
+    constexpr float MAX_DYNAMIC_OBJECT_VELOCITY = 25.0f;
+    constexpr float MAX_DYNAMIC_OBJECT_TURN_VELOCITY = 20.0f;
+
+    bool IsSaneVector(const CVector& vec, float maxMagnitude)
+    {
+        if (!std::isfinite(vec.fX) || !std::isfinite(vec.fY) || !std::isfinite(vec.fZ))
+            return false;
+
+        const float magnitudeSquared = vec.fX * vec.fX + vec.fY * vec.fY + vec.fZ * vec.fZ;
+        return magnitudeSquared <= maxMagnitude * maxMagnitude;
+    }
+}
 
 CObjectSync::CObjectSync(CPlayerManager* pPlayerManager, CObjectManager* pObjectManager)
 {
@@ -25,7 +42,6 @@ CObjectSync::CObjectSync(CPlayerManager* pPlayerManager, CObjectManager* pObject
 
 void CObjectSync::DoPulse()
 {
-    // Time to check for players that should no longer be syncing a object or objects that should be synced?
     if (m_UpdateTimer.Get() > SYNC_RATE)
     {
         m_UpdateTimer.Reset();
@@ -46,17 +62,13 @@ bool CObjectSync::ProcessPacket(CPacket& Packet)
 
 void CObjectSync::OverrideSyncer(CObject* pObject, CPlayer* pPlayer, bool bPersist)
 {
-    // If the object already has a syncer, tell him not to sync it anymore
     CPlayer* pSyncer = pObject->GetSyncer();
     if (pSyncer)
     {
         if (pSyncer == pPlayer)
         {
-            if (bPersist == false)
-            {
+            if (!bPersist)
                 SetSyncerAsPersistent(false);
-            }
-
             return;
         }
 
@@ -72,60 +84,40 @@ void CObjectSync::OverrideSyncer(CObject* pObject, CPlayer* pPlayer, bool bPersi
 
 void CObjectSync::Update()
 {
-    // Update all objects
-    list<CObject*>::const_iterator iter = m_pObjectManager->IterBegin();
-    for (; iter != m_pObjectManager->IterEnd(); iter++)
-    {
+    for (auto iter = m_pObjectManager->IterBegin(); iter != m_pObjectManager->IterEnd(); ++iter)
         UpdateObject(*iter);
-    }
 }
 
 void CObjectSync::UpdateObject(CObject* pObject)
 {
     CPlayer* pSyncer = pObject->GetSyncer();
 
-    // Does the object need to be synced?
-    // We have no reason to sync static and unbreakable objects
-    if (!pObject->IsSyncable() || (pObject->IsStatic() && !pObject->IsBreakable()))
+    if (!pObject->IsSyncable() || (!pObject->IsDynamicPhysics() && pObject->IsStatic() && !pObject->IsBreakable()))
     {
         if (pSyncer)
-        {
-            // Tell the syncer to stop syncing
             StopSync(pObject);
-        }
         return;
     }
 
-    // Does the object have syncer?
     if (pSyncer)
     {
-        // Does the syncer still near the object?
-        if (!IsSyncerPersistent() && !IsPointNearPoint3D(pSyncer->GetPosition(), pObject->GetPosition(), MAX_PLAYER_SYNC_DISTANCE) ||
-            (pObject->GetDimension() != pSyncer->GetDimension()))
+        if ((!IsSyncerPersistent() && !IsPointNearPoint3D(pSyncer->GetPosition(), pObject->GetPosition(), MAX_PLAYER_SYNC_DISTANCE)) ||
+            pObject->GetDimension() != pSyncer->GetDimension())
         {
-            // Stop him from syncing it
             StopSync(pObject);
-
-            // Find a new syncer
             FindSyncer(pObject);
         }
     }
     else
     {
-        // Try to find a syncer
         FindSyncer(pObject);
     }
 }
 
 void CObjectSync::FindSyncer(CObject* pObject)
 {
-    // Find a player close enough to it
-    CPlayer* pPlayer = FindPlayerCloseToObject(pObject, MAX_PLAYER_SYNC_DISTANCE);
-    if (pPlayer)
-    {
-        // Tell him to start syncing it
+    if (CPlayer* pPlayer = FindPlayerCloseToObject(pObject, MAX_PLAYER_SYNC_DISTANCE))
         StartSync(pPlayer, pObject);
-    }
 }
 
 void CObjectSync::StartSync(CPlayer* pPlayer, CObject* pObject)
@@ -133,106 +125,91 @@ void CObjectSync::StartSync(CPlayer* pPlayer, CObject* pObject)
     if (!pObject->IsSyncable())
         return;
 
-    // Tell the player
     pPlayer->Send(CObjectStartSyncPacket(pObject));
-
-    // Mark him as the syncing player
     pObject->SetSyncer(pPlayer);
 
-    // Call the onElementStartSync event
     CLuaArguments Arguments;
-    Arguments.PushElement(pPlayer);  // New syncer
+    Arguments.PushElement(pPlayer);
     pObject->CallEvent("onElementStartSync", Arguments);
 }
 
 void CObjectSync::StopSync(CObject* pObject)
 {
-    // Tell the player that used to sync it
     CPlayer* pSyncer = pObject->GetSyncer();
     pSyncer->Send(CObjectStopSyncPacket(pObject));
-
-    // Unmark him as the syncing player
     pObject->SetSyncer(NULL);
-
     SetSyncerAsPersistent(false);
 
-    // Call the onElementStopSync event
     CLuaArguments Arguments;
-    Arguments.PushElement(pSyncer);  // Old syncer
+    Arguments.PushElement(pSyncer);
     pObject->CallEvent("onElementStopSync", Arguments);
 }
 
 CPlayer* CObjectSync::FindPlayerCloseToObject(CObject* pObject, float fMaxDistance)
 {
-    // Grab the object position
-    CVector vecPosition = pObject->GetPosition();
+    CVector  vecPosition = pObject->GetPosition();
+    CPlayer* pSyncer = NULL;
 
-    // See if any players are close enough
-    CPlayer*                       pSyncer = NULL;
-    list<CPlayer*>::const_iterator iter = m_pPlayerManager->IterBegin();
-    for (; iter != m_pPlayerManager->IterEnd(); iter++)
+    for (auto iter = m_pPlayerManager->IterBegin(); iter != m_pPlayerManager->IterEnd(); ++iter)
     {
         CPlayer* pPlayer = *iter;
-        // Is he joined?
-        if (pPlayer->IsJoined())
+        if (pPlayer->IsJoined() && IsPointNearPoint3D(vecPosition, pPlayer->GetPosition(), fMaxDistance) && pPlayer->GetDimension() == pObject->GetDimension())
         {
-            // Is he near the object?
-            if (IsPointNearPoint3D(vecPosition, pPlayer->GetPosition(), fMaxDistance) && (pPlayer->GetDimension() == pObject->GetDimension()))
-            {
-                // Prefer a player that syncs less objects
-                if (!pSyncer || pPlayer->CountSyncingObjects() < pSyncer->CountSyncingObjects())
-                {
-                    pSyncer = pPlayer;
-                }
-            }
+            if (!pSyncer || pPlayer->CountSyncingObjects() < pSyncer->CountSyncingObjects())
+                pSyncer = pPlayer;
         }
     }
 
-    // Return the player we found
     return pSyncer;
 }
 
 void CObjectSync::Packet_ObjectSync(CObjectSyncPacket& Packet)
 {
-    // Grab the player
     CPlayer* pPlayer = Packet.GetSourcePlayer();
-    if (pPlayer && pPlayer->IsJoined())
+    if (!pPlayer || !pPlayer->IsJoined())
+        return;
+
+    for (auto iter = Packet.IterBegin(); iter != Packet.IterEnd(); ++iter)
     {
-        // Apply the data for each object in the packet
-        vector<CObjectSyncPacket::SyncData*>::const_iterator iter = Packet.IterBegin();
-        for (; iter != Packet.IterEnd(); iter++)
+        CObjectSyncPacket::SyncData* pData = *iter;
+        CElement*                    pElement = CElementIDs::GetElement(pData->ID);
+        if (!pElement || !IS_OBJECT(pElement))
+            continue;
+
+        CObject* pObject = static_cast<CObject*>(pElement);
+        if (pObject->GetSyncer() != pPlayer || !pObject->CanUpdateSync(pData->ucSyncTimeContext))
+            continue;
+
+        if (pData->ucFlags & 0x8)
         {
-            CObjectSyncPacket::SyncData* pData = *iter;
-
-            // Grab the element
-            CElement* pElement = CElementIDs::GetElement(pData->ID);
-            if (pElement && IS_OBJECT(pElement))
-            {
-                CObject* pObject = static_cast<CObject*>(pElement);
-
-                // Is the player syncing this object?
-                if ((pObject->GetSyncer() == pPlayer) && pObject->CanUpdateSync(pData->ucSyncTimeContext))
-                {
-                    // Apply the data to the object
-                    if (pData->ucFlags & 0x1)
-                    {
-                        pObject->SetPosition(pData->vecPosition);
-                        g_pGame->GetColManager()->DoHitDetection(pObject->GetPosition(), pObject);
-                    }
-                    if (pData->ucFlags & 0x2)
-                        pObject->SetRotation(pData->vecRotation);
-                    if (pData->ucFlags & 0x4)
-                        pObject->SetHealth(pData->fHealth);
-
-                    // Send this sync
-                    pData->bSend = true;
-                }
-            }
+            if (!pObject->IsDynamicPhysics() || !IsSaneVector(pData->vecVelocity, MAX_DYNAMIC_OBJECT_VELOCITY))
+                pData->ucFlags &= ~0x8;
+            else
+                pObject->SetPhysicsVelocity(pData->vecVelocity);
         }
 
-        // Tell everyone
-        m_pPlayerManager->BroadcastOnlyJoined(Packet, pPlayer);
+        if (pData->ucFlags & 0x10)
+        {
+            if (!pObject->IsDynamicPhysics() || !IsSaneVector(pData->vecTurnVelocity, MAX_DYNAMIC_OBJECT_TURN_VELOCITY))
+                pData->ucFlags &= ~0x10;
+            else
+                pObject->SetPhysicsTurnVelocity(pData->vecTurnVelocity);
+        }
+
+        if (pData->ucFlags & 0x1)
+        {
+            pObject->SetPosition(pData->vecPosition);
+            g_pGame->GetColManager()->DoHitDetection(pObject->GetPosition(), pObject);
+        }
+        if (pData->ucFlags & 0x2)
+            pObject->SetRotation(pData->vecRotation);
+        if (pData->ucFlags & 0x4)
+            pObject->SetHealth(pData->fHealth);
+
+        pData->bSend = pData->ucFlags != 0;
     }
+
+    m_pPlayerManager->BroadcastOnlyJoined(Packet, pPlayer);
 }
 
 #endif
