@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CClientFoliageManager.h"
 #include <game/CPointLights.h>
 
 using std::list;
@@ -84,6 +85,7 @@ void CClientPointLightsManager::SetDimension(unsigned short usDimension)
     }
 
     m_usDimension = usDimension;
+    CClientFoliageManager::GetSingleton().SetDimension(usDimension);
 }
 
 void CClientPointLightsManager::DoPulse()

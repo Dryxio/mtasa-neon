@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CLuaFoliageDefs.h"
 
 void CLuaPointLightDefs::LoadFunctions()
 {
@@ -21,6 +22,8 @@ void CLuaPointLightDefs::LoadFunctions()
     // Add functions
     for (const auto& [name, func] : functions)
         CLuaCFunctions::AddFunction(name, func);
+
+    CLuaFoliageDefs::LoadFunctions();
 }
 
 void CLuaPointLightDefs::AddClass(lua_State* luaVM)
@@ -43,6 +46,8 @@ void CLuaPointLightDefs::AddClass(lua_State* luaVM)
     lua_classvariable(luaVM, "direction", "setLightDirection", "getLightDirection");
 
     lua_registerclass(luaVM, "Light", "Element");
+
+    CLuaFoliageDefs::AddClass(luaVM);
 }
 
 int CLuaPointLightDefs::CreateLight(lua_State* luaVM)

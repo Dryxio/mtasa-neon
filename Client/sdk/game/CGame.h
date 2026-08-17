@@ -50,6 +50,7 @@ class CHud;
 class CKeyGen;
 class CModelInfo;
 class CObjectGroupPhysicalProperties;
+class CPlantManager;
 class CPad;
 class CPathFind;
 class CPed;
@@ -737,4 +738,9 @@ public:
     virtual bool UpdateAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) = 0;
     virtual bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) = 0;
     virtual bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const = 0;
+
+    // Custom foliage calls GTA plant natives through Game SA. Keep the
+    // process-local implementation behind the module boundary so client.dll
+    // does not link directly against symbols owned by game_sa.dll.
+    virtual CPlantManager* GetPlantManager() = 0;
 };
