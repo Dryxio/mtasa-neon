@@ -23,7 +23,9 @@ local weaponModels = {
     [46] = 371, -- Parachute
 }
 
+local CONTROL_MODEL = 1220 -- cardboardbox2: vanilla dynamic object with native COL/object.dat
 local drops = {}
+local comparisonObjects = {}
 
 local function message(player, text, r, g, b)
     outputChatBox("[physical-drop] " .. text, player, r or 210, g or 230, b or 255)
@@ -83,6 +85,58 @@ local function createPhysicalDrop(player, weapon, ammo)
     return object
 end
 
+local function clearComparisonObjects()
+    for object in pairs(comparisonObjects) do
+        if isElement(object) then
+            destroyElement(object)
+        end
+    end
+    comparisonObjects = {}
+end
+
+local function createComparisonObject(player, model, label, lateralOffset)
+    local x, y, z = getElementPosition(player)
+    local _, _, heading = getElementRotation(player)
+    local radians = math.rad(heading)
+    local forwardX, forwardY = -math.sin(radians), math.cos(radians)
+    local rightX, rightY = math.cos(radians), math.sin(radians)
+
+    local object = createObject(
+        model,
+        x + forwardX * 1.25 + rightX * lateralOffset,
+        y + forwardY * 1.25 + rightY * lateralOffset,
+        z + 0.85,
+        0, 0, heading
+    )
+    if not object then
+        message(player, ("comparison createObject failed for model %d"):format(model), 255, 100, 100)
+        return false
+    end
+
+    setElementInterior(object, getElementInterior(player))
+    setElementDimension(object, getElementDimension(player))
+    setElementData(object, "physicalDrop", true)
+    -- Reuse the current client label without requiring a client.lua change.
+    setElementData(object, "physicalDrop:weapon", label)
+    setElementData(object, "physicalDrop:ammo", model)
+
+    if not setObjectDynamicPhysics(object, true) then
+        destroyElement(object)
+        message(player, ("comparison setObjectDynamicPhysics failed for model %d"):format(model), 255, 100, 100)
+        return false
+    end
+
+    -- Deliberately identical impulse for the weapon and vanilla control.
+    setElementVelocity(object, forwardX * 0.18, forwardY * 0.18, 0.11)
+    setElementAngularVelocity(object, 0.07, 0.11, 0.16)
+
+    comparisonObjects[object] = true
+    addEventHandler("onElementDestroy", object, function()
+        comparisonObjects[source] = nil
+    end)
+    return object
+end
+
 addCommandHandler("physdrop", function(player, _, weaponArgument, ammoArgument)
     if not isElement(player) or getElementType(player) ~= "player" then
         return
@@ -102,6 +156,22 @@ addCommandHandler("physdrop", function(player, _, weaponArgument, ammoArgument)
     createPhysicalDrop(player, weapon, ammo)
 end)
 
+addCommandHandler("physcompare", function(player, _, controlModelArgument)
+    if not isElement(player) or getElementType(player) ~= "player" then
+        return
+    end
+
+    clearComparisonObjects()
+
+    local controlModel = math.floor(tonumber(controlModelArgument) or CONTROL_MODEL)
+    local weaponObject = createComparisonObject(player, 355, "AK-test", -0.65)
+    local controlObject = createComparisonObject(player, controlModel, "vanilla-control", 0.65)
+
+    if weaponObject and controlObject then
+        message(player, ("Comparison: AK 355 vs vanilla model %d (default 1220 cardboardbox2). Same impulse; watch both + F8."):format(controlModel), 120, 255, 160)
+    end
+end)
+
 addCommandHandler("physclear", function(player)
     local count = 0
     for object in pairs(drops) do
@@ -111,8 +181,17 @@ addCommandHandler("physclear", function(player)
         end
     end
     drops = {}
+
+    for object in pairs(comparisonObjects) do
+        if isElement(object) then
+            destroyElement(object)
+            count = count + 1
+        end
+    end
+    comparisonObjects = {}
+
     if isElement(player) then
-        message(player, "Cleared " .. count .. " drops")
+        message(player, "Cleared " .. count .. " drops/test objects")
     end
 end)
 
@@ -154,6 +233,12 @@ addEventHandler("physicalDrop:ready", resourceRoot, function()
     end
 
     for object in pairs(drops) do
+        if isElement(object) then
+            setObjectDynamicPhysics(object, true)
+        end
+    end
+
+    for object in pairs(comparisonObjects) do
         if isElement(object) then
             setObjectDynamicPhysics(object, true)
         end
