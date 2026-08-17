@@ -9,20 +9,21 @@ local state = {
     demo = {},
     demoMode = nil,
     demoCenter = nil,
+    demoHidden = false,
     cinematic = false,
     cinematicTick = 0,
     video = false,
     lifetime = nil,
 }
 
-local function pushLog(level, text)
+local function log(level, text)
     local line = string.format("[%s] %s", level, text)
     table.insert(state.logs, 1, line)
     while #state.logs > 9 do
         table.remove(state.logs)
     end
 
-    local r, g, b = 210, 210, 210
+    local r, g, b = 215, 215, 215
     if level == "PASS" then
         r, g, b = 90, 220, 120
     elseif level == "FAIL" then
@@ -38,18 +39,18 @@ end
 local function check(name, condition, detail)
     if condition then
         state.pass = state.pass + 1
-        pushLog("PASS", name)
+        log("PASS", name)
         return true
     end
 
     state.fail = state.fail + 1
-    pushLog("FAIL", name .. (detail and (" - " .. detail) or ""))
+    log("FAIL", name .. (detail and (" - " .. tostring(detail)) or ""))
     return false
 end
 
-local function warning(text)
+local function warn(text)
     state.warn = state.warn + 1
-    pushLog("WARN", text)
+    log("WARN", text)
 end
 
 local function nearlyEqual(a, b, epsilon)
@@ -60,7 +61,7 @@ local function vectorEqual(a, b, epsilon)
     return a and b and nearlyEqual(a.x, b.x, epsilon) and nearlyEqual(a.y, b.y, epsilon) and nearlyEqual(a.z, b.z, epsilon)
 end
 
-local function surfaceListText()
+local function surfaceText()
     local result = {}
     for i, surface in ipairs(state.surfaces) do
         result[i] = tostring(surface)
@@ -68,17 +69,13 @@ local function surfaceListText()
     return #result > 0 and table.concat(result, ", ") or "none"
 end
 
-local function playerOrigin()
-    local x, y, z = getElementPosition(localPlayer)
-    return x, y, z
+local function playerPosition()
+    return getElementPosition(localPlayer)
 end
 
 local function groundZ(x, y, fallbackZ)
     local z = getGroundPosition(x, y, fallbackZ + 100.0)
-    if type(z) ~= "number" then
-        return fallbackZ
-    end
-    return z + 0.06
+    return type(z) == "number" and (z + 0.06) or fallbackZ
 end
 
 local function makeTriangle(cx, cy, size, fallbackZ)
@@ -92,7 +89,7 @@ local function makeTriangle(cx, cy, size, fallbackZ)
            Vector3(x3, y3, groundZ(x3, y3, fallbackZ))
 end
 
-local function destroyList(elements)
+local function destroyElements(elements)
     for i = #elements, 1, -1 do
         if isElement(elements[i]) then
             destroyElement(elements[i])
@@ -109,9 +106,17 @@ local function stopCinematic()
 end
 
 local function clearDemo()
-    destroyList(state.demo)
+    for i = #state.demo, 1, -1 do
+        local entry = state.demo[i]
+        if entry and isElement(entry.element) then
+            destroyElement(entry.element)
+        end
+        state.demo[i] = nil
+    end
+
     state.demoMode = nil
     state.demoCenter = nil
+    state.demoHidden = false
     state.video = false
     stopCinematic()
 end
@@ -124,18 +129,16 @@ local function clearLifetime()
 end
 
 local function createAt(cx, cy, size, surface, density)
-    local _, _, pz = playerOrigin()
+    local _, _, pz = playerPosition()
     local v1, v2, v3 = makeTriangle(cx, cy, size, pz)
-    local foliage = createFoliage(v1, v2, v3, surface, density)
-    return foliage, v1, v2, v3
+    return createFoliage(v1, v2, v3, surface, density), v1, v2, v3
 end
 
-local function probeWorkingSurfaces(wanted, quiet)
+local function probeSurfaces(wanted, quiet)
     wanted = math.max(1, math.min(16, tonumber(wanted) or 4))
-
     if type(createFoliage) ~= "function" then
         if not quiet then
-            pushLog("FAIL", "createFoliage is not registered")
+            log("FAIL", "createFoliage is not registered")
         end
         return state.surfaces
     end
@@ -144,8 +147,7 @@ local function probeWorkingSurfaces(wanted, quiet)
         return state.surfaces
     end
 
-    local px, py = playerOrigin()
-    local _, _, pz = playerOrigin()
+    local px, py, pz = playerPosition()
     local v1, v2, v3 = makeTriangle(px + 4, py + 4, 30, pz)
 
     for surface = 0, 255 do
@@ -164,9 +166,9 @@ local function probeWorkingSurfaces(wanted, quiet)
 
     if not quiet then
         if #state.surfaces > 0 then
-            pushLog("INFO", "Working foliage surfaces: " .. surfaceListText())
+            log("INFO", "Working foliage surfaces: " .. surfaceText())
         else
-            pushLog("WARN", "No working foliage surface found at this test triangle")
+            warn("No working foliage surface found at the current test area")
         end
     end
 
@@ -194,73 +196,71 @@ end
 local function runCoreTests()
     state.pass, state.fail, state.warn = 0, 0, 0
     state.logs = {}
-    pushLog("INFO", "Starting custom foliage core regression suite")
+    log("INFO", "Starting custom foliage core regression suite")
 
     if not apiAvailable() then
-        pushLog("FAIL", "Core suite aborted because one or more foliage functions are missing")
+        log("FAIL", "Core suite aborted: foliage API is incomplete")
         return false
     end
 
-    probeWorkingSurfaces(4, true)
-    if not check("At least one native surface can create foliage", #state.surfaces > 0) then
-        warning("Move to a normal streamed world area and retry /foliage_probe")
+    probeSurfaces(4, true)
+    if not check("At least one native surface creates foliage", #state.surfaces > 0) then
+        warn("Move to a normal streamed world area and retry /foliage_probe")
         return false
     end
 
     local surface = state.surfaces[1]
-    local px, py, pz = playerOrigin()
+    local px, py, pz = playerPosition()
     local v1, v2, v3 = makeTriangle(px + 4, py + 4, 24, pz)
     local foliage = createFoliage(v1, v2, v3, surface, 1.0)
-
     if not check("createFoliage returns an element", isElement(foliage)) then
         return false
     end
 
-    check("Element type is foliage", getElementType(foliage) == "foliage", tostring(getElementType(foliage)))
+    check("Element type is foliage", getElementType(foliage) == "foliage", getElementType(foliage))
     check("Surface getter round-trip", getFoliageSurface(foliage) == surface)
     check("Density getter round-trip", nearlyEqual(getFoliageDensity(foliage), 1.0))
 
-    local densities = {0.0, 0.5, 1.0, 2.0, 10.0}
-    for _, density in ipairs(densities) do
-        local setOk = setFoliageDensity(foliage, density)
-        check(string.format("Density setter accepts %.1f", density), setOk == true)
+    for _, density in ipairs({0.0, 0.5, 1.0, 2.0, 10.0}) do
+        check(string.format("Density setter accepts %.1f", density), setFoliageDensity(foliage, density) == true)
         check(string.format("Density getter reports %.1f", density), nearlyEqual(getFoliageDensity(foliage), density))
     end
-
     check("Density setter rejects negative values", setFoliageDensity(foliage, -0.1) == false)
     check("Density setter rejects values above 10", setFoliageDensity(foliage, 10.01) == false)
     setFoliageDensity(foliage, 1.0)
 
+    local beforeX, beforeY, beforeZ = getElementPosition(foliage)
+    check("Generic setElementPosition rebuilds foliage", setElementPosition(foliage, beforeX + 1.0, beforeY, beforeZ) == true)
+    local afterX, afterY, afterZ = getElementPosition(foliage)
+    check("Generic position getter reports translated centroid", nearlyEqual(afterX, beforeX + 1.0) and nearlyEqual(afterY, beforeY) and nearlyEqual(afterZ, beforeZ))
+
     local rv1, rv2, rv3 = getFoliageVertices(foliage)
     check("Vertex getter returns three Vector3 values", rv1 and rv2 and rv3 and rv1.x and rv2.x and rv3.x)
-
     if rv1 and rv2 and rv3 then
         local moved1 = Vector3(rv1.x + 2.0, rv1.y, rv1.z)
         local moved2 = Vector3(rv2.x + 2.0, rv2.y, rv2.z)
         local moved3 = Vector3(rv3.x + 2.0, rv3.y, rv3.z)
         check("Vertex setter rebuilds native foliage", setFoliageVertices(foliage, moved1, moved2, moved3) == true)
-
         local gv1, gv2, gv3 = getFoliageVertices(foliage)
         check("Vertex setter/getter round-trip", vectorEqual(gv1, moved1) and vectorEqual(gv2, moved2) and vectorEqual(gv3, moved3))
     end
 
     if #state.surfaces >= 2 then
         local second = state.surfaces[2]
-        check("Surface setter rebuilds with another valid surface", setFoliageSurface(foliage, second) == true)
+        check("Surface setter accepts another working surface", setFoliageSurface(foliage, second) == true)
         check("Surface getter reports changed surface", getFoliageSurface(foliage) == second)
         check("Surface setter restores original surface", setFoliageSurface(foliage, surface) == true)
     else
-        warning("Only one usable surface found; multi-surface setter test skipped")
+        warn("Only one working surface found; valid multi-surface setter test skipped")
     end
-
     check("Surface setter rejects -1", setFoliageSurface(foliage, -1) == false)
     check("Surface setter rejects 256", setFoliageSurface(foliage, 256) == false)
 
     local originalDimension = getElementDimension(foliage)
-    local hiddenDimension = originalDimension == 0 and 1 or 0
-    check("Element dimension can be changed", setElementDimension(foliage, hiddenDimension) == true)
-    check("Dimension getter reports hidden dimension", getElementDimension(foliage) == hiddenDimension)
-    check("Element dimension can be restored", setElementDimension(foliage, originalDimension) == true)
+    local otherDimension = originalDimension == 0 and 1 or 0
+    check("Dimension can be changed", setElementDimension(foliage, otherDimension) == true)
+    check("Dimension getter reports changed dimension", getElementDimension(foliage) == otherDimension)
+    check("Dimension can be restored", setElementDimension(foliage, originalDimension) == true)
     check("Dimension getter reports restored dimension", getElementDimension(foliage) == originalDimension)
 
     local propertyOk, propertyDensity = pcall(function()
@@ -281,19 +281,13 @@ local function runCoreTests()
         destroyElement(oopFoliage)
     end
 
-    local invalidSurfaceLow = createFoliage(v1, v2, v3, -1, 1.0)
-    local invalidSurfaceHigh = createFoliage(v1, v2, v3, 256, 1.0)
-    check("createFoliage rejects surface -1", invalidSurfaceLow == false)
-    check("createFoliage rejects surface 256", invalidSurfaceHigh == false)
-
-    local invalidDensityLow = createFoliage(v1, v2, v3, surface, -0.1)
-    local invalidDensityHigh = createFoliage(v1, v2, v3, surface, 10.01)
-    check("createFoliage rejects density below 0", invalidDensityLow == false)
-    check("createFoliage rejects density above 10", invalidDensityHigh == false)
+    check("createFoliage rejects surface -1", createFoliage(v1, v2, v3, -1, 1.0) == false)
+    check("createFoliage rejects surface 256", createFoliage(v1, v2, v3, 256, 1.0) == false)
+    check("createFoliage rejects density below 0", createFoliage(v1, v2, v3, surface, -0.1) == false)
+    check("createFoliage rejects density above 10", createFoliage(v1, v2, v3, surface, 10.01) == false)
 
     local same = Vector3(px, py, pz)
-    local degenerate = createFoliage(same, same, same, surface, 1.0)
-    check("createFoliage rejects degenerate triangle", degenerate == false)
+    check("createFoliage rejects a degenerate triangle", createFoliage(same, same, same, surface, 1.0) == false)
 
     for i = 1, math.min(4, #state.surfaces) do
         local testElement = createFoliage(v1, v2, v3, state.surfaces[i], 1.0)
@@ -303,31 +297,30 @@ local function runCoreTests()
         end
     end
 
-    local destroyed = destroyElement(foliage)
-    check("destroyElement succeeds", destroyed == true)
+    check("destroyElement succeeds", destroyElement(foliage) == true)
     check("Destroyed foliage handle becomes invalid", not isElement(foliage))
-
-    pushLog("INFO", string.format("Core suite finished: %d pass, %d fail, %d warn", state.pass, state.fail, state.warn))
+    log("INFO", string.format("Core suite finished: %d pass, %d fail, %d warn", state.pass, state.fail, state.warn))
     return state.fail == 0
 end
 
 local function runCapTest()
     if type(createFoliage) ~= "function" then
-        pushLog("FAIL", "createFoliage is not registered")
+        log("FAIL", "createFoliage is not registered")
         return false
     end
 
     clearDemo()
     clearLifetime()
-    probeWorkingSurfaces(1, true)
+    probeSurfaces(1, true)
     if #state.surfaces == 0 then
-        warning("Cap test skipped: no working surface")
+        warn("Cap test skipped: no working surface")
         return false
     end
 
     local surface = state.surfaces[1]
-    local px, py, pz = playerOrigin()
+    local px, py, pz = playerPosition()
     local created = {}
+    local rejectedAt = nil
 
     for i = 1, 65 do
         local col = (i - 1) % 8
@@ -335,40 +328,38 @@ local function runCapTest()
         local v1, v2, v3 = makeTriangle(px + (col - 3.5) * 3.0, py + (row - 3.5) * 3.0, 24, pz)
         local foliage = createFoliage(v1, v2, v3, surface, 1.0)
         if not isElement(foliage) then
-            if i == 65 and #created == 64 then
-                check("Global custom foliage cap rejects element 65", true)
-            else
-                warning(string.format("Creation stopped at %d/%d; native pool or other foliage may already consume capacity", #created, 64))
-            end
+            rejectedAt = i
             break
         end
         table.insert(created, foliage)
     end
 
-    if #created == 65 then
-        check("Global custom foliage cap rejects element 65", false, "65 custom foliage elements were created")
-    elseif #created == 64 then
-        pushLog("PASS", "Created 64 custom foliage elements before the cap")
+    local createdCount = #created
+    if createdCount == 64 and rejectedAt == 65 then
+        check("Global custom foliage cap rejects element 65", true)
+    elseif createdCount == 65 then
+        check("Global custom foliage cap rejects element 65", false, "65 elements were accepted")
+    else
+        warn(string.format("Cap test reached %d/64; native pool or foliage from another resource may already consume capacity", createdCount))
     end
 
-    destroyList(created)
-    pushLog("INFO", "Cap test cleanup complete")
-    return #created <= 64
+    destroyElements(created)
+    log("INFO", "Cap test cleanup complete")
+    return createdCount <= 64
 end
 
 local function runStress(count, cycles)
     count = math.max(1, math.min(64, tonumber(count) or 32))
     cycles = math.max(1, math.min(20, tonumber(cycles) or 5))
-
-    probeWorkingSurfaces(1, true)
+    probeSurfaces(1, true)
     if #state.surfaces == 0 then
-        warning("Stress test skipped: no working surface")
+        warn("Stress test skipped: no working surface")
         return
     end
 
     local surface = state.surfaces[1]
-    local px, py, pz = playerOrigin()
-    local totalCreated = 0
+    local px, py, pz = playerPosition()
+    local total = 0
 
     for cycle = 1, cycles do
         local elements = {}
@@ -378,16 +369,16 @@ local function runStress(count, cycles)
             local v1, v2, v3 = makeTriangle(px + (col - 3.5) * 3.0, py + (row - 3.5) * 3.0, 24, pz)
             local foliage = createFoliage(v1, v2, v3, surface, 1.0 + (i % 4) * 0.25)
             if not isElement(foliage) then
-                warning(string.format("Stress cycle %d stopped at %d/%d creations", cycle, #elements, count))
+                warn(string.format("Stress cycle %d stopped at %d/%d creations", cycle, #elements, count))
                 break
             end
             table.insert(elements, foliage)
-            totalCreated = totalCreated + 1
+            total = total + 1
         end
-        destroyList(elements)
+        destroyElements(elements)
     end
 
-    pushLog("INFO", string.format("Stress complete: %d create/destroy operations across %d cycles", totalCreated, cycles))
+    log("INFO", string.format("Stress complete: %d create/destroy operations across %d cycles", total, cycles))
 end
 
 local function addDemoPatch(cx, cy, size, surface, density, label)
@@ -408,88 +399,65 @@ local function addDemoPatch(cx, cy, size, surface, density, label)
     return true
 end
 
-local function destroyDemoElements()
-    for i = #state.demo, 1, -1 do
-        local entry = state.demo[i]
-        if entry and isElement(entry.element) then
-            destroyElement(entry.element)
-        end
-        state.demo[i] = nil
-    end
-end
-
 local function prepareDemoCenter()
-    local px, py, pz = playerOrigin()
-    state.demoCenter = Vector3(px, py + 8.0, groundZ(px, py + 8.0, pz) + 1.0)
-    return px, py, pz
+    local px, py, pz = playerPosition()
+    state.demoCenter = Vector3(px, py + 11.0, groundZ(px, py + 11.0, pz) + 1.0)
+    return px, py
 end
 
 local function startDensityDemo(surfaceArg)
-    destroyDemoElements()
-    stopCinematic()
-    state.video = false
-
+    clearDemo()
     local requested = tonumber(surfaceArg)
     if requested then
         requested = math.floor(requested)
         if requested < 0 or requested > 255 then
-            warning("Requested surface must be between 0 and 255")
+            warn("Requested surface must be between 0 and 255")
             requested = nil
         end
     end
 
-    probeWorkingSurfaces(1, true)
+    probeSurfaces(1, true)
     local surface = requested or state.surfaces[1]
     if surface == nil then
-        warning("Density demo could not find a working surface")
+        warn("Density demo could not find a working surface")
         return false
     end
 
-    local px, py, pz = prepareDemoCenter()
-    local offsets = {
+    local px, py = prepareDemoCenter()
+    local patches = {
         {-12, 0, 0.0},
         {12, 0, 0.5},
         {-12, 22, 1.0},
         {12, 22, 2.0},
     }
 
-    for _, entry in ipairs(offsets) do
-        if not addDemoPatch(px + entry[1], py + entry[2], 18, surface, entry[3], string.format("density %.1fx", entry[3])) then
-            destroyDemoElements()
-            warning("Density demo creation failed; try /foliage_probe then pass a working surface")
+    for _, patch in ipairs(patches) do
+        if not addDemoPatch(px + patch[1], py + patch[2], 18, surface, patch[3], string.format("density %.1fx", patch[3])) then
+            clearDemo()
+            warn("Density demo failed; run /foliage_probe and pass a working surface")
             return false
         end
     end
 
     state.demoMode = "density"
-    pushLog("INFO", "Density showcase ready on surface " .. tostring(surface))
+    log("INFO", "Density showcase ready on surface " .. tostring(surface))
     return true
 end
 
 local function startSurfaceDemo()
-    destroyDemoElements()
-    stopCinematic()
-    state.video = false
-    probeWorkingSurfaces(4, true)
-
+    clearDemo()
+    probeSurfaces(4, true)
     if #state.surfaces == 0 then
-        warning("Surface demo could not find any working surface")
+        warn("Surface demo could not find a working surface")
         return false
     end
 
     local px, py = prepareDemoCenter()
-    local offsets = {
-        {-12, 0},
-        {12, 0},
-        {-12, 22},
-        {12, 22},
-    }
-
-    local count = math.min(4, #state.surfaces)
-    for i = 1, count do
+    local offsets = {{-12, 0}, {12, 0}, {-12, 22}, {12, 22}}
+    for i = 1, math.min(4, #state.surfaces) do
         local surface = state.surfaces[i]
         if not addDemoPatch(px + offsets[i][1], py + offsets[i][2], 18, surface, 1.0, "surface " .. tostring(surface)) then
-            warning("Surface " .. tostring(surface) .. " failed while building showcase")
+            warn("Surface " .. tostring(surface) .. " failed while building the showcase")
         end
     end
 
@@ -498,57 +466,68 @@ local function startSurfaceDemo()
     end
 
     state.demoMode = "surfaces"
-    pushLog("INFO", "Surface showcase ready with " .. tostring(#state.demo) .. " variants")
+    log("INFO", "Surface showcase ready with " .. tostring(#state.demo) .. " variants")
     return true
 end
 
 local function startCinematic()
     if #state.demo == 0 or not state.demoCenter then
-        warning("Start /foliage_demo or /foliage_demo_surfaces first")
+        warn("Start /foliage_demo or /foliage_demo_surfaces first")
         return false
     end
-
     state.cinematic = true
     state.cinematicTick = getTickCount()
-    pushLog("INFO", "Cinematic orbit enabled")
+    log("INFO", "Cinematic orbit enabled")
     return true
 end
 
-local function toggleVideo(arg)
-    if state.video then
-        clearDemo()
-        pushLog("INFO", "Video showcase stopped")
+local function toggleDemoDimension()
+    if #state.demo == 0 then
+        warn("No demo foliage exists; start a demo first")
         return
     end
 
-    local mode = tostring(arg or "density")
-    local ok
-    if mode == "surfaces" then
-        ok = startSurfaceDemo()
-    else
-        ok = startDensityDemo(tonumber(arg))
+    local visibleDimension = getElementDimension(localPlayer)
+    local hiddenDimension = visibleDimension == 0 and 1 or 0
+    state.demoHidden = not state.demoHidden
+    local target = state.demoHidden and hiddenDimension or visibleDimension
+
+    local ok = true
+    for _, entry in ipairs(state.demo) do
+        ok = setElementDimension(entry.element, target) and ok
+    end
+    log(ok and "PASS" or "FAIL", state.demoHidden and "Demo moved to another dimension; foliage should disappear" or "Demo restored to player dimension; foliage should reappear")
+end
+
+local function toggleVideo(modeOrSurface)
+    if state.video then
+        clearDemo()
+        log("INFO", "Video showcase stopped")
+        return
     end
 
+    local value = tostring(modeOrSurface or "density")
+    local ok = value == "surfaces" and startSurfaceDemo() or startDensityDemo(tonumber(modeOrSurface))
     if ok and startCinematic() then
         state.video = true
-        pushLog("INFO", "Video mode active - run /foliage_video again to stop")
+        log("INFO", "Video mode active; run /foliage_video again to stop")
     end
 end
 
 local function drawDemo()
     for _, entry in ipairs(state.demo) do
         local v1, v2, v3 = entry.v1, entry.v2, entry.v3
-        local lineColor = tocolor(80, 220, 130, 230)
-        dxDrawLine3D(v1.x, v1.y, v1.z + 0.08, v2.x, v2.y, v2.z + 0.08, lineColor, 2)
-        dxDrawLine3D(v2.x, v2.y, v2.z + 0.08, v3.x, v3.y, v3.z + 0.08, lineColor, 2)
-        dxDrawLine3D(v3.x, v3.y, v3.z + 0.08, v1.x, v1.y, v1.z + 0.08, lineColor, 2)
+        local color = tocolor(80, 220, 130, 230)
+        dxDrawLine3D(v1.x, v1.y, v1.z + 0.08, v2.x, v2.y, v2.z + 0.08, color, 2)
+        dxDrawLine3D(v2.x, v2.y, v2.z + 0.08, v3.x, v3.y, v3.z + 0.08, color, 2)
+        dxDrawLine3D(v3.x, v3.y, v3.z + 0.08, v1.x, v1.y, v1.z + 0.08, color, 2)
 
         local cx = (v1.x + v2.x + v3.x) / 3
         local cy = (v1.y + v2.y + v3.y) / 3
         local cz = (v1.z + v2.z + v3.z) / 3 + 2.2
         local sx, sy = getScreenFromWorldPosition(cx, cy, cz, 0.05)
         if sx and sy then
-            dxDrawText(entry.label, sx - 100, sy - 18, sx + 100, sy + 18, tocolor(255, 255, 255, 245), 1.15, "default-bold", "center", "center", false, false, false, true)
+            dxDrawText(entry.label, sx - 110, sy - 18, sx + 110, sy + 18, tocolor(255, 255, 255, 245), 1.15, "default-bold", "center", "center")
         end
     end
 end
@@ -558,30 +537,22 @@ local function drawOverlay()
         return
     end
 
-    local screenW = guiGetScreenSize()
-    local x, y = 28, 70
-    local width = 560
+    local x, y, width = 28, 70, 560
     local height = state.video and 82 or 260
-
     dxDrawRectangle(x, y, width, height, tocolor(10, 15, 18, 205))
     dxDrawText("CUSTOM FOLIAGE HARNESS", x + 16, y + 10, x + width - 16, y + 34, tocolor(110, 235, 150, 255), 1.25, "default-bold", "left", "center")
-
-    local mode = state.demoMode or "none"
-    local summary = string.format("PASS %d   FAIL %d   WARN %d   |   demo: %s", state.pass, state.fail, state.warn, mode)
-    dxDrawText(summary, x + 16, y + 38, x + width - 16, y + 62, tocolor(235, 235, 235, 255), 1.0, "default", "left", "center")
+    dxDrawText(string.format("PASS %d   FAIL %d   WARN %d   |   demo: %s", state.pass, state.fail, state.warn, state.demoMode or "none"), x + 16, y + 38, x + width - 16, y + 62, tocolor(235, 235, 235, 255), 1.0, "default", "left", "center")
 
     if state.video then
         return
     end
 
-    dxDrawText("surfaces: " .. surfaceListText(), x + 16, y + 62, x + width - 16, y + 84, tocolor(180, 200, 210, 255), 0.95, "default", "left", "center")
-
+    dxDrawText("surfaces: " .. surfaceText(), x + 16, y + 62, x + width - 16, y + 84, tocolor(180, 200, 210, 255), 0.95, "default", "left", "center")
     local logY = y + 90
     for i = math.min(#state.logs, 7), 1, -1 do
         dxDrawText(state.logs[i], x + 16, logY, x + width - 16, logY + 20, tocolor(220, 220, 220, 245), 0.9, "default", "left", "center", true)
         logY = logY + 22
     end
-
     dxDrawText("/foliage_help for commands", x + 16, y + height - 28, x + width - 16, y + height - 8, tocolor(145, 165, 175, 255), 0.9, "default", "left", "center")
 end
 
@@ -591,10 +562,7 @@ addEventHandler("onClientRender", root, function()
         local angle = (elapsed / 14000) * math.pi * 2
         local center = state.demoCenter
         local radius = 38
-        local cameraX = center.x + math.cos(angle) * radius
-        local cameraY = center.y + math.sin(angle) * radius
-        local cameraZ = center.z + 15
-        setCameraMatrix(cameraX, cameraY, cameraZ, center.x, center.y + 7, center.z + 1.0)
+        setCameraMatrix(center.x + math.cos(angle) * radius, center.y + math.sin(angle) * radius, center.z + 15, center.x, center.y + 7, center.z + 1)
     end
 
     if #state.demo > 0 then
@@ -603,100 +571,83 @@ addEventHandler("onClientRender", root, function()
     drawOverlay()
 end)
 
-addCommandHandler("foliage_test", function()
-    runCoreTests()
-end)
-
+addCommandHandler("foliage_test", runCoreTests)
 addCommandHandler("foliage_test_all", function()
     runCoreTests()
     runCapTest()
 end)
-
 addCommandHandler("foliage_probe", function(_, wanted)
-    probeWorkingSurfaces(tonumber(wanted) or 8, false)
+    probeSurfaces(tonumber(wanted) or 8, false)
 end)
-
-addCommandHandler("foliage_captest", function()
-    runCapTest()
-end)
-
+addCommandHandler("foliage_captest", runCapTest)
 addCommandHandler("foliage_stress", function(_, count, cycles)
     runStress(count, cycles)
 end)
-
 addCommandHandler("foliage_demo", function(_, surface)
     startDensityDemo(surface)
 end)
-
-addCommandHandler("foliage_demo_surfaces", function()
-    startSurfaceDemo()
-end)
-
+addCommandHandler("foliage_demo_surfaces", startSurfaceDemo)
+addCommandHandler("foliage_demo_dimension", toggleDemoDimension)
 addCommandHandler("foliage_cinematic", function()
     if state.cinematic then
         stopCinematic()
-        pushLog("INFO", "Cinematic orbit disabled")
+        log("INFO", "Cinematic orbit disabled")
     else
         startCinematic()
     end
 end)
-
 addCommandHandler("foliage_video", function(_, modeOrSurface)
     toggleVideo(modeOrSurface)
 end)
-
 addCommandHandler("foliage_overlay", function()
     state.overlay = not state.overlay
-    pushLog("INFO", "Overlay " .. (state.overlay and "enabled" or "disabled"))
+    log("INFO", "Overlay " .. (state.overlay and "enabled" or "disabled"))
 end)
-
 addCommandHandler("foliage_lifetime", function(_, surfaceArg)
     clearLifetime()
-    probeWorkingSurfaces(1, true)
+    probeSurfaces(1, true)
     local surface = tonumber(surfaceArg) or state.surfaces[1]
-    if not surface then
-        warning("Lifetime test needs a working surface")
+    if surface == nil then
+        warn("Lifetime test needs a working surface")
         return
     end
 
-    local px, py = playerOrigin()
+    local px, py = playerPosition()
     state.lifetime = select(1, createAt(px + 8, py, 24, math.floor(surface), 2.0))
     if isElement(state.lifetime) then
-        pushLog("INFO", "Lifetime patch created. Restart/stop this resource: the patch must disappear with it.")
+        log("INFO", "Lifetime patch created. Restart/stop this resource; the patch must disappear with it.")
     else
-        warning("Lifetime patch creation failed")
+        warn("Lifetime patch creation failed")
     end
 end)
-
 addCommandHandler("foliage_clear", function()
     clearDemo()
     clearLifetime()
-    pushLog("INFO", "Harness-owned persistent foliage cleared")
+    log("INFO", "Harness-owned persistent foliage cleared")
 end)
-
 addCommandHandler("foliage_help", function()
     outputChatBox("--- Custom foliage harness ---", 110, 235, 150)
-    outputChatBox("/foliage_test - functional API/getter/setter/dimension/OOP regression", 230, 230, 230)
+    outputChatBox("/foliage_test - API/getter/setter/position/dimension/OOP regression", 230, 230, 230)
     outputChatBox("/foliage_test_all - core suite + 64 element cap test", 230, 230, 230)
     outputChatBox("/foliage_probe [count] - discover surfaces that actually produce plants", 230, 230, 230)
     outputChatBox("/foliage_stress [count=32] [cycles=5] - repeated create/destroy", 230, 230, 230)
     outputChatBox("/foliage_captest - verify the custom 64 element guard", 230, 230, 230)
-    outputChatBox("/foliage_demo [surface] - 0x / 0.5x / 1x / 2x visual comparison", 230, 230, 230)
-    outputChatBox("/foliage_demo_surfaces - compare up to four working plant surfaces", 230, 230, 230)
-    outputChatBox("/foliage_video [surface|surfaces] - demo + orbit camera for recording", 230, 230, 230)
+    outputChatBox("/foliage_demo [surface] - 0x / 0.5x / 1x / 2x density comparison", 230, 230, 230)
+    outputChatBox("/foliage_demo_surfaces - compare up to four working surfaces", 230, 230, 230)
+    outputChatBox("/foliage_demo_dimension - visually stream demo out/in by dimension", 230, 230, 230)
+    outputChatBox("/foliage_video [surface|surfaces] - showcase + orbit camera", 230, 230, 230)
     outputChatBox("/foliage_cinematic - toggle orbit camera", 230, 230, 230)
     outputChatBox("/foliage_lifetime [surface] - manual resource-stop ownership test", 230, 230, 230)
     outputChatBox("/foliage_overlay - toggle HUD; /foliage_clear - cleanup", 230, 230, 230)
 end)
 
 addEventHandler("onClientResourceStart", resourceRoot, function()
-    pushLog("INFO", "Custom foliage harness loaded. Use /foliage_help or /foliage_test.")
+    log("INFO", "Custom foliage harness loaded. Use /foliage_help or /foliage_test.")
 end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
-    -- Do not explicitly destroy foliage here. Resource-owned elements must be
-    -- released by the normal resource ElementGroup teardown; /foliage_lifetime
-    -- exists specifically so that lifetime path can be checked visually.
+    -- Deliberately do not destroy foliage here. /foliage_lifetime verifies that
+    -- resource ElementGroup teardown releases native foliage automatically.
     if state.cinematic then
         setCameraTarget(localPlayer)
     end
