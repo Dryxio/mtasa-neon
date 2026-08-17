@@ -139,7 +139,7 @@ An in-game demonstration of Neon's resource-controlled native CULL-zone editing 
 
 ### Scripting GTA's own physics objects
 
-San Andreas' dynamic props, such as Grove Street boxes, crates, bins and breakable clutter, are now client `worldobject` elements. A Lua resource binds one, tracks its live transform, and reacts to damage and destruction while GTA keeps simulating the physics.
+San Andreas' dynamic props, such as cardboard boxes, crates, bins and breakable clutter, are now client `worldobject` elements. A Lua resource binds one, tracks its live transform, and reacts to damage and destruction while GTA keeps simulating the physics.
 
 [![Watch the native world-object scripting demo](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
 
