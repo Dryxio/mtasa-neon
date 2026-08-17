@@ -21,7 +21,9 @@ end
 local function clearTriangle()
     destroyFoliage()
     points = {}
+    cursorWorld = nil
     errorText = nil
+    showCursor(true)
 end
 
 local function createTriangleFoliage()
@@ -80,6 +82,8 @@ addEventHandler("onClientClick", root, function(button, state, _, _, worldX, wor
     points[#points + 1] = Vector3(worldX, worldY, worldZ + 0.06)
     if #points == 3 then
         createTriangleFoliage()
+        cursorWorld = nil
+        showCursor(false)
     end
 end)
 
