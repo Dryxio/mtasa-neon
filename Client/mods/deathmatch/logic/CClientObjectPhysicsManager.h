@@ -40,7 +40,10 @@ private:
         bool  bDisableMoveForce = false;
         bool  bInfiniteMass = false;
         bool  bDisableZ = false;
+        bool  bProcessCollisionEvenIfStationary = false;
         bool  bDontApplySpeed = false;
+        bool  bForceHitReturnFalse = false;
+        bool  bDisableSimpleCollision = false;
         bool  bCanBeCollidedWith = false;
         float fMass = 0.0f;
         float fTurnMass = 0.0f;
@@ -235,7 +238,10 @@ private:
         state.bDisableMoveForce = pInterface->bDisableMovement;
         state.bInfiniteMass = pInterface->b0x40;
         state.bDisableZ = pInterface->b0x80;
+        state.bProcessCollisionEvenIfStationary = pInterface->b0x800;
         state.bDontApplySpeed = pInterface->bDontApplySpeed;
+        state.bForceHitReturnFalse = pInterface->b0x10000;
+        state.bDisableSimpleCollision = pInterface->b0x20000;
         state.bCanBeCollidedWith = pInterface->bEnableCollision;
         state.fMass = pInterface->m_fMass;
         state.fTurnMass = pInterface->m_fTurnMass;
@@ -259,7 +265,7 @@ private:
         state.pLastGameObject = pObject->GetGameObject();
         Snapshot(pInterface, state);
 
-        EnsureFallbackCollision(pObject, state);
+        const bool bFallbackCollision = EnsureFallbackCollision(pObject, state) && state.usFallbackModel == pObject->GetModel();
 
         pInterface->bApplyGravity = true;
         pInterface->bDisableFriction = false;
@@ -268,6 +274,9 @@ private:
         pInterface->bDisableMovement = false;
         pInterface->b0x40 = false;
         pInterface->b0x80 = false;
+        pInterface->b0x800 = true;
+        pInterface->b0x10000 = false;
+        pInterface->b0x20000 = false;
         pInterface->bEnableCollision = true;
 
         // Weapon models and other models without object.dat entries are initialized
@@ -284,6 +293,21 @@ private:
         if (!pObject->IsFrozen())
         {
             pObjectSA->SetStatic(false);
+
+            // CObject was originally inserted into GTA's repeat sectors before
+            // the generated fallback COL existed. Rebuild its sector links so
+            // broad-phase collision sees the new bounds immediately. Calling the
+            // entity virtuals directly deliberately leaves the moving-list link
+            // alone; AddToMovingList below is idempotent.
+            if (bFallbackCollision)
+            {
+                pInterface->Remove();
+                pInterface->Add();
+            }
+
+            pInterface->bCollisionProcessed = false;
+            pInterface->bIsInSafePosition = false;
+            pInterface->bIsStuck = false;
             pObjectSA->AddToMovingList();
 
             // The server can send the toss velocity before GTA has created the
@@ -292,6 +316,24 @@ private:
             pObjectSA->SetMoveSpeed(pObject->m_vecMoveSpeed);
             CVector vecTurnSpeed = pObject->m_vecTurnSpeed;
             pObjectSA->SetTurnSpeed(&vecTurnSpeed);
+        }
+
+        if (g_pCore && g_pCore->GetConsole())
+        {
+            CModelInfo* pModelInfo = g_pGame ? g_pGame->GetModelInfo(pObject->GetModel()) : nullptr;
+            CBaseModelInfoSAInterface* pModelInterface = pModelInfo ? pModelInfo->GetInterface() : nullptr;
+            CColModelSAInterface* pColModel = pModelInterface ? pModelInterface->pColModel : nullptr;
+            CColDataSA* pData = pColModel ? pColModel->m_data : nullptr;
+            const unsigned int spheres = pData ? pData->m_numSpheres : 0;
+            const unsigned int boxes = pData ? pData->m_numBoxes : 0;
+            const unsigned int triangles = pData ? pData->m_numTriangles : 0;
+            const unsigned int specialResponse = pInterface->pObjectInfo ? pInterface->pObjectInfo->ucSpecialColResponseCase : 255;
+
+            g_pCore->GetConsole()->Printf(
+                "[dynamic-physics] model %u: status=%u static=%u moving=%u col=%u/%u/%u special=%u disableSimple=%u collisionForceOff=%u",
+                pObject->GetModel(), static_cast<unsigned int>(pObjectSA->GetEntityStatus()), pObjectSA->IsStatic() ? 1u : 0u,
+                pInterface->m_pMovingList ? 1u : 0u, spheres, boxes, triangles, specialResponse, pInterface->b0x20000 ? 1u : 0u,
+                pInterface->bDisableFriction ? 1u : 0u);
         }
 
         return true;
@@ -341,7 +383,10 @@ private:
         pInterface->bDisableMovement = state.bDisableMoveForce;
         pInterface->b0x40 = state.bInfiniteMass;
         pInterface->b0x80 = state.bDisableZ;
+        pInterface->b0x800 = state.bProcessCollisionEvenIfStationary;
         pInterface->bDontApplySpeed = state.bDontApplySpeed;
+        pInterface->b0x10000 = state.bForceHitReturnFalse;
+        pInterface->b0x20000 = state.bDisableSimpleCollision;
         pInterface->bEnableCollision = state.bCanBeCollidedWith;
         pObjectSA->SetMass(state.fMass);
         pObjectSA->SetTurnMass(state.fTurnMass);
