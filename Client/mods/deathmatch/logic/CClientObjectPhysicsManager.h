@@ -28,6 +28,10 @@ class CClientObjectPhysicsManager
 private:
     static constexpr unsigned short INVALID_FALLBACK_MODEL = 0xFFFF;
     static constexpr unsigned char  SMALLBOX_COLLISION_RESPONSE = 2;
+    static constexpr float          FALLBACK_MASS = 4.0f;
+    static constexpr float          FALLBACK_TURN_MASS = 8.0f;
+    static constexpr float          FALLBACK_AIR_RESISTANCE = 0.99f;
+    static constexpr float          FALLBACK_ELASTICITY = 0.03f;
 
     struct SState
     {
@@ -48,6 +52,8 @@ private:
         bool  bCanBeCollidedWith = false;
         float fMass = 0.0f;
         float fTurnMass = 0.0f;
+        float fAirResistance = 0.0f;
+        float fElasticity = 0.0f;
 
         CObjectInfo* pOriginalObjectInfo = nullptr;
         CObjectInfo  objectInfoOverride{};
@@ -297,6 +303,8 @@ private:
         state.bCanBeCollidedWith = pInterface->bEnableCollision;
         state.fMass = pInterface->m_fMass;
         state.fTurnMass = pInterface->m_fTurnMass;
+        state.fAirResistance = pInterface->m_fAirResistance;
+        state.fElasticity = pInterface->m_fElasticity;
         state.pOriginalObjectInfo = pInterface->pObjectInfo;
         state.bObjectInfoOverride = false;
         state.bSnapshotValid = true;
@@ -341,13 +349,16 @@ private:
         pInterface->b0x20000 = false;
         pInterface->bEnableCollision = true;
 
-        // Weapon models and other models without object.dat entries are initialized
-        // as effectively immovable (99999 mass/turn-mass). Give those models a sane
-        // fallback while preserving explicit object properties configured by scripts.
-        if (pInterface->m_fMass >= 99998.0f)
-            pObjectSA->SetMass(4.0f);
-        if (pInterface->m_fTurnMass >= 99998.0f)
-            pObjectSA->SetTurnMass(8.0f);
+        // Generated collision is used for models that do not have suitable
+        // native object physics. Give only those models a lightweight SMALLBOX
+        // profile; native object.dat models keep their original properties.
+        if (bFallbackCollision)
+        {
+            pObjectSA->SetMass(FALLBACK_MASS);
+            pObjectSA->SetTurnMass(FALLBACK_TURN_MASS);
+            pObjectSA->SetAirResistance(FALLBACK_AIR_RESISTANCE);
+            pObjectSA->SetElasticity(FALLBACK_ELASTICITY);
+        }
 
         pObjectSA->SetUsesCollision(true);
         pObjectSA->SetFrozen(pObject->IsFrozen());
@@ -392,10 +403,11 @@ private:
             const unsigned int specialResponse = pInterface->pObjectInfo ? pInterface->pObjectInfo->ucSpecialColResponseCase : 255;
 
             g_pCore->GetConsole()->Printf(
-                "[dynamic-physics] model %u: status=%u static=%u moving=%u col=%u/%u/%u special=%u disableSimple=%u collisionForceOff=%u",
+                "[dynamic-physics] model %u: status=%u static=%u moving=%u col=%u/%u/%u special=%u disableSimple=%u collisionForceOff=%u fallback=%u mass=%.2f turnMass=%.2f air=%.3f elasticity=%.3f",
                 pObject->GetModel(), static_cast<unsigned int>(pObjectSA->GetEntityStatus()), pObjectSA->IsStatic() ? 1u : 0u,
                 pInterface->m_pMovingList ? 1u : 0u, spheres, boxes, triangles, specialResponse, pInterface->b0x20000 ? 1u : 0u,
-                pInterface->bDisableFriction ? 1u : 0u);
+                pInterface->bDisableFriction ? 1u : 0u, bFallbackCollision ? 1u : 0u, pInterface->m_fMass, pInterface->m_fTurnMass,
+                pInterface->m_fAirResistance, pInterface->m_fElasticity);
         }
 
         return true;
@@ -454,6 +466,8 @@ private:
             pInterface->pObjectInfo = state.pOriginalObjectInfo;
         pObjectSA->SetMass(state.fMass);
         pObjectSA->SetTurnMass(state.fTurnMass);
+        pObjectSA->SetAirResistance(state.fAirResistance);
+        pObjectSA->SetElasticity(state.fElasticity);
         pObjectSA->SetUsesCollision(pObject->IsCollisionEnabled());
     }
 
