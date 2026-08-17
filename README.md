@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://mtasa-neon-wiki.vercel.app/neon"><img src="docs/media/neon-readme-banner.png" alt="MTA:SA Neon Engine — native AI, extended worlds, and new Lua APIs" width="100%"></a>
+  <a href="https://mtasa-neon-wiki.vercel.app/neon"><img src="docs/media/neon-readme-banner.png" alt="MTA:SA Neon Engine: native AI, extended worlds, and new Lua APIs" width="100%"></a>
 </p>
 
 <p align="center">
@@ -74,6 +74,7 @@ Neon keeps MTA:SA's resource model and default gameplay behavior while lifting s
 | Project2DFX distant static lights | Not integrated | Native, player- and resource-controlled implementation with a 25,000-light buffered renderer and 300-5,000 draw-distance range |
 | Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
 | Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
+| Collision authoring | A packaged `.col` file, fixed at build time | Collision serialized from a Lua table of spheres, boxes and meshes, and rebuildable in place on models that are already streamed in |
 | Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
 | Shared ambient pedestrian traffic | GTA population remains client-local and disabled by MTA | Server-owned MTA peds proposed from GTA's civilian, gang, dealer and cop models and paths, with one native-AI owner, syncer handoff, observer presentation, and deterministic cleanup |
 | Ambient couples and city cops | Single-player only | Atomic native couple leases with GTA-owned walk side and hand holding, plus a safe ambient-cop patrol task that keeps real path-node locomotion while making wanted, pursuit and arrest unreachable |
@@ -138,11 +139,19 @@ An in-game demonstration of Neon's resource-controlled native CULL-zone editing 
 
 ### Scripting GTA's own physics objects
 
-San Andreas' dynamic props — Grove Street boxes, crates, bins, breakable clutter — are now client `worldobject` elements. A Lua resource binds one, tracks its live transform, and reacts to damage and destruction while GTA keeps simulating the physics.
+San Andreas' dynamic props, such as Grove Street boxes, crates, bins and breakable clutter, are now client `worldobject` elements. A Lua resource binds one, tracks its live transform, and reacts to damage and destruction while GTA keeps simulating the physics.
 
 [![Watch the native world-object scripting demo](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
 
 [Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
+
+### Collision generated at runtime
+
+A wall drawn in game from a Lua table, then extended, raised and turned into a ramp while the player stands on it. The cyan outline is the generated collision. Nothing is scaled: each edit regenerates the collision model on a shape that is already streamed in.
+
+[![Watch the runtime collision generation demo](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)
+
+[Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)
 
 ## Selected Neon Lua API additions
 
@@ -245,6 +254,30 @@ Every dynamic prop San Andreas already streams around the player is a client `wo
 | `onClientWorldObjectBreak` | `attacker, model, x, y, z` | A native object broke. Cancelling blocks the break. |
 
 Elements are discovered with `getElementsByType("worldobject")`, read and written with `getElementPosition` / `getElementMatrix` / `setElementMatrix`, and cannot be destroyed by scripts. The same element survives stream-out and stream-in, and `onClientElementStreamIn` / `onClientElementStreamOut` fire on it. See [Scriptable dynamic objects](https://mtasa-neon-wiki.vercel.app/neon/world-objects).
+
+### Runtime collision generation
+
+Collision no longer has to come from a `.col` file authored before packaging. A resource can describe it as a Lua table of spheres, boxes and meshes, and rebuild it on a model that players are already standing on.
+
+| Function | Side | Description |
+| --- | --- | --- |
+| `engineLoadCOL(table collision)` | Client | Builds a `col` element from a collision table. Passing a file path or raw data still uses the standard MTA path, so existing resources are unaffected. |
+| `engineSetCOLData(col, table collision)` | Client | Rebuilds an existing `col` element's collision in place and re-applies it to every model it already replaced. |
+
+```lua
+local col = engineLoadCOL({
+    -- position is the centre, size is the full extent
+    boxes = { { position = { 0, 0, 0 }, size = { 4, 0.4, 2.5 }, material = 1 } },
+})
+engineReplaceCOL(col, engineRequestModel("object", 980))
+
+-- Later: same element, taller wall, no reload
+engineSetCOLData(col, {
+    boxes = { { position = { 0, 0, 0 }, size = { 4, 0.4, 3 }, material = 1 } },
+})
+```
+
+Meshes take flat `vertices` and zero-based `indices` triplets, and `material` accepts GTA's surface range `0` to `178`. Validation errors name the exact offending path. See [Runtime collision generation](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision) for the ceilings and the mesh vertex range.
 
 ### Native vehicle predicates, ped tasks and gang tags
 
