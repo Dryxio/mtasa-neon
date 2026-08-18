@@ -14,6 +14,7 @@ local playground = {
     object = nil,
     effect = nil,
     options = nil,
+    armed = false,
 }
 
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
@@ -57,6 +58,7 @@ local function clearPlayground()
     playground.object = nil
     playground.effect = nil
     playground.options = nil
+    playground.armed = false
 end
 
 local function spawn(model, x, y, z, scale, rz, bucket)
@@ -279,7 +281,7 @@ addCommandHandler("breakspawn", function(_, modelArg, ...)
     local distance = 4.0
     local x = px - math.sin(angle) * distance
     local y = py + math.cos(angle) * distance
-    local z = pz + 0.35
+    local z = pz + 0.8
 
     local object = createObject(model, x, y, z, 0, 0, rz)
     if not isElement(object) then
@@ -292,29 +294,44 @@ addCommandHandler("breakspawn", function(_, modelArg, ...)
     setElementFrozen(object, true)
     setObjectScale(object, options.scale)
 
-    local armed = setObjectBreakProfile(object, {
-        native = options.native,
-        health = options.health,
-        damageMultiplier = options.damageMultiplier,
-        instantBreakThreshold = options.instantBreakThreshold,
-        fracture = fractureOptions(options),
-    })
-    if not armed then
-        destroyElement(object)
-        outputChatBox("[BREAKSHOW] failed to arm managed break profile.", 255, 80, 80)
-        return
-    end
-
     playground.object = object
     playground.options = options
+    playground.armed = false
 
-    outputChatBox(("[BREAKSHOW] model %d armed: %.1f HP, native=%s. Shoot or ram it.")
-        :format(model, options.health, tostring(options.native)), 100, 255, 100)
+    outputChatBox(("[BREAKSHOW] model %d spawned; settling before managed break profile is armed..."):format(model), 180, 220, 255)
+
+    setTimer(function()
+        if playground.object ~= object or not isElement(object) then return end
+
+        local armed = setObjectBreakProfile(object, {
+            native = options.native,
+            health = options.health,
+            damageMultiplier = options.damageMultiplier,
+            instantBreakThreshold = options.instantBreakThreshold,
+            fracture = fractureOptions(options),
+        })
+        if not armed then
+            destroyElement(object)
+            playground.object = nil
+            playground.options = nil
+            playground.armed = false
+            outputChatBox("[BREAKSHOW] failed to arm managed break profile.", 255, 80, 80)
+            return
+        end
+
+        playground.armed = true
+        outputChatBox(("[BREAKSHOW] model %d armed: %.1f HP, native=%s. Shoot or ram it.")
+            :format(model, options.health, tostring(options.native)), 100, 255, 100)
+    end, 500, 1)
 end)
 
 addCommandHandler("breakhp", function()
     if not isElement(playground.object) then
         outputChatBox("[BREAKSHOW] no playground object.", 255, 80, 80)
+        return
+    end
+    if not playground.armed then
+        outputChatBox("[BREAKSHOW] object is still settling / not armed yet.", 255, 200, 80)
         return
     end
     local health = getObjectBreakHealth(playground.object)
@@ -330,6 +347,7 @@ addCommandHandler("breaknow", function()
     end
 
     clearObjectBreakProfile(object)
+    playground.armed = false
     if isElement(playground.effect) then destroyElement(playground.effect) end
 
     local px, py, pz = getElementPosition(localPlayer)
