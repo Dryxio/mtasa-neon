@@ -3,6 +3,7 @@ local state = S.state
 local PALETTE = S.PALETTE
 
 local SEGMENTS = 6
+local MOON_COUNT = 7
 
 function S.cue(key, condition, callback)
     if condition and not state.cues[key] then
@@ -27,9 +28,32 @@ function S.updateChase(t)
         local leftColor = PALETTE[phase + 1]
         local rightColor = PALETTE[((#PALETTE - phase) % #PALETTE) + 1]
         local pulse = ((segment + step) % SEGMENTS == 0)
-        S.setEdgeSegment("left", segment, leftColor, pulse and 2.15 or 1.35, pulse and 10 or 2, "default")
-        S.setEdgeSegment("right", segment, rightColor, pulse and 2.15 or 1.35, pulse and 10 or 2, "default")
-        S.setCenterSegment(segment, PALETTE[6], pulse and 1.15 or 0.58, 0, "default")
+        local leftMode = ((segment + step) % 4 == 0) and "warnlight" or "default"
+        local rightMode = ((segment + step + 2) % 4 == 0) and "trafficlight" or "default"
+        S.setEdgeSegment("left", segment, leftColor, pulse and 2.25 or 1.35, pulse and 26 or 14, leftMode)
+        S.setEdgeSegment("right", segment, rightColor, pulse and 2.25 or 1.35, pulse and 26 or 14, rightMode)
+        S.setCenterSegment(segment, PALETTE[6], pulse and 1.05 or 0.55, 0, "default")
+    end
+end
+
+function S.updateMoonBurst(t)
+    if t < 22000 or t >= 27000 then
+        return
+    end
+
+    local step = math.floor((t - 22000) / 260)
+    if step == state.moonStep then
+        return
+    end
+    state.moonStep = step
+
+    for index = 1, MOON_COUNT do
+        local intro = S.clamp((t - (22000 + (index - 1) * 180)) / 800, 0, 1)
+        local outro = S.clamp((27000 - t) / 900, 0, 1)
+        local pulse = 0.85 + 0.25 * math.sin((step + index) * 0.7)
+        local size = intro * outro * (3.7 + index * 0.22) * pulse
+        local color = PALETTE[((index + math.floor(step / 3) - 2) % #PALETTE) + 1]
+        S.setMoon(index, color, math.max(0.03, size), "default")
     end
 end
 
@@ -48,7 +72,9 @@ function S.updateFinal(t)
     local hot = (step % 2 == 0)
     for segment = 1, SEGMENTS do
         if ((segment + step) % 3) == 0 then
-            S.setCenterSegment(segment, PALETTE[6], hot and 1.35 or 0.72, 0, hot and "warnlight" or "default")
+            S.setEdgeSegment("left", segment, nil, hot and 2.05 or 1.55, hot and 25 or 18, hot and "warnlight" or "default")
+            S.setEdgeSegment("right", segment, nil, hot and 2.05 or 1.55, hot and 25 or 18, hot and "trafficlight" or "default")
+            S.setCenterSegment(segment, PALETTE[6], hot and 1.25 or 0.62, 0, hot and "on_off_at_5" or "default")
         end
     end
 end
@@ -63,39 +89,55 @@ function S.updateSceneCues(t)
         local orderCopy = order
         local segment = SEGMENTS - order + 1
         S.cue("edge_segment_" .. segment, t >= 3900 + (orderCopy - 1) * 480, function()
-            S.setEdgeSegment("left", segment, PALETTE[segment], 1.55, 3, "default")
-            S.setEdgeSegment("right", segment, PALETTE[7 - segment], 1.55, 3, "default")
+            S.setEdgeSegment("left", segment, PALETTE[segment], 1.55, 18, "default")
+            S.setEdgeSegment("right", segment, PALETTE[7 - segment], 1.55, 18, "default")
         end)
     end
 
     S.cue("thresholds", t >= 6900, function()
-        S.setThreshold(1, tocolor(45, 255, 150, 255), 1.25, 0, "default")
-        S.setThreshold(2, tocolor(255, 55, 85, 255), 1.25, 0, "default")
+        S.setThreshold(1, tocolor(45, 255, 150, 255), 1.20, 0, "default")
+        S.setThreshold(2, tocolor(255, 55, 85, 255), 1.20, 0, "default")
     end)
 
     for segment = 1, SEGMENTS do
         local segmentCopy = segment
         S.cue("center_segment_" .. segmentCopy, t >= 7600 + (segmentCopy - 1) * 330, function()
-            S.setCenterSegment(segmentCopy, PALETTE[6], 0.72, 0, "default")
+            S.setCenterSegment(segmentCopy, PALETTE[6], 0.62, 0, "default")
         end)
     end
 
-    S.cue("center_blink", t >= 11200, function()
+    S.cue("left_right_demo", t >= 11600, function()
         for segment = 1, SEGMENTS do
-            S.setCenterSegment(segment, PALETTE[6], 0.85, 0, "on_off_at_5")
+            S.setEdgeSegment("left", segment, nil, 1.65, 19, segment % 2 == 0 and "warnlight" or "default")
+            S.setEdgeSegment("right", segment, nil, 1.65, 19, segment % 2 == 1 and "trafficlight" or "default")
         end
     end)
 
-    S.cue("center_normal", t >= 15000, function()
+    S.cue("center_blink", t >= 12400, function()
         for segment = 1, SEGMENTS do
-            S.setCenterSegment(segment, PALETTE[6], 0.72, 0, "default")
+            S.setCenterSegment(segment, PALETTE[6], 0.78, 0, "on_off_at_5")
+        end
+    end)
+
+    S.cue("all_normal", t >= 16400, function()
+        for segment = 1, SEGMENTS do
+            S.setEdgeSegment("left", segment, nil, 1.45, 17, "default")
+            S.setEdgeSegment("right", segment, nil, 1.45, 17, "default")
+            S.setCenterSegment(segment, PALETTE[6], 0.62, 0, "default")
         end
     end)
 
     S.cue("vanilla_mutate", t >= 17300, S.mutateVanillaLight)
     S.cue("vanilla_restore", t >= 20800, S.restoreVanillaLight)
 
+    S.cue("moon_cleanup", t >= 27000, function()
+        for index = 1, MOON_COUNT do
+            S.setMoon(index, PALETTE[((index - 1) % #PALETTE) + 1], 0.03, "default")
+        end
+    end)
+
     S.updateChase(t)
+    S.updateMoonBurst(t)
     S.updateFinal(t)
 end
 
@@ -114,26 +156,26 @@ function S.setCameraForTimeline(t)
         )
     elseif t < 17000 then
         S.cameraLerp(
-            S.cameraPoint(0.20, -30, 9.5, 0.58, 0, 1.4, 72),
-            S.cameraPoint(0.60, 29, 8.0, 0.82, 0, 1.2, 70),
+            S.cameraPoint(0.20, -30, 9.5, 0.58, 0, 2.0, 72),
+            S.cameraPoint(0.60, 29, 8.0, 0.82, 0, 2.0, 70),
             (t - 10500) / 6500
         )
     elseif t < 22000 then
         S.cameraLerp(
-            S.cameraPoint(0.49, -31, 4.0, 0.53, -24, 5.5, 55),
-            S.cameraPoint(0.56, -28, 6.0, 0.53, -24, 5.5, 48),
+            S.cameraPoint(0.47, -34, 4.2, 0.53, -27, 6.0, 55),
+            S.cameraPoint(0.58, -31, 6.2, 0.53, -27, 6.0, 48),
             (t - 17000) / 5000
         )
     elseif t < 27000 then
         S.cameraLerp(
-            S.cameraPoint(0.70, -24, 7.5, 0.90, 0, 2.5, 66),
-            S.cameraPoint(0.82, 19, 5.5, 0.93, 0, 2.0, 60),
+            S.cameraPoint(0.48, -10, 4.0, 0.76, 0, 34.0, 72),
+            S.cameraPoint(0.59, 18, 9.5, 0.78, 0, 39.0, 76),
             (t - 22000) / 5000
         )
     elseif t < 32000 then
         S.cameraLerp(
-            S.cameraPoint(-0.005, -12, 3.4, 0.10, 0, 3.0, 58),
-            S.cameraPoint(0.14, 10, 4.8, 0.22, 0, 2.5, 62),
+            S.cameraPoint(0.70, -24, 7.5, 0.90, 0, 2.5, 66),
+            S.cameraPoint(0.93, 20, 5.5, 0.91, 0, 2.0, 60),
             (t - 27000) / 5000
         )
     else
@@ -196,6 +238,7 @@ function S.beginShow(mode, shot)
     state.shot = shot
     state.cues = {}
     state.chaseStep = -1
+    state.moonStep = -1
     state.finalStep = -1
     state.startedAt = getTickCount()
     state.active = true
@@ -253,7 +296,8 @@ function S.prepareShow(_, _, _, dimension)
         end
 
         -- Particle and roadsign models perform their targeted restream while the
-        -- screen is still black. The recorded timeline itself stays restream-free.
+        -- screen is still black. LIGHT/SUN_GLARE property animation during the
+        -- recorded timeline stays restream-free.
         S.later(2300, function()
             local cam = S.cameraPoint(-0.04, 0, 3.0, 0.8, 0, 1.2, 72)
             setCameraMatrix(cam[1], cam[2], cam[3], cam[4], cam[5], cam[6], 0, cam[7])
