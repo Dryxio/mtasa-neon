@@ -94,27 +94,27 @@ void SetNumber(CElement* pFire, const char* key, double value)
 {
     CLuaArgument argument;
     argument.ReadNumber(value);
-    pFire->SetCustomData(key, argument, ESyncType::BROADCAST, nullptr, false);
+    CStaticFunctionDefinitions::SetElementData(pFire, key, argument, ESyncType::BROADCAST, std::nullopt);
 }
 
 void SetBool(CElement* pFire, const char* key, bool value)
 {
     CLuaArgument argument;
     argument.ReadBool(value);
-    pFire->SetCustomData(key, argument, ESyncType::BROADCAST, nullptr, false);
+    CStaticFunctionDefinitions::SetElementData(pFire, key, argument, ESyncType::BROADCAST, std::nullopt);
 }
 
 void SetElement(CElement* pFire, const char* key, CElement* value)
 {
     if (!value)
     {
-        pFire->DeleteCustomData(key);
+        CStaticFunctionDefinitions::RemoveElementData(pFire, key);
         return;
     }
 
     CLuaArgument argument;
     argument.ReadElement(value);
-    pFire->SetCustomData(key, argument, ESyncType::BROADCAST, nullptr, false);
+    CStaticFunctionDefinitions::SetElementData(pFire, key, argument, ESyncType::BROADCAST, std::nullopt);
 }
 
 bool GetNumber(CElement* pFire, const char* key, double& value)
