@@ -22,92 +22,11 @@
 
 <p align="center"><strong>An independent MTA:BLUE-derived playground for deeper GTA:SA engine work.</strong></p>
 
-MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) that pushes beyond standard MTA with larger worlds, higher engine limits, deeper access to GTA:SA's native systems, and new scripting APIs. One of its flagship systems brings FiveM-style shared NPCs and traffic into MTA, powered by the original single-player AI.
+MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) that opens up parts of the GTA:SA engine MTA never exposed: a bigger world, higher engine limits, and GTA's own native systems turned into Lua primitives.
 
-Beyond synchronization, Neon includes opt-in PS2-style visuals through its selected SkyGFX integration, a GTA:SA-inspired client experience, optional shared identity, and resource-controlled custom vehicle audio.
+Its flagship system brings **GTA:SA's single-player NPCs and traffic into a shared multiplayer world**, running the original AI on one authoritative client.
 
-The repository preserves the complete upstream history and adds proof-of-concept work on top of it. Neon is not affiliated with or endorsed by the Multi Theft Auto team.
-
-Readers familiar with the historical [MTA:Eir](https://wiki.multitheftauto.com/wiki/MTA:Eir) project may recognize a related ambition: using an independent MTA:BLUE-derived codebase as a laboratory for deeper GTA:SA engine integration, expanded streaming and IMG workflows, reverse-engineered native features, and new scripting APIs. Neon is not a continuation of or affiliated with MTA:Eir; the comparison is about scope and experimental spirit.
-
-## Updates and releases
-
-Players install MTA Neon once. On every normal launch, the client checks Neon's latest signed GitHub release manifest and offers any newer build as an optional update. If accepted, Neon downloads and verifies the installer, closes cleanly, and opens the installer; declining simply postpones the offer until a later launch. Servers can still require or recommend a published client build through `minclientversion` and `recommendedclientversion` in `mtaserver.conf`.
-
-Repository pushes and ordinary CI builds do not publish updates. A maintainer deliberately starts the GitHub **Build** workflow on `master` with **Publish release** enabled after the accumulated changes are ready. Public versions use `YYYY.MM.DD.BUILD` for people (for example `2026.08.07.170`) and MTA's technical `1.7.0-5.00BUILD` form for server settings (for example `1.7.0-5.00170`). Neon disables MTA's upstream `minclientversion_auto_update` policy by default so it cannot replace a server owner's explicit Neon requirement.
-
-## GTA:SA's native AI, synchronized for multiplayer
-
-**MTA:SA Neon brings GTA:SA's single-player NPCs, traffic, vehicles, and native AI into one shared, synchronized multiplayer world.** The system is still growing, with more of the original solo behavior becoming available over time. [Learn more on the Neon wiki.](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai)
-
-## MTA:SA vs MTA:SA Neon
-
-Neon keeps MTA:SA's resource model and default gameplay behavior while lifting selected GTA:SA engine limits and exposing new opt-in features to resources. The figures below describe the currently implemented Neon client/server patches and resource workflows.
-
-| Area | MTA:SA | MTA:SA Neon |
-| --- | ---: | ---: |
-| GTA corona pool | 64 | 4,096 (4,094 available to scripted MTA coronas) |
-| GTA 3D marker pool | 32 | 4,096 |
-| GTA checkpoint pool | 32 | 4,096 |
-| GTA checkpoint direction arrows | 5 | 4,096 |
-| GTA attribute CULL zones | 1,300 | 4,096 |
-| GTA tunnel CULL zones | 40 | 256 |
-| GTA mirror CULL zones | 72 | 256 |
-| Native CULL-zone editing | Not exposed to Lua | Client Lua CRUD with stable IDs, resource-scoped cleanup, and 3D diagnostics |
-| Visible entity pointers | 1,000 | 8,192 |
-| Visible LOD pointers | 1,000 | 8,192 |
-| Streaming RenderWare object instances | 2,500 | 30,000 |
-| Main world-sector grid | 120 x 120 | 400 x 400 |
-| LOD world-sector grid | 30 x 30 | 100 x 100 |
-| Supported extended-world XY | Approximately -3,000 to +3,000 | -10,000 to +9,999 |
-| Native minimap tiles | Fixed 12 x 12 stock grid, approximately -3,000 to +3,000 | Sparse 40 x 40 logical grid covering -10,000 to +9,999, with resource-owned TXDs and protected stock tiles |
-| Extended F11 world map | Packaged San Andreas map | Dynamic atlas composed from GTA's native tiles and registered extended tiles, with catalog-derived world bounds |
-| Large IMG-backed map residency | Basic client-side IMG linking | Resource-managed per-client residency for large map packs, with bounded model/TXD allocation, scene preloading, teardown-safe slot reuse, and optional switching |
-| Server-delivered native world packs | Not available | Audited format-3 city sets loaded through GTA's IDE/IMG/COL/IPL path, one imported city resident at a time, with immutable cache, startup authorization, generation-fenced teardown, and current restart-required readmission |
-| MTA pickup visual XY | -4,096 to +4,095.875 | -10,000 to +9,999 |
-| Low-precision networked XY | Approximately -8,192 to +8,192 | -10,000 to +10,000 for Neon-capable connections |
-| Absolute networked camera range | Approximately -8,192 to +8,192 | Approximately -16,384 to +16,384 for Neon-capable connections |
-| Custom-water block grid | 12 x 12 (144 blocks) | 40 x 40 (1,600 blocks) |
-| Custom-water XY | Approximately -3,000 to +3,000 | -10,000 to +9,999 |
-| Procedural seabed boundary | Unlimited | Server-configurable from 3,000 to 10,000, or unlimited |
-| PS2-style visual options | Not built in | Selected opt-in SkyGFX effects, including color filtering, soft blur, radiosity, and YCbCr correction |
-| Project2DFX distant static lights | Not integrated | Native, player- and resource-controlled implementation with a 25,000-light buffered renderer and 300-5,000 draw-distance range |
-| Local asset preview workflow | Build a resource and load the replacement | Experimental drag-and-drop DFF/TXD skin and IFP animation previews for developers |
-| Server-authoritative custom models | Client-local dynamic model allocations only | Stable resource-owned vehicle/object IDs mapped to per-client runtime slots, with synchronized lifecycle and native-parent fallback |
-| Collision authoring | A packaged `.col` file, fixed at build time | Collision serialized from a Lua table of spheres, boxes and meshes, and rebuildable in place on models that are already streamed in |
-| Vegetation placement | Whatever the shipped map contains | Up to 64 resource-owned `foliage` triangles driving GTA's native plant manager, with live surface and density changes and dimension support |
-| Model-native ped walking styles | No explicit synchronized model-native mode | Server/client Lua opt-in that follows skin changes and ped recreation |
-| Shared ambient pedestrian traffic | GTA population remains client-local and disabled by MTA | Server-owned MTA peds proposed from GTA's civilian, gang, dealer and cop models and paths, with one native-AI owner, syncer handoff, observer presentation, and deterministic cleanup |
-| Ambient couples and city cops | Single-player only | Atomic native couple leases with GTA-owned walk side and hand holding, plus a safe ambient-cop patrol task that keeps real path-node locomotion while making wanted, pursuit and arrest unreachable |
-| GTA's own dynamic physics objects | Never exposed to scripts | Native props published as client `worldobject` elements with live read/write transforms and cancellable damage and break events, while GTA keeps physics ownership |
-| Native ped task primitives | No direct resource API for these GTA tasks | Client-owned native movement/combat/vehicle tasks plus persistent GTA mission-actor classification with verified layouts and lifecycles |
-| Native task presentation to non-syncers | Ordinary element state only | Reusable locomotion, animation, fight/chat, weapon audiovisual, and selected physical-response channels without giving observers AI or gameplay authority |
-| Per-object gang-tag rendering | Single-player tag gameplay disabled by MTA | Opt-in native Grove-material alpha for scripted tag objects without restoring gameplay progress |
-| SA-MP-style fast weapon strafe | Not available as a synchronized glitch | Optional `fastweaponstrafe` glitch, server-synchronized and disabled by default |
-| Neon diagnostics and stress tests | Not included | Reproducible resources for limits, rendering, extended-world systems, radar/F11 composition, model-registry lifecycle, IMG residency, native mirrors, and dense-entity profiling |
-
-These are capacity increases, not forced visual defaults. Distant lights and extended world draw distance are disabled by default, so a clean Neon installation retains GTA's ordinary rendering distances. Players can opt in through the Neon settings tab, while servers and client resources can still apply temporary runtime overrides. Legacy network connections retain MTA:SA's original position formats. The CULL relocation and Lua lifecycle have been exercised in game; dedicated tunnel and mirror capacity-boundary tests remain follow-up validation.
-
-Project2DFX support currently covers distant static coronas and timed traffic lights from the complete IPL source set observed at startup. Its DAT catalogue and private 25,000-entry render queue are allocated lazily on first activation, then the compact startup records are released. Searchlight cones are recorded for future work; distant cars, static shadows, and the other Project2DFX modules are not included. The drag-and-drop skin and animation previews are intentionally insecure local development prototypes, not production or competitive-client features. Drop one IFP onto the game window to load its animation list; a one-animation file starts immediately, while multi-animation files can be searched and played from the in-game preview window with loop, freeze-last-frame, root-motion, speed, and blend controls. Technical design, executable address inventories, validation results, and reproducible limit-test resources are documented in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md). Dense-entity profiling methodology and results are documented separately in [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md). The extended native minimap design and Lua API are documented in [EXTENDED_RADAR.md](./EXTENDED_RADAR.md). The current server-authoritative story runtime, reusable native task API, SCM compatibility layer, and co-op roadmap are documented in [STORY_RUNTIME.md](./STORY_RUNTIME.md).
-
-### Neon visual settings
-
-The in-game settings window includes a Neon tab for persistent, local rendering
-preferences:
-
-- **Extended world draw distance** raises both GTA's far clip and the authored
-  LOD distances of stock-world models from 300 to 5,000 units. Fog distance
-  remains independent and can still hide distant geometry.
-- **Project2DFX distant lights** lazily builds the static-light catalogue on
-  first activation, selects a 300-to-5,000-unit light range, adjusts Neon's
-  global distant-corona radius, and can rebuild the cached catalogue on demand.
-- **SkyGFX PS2-style effects** provide an optional, MTA-compatible selection of
-  color filtering, soft blur, timecycle adaptation, depth-bias correction,
-  radiosity, and YCbCr color correction. This is not the complete SkyGFX
-  renderer or a claim of full PS2 parity.
-
-All three stay off on a clean installation. Servers and resources can override
-them while connected, and the player's own settings come back afterwards.
+## See it
 
 Neon renders all of this itself. Nothing to install and no ASI files: every option is a toggle in the settings menu, and servers can drive them too.
 
@@ -123,472 +42,84 @@ Neon renders all of this itself. Nothing to install and no ASI files: every opti
 
 ![Street-level view in Ganton: neutral colors in MTA:SA, warmer and more saturated PS2-style grading in Neon](docs/media/compare-skygfx.jpg)
 
-### Extended-world validation examples
-
-The repository includes reproducible resource pipelines that demonstrate the generic extended-world systems with concrete maps. A Perry Island slice validates terrain around X=9,000, while imported Liberty City, Vice City, Carcer City, and Bullworth resources exercise large IMG-backed map residency, per-client slot reuse, extended radar catalogs, and dynamic F11 composition.
-
-These maps are test cases, not built-in Neon worlds or engine dependencies. Their generated game assets are intentionally excluded from Git and must be produced locally from legitimately obtained source material.
-
-## Demos and media
-
-<!-- MEDIA PLACEHOLDER: Synchronized NPC traffic. Suggested file: docs/media/synchronized-ai-handoff.webp or a YouTube thumbnail/link. Show at least two players observing the same peds, ideally around a syncer handoff rather than an isolated single-client scene. -->
-
-### The Neon client
-
-Neon ships its own GTA:SA-inspired shell instead of the standard MTA one, with an optional Discord identity.
+Neon also ships its own GTA:SA-inspired menu and server browser, with an optional Discord identity.
 
 ![Neon main menu in the GTA:SA visual style, with browse servers, quick connect, map editor, settings, about and quit entries, and a Discord connected badge](docs/media/neon-main-menu.jpg)
 
-![Neon server browser showing community servers with flags, ping and player counts, and a details panel for the selected server](docs/media/neon-server-browser.jpg)
+## Script things MTA could not
 
-<!-- MEDIA PLACEHOLDER: Vehicle audio. Prefer a short captioned video/GIF demonstrating configured engine audio and a backfire; audio should also be available in the linked video rather than relying on an animated image alone. -->
+Four systems that used to be locked inside the engine. Each clip is a real in-game recording.
 
-### Native CULL-zone editing
-
-An in-game demonstration of Neon's resource-controlled native CULL-zone editing workflow.
-
-[![Watch the native CULL-zone editing demo](docs/media/native-cull-zone-demo.png)](https://www.youtube.com/watch?v=17QrE21uDgM)
-
-[Watch on YouTube](https://www.youtube.com/watch?v=17QrE21uDgM)
-
-### Scripting GTA's own physics objects
-
-San Andreas' dynamic props, such as cardboard boxes, crates, bins and breakable clutter, are now client `worldobject` elements. A Lua resource binds one, tracks its live transform, and reacts to damage and destruction while GTA keeps simulating the physics.
-
-[![Watch the native world-object scripting demo](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
-
-[Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/world-objects)
-
-### Collision generated at runtime
-
-A wall drawn in game from a Lua table, then extended, raised and turned into a ramp while the player stands on it. The cyan outline is the generated collision. Nothing is scaled: each edit regenerates the collision model on a shape that is already streamed in.
-
-[![Watch the runtime collision generation demo](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)
-
-[Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)
-
-### Growing GTA's own vegetation
-
-A triangle drawn in game with three clicks, filled with native grass. The surface type and density are changed live and the patch rebuilds each time. GTA renders, animates and fades the plants exactly as it does for the shipped map.
-
-[![Watch the custom foliage demo](docs/media/foliage-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/foliage)
-
-[Watch the clip on the Neon wiki](https://mtasa-neon-wiki.vercel.app/neon/foliage)
-
-## Selected Neon Lua API additions
-
-Neon exposes the representative Lua additions below, including server-side variants of the existing client functions `engineRequestModel` and `engineFreeModel`. Client functions run in downloaded client resources, server functions run in server resources, and client/server functions are available on both sides. The [Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions) is the complete reference for current signatures, lifecycle rules, source commits, and test evidence. Limit increases that do not introduce a callable Lua function remain documented in the comparison table above.
-
-### Extended native radar
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `engineSetRadarMapTile(column, row, txd)` | Client | Registers or replaces a resource-owned TXD in one extended 40 x 40 radar cell. Stock San Andreas cells are protected. |
-| `engineResetRadarMapTile(column, row)` | Client | Removes a radar tile owned by the calling resource and restores the native ocean fallback for that cell. |
-| `engineGetRadarMapStats()` | Client | Returns hook status and registered, loaded, failed, and compressed-source tile statistics. |
-
-Radar tile registrations are resource-scoped: destroying their TXD or stopping the owning resource removes them automatically. See [EXTENDED_RADAR.md](./EXTENDED_RADAR.md) for coordinates, streaming behavior, and current constraints.
-
-### Server-authoritative custom models
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `engineRequestModel(type, parent [, name])` | Server | Allocates a stable, resource-owned logical model ID for an `object` or `vehicle` using a native GTA parent model. |
-| `engineFreeModel(model)` | Server | Releases a logical model owned by the calling resource and remaps surviving elements to their native parent before clients free their runtime slots. |
-| `engineGetModelParent(model)` | Server | Returns the native GTA parent of an active logical model, or `false` when the model is not registered. |
-| `engineGetModelName(model)` | Server | Returns the active model's resource-qualified registry name, or `false` when the model is not registered. |
-| `engineGetModelRuntimeID(serverModel)` | Client | Resolves a stable server model ID to the GTA runtime slot allocated on this client, or `false` when no slot is active. |
-| `engineGetModelServerID(runtimeModel)` | Client | Reverse-resolves a client runtime slot to its stable server model ID, or `false` when it is not a server model. |
-
-Logical IDs use the reserved range 42,341–65,534, are never reused during the server process, and remain independent from the runtime slot selected by each client. ID 65,535 stays invalid. Server-managed model identities require the exact current Neon network epoch; resource shutdown frees owned registrations automatically.
-
-### Renderer and distant lights
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `engineGetRendererStats()` | Client | Returns current usage, session high-water values, and capacities for visible entities, visible LODs, and streaming RenderWare objects. |
-| `engineResetRendererStats()` | Client | Resets the renderer high-water measurement window without changing renderer capacities. |
-| `engineSetDistantLightsEnabled(enabled)` | Client | Enables or disables Neon's native Project2DFX distant static lights. The feature is disabled by default. |
-| `engineSetDistantLightsDrawDistance(distance)` | Client | Sets the distant-light draw distance from 300 to 5,000 world units. |
-| `engineRebuildDistantLights()` | Client | Refreshes the distant-light cache from the startup-wide IPL catalogue and currently streamed additions. |
-| `engineGetDistantLightStats()` | Client | Returns enabled state, definition count, active corona count, corona capacity, and draw distance. |
-
-### Native CULL zones
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `engineGetCullZones([type])` | Client | Lists adopted native and custom CULL zones, optionally filtered by `attribute`, `tunnel`, or `mirror`. |
-| `engineCreateCullZone(type, x, y, z, width, depth, height, flags, ...)` | Client | Creates a resource-owned CULL zone and returns its stable ID; optional arguments cover rotation and mirror-plane data. |
-| `engineSetCullZone(id, type, x, y, z, width, depth, height, flags, ...)` | Client | Replaces an owned or claimed zone definition while retaining its stable ID. |
-| `engineSetCullZoneEnabled(id, enabled)` | Client | Enables or disables a custom zone or a vanilla zone claimed by the calling resource. |
-| `engineRemoveCullZone(id)` | Client | Removes a custom zone or temporarily removes a claimed vanilla zone. |
-| `engineRestoreCullZone(id)` | Client | Restores a claimed vanilla zone to its original definition and releases the resource's edit state. |
-
-Custom zones are deleted and edited vanilla zones are restored when their owning resource stops. Coordinates use GTA's signed 16-bit whole-unit representation, so fractional inputs are truncated.
-
-### Marker diagnostics
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `getMarkerLimitStats()` | Client | Returns streamed-marker usage and limits plus allocated 3D-marker, checkpoint, and direction-arrow capacities. |
-| `renderScriptImportantArea(center, radiusX, radiusY [, localId])` | Client | Submits GTA's native SCM important-area visual for the current frame: three pulsing, additive red cylinders with native ground correction. The resource identity and optional local ID are mixed into the native marker identifier. |
-
-`renderScriptImportantArea` is a frame-submission primitive rather than an element: call it from `onClientPreRender` while the area should remain visible. It reproduces the visual emitted by the nonzero area flag of SCM `LOCATE_*` commands, but deliberately creates no collision shape; scripts must evaluate the corresponding box or radius separately.
-
-### Procedural seabed
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `setWorldSeaBedOuterBoundary(boundary)` | Server | Sets and synchronizes the square procedural-seabed boundary from 3,000 to 10,000 units; values are rounded up to GTA's 500-unit blocks. |
-| `resetWorldSeaBedOuterBoundary()` | Server | Restores GTA's unlimited procedural seabed and synchronizes the reset to clients. |
-| `getWorldSeaBedOuterBoundary()` | Server | Returns the applied boundary, or `false` while the seabed is unlimited. |
-
-These functions affect only the rendered procedural seabed. They do not remove the infinite ocean or change water physics.
-
-### Model-native ped walking styles
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `setPedUseNativeWalkingStyle(ped, enabled)` | Client/server | Makes a ped use the current skin model's native motion group, or disables native selection and restores the default walking style. |
-| `isPedUsingNativeWalkingStyle(ped)` | Client/server | Reports whether model-native walking-style selection is enabled for the ped. |
-
-The mode follows skin changes, entity recreation, joins, and streaming. The OOP equivalents are `ped:setUseNativeWalkingStyle(enabled)`, `ped:isUsingNativeWalkingStyle()`, and the `ped.usingNativeWalkingStyle` property.
-
-### Synchronized ambient pedestrian traffic
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `updateAmbientPedPopulationModels(origin)` | Client | Runs GTA's ped-only zone-model residency pass around a finite `Vector3` origin without enabling unmanaged population creation. |
-| `getAmbientPedSpawnCandidate(origin [, selection, gangId])` | Client | Returns one read-only `civilian`, `gang`, `dealer` or `cop` model and native path-placement proposal, or `false` plus a bounded rejection reason. It creates no ped and grants no authority. |
-| `resetAmbientPedPopulationModels()` | Client | Releases the eight stock population-model slots retained by the update pass; live MTA peds keep their own model references. |
-
-These primitives are deliberately smaller than a population manager. The server must validate proposals against every player and its own caps, create and own the synchronized peds, assign exactly one syncer, advance ownership epochs, and clean up the resource's elements. The reference resource combines them with native Wander, the `"ambient-wander"` event profile, and the two event bridges listed below.
-
-Native gang groups, gang combat, motorcycle carjacks, dealers, city cops, and atomic civilian couples each add their own lease and diagnostic functions on top of these proposals. The complete set, with ownership rules and handoff behavior, is documented on [Synchronized NPCs and traffic](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai).
-
-### Native dynamic world objects
-
-Every dynamic prop San Andreas already streams around the player is a client `worldobject` element, with no placement or setup step. They answer the ordinary transform API, so existing scripting knowledge carries over directly, and Neon adds two events.
-
-| Event | Parameters | Description |
-| --- | --- | --- |
-| `onClientWorldObjectDamage` | `loss, attacker, model, x, y, z` | A native object took damage. `attacker` may be `nil`. Cancelling blocks the health loss. |
-| `onClientWorldObjectBreak` | `attacker, model, x, y, z` | A native object broke. Cancelling blocks the break. |
-
-Elements are discovered with `getElementsByType("worldobject")`, read and written with `getElementPosition` / `getElementMatrix` / `setElementMatrix`, and cannot be destroyed by scripts. The same element survives stream-out and stream-in, and `onClientElementStreamIn` / `onClientElementStreamOut` fire on it. See [Scriptable dynamic objects](https://mtasa-neon-wiki.vercel.app/neon/world-objects).
-
-### Runtime collision generation
-
-Collision no longer has to come from a `.col` file authored before packaging. A resource can describe it as a Lua table of spheres, boxes and meshes, and rebuild it on a model that players are already standing on.
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `engineLoadCOL(table collision)` | Client | Builds a `col` element from a collision table. Passing a file path or raw data still uses the standard MTA path, so existing resources are unaffected. |
-| `engineSetCOLData(col, table collision)` | Client | Rebuilds an existing `col` element's collision in place and re-applies it to every model it already replaced. |
+| | |
+| :--: | :--: |
+| [![Native CULL-zone editing](docs/media/native-cull-zone-demo.png)](https://www.youtube.com/watch?v=17QrE21uDgM)<br>**[Native CULL zones](https://mtasa-neon-wiki.vercel.app/neon/rendering-and-limits)**<br>Edit GTA's culling from Lua | [![Scripting GTA's own physics objects](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)<br>**[Dynamic world objects](https://mtasa-neon-wiki.vercel.app/neon/world-objects)**<br>Track, move, damage and break San Andreas' own props |
+| [![Collision generated at runtime](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)<br>**[Runtime collision](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)**<br>Build collision shapes from Lua, no `.col` file | [![Custom foliage](docs/media/foliage-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/foliage)<br>**[Custom foliage](https://mtasa-neon-wiki.vercel.app/neon/foliage)**<br>Grow GTA's own vegetation anywhere |
 
 ```lua
+-- Build a wall's collision from a Lua table, then change it live
 local col = engineLoadCOL({
-    -- position is the centre, size is the full extent
-    boxes = { { position = { 0, 0, 0 }, size = { 4, 0.4, 2.5 }, material = 1 } },
+    boxes = { { position = { 0, 0, 0 }, size = { 6, 0.5, 2 }, material = 1 } },
 })
-engineReplaceCOL(col, engineRequestModel("object", 980))
+engineReplaceCOL(col, modelId)
 
--- Later: same element, taller wall, no reload
-engineSetCOLData(col, {
-    boxes = { { position = { 0, 0, 0 }, size = { 4, 0.4, 3 }, material = 1 } },
-})
-```
-
-Meshes take flat `vertices` and zero-based `indices` triplets, and `material` accepts GTA's surface range `0` to `178`. Validation errors name the exact offending path. See [Runtime collision generation](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision) for the ceilings and the mesh vertex range.
-
-### Custom foliage
-
-GTA's native plant manager decides what grows on each surface, but until now nothing could ask it to grow anywhere new. A resource can hand it a triangle and get real vegetation, rendered and animated by GTA itself.
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `createFoliage(v1, v2, v3, surface [, density])` | Client | Grows native plants inside a world-space triangle. Returns a `foliage` element, or `false` when the triangle, surface or density is rejected. |
-| `getFoliageVertices(foliage)` / `setFoliageVertices(foliage, v1, v2, v3)` | Client | Read or replace the three corners, rebuilding the patch. |
-| `getFoliageSurface(foliage)` / `setFoliageSurface(foliage, surface)` | Client | Read or replace the GTA surface type the patch grows from. |
-| `getFoliageDensity(foliage)` / `setFoliageDensity(foliage, density)` | Client | Read or replace the `0.0` to `10.0` density multiplier, where `1.0` is the native density. |
-
-```lua
-local patch = createFoliage(
-    Vector3(2470, -1650, 12.5),
-    Vector3(2480, -1650, 12.5),
-    Vector3(2475, -1640, 12.5),
-    10, 1.5)
-
--- OOP form, since foliage is registered as a Foliage class
+-- Grow GTA's own grass inside a triangle
+local patch = createFoliage(v1, v2, v3, 10, 1.5)
 patch.density = 2.0
 ```
 
-Every setter rebuilds the native triangle atomically, so a rejected change leaves the patch on its previous state. Patches respect element dimensions and are removed when the owning resource stops. Up to 64 exist at a time. See [Custom foliage](https://mtasa-neon-wiki.vercel.app/neon/foliage) for the surface rules and limits.
+## Play
 
-### Native vehicle predicates, ped tasks and gang tags
+Download the Windows client installer, run it, and join a server from the Neon browser. Neon checks for newer signed releases on launch and offers them as optional updates.
 
-**Neon lets one authoritative client run GTA:SA's original NPC tasks while other players receive synchronized, native-looking presentation.**
+Server owners use the separate server package. Both downloads are linked at the top of this page.
 
-Use it for story missions, convoys, escorts, scripted traffic, freeroam events, and more. Full ambient vehicle traffic is still open work.
+## What changes versus MTA:SA
 
-| Function | Side | Description |
-| --- | --- | --- |
-| `acquireElementStreamingLease(element)` | Client | Acquires an independent resource-owned reference which keeps one streaming-compatible element present in the local GTA world. Returns a token. |
-| `releaseElementStreamingLease(token)` | Client | Releases one live streaming token owned by the calling resource. |
-| `isVehicleOnAllWheels(vehicle)` | Client | Reproduces SCM opcode `09D0`: returns true only when a streamed native automobile or bike has exactly four active wheel contacts. |
-| `setPedGoTo(ped, target [, movement, radius, slowdownRadius, timeout])` | Client | Queues GTA's native scripted go-to-and-stand-still task for an owned ped; movement is `walk`, `run`, or `sprint`. |
-| `setPedEnterVehicle(ped [, vehicle, seatOrPassenger])` | Client | Requests MTA's authoritative vehicle-entry lifecycle; an explicit passenger seat runs GTA's native enter-car-as-passenger task after server confirmation. |
-| `setPedExitVehicle(ped)` | Client | Requests an authoritative MTA vehicle exit; the ped's syncer runs GTA's native leave-car task after server confirmation. |
-| `setPedDriveWander(ped, vehicle, speed [, drivingStyle])` | Client | Assigns GTA's indefinite road-cruising task to an owned ped already occupying a vehicle owned by the same client. |
-| `setPedDriveTo(ped, vehicle, target, speed [, mode, drivingStyle])` | Client | Assigns GTA's finite road-driving task to an owned ped in the driver seat. |
-| `setPedDriveBy(ped, target, abortRange [, style, seatRHS, frequency])` | Client | Assigns GTA's native gang drive-by task to an owned script ped, targeting a streamed ped, streamed vehicle, or world coordinate. |
-| `setPedTaskSequence(ped, tasks [, repeat])` | Client | Dispatches up to eight native task descriptors as one GTA mission sequence. Supported children include `leave_car`, `leave_car_immediately`, `go_to`, `shoot_at`, `drive_to`, `smart_flee`, and `die`. |
-| `getPedTaskSequenceProgress(ped)` | Client | Returns the active GTA sequence child index, or `-1` when no sequence is active. |
-| `setPedChatWith(ped, partner, leadSpeaker [, updateDirection [, conversationEnabled]])` | Client | Queues GTA's native paired chat task through its scripted-event path for an owned ped, with GTA's silent timed fallback available when conversation audio is disabled. |
-| `setPedStandStill(ped [, duration])` | Client | Assigns GTA's native StandStill primary task. |
-| `setPedTurnToFace(ped, targetPed)` | Client | Queues GTA's native entity-tracking body-turn task for an owned ped. |
-| `setPedGoToOffset(ped, target [, timeout, radius, angle, repeat])` | Client | Makes an owned ped seek a live offset around another ped, optionally through GTA's repeating mission-sequence lifecycle. |
-| `setPedKillOnFoot(ped, target)` | Client | Gives GTA full native control of an owned ped's indefinite on-foot pursuit and attack task. |
-| `setPedWander(ped [, movement, direction, wanderSensibly])` | Client | Assigns GTA's standard on-foot Wander AI; an omitted direction uses GTA's own random choice. |
-| `setPedJump(ped [, allowClimb])` | Client | Starts GTA's native jump lifecycle on an owned ped. GTA controls launch, in-air movement and landing; climbing is enabled by default. |
-| `setPedScriptedSpeechMuted(ped, muted)` | Client | Disables or restores ambient ped speech through GTA's scripted-speech state. |
-| `setPedFacialTalk(ped, duration)` | Client | Requests GTA's native `FACTALK` facial expression for a non-negative duration in milliseconds. |
-| `stopPedFacialTalk(ped)` | Client | Stops the streamed ped's active native facial expression request. |
-| `setPedMissionActor(ped, enabled)` | Client | Persists GTA's `PED_MISSION` classification and native AI weapon ownership on a script ped across local native model recreation, restoring its previous MTA policy when disabled. |
-| `isPedMissionActor(ped)` | Client | Reports the locally persisted mission-actor policy for a script ped, including while its native model is streamed out. |
-| `acquirePedNativeEventProfile(ped, "mission" or "ambient-wander")` | Client | Exclusively leases a stock event profile. Mission requires a mission actor; ambient wander enables owner-only pedestrian and vehicle avoidance, moving-vehicle danger, civilian gun-threat and damage responses. Returns a resource-owned token. |
-| `releasePedNativeEventProfile(token)` | Client | Releases one native event-profile token owned by the calling resource. |
-| `isPedNativeEventProfileActive(ped, token)` | Client | Reports whether the calling resource's lease is currently applied by this ped's authoritative syncer generation. |
-| `addPedNativeGunAimedAtEvent(ped, aimingPed, token)` | Client | Bridges synchronized targeting into GTA's real aimed-at event on the active ambient owner; the leased profile token is required. |
-| `addPedNativeDamageResponseEvent(ped, attacker, weapon, bodypart, token)` | Client | Replays only GTA's civilian damage decision on the active ambient owner after MTA has synchronized the physical hit; it never applies health damage a second time. |
-| `setPedStoryProtected(ped, enabled)` | Client | Applies or restores GTA's grouped story-actor protection flags on a script ped across local native model recreation. |
-| `isPedStoryProtected(ped)` | Client | Reports whether the local story-actor protection policy is enabled. |
-| `setPedSuffersCriticalHits(ped, suffers)` | Client | Persists only GTA's critical-hit policy bit on a script ped without applying the broader protagonist protection tuple. |
-| `getPedSuffersCriticalHits(ped)` | Client | Reports the locally persisted critical-hit policy, including while the native model is streamed out. |
-| `setPedStayInSamePlace(ped, stay)` | Client | Persists GTA's scalar stay-in-place flag on a script ped across local native model recreation. |
-| `getPedStayInSamePlace(ped)` | Client | Reports the effective local stay-in-place policy. |
-| `setPedNeverTargeted(ped, neverTargeted)` | Client | Persists only GTA's never-targeted bit without applying the grouped protagonist policy. |
-| `isPedNeverTargeted(ped)` | Client | Reports the effective local never-targeted policy. |
-| `setVehicleDoorLockMode(vehicle, mode)` | Client | Sets GTA's raw door lock mode from `1` through `7`; mode `3` is SCM `LOCKOUT_PLAYER_ONLY`. |
-| `getVehicleDoorLockMode(vehicle)` | Client | Returns the streamed native door mode or the locally persisted mode while streamed out. |
-| `setVehicleTyresCanBurst(vehicle, canBurst)` | Client | Applies a persistent tyre-only burst policy without changing ordinary body damage. |
-| `getVehicleTyresCanBurst(vehicle)` | Client | Reports the effective local native tyre-burst policy. |
-| `setVehiclePhysicalProofs(vehicle, bullet, fire, explosion, collision, melee)` | Client | Persists GTA's five independent SCM vehicle-proof flags across local native vehicle recreation. |
-| `setVehicleLoadCollisionFlag(vehicle, loadCollision)` | Client | Reproduces SCM opcode `0587` and persists GTA's mission-car collision-loading/ghost-physics policy across local native vehicle recreation. |
-| `setPedShootAt(ped, target [, duration, burstLength])` | Client | Replaces the owned ped's primary task with GTA's native coordinate `GunControl` firing task. |
-| `getPedWeaponShootingRate(ped)` | Client | Reads GTA's current native 0–255 shooting-rate byte from a streamed ped. |
-| `setPedWeaponShootingRate(ped, rate)` | Client | Sets GTA's persistent 0-255 shooting-rate byte used by native gun tasks. |
-| `setPedWeaponAccuracy(ped, accuracy)` | Client | Sets GTA's persistent 0-255 weapon-accuracy byte used for shot spread. |
-| `setObjectGangTagAlpha(object, alpha)` | Client | Sets a logical 0-255 Grove-material alpha on a streamed native gang-tag object, or clears the opt-in override when `alpha` is `false`. |
-| `acquireObjectGangTag(object [, progress])` | Client | Gives the calling resource exclusive ownership of a tag object and attaches it to GTA's native spray-can shot path. |
-| `setObjectGangTagProgress(object, progress)` | Client | Applies an authoritative 0-255 progress byte to an object owned by the calling resource. |
-| `getObjectGangTagProgress(object)` | Client | Returns the current native/predicted progress byte. |
-| `releaseObjectGangTag(object)` | Client | Releases ownership, native spray registration, and the opt-in tag renderer. |
+| Area | MTA:SA | MTA:SA Neon |
+| --- | ---: | ---: |
+| Ambient NPCs and traffic | Local only, disabled by MTA | Server-owned peds running GTA's native AI, with one syncer and handoff |
+| World size | Approximately -3,000 to +3,000 | -10,000 to +9,999, with matching radar and F11 map |
+| GTA corona pool | 64 | 4,096 |
+| GTA 3D marker pool | 32 | 4,096 |
+| Visible entity pointers | 1,000 | 8,192 |
+| Collision authoring | A packaged `.col` file | Generated from a Lua table and rebuildable live |
+| Vegetation placement | Whatever the map contains | Resource-owned foliage driving GTA's plant manager |
+| Distant lights and draw distance | Not integrated | Built in, 300 to 5,000 units, off by default |
 
-Streaming tokens are private to the calling resource. Independent tokens compose on the same element, element destruction invalidates their generation-safe target references, and resource shutdown releases every surviving token automatically. The older `setElementStreamable` boolean retains its own separate legacy reference and cannot release a token owned by another resource. A lease preserves a currently running local GTA task by preventing MTA's native ped recreation; it does not reconstruct a task after an owner change or intentional release. Native ped event-profile tokens are also resource-private, but exclusive per ped on each client. The `"mission"` profile requires a mission actor, while `"ambient-wander"` requires an ordinary script ped; either lease may be acquired before that client owns or even streams the native model. The logical lease survives native model recreation and syncer loss, while its GTA exception automatically deactivates off-syncer and reactivates only for the next authoritative generation. Resource shutdown revokes it automatically. The mission profile restores stock `EVENT_VEHICLE_ON_FIRE` admission. The ambient profile uses the model's civilian decision maker for owner-only avoidance and gun-threat events; synchronized targeting may bridge `CEventGunAimedAt` to that owner with the same lease token. Neither profile changes `CPlayerPed` identity during unrelated movement, vehicle entry, or combat. `isVehicleOnAllWheels` has no streamed-out or geometric fallback and should be queried by the vehicle syncer. Automobiles and bikes pass only at a native contact count of exactly four; other raw GTA vehicle classes return false, matching opcode `09D0`. Its OOP alias is `vehicle:isOnAllWheels()`. The mutating functions return a boolean. For native task calls, `true` confirms that GTA accepted ownership of the fresh scripted command, not that the event has already become the active task. Resources must observe activation or authoritative world state before advancing. Task and combat functions require a living, streamed ped simulated by the calling client: the local player, a client-local ped, or a server ped for which that client is the current syncer. `setPedTurnToFace` tracks a live target with GTA's `0.5` heading-rate multiplier and completes inside its native `0.2` radian tolerance; its OOP alias is `ped:setTurnToFace(targetPed)`. Facial talk is local presentation instead: every client may apply it to a streamed script ped, while remote player elements are rejected. Its OOP aliases are `ped:setFacialTalk(duration)` and `ped:stopFacialTalk()`. `setPedMissionActor` and `isPedMissionActor` accept only script ped elements, never players; their client-local policy may be set while the native model is streamed out and is reapplied when it is recreated. Mission actors also suspend MTA's player-weapon target substitution so GTA AI tasks retain their explicit native target; disabling the policy restores ordinary shot synchronization. `setPedGoTo` defaults to `walk`, a `0.5` target radius, a `2.0` slowdown radius, and an untimed task; timeout `-1` selects the SCM-compatible 20-second timeout. `setPedGoToOffset` defaults to the SCM-compatible 50-second native seek timeout when passed `-1`; repeat mode uses GTA's global mission sequence pool and `CTaskComplexUseSequence`, not a Lua polling loop. `setPedEnterVehicle` and `setPedExitVehicle` are existing MTA APIs rather than duplicate task constructors: Neon now verifies and locks their underlying `CTaskComplexEnterCarAsPassenger` and `CTaskComplexLeaveCar` ABIs while preserving MTA's server-confirmed occupant lifecycle. MTA seat `0` is the driver and seat `1` is the first passenger, corresponding to SCM passenger index `0`. `setPedDriveWander` accepts a finite speed from `0` through `255` and a driving style integer from `0` through `6`, or one of `stop_for_cars`, `slow_down_for_cars`, `avoid_cars`, `plough_through`, `stop_for_cars_ignore_lights`, `avoid_cars_obey_lights`, and `avoid_cars_stop_for_peds_obey_lights`; its task is indefinite and the driver seat must be free or occupied by the target ped. `setPedDriveTo` requires the ped in driver seat `0`, finite target coordinates, speed from `0` up to but excluding `255`, a mode integer `0..3` or `normal`, `accurate`, `straight_line`, `racing`, and the same driving styles as Wander. A sequence `drive_to` descriptor additionally accepts `vehicleModel`; it intentionally omits a vehicle element so GTA binds the current vehicle at child activation, matching SCM placeholders. `setPedDriveBy` accepts a streamed ped, streamed vehicle, or finite `Vector3`, a non-negative abort range, style `0..8` or its readable name, either seat side, and a firing frequency from `0` through `100`. It is restricted to owned script peds in owned streamed vehicles; its OOP alias is `ped:setDriveBy(...)`. `setPedShootAt` defaults to 1,000 ms and a burst length of five; every negative duration is indefinite, matching GTA's native task. The other OOP task aliases mirror the function names without the `setPed` prefix.
+That is the short list. The [full comparison table](https://mtasa-neon-wiki.vercel.app/neon/features) covers every pool, boundary and subsystem.
 
-The low-level task calls do not themselves return resource-owned lifecycle handles. The optional `native-task-runtime` Lua layer now composes the public primitives into stable server-owned `drive_to` route handles with owner epochs, completion state, cleanup, and reconstruction from the current logical waypoint after deliberate syncer migration. Mission-actor policy is client-local and last-writer-wins, so a synchronized resource should replicate the intended value to every client and clear it before relinquishing a surviving ped. Gang-tag ownership is resource-exclusive, persists across streaming and game-object recreation, and is revoked automatically on resource stop. GTA advances registered objects by its original 8-alpha rule and emits `onClientObjectGangTagProgress(previousProgress, currentProgress, creator)` from the actual spray path; synchronized resources should validate that report server-side and replicate the authoritative byte with `setObjectGangTagProgress`. The low-level `setObjectGangTagAlpha` function remains available for visual-only use. Tag OOP aliases are `object:acquireGangTag`, `object:setGangTagProgress`, `object:getGangTagProgress`, and `object:releaseGangTag`. See [STORY_RUNTIME.md](./STORY_RUNTIME.md) for the verified GTA behavior and current architectural limits.
+## For scripters
 
-The optional `story-entry-exit-runtime` Lua layer provides resource-owned, server-authoritative transitions for stock GTA ENEX sites. It uses audited IPL rectangles and GTA loader conversions, detects only an on-foot player, applies a fade and synchronized interior move, and restores freeze/camera state on every cleanup path. It deliberately does not reenable MTA's patched-out `CEntryExitManager::Update`; stock sites are added incrementally as missions require them.
-
-### Native script camera
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `acquireScriptCamera([inhibitControls])` | Client | Acquires the resource-exclusive GTA script camera and returns a generation token. When inhibition is requested, Neon also raises GTA's native player-safe control bit so driven vehicles brake like `SET_PLAYER_CONTROL OFF`. |
-| `releaseScriptCamera(token [, preserveFade])` | Client | Restores the captured gameplay camera, near clip, widescreen, and optional input inhibition. By default it also forces a visible screen; `preserveFade=true` lets a successful scene restore gameplay while still black and fade in afterward. |
-| `isScriptCameraLeaseActive(token)` | Client | Reports whether the calling resource still owns the current camera generation. |
-| `setScriptCameraFixed(token, position, target [, upOffset, jumpCut])` | Client | Activates GTA's fixed camera and native point-at control. |
-| `moveScriptCamera(token, from, to, durationMs [, ease])` | Client | Starts GTA's native linear/eased camera-position track. |
-| `trackScriptCamera(token, from, to, durationMs [, ease])` | Client | Starts GTA's native linear/eased look-at track. |
-| `setScriptCameraPersist(token, position, target)` | Client | Selects whether completed position and target tracks persist. |
-| `resetScriptCamera(token)` | Client | Resets GTA's scriptable camera interpolation components. |
-| `fadeScriptCamera(token, fadeIn, durationSeconds [, red, green, blue])` | Client | Runs the native GTA fade owned by the current camera lease. |
-| `isScriptCameraFading(token)` | Client | Reports the native fade state for the current generation. |
-| `isScriptCameraMoveRunning(token)` | Client | Reports whether the native position track is still active. |
-| `isScriptCameraTrackRunning(token)` | Client | Reports whether the native target track is still active. |
-| `setScriptCameraWidescreen(token, enabled)` | Client | Uses GTA's native widescreen transition. |
-| `setScriptCameraNearClip(token, distanceOrFalse)` | Client | Sets GTA's scripted near clip, or clears it with `false`. |
-
-The token prevents delayed callbacks from an older run in the same resource from controlling a newer camera lease. A resource stop, restart, or disconnect revokes its lease automatically. Gameplay input inhibition is independent from `toggleAllControls`, so cleanup does not overwrite control restrictions owned by other resources. Its reference-counted native pad bit is also restored to the state captured by the outermost inhibitor. GTA consumes that bit for its standard vehicle slowdown: zero throttle, full brake, handbrake, and a `0.28` speed clamp before physics completes the stop. Neon intentionally does not call the broader `CPlayerInfo::MakePlayerSafe`, which would also clear tasks, grant protection, and mutate world systems. Legacy client camera setters are rejected while the lease is active; an authoritative server camera RPC revokes the lease before taking control.
-
-### Native file cutscenes
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `requestFileCutscene(name [, visibleArea])` | Client | Acquires the exclusive camera lease, optionally applies the SCM-style world area for the scene, validates a stock cutscene name, and starts GTA's asynchronous DAT/CUT/IFP load. Returns a generation token. |
-| `isFileCutsceneLeaseActive(token)` | Client | Reports whether the calling resource still owns the native cutscene and camera generation. |
-| `isFileCutsceneLoaded(token)` | Client | Reports GTA's native loaded status. |
-| `startFileCutscene(token)` | Client | Starts the loaded native cutscene once. |
-| `fadeFileCutscene(token, fadeIn, durationSeconds [, red, green, blue])` | Client | Runs GTA's native fade while the file-cutscene lease is active. |
-| `isFileCutsceneFading(token)` | Client | Reports the native fade state for the current cutscene generation. |
-| `isFileCutsceneFinished(token)` | Client | Reports native camera-spline completion after this lease has successfully started. |
-| `isFileCutsceneSkipInputPressed(token)` | Client | Queries GTA's original cutscene skip controls without applying the skip locally. |
-| `wasFileCutsceneSkipped(token)` | Client | Reports whether GTA's native skip path completed this playback. |
-| `skipFileCutscene(token)` | Client | Applies GTA's native skip to the owned playback. Cooperative resources should call it only after a server-authorized broadcast. |
-| `releaseFileCutscene(token [, preserveFade])` | Client | Deletes native cutscene data and restores the captured camera and controls. Resource shutdown performs the same cleanup automatically. |
-
-File cutscenes are global GTA state and therefore share the exclusive script-camera lease. Ordinary script-camera setters cannot mutate a file-cutscene lease, and camera takeover deletes native cutscene data before restoring gameplay. When supplied, `visibleArea` changes only GTA's current rendered world area, matching `SET_AREA_VISIBLE` rather than moving the player to another interior; the lease restores the previous area after native cutscene deletion on every cleanup path. Once native loading completes, Neon restores GTA's universal area `13` on the manager-owned cutscene actors and props. This narrowly compensates for MTA's global pickup compatibility patch, which otherwise makes every `CObject`, including `CCutsceneObject`, start in area `0` and disappear in an interior cutscene. Neon suppresses only the original local skip call inside `CCutsceneMgr::Update`; the resource can still query the same keyboard, mouse, and gamepad edge and synchronize one leader's decision across all participants. Names are limited to GTA's stock cutscene-audio table and seven characters so an invalid public request cannot partially mutate streaming, player-safe, or hidden-world state.
-
-### Native directional scene loading
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `enginePreloadWorldAreaInDirection(position, heading)` | Client | Performs GTA's blocking directional scene load used by SCM `0A0B`, with the heading expressed in degrees. |
-
-The call stops GTA's timer, requests renderer objects through the directional loading frustum, loads the scene, and updates the timer as one operation. It returns `false` for non-finite coordinates or headings.
-
-### Native mission audio
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `requestMissionAudio(eventId)` | Client | Preloads a supported GTA script-audio event and returns an opaque, resource-owned handle. |
-| `isMissionAudioLoaded(handle)` | Client | Reports whether the handle's native event has finished loading. |
-| `playMissionAudio(handle)` | Client | Starts one loaded handle once through GTA's mission-audio player. |
-| `isMissionAudioFinished(handle)` | Client | Reports natural completion after playback has started. |
-| `releaseMissionAudio(handle)` | Client | Clears the owned native event and releases its physical slot. |
-| `reportVehicleMissionAudioEvent(vehicle, eventId)` | Client | Reports a verified `1000..1190` one-shot script event on a streamed native vehicle through GTA's `09F7` path. |
-
-Mission audio is local to each client: a co-op resource should preload on every participant, cross a server readiness barrier, then broadcast play and wait for every completion acknowledgement. Handles are generation-scoped to the calling resource and cannot query, play, or release another resource's slot. Resource shutdown releases its handles automatically. The service never preempts an occupied native slot; while an owned, unplayed event remains pending, load polling periodically re-arms GTA's silently dropped hardware request. Supported handle event IDs are the two native script-audio families (`1800..1829` and `2000..45400`); custom event `65535` is intentionally excluded. Vehicle one-shot events use the separate synchronous `1000..1190` family and require a streamed vehicle.
-
-### Native mission text
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `acquireMissionText(blockName)` | Client | Exclusively loads one GTA mission GXT block for the calling resource. |
-| `showMissionText(key, duration [, flags])` | Client | Queues the translated key through GTA's native small-message path used by `PRINT_NOW`. |
-| `showMissionHelp(key [, permanent])` | Client | Displays the translated key through GTA's native help-message HUD. |
-| `showMissionBigText(key, duration [, style, number])` | Client | Queues GTA's native big mission text, optionally substituting one number. SCM styles use the original one-based values. |
-| `clearMissionTexts()` | Client | Clears the calling resource's tracked small and big native messages. |
-| `clearMissionHelp()` | Client | Clears the calling resource's native help message. |
-| `releaseMissionText()` | Client | Clears owned messages/help and releases the exclusive mission-text lease. |
-
-GTA has one global loaded mission-text table, so this API is deliberately resource-exclusive rather than last-writer-wins. Keys and block names use GTA's seven-character GXT limit. Main-table keys remain available while a mission block is leased, spoken `~z~` lines honor the player's GTA subtitle option, and resource shutdown clears every tracked HUD pointer before relinquishing ownership. The loaded block itself remains cached until another owner replaces it.
-
-### Native recorded-car playback
-
-| Function | Side | Description |
-| --- | --- | --- |
-| `requestVehicleRecording(recordingId)` | Client | Acquires and requests one registered GTA `carrec` recording for the calling resource. Repeated requests are idempotent and can reload a buffer released by natural completion. |
-| `isVehicleRecordingLoaded(recordingId)` | Client | Reports whether the registered recording currently has a streamed native frame buffer. |
-| `startVehiclePlayback(vehicle, recordingId)` | Client | Starts GTA's direct, non-looped recorded-car playback on a vehicle owned by the local unoccupied-vehicle syncer. |
-| `stopVehiclePlayback(vehicle)` | Client | Stops playback when the calling resource owns that vehicle's active native slot. |
-| `isVehiclePlaybackActive(vehicle)` | Client | Reports whether GTA's native 16-slot player currently contains that vehicle. |
-
-The mutating calls are resource-owned. Resource shutdown, native vehicle destruction, stream-out, or sync ownership loss stops active playback and releases the local slot; there is no unsafe attempt to resume at a missing network frame index. `startVehiclePlayback` rejects unknown or unloaded recordings, duplicate vehicle playback, a full native pool, frozen or blown vehicles, foreign sync ownership, and player drivers. A locally synchronized script ped may drive after its competing task has been cleared, matching `SWEET1`; an empty driver seat is also supported. This slice deliberately exposes only opcode `05EB` semantics (`useCarAI=false`, `looped=false`). OOP aliases are `vehicle:startPlayback(recordingId)`, `vehicle:stopPlayback()`, `vehicle:isPlaybackActive()`, and the read-only `vehicle.playbackActive` property.
-
-### Existing API extensions
-
-Neon adds `fastweaponstrafe` as a server-synchronized, disabled-by-default option accepted by the existing `setGlitchEnabled` and `isGlitchEnabled` server functions:
+Neon adds **186 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
 
 ```lua
-setGlitchEnabled("fastweaponstrafe", true)
-local enabled = isGlitchEnabled("fastweaponstrafe")
+engineSetRadarMapTile(column, row, txd)        -- resource-owned extended radar tiles
+engineCreateCullZone(...)                      -- native CULL zones from Lua
+createFoliage(v1, v2, v3, surface, density)    -- GTA's native vegetation
+engineSetCOLData(col, collisionTable)          -- rebuild collision in place
+getAmbientPedSpawnCandidate(origin, "cop")     -- ask GTA where a ped belongs
+acquirePedNativeCouple(a, b, leaderIndex)      -- native two-ped couple behaviour
 ```
+
+The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the complete reference, with signatures, lifecycle rules, source commits and test evidence for every entry.
+
+## Documentation
+
+| | |
+| --- | --- |
+| [Neon wiki](https://mtasa-neon-wiki.vercel.app/neon) | Everything: guides, Lua API, evidence |
+| [Synchronized NPCs](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai) | How shared native AI works |
+| [Extended world](https://mtasa-neon-wiki.vercel.app/neon/extended-world) | Boundaries, radar, water, seabed |
+| [Tooling and verification](https://mtasa-neon-wiki.vercel.app/neon/tooling-and-verification) | What is actually proven, and what is not |
+| [BUILDING.md](./BUILDING.md) | Compiling the client and server |
+
+Deeper technical notes live in [LIMIT_PATCHING.md](./LIMIT_PATCHING.md), [EXTENDED_RADAR.md](./EXTENDED_RADAR.md), [STORY_RUNTIME.md](./STORY_RUNTIME.md), [ENTITY_PERFORMANCE.md](./ENTITY_PERFORMANCE.md) and [MULTI_CLIENT.md](./MULTI_CLIENT.md).
 
 ## Upstream relationship
 
 Neon is built on [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) and preserves its complete history and GPLv3 licensing. Neon-specific experiments and builds are maintained independently; use the upstream project for official MTA:SA downloads, documentation, and support.
 
-## Build instructions
-
-### Windows
-
-Prerequisites
-- [Visual Studio 2026](https://visualstudio.microsoft.com/vs/) with:
-  - Desktop development with C++
-  - Optional component *C++ MFC for latest v145 build tools (x86 & x64)* or if that's missing *C++ MFC for x64/x86 (Latest MSVC)*
-- [Microsoft DirectX SDK](https://wiki.multitheftauto.com/wiki/Compiling_MTASA#Microsoft_DirectX_SDK)
-- [Git for Windows](https://git-scm.com/download/win) (Optional)
-
-1. Execute `win-create-projects.bat`
-2. Open `MTASA.sln` in the `Build` directory
-3. Compile
-4. Execute: `win-install-data.bat`
-
-Visit the wiki article ["Compiling MTASA"](https://wiki.multitheftauto.com/wiki/Compiling_MTASA) for additional information and error troubleshooting.
-
-### Local two-client testing
-
-Custom development builds can run a primary client and a second isolated
-client with the `-cl2` option. This is useful for testing resources that need
-two players on one workstation. See [MULTI_CLIENT.md](./MULTI_CLIENT.md) for
-server configuration, isolated profile behavior, direct launch commands, and
-the macOS/Parallels side-by-side launcher.
-
-### GNU/Linux
-
-The MTA:SA server can be built on GNU/Linux for x86, x86_64, armhf, and arm64. ARM configurations are experimental; x86_64 is the primary build environment and can be used to cross-compile the other architectures.
-
-**Build dependencies**
-
-*Please always read the utils/docker/Dockerfile for up-to-date build dependencies.*
-
-- make
-- GNU GCC compiler (version 10 or newer)
-- libncurses-dev
-- libmysqlclient-dev
-
-**Build instructions: Script**
-
-**Note:** This script always deletes `Build/` and `Bin/` directories and does a clean build.
-
-```sh
-$ ./linux-build.sh [--arch=x86|x64|arm|arm64] [--config=debug|release] [--cores=<n>]
-$ ./linux-install-data.sh  # optional step
-```
-
-If build architecture `--arch` is not provided, then it's taken from the environment variable `BUILD_ARCHITECTURE` (defaults to: x64).
-
-If build configuration `--config` is not provided, then it's taken from the environment variable `BUILD_CONFIG` (defaults to: release).
-
-If the number of jobs `--cores` is not provided, then the build will default to the amount of CPU cores.
-
-If you are trying to **cross-compile** to another architecture, then set `AR`, `CC`, `CXX`, `GCC_PREFIX` environment variables accordingly (see `utils/docker/Dockerfile` for an example).
-
-**Build instructions: Manual**
-
-```sh
-$ ./utils/premake5 gmake
-$ make -C Build/ config=release_x64 all
-$ ./linux-install-data.sh  # optional step
-```
-
-If you don't want to build the release configuration for the x86_64 architecture, you can instead pick another build configuration from: `{debug|release}_{x86|x64|arm|arm64}`.
-
-#### GNU/Linux: Docker Build Environment
-
-If you have problems resolving the required dependencies or want maximum compatibility, you can use the upstream MTA:SA Docker image, which contains the required build dependencies.
-
-**Pulling the Docker image**
-
-```sh
-$ docker pull ghcr.io/multitheftauto/mtasa-blue-build:latest
-```
-
-**Building with Docker**
-
-These examples assume that your current directory is the Neon checkout. The image expects the source tree at `/build` inside the container. After compiling, you will find the resulting binaries in `./Bin`. To build the unoptimised debug build, add `--config=debug` to the Docker arguments.
-
-```sh
-# x86_64
-docker run --rm -v `pwd`:/build ghcr.io/multitheftauto/mtasa-blue-build:latest --arch=x64
-
-# x86
-docker run --rm -v `pwd`:/build ghcr.io/multitheftauto/mtasa-blue-build:latest --arch=x86
-
-# arm
-docker run --rm -v `pwd`:/build ghcr.io/multitheftauto/mtasa-blue-build:latest --arch=arm
-
-# arm64
-docker run --rm -v `pwd`:/build ghcr.io/multitheftauto/mtasa-blue-build:latest --arch=arm64
-```
-
-### Premake FAQ
-
-#### How to add new C++ source files?
-
-Execute `win-create-projects.bat`
+Neon is not affiliated with or endorsed by the Multi Theft Auto team.
 
 ## License
 
