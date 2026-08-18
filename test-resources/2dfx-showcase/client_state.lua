@@ -32,6 +32,8 @@ S.state = {
     centerEffects = {},
     thresholdModels = {},
     thresholdEffects = {},
+    moonModels = {},
+    moonEffects = {},
     particleModels = {},
     roadsignModels = {},
     sunModel = nil,
@@ -39,8 +41,10 @@ S.state = {
     vanillaObject = nil,
     vanillaEffect = nil,
     vanillaBaseline = nil,
+    lightTemplate = nil,
     cues = {},
     chaseStep = -1,
+    moonStep = -1,
     finalStep = -1,
     savedTime = nil,
     savedWeather = nil,
@@ -201,6 +205,8 @@ function S.cleanupLocal()
     state.centerEffects = {}
     state.thresholdModels = {}
     state.thresholdEffects = {}
+    state.moonModels = {}
+    state.moonEffects = {}
     state.particleModels = {}
     state.roadsignModels = {}
     state.sunModel = nil
@@ -208,8 +214,10 @@ function S.cleanupLocal()
     state.vanillaObject = nil
     state.vanillaEffect = nil
     state.vanillaBaseline = nil
+    state.lightTemplate = nil
     state.cues = {}
     state.chaseStep = -1
+    state.moonStep = -1
     state.finalStep = -1
     state.savedTime = nil
     state.savedWeather = nil
@@ -251,7 +259,8 @@ function S.spawnWorld(model, x, y, z, rz, scale, alpha)
     return object
 end
 
-function S.spawnOnRunway(model, t, lateral, height, alpha, scale)
+function S.spawnOnRunway(model, t, lateral, height, alpha, scale, yawOffset)
     local x, y, z = S.runwayPoint(t, lateral, height)
-    return S.spawnWorld(model, x, y, z, state.basis and state.basis.yaw or 270, scale, alpha)
+    local yaw = (state.basis and state.basis.yaw or 270) + (yawOffset or 0)
+    return S.spawnWorld(model, x, y, z, yaw, scale, alpha)
 end
