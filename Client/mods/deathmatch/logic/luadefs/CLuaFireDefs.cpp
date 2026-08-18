@@ -10,16 +10,11 @@
 #include "StdInc.h"
 #include "CLuaFireDefs.h"
 #include "../CClientFireManager.h"
-#include <chrono>
+#include <algorithm>
 
 namespace
 {
 using FireManager = CClientFireManager;
-
-long long NowMs()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-}
 
 bool IsFire(CClientEntity* pElement)
 {
@@ -190,9 +185,8 @@ int CLuaFireDefs::CreateFire(lua_State* luaVM)
         return 1;
     }
 
-    // Keep the historical numeric form byte-for-byte compatible: it creates a native,
-    // unmanaged GTA fire and returns a boolean. The options-table form creates a managed
-    // fire element with stable lifetime and control state.
+    // Keep the historical numeric form compatible. The options-table form creates
+    // a managed element; the numeric form keeps the original native GTA fire path.
     if (!lua_istable(luaVM, 4))
     {
         float size = 1.8f;
@@ -229,7 +223,7 @@ int CLuaFireDefs::CreateFire(lua_State* luaVM)
 
     fire->SetPosition(vecPosition);
     SetNumber(fire, FireManager::KEY_DURATION, duration);
-    SetNumber(fire, FireManager::KEY_EXPIRY, duration > 0.0 ? static_cast<double>(NowMs()) + duration : 0.0);
+    SetNumber(fire, FireManager::KEY_REMAINING, duration);
     SetNumber(fire, FireManager::KEY_STRENGTH, strength);
     SetBool(fire, FireManager::KEY_DAMAGE, damage);
     SetNumber(fire, FireManager::KEY_DAMAGE_MASK, damageMask);
@@ -248,14 +242,11 @@ int CLuaFireDefs::CreateFire(lua_State* luaVM)
 
 int CLuaFireDefs::ExtinguishFire(lua_State* luaVM)
 {
-    if (lua_type(luaVM, 1) == LUA_TLIGHTUSERDATA)
+    CClientEntity* managed = lua_toelement(luaVM, 1);
+    if (IsFire(managed))
     {
-        CClientEntity* fire = lua_toelement(luaVM, 1);
-        if (IsFire(fire) && CanMutate(fire))
-        {
-            lua_pushboolean(luaVM, CStaticFunctionDefinitions::DestroyElement(*fire));
-            return 1;
-        }
+        lua_pushboolean(luaVM, CanMutate(managed) && CStaticFunctionDefinitions::DestroyElement(*managed));
+        return 1;
     }
 
     CScriptArgReader argStream(luaVM);
@@ -301,7 +292,7 @@ int CLuaFireDefs::SetFireDuration(lua_State* luaVM)
     if (!args.HasErrors() && IsFire(fire) && CanMutate(fire) && duration >= 0.0)
     {
         SetNumber(fire, FireManager::KEY_DURATION, duration);
-        SetNumber(fire, FireManager::KEY_EXPIRY, duration > 0.0 ? static_cast<double>(NowMs()) + duration : 0.0);
+        SetNumber(fire, FireManager::KEY_REMAINING, duration);
         lua_pushboolean(luaVM, true);
         return 1;
     }
@@ -312,13 +303,11 @@ int CLuaFireDefs::SetFireDuration(lua_State* luaVM)
 int CLuaFireDefs::GetFireRemainingTime(lua_State* luaVM)
 {
     CClientEntity* fire = nullptr;
-    double expiry = 0.0;
-    if (ReadFire(luaVM, fire) && GetNumber(fire, FireManager::KEY_EXPIRY, expiry))
-    {
-        lua_pushnumber(luaVM, expiry <= 0.0 ? 0.0 : std::max(0.0, expiry - static_cast<double>(NowMs())));
-        return 1;
-    }
-    lua_pushboolean(luaVM, false);
+    double remaining = 0.0;
+    if (ReadFire(luaVM, fire) && GetNumber(fire, FireManager::KEY_REMAINING, remaining))
+        lua_pushnumber(luaVM, std::max(0.0, remaining));
+    else
+        lua_pushboolean(luaVM, false);
     return 1;
 }
 
@@ -331,7 +320,11 @@ int CLuaFireDefs::SetFireRemainingTime(lua_State* luaVM)
     args.ReadNumber(remaining);
     if (!args.HasErrors() && IsFire(fire) && CanMutate(fire) && remaining >= 0.0)
     {
-        SetNumber(fire, FireManager::KEY_EXPIRY, remaining > 0.0 ? static_cast<double>(NowMs()) + remaining : static_cast<double>(NowMs()));
+        double duration = 0.0;
+        GetNumber(fire, FireManager::KEY_DURATION, duration);
+        if (duration <= 0.0 && remaining > 0.0)
+            SetNumber(fire, FireManager::KEY_DURATION, remaining);
+        SetNumber(fire, FireManager::KEY_REMAINING, remaining);
         lua_pushboolean(luaVM, true);
         return 1;
     }
