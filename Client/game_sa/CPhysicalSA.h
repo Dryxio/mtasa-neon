@@ -143,16 +143,7 @@ public:
     void  SetCenterOfMass(CVector& vecCenterOfMass);
 
     void ProcessCollision();
-    void RemoveAndAdd()
-    {
-        DWORD dwFunc = FUNC_CPhysical_RemoveAndAdd;
-        DWORD dwThis = (DWORD)GetInterface();
-        __asm
-        {
-            mov ecx, dwThis
-            call dwFunc
-        }
-    }
+    void RemoveAndAdd();
     void AddToMovingList();
 
     float    GetDamageImpulseMagnitude();
