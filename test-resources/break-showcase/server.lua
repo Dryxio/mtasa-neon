@@ -1,5 +1,11 @@
 local DIMENSION = 64992
-local CENTER = {404.8, 2532.5, 18.0}
+local RUNWAY_START = {100.74450, 2501.11401, 16.48438, 272.30032}
+local RUNWAY_END = {424.00473, 2503.03442, 16.48438, 267.65860}
+local STAGING = {
+    (RUNWAY_START[1] + RUNWAY_END[1]) * 0.5,
+    (RUNWAY_START[2] + RUNWAY_END[2]) * 0.5,
+    (RUNWAY_START[3] + RUNWAY_END[3]) * 0.5 + 1.0,
+}
 local saved = {}
 
 local function restore(player)
@@ -43,13 +49,16 @@ addCommandHandler("breakshow", function(player, _, action)
 
     setElementInterior(player, 0)
     setElementDimension(player, DIMENSION)
-    setElementPosition(player, CENTER[1], CENTER[2] - 22, CENTER[3] + 1)
+    setElementPosition(player, STAGING[1], STAGING[2], STAGING[3])
+    setElementRotation(player, 0, 0, RUNWAY_START[4])
     setElementAlpha(player, 0)
     setElementFrozen(player, true)
 
+    -- Keep the hidden player near the middle of the runway so the complete
+    -- client-side gallery is comfortably inside the normal streaming radius.
     setTimer(function()
         if isElement(player) and saved[player] then
-            triggerClientEvent(player, "breakShowcase:start", resourceRoot, CENTER[1], CENTER[2], CENTER[3], DIMENSION)
+            triggerClientEvent(player, "breakShowcase:start", resourceRoot, DIMENSION)
         end
     end, 650, 1)
 end)
