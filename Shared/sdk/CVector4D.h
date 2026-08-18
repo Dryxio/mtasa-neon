@@ -18,6 +18,9 @@
  */
 class CVector4D
 {
+private:
+    static constexpr float FLOAT_EPSILON = 0.0001f;
+
 public:
     float fX = 0.0f;
     float fY = 0.0f;
