@@ -200,4 +200,6 @@ public:
     // Kept at the end to preserve the ABI of existing client modules.
     virtual void DrawTextureRaw(IDirect3DTexture9* texture, unsigned int textureWidth, unsigned int textureHeight, float fX, float fY, float fWidth,
                                 float fHeight, DWORD dwColor = 0xFFFFFFFF) = 0;
+    virtual void DrawRawMaterialPrimitive3DQueued(std::vector<PrimitiveMaterialVertice>* pVecVertices, D3DPRIMITIVETYPE eType,
+                                                  IDirect3DTexture9* pTexture, eRenderStage stage = eRenderStage::PRE_FX) = 0;
 };

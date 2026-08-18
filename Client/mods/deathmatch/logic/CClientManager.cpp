@@ -11,6 +11,7 @@
 #include "StdInc.h"
 #include "CClientFireManager.h"
 #include "CClientBirdManager.h"
+#include "CClientBreakEffectManager.h"
 
 using SharedUtil::CalcMTASAPath;
 
@@ -236,6 +237,7 @@ void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse
             m_pProjectileManager->DoPulse();
             m_pFireManager->DoPulse();
             CClientBirdManager::GetSingleton().DoPulse(this);
+            CClientBreakEffectManager::GetSingleton().DoPulse(this);
             m_pSoundManager->DoPulse();
             TIMING_CHECKPOINT("+MTA_PlayerManager");
             m_pPlayerManager->DoPulse();
@@ -255,6 +257,7 @@ void CClientManager::DoRender()
 {
     if (IsGameLoaded())
     {
+        CClientBreakEffectManager::GetSingleton().DoRenderQueued(this);
         CClientBirdManager::GetSingleton().DoRender(this);
         m_pDisplayManager->DoPulse();
     }

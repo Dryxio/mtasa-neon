@@ -9,6 +9,7 @@
 
 #include "StdInc.h"
 #include "CLuaFoliageDefs.h"
+#include "CLuaBreakEffectDefs.h"
 #include "../CClientFoliage.h"
 #include "../CClientFoliageManager.h"
 
@@ -46,6 +47,8 @@ void CLuaFoliageDefs::LoadFunctions()
 
     for (const auto& [name, func] : functions)
         CLuaCFunctions::AddFunction(name, func);
+
+    CLuaBreakEffectDefs::LoadFunctions();
 }
 
 void CLuaFoliageDefs::AddClass(lua_State* luaVM)
@@ -64,6 +67,7 @@ void CLuaFoliageDefs::AddClass(lua_State* luaVM)
     lua_classvariable(luaVM, "density", "setFoliageDensity", "getFoliageDensity");
 
     lua_registerclass(luaVM, "Foliage", "Element");
+    CLuaBreakEffectDefs::AddClass(luaVM);
 }
 
 int CLuaFoliageDefs::CreateFoliage(lua_State* luaVM)
