@@ -10,6 +10,7 @@
 #pragma once
 
 #include "CClientEntity.h"
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
