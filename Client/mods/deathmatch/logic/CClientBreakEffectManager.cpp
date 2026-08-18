@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -81,7 +82,6 @@ namespace
         int x;
         int y;
         int z;
-
         bool operator==(const SQuantizedVertex& rhs) const { return x == rhs.x && y == rhs.y && z == rhs.z; }
     };
 
@@ -115,7 +115,6 @@ namespace
     {
         if (!rwObject)
             return;
-
         RwObject* object = static_cast<RwObject*>(rwObject);
         if (object->type == RP_TYPE_ATOMIC)
         {
@@ -125,7 +124,7 @@ namespace
         if (object->type != RP_TYPE_CLUMP)
             return;
 
-        RpClump*     clump = reinterpret_cast<RpClump*>(object);
+        RpClump* clump = reinterpret_cast<RpClump*>(object);
         RwListEntry* root = &clump->atomics.root;
         for (RwListEntry* entry = root->next; entry && entry != root; entry = entry->next)
         {
@@ -134,12 +133,32 @@ namespace
         }
     }
 
+    RwMatrix IdentityRwMatrix()
+    {
+        RwMatrix matrix{};
+        matrix.right = {1.0f, 0.0f, 0.0f};
+        matrix.up = {0.0f, 1.0f, 0.0f};
+        matrix.at = {0.0f, 0.0f, 1.0f};
+        matrix.pos = {0.0f, 0.0f, 0.0f};
+        return matrix;
+    }
+
+    D3DMATRIX IdentityD3DMatrix()
+    {
+        D3DMATRIX matrix{};
+        matrix._11 = matrix._22 = matrix._33 = matrix._44 = 1.0f;
+        return matrix;
+    }
+
     std::uint32_t PackColor(const RwColor* vertexColor, const RpMaterial* material)
     {
         const RwColor white{255, 255, 255, 255};
         const RwColor& v = vertexColor ? *vertexColor : white;
         const RwColor& m = material ? material->color : white;
-        const auto mul = [](unsigned char a, unsigned char b) -> unsigned char { return static_cast<unsigned char>((static_cast<unsigned int>(a) * b) / 255u); };
+        const auto mul = [](unsigned char a, unsigned char b) -> unsigned char
+        {
+            return static_cast<unsigned char>((static_cast<unsigned int>(a) * b) / 255u);
+        };
         const unsigned char r = mul(v.r, m.r);
         const unsigned char g = mul(v.g, m.g);
         const unsigned char b = mul(v.b, m.b);
@@ -158,18 +177,10 @@ namespace
     {
         if (triangles <= 8)
             return std::max<std::size_t>(1, triangles);
-        const float root = std::sqrt(static_cast<float>(triangles));
-        std::size_t count = static_cast<std::size_t>(std::round(root * 0.72f));
+        std::size_t count = static_cast<std::size_t>(std::round(std::sqrt(static_cast<float>(triangles)) * 0.72f));
         if (triangles > 5000)
             count = std::max<std::size_t>(count, 40);
         return std::clamp<std::size_t>(count, 6, CClientBreakEffectManager::MAX_FRAGMENTS_PER_EFFECT);
-    }
-
-    D3DMATRIX IdentityMatrix()
-    {
-        D3DMATRIX matrix{};
-        matrix._11 = matrix._22 = matrix._33 = matrix._44 = 1.0f;
-        return matrix;
     }
 }
 
@@ -179,23 +190,14 @@ CClientBreakEffectManager& CClientBreakEffectManager::GetSingleton()
     return manager;
 }
 
-void CClientBreakEffectManager::AddToList(CClientBreakEffect* pEffect)
-{
-    m_List.push_back(pEffect);
-}
-
-void CClientBreakEffectManager::RemoveFromList(CClientBreakEffect* pEffect)
-{
-    m_List.remove(pEffect);
-}
+void CClientBreakEffectManager::AddToList(CClientBreakEffect* effect) { m_List.push_back(effect); }
+void CClientBreakEffectManager::RemoveFromList(CClientBreakEffect* effect) { m_List.remove(effect); }
 
 CClientBreakEffect* CClientBreakEffectManager::Get(ElementID ID)
 {
     for (CClientBreakEffect* effect : m_List)
-    {
         if (effect && effect->GetID() == ID)
             return effect;
-    }
     return nullptr;
 }
 
@@ -203,23 +205,17 @@ std::size_t CClientBreakEffectManager::GetActiveFragmentCount() const
 {
     std::size_t count = 0;
     for (const CClientBreakEffect* effect : m_List)
-    {
         if (effect && !effect->IsBeingDeleted())
             count += effect->m_Chunks.size();
-    }
     return count;
 }
 
-void CClientBreakEffectManager::ClearCache()
-{
-    m_Cache.clear();
-}
+void CClientBreakEffectManager::ClearCache() { m_Cache.clear(); }
 
 std::uint64_t CClientBreakEffectManager::ComputeGeometrySignature(const RpGeometry* geometry) const
 {
     if (!geometry || !geometry->morph_target || !geometry->morph_target->verts)
         return 0;
-
     std::uint64_t hash = 1469598103934665603ull;
     auto mix = [&hash](std::uint32_t value)
     {
@@ -228,23 +224,19 @@ std::uint64_t CClientBreakEffectManager::ComputeGeometrySignature(const RpGeomet
     };
     mix(static_cast<std::uint32_t>(geometry->vertices_size));
     mix(static_cast<std::uint32_t>(geometry->triangles_size));
-
     const int vertexStep = std::max(1, geometry->vertices_size / 16);
     for (int i = 0; i < geometry->vertices_size; i += vertexStep)
     {
-        const RwV3d& vertex = geometry->morph_target->verts[i];
-        mix(static_cast<std::uint32_t>(std::lround(vertex.x * 1000.0f)));
-        mix(static_cast<std::uint32_t>(std::lround(vertex.y * 1000.0f)));
-        mix(static_cast<std::uint32_t>(std::lround(vertex.z * 1000.0f)));
+        const RwV3d& v = geometry->morph_target->verts[i];
+        mix(static_cast<std::uint32_t>(std::lround(v.x * 1000.0f)));
+        mix(static_cast<std::uint32_t>(std::lround(v.y * 1000.0f)));
+        mix(static_cast<std::uint32_t>(std::lround(v.z * 1000.0f)));
     }
     const int triangleStep = std::max(1, geometry->triangles_size / 16);
     for (int i = 0; i < geometry->triangles_size; i += triangleStep)
     {
-        const RpTriangle& triangle = geometry->triangles[i];
-        mix(triangle.verts[0]);
-        mix(triangle.verts[1]);
-        mix(triangle.verts[2]);
-        mix(triangle.materialId);
+        const RpTriangle& t = geometry->triangles[i];
+        mix(t.verts[0]); mix(t.verts[1]); mix(t.verts[2]); mix(t.materialId);
     }
     return hash;
 }
@@ -267,11 +259,10 @@ bool CClientBreakEffectManager::BuildClusterAssignments(const RpGeometry* geomet
             entry.fragments == fragments && entry.seed == seed && entry.signature == signature)
         {
             outAssignments = entry.assignments;
-            outClusterCount = 0;
             for (std::uint16_t assignment : outAssignments)
                 outClusterCount = std::max(outClusterCount, static_cast<std::size_t>(assignment) + 1);
             outCacheHit = true;
-            return true;
+            return outClusterCount != 0;
         }
     }
 
@@ -301,35 +292,29 @@ bool CClientBreakEffectManager::BuildClusterAssignments(const RpGeometry* geomet
         const RpTriangle& triangle = geometry->triangles[i];
         if (triangle.verts[0] >= vertexCount || triangle.verts[1] >= vertexCount || triangle.verts[2] >= vertexCount)
             return false;
-
         const RwV3d& a = vertices[triangle.verts[0]];
         const RwV3d& b = vertices[triangle.verts[1]];
         const RwV3d& c = vertices[triangle.verts[2]];
         centroids[i] = CVector((a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f);
-
         const std::uint32_t ids[3] = {welded[triangle.verts[0]], welded[triangle.verts[1]], welded[triangle.verts[2]]};
         for (int edge = 0; edge < 3; ++edge)
         {
-            const std::uint32_t p0 = ids[edge];
-            const std::uint32_t p1 = ids[(edge + 1) % 3];
-            const std::uint32_t lo = std::min(p0, p1);
-            const std::uint32_t hi = std::max(p0, p1);
+            const std::uint32_t lo = std::min(ids[edge], ids[(edge + 1) % 3]);
+            const std::uint32_t hi = std::max(ids[edge], ids[(edge + 1) % 3]);
             edgeTriangles[(static_cast<std::uint64_t>(lo) << 32) | hi].push_back(i);
         }
     }
 
     std::vector<std::vector<int>> adjacency(triangleCount);
-    for (const auto& [edge, triangles] : edgeTriangles)
+    for (const auto& item : edgeTriangles)
     {
-        (void)edge;
+        const auto& triangles = item.second;
         for (std::size_t i = 0; i < triangles.size(); ++i)
-        {
             for (std::size_t j = i + 1; j < triangles.size(); ++j)
             {
                 adjacency[triangles[i]].push_back(triangles[j]);
                 adjacency[triangles[j]].push_back(triangles[i]);
             }
-        }
     }
 
     std::vector<int> componentOf(triangleCount, -1);
@@ -340,8 +325,7 @@ bool CClientBreakEffectManager::BuildClusterAssignments(const RpGeometry* geomet
             continue;
         const int componentIndex = static_cast<int>(components.size());
         components.emplace_back();
-        std::deque<int> queue;
-        queue.push_back(triangle);
+        std::deque<int> queue{triangle};
         componentOf[triangle] = componentIndex;
         while (!queue.empty())
         {
@@ -349,13 +333,11 @@ bool CClientBreakEffectManager::BuildClusterAssignments(const RpGeometry* geomet
             queue.pop_front();
             components.back().push_back(current);
             for (int neighbor : adjacency[current])
-            {
                 if (componentOf[neighbor] == -1)
                 {
                     componentOf[neighbor] = componentIndex;
                     queue.push_back(neighbor);
                 }
-            }
         }
     }
 
@@ -434,26 +416,20 @@ bool CClientBreakEffectManager::BuildClusterAssignments(const RpGeometry* geomet
                 outAssignments[seeds[localCluster]] = cluster;
                 queue.emplace_back(seeds[localCluster], cluster);
             }
-
             while (!queue.empty())
             {
-                const auto [triangle, cluster] = queue.front();
+                const auto current = queue.front();
                 queue.pop_front();
-                for (int neighbor : adjacency[triangle])
-                {
+                for (int neighbor : adjacency[current.first])
                     if (componentOf[neighbor] == static_cast<int>(componentIndex) && outAssignments[neighbor] == UNASSIGNED_CLUSTER)
                     {
-                        outAssignments[neighbor] = cluster;
-                        queue.emplace_back(neighbor, cluster);
+                        outAssignments[neighbor] = current.second;
+                        queue.emplace_back(neighbor, current.second);
                     }
-                }
             }
-
             for (int triangle : component)
-            {
                 if (outAssignments[triangle] == UNASSIGNED_CLUSTER)
                     outAssignments[triangle] = clusterBase;
-            }
             clusterBase = static_cast<std::uint16_t>(clusterBase + seeds.size());
         }
         outClusterCount = clusterBase;
@@ -461,7 +437,6 @@ bool CClientBreakEffectManager::BuildClusterAssignments(const RpGeometry* geomet
 
     if (!outClusterCount)
         return false;
-
     if (m_Cache.size() >= 128)
         m_Cache.erase(m_Cache.begin());
     m_Cache.push_back({geometry, geometry->triangles_size, geometry->vertices_size, fragments, seed, signature, outAssignments});
@@ -487,7 +462,7 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
     void* rwObject = static_cast<void*>(pObject->GetGameObject()->GetRpClump());
     std::vector<SAtomicSource> sources;
     CollectAtomics(rwObject, sources);
-    if (sources.empty())
+    if (sources.empty() || sources.size() > MAX_FRAGMENTS_PER_EFFECT)
     {
         pObject->RestoreSAMPObjectMaterialsAfterRender();
         return nullptr;
@@ -495,49 +470,41 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
 
     std::size_t sourceTriangleCount = 0;
     for (const SAtomicSource& source : sources)
-        sourceTriangleCount += source.triangles;
-
-    std::size_t targetFragments = options.fragments ? options.fragments : ChooseAutomaticFragmentCount(sourceTriangleCount);
-    targetFragments = std::clamp<std::size_t>(targetFragments, 1, MAX_FRAGMENTS_PER_EFFECT);
-    targetFragments = std::max(targetFragments, std::min<std::size_t>(sources.size(), MAX_FRAGMENTS_PER_EFFECT));
+        sourceTriangleCount += static_cast<std::size_t>(source.triangles);
 
     const std::size_t activeFragments = GetActiveFragmentCount();
-    if (activeFragments >= MAX_ACTIVE_FRAGMENTS)
-    {
-        pObject->RestoreSAMPObjectMaterialsAfterRender();
-        return nullptr;
-    }
-    targetFragments = std::min(targetFragments, MAX_ACTIVE_FRAGMENTS - activeFragments);
-    if (!targetFragments)
+    const std::size_t freeFragments = activeFragments < MAX_ACTIVE_FRAGMENTS ? MAX_ACTIVE_FRAGMENTS - activeFragments : 0;
+    if (freeFragments < sources.size())
     {
         pObject->RestoreSAMPObjectMaterialsAfterRender();
         return nullptr;
     }
 
+    std::size_t targetFragments = options.fragments ? options.fragments : ChooseAutomaticFragmentCount(sourceTriangleCount);
+    targetFragments = std::clamp<std::size_t>(targetFragments, sources.size(), MAX_FRAGMENTS_PER_EFFECT);
+    targetFragments = std::min(targetFragments, freeFragments);
+
     std::vector<std::size_t> allocations(sources.size(), 1);
-    if (sources.size() < targetFragments)
+    std::size_t remaining = targetFragments - sources.size();
+    while (remaining > 0)
     {
-        std::size_t remaining = targetFragments - sources.size();
-        while (remaining > 0)
+        std::size_t best = sources.size();
+        float bestScore = -1.0f;
+        for (std::size_t i = 0; i < sources.size(); ++i)
         {
-            std::size_t best = 0;
-            float bestScore = -1.0f;
-            for (std::size_t i = 0; i < sources.size(); ++i)
+            if (allocations[i] >= static_cast<std::size_t>(sources[i].triangles))
+                continue;
+            const float score = static_cast<float>(sources[i].triangles) / static_cast<float>(allocations[i]);
+            if (score > bestScore)
             {
-                if (allocations[i] >= static_cast<std::size_t>(sources[i].triangles))
-                    continue;
-                const float score = static_cast<float>(sources[i].triangles) / static_cast<float>(allocations[i]);
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    best = i;
-                }
+                bestScore = score;
+                best = i;
             }
-            if (bestScore < 0.0f)
-                break;
-            ++allocations[best];
-            --remaining;
         }
+        if (best == sources.size())
+            break;
+        ++allocations[best];
+        --remaining;
     }
 
     std::vector<SBreakEffectChunk> chunks;
@@ -563,7 +530,7 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
         const std::size_t chunkOffset = chunks.size();
         chunks.resize(chunkOffset + clusterCount);
         RwFrame* frame = RpAtomicGetFrame(source.atomic);
-        const RwMatrix matrix = frame ? frame->ltm : IdentityMatrix();
+        const RwMatrix matrix = frame ? frame->ltm : IdentityRwMatrix();
         RpGeometry* geometry = source.geometry;
         const RwV3d* vertices = geometry->morph_target->verts;
 
@@ -573,7 +540,6 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
             const std::size_t cluster = assignments[triangleIndex];
             if (cluster >= clusterCount)
                 continue;
-
             RpMaterial* material = nullptr;
             if (geometry->materials.materials && triangle.materialId < geometry->materials.entries)
                 material = geometry->materials.materials[triangle.materialId];
@@ -589,12 +555,9 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
                 batchIt = std::prev(chunk.batches.end());
                 batchIt->texture = texture;
             }
-
             for (int vertexIndex = 0; vertexIndex < 3; ++vertexIndex)
             {
                 const unsigned short index = triangle.verts[vertexIndex];
-                if (index >= geometry->vertices_size)
-                    continue;
                 SBreakEffectVertex vertex;
                 vertex.localPosition = TransformPoint(matrix, vertices[index]);
                 if (geometry->texcoords[0])
@@ -620,10 +583,9 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
 
     for (SBreakEffectChunk& chunk : chunks)
     {
-        CVector sum;
+        CVector sum(0.0f, 0.0f, 0.0f);
         std::size_t samples = 0;
         for (const SBreakEffectBatch& batch : chunk.batches)
-        {
             for (const SBreakEffectVertex& vertex : batch.vertices)
             {
                 sum.fX += vertex.localPosition.fX;
@@ -631,13 +593,12 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
                 sum.fZ += vertex.localPosition.fZ;
                 ++samples;
             }
-        }
         if (!samples)
             continue;
+
         chunk.position = CVector(sum.fX / samples, sum.fY / samples, sum.fZ / samples);
         chunk.radius = 0.05f;
         for (SBreakEffectBatch& batch : chunk.batches)
-        {
             for (SBreakEffectVertex& vertex : batch.vertices)
             {
                 vertex.localPosition.fX -= chunk.position.fX;
@@ -645,7 +606,6 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
                 vertex.localPosition.fZ -= chunk.position.fZ;
                 chunk.radius = std::max(chunk.radius, std::sqrt(LengthSq(vertex.localPosition)));
             }
-        }
 
         CVector outward(chunk.position.fX - impact.fX, chunk.position.fY - impact.fY, chunk.position.fZ - impact.fZ);
         outward = NormalizeOr(outward, CVector(RandomRange(randomState, -1.0f, 1.0f), RandomRange(randomState, -1.0f, 1.0f),
@@ -663,13 +623,11 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
     std::vector<RwTexture*> referencedTextures;
     referencedTextures.reserve(uniqueTextures.size());
     for (RwTexture* texture : uniqueTextures)
-    {
         if (texture)
         {
             ++texture->refs;
             referencedTextures.push_back(texture);
         }
-    }
 
     CClientBreakEffect* effect = new CClientBreakEffect(pManager, ID);
     if (!effect->Initialize(std::move(chunks), std::move(referencedTextures), origin, sourceTriangleCount, options.lifetimeMs, options.gravity,
@@ -678,7 +636,6 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
         delete effect;
         return nullptr;
     }
-
     if (options.hideOriginal)
         pObject->SetVisible(false);
     if (options.disableOriginalCollision)
@@ -690,7 +647,6 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
 {
     if (!pManager || m_List.empty())
         return;
-
     const unsigned long long now = GetTickCount64_();
     if (!m_ullLastPulse)
     {
@@ -721,7 +677,6 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
             SBreakEffectChunk& chunk = effect->m_Chunks[chunkIndex];
             if (chunk.sleeping)
                 continue;
-
             const float damping = 1.0f / (1.0f + effect->m_fDrag * dt);
             chunk.velocity.fX *= damping;
             chunk.velocity.fY *= damping;
@@ -738,7 +693,6 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
                 if (std::isfinite(ground))
                     chunk.groundZ = ground;
             }
-
             if (chunk.position.fZ - chunk.radius <= chunk.groundZ)
             {
                 chunk.position.fZ = chunk.groundZ + chunk.radius;
@@ -756,23 +710,18 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
             }
         }
     }
-
     for (CClientBreakEffect* effect : expired)
-    {
         if (effect && !effect->IsBeingDeleted())
             g_pClientGame->GetElementDeleter()->Delete(effect);
-    }
 }
 
 void CClientBreakEffectManager::DoRender(CClientManager* pManager)
 {
     if (!pManager || m_List.empty() || !g_pCore || !g_pCore->GetGraphics())
         return;
-
     CClientPlayer* localPlayer = pManager->GetPlayerManager()->GetLocalPlayer();
     if (!localPlayer)
         return;
-
     IDirect3DDevice9* device = g_pCore->GetGraphics()->GetDevice();
     if (!device)
         return;
@@ -782,7 +731,7 @@ void CClientBreakEffectManager::DoRender(CClientManager* pManager)
         return;
     stateBlock->Capture();
 
-    const D3DMATRIX identity = IdentityMatrix();
+    const D3DMATRIX identity = IdentityD3DMatrix();
     device->SetTransform(D3DTS_WORLD, &identity);
     device->SetVertexShader(nullptr);
     device->SetPixelShader(nullptr);
@@ -796,10 +745,8 @@ void CClientBreakEffectManager::DoRender(CClientManager* pManager)
     device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
     device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
     device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-    device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
     device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
     device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-    device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
     device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
     device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
     device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
@@ -809,8 +756,8 @@ void CClientBreakEffectManager::DoRender(CClientManager* pManager)
     const unsigned short dimension = localPlayer->GetDimension();
     const unsigned char interior = localPlayer->GetInterior();
     const unsigned long long now = GetTickCount64_();
-
     std::vector<PrimitiveMaterialVertice> vertices;
+
     for (CClientBreakEffect* effect : m_List)
     {
         if (!effect || effect->IsBeingDeleted() || effect->GetDimension() != dimension || effect->GetInterior() != interior)
@@ -826,7 +773,6 @@ void CClientBreakEffectManager::DoRender(CClientManager* pManager)
             fade = std::clamp(static_cast<float>(effect->m_uiLifetimeMs - age) / 1000.0f, 0.0f, 1.0f);
 
         for (const SBreakEffectChunk& chunk : effect->m_Chunks)
-        {
             for (const SBreakEffectBatch& batch : chunk.batches)
             {
                 if (batch.vertices.empty())
@@ -840,25 +786,14 @@ void CClientBreakEffectManager::DoRender(CClientManager* pManager)
                     const unsigned char originalAlpha = static_cast<unsigned char>((color >> 24) & 0xFF);
                     const unsigned char alpha = static_cast<unsigned char>(static_cast<float>(originalAlpha) * fade);
                     color = (color & 0x00FFFFFFu) | (static_cast<std::uint32_t>(alpha) << 24);
-                    vertices.push_back({chunk.position.fX + rotated.fX, chunk.position.fY + rotated.fY, chunk.position.fZ + rotated.fZ, color, source.u,
-                                        source.v});
+                    vertices.push_back({chunk.position.fX + rotated.fX, chunk.position.fY + rotated.fY, chunk.position.fZ + rotated.fZ, color, source.u, source.v});
                 }
-
                 IDirect3DTexture9* texture = GetD3DTexture(batch.texture);
                 device->SetTexture(0, texture);
-                if (!texture)
-                {
-                    device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
-                    device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
-                }
-                else
-                {
-                    device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-                    device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-                }
+                device->SetTextureStageState(0, D3DTSS_COLOROP, texture ? D3DTOP_MODULATE : D3DTOP_SELECTARG2);
+                device->SetTextureStageState(0, D3DTSS_ALPHAOP, texture ? D3DTOP_MODULATE : D3DTOP_SELECTARG2);
                 device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(vertices.size() / 3), vertices.data(), sizeof(PrimitiveMaterialVertice));
             }
-        }
     }
 
     stateBlock->Apply();
