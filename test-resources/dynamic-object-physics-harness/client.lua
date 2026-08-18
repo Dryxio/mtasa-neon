@@ -65,9 +65,15 @@ local function getClosestHarnessBall(maxDistance)
 end
 
 addEventHandler("onClientResourceStart", resourceRoot, function()
-    installCollision()
+    local collisionReady = installCollision()
     for _, object in ipairs(getElementsByType("object", root, true)) do
         configureBall(object)
+    end
+
+    if collisionReady then
+        triggerServerEvent("dynamicPhysicsHarness:clientReady", resourceRoot)
+    else
+        outputChatBox("[dynamic-physics] collision setup failed; /dophys is blocked", 255, 100, 100)
     end
 
     outputChatBox("[dynamic-physics] /dophys spawn, /dothrow [speed] [up], /dostatus, /doreset, /doclear", 170, 220, 255)
