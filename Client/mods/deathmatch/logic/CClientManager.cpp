@@ -22,7 +22,7 @@ CClientManager::CClientManager()
     m_pMarkerStreamer = new CClientStreamer(CClientMarker::IsLimitReached, 600.0f, 300, 300);
     m_pObjectStreamer = new CClientStreamer(CClientObjectManager::StaticIsObjectLimitReached, 500.0f, 300, 300);
     m_pObjectLodStreamer = new CClientStreamer(CClientObjectManager::StaticIsLowLodObjectLimitReached, 1700.0f, 1500, 1500);
-    m_pPickupStreamer = new CClientStreamer(CClientPickupManager::IsPickupLimitReached, 100.0f, 300, 300);
+    m_pPickupStreamer = new CClientStreamer(CClientPickupManager::IsLimitReached, 100.0f, 300, 300);
     m_pPlayerStreamer = new CClientStreamer(CClientPlayerManager::IsPlayerLimitReached, 250.0f, 300, 300);
     m_pVehicleStreamer = new CClientStreamer(CClientVehicleManager::IsVehicleLimitReached, 250.0f, 300, 300);
     m_pLightStreamer = new CClientStreamer(CClientPointLightsManager::IsLightsLimitReached, 600.0f, 300, 300);
@@ -33,10 +33,10 @@ CClientManager::CClientManager()
     m_pObjectManager = new CClientObjectManager(this);
     m_pPathManager = new CClientPathManager(this);
     m_pPickupManager = new CClientPickupManager(this);
-    m_pPlayerManager = new CClientPlayerManager(this);
-    m_pRadarAreaManager = new CClientRadarAreaManager(this);
-    m_pRadarMarkerManager = new CClientRadarMarkerManager(this);
-    m_pSoundManager = new CClientSoundManager(this);
+    m_pPlayerManager = new CClientPlayerManager;
+    m_pRadarAreaManager = new CClientRadarAreaManager;
+    m_pRadarMarkerManager = new CClientRadarMarkerManager;
+    m_pSoundManager = new CClientSoundManager;
     m_pRenderElementManager = new CClientRenderElementManager(this);
     m_pTeamManager = new CClientTeamManager;
     m_pDisplayManager = new CClientDisplayManager;
@@ -245,6 +245,7 @@ void CClientManager::DoRender()
 {
     if (IsGameLoaded())
     {
+        CClientBreakEffectManager::GetSingleton().DoRenderQueued(this);
         CClientBirdManager::GetSingleton().DoRender(this);
         m_pDisplayManager->DoPulse();
     }
