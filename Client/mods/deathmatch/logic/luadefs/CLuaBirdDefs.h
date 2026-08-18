@@ -11,6 +11,10 @@
 
 #include "CLuaDefs.h"
 
+#ifndef lua_absindex
+#define lua_absindex(L, i) ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : lua_gettop(L) + (i) + 1)
+#endif
+
 class CLuaBirdDefs : public CLuaDefs
 {
 public:
