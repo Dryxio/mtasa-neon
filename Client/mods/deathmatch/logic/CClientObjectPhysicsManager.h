@@ -23,9 +23,11 @@ class CClientObjectPhysicsManager
 private:
     struct SState
     {
-        CObject* pLastGameObject = nullptr;
-        bool     bSnapshotValid = false;
-        bool     bSleeping = false;
+        CObject*     pLastGameObject = nullptr;
+        bool         bSnapshotValid = false;
+        bool         bSleeping = false;
+        bool         bActivationPending = false;
+        unsigned int uiActivationPreparedFrame = 0;
         unsigned char ucRestFrames = 0;
         unsigned char ucContactGraceFrames = 0;
 
@@ -152,6 +154,34 @@ private:
         pInterface->pObjectInfo = state.pDynamicObjectInfo.get();
     }
 
+    static void ResetTransientPhysicsState(CObjectSAInterface* pInterface)
+    {
+        if (!pInterface)
+            return;
+
+        // CPhysicalSAInterface uses old MTA names for several CPhysical fields:
+        // these four vectors are GTA's friction move/turn velocity, force and
+        // torque. They belong to the previous contact integration and must not
+        // survive a scripted teleport/re-launch.
+        const CVector zero;
+        pInterface->m_vecCollisionLinearVelocity = zero;
+        pInterface->m_vecCollisionAngularVelocity = zero;
+        pInterface->m_vecOffsetUnk5 = zero;
+        pInterface->m_vecOffsetUnk6 = zero;
+
+        pInterface->bCollisionProcessed = false;
+        pInterface->bIsInSafePosition = false;
+        pInterface->bIsStuck = false;
+        pInterface->bOnSolidSurface = false;
+        pInterface->m_ucColFlag1 = 0;
+        pInterface->m_ucCollisionState = 0;
+
+        pInterface->m_fDamageImpulseMagnitude = 0.0f;
+        pInterface->m_pCollidedEntity = nullptr;
+        pInterface->m_vecCollisionImpactVelocity = zero;
+        pInterface->m_vecCollisionPosition = zero;
+    }
+
     static void Wake(CClientObject* pObject, SState& state)
     {
         CObjectSA* pObjectSA = GetObjectSA(pObject);
@@ -180,6 +210,79 @@ private:
         pObjectSA->AddToMovingList();
     }
 
+    static void PrepareActivation(CClientObject* pObject, SState& state, bool bExplicitWake)
+    {
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return;
+
+        CObjectSAInterface* pInterface = pObjectSA->GetObjectInterface();
+        if (!pInterface)
+            return;
+
+        if (bExplicitWake)
+            state.bSleeping = false;
+        state.ucRestFrames = 0;
+        state.ucContactGraceFrames = 0;
+
+        // Treat an explicit re-enable as a launch barrier. /dothrow and normal
+        // scripts commonly teleport first and then re-enable/set velocity in the
+        // same network update. Rebuild the broadphase at the new position and
+        // throw away contact integration left by the previous flight.
+        ReapplyReplacementCollision(pObject, pObjectSA);
+        ResetTransientPhysicsState(pInterface);
+
+        // Keep the native body motionless for the remainder of this frame. Any
+        // velocity packets arriving after this point are cached on CClientObject
+        // and applied only after the replacement COL has survived one full frame.
+        const CVector zero;
+        pInterface->m_vecLinearVelocity = zero;
+        pInterface->m_vecAngularVelocity = zero;
+        pObjectSA->SetStatic(true);
+
+        state.bActivationPending = true;
+        state.uiActivationPreparedFrame = g_pClientGame ? g_pClientGame->GetFrameCount() : 0;
+    }
+
+    static bool FinishActivation(CClientObject* pObject, SState& state, unsigned int uiFrame)
+    {
+        if (!state.bActivationPending)
+            return true;
+        if (uiFrame == state.uiActivationPreparedFrame || pObject->IsFrozen())
+            return false;
+
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return false;
+
+        CObjectSAInterface* pInterface = pObjectSA->GetObjectInterface();
+        if (!pInterface)
+            return false;
+
+        // Reassert the replacement after the cold model-load frame. GTA model
+        // streaming can rewrite pColModel while constructing the first native
+        // CObject; doing this again here closes that first-spawn race and rebuilds
+        // the repeat-sector links from the final collision bounds.
+        ReapplyReplacementCollision(pObject, pObjectSA);
+        ResetTransientPhysicsState(pInterface);
+
+        state.bActivationPending = false;
+        if (state.bSleeping)
+        {
+            const CVector zero;
+            pInterface->m_vecLinearVelocity = zero;
+            pInterface->m_vecAngularVelocity = zero;
+            pObjectSA->SetStatic(true);
+            return true;
+        }
+
+        Wake(pObject, state);
+        pObjectSA->SetMoveSpeed(pObject->m_vecMoveSpeed);
+        CVector vecTurnSpeed = pObject->m_vecTurnSpeed;
+        pObjectSA->SetTurnSpeed(&vecTurnSpeed);
+        return true;
+    }
+
     static void PutToSleep(CClientObject* pObject, SState& state)
     {
         CObjectSA* pObjectSA = GetObjectSA(pObject);
@@ -200,6 +303,7 @@ private:
         pObject->m_vecMoveSpeed = zero;
         pObject->m_vecTurnSpeed = zero;
         state.bSleeping = true;
+        state.bActivationPending = false;
         state.ucRestFrames = 0;
         state.ucContactGraceFrames = 0;
     }
@@ -211,6 +315,7 @@ private:
         {
             state.pLastGameObject = nullptr;
             state.bSnapshotValid = false;
+            state.bActivationPending = false;
             return false;
         }
 
@@ -243,28 +348,23 @@ private:
         pObjectSA->SetUsesCollision(true);
         pObjectSA->SetFrozen(pObject->IsFrozen());
 
-        if (!pObject->IsFrozen())
+        if (state.bSleeping)
         {
-            if (state.bSleeping)
-            {
-                const CVector zero;
-                pInterface->m_vecLinearVelocity = zero;
-                pInterface->m_vecAngularVelocity = zero;
-                pInterface->m_vecCollisionLinearVelocity = zero;
-                pInterface->m_vecCollisionAngularVelocity = zero;
-                pObjectSA->SetStatic(true);
-            }
-            else
-            {
-                Wake(pObject, state);
-
-                // The server can send launch velocity before GTA has created the
-                // streamed CObject. Restore the cached values into every new native
-                // instance so streaming and syncer migration preserve momentum.
-                pObjectSA->SetMoveSpeed(pObject->m_vecMoveSpeed);
-                CVector vecTurnSpeed = pObject->m_vecTurnSpeed;
-                pObjectSA->SetTurnSpeed(&vecTurnSpeed);
-            }
+            const CVector zero;
+            pInterface->m_vecLinearVelocity = zero;
+            pInterface->m_vecAngularVelocity = zero;
+            pInterface->m_vecCollisionLinearVelocity = zero;
+            pInterface->m_vecCollisionAngularVelocity = zero;
+            pObjectSA->SetStatic(true);
+            state.bActivationPending = false;
+        }
+        else
+        {
+            // The first native instance gets one stable frame with the final COL
+            // and repeat-sector registration before gravity or launch velocity can
+            // advance it. This is especially important when engineReplaceCOL was
+            // registered before the underlying GTA model was loaded.
+            PrepareActivation(pObject, state, false);
         }
 
         return true;
@@ -376,7 +476,7 @@ public:
         if (pObject->GetGameObject() != state.pLastGameObject || !state.bSnapshotValid)
             Apply(pObject, state);
         else if (!inserted)
-            Wake(pObject, state);
+            PrepareActivation(pObject, state, true);
         return true;
     }
 
@@ -390,7 +490,7 @@ public:
         if (!pObject)
             return;
 
-        const bool bNearRest = LengthSq(vecMoveSpeed) <= REST_LINEAR_SPEED_SQ;
+        const bool    bNearRest = LengthSq(vecMoveSpeed) <= REST_LINEAR_SPEED_SQ;
         const CVector vecApplied = bNearRest ? CVector() : vecMoveSpeed;
         pObject->m_vecMoveSpeed = vecApplied;
 
@@ -399,6 +499,8 @@ public:
             return;
 
         auto iter = ms_Objects.find(pObject);
+        if (iter != ms_Objects.end() && iter->second.bActivationPending)
+            return;
         if (!bNearRest && iter != ms_Objects.end())
             Wake(pObject, iter->second);
 
@@ -420,7 +522,7 @@ public:
         if (!pObject)
             return;
 
-        const bool bNearRest = LengthSq(vecTurnSpeed) <= REST_TURN_SPEED_SQ;
+        const bool    bNearRest = LengthSq(vecTurnSpeed) <= REST_TURN_SPEED_SQ;
         const CVector vecApplied = bNearRest ? CVector() : vecTurnSpeed;
         pObject->m_vecTurnSpeed = vecApplied;
 
@@ -429,6 +531,8 @@ public:
             return;
 
         auto iter = ms_Objects.find(pObject);
+        if (iter != ms_Objects.end() && iter->second.bActivationPending)
+            return;
         if (!bNearRest && iter != ms_Objects.end())
             Wake(pObject, iter->second);
 
@@ -468,14 +572,23 @@ public:
                 continue;
             }
 
-            if (pObject->GetGameObject() != iter->second.pLastGameObject)
+            SState& state = iter->second;
+            if (pObject->GetGameObject() != state.pLastGameObject)
             {
-                iter->second.bSnapshotValid = false;
-                Apply(pObject, iter->second);
+                state.bSnapshotValid = false;
+                state.bActivationPending = false;
+                Apply(pObject, state);
             }
 
-            if (pObject->GetGameObject() && pObject->GetGameObject() == iter->second.pLastGameObject)
-                CacheLiveState(pObject, iter->second);
+            if (pObject->GetGameObject() && pObject->GetGameObject() == state.pLastGameObject)
+            {
+                if (state.bActivationPending && !FinishActivation(pObject, state, uiFrame))
+                {
+                    ++iter;
+                    continue;
+                }
+                CacheLiveState(pObject, state);
+            }
 
             ++iter;
         }
