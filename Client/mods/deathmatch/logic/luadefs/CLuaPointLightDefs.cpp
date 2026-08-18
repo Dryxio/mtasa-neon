@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CLuaFoliageDefs.h"
+#include "CLuaBirdDefs.h"
 
 void CLuaPointLightDefs::LoadFunctions()
 {
@@ -24,6 +25,7 @@ void CLuaPointLightDefs::LoadFunctions()
         CLuaCFunctions::AddFunction(name, func);
 
     CLuaFoliageDefs::LoadFunctions();
+    CLuaBirdDefs::LoadFunctions();
 }
 
 void CLuaPointLightDefs::AddClass(lua_State* luaVM)
@@ -48,6 +50,7 @@ void CLuaPointLightDefs::AddClass(lua_State* luaVM)
     lua_registerclass(luaVM, "Light", "Element");
 
     CLuaFoliageDefs::AddClass(luaVM);
+    CLuaBirdDefs::AddClass(luaVM);
 }
 
 int CLuaPointLightDefs::CreateLight(lua_State* luaVM)
