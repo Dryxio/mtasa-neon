@@ -3,8 +3,8 @@ local GRAVITY_PER_FRAME = 0.008
 
 -- Existing world hoop: model 947 (bskballhub_lax01).
 -- The supplied DFF places the rim center at this local offset from the model origin.
-local COURT_OBJECT_X, COURT_OBJECT_Y, COURT_OBJECT_Z = 2533.9, -1667.6, 16.3
-local COURT_OBJECT_HEADING = 0.0
+local COURT_OBJECT_X, COURT_OBJECT_Y, COURT_OBJECT_Z = 2533.2582, -1668.019607, 16.3
+local COURT_OBJECT_HEADING = 354.0
 local RIM_LOCAL_X, RIM_LOCAL_Y, RIM_LOCAL_Z = 0.07342529296875, 0.5001220703125, 0.9108123779296875
 
 local court = false
