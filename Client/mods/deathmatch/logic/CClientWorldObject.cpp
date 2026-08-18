@@ -18,6 +18,15 @@ namespace
 {
     constexpr float MIN_AXIS_LENGTH = 0.0001f;
 
+    void UpdateRw(CEntitySAInterface* pInterface)
+    {
+        if (!pInterface)
+            return;
+
+        using UpdateRwFn = void(__thiscall*)(CEntitySAInterface*);
+        reinterpret_cast<UpdateRwFn>(0x446F90)(pInterface);
+    }
+
     float AxisLength(const CVector& axis)
     {
         return std::sqrt(axis.fX * axis.fX + axis.fY * axis.fY + axis.fZ * axis.fZ);
@@ -104,7 +113,7 @@ bool CClientWorldObject::SetMatrix(const CMatrix& matrix)
     if (pInterface && pInterface->matrix)
     {
         pInterface->matrix->SetFromMatrixSkipPadding(matrix);
-        pInterface->UpdateRW();
+        UpdateRw(pInterface);
         RefreshFromGame();
         return true;
     }
@@ -138,7 +147,7 @@ void CClientWorldObject::SetPosition(const CVector& vecPosition)
     else
         pInterface->m_transform.m_translate = vecPosition;
 
-    pInterface->UpdateRW();
+    UpdateRw(pInterface);
 }
 
 void CClientWorldObject::GetRotationRadians(CVector& vecOutRadians) const
@@ -163,7 +172,7 @@ void CClientWorldObject::SetRotationRadians(const CVector& vecRadians)
         return;
 
     pInterface->SetOrientation(vecRadians.fX, vecRadians.fY, vecRadians.fZ);
-    pInterface->UpdateRW();
+    UpdateRw(pInterface);
 }
 
 CEntitySAInterface* CClientWorldObject::GetTransformInterface() const
