@@ -22,7 +22,7 @@ CClientManager::CClientManager()
     m_pMarkerStreamer = new CClientStreamer(CClientMarker::IsLimitReached, 600.0f, 300, 300);
     m_pObjectStreamer = new CClientStreamer(CClientObjectManager::StaticIsObjectLimitReached, 500.0f, 300, 300);
     m_pObjectLodStreamer = new CClientStreamer(CClientObjectManager::StaticIsLowLodObjectLimitReached, 1700.0f, 1500, 1500);
-    m_pPickupStreamer = new CClientStreamer(CClientPickupManager::IsLimitReached, 100.0f, 300, 300);
+    m_pPickupStreamer = new CClientStreamer(CClientPickupManager::IsPickupLimitReached, 100.0f, 300, 300);
     m_pPlayerStreamer = new CClientStreamer(CClientPlayerManager::IsPlayerLimitReached, 250.0f, 300, 300);
     m_pVehicleStreamer = new CClientStreamer(CClientVehicleManager::IsVehicleLimitReached, 250.0f, 300, 300);
     m_pLightStreamer = new CClientStreamer(CClientPointLightsManager::IsLightsLimitReached, 600.0f, 300, 300);
@@ -33,10 +33,10 @@ CClientManager::CClientManager()
     m_pObjectManager = new CClientObjectManager(this);
     m_pPathManager = new CClientPathManager(this);
     m_pPickupManager = new CClientPickupManager(this);
-    m_pPlayerManager = new CClientPlayerManager;
-    m_pRadarAreaManager = new CClientRadarAreaManager;
-    m_pRadarMarkerManager = new CClientRadarMarkerManager;
-    m_pSoundManager = new CClientSoundManager;
+    m_pPlayerManager = new CClientPlayerManager(this);
+    m_pRadarAreaManager = new CClientRadarAreaManager(this);
+    m_pRadarMarkerManager = new CClientRadarMarkerManager(this);
+    m_pSoundManager = new CClientSoundManager(this);
     m_pRenderElementManager = new CClientRenderElementManager(this);
     m_pTeamManager = new CClientTeamManager;
     m_pDisplayManager = new CClientDisplayManager;
@@ -75,15 +75,20 @@ CClientManager::~CClientManager()
     delete m_pPacketRecorder;
     m_pPacketRecorder = NULL;
 
+    // Resource stop handlers can still call the vehicle-audio Lua API, and CResourceManager also releases any remaining native audio lease. Keep the
+    // subsystem alive until every resource has finished its teardown.
     delete m_pResourceManager;
     m_pResourceManager = NULL;
 
     delete m_pVehicleSoundManager;
     m_pVehicleSoundManager = nullptr;
 
+    // We need to call this after deleting resources but before deleting entities
     g_pClientGame->GetElementDeleter()->DoDeleteAll();
     g_pCore->GetGUI()->CleanDeadPool();
 
+    // Server model teardown restores live entities to their native parents and
+    // releases DFF/COL state. All managers used by that path must still exist.
     delete m_pModelManager;
     m_pModelManager = nullptr;
 
@@ -193,6 +198,9 @@ CClientManager::~CClientManager()
     m_pBuildingManager = nullptr;
 }
 
+//
+// This function gets called twice per game loop
+//
 void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse)
 {
     if (bDoStandardPulses)
@@ -204,7 +212,11 @@ void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse
         {
             m_pModelRequestManager->DoPulse();
             m_pCamera->DoPulse();
-            m_pRadarAreaManager->DoPulse(false);
+            /* now called from CClientGame::PostWorldProcessHandler so marker positions
+            are no longer a frame behind when attached to other entities.
+            m_pMarkerManager->DoPulse (); */
+            m_pRadarAreaManager->DoPulse(
+                false);  // DoPulse, but do not render (we render them from a hook to avoid render issues - the mask not blocking the edges)
         }
 
         if (bDoVehicleManagerPulse)
@@ -253,11 +265,16 @@ void CClientManager::DoRender()
 
 void CClientManager::UpdateStreamers()
 {
+    // Is the game loaded?
     if (IsGameLoaded())
     {
+        // Grab the camera position
         CVector vecTemp;
         GetCamera()->GetPosition(vecTemp);
 
+        // Keep these scopes at streamer granularity. Entity-density profiling needs to
+        // distinguish spatial maintenance from the per-entity manager and GTA world costs,
+        // while per-element timers would perturb the hot loops being measured.
         TIMING_CHECKPOINT("+MTA_Streamers");
         TIMING_CHECKPOINT("+MTA_MarkerStreamer");
         m_pMarkerStreamer->DoPulse(vecTemp);
@@ -287,29 +304,39 @@ void CClientManager::UpdateStreamers()
 void CClientManager::InvalidateEntity(CClientEntity* pEntity)
 {
     if (m_pCamera)
+    {
         m_pCamera->InvalidateEntity(pEntity);
+    }
 }
 
 void CClientManager::RestoreEntity(CClientEntity* pEntity)
 {
     if (m_pCamera)
+    {
         m_pCamera->RestoreEntity(pEntity);
+    }
 }
 
 void CClientManager::UnreferenceEntity(CClientEntity* pEntity)
 {
     if (m_pCamera)
+    {
         m_pCamera->UnreferenceEntity(pEntity);
+    }
 }
 
 void CClientManager::OnUpdateStreamPosition(CClientStreamElement* pElement)
 {
     if (m_pColManager && m_pColManager->Count() > 0)
+    {
         m_pColManager->DoHitDetection(pElement->GetStreamPosition(), 0.0f, pElement);
+    }
 }
 
+// Only enable LOD hooks when needed
 void CClientManager::OnLowLODElementCreated()
 {
+    // Switch on with first low LOD element
     if (m_iNumLowLODElements == 0)
         g_pCore->GetMultiplayer()->SetLODSystemEnabled(true);
     m_iNumLowLODElements++;
@@ -317,6 +344,7 @@ void CClientManager::OnLowLODElementCreated()
 
 void CClientManager::OnLowLODElementDestroyed()
 {
+    // Switch off with last low LOD element
     m_iNumLowLODElements--;
     if (m_iNumLowLODElements == 0)
         g_pCore->GetMultiplayer()->SetLODSystemEnabled(false);
