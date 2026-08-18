@@ -1,0 +1,7 @@
+<meta>
+    <info author="Dryxio" name="2DFX runway showcase" type="script" />
+    <script src="server.lua" type="server" />
+    <script src="client_state.lua" type="client" cache="false" />
+    <script src="client_scene.lua" type="client" cache="false" />
+    <script src="client_show.lua" type="client" cache="false" />
+</meta>

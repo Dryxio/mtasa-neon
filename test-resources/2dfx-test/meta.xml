@@ -1,0 +1,4 @@
+<meta>
+    <info author="Dryxio" name="2DFX API regression harness" type="script" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>
