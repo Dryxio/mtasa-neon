@@ -30,4 +30,11 @@ public:
     LUA_DECLARE(SetBreakEffectPaused);
     LUA_DECLARE(GetBreakEffectCacheSize);
     LUA_DECLARE(ClearBreakEffectCache);
+
+    LUA_DECLARE(SetObjectBreakProfile);
+    LUA_DECLARE(GetObjectBreakProfile);
+    LUA_DECLARE(GetObjectBreakHealth);
+    LUA_DECLARE(SetObjectBreakHealth);
+    LUA_DECLARE(ResetObjectBreakHealth);
+    LUA_DECLARE(ClearObjectBreakProfile);
 };

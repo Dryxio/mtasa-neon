@@ -51,6 +51,7 @@ local function stopShow()
 end
 
 local function clearPlayground()
+    if isElement(playground.object) then clearObjectBreakProfile(playground.object) end
     if isElement(playground.effect) then destroyElement(playground.effect) end
     if isElement(playground.object) then destroyElement(playground.object) end
     playground.object = nil
@@ -171,6 +172,13 @@ local function updateShow()
     end
 end
 
+local function readBool(v)
+    v = tostring(v):lower()
+    if v == "1" or v == "true" or v == "yes" or v == "on" then return true end
+    if v == "0" or v == "false" or v == "no" or v == "off" then return false end
+    return nil
+end
+
 local optionReaders = {
     fragments = function(v) return math.floor(tonumber(v) or -1) end,
     force = tonumber,
@@ -185,8 +193,12 @@ local optionReaders = {
     vy = tonumber,
     vz = tonumber,
     scale = tonumber,
-    hideOriginal = function(v) return v == "1" or v == "true" end,
-    disableOriginalCollision = function(v) return v == "1" or v == "true" end,
+    health = tonumber,
+    damageMultiplier = tonumber,
+    instantBreakThreshold = tonumber,
+    native = readBool,
+    hideOriginal = readBool,
+    disableOriginalCollision = readBool,
 }
 
 local function parsePlaygroundOptions(args)
@@ -204,6 +216,10 @@ local function parsePlaygroundOptions(args)
         vy = 0,
         vz = 1.0,
         scale = 1.0,
+        health = 250,
+        native = true,
+        damageMultiplier = 1.0,
+        instantBreakThreshold = 150,
         hideOriginal = true,
         disableOriginalCollision = true,
     }
@@ -220,11 +236,31 @@ local function parsePlaygroundOptions(args)
     return values
 end
 
+local function fractureOptions(p, impact)
+    local options = {
+        fragments = p.fragments,
+        force = p.force,
+        randomness = p.randomness,
+        lifetime = p.lifetime,
+        gravity = p.gravity,
+        bounce = p.bounce,
+        drag = p.drag,
+        renderDistance = p.renderDistance,
+        seed = p.seed,
+        velocity = {p.vx, p.vy, p.vz},
+        hideOriginal = p.hideOriginal,
+        disableOriginalCollision = p.disableOriginalCollision,
+    }
+    if impact then options.impactPosition = impact end
+    return options
+end
+
 local function playgroundHelp()
     outputChatBox("[BREAKSHOW] /breakspawn <model> [key=value ...]", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] keys: fragments force randomness lifetime gravity bounce drag renderDistance seed scale vx vy vz hideOriginal disableOriginalCollision", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] then /breaknow   |   /breakclear", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] example: /breakspawn 1337 fragments=24 force=7 randomness=1.4 bounce=.4 lifetime=12000 scale=1.2", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] durability: health native damageMultiplier instantBreakThreshold", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] fracture: fragments force randomness lifetime gravity bounce drag renderDistance seed scale vx vy vz", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] shoot/ram the object, /breakhp for health, /breaknow to force, /breakclear", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] example: /breakspawn 1337 health=250 fragments=24 force=7", 255, 200, 80)
 end
 
 addCommandHandler("breakspawn", function(_, modelArg, ...)
@@ -256,12 +292,33 @@ addCommandHandler("breakspawn", function(_, modelArg, ...)
     setElementFrozen(object, true)
     setObjectScale(object, options.scale)
 
+    local armed = setObjectBreakProfile(object, {
+        native = options.native,
+        health = options.health,
+        damageMultiplier = options.damageMultiplier,
+        instantBreakThreshold = options.instantBreakThreshold,
+        fracture = fractureOptions(options),
+    })
+    if not armed then
+        destroyElement(object)
+        outputChatBox("[BREAKSHOW] failed to arm managed break profile.", 255, 80, 80)
+        return
+    end
+
     playground.object = object
     playground.options = options
 
-    outputChatBox(("[BREAKSHOW] spawned model %d. Use /breaknow to fracture it."):format(model), 100, 255, 100)
-    outputChatBox(("[BREAKSHOW] fragments=%d force=%.2f randomness=%.2f lifetime=%d bounce=%.2f drag=%.2f scale=%.2f")
-        :format(options.fragments, options.force, options.randomness, options.lifetime, options.bounce, options.drag, options.scale), 180, 220, 255)
+    outputChatBox(("[BREAKSHOW] model %d armed: %.1f HP, native=%s. Shoot or ram it.")
+        :format(model, options.health, tostring(options.native)), 100, 255, 100)
+end)
+
+addCommandHandler("breakhp", function()
+    if not isElement(playground.object) then
+        outputChatBox("[BREAKSHOW] no playground object.", 255, 80, 80)
+        return
+    end
+    local health = getObjectBreakHealth(playground.object)
+    outputChatBox(("[BREAKSHOW] managed health: %s"):format(tostring(health)), 180, 220, 255)
 end)
 
 addCommandHandler("breaknow", function()
@@ -272,24 +329,11 @@ addCommandHandler("breaknow", function()
         return
     end
 
+    clearObjectBreakProfile(object)
     if isElement(playground.effect) then destroyElement(playground.effect) end
 
     local px, py, pz = getElementPosition(localPlayer)
-    local effect = createObjectBreakEffect(object, {
-        fragments = p.fragments,
-        force = p.force,
-        randomness = p.randomness,
-        lifetime = p.lifetime,
-        gravity = p.gravity,
-        bounce = p.bounce,
-        drag = p.drag,
-        renderDistance = p.renderDistance,
-        seed = p.seed,
-        velocity = {p.vx, p.vy, p.vz},
-        impactPosition = {px, py, pz + 0.7},
-        hideOriginal = p.hideOriginal,
-        disableOriginalCollision = p.disableOriginalCollision,
-    })
+    local effect = createObjectBreakEffect(object, fractureOptions(p, {px, py, pz + 0.7}))
 
     if not isElement(effect) then
         outputChatBox("[BREAKSHOW] fracture failed (object may not be streamed / valid static geometry).", 255, 80, 80)

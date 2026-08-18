@@ -21,7 +21,10 @@ end
 local function reset()
     serial = serial + 1
     for element in pairs(tracked) do
-        if isElement(element) then destroyElement(element) end
+        if isElement(element) then
+            if getElementType(element) == "object" then clearObjectBreakProfile(element) end
+            destroyElement(element)
+        end
     end
     tracked = {}
     clearBreakEffectCache()
@@ -92,6 +95,44 @@ local function cache(runSerial)
     end, 750, 1)
 end
 
+local function profile(runSerial)
+    local object = spawnObject(1337, 9, 0, 0.8, 1.0)
+    if not check("profile.object", isElement(object), tostring(object)) then return end
+
+    setTimer(function()
+        if runSerial ~= serial or not isElement(object) then return end
+        local ok = setObjectBreakProfile(object, {
+            native = false,
+            health = 200,
+            fracture = {
+                fragments = 10,
+                force = 4.0,
+                randomness = 1.0,
+                lifetime = 5000,
+                seed = 777,
+            },
+        })
+        check("profile.set", ok)
+        check("profile.health-initial", getObjectBreakHealth(object) == 200, getObjectBreakHealth(object))
+
+        local info = getObjectBreakProfile(object)
+        check("profile.get", type(info) == "table" and info.maxHealth == 200 and info.native == false,
+            type(info) == "table" and ("health=%s max=%s native=%s"):format(tostring(info.health), tostring(info.maxHealth), tostring(info.native)) or tostring(info))
+
+        check("profile.health-set", setObjectBreakHealth(object, 80) and getObjectBreakHealth(object) == 80, getObjectBreakHealth(object))
+        check("profile.health-reset", resetObjectBreakHealth(object) and getObjectBreakHealth(object) == 200, getObjectBreakHealth(object))
+
+        local before = #getElementsByType("break-effect")
+        check("profile.zero", setObjectBreakHealth(object, 0))
+        setTimer(function()
+            if runSerial ~= serial then return end
+            local after = #getElementsByType("break-effect")
+            check("profile.fracture", after > before, ("before=%d after=%d"):format(before, after))
+            check("profile.cleared-after-break", getObjectBreakProfile(object) == false)
+        end, 100, 1)
+    end, 700, 1)
+end
+
 local function invalid(runSerial)
     local object = spawnObject(1337, 7, 3.0, 0.8, 1.0)
     if not check("invalid.object", isElement(object)) then return end
@@ -100,6 +141,9 @@ local function invalid(runSerial)
         check("invalid.fragments", createObjectBreakEffect(object, {fragments = 65}) == false)
         check("invalid.force", createObjectBreakEffect(object, {force = -1}) == false)
         check("invalid.distance", createObjectBreakEffect(object, {renderDistance = 0}) == false)
+        check("invalid.profile-health", setObjectBreakProfile(object, {health = -1}) == false)
+        check("invalid.profile-multiplier", setObjectBreakProfile(object, {damageMultiplier = -1}) == false)
+        check("invalid.profile-threshold", setObjectBreakProfile(object, {instantBreakThreshold = -1}) == false)
     end, 650, 1)
 end
 
@@ -142,13 +186,14 @@ local function runAll()
     outputChatBox(("[BREAKTEST] RUN serial=%d"):format(runSerial), 255, 200, 80)
     basic(runSerial)
     setTimer(function() if runSerial == serial then cache(runSerial) end end, 1500, 1)
-    setTimer(function() if runSerial == serial then invalid(runSerial) end end, 3000, 1)
-    setTimer(function() if runSerial == serial then stress(runSerial, 6) end end, 4300, 1)
+    setTimer(function() if runSerial == serial then profile(runSerial) end end, 3000, 1)
+    setTimer(function() if runSerial == serial then invalid(runSerial) end end, 4500, 1)
+    setTimer(function() if runSerial == serial then stress(runSerial, 6) end end, 5800, 1)
     setTimer(function()
         if runSerial == serial then
             outputChatBox(("[BREAKTEST] DONE serial=%d -- inspect PASS/FAIL above"):format(runSerial), 255, 200, 80)
         end
-    end, 6500, 1)
+    end, 8000, 1)
 end
 
 local function parseBool(value)
@@ -249,6 +294,8 @@ addCommandHandler("breaktest", function(_, caseName, value)
         reset(); basic(serial)
     elseif caseName == "cache" then
         reset(); cache(serial)
+    elseif caseName == "profile" then
+        reset(); profile(serial)
     elseif caseName == "invalid" then
         reset(); invalid(serial)
     elseif caseName == "stress" then
@@ -258,7 +305,7 @@ addCommandHandler("breaktest", function(_, caseName, value)
     elseif caseName == "reset" then
         reset(); log("PASS", "reset")
     else
-        outputChatBox("[BREAKTEST] cases: all, basic, cache, invalid, stress [count], status, reset", 255, 200, 80)
+        outputChatBox("[BREAKTEST] cases: all, basic, cache, profile, invalid, stress [count], status, reset", 255, 200, 80)
     end
 end)
 
