@@ -1,0 +1,4 @@
+<meta>
+    <info author="Neon" name="Managed break effect regression harness" type="script" version="1.0" />
+    <script src="client.lua" type="client" />
+</meta>
