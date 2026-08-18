@@ -14,6 +14,7 @@ class CClientDummy;
 class CClientEntity;
 class CClientManager;
 class CFxSystem;
+class CVector;
 
 class CClientFireManager
 {
@@ -53,7 +54,6 @@ private:
         CClientDummy* pElement{};
         CFxSystem*    pFxSystem{};
         int           iFxTier{-1};
-        unsigned long long ullLastDamagePulse{};
         std::unordered_map<CClientEntity*, unsigned long long> LastVictimPulse;
     };
 
@@ -63,6 +63,6 @@ private:
     void ProcessDamage(SFireEntry& entry, const CVector& vecPosition, float fStrength, unsigned char ucMask);
     void TryDamage(SFireEntry& entry, CClientEntity* pVictim, const CVector& vecPosition, float fRadiusSq, unsigned char ucMask, float fDamage);
 
-    CClientManager*                         m_pManager{};
-    std::vector<SFireEntry>                 m_Fires;
+    CClientManager*         m_pManager{};
+    std::vector<SFireEntry> m_Fires;
 };
