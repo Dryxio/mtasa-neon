@@ -2,14 +2,17 @@ DFXShowcase = DFXShowcase or {}
 
 local S = DFXShowcase
 
-S.FULL_DURATION = 42000
+S.FULL_DURATION = 38000
+S.RUNWAY_START = { 100.74450, 2501.11401, 16.48438 }
+S.RUNWAY_END = { 424.00473, 2503.03442, 16.48438 }
+S.RUNWAY_HALF_WIDTH = 17.0
 S.PALETTE = {
-    tocolor(40, 235, 255, 255),
-    tocolor(60, 125, 255, 255),
-    tocolor(125, 70, 255, 255),
-    tocolor(220, 65, 255, 255),
-    tocolor(255, 70, 175, 255),
-    tocolor(235, 245, 255, 255),
+    tocolor(35, 235, 255, 255),
+    tocolor(55, 130, 255, 255),
+    tocolor(120, 75, 255, 255),
+    tocolor(220, 70, 255, 255),
+    tocolor(255, 75, 175, 255),
+    tocolor(240, 248, 255, 255),
 }
 
 S.state = {
@@ -18,28 +21,30 @@ S.state = {
     mode = "full",
     shot = nil,
     startedAt = 0,
-    cx = 0, cy = 0, cz = 0,
     dimension = 0,
     allocatedModels = {},
     touchedModels = {},
     objects = {},
     timers = {},
-    lampModels = {},
-    lampEffects = {},
-    heroModel = nil,
-    heroEffect = nil,
+    edgeModels = { left = {}, right = {} },
+    edgeEffects = { left = {}, right = {} },
+    centerModels = {},
+    centerEffects = {},
+    thresholdModels = {},
+    thresholdEffects = {},
+    particleModels = {},
+    roadsignModels = {},
+    sunModel = nil,
     vanillaModel = nil,
     vanillaObject = nil,
     vanillaEffect = nil,
     vanillaBaseline = nil,
-    particleModels = {},
-    roadsignModels = {},
-    escalatorModels = {},
-    sunModel = nil,
     cues = {},
-    lastFinalStep = -1,
+    chaseStep = -1,
+    finalStep = -1,
     savedTime = nil,
     savedWeather = nil,
+    basis = nil,
 }
 
 local state = S.state
@@ -72,6 +77,41 @@ function S.cameraLerp(a, b, t)
         S.lerp(a[4], b[4], t), S.lerp(a[5], b[5], t), S.lerp(a[6], b[6], t),
         0, S.lerp(a[7] or 70, b[7] or 70, t)
     )
+end
+
+function S.configureRunway()
+    local sx, sy, sz = S.RUNWAY_START[1], S.RUNWAY_START[2], S.RUNWAY_START[3]
+    local ex, ey, ez = S.RUNWAY_END[1], S.RUNWAY_END[2], S.RUNWAY_END[3]
+    local dx, dy = ex - sx, ey - sy
+    local length = math.sqrt(dx * dx + dy * dy)
+    local ux, uy = dx / length, dy / length
+    state.basis = {
+        sx = sx, sy = sy, sz = sz,
+        ex = ex, ey = ey, ez = ez,
+        ux = ux, uy = uy,
+        px = -uy, py = ux,
+        length = length,
+        yaw = math.deg(math.atan2(-ux, uy)),
+    }
+end
+
+function S.runwayPoint(t, lateral, height)
+    if not state.basis then
+        S.configureRunway()
+    end
+    local b = state.basis
+    lateral = lateral or 0
+    height = height or 0
+    local x = b.sx + (b.ex - b.sx) * t + b.px * lateral
+    local y = b.sy + (b.ey - b.sy) * t + b.py * lateral
+    local z = b.sz + (b.ez - b.sz) * t + height
+    return x, y, z
+end
+
+function S.cameraPoint(t, lateral, height, lookT, lookLateral, lookHeight, fov)
+    local x, y, z = S.runwayPoint(t, lateral, height)
+    local lx, ly, lz = S.runwayPoint(lookT, lookLateral or 0, lookHeight or 0)
+    return { x, y, z, lx, ly, lz, fov or 70 }
 end
 
 function S.setPresentationUI(visible)
@@ -151,22 +191,25 @@ function S.cleanupLocal()
     setCameraTarget(localPlayer)
     S.setPresentationUI(true)
 
-    state.lampModels = {}
-    state.lampEffects = {}
-    state.heroModel = nil
-    state.heroEffect = nil
+    state.edgeModels = { left = {}, right = {} }
+    state.edgeEffects = { left = {}, right = {} }
+    state.centerModels = {}
+    state.centerEffects = {}
+    state.thresholdModels = {}
+    state.thresholdEffects = {}
+    state.particleModels = {}
+    state.roadsignModels = {}
+    state.sunModel = nil
     state.vanillaModel = nil
     state.vanillaObject = nil
     state.vanillaEffect = nil
     state.vanillaBaseline = nil
-    state.particleModels = {}
-    state.roadsignModels = {}
-    state.escalatorModels = {}
-    state.sunModel = nil
     state.cues = {}
-    state.lastFinalStep = -1
+    state.chaseStep = -1
+    state.finalStep = -1
     state.savedTime = nil
     state.savedWeather = nil
+    state.basis = nil
 end
 
 function S.failSetup(reason)
@@ -183,8 +226,8 @@ function S.requestObjectModel(parent)
     return model
 end
 
-function S.spawn(model, ox, oy, oz, rz, scale, alpha)
-    local object = createObject(model, state.cx + ox, state.cy + oy, state.cz + oz, 0, 0, rz or 0)
+function S.spawnWorld(model, x, y, z, rz, scale, alpha)
+    local object = createObject(model, x, y, z, 0, 0, rz or 0)
     if not isElement(object) then
         return false
     end
@@ -196,10 +239,15 @@ function S.spawn(model, ox, oy, oz, rz, scale, alpha)
     if scale then
         setObjectScale(object, scale)
     end
-    if alpha then
+    if alpha ~= nil then
         setElementAlpha(object, alpha)
     end
 
     state.objects[#state.objects + 1] = object
     return object
+end
+
+function S.spawnOnRunway(model, t, lateral, height, alpha, scale)
+    local x, y, z = S.runwayPoint(t, lateral, height)
+    return S.spawnWorld(model, x, y, z, state.basis and state.basis.yaw or 270, scale, alpha)
 end
