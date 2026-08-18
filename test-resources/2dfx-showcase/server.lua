@@ -1,5 +1,8 @@
 local SHOW_DIMENSION = 64991
-local CENTER_X, CENTER_Y, CENTER_Z = 405.0, 2535.0, 16.4
+local RUNWAY_START_X, RUNWAY_START_Y, RUNWAY_Z = 100.74450, 2501.11401, 16.48438
+local RUNWAY_END_X, RUNWAY_END_Y = 424.00473, 2503.03442
+local CENTER_X = (RUNWAY_START_X + RUNWAY_END_X) * 0.5
+local CENTER_Y = (RUNWAY_START_Y + RUNWAY_END_Y) * 0.5
 
 local active = {}
 
@@ -79,8 +82,8 @@ local function startShow(player, mode, shot)
     fadeCamera(player, false, 0.25)
     setElementInterior(player, 0)
     setElementDimension(player, SHOW_DIMENSION)
-    setElementPosition(player, CENTER_X, CENTER_Y - 34.0, CENTER_Z + 1.0)
-    setElementRotation(player, 0, 0, 0)
+    setElementPosition(player, CENTER_X, CENTER_Y, RUNWAY_Z + 1.0)
+    setElementRotation(player, 0, 0, 270)
     setElementAlpha(player, 0)
     setElementFrozen(player, true)
 
@@ -93,7 +96,7 @@ local function startShow(player, mode, shot)
             player,
             "2dfxShowcase:prepare",
             resourceRoot,
-            CENTER_X, CENTER_Y, CENTER_Z,
+            CENTER_X, CENTER_Y, RUNWAY_Z,
             SHOW_DIMENSION, mode, shot
         )
     end, 350, 1)
