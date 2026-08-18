@@ -1,0 +1,5 @@
+<meta>
+    <info author="Dryxio" name="Managed fire test harness" type="script" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>

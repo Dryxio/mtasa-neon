@@ -2,19 +2,21 @@
  *
  *  PROJECT:     Multi Theft Auto
  *  LICENSE:     See LICENSE in the top level directory
- *  FILE:        Client/mods/deathmatch/logic/luadefs/CLuaFireDefs.h
- *
- *  Multi Theft Auto is available from https://www.multitheftauto.com/
+ *  PURPOSE:     Managed fire Lua definitions
  *
  *****************************************************************************/
 #pragma once
 
 #include "CLuaDefs.h"
 
+class CDummy;
+
 class CLuaFireDefs : public CLuaDefs
 {
 public:
     static void LoadFunctions();
+    static void DoPulse();
+    static void OnFireDestroyed(CDummy* pFire);
 
     LUA_DECLARE(CreateFire);
     LUA_DECLARE(ExtinguishFire);

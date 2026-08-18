@@ -48,6 +48,7 @@ class CClientManager;
 
 class CClientProjectileManager;
 class CClientExplosionManager;
+class CClientFireManager;
 
 class CClientManager
 {
@@ -92,6 +93,7 @@ public:
     CClientGroups*               GetGroups() { return m_pGroups; }
     CClientProjectileManager*    GetProjectileManager() { return m_pProjectileManager; }
     CClientExplosionManager*     GetExplosionManager() { return m_pExplosionManager; }
+    CClientFireManager*          GetFireManager() { return m_pFireManager; }
     CClientPacketRecorder*       GetPacketRecorder() { return m_pPacketRecorder; }
     CClientWaterManager*         GetWaterManager() { return m_pWaterManager; }
     CClientWeaponManager*        GetWeaponManager() { return m_pWeaponManager; }
@@ -149,6 +151,7 @@ private:
     CClientGroups*               m_pGroups;
     CClientProjectileManager*    m_pProjectileManager;
     CClientExplosionManager*     m_pExplosionManager;
+    CClientFireManager*          m_pFireManager;
     CClientWeaponManager*        m_pWeaponManager;
     CClientEffectManager*        m_pEffectManager;
     CClientPointLightsManager*   m_pPointLightsManager;

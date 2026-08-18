@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CClientFireManager.h"
 
 CClientDummy::CClientDummy(CClientManager* pManager, ElementID ID, const char* szTypeName) : ClassInit(this), CClientEntity(ID)
 {
@@ -23,6 +24,9 @@ CClientDummy::CClientDummy(CClientManager* pManager, ElementID ID, const char* s
         {
             m_pGroups->AddToList(this);
         }
+
+        if (pManager->GetFireManager() && GetTypeName() == "fire")
+            pManager->GetFireManager()->Register(this);
     }
     else
     {
@@ -37,8 +41,12 @@ CClientDummy::~CClientDummy()
 
 void CClientDummy::Unlink()
 {
+    if (m_pManager && m_pManager->GetFireManager() && GetTypeName() == "fire")
+        m_pManager->GetFireManager()->Unregister(this);
+
     if (m_pGroups)
     {
         m_pGroups->RemoveFromList(this);
+        m_pGroups = NULL;
     }
 }

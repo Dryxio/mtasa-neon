@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CClientFireManager.h"
 
 using SharedUtil::CalcMTASAPath;
 
@@ -43,6 +44,7 @@ CClientManager::CClientManager()
     m_pResourceManager = new CResourceManager;
     m_pColManager = new CClientColManager;
     m_pGroups = new CClientGroups;
+    m_pFireManager = new CClientFireManager(this);
     m_pProjectileManager = new CClientProjectileManager(this);
     m_pDFFManager = new CClientDFFManager(this);
     m_pColModelManager = new CClientColModelManager(this);
@@ -99,6 +101,9 @@ CClientManager::~CClientManager()
 
     delete m_pProjectileManager;
     m_pProjectileManager = NULL;
+
+    delete m_pFireManager;
+    m_pFireManager = NULL;
 
     delete m_pGroups;
     m_pGroups = NULL;
@@ -228,6 +233,7 @@ void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse
             m_pPedManager->DoPulse(true);
             TIMING_CHECKPOINT("-MTA_PedManager");
             m_pProjectileManager->DoPulse();
+            m_pFireManager->DoPulse();
             m_pSoundManager->DoPulse();
             TIMING_CHECKPOINT("+MTA_PlayerManager");
             m_pPlayerManager->DoPulse();
