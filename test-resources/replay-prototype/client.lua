@@ -1,54 +1,58 @@
 local BUFFER_DURATION_MS = 60000
 local SAMPLE_INTERVAL_MS = 16
-local KEYFRAME_INTERVAL_MS = 500
-
--- Control-driven playback correction policy.
--- Small drift is intentionally tolerated so GTA keeps ownership of locomotion/tasks.
-local SOFT_CORRECTION_DISTANCE = 0.30
-local HARD_CORRECTION_DISTANCE = 3.00
-local MAX_HORIZONTAL_CORRECTION_PER_FRAME = 0.025
-local MAX_VERTICAL_CORRECTION_PER_FRAME = 0.012
-local VERTICAL_CORRECTION_THRESHOLD = 0.30
+local HARD_RESYNC_DISTANCE = 8.0
+local VELOCITY_ASSIST_START = 1.0
+local MAX_VELOCITY_ASSIST = 0.018
 
 local CONTROL_NAMES = {
-    "forwards",
-    "backwards",
-    "left",
-    "right",
-    "sprint",
-    "walk",
-    "jump",
-    "crouch",
-    "aim_weapon",
-    "fire",
-    "action",
+    "forwards", "backwards", "left", "right", "sprint", "walk",
+    "jump", "crouch", "aim_weapon", "fire", "action",
+}
+
+-- Normal GTA locomotion animations are task-driven. Moving a ped with
+-- setElementPosition does not automatically select them, so hybrid playback
+-- mirrors the recorded move state onto the smooth tracked ghost.
+local MOVE_ANIMATIONS = {
+    stand = {"PED", "IDLE_stance", true},
+    walk = {"PED", "WALK_player", true},
+    jog = {"PED", "RUN_player", true},
+    sprint = {"PED", "sprint_civi", true},
+    jump = {"PED", "JUMP_launch", false},
+    fall = {"PED", "FALL_fall", true},
+    land = {"PED", "JUMP_land", false},
 }
 
 local state = {
     recording = false,
     recordStartedAt = 0,
     lastSampleAt = 0,
-    lastKeyframeAt = 0,
     frames = {},
     firstFrame = 1,
+
     playback = false,
     paused = false,
     playbackStartedAt = 0,
-    pausedAt = 0,
     playbackOffset = 0,
     playbackIndex = 1,
+    replayMode = "hybrid",
+
     ghost = nil,
     ghostWeapon = nil,
+    ghostMoveState = nil,
+
     corrections = 0,
     hardResyncs = 0,
     currentDrift = 0,
     maxDrift = 0,
-    replayMode = "tracked",
     debug = true,
 }
 
 local function chat(message, r, g, b)
     outputChatBox("[REPLAY] " .. message, r or 120, g or 220, b or 255)
+end
+
+local function clamp(value, minimum, maximum)
+    return math.max(minimum, math.min(maximum, value))
 end
 
 local function distance3D(ax, ay, az, bx, by, bz)
@@ -83,10 +87,19 @@ local function clearControls(ped)
     if not isElement(ped) then
         return
     end
-
     for _, control in ipairs(CONTROL_NAMES) do
         setPedControlState(ped, control, false)
     end
+end
+
+local function getMoveState(ped)
+    if type(getPedMoveState) == "function" then
+        local ok, moveState = pcall(getPedMoveState, ped)
+        if ok and type(moveState) == "string" then
+            return moveState
+        end
+    end
+    return "stand"
 end
 
 local function getAimTarget(player, cameraTargetX, cameraTargetY, cameraTargetZ)
@@ -96,7 +109,6 @@ local function getAimTarget(player, cameraTargetX, cameraTargetY, cameraTargetZ)
             return x, y, z
         end
     end
-
     return cameraTargetX, cameraTargetY, cameraTargetZ
 end
 
@@ -111,39 +123,22 @@ local function captureFrame(now)
     local vx, vy, vz = getElementVelocity(player)
     local cx, cy, cz, tx, ty, tz = getCameraMatrix()
     local aimX, aimY, aimZ = getAimTarget(player, tx, ty, tz)
-    local timestamp = now - state.recordStartedAt
-    local keyframe = timestamp - state.lastKeyframeAt >= KEYFRAME_INTERVAL_MS or #state.frames == 0
-
-    if keyframe then
-        state.lastKeyframeAt = timestamp
-    end
 
     state.frames[#state.frames + 1] = {
-        t = timestamp,
-        x = x,
-        y = y,
-        z = z,
-        rx = rx,
-        ry = ry,
-        rz = rz,
-        vx = vx,
-        vy = vy,
-        vz = vz,
-        cx = cx,
-        cy = cy,
-        cz = cz,
-        tx = tx,
-        ty = ty,
-        tz = tz,
-        aimX = aimX,
-        aimY = aimY,
-        aimZ = aimZ,
+        t = now - state.recordStartedAt,
+        x = x, y = y, z = z,
+        rx = rx, ry = ry, rz = rz,
+        vx = vx, vy = vy, vz = vz,
+        cx = cx, cy = cy, cz = cz,
+        tx = tx, ty = ty, tz = tz,
+        aimX = aimX, aimY = aimY, aimZ = aimZ,
         weapon = getPedWeapon(player),
         weaponSlot = getPedWeaponSlot(player),
         controls = getControls(player),
-        keyframe = keyframe,
+        moveState = getMoveState(player),
     }
 
+    local timestamp = state.frames[#state.frames].t
     local cutoff = timestamp - BUFFER_DURATION_MS
     while state.firstFrame < #state.frames and state.frames[state.firstFrame + 1].t < cutoff do
         state.firstFrame = state.firstFrame + 1
@@ -162,11 +157,13 @@ end
 local function stopGhost()
     if isElement(state.ghost) then
         clearControls(state.ghost)
+        setPedAnimation(state.ghost, false)
         destroyElement(state.ghost)
     end
 
     state.ghost = nil
     state.ghostWeapon = nil
+    state.ghostMoveState = nil
     state.playback = false
     state.paused = false
     state.playbackIndex = 1
@@ -175,16 +172,11 @@ local function stopGhost()
 end
 
 local function ensureGhostWeapon(frame)
-    if not isElement(state.ghost) or not frame then
-        return
-    end
-
-    if state.ghostWeapon == frame.weapon then
+    if not isElement(state.ghost) or not frame or state.ghostWeapon == frame.weapon then
         return
     end
 
     state.ghostWeapon = frame.weapon
-
     if frame.weapon and frame.weapon > 0 and type(givePedWeapon) == "function" then
         givePedWeapon(state.ghost, frame.weapon, 9999, true)
     elseif type(setPedWeaponSlot) == "function" then
@@ -192,14 +184,38 @@ local function ensureGhostWeapon(frame)
     end
 end
 
+local function applyMoveAnimation(frame)
+    if not isElement(state.ghost) then
+        return
+    end
+
+    local moveState = frame.moveState or "stand"
+    if state.ghostMoveState == moveState then
+        return
+    end
+    state.ghostMoveState = moveState
+
+    -- Crouch/aim are better left to GTA controls because their weapon-specific
+    -- upper body pose matters more than a generic animation replacement.
+    if moveState == "crouch" or frame.controls[9] then
+        setPedAnimation(state.ghost, false)
+        return
+    end
+
+    local animation = MOVE_ANIMATIONS[moveState]
+    if not animation then
+        setPedAnimation(state.ghost, false)
+        return
+    end
+
+    setPedAnimation(state.ghost, animation[1], animation[2], -1, animation[3], true, false, false)
+end
+
 local function getReplayBounds()
     if #state.frames < 2 then
         return nil
     end
-
-    local first = state.frames[state.firstFrame]
-    local last = state.frames[#state.frames]
-    return first, last
+    return state.frames[state.firstFrame], state.frames[#state.frames]
 end
 
 local function findPlaybackFrames(time)
@@ -212,7 +228,6 @@ local function findPlaybackFrames(time)
         state.playbackIndex = state.firstFrame
         return first, first, 0
     end
-
     if time >= last.t then
         return last, last, 0
     end
@@ -221,18 +236,15 @@ local function findPlaybackFrames(time)
     while index < #state.frames and state.frames[index + 1].t <= time do
         index = index + 1
     end
-
     while index > state.firstFrame and state.frames[index].t > time do
         index = index - 1
     end
 
     state.playbackIndex = index
-
     local a = state.frames[index]
     local b = state.frames[math.min(index + 1, #state.frames)]
     local duration = math.max(b.t - a.t, 1)
-    local alpha = math.max(0, math.min(1, (time - a.t) / duration))
-    return a, b, alpha
+    return a, b, clamp((time - a.t) / duration, 0, 1)
 end
 
 local function spawnGhost()
@@ -242,9 +254,7 @@ local function spawnGhost()
     end
 
     stopGhost()
-
-    local model = getElementModel(localPlayer)
-    local ghost = createPed(model, first.x, first.y, first.z, first.rz)
+    local ghost = createPed(getElementModel(localPlayer), first.x, first.y, first.z, first.rz)
     if not isElement(ghost) then
         chat("Could not create replay ghost.", 255, 80, 80)
         return false
@@ -258,7 +268,6 @@ local function spawnGhost()
     setElementVelocity(ghost, first.vx, first.vy, first.vz)
     ensureGhostWeapon(first)
     applyControls(ghost, first.controls)
-
     return true
 end
 
@@ -268,17 +277,14 @@ local function startPlayback(offsetMs)
         chat("Need at least two recorded samples first. Use /replayrec.", 255, 120, 80)
         return
     end
-
     if not spawnGhost() then
         return
     end
 
     offsetMs = tonumber(offsetMs) or 0
-    offsetMs = math.max(first.t, math.min(last.t, first.t + offsetMs))
-
     state.playback = true
     state.paused = false
-    state.playbackOffset = offsetMs
+    state.playbackOffset = clamp(first.t + offsetMs, first.t, last.t)
     state.playbackStartedAt = getTickCount()
     state.playbackIndex = state.firstFrame
     state.corrections = 0
@@ -286,37 +292,15 @@ local function startPlayback(offsetMs)
     state.currentDrift = 0
     state.maxDrift = 0
 
-    chat(("Playback started (%s mode, %.2fs buffered, %d samples)."):format(state.replayMode, (last.t - first.t) / 1000, #state.frames - state.firstFrame + 1), 120, 255, 120)
-end
-
-local function seekPlayback(seconds)
-    local first, last = getReplayBounds()
-    if not first then
-        return
-    end
-
-    local offset = math.max(0, tonumber(seconds) or 0) * 1000
-    local target = math.min(last.t, first.t + offset)
-
-    state.playbackOffset = target
-    state.playbackStartedAt = getTickCount()
-    state.playbackIndex = state.firstFrame
-
-    local frame = select(1, findPlaybackFrames(target))
-    if frame and isElement(state.ghost) then
-        setElementPosition(state.ghost, frame.x, frame.y, frame.z)
-        setElementRotation(state.ghost, frame.rx, frame.ry, frame.rz)
-        setElementVelocity(state.ghost, frame.vx, frame.vy, frame.vz)
-        ensureGhostWeapon(frame)
-        applyControls(state.ghost, frame.controls)
-    end
+    chat(("Playback started (%s mode, %.2fs buffered, %d samples)."):format(
+        state.replayMode, (last.t - first.t) / 1000, #state.frames - state.firstFrame + 1
+    ), 120, 255, 120)
 end
 
 local function getPlaybackTime(now)
     if state.paused then
         return state.playbackOffset
     end
-
     return state.playbackOffset + (now - state.playbackStartedAt)
 end
 
@@ -324,20 +308,22 @@ local function updateTrackedMovement(a, b, alpha)
     local targetX = lerp(a.x, b.x, alpha)
     local targetY = lerp(a.y, b.y, alpha)
     local targetZ = lerp(a.z, b.z, alpha)
-    local targetRX = lerpAngle(a.rx, b.rx, alpha)
-    local targetRY = lerpAngle(a.ry, b.ry, alpha)
-    local targetRZ = lerpAngle(a.rz, b.rz, alpha)
-    local targetVX = lerp(a.vx, b.vx, alpha)
-    local targetVY = lerp(a.vy, b.vy, alpha)
-    local targetVZ = lerp(a.vz, b.vz, alpha)
-
     local gx, gy, gz = getElementPosition(state.ghost)
+
     state.currentDrift = distance3D(gx, gy, gz, targetX, targetY, targetZ)
     state.maxDrift = math.max(state.maxDrift, state.currentDrift)
 
     setElementPosition(state.ghost, targetX, targetY, targetZ)
-    setElementRotation(state.ghost, targetRX, targetRY, targetRZ)
-    setElementVelocity(state.ghost, targetVX, targetVY, targetVZ)
+    setElementRotation(state.ghost,
+        lerpAngle(a.rx, b.rx, alpha),
+        lerpAngle(a.ry, b.ry, alpha),
+        lerpAngle(a.rz, b.rz, alpha)
+    )
+    setElementVelocity(state.ghost,
+        lerp(a.vx, b.vx, alpha),
+        lerp(a.vy, b.vy, alpha),
+        lerp(a.vz, b.vz, alpha)
+    )
 end
 
 local function updateControlDrivenMovement(a, b, alpha)
@@ -345,50 +331,41 @@ local function updateControlDrivenMovement(a, b, alpha)
     local targetY = lerp(a.y, b.y, alpha)
     local targetZ = lerp(a.z, b.z, alpha)
     local gx, gy, gz = getElementPosition(state.ghost)
+    local dx, dy, dz = targetX - gx, targetY - gy, targetZ - gz
+    local drift = math.sqrt(dx * dx + dy * dy + dz * dz)
 
-    local dx = targetX - gx
-    local dy = targetY - gy
-    local dz = targetZ - gz
-    local horizontalDistance = math.sqrt(dx * dx + dy * dy)
-    local errorDistance = math.sqrt(horizontalDistance * horizontalDistance + dz * dz)
+    state.currentDrift = drift
+    state.maxDrift = math.max(state.maxDrift, drift)
 
-    state.currentDrift = errorDistance
-    state.maxDrift = math.max(state.maxDrift, errorDistance)
-
-    if errorDistance > HARD_CORRECTION_DISTANCE then
-        -- Only large divergence is allowed to snap. This is a safety net, not normal playback.
+    -- Do not touch position during normal controls playback. setElementPosition
+    -- resets/interferes with the ped locomotion task, which is what caused the
+    -- repeated teleport + animation restart behaviour in the first prototype.
+    if drift > HARD_RESYNC_DISTANCE then
         setElementPosition(state.ghost, targetX, targetY, targetZ)
-        setElementRotation(state.ghost, lerpAngle(a.rx, b.rx, alpha), lerpAngle(a.ry, b.ry, alpha), lerpAngle(a.rz, b.rz, alpha))
+        setElementRotation(state.ghost, 0, 0, lerpAngle(a.rz, b.rz, alpha))
         setElementVelocity(state.ghost, lerp(a.vx, b.vx, alpha), lerp(a.vy, b.vy, alpha), lerp(a.vz, b.vz, alpha))
         state.hardResyncs = state.hardResyncs + 1
         return
     end
 
-    if errorDistance <= SOFT_CORRECTION_DISTANCE then
+    if drift <= VELOCITY_ASSIST_START then
         return
     end
 
-    -- Correct continuously by a tiny capped amount rather than moving a percentage
-    -- of the whole error every keyframe. This preserves native locomotion and avoids
-    -- the visible half-meter snaps produced by sparse setElementPosition calls.
-    local correctionX, correctionY, correctionZ = 0, 0, 0
-
-    if horizontalDistance > 0.001 then
-        local horizontalStep = math.min(MAX_HORIZONTAL_CORRECTION_PER_FRAME, horizontalDistance - math.min(horizontalDistance, SOFT_CORRECTION_DISTANCE))
-        if horizontalStep > 0 then
-            correctionX = dx / horizontalDistance * horizontalStep
-            correctionY = dy / horizontalDistance * horizontalStep
-        end
+    local vx, vy, vz = getElementVelocity(state.ghost)
+    local horizontal = math.sqrt(dx * dx + dy * dy)
+    if horizontal > 0.001 then
+        local assist = math.min(MAX_VELOCITY_ASSIST, (horizontal - VELOCITY_ASSIST_START) * 0.004)
+        vx = vx + dx / horizontal * assist
+        vy = vy + dy / horizontal * assist
     end
 
-    if math.abs(dz) > VERTICAL_CORRECTION_THRESHOLD then
-        correctionZ = math.max(-MAX_VERTICAL_CORRECTION_PER_FRAME, math.min(MAX_VERTICAL_CORRECTION_PER_FRAME, dz))
+    if math.abs(dz) > 1.0 then
+        vz = vz + clamp(dz * 0.002, -0.006, 0.006)
     end
 
-    if correctionX ~= 0 or correctionY ~= 0 or correctionZ ~= 0 then
-        setElementPosition(state.ghost, gx + correctionX, gy + correctionY, gz + correctionZ)
-        state.corrections = state.corrections + 1
-    end
+    setElementVelocity(state.ghost, vx, vy, vz)
+    state.corrections = state.corrections + 1
 end
 
 local function updatePlayback(now)
@@ -405,11 +382,11 @@ local function updatePlayback(now)
     local playbackTime = getPlaybackTime(now)
     if playbackTime >= last.t then
         clearControls(state.ghost)
+        setPedAnimation(state.ghost, false)
         state.playback = false
         chat(("Playback complete. Max drift %.2fm."):format(state.maxDrift), 120, 255, 120)
         return
     end
-
     if state.paused then
         return
     end
@@ -419,31 +396,64 @@ local function updatePlayback(now)
         return
     end
 
-    applyControls(state.ghost, a.controls)
     ensureGhostWeapon(a)
 
-    if type(setPedAimTarget) == "function" and (a.controls[9] or a.controls[10]) then
-        local aimX = lerp(a.aimX, b.aimX, alpha)
-        local aimY = lerp(a.aimY, b.aimY, alpha)
-        local aimZ = lerp(a.aimZ, b.aimZ, alpha)
-        setPedAimTarget(state.ghost, aimX, aimY, aimZ)
-    end
-
     if state.replayMode == "controls" then
+        -- Pure diagnostic mode: GTA owns locomotion and we only bias velocity.
+        setPedAnimation(state.ghost, false)
+        state.ghostMoveState = nil
+        applyControls(state.ghost, a.controls)
         updateControlDrivenMovement(a, b, alpha)
     else
+        -- Smooth recorded trajectory. Hybrid additionally mirrors locomotion
+        -- animations while controls keep crouch/aim/fire states available.
         updateTrackedMovement(a, b, alpha)
+        applyControls(state.ghost, a.controls)
+        if state.replayMode == "hybrid" then
+            applyMoveAnimation(a)
+        else
+            setPedAnimation(state.ghost, false)
+            state.ghostMoveState = nil
+        end
+    end
+
+    if type(setPedAimTarget) == "function" and (a.controls[9] or a.controls[10]) then
+        setPedAimTarget(state.ghost,
+            lerp(a.aimX, b.aimX, alpha),
+            lerp(a.aimY, b.aimY, alpha),
+            lerp(a.aimZ, b.aimZ, alpha)
+        )
+    end
+end
+
+local function seekPlayback(seconds)
+    local first, last = getReplayBounds()
+    if not first or not isElement(state.ghost) then
+        return
+    end
+
+    local target = math.min(last.t, first.t + math.max(0, tonumber(seconds) or 0) * 1000)
+    state.playbackOffset = target
+    state.playbackStartedAt = getTickCount()
+    state.playbackIndex = state.firstFrame
+    state.ghostMoveState = nil
+
+    local frame = select(1, findPlaybackFrames(target))
+    if frame then
+        setElementPosition(state.ghost, frame.x, frame.y, frame.z)
+        setElementRotation(state.ghost, frame.rx, frame.ry, frame.rz)
+        setElementVelocity(state.ghost, frame.vx, frame.vy, frame.vz)
+        ensureGhostWeapon(frame)
+        applyControls(state.ghost, frame.controls)
     end
 end
 
 addEventHandler("onClientPreRender", root, function()
     local now = getTickCount()
-
     if state.recording and now - state.lastSampleAt >= SAMPLE_INTERVAL_MS then
         state.lastSampleAt = now
         captureFrame(now)
     end
-
     updatePlayback(now)
 end)
 
@@ -457,29 +467,15 @@ addEventHandler("onClientRender", root, function()
     local sampleCount = first and (#state.frames - state.firstFrame + 1) or 0
     local playbackTime = state.playback and getPlaybackTime(getTickCount()) / 1000 or 0
 
-    dxDrawText(
-        ("Replay prototype\nrecording: %s | samples: %d | buffer: %.2fs\nplayback: %s%s | mode: %s | time: %.2fs\ndrift: %.2fm | max: %.2fm | correction frames: %d | hard resyncs: %d")
-            :format(
-                tostring(state.recording),
-                sampleCount,
-                buffered,
-                tostring(state.playback),
-                state.paused and " (paused)" or "",
-                state.replayMode,
-                playbackTime,
-                state.currentDrift,
-                state.maxDrift,
-                state.corrections,
-                state.hardResyncs
-            ),
-        24,
-        180,
-        800,
-        320,
-        tocolor(255, 255, 255, 230),
-        1.0,
-        "default-bold"
-    )
+    dxDrawText(("Replay prototype\nrecording: %s | samples: %d | buffer: %.2fs\nplayback: %s%s | mode: %s | time: %.2fs\nmove: %s | drift: %.2fm | max: %.2fm | corrections: %d | hard resyncs: %d")
+        :format(
+            tostring(state.recording), sampleCount, buffered,
+            tostring(state.playback), state.paused and " (paused)" or "",
+            state.replayMode, playbackTime,
+            tostring(state.ghostMoveState or "native"), state.currentDrift, state.maxDrift,
+            state.corrections, state.hardResyncs
+        ),
+        24, 180, 800, 330, tocolor(255, 255, 255, 230), 1.0, "default-bold")
 end)
 
 addCommandHandler("replayrec", function()
@@ -489,7 +485,6 @@ addCommandHandler("replayrec", function()
     state.recording = true
     state.recordStartedAt = getTickCount()
     state.lastSampleAt = 0
-    state.lastKeyframeAt = -KEYFRAME_INTERVAL_MS
     chat("Recording started. On-foot only; keeps the last 60 seconds.", 120, 255, 120)
 end)
 
@@ -520,11 +515,10 @@ addCommandHandler("replaypause", function()
     if not state.playback or state.paused then
         return
     end
-
     state.playbackOffset = getPlaybackTime(getTickCount())
     state.paused = true
-    state.pausedAt = getTickCount()
     clearControls(state.ghost)
+    setPedAnimation(state.ghost, false)
     setElementFrozen(state.ghost, true)
     chat("Playback paused.")
 end)
@@ -533,9 +527,9 @@ addCommandHandler("replayresume", function()
     if not state.playback or not state.paused then
         return
     end
-
     state.paused = false
     state.playbackStartedAt = getTickCount()
+    state.ghostMoveState = nil
     setElementFrozen(state.ghost, false)
     chat("Playback resumed.")
 end)
@@ -545,22 +539,22 @@ addCommandHandler("replayseek", function(_, seconds)
         chat("Start playback first with /replayplay.", 255, 120, 80)
         return
     end
-
     seekPlayback(seconds)
     chat(("Seeked to %.2fs."):format(tonumber(seconds) or 0))
 end)
 
 addCommandHandler("replaymode", function(_, mode)
     mode = mode and mode:lower() or nil
-    if mode ~= "tracked" and mode ~= "controls" then
-        chat("Usage: /replaymode [tracked|controls]. Current: " .. state.replayMode, 255, 220, 100)
+    if mode ~= "hybrid" and mode ~= "tracked" and mode ~= "controls" then
+        chat("Usage: /replaymode [hybrid|tracked|controls]. Current: " .. state.replayMode, 255, 220, 100)
         return
     end
 
     state.replayMode = mode
     state.currentDrift = 0
     state.maxDrift = 0
-    chat("Replay mode: " .. mode .. (mode == "tracked" and " (smooth recorded trajectory)." or " (native GTA locomotion + continuous drift correction)."), 120, 255, 120)
+    state.ghostMoveState = nil
+    chat("Replay mode: " .. mode, 120, 255, 120)
 end)
 
 addCommandHandler("replaydebug", function()
