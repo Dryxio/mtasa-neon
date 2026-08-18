@@ -203,17 +203,17 @@ local function parseBool(value)
     return nil
 end
 
-local function printBreakSpawnHelp()
-    outputChatBox("[BREAKSPAWN] /breakspawn <model> [key=value ...]", 255, 200, 80)
-    outputChatBox("[BREAKSPAWN] keys: fragments force randomness lifetime gravity bounce drag renderDistance seed", 255, 200, 80)
-    outputChatBox("[BREAKSPAWN] spawn: distance side z scale | velocity: vx vy vz | hideOriginal collision", 255, 200, 80)
-    outputChatBox("[BREAKSPAWN] example: /breakspawn 1337 fragments=24 force=8 randomness=2 bounce=0.55 lifetime=12000", 255, 200, 80)
+local function printBreakTestSpawnHelp()
+    outputChatBox("[BREAKTESTSPAWN] /breaktestspawn <model> [key=value ...]", 255, 200, 80)
+    outputChatBox("[BREAKTESTSPAWN] keys: fragments force randomness lifetime gravity bounce drag renderDistance seed", 255, 200, 80)
+    outputChatBox("[BREAKTESTSPAWN] spawn: distance side z scale | velocity: vx vy vz | hideOriginal collision", 255, 200, 80)
+    outputChatBox("[BREAKTESTSPAWN] example: /breaktestspawn 1337 fragments=24 force=8 randomness=2 bounce=0.55 lifetime=12000", 255, 200, 80)
 end
 
-addCommandHandler("breakspawn", function(_, modelArg, ...)
+addCommandHandler("breaktestspawn", function(_, modelArg, ...)
     local model = tonumber(modelArg)
     if not model then
-        printBreakSpawnHelp()
+        printBreakTestSpawnHelp()
         return
     end
 
@@ -258,7 +258,7 @@ addCommandHandler("breakspawn", function(_, modelArg, ...)
                 local value = parseBool(raw)
                 if value ~= nil then options.disableOriginalCollision = value end
             else
-                outputChatBox(("[BREAKSPAWN] unknown key: %s"):format(key), 255, 120, 80)
+                outputChatBox(("[BREAKTESTSPAWN] unknown key: %s"):format(key), 255, 120, 80)
             end
         end
     end
@@ -267,24 +267,24 @@ addCommandHandler("breakspawn", function(_, modelArg, ...)
 
     local object = spawnObject(model, spawn.distance, spawn.side, spawn.z, spawn.scale)
     if not isElement(object) then
-        outputChatBox(("[BREAKSPAWN] failed to create model %s"):format(tostring(model)), 255, 80, 80)
+        outputChatBox(("[BREAKTESTSPAWN] failed to create model %s"):format(tostring(model)), 255, 80, 80)
         return
     end
 
     local runSerial = serial
-    outputChatBox(("[BREAKSPAWN] model=%d spawned; fracturing in 650ms"):format(model), 100, 255, 100)
+    outputChatBox(("[BREAKTESTSPAWN] model=%d spawned; fracturing in 650ms"):format(model), 100, 255, 100)
     breakLater(runSerial, object, options, function(effect)
         if not isElement(effect) then
-            outputChatBox("[BREAKSPAWN] fracture failed (model may not be streamed/static RenderWare geometry)", 255, 80, 80)
+            outputChatBox("[BREAKTESTSPAWN] fracture failed (model may not be streamed/static RenderWare geometry)", 255, 80, 80)
             return
         end
-        outputChatBox(("[BREAKSPAWN] effect=%s fragments=%s triangles=%s cacheHit=%s"):format(
+        outputChatBox(("[BREAKTESTSPAWN] effect=%s fragments=%s triangles=%s cacheHit=%s"):format(
             tostring(effect), tostring(getBreakEffectFragmentCount(effect)), tostring(getBreakEffectSourceTriangleCount(effect)),
             tostring(getBreakEffectCacheHit(effect))), 100, 255, 100)
     end)
 end)
 
-addCommandHandler("breakspawnhelp", printBreakSpawnHelp)
+addCommandHandler("breaktestspawnhelp", printBreakTestSpawnHelp)
 
 addCommandHandler("breaktest", function(_, caseName, value)
     caseName = (caseName or "all"):lower()
