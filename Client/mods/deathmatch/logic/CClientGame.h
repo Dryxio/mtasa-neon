@@ -360,7 +360,7 @@ public:
     void ShowTasks(const char* szNick);
     void ShowPlayer(const char* szNick);
     void SetMimic(unsigned int uiMimicCount);
-    void SetMimicLag(bool bShow) { m_bMimicLag = bShow; }
+    void SetMimicLag(bool bMimicLag) { m_bMimicLag = bMimicLag; };
     void SetDoPaintballs(bool bDoPaintballs) { m_bDoPaintballs = bDoPaintballs; }
     void ShowInterpolation(bool bShow) { m_bShowInterpolation = bShow; }
     bool IsShowingInterpolation() const { return m_bShowInterpolation; }
@@ -755,6 +755,7 @@ public:
     CClientPed* GetClientPedByClump(const RpClump& Clump);
 
     void OnClientIFPUnload(const std::shared_ptr<CClientIFP>& IFP);
+
     void InsertAnimationAssociationToMap(CAnimBlendAssociationSAInterface* pAnimAssociation, const std::shared_ptr<CIFPAnimations>& pIFPAnimations);
     void RemoveAnimationAssociationFromMap(CAnimBlendAssociationSAInterface* pAnimAssociation);
     void InsertRunNamedAnimTaskToMap(class CTaskSimpleRunNamedAnimSAInterface* pTask, CClientPed* pPed);
