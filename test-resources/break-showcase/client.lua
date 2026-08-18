@@ -127,40 +127,48 @@ local function runwayPoint(t, side)
            lerp(RUNWAY_START.z, RUNWAY_END.z, t)
 end
 
--- The first section reads as a proof shot, the middle becomes a fast gallery,
--- and the final six objects form a compact cascade near the end of the runway.
+-- Curated from the GTA Stuff GTA:SA model database. Keep this as recognizable,
+-- solid props rather than arbitrary map pieces/LODs: street furniture first,
+-- then construction/industrial pieces, ending on a larger six-object cascade.
+-- The name field is documentation only; model is the actual createObject ID.
 local runwaySpecs = {
-    {model = 1948, t = 0.070, side =  0.0, scale = 0.82, fragments = 34, force = 2.4, randomness = 0.45, vz = 0.20, bounce = 0.12, lead = 0.042},
-    {model = 980,  t = 0.108, side = -4.2, scale = 0.88, fragments = 20, force = 3.0, randomness = 0.65, vz = 0.35, bounce = 0.18},
-    {model = 1634, t = 0.143, side =  4.0, scale = 1.00, fragments = 18, force = 4.0, randomness = 0.90, vz = 0.55, bounce = 0.20},
-    {model = 1337, t = 0.178, side = -2.4, scale = 1.15, fragments = 22, force = 3.2, randomness = 0.70, vz = 0.35, bounce = 0.15},
-    {model = 1225, t = 0.213, side =  2.8, scale = 1.25, fragments = 16, force = 4.8, randomness = 1.00, vz = 0.70, bounce = 0.24},
-    {model = 1299, t = 0.248, side = -4.0, scale = 1.10, fragments = 20, force = 3.4, randomness = 0.75, vz = 0.40, bounce = 0.16},
-    {model = 1429, t = 0.283, side =  4.3, scale = 1.00, fragments = 24, force = 3.8, randomness = 0.80, vz = 0.45, bounce = 0.18},
-    {model = 1437, t = 0.318, side =  0.0, scale = 1.12, fragments = 24, force = 4.2, randomness = 0.85, vz = 0.55, bounce = 0.20},
-    {model = 1218, t = 0.353, side = -3.2, scale = 1.30, fragments = 16, force = 5.2, randomness = 1.10, vz = 0.75, bounce = 0.25},
-    {model = 1948, t = 0.388, side =  4.5, scale = 0.64, fragments = 30, force = 3.1, randomness = 0.55, vz = 0.25, bounce = 0.12},
-    {model = 968,  t = 0.423, side = -4.3, scale = 1.35, fragments = 18, force = 3.8, randomness = 0.65, vz = 0.35, bounce = 0.15},
-    {model = 987,  t = 0.458, side =  4.0, scale = 0.82, fragments = 28, force = 3.0, randomness = 0.55, vz = 0.25, bounce = 0.10},
-    {model = 1337, t = 0.493, side = -2.0, scale = 1.35, fragments = 24, force = 4.2, randomness = 0.85, vz = 0.50, bounce = 0.18},
-    {model = 1634, t = 0.528, side =  2.2, scale = 1.15, fragments = 22, force = 5.0, randomness = 1.00, vz = 0.80, bounce = 0.22},
-    {model = 1225, t = 0.563, side = -4.0, scale = 1.45, fragments = 18, force = 5.5, randomness = 1.20, vz = 0.85, bounce = 0.26},
-    {model = 980,  t = 0.598, side =  4.0, scale = 1.08, fragments = 28, force = 3.2, randomness = 0.60, vz = 0.30, bounce = 0.12},
-    {model = 1437, t = 0.633, side =  0.0, scale = 1.25, fragments = 28, force = 4.5, randomness = 0.90, vz = 0.55, bounce = 0.18},
-    {model = 1299, t = 0.668, side = -4.2, scale = 1.22, fragments = 22, force = 4.0, randomness = 0.75, vz = 0.45, bounce = 0.16},
-    {model = 1429, t = 0.703, side =  4.3, scale = 1.18, fragments = 26, force = 4.6, randomness = 0.90, vz = 0.55, bounce = 0.18},
-    {model = 1218, t = 0.738, side = -2.5, scale = 1.50, fragments = 20, force = 5.8, randomness = 1.20, vz = 0.90, bounce = 0.25},
-    {model = 1948, t = 0.773, side =  3.7, scale = 0.74, fragments = 38, force = 4.2, randomness = 0.70, vz = 0.40, bounce = 0.12},
-    {model = 987,  t = 0.808, side = -4.5, scale = 0.90, fragments = 30, force = 3.4, randomness = 0.60, vz = 0.30, bounce = 0.10},
-    {model = 988,  t = 0.838, side =  4.5, scale = 0.90, fragments = 28, force = 3.8, randomness = 0.65, vz = 0.35, bounce = 0.12},
-    {model = 1634, t = 0.865, side =  0.0, scale = 1.25, fragments = 24, force = 5.4, randomness = 1.00, vz = 0.80, bounce = 0.22},
+    -- Proof shot: a substantial, normally solid electrical transformer.
+    {name = "substa_transf1_",    model = 3272,  t = 0.070, side =  0.0, scale = 0.58, fragments = 38, force = 2.3, randomness = 0.40, vz = 0.18, bounce = 0.10, lead = 0.042},
 
-    {model = 1225, t = 0.888, side = -5.0, scale = 1.45, fragments = 24, force = 6.5, randomness = 1.30, vz = 1.00, bounce = 0.26, lead = 0.055},
-    {model = 1337, t = 0.899, side =  0.0, scale = 1.45, fragments = 30, force = 7.0, randomness = 1.35, vz = 1.10, bounce = 0.24, lead = 0.052},
-    {model = 1218, t = 0.910, side =  5.0, scale = 1.55, fragments = 26, force = 6.8, randomness = 1.35, vz = 1.10, bounce = 0.26, lead = 0.049},
-    {model = 980,  t = 0.928, side = -3.2, scale = 1.10, fragments = 34, force = 7.4, randomness = 1.30, vz = 1.15, bounce = 0.20, lead = 0.047},
-    {model = 1948, t = 0.944, side =  3.3, scale = 0.72, fragments = 42, force = 7.2, randomness = 1.25, vz = 1.10, bounce = 0.18, lead = 0.044},
-    {model = 1437, t = 0.958, side =  0.0, scale = 1.35, fragments = 34, force = 8.0, randomness = 1.45, vz = 1.25, bounce = 0.22, lead = 0.041},
+    -- Street / roadside gallery.
+    {name = "chillidogcart",      model = 1340,  t = 0.108, side = -3.4, scale = 1.15, fragments = 22, force = 3.2, randomness = 0.65, vz = 0.35, bounce = 0.16},
+    {name = "CJ_BLOCKER_BENCH",   model = 1368,  t = 0.143, side =  3.6, scale = 1.25, fragments = 20, force = 3.0, randomness = 0.55, vz = 0.30, bounce = 0.12},
+    {name = "petrolpump",         model = 1244,  t = 0.178, side = -2.7, scale = 1.45, fragments = 18, force = 4.0, randomness = 0.75, vz = 0.50, bounce = 0.16},
+    {name = "DYN_post_box",       model = 1478,  t = 0.213, side =  2.8, scale = 1.35, fragments = 18, force = 3.5, randomness = 0.60, vz = 0.35, bounce = 0.14},
+    {name = "BinNt07_LA",         model = 1337,  t = 0.248, side = -3.5, scale = 1.65, fragments = 18, force = 4.2, randomness = 0.85, vz = 0.55, bounce = 0.18},
+    {name = "trafficcone",        model = 1238,  t = 0.283, side =  3.8, scale = 2.10, fragments = 10, force = 5.0, randomness = 1.00, vz = 0.75, bounce = 0.28},
+    {name = "noparkingsign1",     model = 1233,  t = 0.318, side = -2.0, scale = 1.35, fragments = 16, force = 4.0, randomness = 0.70, vz = 0.45, bounce = 0.14},
+    {name = "barrierturn",        model = 968,   t = 0.353, side =  2.3, scale = 1.25, fragments = 20, force = 4.4, randomness = 0.80, vz = 0.55, bounce = 0.16},
+    {name = "barrier_4andy",      model = 1949,  t = 0.388, side = -4.0, scale = 1.10, fragments = 20, force = 4.6, randomness = 0.80, vz = 0.55, bounce = 0.16},
+    {name = "fenceshit2",         model = 984,   t = 0.423, side =  4.0, scale = 0.92, fragments = 26, force = 3.8, randomness = 0.65, vz = 0.35, bounce = 0.12},
+    {name = "vgsSelecfence16",    model = 8313,  t = 0.458, side = -3.4, scale = 0.78, fragments = 28, force = 3.8, randomness = 0.65, vz = 0.35, bounce = 0.12},
+
+    -- Crates / workshop / loose industrial props.
+    {name = "DYN_CRATE_2",        model = 1449,  t = 0.493, side =  3.2, scale = 1.45, fragments = 22, force = 4.8, randomness = 0.90, vz = 0.60, bounce = 0.20},
+    {name = "gunbox",             model = 1271,  t = 0.528, side = -2.2, scale = 1.55, fragments = 18, force = 4.6, randomness = 0.85, vz = 0.55, bounce = 0.18},
+    {name = "AMMO_BOX_M3",        model = 2042,  t = 0.563, side =  2.4, scale = 1.60, fragments = 18, force = 5.0, randomness = 0.95, vz = 0.65, bounce = 0.20},
+    {name = "DYN_AIRCON",         model = 1420,  t = 0.598, side = -3.7, scale = 1.25, fragments = 20, force = 4.5, randomness = 0.75, vz = 0.50, bounce = 0.16},
+    {name = "DYN_CUPBOARD",       model = 1417,  t = 0.633, side =  3.6, scale = 1.20, fragments = 22, force = 4.2, randomness = 0.75, vz = 0.50, bounce = 0.16},
+    {name = "hos_trolley",        model = 1997,  t = 0.668, side = -2.5, scale = 1.25, fragments = 18, force = 4.8, randomness = 0.90, vz = 0.65, bounce = 0.22},
+    {name = "kb_barrel",          model = 3046,  t = 0.703, side =  2.8, scale = 1.35, fragments = 18, force = 5.2, randomness = 1.00, vz = 0.75, bounce = 0.24},
+    {name = "barrel4",            model = 1225,  t = 0.738, side = -3.9, scale = 1.40, fragments = 18, force = 5.5, randomness = 1.05, vz = 0.80, bounce = 0.25},
+    {name = "DYN_F_R_WOOD_4",     model = 1446,  t = 0.773, side =  3.8, scale = 1.08, fragments = 26, force = 4.2, randomness = 0.75, vz = 0.45, bounce = 0.14},
+    {name = "sw_logs01",          model = 13004, t = 0.808, side = -3.2, scale = 0.82, fragments = 28, force = 4.6, randomness = 0.80, vz = 0.50, bounce = 0.15},
+    {name = "Kylie_logs",         model = 14872, t = 0.838, side =  3.3, scale = 0.82, fragments = 28, force = 4.8, randomness = 0.85, vz = 0.55, bounce = 0.16},
+    {name = "frway_box1",         model = 9576,  t = 0.865, side =  0.0, scale = 1.00, fragments = 30, force = 5.2, randomness = 0.90, vz = 0.65, bounce = 0.18},
+
+    -- Finale: larger freight / construction silhouettes, tightly staggered.
+    {name = "frght_BOXES19",      model = 9604,  t = 0.888, side = -4.8, scale = 0.82, fragments = 34, force = 6.4, randomness = 1.20, vz = 0.95, bounce = 0.20, lead = 0.055},
+    {name = "girders07",          model = 14397, t = 0.899, side =  0.0, scale = 0.78, fragments = 34, force = 6.8, randomness = 1.20, vz = 1.00, bounce = 0.18, lead = 0.052},
+    {name = "barb-pipes",         model = 14882, t = 0.910, side =  4.8, scale = 0.82, fragments = 34, force = 7.0, randomness = 1.25, vz = 1.05, bounce = 0.18, lead = 0.049},
+    {name = "des_quarrygate",     model = 3049,  t = 0.928, side = -3.1, scale = 0.70, fragments = 38, force = 7.3, randomness = 1.25, vz = 1.10, bounce = 0.18, lead = 0.047},
+    {name = "bigsprunkpole",      model = 13562, t = 0.944, side =  3.2, scale = 0.65, fragments = 40, force = 7.5, randomness = 1.30, vz = 1.10, bounce = 0.18, lead = 0.044},
+    {name = "carter-stairs01",    model = 14407, t = 0.958, side =  0.0, scale = 0.72, fragments = 42, force = 8.0, randomness = 1.40, vz = 1.20, bounce = 0.20, lead = 0.041},
 }
 
 local function spawnRunwayEntry(spec, index)
