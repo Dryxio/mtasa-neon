@@ -257,13 +257,7 @@ void CClientManager::DoRender()
 {
     if (IsGameLoaded())
     {
-        CGraphicsInterface* graphics = g_pCore ? g_pCore->GetGraphics() : nullptr;
-        if (graphics)
-            graphics->EnteringMTARenderZone();
-        CClientBreakEffectManager::GetSingleton().DoRender(this);
-        if (graphics)
-            graphics->LeavingMTARenderZone();
-
+        CClientBreakEffectManager::GetSingleton().DoRenderQueued(this);
         CClientBirdManager::GetSingleton().DoRender(this);
         m_pDisplayManager->DoPulse();
     }
