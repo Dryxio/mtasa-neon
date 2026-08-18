@@ -1,5 +1,3 @@
-local screenW, screenH = guiGetScreenSize()
-
 local show = {
     active = false,
     startedAt = 0,
@@ -8,8 +6,6 @@ local show = {
     centerZ = 0,
     vehicle = nil,
     heroFire = nil,
-    fireCount = 0,
-    duration = 0,
 }
 
 local function clamp(value, minimum, maximum)
@@ -69,24 +65,9 @@ local function getVehicleCamera()
         z + 1.0
 end
 
-local function drawCaption(title, subtitle, accent)
-    local left = screenW * 0.065
-    local bottom = screenH * 0.90
-    local width = screenW * 0.64
-    local titleHeight = screenH * 0.055
-
-    dxDrawRectangle(left - 18, bottom - 92, width, 82, tocolor(0, 0, 0, 150), false)
-    dxDrawRectangle(left - 18, bottom - 92, 5, 82, accent or tocolor(255, 140, 40, 240), false)
-    dxDrawText(title, left, bottom - 87, left + width, bottom - 87 + titleHeight,
-        tocolor(255, 255, 255, 255), 1.7, "default-bold", "left", "top", false, false, false)
-    dxDrawText(subtitle, left, bottom - 48, left + width, bottom,
-        tocolor(220, 220, 220, 245), 1.0, "default", "left", "top", false, false, false)
-end
-
-local function drawCinematicBars()
-    local barHeight = screenH * 0.045
-    dxDrawRectangle(0, 0, screenW, barHeight, tocolor(0, 0, 0, 235), false)
-    dxDrawRectangle(0, screenH - barHeight, screenW, barHeight, tocolor(0, 0, 0, 235), false)
+local function setPresentationUI(visible)
+    showPlayerHudComponent("all", visible)
+    showChat(visible)
 end
 
 local function renderShow()
@@ -97,9 +78,11 @@ local function renderShow()
     local elapsed = getTickCount() - show.startedAt
     local cx, cy, cz = show.centerX, show.centerY, show.centerZ
 
-    -- 0-7s: reveal the full vertical NEON logo from a clean, readable angle.
-    if elapsed < 7000 then
-        local reveal = smoothstep(elapsed / 1600)
+    -- Give the managed fire FX plenty of time to stream in and settle. The camera
+    -- eases into the logo for the first few seconds, then stays almost completely
+    -- still so the full NEON word remains readable on video.
+    if elapsed < 14000 then
+        local reveal = smoothstep(elapsed / 3000)
         cameraLerp(
             cx + 23, cy - 42, cz + 13,
             cx, cy, cz,
@@ -109,9 +92,10 @@ local function renderShow()
             76, 62
         )
 
-    -- 7-11s: push toward the selected flame as it brightens and leaves the O.
-    elseif elapsed < 11000 then
-        local t = (elapsed - 7000) / 4000
+    -- Move in on the selected fire only after the complete logo has been visible
+    -- for a long uninterrupted shot.
+    elseif elapsed < 19000 then
+        local t = (elapsed - 14000) / 5000
         local lookX, lookY, lookZ = cx + 5, cy, cz
         if isElement(show.heroFire) then
             local fireX, fireY, fireZ = getElementPosition(show.heroFire)
@@ -129,8 +113,8 @@ local function renderShow()
             62, 55
         )
 
-    -- 11-21s: chase the vehicle. The same managed fire now follows it as a target.
-    elseif elapsed < 21000 then
+    -- Follow the car while the very same fire element is targeting it.
+    elseif elapsed < 31000 then
         local camX, camY, camZ, lookX, lookY, lookZ = getVehicleCamera()
         if camX then
             setCameraMatrix(camX, camY, camZ, lookX, lookY, lookZ, 0, 62)
@@ -138,7 +122,7 @@ local function renderShow()
             setCameraMatrix(cx + 8, cy - 21, cz + 2, cx, cy, cz, 0, 60)
         end
 
-    -- 21s-end: pull back enough to retain the fiery logo while the car rests in frame.
+    -- Finish on a clean wide gameplay shot with both the logo and car area visible.
     else
         local vehicleX, vehicleY, vehicleZ = cx + 16, cy - 13, 16.6
         if isElement(show.vehicle) then
@@ -153,37 +137,6 @@ local function renderShow()
         local targetZ = math.max(cz, vehicleZ + 2)
         setCameraMatrix(cx + 27, cy - 43, cz + 15, targetX, targetY, targetZ, 0, 74)
     end
-
-    drawCinematicBars()
-
-    if elapsed < 7000 then
-        drawCaption(
-            ("%d MANAGED FIRES"):format(show.fireCount),
-            "One synchronized NEON sign — already beyond GTA's native 60-fire pool."
-        )
-    elseif elapsed < 11000 then
-        drawCaption(
-            "EVERY FLAME IS AN ELEMENT",
-            "The selected fire changes strength and position live — no extinguish/recreate workaround."
-        )
-    elseif elapsed < 21000 then
-        drawCaption(
-            "SAME FIRE. NEW TARGET.",
-            "One existing fire leaves the logo, targets a moving vehicle, and follows it."
-        )
-    else
-        drawCaption(
-            "SYNCED • SCRIPTABLE • TARGETABLE",
-            "Managed fire elements: lifetime, strength, source/target, damage policy and propagation."
-        )
-    end
-
-    -- Tiny implementation hint for scripters without turning the video into documentation.
-    dxDrawText(
-        "createFire(...) → element",
-        screenW * 0.74, screenH * 0.065, screenW * 0.95, screenH * 0.11,
-        tocolor(235, 235, 235, 210), 1.0, "default-bold", "right", "top", false, false, false
-    )
 end
 
 local function stopShow()
@@ -194,13 +147,14 @@ local function stopShow()
     show.active = false
     removeEventHandler("onClientRender", root, renderShow)
     setCameraTarget(localPlayer)
+    setPresentationUI(true)
 
     show.vehicle = nil
     show.heroFire = nil
 end
 
 addEvent("fireShowcase:start", true)
-addEventHandler("fireShowcase:start", resourceRoot, function(centerX, centerY, centerZ, vehicle, heroFire, fireCount, duration)
+addEventHandler("fireShowcase:start", resourceRoot, function(centerX, centerY, centerZ, vehicle, heroFire)
     stopShow()
 
     show.active = true
@@ -210,9 +164,8 @@ addEventHandler("fireShowcase:start", resourceRoot, function(centerX, centerY, c
     show.centerZ = centerZ
     show.vehicle = vehicle
     show.heroFire = heroFire
-    show.fireCount = fireCount
-    show.duration = duration
 
+    setPresentationUI(false)
     addEventHandler("onClientRender", root, renderShow)
 end)
 
