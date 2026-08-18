@@ -1,9 +1,22 @@
 local tracked = {}
 local runSerial = 0
+local runPlayer = false
+
+local function emit(message, debugLevel, r, g, b)
+    outputDebugString(message, debugLevel or 3)
+    if isElement(runPlayer) and getElementType(runPlayer) == "player" then
+        outputChatBox(message, runPlayer, r or 255, g or 255, b or 255)
+    end
+end
 
 local function log(kind, name, detail)
     local suffix = detail and (": " .. tostring(detail)) or ""
-    outputDebugString(("[FIRETEST] %s %s%s"):format(kind, name, suffix), kind == "FAIL" and 1 or 3)
+    local message = ("[FIRETEST] %s %s%s"):format(kind, name, suffix)
+    if kind == "FAIL" then
+        emit(message, 1, 255, 80, 80)
+    else
+        emit(message, 3, 100, 255, 100)
+    end
 end
 
 local function pass(name, detail)
@@ -158,7 +171,7 @@ local function runAll(player)
     runSerial = runSerial + 1
     local serial = runSerial
     reset()
-    outputDebugString(("[FIRETEST] RUN serial=%d player=%s"):format(serial, getPlayerName(player)), 3)
+    emit(("[FIRETEST] RUN serial=%d player=%s"):format(serial, getPlayerName(player)), 3, 255, 200, 80)
 
     if not runImmediate(player) then
         fail("run", "basic creation failed; dependent tests skipped")
@@ -171,7 +184,7 @@ local function runAll(player)
 
     setTimer(function()
         if serial == runSerial then
-            outputDebugString(("[FIRETEST] DONE serial=%d -- inspect PASS/FAIL lines above"):format(serial), 3)
+            emit(("[FIRETEST] DONE serial=%d -- inspect PASS/FAIL lines above"):format(serial), 3, 255, 200, 80)
         end
     end, 5000, 1)
 end
@@ -185,6 +198,11 @@ addEventHandler("firetest:clientResult", resourceRoot, function(serial, name, ok
 end)
 
 addCommandHandler("firetest", function(player, _, caseName)
+    if not isElement(player) or getElementType(player) ~= "player" then
+        return
+    end
+
+    runPlayer = player
     caseName = caseName or "all"
     if caseName == "all" then
         runAll(player)
@@ -216,6 +234,13 @@ addCommandHandler("firetest", function(player, _, caseName)
     end
 end)
 
+addEventHandler("onPlayerQuit", root, function()
+    if source == runPlayer then
+        runPlayer = false
+    end
+end)
+
 addEventHandler("onResourceStop", resourceRoot, function()
     reset()
+    runPlayer = false
 end)
