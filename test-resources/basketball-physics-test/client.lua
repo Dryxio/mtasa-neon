@@ -1,7 +1,10 @@
 local BALL_MODEL, BALL_RADIUS = 2114, 0.12
 local RIM_RADIUS = 0.23
 local RIM_PIPE_RADIUS, RIM_EDGE_STEPS = 0.03, 4
+local RIM_LOCAL_X, RIM_LOCAL_Y, RIM_LOCAL_Z = 0.07342529296875, 0.5001220703125, 0.9108123779296875
 local BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_OFFSET_Z = -0.06488037109375, -0.394287109375, 0.5519981384277344
+local CALIBRATION_STEP = 0.01
+local CALIBRATION_HEADING_STEP = 1.0
 
 -- Centerline of model 947's visible rim, extracted from the supplied
 -- bskballhub_lax01.dff and expressed relative to the rim center.
@@ -21,6 +24,7 @@ local rimModel, boardModel = false, false
 local rimObject, boardObject = false, false
 local court, trackedBall = false, false
 local aiming, charging, chargeStart = false, false, 0
+local calibrating = false
 local scoreArmed, previousBallZ, lastScoreSignal = false, false, 0
 local screenW, screenH = guiGetScreenSize()
 
@@ -139,8 +143,34 @@ local function pickup()
     if dx * dx + dy * dy + dz * dz <= 3.24 then triggerServerEvent("basketPhysics:pickup", resourceRoot) end
 end
 
+local function nudgeCourt(dx, dy, dz, dHeading)
+    if not calibrating or not court then return end
+    triggerServerEvent("basketPhysics:calibrate", resourceRoot, dx, dy, dz, dHeading)
+end
+
+local function getCalibratedOrigin()
+    if not court then return false end
+    local rimOffsetX, rimOffsetY = rotateLocal(RIM_LOCAL_X, RIM_LOCAL_Y, court.heading)
+    return court.x - rimOffsetX, court.y - rimOffsetY, court.z - RIM_LOCAL_Z
+end
+
+local function copyCalibration()
+    if not court then
+        outputChatBox("[basket-test] No active court. Run /baskettest first.", 255, 140, 140)
+        return
+    end
+
+    local objectX, objectY, objectZ = getCalibratedOrigin()
+    local text = ("COURT_OBJECT_X=%.6f, COURT_OBJECT_Y=%.6f, COURT_OBJECT_Z=%.6f, COURT_OBJECT_HEADING=%.3f")
+        :format(objectX, objectY, objectZ, court.heading)
+    setClipboard(text)
+    outputChatBox("[basket-test] Calibration coords copied to clipboard:", 170, 230, 255)
+    outputChatBox("[basket-test] " .. text, 235, 235, 235)
+end
+
 -- Mac-friendly keyboard controls: A toggles aim, E charges/releases the shot.
 bindKey("a", "down", function()
+    if calibrating then return end
     if not holding() then
         aiming, charging = false, false
         return
@@ -150,6 +180,7 @@ bindKey("a", "down", function()
 end)
 
 bindKey("e", "both", function(_, state)
+    if calibrating then return end
     if state == "down" and aiming and holding() then
         charging, chargeStart = true, getTickCount()
         return
@@ -161,7 +192,36 @@ bindKey("e", "both", function(_, state)
     charging = false
 end)
 
-bindKey("f", "down", pickup)
+bindKey("f", "down", function()
+    if not calibrating then pickup() end
+end)
+
+bindKey("arrow_l", "down", function() nudgeCourt(-CALIBRATION_STEP, 0, 0, 0) end)
+bindKey("arrow_r", "down", function() nudgeCourt(CALIBRATION_STEP, 0, 0, 0) end)
+bindKey("arrow_u", "down", function() nudgeCourt(0, CALIBRATION_STEP, 0, 0) end)
+bindKey("arrow_d", "down", function() nudgeCourt(0, -CALIBRATION_STEP, 0, 0) end)
+bindKey("pgup", "down", function() nudgeCourt(0, 0, CALIBRATION_STEP, 0) end)
+bindKey("pgdn", "down", function() nudgeCourt(0, 0, -CALIBRATION_STEP, 0) end)
+bindKey("z", "down", function() nudgeCourt(0, 0, 0, -CALIBRATION_HEADING_STEP) end)
+bindKey("x", "down", function() nudgeCourt(0, 0, 0, CALIBRATION_HEADING_STEP) end)
+bindKey("c", "down", function()
+    if calibrating then copyCalibration() end
+end)
+
+addCommandHandler("basketcal", function()
+    if not court then
+        outputChatBox("[basket-test] Run /baskettest first.", 255, 140, 140)
+        return
+    end
+    calibrating = not calibrating
+    aiming, charging = false, false
+    if calibrating then
+        outputChatBox("[basket-test] CALIBRATION ON: arrows X/Y, PgUp/PgDn Z, Z/X rotate, C copy.", 170, 230, 255)
+    else
+        outputChatBox("[basket-test] Calibration off.", 170, 230, 255)
+    end
+end)
+addCommandHandler("basketcopy", copyCalibration)
 addCommandHandler("basketpickup", pickup)
 addCommandHandler("basketshot", function(_, value) shoot(clamp(tonumber(value) or 0.65, 0, 1)) end)
 
@@ -206,8 +266,16 @@ addEventHandler("onClientRender", root, function()
         local vx, vy, vz = getElementVelocity(object)
         local ax, ay, az = getElementAngularVelocity(object)
         local score = getElementData(localPlayer, "basketPhysics:score") or 0
-        dxDrawText(("BASKET PHYSICS | score %d\nvel %.4f %.4f %.4f | spin %.4f %.4f %.4f\nA aim toggle | hold/release E shoot | F pickup | /basketshot [0..1]"):format(score, vx, vy, vz, ax, ay, az), 24, 24, 760, 115, tocolor(255,255,255,235), 1, "default-bold")
+        dxDrawText(("BASKET PHYSICS | score %d\nvel %.4f %.4f %.4f | spin %.4f %.4f %.4f\nA aim toggle | hold/release E shoot | F pickup | /basketcal"):format(score, vx, vy, vz, ax, ay, az), 24, 24, 760, 115, tocolor(255,255,255,235), 1, "default-bold")
     end
+
+    if calibrating and court then
+        local objectX, objectY, objectZ = getCalibratedOrigin()
+        local text = ("HOOP CALIBRATION\nArrows: X/Y  |  PgUp/PgDn: Z  |  Z/X: heading  |  C: copy\nRim %.4f %.4f %.4f  heading %.1f\nObject origin %.4f %.4f %.4f")
+            :format(court.x, court.y, court.z, court.heading, objectX, objectY, objectZ)
+        dxDrawText(text, 24, 125, 850, 220, tocolor(255, 210, 90, 245), 1, "default-bold", "left", "top", false, false, false)
+    end
+
     if aiming and holding() then
         local p = charging and clamp((getTickCount() - chargeStart) / 1200, 0, 1) or 0
         local w, h = 260, 16 local x, y = (screenW - w) * 0.5, screenH * 0.82
@@ -222,11 +290,20 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
     if not ensureHoopModels() then outputDebugString("[basket-test] hoop collision setup failed", 1) end
     if readCourt() then rebuildCourt() end
     for _, object in ipairs(getElementsByType("object", root, true)) do configureBall(object) end
-    outputChatBox("[basket-test] /baskettest, A aim, hold/release E shoot, F pickup, /basketshot [0..1]", 170,230,255)
+    outputChatBox("[basket-test] /baskettest | A aim | E shoot | F pickup | /basketcal align hoop", 170,230,255)
 end)
 addEventHandler("onClientElementStreamIn", root, function() configureBall(source) end)
 addEventHandler("onClientElementDataChange", root, function(key)
-    if source == resourceRoot and key and key:find("^basketPhysics:") then rebuildCourt() else configureBall(source) end
+    if source == resourceRoot then
+        if key == "basketPhysics:revision" then
+            rebuildCourt()
+        elseif key == "basketPhysics:active" and not getElementData(resourceRoot, "basketPhysics:active") then
+            court = false
+            destroyCourtObjects()
+        end
+    else
+        configureBall(source)
+    end
 end)
 addEventHandler("onClientResourceStop", resourceRoot, function()
     destroyCourtObjects()
