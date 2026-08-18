@@ -13,13 +13,7 @@
 #include "CMaterialPrimitive3DBatcher.h"
 #include "DXHook/CProxyDirect3DDevice9.h"
 #include "DXHook/CDirect3DEvents9.h"
-////////////////////////////////////////////////////////////////
-//
-// CMaterialPrimitive3DBatcher::CMaterialPrimitive3DBatcher
-//
-//
-//
-////////////////////////////////////////////////////////////////
+
 CMaterialPrimitive3DBatcher::CMaterialPrimitive3DBatcher(bool bPreGUI, CGraphics* pGraphics) : m_bPreGUI(bPreGUI), m_pGraphics(pGraphics)
 {
 }
@@ -28,24 +22,12 @@ CMaterialPrimitive3DBatcher::~CMaterialPrimitive3DBatcher()
 {
     ClearQueue();
 }
-////////////////////////////////////////////////////////////////
-//
-// CMaterialPrimitive3DBatcher::OnDeviceCreate
-//
-//
-//
-////////////////////////////////////////////////////////////////
+
 void CMaterialPrimitive3DBatcher::OnDeviceCreate(IDirect3DDevice9* pDevice, float fViewportSizeX, float fViewportSizeY)
 {
     m_pDevice = pDevice;
 }
-////////////////////////////////////////////////////////////////
-//
-// CMaterialPrimitive3DBatcher::Flush
-//
-// Send all buffered vertices to D3D
-//
-////////////////////////////////////////////////////////////////
+
 void CMaterialPrimitive3DBatcher::Flush()
 {
     if (m_primitiveList.empty())
@@ -92,7 +74,7 @@ void CMaterialPrimitive3DBatcher::Flush()
 
     m_pDevice->SetTexture(0, nullptr);
     CMaterialItem* pLastMaterial = nullptr;
-    uint uiVertexStreamZeroStride = sizeof(PrimitiveMaterialVertice);
+    const uint uiVertexStreamZeroStride = sizeof(PrimitiveMaterialVertice);
 
     for (auto& primitive : m_primitiveList)
     {
@@ -103,16 +85,12 @@ void CMaterialPrimitive3DBatcher::Flush()
 
         if (primitive.pRawTexture)
         {
-            // RenderWare textures are created through the D3D proxy. The queued
-            // batcher renders on the raw device, so unwrap the proxy first just
-            // like DrawTextureRaw does. This is the important difference from
-            // the old break-effect renderer which crashed inside d3d9.dll.
-            IDirect3DTexture9* pRealTexture = reinterpret_cast<IDirect3DTexture9*>(CDirect3DEvents9::GetRealTexture(primitive.pRawTexture));
-            if (pRealTexture)
-            {
-                m_pDevice->SetTexture(0, pRealTexture);
-                DrawPrimitive(primitive.eType, primitive.pVecVertices->size(), pVertexStreamZeroData, uiVertexStreamZeroStride);
-            }
+            // pRawTexture is already unwrapped to the real D3D texture when it
+            // enters the queue. Keeping only the real COM object here makes the
+            // queued lifetime safe and avoids calling AddRef/Release on GTA's
+            // proxy wrapper.
+            m_pDevice->SetTexture(0, primitive.pRawTexture);
+            DrawPrimitive(primitive.eType, primitive.pVecVertices->size(), pVertexStreamZeroData, uiVertexStreamZeroStride);
             pLastMaterial = nullptr;
             continue;
         }
@@ -237,8 +215,19 @@ void CMaterialPrimitive3DBatcher::AddRawPrimitive(D3DPRIMITIVETYPE eType, IDirec
         return;
     }
 
-    pTexture->AddRef();
-    m_primitiveList.push_back({eType, nullptr, pTexture, pVecVertices});
+    // GTA/RenderWare gives us a CProxyDirect3DTexture9-facing pointer. Never
+    // call COM methods on that pointer from the raw core renderer. Resolve the
+    // underlying real texture first, then retain that object across the queue.
+    IDirect3DBaseTexture9* pRealBaseTexture = CDirect3DEvents9::GetRealTexture(pTexture);
+    IDirect3DTexture9* pRealTexture = reinterpret_cast<IDirect3DTexture9*>(pRealBaseTexture);
+    if (!pRealTexture)
+    {
+        delete pVecVertices;
+        return;
+    }
+
+    pRealTexture->AddRef();
+    m_primitiveList.push_back({eType, nullptr, pRealTexture, pVecVertices});
 }
 
 void CGraphics::DrawRawMaterialPrimitive3DQueued(std::vector<PrimitiveMaterialVertice>* pVecVertices, D3DPRIMITIVETYPE eType,
