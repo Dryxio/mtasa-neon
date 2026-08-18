@@ -13,7 +13,7 @@ local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function configureBall(object)
     if not isElement(object) or getElementType(object) ~= "object" or not getElementData(object, "basketPhysicsTest") then return false end
     setObjectProperty(object, "mass", 0.62)
-    setObjectProperty(object, "turn_mass", 0.08)
+    setObjectProperty(object, "turn_mass", 0.4 * 0.62 * BALL_RADIUS * BALL_RADIUS)
     setObjectProperty(object, "air_resistance", 0.995)
     setObjectProperty(object, "elasticity", 0.72)
     trackedBall = object
