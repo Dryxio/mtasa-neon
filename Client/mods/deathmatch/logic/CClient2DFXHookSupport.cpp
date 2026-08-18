@@ -7,6 +7,7 @@
  *
  *****************************************************************************/
 #include "StdInc.h"
+#include <SharedUtil.MemAccess.h>
 #include "../../../game_sa/HookSystem.h"
 #include "../../../game_sa/gamesa_init.h"
 
