@@ -227,6 +227,20 @@ void CPhysicalSA::ProcessCollision()
     // clang-format on
 }
 
+void CPhysicalSA::RemoveAndAdd()
+{
+    DWORD dwFunc = FUNC_CPhysical_RemoveAndAdd;
+    DWORD dwThis = (DWORD)GetInterface();
+
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThis
+        call    dwFunc
+    }
+    // clang-format on
+}
+
 void CPhysicalSA::AddToMovingList()
 {
     DWORD dwFunc = FUNC_CPhysical_AddToMovingList;
@@ -290,7 +304,6 @@ void CPhysicalSA::AttachEntityToEntity(CPhysical& Entity, const CVector& vecPosi
 {
     CPhysicalSA& EntitySA = dynamic_cast<CPhysicalSA&>(Entity);
     DWORD        dwEntityInterface = (DWORD)EntitySA.GetInterface();
-
     InternalAttachEntityToEntity(dwEntityInterface, &vecPosition, &vecRotation);
 }
 
@@ -300,7 +313,6 @@ void CPhysicalSA::DetachEntityFromEntity(float fUnkX, float fUnkY, float fUnkZ, 
     DWORD dwThis = (DWORD)GetInterface();
 
     // DetachEntityFromEntity appears to crash when there's no entity attached (0x544403, bug 2350)
-    // So do a NULL check here
     if (((CPhysicalSAInterface*)GetInterface())->m_pAttachedEntity == NULL)
         return;
 
