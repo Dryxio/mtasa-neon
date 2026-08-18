@@ -9,7 +9,7 @@ The scene uses the Verdant Meadows runway between:
 424.00473, 2503.03442, 16.48438
 ```
 
-No mall, buildings, escalators or decorative showcase props are created. Runtime models are invisible anchors; the camera should show only the normal GTA runway and native 2DFX output.
+The runway itself stays stock GTA. The only visible objects added for the main light show are real GTA lamp posts (model 1226); centerline, threshold, particle, roadsign, sun-glare and moon carriers use tiny invisible runtime anchors.
 
 ## Run
 
@@ -26,42 +26,45 @@ Use `/2dfxshow stop` to abort and restore the player immediately.
 
 - `/2dfxshow` or `/2dfxshow full` — full seven-shot cinematic.
 - `/2dfxshow shot 1` — clean sunset runway / native `SUN_GLARE` establishing shot.
-- `/2dfxshow shot 2` — night transition and far-to-near runway edge ignition.
-- `/2dfxshow shot 3` — model-level color chase, centerline animation and flash modes.
-- `/2dfxshow shot 4` — close-up mutation and restoration of a real GTA lamp 2DFX.
-- `/2dfxshow shot 5` — native `smoke_flare` and `fire` particle gates at the far threshold.
-- `/2dfxshow shot 6` — native generated roadsign text on the runway.
-- `/2dfxshow shot 7` — full-runway finale with color waves, threshold lights and centerline strobes.
+- `/2dfxshow shot 2` — night transition and far-to-near ignition of the physical lamp-post rows.
+- `/2dfxshow shot 3` — model-level color chase, left/right blinking modes, centerline animation and corona pulses.
+- `/2dfxshow shot 4` — close-up mutation and restoration of a cloned GTA lamp's native 2DFX when available.
+- `/2dfxshow shot 5` — deliberate multicolor `coronamoon` burst arranged as an arc in the sky.
+- `/2dfxshow shot 6` — native `smoke_flare`/`fire` particle gates plus generated native roadsign text.
+- `/2dfxshow shot 7` — full-runway finale with lamp-post color waves, threshold lights and centerline strobes.
 - `/2dfxshow final` — hold the final composition for screenshots.
 - `/2dfxshow setup` — hold the final composition with HUD/chat visible for visual inspection.
 - `/2dfxshow stop` — cleanup and restore player/camera/time/weather.
 
-## What the light show is doing
+## What the lamp show is doing
 
-The runway is split into six longitudinal segments. Each segment gets three independently allocated runtime models: left edge, right edge and centerline. Multiple invisible objects share each model, so changing one model-level 2DFX instantly changes a whole physical section of runway.
+Thirty physical model-1226 lamp posts are placed down each side of the runway. Each side is split into six model-level groups, five lamp posts per group. The runtime models inherit the 1226 visual, and their native light 2DFX is used when the clone exposes it. If a runtime slot does not clone the native effect, the showcase creates the equivalent LIGHT at the original 1226 effect position and reuses the original 1226 `coronaName`/`shadowName` instead of hard-coding a sprite.
 
-That is used to demonstrate the actual model-level nature of GTA's 2DFX system rather than faking a per-object light animation.
+This means one Lua mutation changes five real lamp posts at once. Left and right use separate runtime models, so the show can produce opposite color waves, alternating blink patterns, `warnlight`/`trafficlight` modes, corona-size pulses and range changes while still demonstrating GTA's model-level semantics.
+
+The centerline and threshold lights also reuse the native 1226 corona texture. `coronamoon` is intentionally isolated to shot 5, where seven invisible anchors form a large multicolor moon arc in the sky; it is no longer used for ordinary runway lights.
 
 The final scene contains roughly:
 
-- 60 edge-light anchors across both runway sides;
-- 24 centerline light anchors;
+- 60 visible GTA lamp posts across both runway sides;
+- 12 independently controlled lamp-post model groups (six left + six right);
+- 24 centerline light anchors in six independently controlled groups;
 - two 9-light threshold bars;
-- six independently controlled longitudinal light segments per side;
-- six independently controlled centerline segments;
-- native `showMode` blinking/strobe changes;
+- native `showMode` blinking (`warnlight`, `trafficlight`, `on_off_at_5`);
 - live color, corona-size and point-light-range mutations;
-- one real GTA lamp whose original native 2DFX is mutated and restored;
+- seven intentional multicolor `coronamoon` sprites for the sky-burst shot;
 - four native `smoke_flare` particle anchors and two native `fire` particle anchors;
 - two native `ROADSIGN` effects reading `NATIVE_GTA_2DFX / SCRIPTED_IN_LUA` and `NO_SHADERS / NO_CUSTOM_ASSETS`;
 - a sunset `SUN_GLARE` cluster at the far end.
 
 ## Visual claim
 
-There are no custom DFFs, TXDs, shaders or textures in the showcase. The runway remains the stock GTA environment; the visual spectacle is produced by native GTA 2DFX types controlled from Lua.
+There are no custom DFFs, TXDs, shaders or textures in the showcase. Lamp posts and all texture names come from GTA itself; the spectacle is produced by native GTA 2DFX types controlled from Lua.
 
 ## Recording notes
 
-Record 16:9. First run `/2dfxshow setup` and make sure both runway edges are correctly aligned with the asphalt and the roadsigns face the intended camera direction. If those are aligned, `/2dfxshow` should be ready to record without additional world restreams.
+Record 16:9. First run `/2dfxshow setup` and verify that both lamp-post rows sit just outside the asphalt edges and that their heads face sensibly toward the runway. If required, adjust `RUNWAY_HALF_WIDTH` or the two lamp yaw offsets in `client_scene.lua`.
 
-The runway axis is computed directly from the two supplied endpoint coordinates, so changing the endpoints later automatically repositions every edge/center/threshold anchor and every camera path around the new line.
+Then test `/2dfxshow shot 5` separately: the moons should read as one intentional sky arc, not as runway lights. Finally run `/2dfxshow shot 6` to verify particle/roadsign orientation before recording the full show.
+
+The runway axis is computed directly from the two supplied endpoint coordinates, so changing the endpoints later automatically repositions every lamp, edge/center/threshold effect and camera path around the new line.
