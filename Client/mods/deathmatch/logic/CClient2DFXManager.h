@@ -6,6 +6,13 @@
  *  PURPOSE:     Resource-owned model 2DFX state and native integration
  *
  *****************************************************************************/
+
+// 2DFX API based on the original work by FileEX:
+// https://github.com/multitheftauto/mtasa-blue/pull/3741
+//
+// Neon adaptation adds resource-owned state/lifecycle cleanup, stacked
+// multi-resource overrides/removals, and additional native safety hardening.
+
 #pragma once
 
 #include <CVector.h>
