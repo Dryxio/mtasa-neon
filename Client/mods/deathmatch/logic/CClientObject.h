@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 class CClientObject;
+class CClientObjectPhysicsManager;
 class CResource;
 
 #pragma once
@@ -37,6 +38,7 @@ class CClientObject : public CClientStreamElement
 {
     DECLARE_CLASS(CClientObject, CClientStreamElement)
     friend class CClientObjectManager;
+    friend class CClientObjectPhysicsManager;
     friend class CClientPed;
 
 public:

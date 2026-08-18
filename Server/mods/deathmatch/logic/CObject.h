@@ -79,6 +79,13 @@ public:
     bool IsSyncable() { return m_bSyncable; }
     void SetSyncable(bool bSyncable) { m_bSyncable = bSyncable; }
 
+    bool IsDynamicPhysics() const noexcept { return m_bDynamicPhysics; }
+    void SetDynamicPhysics(bool bEnabled) noexcept { m_bDynamicPhysics = bEnabled; }
+    const CVector& GetPhysicsVelocity() const noexcept { return m_vecPhysicsVelocity; }
+    void SetPhysicsVelocity(const CVector& vecVelocity) noexcept { m_vecPhysicsVelocity = vecVelocity; }
+    const CVector& GetPhysicsTurnVelocity() const noexcept { return m_vecPhysicsTurnVelocity; }
+    void SetPhysicsTurnVelocity(const CVector& vecVelocity) noexcept { m_vecPhysicsTurnVelocity = vecVelocity; }
+
     CPlayer* GetSyncer() { return m_pSyncer; }
     void     SetSyncer(CPlayer* pPlayer);
 
@@ -110,6 +117,9 @@ private:
     float          m_fHealth;
     bool           m_bBreakable;
     bool           m_bSyncable;
+    bool           m_bDynamicPhysics = false;
+    CVector        m_vecPhysicsVelocity{};
+    CVector        m_vecPhysicsTurnVelocity{};
     CPlayer*       m_pSyncer;
     bool           m_bVisibleInAllDimensions = false;
     bool           m_bRespawnable;

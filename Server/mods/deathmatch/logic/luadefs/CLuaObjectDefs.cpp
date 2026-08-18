@@ -11,9 +11,11 @@
 
 #include "StdInc.h"
 #include "../CServerModelManager.h"
+#include "../packets/CElementRPCPacket.h"
 #include "CLuaObjectDefs.h"
 #include "CStaticFunctionDefinitions.h"
 #include "CScriptArgReader.h"
+#include <net/rpc_enums.h>
 
 void CLuaObjectDefs::LoadFunctions()
 {
@@ -28,18 +30,19 @@ void CLuaObjectDefs::LoadFunctions()
         {"isObjectBreakable", ArgumentParser<IsObjectBreakable>},
         {"isObjectMoving", ArgumentParser<IsObjectMoving>},
         {"isObjectRespawnable", ArgumentParser<IsObjectRespawnable>},
+        {"isObjectDynamicPhysics", ArgumentParser<IsObjectDynamicPhysics>},
 
         // Object set funcs
         {"setObjectRotation", SetObjectRotation},
         {"setObjectScale", SetObjectScale},
         {"setObjectBreakable", ArgumentParser<SetObjectBreakable>},
+        {"setObjectDynamicPhysics", ArgumentParser<SetObjectDynamicPhysics>},
         {"moveObject", MoveObject},
         {"stopObject", StopObject},
         {"breakObject", ArgumentParser<BreakObject>},
         {"toggleObjectRespawn", ArgumentParser<ToggleObjectRespawn>},
     };
 
-    // Add functions
     for (const auto& [name, func] : functions)
         CLuaCFunctions::AddFunction(name, func);
 }
@@ -60,18 +63,20 @@ void CLuaObjectDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setBreakable", "setObjectBreakable");
     lua_classfunction(luaVM, "isMoving", "isObjectMoving");
     lua_classfunction(luaVM, "toggleRespawn", "toggleObjectRespawn");
+    lua_classfunction(luaVM, "isDynamicPhysics", "isObjectDynamicPhysics");
+    lua_classfunction(luaVM, "setDynamicPhysics", "setObjectDynamicPhysics");
 
     lua_classvariable(luaVM, "scale", "setObjectScale", "getObjectScale");
     lua_classvariable(luaVM, "breakable", "setObjectBreakable", "isObjectBreakable");
     lua_classvariable(luaVM, "moving", nullptr, "isObjectMoving");
     lua_classvariable(luaVM, "isRespawnable", nullptr, "isObjectRespawnable");
+    lua_classvariable(luaVM, "dynamicPhysics", "setObjectDynamicPhysics", "isObjectDynamicPhysics");
 
     lua_registerclass(luaVM, "Object", "Element");
 }
 
 int CLuaObjectDefs::CreateObject(lua_State* luaVM)
 {
-    //  object createObject ( int modelid, float x, float y, float z, [float rx, float ry, float rz, bool lowLOD] )
     ushort  usModelID;
     CVector vecPosition;
     CVector vecRotation;
@@ -98,9 +103,7 @@ int CLuaObjectDefs::CreateObject(lua_State* luaVM)
                     {
                         CElementGroup* pGroup = pResource->GetElementGroup();
                         if (pGroup)
-                        {
                             pGroup->Add(pObject);
-                        }
 
                         lua_pushelement(luaVM, pObject);
                         return 1;
@@ -170,6 +173,11 @@ bool CLuaObjectDefs::IsObjectBreakable(CObject* const pObject)
     return pObject->IsBreakable();
 }
 
+bool CLuaObjectDefs::IsObjectDynamicPhysics(CObject* const pObject) noexcept
+{
+    return pObject && pObject->IsDynamicPhysics();
+}
+
 int CLuaObjectDefs::SetObjectRotation(lua_State* luaVM)
 {
     CElement* pElement;
@@ -202,18 +210,12 @@ int CLuaObjectDefs::SetObjectScale(lua_State* luaVM)
     CScriptArgReader argStream(luaVM);
     argStream.ReadUserData(pObject);
 
-    // Caz - This function looks weird but it works
-    // the function is designed to support the following syntaxes
-    // setObjectScale ( obj, 2 ) -- all other components are set to 2
-    // setObjectScale ( obj, 2, 1, 5 ) -- custom scaling on 3 axis
-
     if (argStream.NextIsVector3D())
     {
         argStream.ReadVector3D(vecScale);
     }
     else
     {
-        // Caz - Here is what I am talking about.
         argStream.ReadNumber(vecScale.fX);
         argStream.ReadNumber(vecScale.fY, vecScale.fX);
         argStream.ReadNumber(vecScale.fZ, vecScale.fX);
@@ -241,10 +243,6 @@ bool CLuaObjectDefs::IsObjectMoving(CObject* const pObject)
 
 int CLuaObjectDefs::MoveObject(lua_State* luaVM)
 {
-    //  bool moveObject ( object theObject, int time,
-    //      float targetx, float targety, float targetz,
-    //      [ float moverx, float movery, float moverz,
-    //      string strEasingType, float fEasingPeriod, float fEasingAmplitude, float fEasingOvershoot ] )
     CElement*           pElement;
     int                 iTime;
     CVector             vecTargetPosition;
@@ -313,6 +311,24 @@ int CLuaObjectDefs::StopObject(lua_State* luaVM)
 bool CLuaObjectDefs::SetObjectBreakable(CObject* const pObject, const bool bBreakable)
 {
     return CStaticFunctionDefinitions::SetObjectBreakable(pObject, bBreakable);
+}
+
+bool CLuaObjectDefs::SetObjectDynamicPhysics(CObject* const pObject, const bool bEnabled)
+{
+    if (!pObject)
+        return false;
+
+    pObject->SetDynamicPhysics(bEnabled);
+    if (!bEnabled)
+    {
+        pObject->SetPhysicsVelocity(CVector());
+        pObject->SetPhysicsTurnVelocity(CVector());
+    }
+
+    CBitStream bitStream;
+    bitStream.pBitStream->WriteBit(bEnabled);
+    m_pPlayerManager->BroadcastOnlyJoined(CElementRPCPacket(pObject, SET_OBJECT_DYNAMIC_PHYSICS, *bitStream.pBitStream));
+    return true;
 }
 
 bool CLuaObjectDefs::BreakObject(CObject* const pObject)
