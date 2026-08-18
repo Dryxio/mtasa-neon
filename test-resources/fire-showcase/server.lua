@@ -1,5 +1,5 @@
 local SHOW_DIMENSION = 64990
-local SHOW_DURATION = 27000
+local SHOW_DURATION = 36000
 
 local LOGO_CENTER_X = 405.0
 local LOGO_Y = 2535.0
@@ -132,7 +132,6 @@ local function cleanup(notifyClient)
         triggerClientEvent(state.player, "fireShowcase:stop", resourceRoot)
     end
 
-    -- Destroy fires before the target vehicle so element references disappear cleanly.
     for _, fire in ipairs(state.fires) do
         destroyElementSafe(fire)
     end
@@ -177,7 +176,6 @@ local function buildLogo(player)
     local firstX = LOGO_CENTER_X - ((totalColumns - 1) * LOGO_STEP * 0.5)
     local created = 0
     local hero = nil
-    local minColumn = math.huge
 
     for letterIndex, pattern in ipairs(patterns) do
         local columnBase = (letterIndex - 1) * (letterWidth + LETTER_GAP)
@@ -200,9 +198,7 @@ local function buildLogo(player)
                         setElementInterior(fire, 0)
                         state.fires[#state.fires + 1] = fire
                         created = created + 1
-                        minColumn = math.min(minColumn, globalColumn)
 
-                        -- Right side of the O: easy to see leaving the middle of the word.
                         if letterIndex == 3 and rowIndex == 4 and columnIndex == 5 then
                             hero = fire
                         end
@@ -212,7 +208,7 @@ local function buildLogo(player)
         end
     end
 
-    return created, hero, firstX, minColumn
+    return created, hero, firstX
 end
 
 local function animateStrengthWave(firstX)
@@ -220,7 +216,7 @@ local function animateStrengthWave(firstX)
         if isElement(fire) then
             local x = select(1, getElementPosition(fire))
             local column = math.floor(((x - firstX) / LOGO_STEP) + 0.5)
-            local delay = 1800 + column * 105
+            local delay = 6000 + column * 120
 
             later(delay, function()
                 if isElement(fire) then
@@ -228,7 +224,7 @@ local function animateStrengthWave(firstX)
                 end
             end)
 
-            later(delay + 420, function()
+            later(delay + 500, function()
                 if isElement(fire) and fire ~= state.heroFire then
                     setFireStrength(fire, 1.0)
                 end
@@ -248,7 +244,7 @@ local function animateHeroToVehicle()
     setFireStrength(hero, 3.2)
 
     local startX, startY, startZ = getElementPosition(hero)
-    local steps = 24
+    local steps = 28
     local currentStep = 0
     local serial = state.serial
     local timer
@@ -322,8 +318,7 @@ local function startShow(player)
 
     animateStrengthWave(firstX)
 
-    -- Make the selected flame stand out before it physically leaves the O.
-    later(8200, function()
+    later(14500, function()
         if isElement(state.heroFire) then
             setFireStrength(state.heroFire, 3.2)
         end
@@ -332,26 +327,25 @@ local function startShow(player)
         end
     end)
 
-    later(9300, animateHeroToVehicle)
+    later(16000, animateHeroToVehicle)
 
-    -- Keep the car in the useful camera area rather than letting physics run forever.
-    later(19000, function()
+    later(30000, function()
         if isElement(state.vehicle) then
             setElementVelocity(state.vehicle, 0, 0, 0)
         end
     end)
 
-    triggerClientEvent(player, "fireShowcase:start", resourceRoot,
-        LOGO_CENTER_X, LOGO_Y, LOGO_BASE_Z + 4.05, vehicle, hero, count, SHOW_DURATION)
-
-    chat(player, ("Started: %d managed fires. Recording sequence is automatic."):format(count), 120, 255, 120)
+    -- Wait briefly before switching to the showcase camera so EntityAdd packets and
+    -- their FX can start arriving before the first recorded frame.
+    later(900, function()
+        if isElement(state.player) then
+            triggerClientEvent(state.player, "fireShowcase:start", resourceRoot,
+                LOGO_CENTER_X, LOGO_Y, LOGO_BASE_Z + 4.05, state.vehicle, state.heroFire)
+        end
+    end)
 
     later(SHOW_DURATION, function()
-        local owner = state.player
         cleanup(true)
-        if isElement(owner) then
-            chat(owner, "Showcase complete. /fireshow to replay.", 120, 255, 120)
-        end
     end)
 end
 
@@ -364,7 +358,6 @@ addCommandHandler("fireshow", function(player, _, action)
             return
         end
         cleanup(true)
-        chat(player, "Showcase stopped and cleaned up.", 255, 200, 80)
         return
     end
 
