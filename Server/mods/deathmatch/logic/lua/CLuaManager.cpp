@@ -18,6 +18,7 @@
 #include "luadefs/CLuaHTTPDefs.h"
 #include "luadefs/CLuaUtilDefs.h"
 #include "luadefs/CLuaElementDefs.h"
+#include "luadefs/CLuaFireDefs.h"
 #include "luadefs/CLuaAccountDefs.h"
 #include "luadefs/CLuaACLDefs.h"
 #include "luadefs/CLuaBanDefs.h"
@@ -134,6 +135,7 @@ void CLuaManager::DoPulse()
         (*iter)->DoPulse();
     }
     m_pLuaModuleManager->DoPulse();
+    CLuaFireDefs::DoPulse();
 }
 
 CLuaMain* CLuaManager::GetVirtualMachine(lua_State* luaVM)
@@ -220,6 +222,7 @@ void CLuaManager::LoadCFunctions()
     CLuaColShapeDefs::LoadFunctions();
     CLuaDatabaseDefs::LoadFunctions();
     CLuaElementDefs::LoadFunctions();
+    CLuaFireDefs::LoadFunctions();
     CLuaHandlingDefs::LoadFunctions();
     CLuaMarkerDefs::LoadFunctions();
     CLuaModelDefs::LoadFunctions();
