@@ -5,8 +5,6 @@
  *  FILE:        mods/deathmatch/logic/CObjectSync.cpp
  *  PURPOSE:     Object sync class
  *
- *  Multi Theft Auto is available from https://www.multitheftauto.com/
- *
  *****************************************************************************/
 
 #include "StdInc.h"
@@ -123,8 +121,16 @@ void CObjectSync::Packet_ObjectStartSync(NetBitStreamInterface& BitStream)
     // Keep the long-standing attached-object orientation workaround intact.
     // Dynamic objects are already receiving authoritative snapshots before a
     // syncer migration, so only velocity needs to be restored here.
-    pObject->SetMoveSpeed(velocity.data.vecVelocity);
-    pObject->SetTurnSpeed(turnVelocity.data.vecVelocity);
+    if (bDynamicPhysics)
+    {
+        CClientObjectPhysicsManager::ApplySyncedMoveSpeed(pObject, velocity.data.vecVelocity);
+        CClientObjectPhysicsManager::ApplySyncedTurnSpeed(pObject, turnVelocity.data.vecVelocity);
+    }
+    else
+    {
+        pObject->SetMoveSpeed(velocity.data.vecVelocity);
+        pObject->SetTurnSpeed(turnVelocity.data.vecVelocity);
+    }
     pObject->SetHealth(health.data.fValue);
 
     AddObject(pObject);
@@ -188,9 +194,9 @@ void CObjectSync::Packet_ObjectSync(NetBitStreamInterface& BitStream)
         if (flags & 0x4)
             pObject->SetHealth(health.data.fValue);
         if (flags & 0x8)
-            pObject->SetMoveSpeed(velocity.data.vecVelocity);
+            CClientObjectPhysicsManager::ApplySyncedMoveSpeed(pObject, velocity.data.vecVelocity);
         if (flags & 0x10)
-            pObject->SetTurnSpeed(turnVelocity.data.vecVelocity);
+            CClientObjectPhysicsManager::ApplySyncedTurnSpeed(pObject, turnVelocity.data.vecVelocity);
     }
 }
 
