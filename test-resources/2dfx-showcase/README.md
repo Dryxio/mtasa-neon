@@ -1,6 +1,15 @@
-# 2DFX cinematic showcase
+# 2DFX runway showcase
 
-Gameplay-only showcase for the resource-owned model 2DFX API in PR #56.
+Gameplay-only cinematic for the resource-owned model 2DFX API in PR #56.
+
+The scene uses the Verdant Meadows runway between:
+
+```text
+100.74450, 2501.11401, 16.48438
+424.00473, 2503.03442, 16.48438
+```
+
+No mall, buildings, escalators or decorative showcase props are created. Runtime models are invisible anchors; the camera should show only the normal GTA runway and native 2DFX output.
 
 ## Run
 
@@ -9,36 +18,48 @@ start 2dfx-showcase
 /2dfxshow
 ```
 
-The full cinematic is about 42 seconds. HUD/chat are hidden while recording and the player is staged in an isolated dimension over Verdant Meadows. Setup/restream work is performed while the camera is faded to black.
+The full sequence lasts about 38 seconds. Setup, runtime-model allocation and targeted particle/roadsign restreams happen while the camera is black. The recorded timeline never calls `engineRestreamWorld()`.
 
 Use `/2dfxshow stop` to abort and restore the player immediately.
 
 ## Production commands
 
 - `/2dfxshow` or `/2dfxshow full` — full seven-shot cinematic.
-- `/2dfxshow shot 1` — sunset / native SUN_GLARE.
-- `/2dfxshow shot 2` — model-level neon light wave.
-- `/2dfxshow shot 3` — mutate and restore a vanilla GTA light.
-- `/2dfxshow shot 4` — native particle 2DFX on rooftop-style anchors.
-- `/2dfxshow shot 5` — generated native roadsign text.
-- `/2dfxshow shot 6` — two native escalators moving in opposite directions.
-- `/2dfxshow shot 7` — final wide shot with everything active.
-- `/2dfxshow final` — hold the final composition indefinitely for screenshots.
-- `/2dfxshow setup` — hold the final scene with chat/HUD visible for visual inspection.
+- `/2dfxshow shot 1` — clean sunset runway / native `SUN_GLARE` establishing shot.
+- `/2dfxshow shot 2` — night transition and far-to-near runway edge ignition.
+- `/2dfxshow shot 3` — model-level color chase, centerline animation and flash modes.
+- `/2dfxshow shot 4` — close-up mutation and restoration of a real GTA lamp 2DFX.
+- `/2dfxshow shot 5` — native `smoke_flare` and `fire` particle gates at the far threshold.
+- `/2dfxshow shot 6` — native generated roadsign text on the runway.
+- `/2dfxshow shot 7` — full-runway finale with color waves, threshold lights and centerline strobes.
+- `/2dfxshow final` — hold the final composition for screenshots.
+- `/2dfxshow setup` — hold the final composition with HUD/chat visible for visual inspection.
 - `/2dfxshow stop` — cleanup and restore player/camera/time/weather.
 
-## Visual claims
+## What the light show is doing
 
-The scene deliberately uses no custom DFF, TXD, shader or texture. The visible feature work is GTA's native 2DFX system driven from Lua:
+The runway is split into six longitudinal segments. Each segment gets three independently allocated runtime models: left edge, right edge and centerline. Multiple invisible objects share each model, so changing one model-level 2DFX instantly changes a whole physical section of runway.
 
-- six independently allocated lamp models receive custom `LIGHT` effects and animate as a boulevard wave;
-- a real GTA lamp 2DFX is recolored/enlarged and then restored;
-- `PARTICLE` uses native `fire` and `smoke_flare` systems;
-- `ROADSIGN` generates the showcase title/capability text from native roadsign glyphs;
-- paired `ESCALATOR` effects create and animate GTA's actual escalator step objects;
-- multiple `SUN_GLARE` directions are staged at sunset so the camera can catch the native glare response;
-- resource teardown resets all model mutations and frees every runtime model slot.
+That is used to demonstrate the actual model-level nature of GTA's 2DFX system rather than faking a per-object light animation.
+
+The final scene contains roughly:
+
+- 60 edge-light anchors across both runway sides;
+- 24 centerline light anchors;
+- two 9-light threshold bars;
+- six independently controlled longitudinal light segments per side;
+- six independently controlled centerline segments;
+- native `showMode` blinking/strobe changes;
+- live color, corona-size and point-light-range mutations;
+- one real GTA lamp whose original native 2DFX is mutated and restored;
+- four native `smoke_flare` particle anchors and two native `fire` particle anchors;
+- two native `ROADSIGN` effects reading `NATIVE_GTA_2DFX / SCRIPTED_IN_LUA` and `NO_SHADERS / NO_CUSTOM_ASSETS`;
+- a sunset `SUN_GLARE` cluster at the far end.
+
+## Visual claim
+
+There are no custom DFFs, TXDs, shaders or textures in the showcase. The runway remains the stock GTA environment; the visual spectacle is produced by native GTA 2DFX types controlled from Lua.
 
 ## Recording notes
 
-Record 16:9. Start recording immediately before `/2dfxshow`; the initial fade hides model allocation and targeted restreams. No `engineRestreamWorld()` is used by the showcase.
+Record 16:9. First run `/2dfxshow setup` and make sure both runway edges are correctly aligned with the asphalt and the roadsigns face the intended camera direction. If those are aligned, `/2dfxshow` should be ready to record without additional world restreams.
