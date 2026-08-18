@@ -28,7 +28,8 @@ constexpr unsigned char DAMAGE_OBJECTS = 1 << 3;
 constexpr unsigned char DAMAGE_ALL = DAMAGE_PLAYERS | DAMAGE_PEDS | DAMAGE_VEHICLES | DAMAGE_OBJECTS;
 
 constexpr const char* KEY_DURATION = "__neon_fire_duration";
-constexpr const char* KEY_EXPIRY = "__neon_fire_expiry";
+constexpr const char* KEY_REMAINING = "__neon_fire_remaining";
+constexpr const char* KEY_EXPIRY = "__neon_fire_expiry";  // Server-local only; never sent to clients.
 constexpr const char* KEY_STRENGTH = "__neon_fire_strength";
 constexpr const char* KEY_DAMAGE = "__neon_fire_damage";
 constexpr const char* KEY_DAMAGE_MASK = "__neon_fire_damage_mask";
@@ -58,11 +59,16 @@ bool IsFire(CElement* pElement)
     return pElement && pElement->GetType() == CElement::DUMMY && pElement->GetTypeName() == "fire";
 }
 
-void SetInitialNumber(CElement* pFire, const char* key, double value)
+void StoreNumber(CElement* pFire, const char* key, double value, ESyncType syncType)
 {
     CLuaArgument argument;
     argument.ReadNumber(value);
-    pFire->GetCustomDataManager().Set(key, argument, ESyncType::BROADCAST);
+    pFire->GetCustomDataManager().Set(key, argument, syncType);
+}
+
+void SetInitialNumber(CElement* pFire, const char* key, double value)
+{
+    StoreNumber(pFire, key, value, ESyncType::BROADCAST);
 }
 
 void SetInitialBool(CElement* pFire, const char* key, bool value)
@@ -206,10 +212,12 @@ CDummy* CreateFireElement(CResource* pResource, const CVector& position, double 
     fire->SetDimension(dimension);
     fire->SetInterior(interior);
 
-    // Seed synchronized state before CEntityAddPacket is sent so a joining client can
-    // construct the fire in one pass without seeing a transient default configuration.
+    // Seed all synchronized values before EntityAdd. The absolute expiry remains local
+    // to the server; clients only receive a relative remaining duration so their wall
+    // clocks never need to agree with the server clock.
     SetInitialNumber(fire, KEY_DURATION, duration);
-    SetInitialNumber(fire, KEY_EXPIRY, duration > 0.0 ? NowMs() + duration : 0.0);
+    SetInitialNumber(fire, KEY_REMAINING, duration);
+    StoreNumber(fire, KEY_EXPIRY, duration > 0.0 ? NowMs() + duration : 0.0, ESyncType::LOCAL);
     SetInitialNumber(fire, KEY_STRENGTH, strength);
     SetInitialBool(fire, KEY_DAMAGE, damage);
     SetInitialNumber(fire, KEY_DAMAGE_MASK, mask);
@@ -299,12 +307,22 @@ void CLuaFireDefs::DoPulse()
         if (!fire || fire->IsBeingDeleted())
             continue;
 
+        double duration = 0.0;
         double expiry = 0.0;
+        GetNumber(fire, KEY_DURATION, duration);
         GetNumber(fire, KEY_EXPIRY, expiry);
-        if (expiry > 0.0 && now >= expiry)
+        if (duration > 0.0)
         {
-            expired.push_back(fire);
-            continue;
+            const double remaining = expiry > 0.0 ? std::max(0.0, expiry - now) : 0.0;
+            // This updates the authoritative stored value without emitting a packet every
+            // pulse. Existing clients count down locally; a late join gets this fresh value
+            // in its EntityAdd custom-data snapshot.
+            StoreNumber(fire, KEY_REMAINING, remaining, ESyncType::BROADCAST);
+            if (remaining <= 0.0)
+            {
+                expired.push_back(fire);
+                continue;
+            }
         }
 
         bool spread = false;
@@ -478,7 +496,8 @@ int CLuaFireDefs::SetFireDuration(lua_State* luaVM)
     if (!args.HasErrors() && IsFire(fire) && duration >= 0.0)
     {
         SetNumber(fire, KEY_DURATION, duration);
-        SetNumber(fire, KEY_EXPIRY, duration > 0.0 ? NowMs() + duration : 0.0);
+        SetNumber(fire, KEY_REMAINING, duration);
+        StoreNumber(fire, KEY_EXPIRY, duration > 0.0 ? NowMs() + duration : 0.0, ESyncType::LOCAL);
         lua_pushboolean(luaVM, true);
         return 1;
     }
@@ -489,10 +508,11 @@ int CLuaFireDefs::SetFireDuration(lua_State* luaVM)
 int CLuaFireDefs::GetFireRemainingTime(lua_State* luaVM)
 {
     CElement* fire = lua_toelement(luaVM, 1);
+    double duration = 0.0;
     double expiry = 0.0;
-    if (IsFire(fire) && GetNumber(fire, KEY_EXPIRY, expiry))
+    if (IsFire(fire) && GetNumber(fire, KEY_DURATION, duration) && GetNumber(fire, KEY_EXPIRY, expiry))
     {
-        lua_pushnumber(luaVM, expiry <= 0.0 ? 0.0 : std::max(0.0, expiry - NowMs()));
+        lua_pushnumber(luaVM, duration <= 0.0 ? 0.0 : std::max(0.0, expiry - NowMs()));
         return 1;
     }
     lua_pushboolean(luaVM, false);
@@ -508,7 +528,15 @@ int CLuaFireDefs::SetFireRemainingTime(lua_State* luaVM)
     args.ReadNumber(remaining);
     if (!args.HasErrors() && IsFire(fire) && remaining >= 0.0)
     {
-        SetNumber(fire, KEY_EXPIRY, remaining > 0.0 ? NowMs() + remaining : NowMs());
+        double duration = 0.0;
+        GetNumber(fire, KEY_DURATION, duration);
+        if (duration <= 0.0 && remaining > 0.0)
+        {
+            duration = remaining;
+            SetNumber(fire, KEY_DURATION, duration);
+        }
+        SetNumber(fire, KEY_REMAINING, remaining);
+        StoreNumber(fire, KEY_EXPIRY, remaining > 0.0 ? NowMs() + remaining : (duration > 0.0 ? NowMs() : 0.0), ESyncType::LOCAL);
         lua_pushboolean(luaVM, true);
         return 1;
     }
