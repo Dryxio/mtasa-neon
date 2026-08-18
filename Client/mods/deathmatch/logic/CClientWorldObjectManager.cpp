@@ -61,6 +61,35 @@ namespace
         return pObject->pad1 == 1;
     }
 
+    bool DefaultObjectDamageHandler(CObjectSAInterface* pObjectInterface, float fLoss, CEntitySAInterface* pAttackerInterface)
+    {
+        if (!pObjectInterface || !g_pGame)
+            return true;
+
+        CPools*                   pPools = g_pGame->GetPools();
+        SClientEntity<CObjectSA>* pObjectEntity = pPools ? pPools->GetObject(reinterpret_cast<DWORD*>(pObjectInterface)) : nullptr;
+        if (!pObjectEntity)
+            return true;
+
+        CClientObject* pClientObject = reinterpret_cast<CClientObject*>(pObjectEntity->pClientEntity);
+        if (!pClientObject)
+            return true;
+
+        CClientEntity* pClientAttacker = pPools->GetClientEntity(reinterpret_cast<DWORD*>(pAttackerInterface));
+        CClientPed*    pPresentationPed = DynamicCast<CClientPed>(pClientAttacker);
+        if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+            return false;
+
+        CLuaArguments arguments;
+        arguments.PushNumber(fLoss);
+        if (pClientAttacker)
+            arguments.PushElement(pClientAttacker);
+        else
+            arguments.PushNil();
+
+        return pClientObject->CallEvent("onClientObjectDamage", arguments, true);
+    }
+
     bool DefaultObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pAttackerInterface)
     {
         if (!pObjectInterface || !g_pGame)
@@ -218,7 +247,7 @@ void CClientWorldObjectManager::Shutdown()
 
     if (g_bHandlersInstalled && g_pMultiplayer)
     {
-        g_pMultiplayer->SetObjectDamageHandler(CClientGame::StaticObjectDamageHandler);
+        g_pMultiplayer->SetObjectDamageHandler(DefaultObjectDamageHandler);
         g_pMultiplayer->SetObjectBreakHandler(DefaultObjectBreakHandler);
     }
 
@@ -230,7 +259,7 @@ bool CClientWorldObjectManager::ObjectDamageHandler(CObjectSAInterface* pObjectI
 {
     CClientWorldObject* pProxy = FindOrAdoptObject(pObjectInterface);
     if (!pProxy)
-        return CClientGame::StaticObjectDamageHandler(pObjectInterface, fLoss, pAttackerInterface);
+        return DefaultObjectDamageHandler(pObjectInterface, fLoss, pAttackerInterface);
 
     pProxy->RefreshFromGame();
     CVector position;
