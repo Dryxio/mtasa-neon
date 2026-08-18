@@ -18,6 +18,48 @@ local patterns = {
     {"10001","11001","10101","10011","10001","10001","10001"},
 }
 
+local families = {
+    normal = {
+        preset = "normal",
+        size = 0.56,
+        body = {198, 210, 224},
+        wing = {242, 247, 255},
+        wingBeat = 320,
+        curved = false,
+    },
+    water = {
+        preset = "water",
+        size = 0.92,
+        body = {130, 148, 165},
+        wing = {225, 235, 244},
+        wingBeat = 720,
+        curved = false,
+    },
+    desert = {
+        preset = "desert",
+        size = 1.65,
+        body = {92, 54, 38},
+        wing = {158, 82, 48},
+        wingBeat = 1180,
+        curved = true,
+    },
+}
+
+local coolPalette = {
+    body = {112, 172, 224},
+    wing = {205, 232, 255},
+}
+
+local warmPalette = {
+    body = {218, 138, 78},
+    wing = {255, 216, 170},
+}
+
+local finalPalette = {
+    body = {226, 235, 244},
+    wing = {255, 255, 255},
+}
+
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
 local function smoothstep(t) t = clamp(t, 0, 1); return t * t * (3 - 2 * t) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -72,23 +114,32 @@ local function formationPoints(cx, cy, cz)
     return points
 end
 
+local function familyForIndex(i)
+    if i % 13 == 0 then return families.desert end
+    if i % 5 == 0 then return families.water end
+    return families.normal
+end
+
 local function spawnFlock(cx, cy, cz, dimension)
     local targets = formationPoints(cx, cy, cz)
     for i = 1, 96 do
+        local family = familyForIndex(i)
         local col = (i - 1) % 16
         local row = math.floor((i - 1) / 16)
         local x = cx - 18 + col * 2.4 + math.sin(i * 1.7) * 0.8
         local y = cy + 52 + row * 1.2
         local z = cz - 2 + (i % 9) * 0.75
+        local sizeVariation = ((i % 4) - 1.5) * 0.035
         local bird = createBird(x, y, z, {
-            preset = (i % 11 == 0) and "water" or "normal",
+            preset = family.preset,
             velocity = {math.sin(i) * 0.4, -9.0 - (i % 5) * 0.25, math.cos(i * 0.7) * 0.2},
             targetVelocity = {0, -9.5, 0},
-            size = 0.62 + (i % 4) * 0.035,
+            size = family.size + sizeVariation,
             renderDistance = 220,
-            bodyColor = {205, 215, 225},
-            wingColor = {245, 248, 255},
-            wingBeatTime = 300 + (i % 7) * 35,
+            bodyColor = family.body,
+            wingColor = family.wing,
+            wingBeatTime = family.wingBeat + (i % 7) * 35,
+            curvedFlight = family.curved,
             shootable = true,
         })
         if isElement(bird) then
@@ -132,15 +183,19 @@ local function updateShow()
     if elapsed < 6500 then
         for i,bird in ipairs(show.birds) do
             if isElement(bird) then
-                setBirdCurvedFlightEnabled(bird, false)
+                if i % 13 ~= 0 then setBirdCurvedFlightEnabled(bird, false) end
                 setBirdTargetVelocity(bird, Vector3(math.sin(i*1.31)*0.6, -9.5, math.cos(i*0.63)*0.25))
             end
         end
     elseif elapsed < 13500 then
         for i,bird in ipairs(show.birds) do
             if isElement(bird) then
-                local x,y,z = getElementPosition(bird)
                 local side = (i % 2 == 0) and -1 or 1
+                local palette = side < 0 and coolPalette or warmPalette
+                setBirdColors(bird, palette.body[1], palette.body[2], palette.body[3], palette.wing[1], palette.wing[2], palette.wing[3])
+                setBirdCurvedFlightEnabled(bird, i % 7 == 0 or i % 13 == 0)
+
+                local x,y,z = getElementPosition(bird)
                 local ox,oy = cx + side*8, cy + 1
                 local dx,dy = x-ox,y-oy
                 local len = math.max(math.sqrt(dx*dx+dy*dy), 0.5)
@@ -156,9 +211,11 @@ local function updateShow()
         if isElement(show.hero) then
             setBirdColors(show.hero, 255,55,55,255,210,210)
             setBirdSize(show.hero, 1.8)
+            setBirdWingBeatTime(show.hero, 145)
             local d = steerTo(show.hero, cx+1,cy-4,cz+4,1.4,8)
             if d < 0.35 then
                 setBirdMovementEnabled(show.hero, false)
+                setBirdWingBeatTime(show.hero, 1450)
             end
         end
         for i=2,#show.birds do
@@ -172,8 +229,11 @@ local function updateShow()
         for i,bird in ipairs(show.birds) do
             local target = show.targets[i]
             if isElement(bird) and target then
-                if bird == show.hero and not isBirdMovementEnabled(bird) then setBirdMovementEnabled(bird,true) end
-                if bird == show.hero then setBirdSize(bird,0.72); setBirdColors(bird,225,230,238,255,255,255) end
+                if bird == show.hero and not isBirdMovementEnabled(bird) then
+                    setBirdMovementEnabled(bird,true)
+                    setBirdWingBeatTime(bird,220)
+                end
+                if bird == show.hero then setBirdSize(bird,0.72) end
                 setBirdCurvedFlightEnabled(bird,false)
                 local d = steerTo(bird,target[1],target[2],target[3],1.15,10)
                 if d < 0.18 then
@@ -181,6 +241,8 @@ local function updateShow()
                     setBirdVelocity(bird,Vector3(0,0,0))
                     setBirdTargetVelocity(bird,Vector3(0,0,0))
                     setBirdMovementEnabled(bird,false)
+                    setBirdColors(bird, finalPalette.body[1], finalPalette.body[2], finalPalette.body[3], finalPalette.wing[1], finalPalette.wing[2], finalPalette.wing[3])
+                    setBirdWingBeatTime(bird, 760 + (i % 5) * 45)
                 end
             end
         end
@@ -224,10 +286,12 @@ addEventHandler("birdShowcase:shoot", resourceRoot, function()
     local _,_,rz=getElementRotation(localPlayer)
     local a=math.rad(rz); local fx,fy=-math.sin(a),math.cos(a); local rx,ry=fy,-fx
     for i=1,12 do
+        local family = familyForIndex(i)
         local d=12+(i%4)*3
         local bird=createBird(x+fx*d+rx*(i-6.5)*1.4,y+fy*d+ry*(i-6.5)*1.4,z+2.2+(i%3)*1.2,{
-            velocity={0,0,0},targetVelocity={0,0,0},movementEnabled=false,size=i==6 and 2.0 or 0.9,
-            bodyColor=i==6 and {255,60,60} or {210,215,225},wingColor={255,255,255},renderDistance=100,shootable=true,
+            preset=family.preset, velocity={0,0,0},targetVelocity={0,0,0},movementEnabled=false,
+            size=i==6 and 2.0 or family.size, bodyColor=i==6 and {255,60,60} or family.body,
+            wingColor=family.wing, wingBeatTime=family.wingBeat, renderDistance=100, shootable=true,
         })
         if isElement(bird) then show.shootBirds[#show.shootBirds+1]=bird end
     end
