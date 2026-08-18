@@ -76,6 +76,10 @@ function S.addCustomLight(model, color, size, range, showMode, coronaName, posit
     return getModel2DFXCount(model, true) - 1
 end
 
+function S.addGroundLight(model, color, size, range, showMode)
+    return S.addCustomLight(model, color, size, range, showMode or "default", nil, { 0, 0, 0 })
+end
+
 function S.ensureLampLight(model, color)
     local index = S.findFirstLight(model)
     if index ~= nil then
@@ -83,6 +87,42 @@ function S.ensureLampLight(model, color)
         return index
     end
     return S.addCustomLight(model, color, 0.04, 0, "default")
+end
+
+-- Model 1226 is asymmetric: the native 2DFX position tells us where the lamp
+-- head actually is in model space. Rotate each physical row so that this vector
+-- points toward the runway centre instead of relying on a guessed +/-90 offset.
+function S.lampYawForLateral(lateral)
+    local template = state.lightTemplate
+    local basis = state.basis
+    if not template or not basis then
+        return basis and basis.yaw or 270
+    end
+
+    local headX = template.position[1] or 0
+    local headY = template.position[2] or 0
+    if math.abs(headX) + math.abs(headY) < 0.001 then
+        return basis.yaw
+    end
+
+    local targetX, targetY
+    if lateral < 0 then
+        targetX, targetY = basis.px, basis.py
+    else
+        targetX, targetY = -basis.px, -basis.py
+    end
+
+    local localAngle = math.deg(math.atan2(headY, headX))
+    local targetAngle = math.deg(math.atan2(targetY, targetX))
+    local yaw = targetAngle - localAngle
+    while yaw < 0 do yaw = yaw + 360 end
+    while yaw >= 360 do yaw = yaw - 360 end
+    return yaw
+end
+
+function S.spawnRunwayLamp(model, t, lateral, height)
+    local x, y, z = S.runwayPoint(t, lateral, height or 0)
+    return S.spawnWorld(model, x, y, z, S.lampYawForLateral(lateral), 1.0, 255)
 end
 
 function S.setLight(model, effect, color, size, range, showMode)
@@ -196,24 +236,27 @@ function S.buildRunwayAnchors()
     for index = 1, EDGE_STATIONS do
         local segment = segmentForStation(index, EDGE_STATIONS)
         local t = 0.045 + ((index - 1) / (EDGE_STATIONS - 1)) * 0.91
-        if not S.spawnOnRunway(state.edgeModels.left[segment], t, -S.RUNWAY_HALF_WIDTH - 2.0, 0, 255, 1.0, 90) or
-           not S.spawnOnRunway(state.edgeModels.right[segment], t, S.RUNWAY_HALF_WIDTH + 2.0, 0, 255, 1.0, -90) then
+        if not S.spawnRunwayLamp(state.edgeModels.left[segment], t, -S.RUNWAY_HALF_WIDTH - 2.0, 0) or
+           not S.spawnRunwayLamp(state.edgeModels.right[segment], t, S.RUNWAY_HALF_WIDTH + 2.0, 0) then
             return false, "could not create runway lamp posts"
         end
     end
 
+    -- Ground carriers sit only a few centimetres above the asphalt. Their 2DFX
+    -- position is local zero, so the corona itself is at runway level rather
+    -- than inheriting the several-metre-high lamp-head offset from model 1226.
     for index = 1, CENTER_STATIONS do
         local segment = segmentForStation(index, CENTER_STATIONS)
         local t = 0.07 + ((index - 1) / (CENTER_STATIONS - 1)) * 0.86
-        if not S.spawnOnRunway(state.centerModels[segment], t, 0, 0.10, 0, 0.06) then
+        if not S.spawnOnRunway(state.centerModels[segment], t, 0, 0.035, 0, 0.06) then
             return false, "could not create runway center anchors"
         end
     end
 
     for side = -4, 4 do
         local lateral = side * 4.0
-        if not S.spawnOnRunway(state.thresholdModels[1], 0.035, lateral, 0.12, 0, 0.06) or
-           not S.spawnOnRunway(state.thresholdModels[2], 0.965, lateral, 0.12, 0, 0.06) then
+        if not S.spawnOnRunway(state.thresholdModels[1], 0.035, lateral, 0.035, 0, 0.06) or
+           not S.spawnOnRunway(state.thresholdModels[2], 0.965, lateral, 0.035, 0, 0.06) then
             return false, "could not create runway threshold anchors"
         end
     end
@@ -248,7 +291,7 @@ function S.buildRunwayAnchors()
         end
     end
 
-    state.vanillaObject = S.spawnOnRunway(state.vanillaModel, 0.53, -27.0, 0, 255, 1.0, 90)
+    state.vanillaObject = S.spawnRunwayLamp(state.vanillaModel, 0.53, -27.0, 0)
     if not state.vanillaObject then
         return false, "could not create hero vanilla lamp"
     end
@@ -303,14 +346,14 @@ function S.addEffects()
     for segment = 1, SEGMENTS do
         state.edgeEffects.left[segment] = S.ensureLampLight(state.edgeModels.left[segment], PALETTE[segment])
         state.edgeEffects.right[segment] = S.ensureLampLight(state.edgeModels.right[segment], PALETTE[7 - segment])
-        state.centerEffects[segment] = S.addCustomLight(state.centerModels[segment], PALETTE[6], 0.02, 0)
+        state.centerEffects[segment] = S.addGroundLight(state.centerModels[segment], PALETTE[6], 0.02, 0)
         if state.edgeEffects.left[segment] == false or state.edgeEffects.right[segment] == false or state.centerEffects[segment] == false then
             return false, "failed to prepare runway light segment " .. segment
         end
     end
 
-    state.thresholdEffects[1] = S.addCustomLight(state.thresholdModels[1], tocolor(45, 255, 150, 255), 0.03, 0)
-    state.thresholdEffects[2] = S.addCustomLight(state.thresholdModels[2], tocolor(255, 55, 85, 255), 0.03, 0)
+    state.thresholdEffects[1] = S.addGroundLight(state.thresholdModels[1], tocolor(45, 255, 150, 255), 0.03, 0)
+    state.thresholdEffects[2] = S.addGroundLight(state.thresholdModels[2], tocolor(255, 55, 85, 255), 0.03, 0)
     if state.thresholdEffects[1] == false or state.thresholdEffects[2] == false then
         return false, "failed to add threshold lights"
     end
