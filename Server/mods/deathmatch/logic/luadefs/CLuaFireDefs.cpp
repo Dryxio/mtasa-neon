@@ -76,6 +76,7 @@ void SetInitialElement(CElement* pFire, const char* key, CElement* value)
 {
     if (!value)
         return;
+
     CLuaArgument argument;
     argument.ReadElement(value);
     pFire->GetCustomDataManager().Set(key, argument, ESyncType::BROADCAST);
@@ -102,6 +103,7 @@ void SetElement(CElement* pFire, const char* key, CElement* value)
         pFire->DeleteCustomData(key);
         return;
     }
+
     CLuaArgument argument;
     argument.ReadElement(value);
     pFire->SetCustomData(key, argument, ESyncType::BROADCAST, nullptr, false);
@@ -112,6 +114,7 @@ bool GetNumber(CElement* pFire, const char* key, double& value)
     CLuaArgument* argument = pFire ? pFire->GetCustomData(key, false) : nullptr;
     if (!argument || argument->GetType() != LUA_TNUMBER)
         return false;
+
     value = argument->GetNumber();
     return true;
 }
@@ -121,6 +124,7 @@ bool GetBool(CElement* pFire, const char* key, bool& value)
     CLuaArgument* argument = pFire ? pFire->GetCustomData(key, false) : nullptr;
     if (!argument || argument->GetType() != LUA_TBOOLEAN)
         return false;
+
     value = argument->GetBoolean();
     return true;
 }
@@ -190,7 +194,8 @@ void PushDamageMask(lua_State* luaVM, unsigned char mask)
 }
 
 CDummy* CreateFireElement(CResource* pResource, const CVector& position, double duration, double strength, bool damage, unsigned char mask, bool spread,
-                          unsigned int maxGenerations, unsigned int generation, CElement* source, CElement* target)
+                          unsigned int maxGenerations, unsigned int generation, CElement* source, CElement* target, unsigned short dimension = 0,
+                          unsigned char interior = 0)
 {
     if (!pResource)
         return nullptr;
@@ -198,7 +203,11 @@ CDummy* CreateFireElement(CResource* pResource, const CVector& position, double 
     CDummy* fire = new CDummy(g_pGame->GetGroups(), pResource->GetDynamicElementRoot());
     fire->SetTypeName("fire");
     fire->SetPosition(position);
+    fire->SetDimension(dimension);
+    fire->SetInterior(interior);
 
+    // Seed synchronized state before CEntityAddPacket is sent so a joining client can
+    // construct the fire in one pass without seeing a transient default configuration.
     SetInitialNumber(fire, KEY_DURATION, duration);
     SetInitialNumber(fire, KEY_EXPIRY, duration > 0.0 ? NowMs() + duration : 0.0);
     SetInitialNumber(fire, KEY_STRENGTH, strength);
@@ -229,6 +238,7 @@ bool DestroyManagedFire(CDummy* fire)
 {
     if (!fire || !IsFire(fire))
         return false;
+
     g_Fires.erase(fire);
     return CStaticFunctionDefinitions::DestroyElement(fire);
 }
@@ -332,21 +342,16 @@ void CLuaFireDefs::DoPulse()
         GetBool(parent, KEY_DAMAGE, damage);
         GetBool(parent, KEY_SPREAD, spread);
 
-        const double angle = (static_cast<double>(std::rand() % 6284) / 1000.0);
+        const double angle = static_cast<double>(std::rand() % 6284) / 1000.0;
         const double distance = 2.0 + static_cast<double>(std::rand() % 1000) / 1000.0;
-        CVector position;
-        parent->GetPosition(position);
+        CVector position = parent->GetPosition();
         position.fX += static_cast<float>(std::cos(angle) * distance);
         position.fY += static_cast<float>(std::sin(angle) * distance);
 
-        CDummy* child = CreateFireElement(record.pResource, position, 20000.0, std::max(0.8, strength * 0.8), damage,
-                                          static_cast<unsigned char>(static_cast<unsigned int>(mask)) & DAMAGE_ALL, spread,
-                                          static_cast<unsigned int>(maxGenerations), static_cast<unsigned int>(generation) + 1, GetElement(parent, KEY_SOURCE), nullptr);
-        if (child)
-        {
-            child->SetDimension(parent->GetDimension());
-            child->SetInterior(parent->GetInterior());
-        }
+        CreateFireElement(record.pResource, position, 20000.0, std::max(0.8, strength * 0.8), damage,
+                          static_cast<unsigned char>(static_cast<unsigned int>(mask)) & DAMAGE_ALL, spread,
+                          static_cast<unsigned int>(maxGenerations), static_cast<unsigned int>(generation) + 1, GetElement(parent, KEY_SOURCE), nullptr,
+                          parent->GetDimension(), parent->GetInterior());
     }
 }
 
@@ -404,10 +409,10 @@ int CLuaFireDefs::CreateFire(lua_State* luaVM)
 
 int CLuaFireDefs::ExtinguishFire(lua_State* luaVM)
 {
-    if (lua_type(luaVM, 1) == LUA_TLIGHTUSERDATA)
+    CElement* firstElement = lua_toelement(luaVM, 1);
+    if (IsFire(firstElement))
     {
-        CElement* element = lua_toelement(luaVM, 1);
-        lua_pushboolean(luaVM, IsFire(element) && DestroyManagedFire(static_cast<CDummy*>(element)));
+        lua_pushboolean(luaVM, DestroyManagedFire(static_cast<CDummy*>(firstElement)));
         return 1;
     }
 
@@ -430,6 +435,7 @@ int CLuaFireDefs::ExtinguishFire(lua_State* luaVM)
     args.ReadNumber(radius, 1.0f);
     if (args.HasErrors())
     {
+        m_pScriptDebugging->LogCustom(luaVM, args.GetFullErrorMessage());
         lua_pushboolean(luaVM, false);
         return 1;
     }
@@ -438,10 +444,11 @@ int CLuaFireDefs::ExtinguishFire(lua_State* luaVM)
     std::vector<CDummy*> fires;
     for (const auto& [fire, record] : g_Fires)
     {
-        CVector firePosition;
-        fire->GetPosition(firePosition);
-        const CVector delta = firePosition - position;
-        if (delta.DotProduct(&delta) <= radiusSq)
+        const CVector& firePosition = fire->GetPosition();
+        const float dx = firePosition.fX - position.fX;
+        const float dy = firePosition.fY - position.fY;
+        const float dz = firePosition.fZ - position.fZ;
+        if (dx * dx + dy * dy + dz * dz <= radiusSq)
             fires.push_back(fire);
     }
     for (CDummy* fire : fires)
