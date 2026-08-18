@@ -483,6 +483,19 @@ public:
 
     static void Shutdown()
     {
+        if (g_pClientGame && g_pClientGame->GetManager())
+        {
+            CClientObjectManager* pManager = g_pClientGame->GetManager()->GetObjectManager();
+            if (pManager)
+            {
+                for (auto& [pObject, state] : ms_Objects)
+                {
+                    if (pObject && pManager->Exists(pObject))
+                        Restore(pObject, state);
+                }
+            }
+        }
+
         ms_Objects.clear();
         ms_uiLastPulseFrame = 0xFFFFFFFFu;
     }
