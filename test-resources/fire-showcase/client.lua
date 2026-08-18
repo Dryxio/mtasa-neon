@@ -78,22 +78,22 @@ local function renderShow()
     local elapsed = getTickCount() - show.startedAt
     local cx, cy, cz = show.centerX, show.centerY, show.centerZ
 
-    -- Give the managed fire FX plenty of time to stream in and settle. The camera
-    -- eases into the logo for the first few seconds, then stays almost completely
-    -- still so the full NEON word remains readable on video.
+    -- Stay close enough for every fire FX to be clearly rendered from the first
+    -- recorded frame. Use a wider FOV instead of moving the camera far away just
+    -- to fit the whole word in shot.
     if elapsed < 14000 then
-        local reveal = smoothstep(elapsed / 3000)
+        local t = smoothstep(elapsed / 14000)
         cameraLerp(
-            cx + 23, cy - 42, cz + 13,
+            cx, cy - 22.0, cz + 3.2,
             cx, cy, cz,
-            cx, cy - 34, cz + 5,
+            cx, cy - 19.5, cz + 2.2,
             cx, cy, cz,
-            reveal,
-            76, 62
+            t,
+            90, 84
         )
 
-    -- Move in on the selected fire only after the complete logo has been visible
-    -- for a long uninterrupted shot.
+    -- After the long clean logo shot, move much closer to the selected fire as it
+    -- leaves the O.
     elseif elapsed < 19000 then
         local t = (elapsed - 14000) / 5000
         local lookX, lookY, lookZ = cx + 5, cy, cz
@@ -105,12 +105,12 @@ local function renderShow()
         end
 
         cameraLerp(
-            cx, cy - 34, cz + 5,
+            cx, cy - 19.5, cz + 2.2,
             cx, cy, cz,
-            cx + 8, cy - 21, cz + 2,
+            cx + 6, cy - 13.5, cz + 1.5,
             lookX, lookY, lookZ,
             t,
-            62, 55
+            84, 68
         )
 
     -- Follow the car while the very same fire element is targeting it.
@@ -119,10 +119,10 @@ local function renderShow()
         if camX then
             setCameraMatrix(camX, camY, camZ, lookX, lookY, lookZ, 0, 62)
         else
-            setCameraMatrix(cx + 8, cy - 21, cz + 2, cx, cy, cz, 0, 60)
+            setCameraMatrix(cx + 6, cy - 13.5, cz + 1.5, cx, cy, cz, 0, 68)
         end
 
-    -- Finish on a clean wide gameplay shot with both the logo and car area visible.
+    -- Finish close enough that the remaining logo fires are still clearly visible.
     else
         local vehicleX, vehicleY, vehicleZ = cx + 16, cy - 13, 16.6
         if isElement(show.vehicle) then
@@ -135,7 +135,7 @@ local function renderShow()
         local targetX = (cx + vehicleX) * 0.5
         local targetY = (cy + vehicleY) * 0.5
         local targetZ = math.max(cz, vehicleZ + 2)
-        setCameraMatrix(cx + 27, cy - 43, cz + 15, targetX, targetY, targetZ, 0, 74)
+        setCameraMatrix(cx + 18, cy - 24, cz + 9, targetX, targetY, targetZ, 0, 82)
     end
 end
 
