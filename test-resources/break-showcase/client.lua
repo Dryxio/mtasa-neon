@@ -27,6 +27,8 @@ local playground = {
     effect = nil,
     options = nil,
     armed = false,
+    objects = {},
+    effects = {},
 }
 
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
@@ -55,13 +57,18 @@ local function stopShow()
 end
 
 local function clearPlayground()
-    if isElement(playground.object) then clearObjectBreakProfile(playground.object) end
-    if isElement(playground.effect) then destroyElement(playground.effect) end
-    if isElement(playground.object) then destroyElement(playground.object) end
+    for _, object in ipairs(playground.objects) do
+        if isElement(object) then clearObjectBreakProfile(object) end
+    end
+    destroyList(playground.effects)
+    destroyList(playground.objects)
+
     playground.object = nil
     playground.effect = nil
     playground.options = nil
     playground.armed = false
+    playground.objects = {}
+    playground.effects = {}
 end
 
 local function raisePlaygroundObject()
@@ -130,48 +137,15 @@ local function runwayPoint(t, side)
            lerp(RUNWAY_START.z, RUNWAY_END.z, t)
 end
 
--- Curated from the GTA Stuff GTA:SA model database. Keep this as recognizable,
--- solid props rather than arbitrary map pieces/LODs: street furniture first,
--- then construction/industrial pieces, ending on a larger six-object cascade.
--- The name field is documentation only; model is the actual createObject ID.
+-- Focused geometry showcase requested for validating managed fracture on a
+-- small set of representative GTA:SA objects. The name field is documentation
+-- only; model is the actual createObject ID.
 local runwaySpecs = {
-    -- Proof shot: a substantial, normally solid electrical transformer.
-    {name = "substa_transf1_",    model = 3272,  t = 0.070, side =  0.0, scale = 0.58, fragments = 38, force = 2.3, randomness = 0.40, vz = 0.18, bounce = 0.10, lead = 0.042},
-
-    -- Street / roadside gallery.
-    {name = "chillidogcart",      model = 1340,  t = 0.108, side = -3.4, scale = 1.15, fragments = 22, force = 3.2, randomness = 0.65, vz = 0.35, bounce = 0.16},
-    {name = "CJ_BLOCKER_BENCH",   model = 1368,  t = 0.143, side =  3.6, scale = 1.25, fragments = 20, force = 3.0, randomness = 0.55, vz = 0.30, bounce = 0.12},
-    {name = "petrolpump",         model = 1244,  t = 0.178, side = -2.7, scale = 1.45, fragments = 18, force = 4.0, randomness = 0.75, vz = 0.50, bounce = 0.16},
-    {name = "DYN_post_box",       model = 1478,  t = 0.213, side =  2.8, scale = 1.35, fragments = 18, force = 3.5, randomness = 0.60, vz = 0.35, bounce = 0.14},
-    {name = "BinNt07_LA",         model = 1337,  t = 0.248, side = -3.5, scale = 1.65, fragments = 18, force = 4.2, randomness = 0.85, vz = 0.55, bounce = 0.18},
-    {name = "trafficcone",        model = 1238,  t = 0.283, side =  3.8, scale = 2.10, fragments = 10, force = 5.0, randomness = 1.00, vz = 0.75, bounce = 0.28},
-    {name = "noparkingsign1",     model = 1233,  t = 0.318, side = -2.0, scale = 1.35, fragments = 16, force = 4.0, randomness = 0.70, vz = 0.45, bounce = 0.14},
-    {name = "barrierturn",        model = 968,   t = 0.353, side =  2.3, scale = 1.25, fragments = 20, force = 4.4, randomness = 0.80, vz = 0.55, bounce = 0.16},
-    {name = "barrier_4andy",      model = 1949,  t = 0.388, side = -4.0, scale = 1.10, fragments = 20, force = 4.6, randomness = 0.80, vz = 0.55, bounce = 0.16},
-    {name = "fenceshit2",         model = 984,   t = 0.423, side =  4.0, scale = 0.92, fragments = 26, force = 3.8, randomness = 0.65, vz = 0.35, bounce = 0.12},
-    {name = "vgsSelecfence16",    model = 8313,  t = 0.458, side = -3.4, scale = 0.78, fragments = 28, force = 3.8, randomness = 0.65, vz = 0.35, bounce = 0.12},
-
-    -- Crates / workshop / loose industrial props.
-    {name = "DYN_CRATE_2",        model = 1449,  t = 0.493, side =  3.2, scale = 1.45, fragments = 22, force = 4.8, randomness = 0.90, vz = 0.60, bounce = 0.20},
-    {name = "gunbox",             model = 1271,  t = 0.528, side = -2.2, scale = 1.55, fragments = 18, force = 4.6, randomness = 0.85, vz = 0.55, bounce = 0.18},
-    {name = "AMMO_BOX_M3",        model = 2042,  t = 0.563, side =  2.4, scale = 1.60, fragments = 18, force = 5.0, randomness = 0.95, vz = 0.65, bounce = 0.20},
-    {name = "DYN_AIRCON",         model = 1420,  t = 0.598, side = -3.7, scale = 1.25, fragments = 20, force = 4.5, randomness = 0.75, vz = 0.50, bounce = 0.16},
-    {name = "DYN_CUPBOARD",       model = 1417,  t = 0.633, side =  3.6, scale = 1.20, fragments = 22, force = 4.2, randomness = 0.75, vz = 0.50, bounce = 0.16},
-    {name = "hos_trolley",        model = 1997,  t = 0.668, side = -2.5, scale = 1.25, fragments = 18, force = 4.8, randomness = 0.90, vz = 0.65, bounce = 0.22},
-    {name = "kb_barrel",          model = 3046,  t = 0.703, side =  2.8, scale = 1.35, fragments = 18, force = 5.2, randomness = 1.00, vz = 0.75, bounce = 0.24},
-    {name = "barrel4",            model = 1225,  t = 0.738, side = -3.9, scale = 1.40, fragments = 18, force = 5.5, randomness = 1.05, vz = 0.80, bounce = 0.25},
-    {name = "DYN_F_R_WOOD_4",     model = 1446,  t = 0.773, side =  3.8, scale = 1.08, fragments = 26, force = 4.2, randomness = 0.75, vz = 0.45, bounce = 0.14},
-    {name = "sw_logs01",          model = 13004, t = 0.808, side = -3.2, scale = 0.82, fragments = 28, force = 4.6, randomness = 0.80, vz = 0.50, bounce = 0.15},
-    {name = "Kylie_logs",         model = 14872, t = 0.838, side =  3.3, scale = 0.82, fragments = 28, force = 4.8, randomness = 0.85, vz = 0.55, bounce = 0.16},
-    {name = "frway_box1",         model = 9576,  t = 0.865, side =  0.0, scale = 1.00, fragments = 30, force = 5.2, randomness = 0.90, vz = 0.65, bounce = 0.18},
-
-    -- Finale: larger freight / construction silhouettes, tightly staggered.
-    {name = "frght_BOXES19",      model = 9604,  t = 0.888, side = -4.8, scale = 0.82, fragments = 34, force = 6.4, randomness = 1.20, vz = 0.95, bounce = 0.20, lead = 0.055},
-    {name = "girders07",          model = 14397, t = 0.899, side =  0.0, scale = 0.78, fragments = 34, force = 6.8, randomness = 1.20, vz = 1.00, bounce = 0.18, lead = 0.052},
-    {name = "barb-pipes",         model = 14882, t = 0.910, side =  4.8, scale = 0.82, fragments = 34, force = 7.0, randomness = 1.25, vz = 1.05, bounce = 0.18, lead = 0.049},
-    {name = "des_quarrygate",     model = 3049,  t = 0.928, side = -3.1, scale = 0.70, fragments = 38, force = 7.3, randomness = 1.25, vz = 1.10, bounce = 0.18, lead = 0.047},
-    {name = "bigsprunkpole",      model = 13562, t = 0.944, side =  3.2, scale = 0.65, fragments = 40, force = 7.5, randomness = 1.30, vz = 1.10, bounce = 0.18, lead = 0.044},
-    {name = "carter-stairs01",    model = 14407, t = 0.958, side =  0.0, scale = 0.72, fragments = 42, force = 8.0, randomness = 1.40, vz = 1.20, bounce = 0.20, lead = 0.041},
+    {name = "pool_table",       model = 2964,  t = 0.12, side = -2.5, scale = 1.00, fragments = 28, force = 4.5, randomness = 0.75, vz = 0.45, bounce = 0.16},
+    {name = "paypark",          model = 4639,  t = 0.30, side =  2.5, scale = 1.00, fragments = 32, force = 5.0, randomness = 0.85, vz = 0.55, bounce = 0.16},
+    {name = "plumber_tower",    model = 16327, t = 0.48, side = -4.0, scale = 1.00, fragments = 56, force = 6.0, randomness = 1.00, vz = 0.75, bounce = 0.18},
+    {name = "sm_airstrm_med_",  model = 3175,  t = 0.66, side =  4.0, scale = 1.00, fragments = 48, force = 5.8, randomness = 0.95, vz = 0.70, bounce = 0.18},
+    {name = "billboard",        model = 9190,  t = 0.84, side =  0.0, scale = 1.00, fragments = 56, force = 6.2, randomness = 1.05, vz = 0.80, bounce = 0.18},
 }
 
 local function spawnRunwayEntry(spec, index)
@@ -421,8 +395,8 @@ local function playgroundHelp()
     outputChatBox("[BREAKSHOW] /breakspawn <model> [key=value ...]", 255, 200, 80)
     outputChatBox("[BREAKSHOW] durability: health native damageMultiplier instantBreakThreshold", 255, 200, 80)
     outputChatBox("[BREAKSHOW] fracture: fragments force randomness lifetime gravity bounce drag renderDistance seed vx vy vz", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] placement: distance scale groundOffset (auto-grounded by default); R raises object +0.10m", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] shoot/ram the object, /breakhp for health, /breaknow to force, /breakclear", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] placement: distance scale groundOffset (auto-grounded by default); R raises latest object +0.10m", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] shoot/ram the objects; /breakhp and /breaknow target the latest spawn; /breakclear clears all", 255, 200, 80)
     outputChatBox("[BREAKSHOW] example: /breakspawn 1337 health=250 fragments=24 force=7", 255, 200, 80)
 end
 
@@ -458,8 +432,6 @@ local function handleBreakspawn(_, modelArg, ...)
         return
     end
 
-    clearPlayground()
-
     local options = parsePlaygroundOptions({...})
     local object, errorReason = spawnPlaygroundObject(model, options)
     if not isElement(object) then
@@ -471,12 +443,14 @@ local function handleBreakspawn(_, modelArg, ...)
         return
     end
 
+    playground.objects[#playground.objects + 1] = object
     playground.object = object
+    playground.effect = nil
     playground.options = options
     playground.armed = false
 
     setTimer(function()
-        if playground.object ~= object or not isElement(object) then return end
+        if not isElement(object) then return end
 
         local armed = setObjectBreakProfile(object, {
             native = options.native,
@@ -487,14 +461,17 @@ local function handleBreakspawn(_, modelArg, ...)
         })
         if not armed then
             destroyElement(object)
-            playground.object = nil
-            playground.options = nil
-            playground.armed = false
+            if playground.object == object then
+                playground.object = nil
+                playground.effect = nil
+                playground.options = nil
+                playground.armed = false
+            end
             outputChatBox("[BREAKSHOW] failed to arm managed break profile.", 255, 80, 80)
             return
         end
 
-        playground.armed = true
+        if playground.object == object then playground.armed = true end
         outputChatBox(("Object %d spawned and made breakable."):format(model), 100, 255, 100)
     end, 500, 1)
 end
@@ -552,6 +529,7 @@ addCommandHandler("breaknow", function()
     end
 
     playground.effect = effect
+    playground.effects[#playground.effects + 1] = effect
     outputChatBox(("[BREAKSHOW] fractured: %d fragments, %d source triangles, cacheHit=%s")
         :format(getBreakEffectFragmentCount(effect), getBreakEffectSourceTriangleCount(effect), tostring(getBreakEffectCacheHit(effect))), 100, 255, 100)
 end)
