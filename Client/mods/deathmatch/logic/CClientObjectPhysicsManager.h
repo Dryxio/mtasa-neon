@@ -41,6 +41,18 @@ private:
 
     static inline std::unordered_map<CClientObject*, SState> ms_Objects;
 
+    // GTA's CObject::ProcessControl starts its native fake-physics sleep path
+    // around this speed range. Network snapshots below the same threshold are
+    // canonicalized to zero so CPhysicalSA::SetMoveSpeed/SetTurnSpeed do not
+    // wake an already-settled object on every sync packet.
+    static constexpr float REST_LINEAR_SPEED_SQ = 0.003f * 0.003f;
+    static constexpr float REST_TURN_SPEED_SQ = 0.003f * 0.003f;
+
+    static float LengthSq(const CVector& value)
+    {
+        return value.fX * value.fX + value.fY * value.fY + value.fZ * value.fZ;
+    }
+
     static CObjectSA* GetObjectSA(CClientObject* pObject)
     {
         if (!pObject || !pObject->GetGameObject())
@@ -201,6 +213,58 @@ public:
     static bool IsEnabled(CClientObject* pObject)
     {
         return pObject && ms_Objects.contains(pObject);
+    }
+
+    static void ApplySyncedMoveSpeed(CClientObject* pObject, const CVector& vecMoveSpeed)
+    {
+        if (!pObject)
+            return;
+
+        const bool bNearRest = LengthSq(vecMoveSpeed) <= REST_LINEAR_SPEED_SQ;
+        const CVector vecApplied = bNearRest ? CVector() : vecMoveSpeed;
+        pObject->m_vecMoveSpeed = vecApplied;
+
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return;
+
+        if (bNearRest)
+        {
+            // Directly update the native field. CPhysicalSA::SetMoveSpeed always
+            // calls AddToMovingList + SetStatic(false), which would wake an object
+            // that GTA had just put to sleep.
+            pObjectSA->GetObjectInterface()->m_vecLinearVelocity = vecApplied;
+        }
+        else
+        {
+            pObjectSA->SetMoveSpeed(vecApplied);
+        }
+    }
+
+    static void ApplySyncedTurnSpeed(CClientObject* pObject, const CVector& vecTurnSpeed)
+    {
+        if (!pObject)
+            return;
+
+        const bool bNearRest = LengthSq(vecTurnSpeed) <= REST_TURN_SPEED_SQ;
+        const CVector vecApplied = bNearRest ? CVector() : vecTurnSpeed;
+        pObject->m_vecTurnSpeed = vecApplied;
+
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return;
+
+        if (bNearRest)
+        {
+            // Same rule as linear velocity: do not wake a sleeping object just
+            // to apply a network snapshot that is already effectively zero.
+            pObjectSA->GetObjectInterface()->m_vecAngularVelocity = vecApplied;
+        }
+        else
+        {
+            CVector vecAppliedCopy = vecApplied;
+            pObjectSA->SetTurnSpeed(&vecAppliedCopy);
+        }
     }
 
     static void Pulse()
