@@ -68,12 +68,13 @@ private:
     static constexpr unsigned char SETTLE_FRAMES = 12;
     static constexpr unsigned char CONTACT_GRACE_FRAMES = 6;
 
-    // CObject::SpecialEntityCalcCollisionSteps uses the COL bound radius when
-    // the special response is GRENADE instead of the generic 0.3-unit step.
-    // Give dynamic objects a private copy of CObjectInfo with only that field
-    // changed so small runtime collision shapes receive enough substeps without
-    // mutating GTA's shared object.dat entry for every object of the model.
-    static constexpr unsigned char DYNAMIC_SPECIAL_COL_RESPONSE = 5;
+    // CObject::SpecialEntityCalcCollisionSteps uses half the largest COL AABB
+    // dimension for SMALLBOX. Runtime-generated sphere bounds use an enclosing
+    // sphere derived from the AABB corners, so the GRENADE path overestimates a
+    // 0.12-radius basketball as ~0.208 and can take too few collision substeps.
+    // SMALLBOX is the more conservative native path and gives this ball an exact
+    // 0.12-unit step while remaining generic for other dynamic object shapes.
+    static constexpr unsigned char DYNAMIC_SPECIAL_COL_RESPONSE = 2;
 
     static float LengthSq(const CVector& value)
     {
