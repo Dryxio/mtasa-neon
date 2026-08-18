@@ -12,6 +12,7 @@ local ball = false
 local holder = false
 local lastShooter = false
 local lastScoreTick = 0
+local courtRevision = 0
 
 local function message(target, text, r, g, b)
     outputChatBox("[basket-test] " .. text, target or root, r or 235, g or 235, b or 235)
@@ -19,6 +20,14 @@ end
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
+end
+
+local function finiteNumber(value)
+    value = tonumber(value)
+    if not value or value ~= value or value == math.huge or value == -math.huge then
+        return false
+    end
+    return value
 end
 
 local function rotateLocal(x, y, heading)
@@ -43,6 +52,8 @@ local function publishCourt()
     setElementData(resourceRoot, "basketPhysics:ringY", court.ringY)
     setElementData(resourceRoot, "basketPhysics:ringZ", court.ringZ)
     setElementData(resourceRoot, "basketPhysics:heading", court.heading)
+    courtRevision = courtRevision + 1
+    setElementData(resourceRoot, "basketPhysics:revision", courtRevision)
 end
 
 local function destroyBall()
@@ -217,6 +228,31 @@ addEventHandler("basketPhysics:pickup", resourceRoot, function()
 
     setHolder(client)
     message(client, "Ball picked up.", 180, 255, 190)
+end)
+
+addEvent("basketPhysics:calibrate", true)
+addEventHandler("basketPhysics:calibrate", resourceRoot, function(dx, dy, dz, dHeading)
+    if not client or not court or court.owner ~= client then
+        return
+    end
+
+    dx, dy, dz, dHeading = finiteNumber(dx), finiteNumber(dy), finiteNumber(dz), finiteNumber(dHeading)
+    if not dx or not dy or not dz or not dHeading then
+        return
+    end
+
+    -- Calibration input is intentionally tiny; clamp remote requests so this
+    -- debug event cannot teleport the shared target arbitrary distances.
+    dx = clamp(dx, -0.10, 0.10)
+    dy = clamp(dy, -0.10, 0.10)
+    dz = clamp(dz, -0.10, 0.10)
+    dHeading = clamp(dHeading, -5.0, 5.0)
+
+    court.ringX = court.ringX + dx
+    court.ringY = court.ringY + dy
+    court.ringZ = court.ringZ + dz
+    court.heading = (court.heading + dHeading) % 360.0
+    publishCourt()
 end)
 
 addEvent("basketPhysics:score", true)
