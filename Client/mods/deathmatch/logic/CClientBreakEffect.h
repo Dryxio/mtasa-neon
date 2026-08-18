@@ -17,12 +17,48 @@
 struct RwTexture;
 class CClientBreakEffectManager;
 
+struct SBreakEffectColor
+{
+    std::uint32_t packed = 0xFFFFFFFFu;
+
+    SBreakEffectColor() = default;
+    SBreakEffectColor(std::uint32_t color) { *this = color; }
+
+    SBreakEffectColor& operator=(std::uint32_t color)
+    {
+        // GTA's native BreakObject_c does not render raw prelight directly. It
+        // bakes the current frame ambient colour into every fragment vertex in
+        // SetBreakInfo before drawing with lighting disabled. Match that here so
+        // managed fragments keep the same apparent lighting as the source mesh.
+        // AmbientLightColourForFrame, GTA SA 1.0 US: 0xC886D4.
+        const float* const ambient = reinterpret_cast<const float*>(0xC886D4);
+        const auto addAmbient = [](std::uint32_t channel, float ambientChannel) -> std::uint32_t
+        {
+            const float lit = static_cast<float>(channel) + ambientChannel * 255.0f;
+            if (lit <= 0.0f)
+                return 0u;
+            if (lit >= 255.0f)
+                return 255u;
+            return static_cast<std::uint32_t>(lit);
+        };
+
+        const std::uint32_t alpha = color & 0xFF000000u;
+        const std::uint32_t red = addAmbient((color >> 16) & 0xFFu, ambient[0]);
+        const std::uint32_t green = addAmbient((color >> 8) & 0xFFu, ambient[1]);
+        const std::uint32_t blue = addAmbient(color & 0xFFu, ambient[2]);
+        packed = alpha | (red << 16) | (green << 8) | blue;
+        return *this;
+    }
+
+    operator std::uint32_t() const { return packed; }
+};
+
 struct SBreakEffectVertex
 {
-    CVector       localPosition;
-    float         u = 0.0f;
-    float         v = 0.0f;
-    std::uint32_t color = 0xFFFFFFFFu;
+    CVector           localPosition;
+    float             u = 0.0f;
+    float             v = 0.0f;
+    SBreakEffectColor color;
 };
 
 struct SBreakEffectBatch
