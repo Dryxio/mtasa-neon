@@ -2,23 +2,198 @@ local S = DFXShowcase
 local state = S.state
 local PALETTE = S.PALETTE
 
-function S.customLightProperties(color)
+local SEGMENTS = 6
+local EDGE_STATIONS = 30
+local CENTER_STATIONS = 24
+
+function S.lightProperties(color, size, range, showMode)
     return {
-        drawDistance = 170,
-        lightRange = 0,
-        coronaSize = 0.05,
-        shadowSize = 8,
-        shadowMultiplier = 45,
-        showMode = "default",
+        drawDistance = 260,
+        lightRange = range or 0,
+        coronaSize = size or 0.04,
+        shadowSize = 0,
+        shadowMultiplier = 0,
+        showMode = showMode or "default",
         coronaReflection = false,
         flareType = 0,
-        flags = { atNight = true, checkObstacles = true },
+        flags = { atNight = true, checkObstacles = false },
         shadowDistance = 0,
         offset = { 0, 0, 0 },
         color = color,
         coronaName = "coronamoon",
         shadowName = "shad_exp",
     }
+end
+
+function S.addLight(model, color, size, range, showMode)
+    if not addModel2DFX(model, 0, 0, 0.22, "light", S.lightProperties(color, size, range, showMode)) then
+        return false
+    end
+    S.rememberTouchedModel(model)
+    return getModel2DFXCount(model, true) - 1
+end
+
+function S.setLight(model, effect, color, size, range, showMode)
+    if not model or effect == nil then
+        return
+    end
+    if color then
+        setModel2DFXProperty(model, effect, "color", color)
+    end
+    if size then
+        setModel2DFXProperty(model, effect, "coronaSize", size)
+    end
+    if range then
+        setModel2DFXProperty(model, effect, "lightRange", range)
+    end
+    if showMode then
+        setModel2DFXProperty(model, effect, "showMode", showMode)
+    end
+end
+
+function S.setEdgeSegment(side, segment, color, size, range, showMode)
+    local model = state.edgeModels[side][segment]
+    local effect = state.edgeEffects[side][segment]
+    S.setLight(model, effect, color, size, range, showMode)
+end
+
+function S.setCenterSegment(segment, color, size, range, showMode)
+    S.setLight(state.centerModels[segment], state.centerEffects[segment], color, size, range, showMode)
+end
+
+function S.setThreshold(index, color, size, range, showMode)
+    S.setLight(state.thresholdModels[index], state.thresholdEffects[index], color, size, range, showMode)
+end
+
+function S.allLightsOff()
+    for segment = 1, SEGMENTS do
+        S.setEdgeSegment("left", segment, PALETTE[1], 0.035, 0, "default")
+        S.setEdgeSegment("right", segment, PALETTE[1], 0.035, 0, "default")
+        S.setCenterSegment(segment, PALETTE[6], 0.025, 0, "default")
+    end
+    S.setThreshold(1, tocolor(40, 255, 150, 255), 0.035, 0, "default")
+    S.setThreshold(2, tocolor(255, 65, 90, 255), 0.035, 0, "default")
+end
+
+function S.applyFinalLights(step)
+    step = step or 0
+    for segment = 1, SEGMENTS do
+        local leftColor = PALETTE[((segment + step - 2) % #PALETTE) + 1]
+        local rightColor = PALETTE[((#PALETTE - segment + step) % #PALETTE) + 1]
+        S.setEdgeSegment("left", segment, leftColor, 1.55, 4, "default")
+        S.setEdgeSegment("right", segment, rightColor, 1.55, 4, "default")
+        S.setCenterSegment(segment, PALETTE[6], 0.72, 0, "default")
+    end
+    S.setThreshold(1, tocolor(45, 255, 150, 255), 1.25, 0, "default")
+    S.setThreshold(2, tocolor(255, 55, 85, 255), 1.25, 0, "default")
+end
+
+function S.buildRuntimeModels()
+    for segment = 1, SEGMENTS do
+        state.edgeModels.left[segment] = S.requestObjectModel(1337)
+        state.edgeModels.right[segment] = S.requestObjectModel(1337)
+        state.centerModels[segment] = S.requestObjectModel(1337)
+        if not state.edgeModels.left[segment] or not state.edgeModels.right[segment] or not state.centerModels[segment] then
+            return false, "could not allocate runway light model group " .. segment
+        end
+    end
+
+    for index = 1, 2 do
+        state.thresholdModels[index] = S.requestObjectModel(1337)
+        state.particleModels[index] = S.requestObjectModel(1337)
+        state.roadsignModels[index] = S.requestObjectModel(1337)
+        if not state.thresholdModels[index] or not state.particleModels[index] or not state.roadsignModels[index] then
+            return false, "could not allocate showcase model group " .. index
+        end
+    end
+
+    state.sunModel = S.requestObjectModel(1337)
+    if not state.sunModel then
+        return false, "could not allocate sun-glare model"
+    end
+
+    state.vanillaModel = S.requestObjectModel(1226)
+    if not state.vanillaModel then
+        state.vanillaModel = 1226
+    end
+
+    return true
+end
+
+local function segmentForStation(index, count)
+    return math.min(SEGMENTS, math.floor((index - 1) * SEGMENTS / count) + 1)
+end
+
+function S.buildRunwayAnchors()
+    for index = 1, EDGE_STATIONS do
+        local segment = segmentForStation(index, EDGE_STATIONS)
+        local t = 0.045 + ((index - 1) / (EDGE_STATIONS - 1)) * 0.91
+        if not S.spawnOnRunway(state.edgeModels.left[segment], t, -S.RUNWAY_HALF_WIDTH, 0.12, 0, 0.08) or
+           not S.spawnOnRunway(state.edgeModels.right[segment], t, S.RUNWAY_HALF_WIDTH, 0.12, 0, 0.08) then
+            return false, "could not create runway edge anchors"
+        end
+    end
+
+    for index = 1, CENTER_STATIONS do
+        local segment = segmentForStation(index, CENTER_STATIONS)
+        local t = 0.07 + ((index - 1) / (CENTER_STATIONS - 1)) * 0.86
+        if not S.spawnOnRunway(state.centerModels[segment], t, 0, 0.10, 0, 0.06) then
+            return false, "could not create runway center anchors"
+        end
+    end
+
+    for side = -4, 4 do
+        local lateral = side * 4.0
+        if not S.spawnOnRunway(state.thresholdModels[1], 0.035, lateral, 0.12, 0, 0.06) or
+           not S.spawnOnRunway(state.thresholdModels[2], 0.965, lateral, 0.12, 0, 0.06) then
+            return false, "could not create runway threshold anchors"
+        end
+    end
+
+    for _, lateral in ipairs({ -10, -5, 5, 10 }) do
+        if not S.spawnOnRunway(state.particleModels[1], 0.885, lateral, 0.25, 0, 0.05) then
+            return false, "could not create smoke-flare anchors"
+        end
+    end
+    for _, lateral in ipairs({ -13, 13 }) do
+        if not S.spawnOnRunway(state.particleModels[2], 0.92, lateral, 0.15, 0, 0.05) then
+            return false, "could not create fire anchors"
+        end
+    end
+
+    if not S.spawnOnRunway(state.roadsignModels[1], 0.10, 0, 0.05, 0, 0.05) or
+       not S.spawnOnRunway(state.roadsignModels[2], 0.90, 0, 0.05, 0, 0.05) then
+        return false, "could not create roadsign anchors"
+    end
+
+    if not S.spawnOnRunway(state.sunModel, 0.94, 0, 4.0, 0, 0.05) then
+        return false, "could not create sun-glare anchor"
+    end
+
+    state.vanillaObject = S.spawnOnRunway(state.vanillaModel, 0.53, -24.0, 0, 255, 1.0)
+    if not state.vanillaObject then
+        return false, "could not create vanilla lamp"
+    end
+
+    return true
+end
+
+function S.addRoadsign(model, text, reverse)
+    local props = {
+        size = { 5.5, 1.9 },
+        rotation = { 90, 0, reverse and 270 or 90 },
+        flags = { lines = 2, charactersPerLine = 16 },
+        color = tocolor(80, 230, 255, 255),
+        text1 = text[1] or "",
+        text2 = text[2] or "",
+        text3 = "",
+        text4 = "",
+    }
+    if not addModel2DFX(model, 0, 0, 3.0, "roadsign", props) then
+        return false
+    end
+    S.rememberTouchedModel(model)
+    return true
 end
 
 function S.findFirstLight(model)
@@ -29,204 +204,6 @@ function S.findFirstLight(model)
         end
     end
     return nil
-end
-
-function S.neutralizeNativeLights(model)
-    local count = getModel2DFXCount(model, false)
-    local firstPosition = nil
-    for index = 0, count - 1 do
-        if getModel2DFXType(model, index) == "light" then
-            if not firstPosition then
-                local x, y, z = getModel2DFXPosition(model, index)
-                if type(x) == "number" then
-                    firstPosition = { x, y, z }
-                end
-            end
-            setModel2DFXProperty(model, index, "coronaSize", 0.05)
-            setModel2DFXProperty(model, index, "lightRange", 0)
-            setModel2DFXProperty(model, index, "shadowSize", 0)
-            S.rememberTouchedModel(model)
-        end
-    end
-    return firstPosition or { 0, 0, 5.4 }
-end
-
-function S.addCustomLight(model, color)
-    local position = S.neutralizeNativeLights(model)
-    if not addModel2DFX(model, position[1], position[2], position[3], "light", S.customLightProperties(color)) then
-        return false
-    end
-    S.rememberTouchedModel(model)
-    return getModel2DFXCount(model, true) - 1
-end
-
-function S.setLight(model, effect, color, size, range)
-    if not model or effect == nil then
-        return
-    end
-    setModel2DFXProperty(model, effect, "color", color)
-    setModel2DFXProperty(model, effect, "coronaSize", size)
-    setModel2DFXProperty(model, effect, "lightRange", range)
-end
-
-function S.setLampRowsOff()
-    for row, model in ipairs(state.lampModels) do
-        S.setLight(model, state.lampEffects[row], PALETTE[row], 0.05, 0)
-    end
-    if state.heroModel and state.heroEffect then
-        S.setLight(state.heroModel, state.heroEffect, PALETTE[1], 0.08, 0)
-    end
-end
-
-function S.activateLampRow(row)
-    local model = state.lampModels[row]
-    local effect = state.lampEffects[row]
-    if model and effect then
-        S.setLight(model, effect, PALETTE[row], 1.65, 23)
-    end
-end
-
-function S.applyAllLights()
-    for row = 1, #state.lampModels do
-        S.activateLampRow(row)
-    end
-    if state.heroModel and state.heroEffect then
-        S.setLight(state.heroModel, state.heroEffect, tocolor(80, 245, 255, 255), 2.35, 30)
-    end
-end
-
-function S.buildRuntimeModels()
-    for row = 1, 6 do
-        local model = S.requestObjectModel(1226)
-        if not model then
-            return false, "could not allocate lamp model " .. row
-        end
-        state.lampModels[row] = model
-    end
-
-    state.heroModel = S.requestObjectModel(1226)
-    if not state.heroModel then
-        return false, "could not allocate hero lamp model"
-    end
-
-    for i = 1, 2 do
-        local model = S.requestObjectModel(1337)
-        if not model then
-            return false, "could not allocate particle model " .. i
-        end
-        state.particleModels[i] = model
-    end
-
-    for i = 1, 3 do
-        local model = S.requestObjectModel(1337)
-        if not model then
-            return false, "could not allocate roadsign model " .. i
-        end
-        state.roadsignModels[i] = model
-    end
-
-    for i = 1, 2 do
-        local model = S.requestObjectModel(1337)
-        if not model then
-            return false, "could not allocate escalator model " .. i
-        end
-        state.escalatorModels[i] = model
-    end
-
-    state.sunModel = S.requestObjectModel(1337)
-    if not state.sunModel then
-        return false, "could not allocate sun glare model"
-    end
-
-    local vanillaClone = S.requestObjectModel(1226)
-    if vanillaClone then
-        state.vanillaModel = vanillaClone
-    else
-        state.vanillaModel = 1226
-    end
-    return true
-end
-
-function S.buildDecor()
-    for row, model in ipairs(state.lampModels) do
-        local y = -18 + (row - 1) * 7.0
-        if not S.spawn(model, -7.0, y, 0, 0) or not S.spawn(model, 7.0, y, 0, 180) then
-            return false, "could not create boulevard lamps"
-        end
-    end
-
-    if not S.spawn(state.heroModel, 0, 6.0, 0, 0) then
-        return false, "could not create hero lamp"
-    end
-
-    if not S.spawn(state.particleModels[1], -11.0, 14.0, 5.0, 0, 1, 1) or
-       not S.spawn(state.particleModels[2], 11.0, 16.0, 5.5, 0, 1, 1) then
-        return false, "could not create particle anchors"
-    end
-
-    S.spawn(970, 0, 27.8, 1.4, 0, 1.8)
-    S.spawn(970, -8.0, 24.8, 1.2, 0, 1.2)
-    S.spawn(970, 8.0, 24.8, 1.2, 0, 1.2)
-    if not S.spawn(state.roadsignModels[1], 0, 27.5, 0, 0, 1, 1) or
-       not S.spawn(state.roadsignModels[2], -8.0, 24.5, 0, 0, 1, 1) or
-       not S.spawn(state.roadsignModels[3], 8.0, 24.5, 0, 0, 1, 1) then
-        return false, "could not create roadsign anchors"
-    end
-
-    S.spawn(980, 0, 41.0, 2.5, 0, 1.35)
-    S.spawn(970, -7.2, 34.0, 1.0, 90, 1.4)
-    S.spawn(970, 7.2, 34.0, 1.0, 90, 1.4)
-    if not S.spawn(state.escalatorModels[1], -5.0, 27.5, 0, 0, 1, 1) or
-       not S.spawn(state.escalatorModels[2], 5.0, 27.5, 0, 0, 1, 1) then
-        return false, "could not create escalator anchors"
-    end
-
-    if not S.spawn(state.sunModel, 0, 48.0, 7.0, 0, 1, 1) then
-        return false, "could not create sun glare anchor"
-    end
-
-    state.vanillaObject = S.spawn(state.vanillaModel, 12.0, 3.0, 0, 0)
-    if not state.vanillaObject then
-        return false, "could not create vanilla light object"
-    end
-
-    S.spawn(1280, -3.5, -6.0, 0, 90)
-    S.spawn(1280, 3.5, -6.0, 0, 270)
-    S.spawn(970, -10.0, 3.0, 0.8, 90, 1.4)
-    S.spawn(970, 10.0, 3.0, 0.8, 90, 1.4)
-    return true
-end
-
-function S.addRoadsign(model, position, size, lines, text)
-    local props = {
-        size = size,
-        rotation = { 90, 0, 0 },
-        flags = { lines = lines, charactersPerLine = 16 },
-        color = tocolor(80, 225, 255, 255),
-        text1 = text[1] or "",
-        text2 = text[2] or "",
-        text3 = text[3] or "",
-        text4 = text[4] or "",
-    }
-    if not addModel2DFX(model, position[1], position[2], position[3], "roadsign", props) then
-        return false
-    end
-    S.rememberTouchedModel(model)
-    return true
-end
-
-function S.addEscalator(model, direction)
-    local props = {
-        bottom = { 0, 0, 0.25 },
-        top = { 0, 8.5, 4.6 },
-        ["end"] = { 0, 12.0, 4.6 },
-        direction = direction,
-    }
-    if not addModel2DFX(model, 0, -3.5, 0.25, "escalator", props) then
-        return false
-    end
-    S.rememberTouchedModel(model)
-    return true
 end
 
 function S.captureVanillaLight()
@@ -247,8 +224,7 @@ function S.captureVanillaLight()
     local coronaSize = getModel2DFXProperty(state.vanillaModel, index, "coronaSize")
     local lightRange = getModel2DFXProperty(state.vanillaModel, index, "lightRange")
     local r, g, b, a = getModel2DFXProperty(state.vanillaModel, index, "color")
-    if type(drawDistance) ~= "number" or type(coronaSize) ~= "number" or
-       type(lightRange) ~= "number" or type(r) ~= "number" then
+    if type(drawDistance) ~= "number" or type(coronaSize) ~= "number" or type(lightRange) ~= "number" or type(r) ~= "number" then
         return false
     end
 
@@ -262,55 +238,39 @@ function S.captureVanillaLight()
 end
 
 function S.addEffects()
-    for row, model in ipairs(state.lampModels) do
-        local index = S.addCustomLight(model, PALETTE[row])
-        if index == false then
-            return false, "failed to add custom light row " .. row
+    for segment = 1, SEGMENTS do
+        state.edgeEffects.left[segment] = S.addLight(state.edgeModels.left[segment], PALETTE[segment], 0.035, 0)
+        state.edgeEffects.right[segment] = S.addLight(state.edgeModels.right[segment], PALETTE[7 - segment], 0.035, 0)
+        state.centerEffects[segment] = S.addLight(state.centerModels[segment], PALETTE[6], 0.025, 0)
+        if state.edgeEffects.left[segment] == false or state.edgeEffects.right[segment] == false or state.centerEffects[segment] == false then
+            return false, "failed to add runway light segment " .. segment
         end
-        state.lampEffects[row] = index
     end
 
-    state.heroEffect = S.addCustomLight(state.heroModel, PALETTE[1])
-    if state.heroEffect == false then
-        return false, "failed to add hero light"
+    state.thresholdEffects[1] = S.addLight(state.thresholdModels[1], tocolor(45, 255, 150, 255), 0.035, 0)
+    state.thresholdEffects[2] = S.addLight(state.thresholdModels[2], tocolor(255, 55, 85, 255), 0.035, 0)
+    if state.thresholdEffects[1] == false or state.thresholdEffects[2] == false then
+        return false, "failed to add threshold lights"
     end
 
-    if not addModel2DFX(state.particleModels[1], 0, 0, 0.3, "particle", { name = "fire" }) then
-        return false, "failed to add fire particle"
+    if not addModel2DFX(state.particleModels[1], 0, 0, 0.2, "particle", { name = "smoke_flare" }) then
+        return false, "failed to add smoke_flare particle"
     end
     S.rememberTouchedModel(state.particleModels[1])
 
-    if not addModel2DFX(state.particleModels[2], 0, 0, 0.3, "particle", { name = "smoke_flare" }) then
-        return false, "failed to add smoke particle"
+    if not addModel2DFX(state.particleModels[2], 0, 0, 0.2, "particle", { name = "fire" }) then
+        return false, "failed to add fire particle"
     end
     S.rememberTouchedModel(state.particleModels[2])
 
-    if not S.addRoadsign(state.roadsignModels[1], { 0, 0, 3.3 }, { 5.5, 2.8 }, 4,
-        { "NEON_BOULEVARD", "NATIVE_GTA_2DFX", "SCRIPTED_IN_LUA", "NO_CUSTOM_ASSETS" }) then
-        return false, "failed to add main roadsign"
+    if not S.addRoadsign(state.roadsignModels[1], { "NATIVE_GTA_2DFX", "SCRIPTED_IN_LUA" }, false) or
+       not S.addRoadsign(state.roadsignModels[2], { "NO_SHADERS", "NO_CUSTOM_ASSETS" }, true) then
+        return false, "failed to add runway roadsigns"
     end
 
-    if not S.addRoadsign(state.roadsignModels[2], { 0, 0, 2.6 }, { 3.2, 1.0 }, 1,
-        { "LIGHTS_FROM_LUA", "", "", "" }) then
-        return false, "failed to add left roadsign"
-    end
-
-    if not S.addRoadsign(state.roadsignModels[3], { 0, 0, 2.6 }, { 3.2, 1.0 }, 1,
-        { "NATIVE_2DFX", "", "", "" }) then
-        return false, "failed to add right roadsign"
-    end
-
-    if not S.addEscalator(state.escalatorModels[1], 0) or
-       not S.addEscalator(state.escalatorModels[2], 1) then
-        return false, "failed to add escalators"
-    end
-
-    for step = 0, 7 do
-        local angle = math.rad(step * 45)
-        local x = math.cos(angle) * 12.0
-        local y = math.sin(angle) * 12.0
-        local z = (step % 2 == 0) and 3.0 or 6.0
-        if not addModel2DFX(state.sunModel, x, y, z, "sun_glare", {}) then
+    for step = 0, 5 do
+        local angle = math.rad(step * 60)
+        if not addModel2DFX(state.sunModel, math.cos(angle) * 5.0, math.sin(angle) * 5.0, 3.0 + (step % 2) * 2.0, "sun_glare", {}) then
             return false, "failed to add sun glare"
         end
     end
@@ -320,7 +280,7 @@ function S.addEffects()
         return false, "could not find vanilla model 1226 light 2DFX"
     end
 
-    S.setLampRowsOff()
+    S.allLightsOff()
     return true
 end
 
@@ -330,10 +290,11 @@ function S.mutateVanillaLight()
     end
     local model = state.vanillaModel
     local index = state.vanillaEffect
-    setModel2DFXProperty(model, index, "drawDistance", state.vanillaBaseline.drawDistance + 120)
-    setModel2DFXProperty(model, index, "coronaSize", math.max(2.8, state.vanillaBaseline.coronaSize * 2.5))
-    setModel2DFXProperty(model, index, "lightRange", state.vanillaBaseline.lightRange + 20)
-    setModel2DFXProperty(model, index, "color", tocolor(35, 240, 255, 255))
+    setModel2DFXProperty(model, index, "drawDistance", state.vanillaBaseline.drawDistance + 180)
+    setModel2DFXProperty(model, index, "coronaSize", math.max(3.2, state.vanillaBaseline.coronaSize * 3.0))
+    setModel2DFXProperty(model, index, "lightRange", state.vanillaBaseline.lightRange + 28)
+    setModel2DFXProperty(model, index, "color", tocolor(30, 245, 255, 255))
+    setModel2DFXProperty(model, index, "showMode", "warnlight")
     S.rememberTouchedModel(model)
 end
 
@@ -347,4 +308,5 @@ function S.restoreVanillaLight()
     resetModel2DFXProperty(model, index, "coronaSize")
     resetModel2DFXProperty(model, index, "lightRange")
     resetModel2DFXProperty(model, index, "color")
+    resetModel2DFXProperty(model, index, "showMode")
 end
