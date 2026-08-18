@@ -2,6 +2,7 @@ local BALL_MODEL = 2114
 
 local playerBall = {}
 local balls = {}
+local readyPlayers = {}
 
 local function message(player, text, r, g, b)
     outputChatBox("[dynamic-physics] " .. text, player, r or 190, g or 225, b or 255)
@@ -15,6 +16,15 @@ local function getForward(player)
     local _, _, heading = getElementRotation(player)
     local radians = math.rad(heading)
     return -math.sin(radians), math.cos(radians), heading
+end
+
+local function isClientReady(player)
+    if readyPlayers[player] then
+        return true
+    end
+
+    message(player, "Client collision is not ready yet; wait for the client resource to finish loading and retry.", 255, 180, 120)
+    return false
 end
 
 local function forgetBall(object)
@@ -38,6 +48,10 @@ local function destroyBall(object)
 end
 
 local function createHarnessBall(player)
+    if not isClientReady(player) then
+        return false
+    end
+
     destroyBall(playerBall[player])
 
     local x, y, z = getElementPosition(player)
@@ -83,6 +97,14 @@ local function getOrCreateBall(player)
     return createHarnessBall(player)
 end
 
+addEvent("dynamicPhysicsHarness:clientReady", true)
+addEventHandler("dynamicPhysicsHarness:clientReady", resourceRoot, function()
+    if client and isElement(client) then
+        readyPlayers[client] = true
+        message(client, "Client collision ready.", 160, 255, 180)
+    end
+end)
+
 addCommandHandler("dophys", function(player)
     if isElement(player) then
         createHarnessBall(player)
@@ -90,7 +112,7 @@ addCommandHandler("dophys", function(player)
 end)
 
 addCommandHandler("dothrow", function(player, _, speedArgument, upArgument)
-    if not isElement(player) then
+    if not isElement(player) or not isClientReady(player) then
         return
     end
 
@@ -165,6 +187,7 @@ end)
 addEventHandler("onPlayerQuit", root, function()
     destroyBall(playerBall[source])
     playerBall[source] = nil
+    readyPlayers[source] = nil
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
@@ -173,4 +196,5 @@ addEventHandler("onResourceStop", resourceRoot, function()
             destroyElement(object)
         end
     end
+    readyPlayers = {}
 end)
