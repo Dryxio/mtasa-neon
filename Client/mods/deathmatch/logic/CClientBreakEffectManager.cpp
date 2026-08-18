@@ -29,13 +29,39 @@
 namespace
 {
     constexpr std::uint16_t UNASSIGNED_CLUSTER = std::numeric_limits<std::uint16_t>::max();
-    constexpr std::uint8_t STABLE_GROUND_FRAMES_TO_SLEEP = 12;
+    constexpr std::uint32_t FREE_SPIN_FRAMES = 5;
 
-    std::unordered_map<const SBreakEffectChunk*, std::uint8_t> g_StableGroundFrames;
+    struct SChunkSettleState
+    {
+        CVector       restAxis{0.0f, 0.0f, 1.0f};
+        float         halfThickness = 0.05f;
+        std::uint32_t framesActive = 0;
+        bool          touchedGround = false;
+    };
+
+    struct SQuaternion
+    {
+        float w = 1.0f;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+    };
+
+    std::unordered_map<const SBreakEffectChunk*, SChunkSettleState> g_ChunkSettleStates;
 
     float LengthSq(const CVector& value)
     {
         return value.fX * value.fX + value.fY * value.fY + value.fZ * value.fZ;
+    }
+
+    float Dot(const CVector& a, const CVector& b)
+    {
+        return a.fX * b.fX + a.fY * b.fY + a.fZ * b.fZ;
+    }
+
+    CVector Cross(const CVector& a, const CVector& b)
+    {
+        return CVector(a.fY * b.fZ - a.fZ * b.fY, a.fZ * b.fX - a.fX * b.fZ, a.fX * b.fY - a.fY * b.fX);
     }
 
     CVector NormalizeOr(const CVector& value, const CVector& fallback)
@@ -62,6 +88,169 @@ namespace
         return CVector(point.fX * c + (axis.fY * point.fZ - axis.fZ * point.fY) * s + axis.fX * dot * (1.0f - c),
                        point.fY * c + (axis.fZ * point.fX - axis.fX * point.fZ) * s + axis.fY * dot * (1.0f - c),
                        point.fZ * c + (axis.fX * point.fY - axis.fY * point.fX) * s + axis.fZ * dot * (1.0f - c));
+    }
+
+    SQuaternion NormalizeQuaternion(const SQuaternion& value)
+    {
+        const float lengthSq = value.w * value.w + value.x * value.x + value.y * value.y + value.z * value.z;
+        if (lengthSq <= 0.000001f)
+            return {};
+        const float invLength = 1.0f / std::sqrt(lengthSq);
+        return {value.w * invLength, value.x * invLength, value.y * invLength, value.z * invLength};
+    }
+
+    SQuaternion QuaternionFromAxisAngle(const CVector& axis, float angle)
+    {
+        if (std::fabs(angle) <= 0.000001f)
+            return {};
+        const CVector normalizedAxis = NormalizeOr(axis, CVector(0.0f, 0.0f, 1.0f));
+        const float half = angle * 0.5f;
+        const float s = std::sin(half);
+        return NormalizeQuaternion({std::cos(half), normalizedAxis.fX * s, normalizedAxis.fY * s, normalizedAxis.fZ * s});
+    }
+
+    SQuaternion MultiplyQuaternion(const SQuaternion& a, const SQuaternion& b)
+    {
+        return NormalizeQuaternion({a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+                                    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                                    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                                    a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w});
+    }
+
+    void QuaternionToAxisAngle(SQuaternion value, CVector& axis, float& angle)
+    {
+        value = NormalizeQuaternion(value);
+        if (value.w < 0.0f)
+        {
+            value.w = -value.w;
+            value.x = -value.x;
+            value.y = -value.y;
+            value.z = -value.z;
+        }
+
+        const float w = std::clamp(value.w, -1.0f, 1.0f);
+        angle = 2.0f * std::acos(w);
+        const float sinHalf = std::sqrt(std::max(0.0f, 1.0f - w * w));
+        if (sinHalf <= 0.00001f || angle <= 0.00001f)
+        {
+            axis = CVector(0.0f, 0.0f, 1.0f);
+            angle = 0.0f;
+            return;
+        }
+
+        axis = NormalizeOr(CVector(value.x / sinHalf, value.y / sinHalf, value.z / sinHalf), CVector(0.0f, 0.0f, 1.0f));
+    }
+
+    void ApplyOrientationCorrection(SBreakEffectChunk& chunk, const CVector& axis, float angle)
+    {
+        if (std::fabs(angle) <= 0.000001f || LengthSq(axis) <= 0.000001f)
+            return;
+
+        const SQuaternion current = QuaternionFromAxisAngle(chunk.rotationAxis, chunk.rotation);
+        const SQuaternion correction = QuaternionFromAxisAngle(axis, angle);
+        const SQuaternion updated = MultiplyQuaternion(correction, current);
+        QuaternionToAxisAngle(updated, chunk.rotationAxis, chunk.rotation);
+    }
+
+    SChunkSettleState BuildSettleState(const SBreakEffectChunk& chunk)
+    {
+        CVector minimum(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+        CVector maximum(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+        bool hasVertices = false;
+
+        for (const SBreakEffectBatch& batch : chunk.batches)
+            for (const SBreakEffectVertex& vertex : batch.vertices)
+            {
+                minimum.fX = std::min(minimum.fX, vertex.localPosition.fX);
+                minimum.fY = std::min(minimum.fY, vertex.localPosition.fY);
+                minimum.fZ = std::min(minimum.fZ, vertex.localPosition.fZ);
+                maximum.fX = std::max(maximum.fX, vertex.localPosition.fX);
+                maximum.fY = std::max(maximum.fY, vertex.localPosition.fY);
+                maximum.fZ = std::max(maximum.fZ, vertex.localPosition.fZ);
+                hasVertices = true;
+            }
+
+        SChunkSettleState state;
+        if (!hasVertices)
+            return state;
+
+        const float width = std::max(0.001f, maximum.fX - minimum.fX);
+        const float length = std::max(0.001f, maximum.fY - minimum.fY);
+        const float height = std::max(0.001f, maximum.fZ - minimum.fZ);
+
+        if (width <= length && width <= height)
+        {
+            state.restAxis = CVector(1.0f, 0.0f, 0.0f);
+            state.halfThickness = width * 0.5f;
+        }
+        else if (length <= width && length <= height)
+        {
+            state.restAxis = CVector(0.0f, 1.0f, 0.0f);
+            state.halfThickness = length * 0.5f;
+        }
+        else
+        {
+            state.restAxis = CVector(0.0f, 0.0f, 1.0f);
+            state.halfThickness = height * 0.5f;
+        }
+
+        state.halfThickness = std::max(state.halfThickness, 0.01f);
+        return state;
+    }
+
+    SChunkSettleState& GetSettleState(SBreakEffectChunk& chunk)
+    {
+        auto [iter, inserted] = g_ChunkSettleStates.try_emplace(&chunk);
+        if (inserted)
+            iter->second = BuildSettleState(chunk);
+        return iter->second;
+    }
+
+    float GetRestAlignment(const SBreakEffectChunk& chunk, const SChunkSettleState& state)
+    {
+        CVector facing = NormalizeOr(RotateAxisAngle(state.restAxis, chunk.rotationAxis, chunk.rotation), state.restAxis);
+        return std::fabs(std::clamp(facing.fZ, -1.0f, 1.0f));
+    }
+
+    void AdvanceVanillaRestOrientation(SBreakEffectChunk& chunk, SChunkSettleState& state, float dt)
+    {
+        ++state.framesActive;
+        if (state.framesActive <= FREE_SPIN_FRAMES)
+        {
+            chunk.rotation += chunk.rotationSpeed * dt;
+            return;
+        }
+
+        const CVector groundNormal(0.0f, 0.0f, 1.0f);
+        CVector facing = NormalizeOr(RotateAxisAngle(state.restAxis, chunk.rotationAxis, chunk.rotation), state.restAxis);
+        float facingDot = std::clamp(Dot(facing, groundNormal), -1.0f, 1.0f);
+
+        // Either side of a thin fragment can face upward. Choosing the nearer
+        // hemisphere avoids a pointless 180-degree flip while preserving the
+        // vanilla rule that the thinnest axis is driven toward the ground normal.
+        if (facingDot < 0.0f)
+        {
+            facing.fX = -facing.fX;
+            facing.fY = -facing.fY;
+            facing.fZ = -facing.fZ;
+            facingDot = -facingDot;
+        }
+
+        if (facingDot >= 0.99999f)
+            return;
+
+        CVector correctionAxis = Cross(facing, groundNormal);
+        const float axisLengthSq = LengthSq(correctionAxis);
+        if (axisLengthSq <= 0.000001f)
+            return;
+        correctionAxis = NormalizeOr(correctionAxis, CVector(1.0f, 0.0f, 0.0f));
+
+        const float angle = std::acos(std::clamp(facingDot, -1.0f, 1.0f));
+        // GTA applies roughly angle * timeStep / 20 every update. With our dt
+        // expressed in seconds, 2.5/sec gives the same ~5% correction at 50 Hz.
+        const float rate = state.touchedGround ? 4.0f : 2.5f;
+        const float step = angle * std::clamp(dt * rate, 0.0f, 1.0f);
+        ApplyOrientationCorrection(chunk, correctionAxis, step);
     }
 
     std::uint32_t NextRandom(std::uint32_t& state)
@@ -199,7 +388,7 @@ void CClientBreakEffectManager::RemoveFromList(CClientBreakEffect* effect)
 {
     if (effect)
         for (SBreakEffectChunk& chunk : effect->m_Chunks)
-            g_StableGroundFrames.erase(&chunk);
+            g_ChunkSettleStates.erase(&chunk);
     m_List.remove(effect);
 }
 
@@ -646,6 +835,10 @@ CClientBreakEffect* CClientBreakEffectManager::CreateFromObject(CClientManager* 
         delete effect;
         return nullptr;
     }
+
+    for (SBreakEffectChunk& chunk : effect->m_Chunks)
+        g_ChunkSettleStates[&chunk] = BuildSettleState(chunk);
+
     if (options.hideOriginal)
         pObject->SetVisible(false);
     if (options.disableOriginalCollision)
@@ -688,7 +881,7 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
             if (chunk.sleeping)
                 continue;
 
-            std::uint8_t& stableGroundFrames = g_StableGroundFrames[&chunk];
+            SChunkSettleState& settle = GetSettleState(chunk);
             const float damping = 1.0f / (1.0f + effect->m_fDrag * dt);
             chunk.velocity.fX *= damping;
             chunk.velocity.fY *= damping;
@@ -696,7 +889,8 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
             chunk.position.fX += chunk.velocity.fX * dt;
             chunk.position.fY += chunk.velocity.fY * dt;
             chunk.position.fZ += chunk.velocity.fZ * dt;
-            chunk.rotation += chunk.rotationSpeed * dt;
+
+            AdvanceVanillaRestOrientation(chunk, settle, dt);
 
             if (((m_uiPhysicsFrame + chunkIndex) & 7u) == 0u && g_pGame && g_pGame->GetWorld())
             {
@@ -707,7 +901,6 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
             }
 
             constexpr float GROUND_CONTACT_TOLERANCE = 0.02f;
-            bool contactedGround = false;
             if (chunk.position.fZ - chunk.radius <= chunk.groundZ + GROUND_CONTACT_TOLERANCE)
             {
                 float lowestWorldZ = std::numeric_limits<float>::max();
@@ -720,78 +913,33 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
 
                 if (lowestWorldZ <= chunk.groundZ + GROUND_CONTACT_TOLERANCE)
                 {
-                    contactedGround = true;
+                    settle.touchedGround = true;
                     if (lowestWorldZ < chunk.groundZ)
                         chunk.position.fZ += chunk.groundZ - lowestWorldZ;
+
+                    // Vanilla BreakObject_c kills free rotation on collision and
+                    // damps the reflected velocity hard. Keep the configurable
+                    // restitution for the normal component, then apply GTA's
+                    // ~0.8 post-collision velocity scale.
                     if (chunk.velocity.fZ < 0.0f)
                         chunk.velocity.fZ = -chunk.velocity.fZ * effect->m_fBounce;
+                    chunk.velocity.fX *= 0.8f;
+                    chunk.velocity.fY *= 0.8f;
+                    chunk.velocity.fZ *= 0.8f;
+                    chunk.rotationSpeed = 0.0f;
 
-                    // A single low vertex or edge is not a stable resting pose.
-                    // Measure the footprint formed by vertices close to the
-                    // lowest point and require that it actually supports the
-                    // chunk centroid before allowing sleep.
-                    const float supportBand = std::clamp(chunk.radius * 0.025f, 0.03f, 0.10f);
-                    float minSupportX = std::numeric_limits<float>::max();
-                    float maxSupportX = -std::numeric_limits<float>::max();
-                    float minSupportY = std::numeric_limits<float>::max();
-                    float maxSupportY = -std::numeric_limits<float>::max();
-                    std::size_t supportVertices = 0;
-
-                    for (const SBreakEffectBatch& batch : chunk.batches)
-                        for (const SBreakEffectVertex& vertex : batch.vertices)
-                        {
-                            const CVector rotated = RotateAxisAngle(vertex.localPosition, chunk.rotationAxis, chunk.rotation);
-                            const float worldZ = chunk.position.fZ + rotated.fZ;
-                            if (worldZ <= chunk.groundZ + supportBand)
-                            {
-                                minSupportX = std::min(minSupportX, rotated.fX);
-                                maxSupportX = std::max(maxSupportX, rotated.fX);
-                                minSupportY = std::min(minSupportY, rotated.fY);
-                                maxSupportY = std::max(maxSupportY, rotated.fY);
-                                ++supportVertices;
-                            }
-                        }
-
-                    const float spanX = supportVertices ? maxSupportX - minSupportX : 0.0f;
-                    const float spanY = supportVertices ? maxSupportY - minSupportY : 0.0f;
-                    const float requiredSpan = std::clamp(chunk.radius * 0.06f, 0.05f, 0.35f);
-                    const float centerMargin = std::clamp(chunk.radius * 0.02f, 0.02f, 0.12f);
-                    const bool supportsCenter = supportVertices >= 3 && minSupportX <= centerMargin && maxSupportX >= -centerMargin &&
-                                                minSupportY <= centerMargin && maxSupportY >= -centerMargin;
-                    const bool broadSupport = supportVertices >= 3 && std::max(spanX, spanY) >= requiredSpan &&
-                                              spanX * spanY >= requiredSpan * requiredSpan * 0.25f;
-                    const bool stableSupport = supportsCenter && broadSupport;
-
-                    chunk.velocity.fX *= stableSupport ? 0.72f : 0.86f;
-                    chunk.velocity.fY *= stableSupport ? 0.72f : 0.86f;
-                    chunk.rotationSpeed *= stableSupport ? 0.78f : 0.96f;
-
-                    if (stableSupport && std::fabs(chunk.velocity.fZ) < 0.25f)
-                        chunk.velocity.fZ = 0.0f;
-                    else if (!stableSupport && std::fabs(chunk.rotationSpeed) < 0.45f)
-                        chunk.rotationSpeed = std::copysign(0.45f, chunk.rotationSpeed == 0.0f ? 1.0f : chunk.rotationSpeed);
-
-                    const bool lowMotion = LengthSq(chunk.velocity) < 0.12f && std::fabs(chunk.rotationSpeed) < 0.8f;
-                    if (stableSupport && lowMotion)
+                    const float alignment = GetRestAlignment(chunk, settle);
+                    const float speedSq = LengthSq(chunk.velocity);
+                    if (speedSq < 0.12f)
                     {
-                        if (stableGroundFrames < std::numeric_limits<std::uint8_t>::max())
-                            ++stableGroundFrames;
-                        if (stableGroundFrames >= STABLE_GROUND_FRAMES_TO_SLEEP)
+                        chunk.velocity = CVector();
+                        if (alignment >= 0.985f)
                         {
-                            chunk.velocity = CVector();
-                            chunk.rotationSpeed = 0.0f;
                             chunk.sleeping = true;
                         }
                     }
-                    else
-                    {
-                        stableGroundFrames = 0;
-                    }
                 }
             }
-
-            if (!contactedGround)
-                stableGroundFrames = 0;
         }
     }
     for (CClientBreakEffect* effect : expired)
