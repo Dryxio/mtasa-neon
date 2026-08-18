@@ -61,6 +61,23 @@ local function clearPlayground()
     playground.armed = false
 end
 
+local function raisePlaygroundObject()
+    if show.active or not isElement(playground.object) or isElement(playground.effect) then return end
+    if isChatBoxInputActive and isChatBoxInputActive() then return end
+    if isConsoleActive and isConsoleActive() then return end
+
+    local x, y, z = getElementPosition(playground.object)
+    local step = 0.10
+    setElementPosition(playground.object, x, y, z + step)
+
+    if playground.options then
+        playground.options.groundOffset = (playground.options.groundOffset or 0) + step
+    end
+
+    outputChatBox(("[BREAKSHOW] object raised +%.2fm (groundOffset=%.2f)")
+        :format(step, playground.options and playground.options.groundOffset or step), 180, 220, 255)
+end
+
 local function getBreakspawnOwners()
     local owners = {}
     for _, entry in ipairs(getCommandHandlers()) do
@@ -305,7 +322,7 @@ local function playgroundHelp()
     outputChatBox("[BREAKSHOW] /breakspawn <model> [key=value ...]", 255, 200, 80)
     outputChatBox("[BREAKSHOW] durability: health native damageMultiplier instantBreakThreshold", 255, 200, 80)
     outputChatBox("[BREAKSHOW] fracture: fragments force randomness lifetime gravity bounce drag renderDistance seed vx vy vz", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] placement: distance scale groundOffset (auto-grounded by default)", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] placement: distance scale groundOffset (auto-grounded by default); R raises object +0.10m", 255, 200, 80)
     outputChatBox("[BREAKSHOW] shoot/ram the object, /breakhp for health, /breaknow to force, /breakclear", 255, 200, 80)
     outputChatBox("[BREAKSHOW] example: /breakspawn 1337 health=250 fragments=24 force=7", 255, 200, 80)
 end
@@ -362,7 +379,7 @@ local function handleBreakspawn(_, modelArg, ...)
     playground.options = options
     playground.armed = false
 
-    outputChatBox(("[BREAKSHOW] model %d grounded at Z %.2f (ground %.2f); arming in 500ms...")
+    outputChatBox(("[BREAKSHOW] model %d grounded at Z %.2f (ground %.2f); R raises +0.10m; arming in 500ms...")
         :format(model, objectZ, groundZ), 180, 220, 255)
 
     setTimer(function()
@@ -394,6 +411,7 @@ addCommandHandler("breakspawn", handleBreakspawn)
 -- Unique alias useful when diagnosing a stale resource that still owns the old
 -- /breakspawn command. Once all resources are resynced both commands are identical.
 addCommandHandler("breakobject", handleBreakspawn)
+bindKey("r", "down", raisePlaygroundObject)
 
 addCommandHandler("breakhp", function()
     if not isElement(playground.object) then
