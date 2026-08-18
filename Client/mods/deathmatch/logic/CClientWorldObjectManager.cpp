@@ -61,6 +61,37 @@ namespace
         return pObject->pad1 == 1;
     }
 
+    bool DefaultObjectBreakHandler(CObjectSAInterface* pObjectInterface, CEntitySAInterface* pAttackerInterface)
+    {
+        if (!pObjectInterface || !g_pGame)
+            return true;
+
+        CPools*                   pPools = g_pGame->GetPools();
+        SClientEntity<CObjectSA>* pObjectEntity = pPools ? pPools->GetObject(reinterpret_cast<DWORD*>(pObjectInterface)) : nullptr;
+        if (!pObjectEntity)
+            return true;
+
+        CClientObject* pClientObject = reinterpret_cast<CClientObject*>(pObjectEntity->pClientEntity);
+        if (!pClientObject)
+            return true;
+        if (!pClientObject->IsBreakable(false))
+            return false;
+
+        CClientEntity* pClientAttacker = pPools->GetClientEntity(reinterpret_cast<DWORD*>(pAttackerInterface));
+        CClientPed*    pPresentationPed = DynamicCast<CClientPed>(pClientAttacker);
+        if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive())
+            return false;
+
+        pClientObject->SetHealth(0.0f);
+
+        CLuaArguments arguments;
+        if (pClientAttacker)
+            arguments.PushElement(pClientAttacker);
+        else
+            arguments.PushNil();
+        return pClientObject->CallEvent("onClientObjectBreak", arguments, true);
+    }
+
     CClientWorldObject* AdoptObject(CObjectSAInterface* pObject)
     {
         if (!IsNativeWorldObject(pObject) || !g_pClientGame)
@@ -188,7 +219,7 @@ void CClientWorldObjectManager::Shutdown()
     if (g_bHandlersInstalled && g_pMultiplayer)
     {
         g_pMultiplayer->SetObjectDamageHandler(CClientGame::StaticObjectDamageHandler);
-        g_pMultiplayer->SetObjectBreakHandler(CClientGame::StaticObjectBreakHandler);
+        g_pMultiplayer->SetObjectBreakHandler(DefaultObjectBreakHandler);
     }
 
     g_bHandlersInstalled = false;
@@ -225,7 +256,7 @@ bool CClientWorldObjectManager::ObjectBreakHandler(CObjectSAInterface* pObjectIn
 {
     CClientWorldObject* pProxy = FindOrAdoptObject(pObjectInterface);
     if (!pProxy)
-        return CClientGame::StaticObjectBreakHandler(pObjectInterface, pAttackerInterface);
+        return DefaultObjectBreakHandler(pObjectInterface, pAttackerInterface);
 
     pProxy->RefreshFromGame();
     CVector position;
