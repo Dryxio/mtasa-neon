@@ -12,6 +12,8 @@
 #include "../CElementGroup.h"
 #include "../CResource.h"
 #include "../packets/CEntityAddPacket.h"
+#include "../CStaticFunctionDefinitions.h"
+#include <CScriptArgReader.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
