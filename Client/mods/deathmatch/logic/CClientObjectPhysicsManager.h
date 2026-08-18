@@ -22,6 +22,9 @@ private:
     {
         CObject* pLastGameObject = nullptr;
         bool     bSnapshotValid = false;
+        bool     bSleeping = false;
+        unsigned char ucRestFrames = 0;
+        unsigned char ucContactGraceFrames = 0;
 
         bool  bApplyGravity = false;
         bool  bDisableCollisionForce = false;
@@ -40,13 +43,22 @@ private:
     };
 
     static inline std::unordered_map<CClientObject*, SState> ms_Objects;
+    static inline unsigned int ms_uiLastPulseFrame = 0xFFFFFFFFu;
 
-    // GTA's CObject::ProcessControl starts its native fake-physics sleep path
-    // around this speed range. Network snapshots below the same threshold are
-    // canonicalized to zero so CPhysicalSA::SetMoveSpeed/SetTurnSpeed do not
-    // wake an already-settled object on every sync packet.
+    // Network snapshots below these values are effectively rest and must not
+    // wake an object GTA has already put to sleep.
     static constexpr float REST_LINEAR_SPEED_SQ = 0.003f * 0.003f;
     static constexpr float REST_TURN_SPEED_SQ = 0.003f * 0.003f;
+
+    // GTA's discrete gravity + restitution can enter a tiny vertical limit
+    // cycle on small elastic spheres. Once the object has had recent contact
+    // and remains below these wider thresholds for several frames, finish the
+    // same transition GTA's CObject::ProcessControl performs: zero all motion
+    // and mark the object static.
+    static constexpr float SETTLE_LINEAR_SPEED_SQ = 0.015f * 0.015f;
+    static constexpr float SETTLE_TURN_SPEED_SQ = 0.050f * 0.050f;
+    static constexpr unsigned char SETTLE_FRAMES = 12;
+    static constexpr unsigned char CONTACT_GRACE_FRAMES = 6;
 
     static float LengthSq(const CVector& value)
     {
@@ -79,6 +91,57 @@ private:
         state.fMass = pInterface->m_fMass;
         state.fTurnMass = pInterface->m_fTurnMass;
         state.bSnapshotValid = true;
+    }
+
+    static void Wake(CClientObject* pObject, SState& state)
+    {
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return;
+
+        CObjectSAInterface* pInterface = pObjectSA->GetObjectInterface();
+        if (!pInterface)
+            return;
+
+        state.bSleeping = false;
+        state.ucRestFrames = 0;
+        state.ucContactGraceFrames = 0;
+
+        // Teleports and previous low-speed contacts can leave these flags in a
+        // state that lets the next fast update skip collision work. A deliberate
+        // wake must invalidate that state before adding the object back to GTA's
+        // moving list.
+        pObjectSA->SetStatic(false);
+        pInterface->bCollisionProcessed = false;
+        pInterface->bIsInSafePosition = false;
+        pInterface->bIsStuck = false;
+        pInterface->bOnSolidSurface = false;
+        pInterface->m_ucColFlag1 = 0;
+        pObjectSA->AddToMovingList();
+    }
+
+    static void PutToSleep(CClientObject* pObject, SState& state)
+    {
+        CObjectSA* pObjectSA = GetObjectSA(pObject);
+        if (!pObjectSA)
+            return;
+
+        CObjectSAInterface* pInterface = pObjectSA->GetObjectInterface();
+        if (!pInterface)
+            return;
+
+        const CVector zero;
+        pInterface->m_vecLinearVelocity = zero;
+        pInterface->m_vecAngularVelocity = zero;
+        pInterface->m_vecCollisionLinearVelocity = zero;
+        pInterface->m_vecCollisionAngularVelocity = zero;
+        pObjectSA->SetStatic(true);
+
+        pObject->m_vecMoveSpeed = zero;
+        pObject->m_vecTurnSpeed = zero;
+        state.bSleeping = true;
+        state.ucRestFrames = 0;
+        state.ucContactGraceFrames = 0;
     }
 
     static bool Apply(CClientObject* pObject, SState& state)
@@ -119,27 +182,39 @@ private:
 
         if (!pObject->IsFrozen())
         {
-            pObjectSA->SetStatic(false);
-            pInterface->bCollisionProcessed = false;
-            pInterface->bIsInSafePosition = false;
-            pInterface->bIsStuck = false;
-            pObjectSA->AddToMovingList();
+            if (state.bSleeping)
+            {
+                const CVector zero;
+                pInterface->m_vecLinearVelocity = zero;
+                pInterface->m_vecAngularVelocity = zero;
+                pInterface->m_vecCollisionLinearVelocity = zero;
+                pInterface->m_vecCollisionAngularVelocity = zero;
+                pObjectSA->SetStatic(true);
+            }
+            else
+            {
+                Wake(pObject, state);
 
-            // The server can send launch velocity before GTA has created the
-            // streamed CObject. Restore the cached values into every new native
-            // instance so streaming and syncer migration preserve momentum.
-            pObjectSA->SetMoveSpeed(pObject->m_vecMoveSpeed);
-            CVector vecTurnSpeed = pObject->m_vecTurnSpeed;
-            pObjectSA->SetTurnSpeed(&vecTurnSpeed);
+                // The server can send launch velocity before GTA has created the
+                // streamed CObject. Restore the cached values into every new native
+                // instance so streaming and syncer migration preserve momentum.
+                pObjectSA->SetMoveSpeed(pObject->m_vecMoveSpeed);
+                CVector vecTurnSpeed = pObject->m_vecTurnSpeed;
+                pObjectSA->SetTurnSpeed(&vecTurnSpeed);
+            }
         }
 
         return true;
     }
 
-    static void CacheLiveState(CClientObject* pObject)
+    static void CacheLiveState(CClientObject* pObject, SState& state)
     {
         CObjectSA* pObjectSA = GetObjectSA(pObject);
         if (!pObjectSA)
+            return;
+
+        CObjectSAInterface* pInterface = pObjectSA->GetObjectInterface();
+        if (!pInterface)
             return;
 
         const CVector vecPosition = *pObjectSA->GetPosition();
@@ -149,6 +224,32 @@ private:
         pObject->GetRotationRadians(vecRotation);
         pObjectSA->GetMoveSpeed(&vecMoveSpeed);
         pObjectSA->GetTurnSpeed(&vecTurnSpeed);
+
+        if (!state.bSleeping && !pObject->IsFrozen())
+        {
+            const bool bContact = pInterface->bOnSolidSurface || pInterface->m_ucCollisionState != 0;
+            if (bContact)
+                state.ucContactGraceFrames = CONTACT_GRACE_FRAMES;
+            else if (state.ucContactGraceFrames > 0)
+                --state.ucContactGraceFrames;
+
+            const bool bNearRest = LengthSq(vecMoveSpeed) <= SETTLE_LINEAR_SPEED_SQ && LengthSq(vecTurnSpeed) <= SETTLE_TURN_SPEED_SQ;
+            if (bNearRest && state.ucContactGraceFrames > 0)
+            {
+                if (state.ucRestFrames < SETTLE_FRAMES)
+                    ++state.ucRestFrames;
+                if (state.ucRestFrames >= SETTLE_FRAMES)
+                {
+                    PutToSleep(pObject, state);
+                    vecMoveSpeed = CVector();
+                    vecTurnSpeed = CVector();
+                }
+            }
+            else
+            {
+                state.ucRestFrames = 0;
+            }
+        }
 
         if (vecPosition != pObject->m_vecPosition)
         {
@@ -204,9 +305,12 @@ public:
             return true;
         }
 
-        SState& state = ms_Objects[pObject];
+        auto [iter, inserted] = ms_Objects.try_emplace(pObject);
+        SState& state = iter->second;
         if (pObject->GetGameObject() != state.pLastGameObject || !state.bSnapshotValid)
             Apply(pObject, state);
+        else if (!inserted)
+            Wake(pObject, state);
         return true;
     }
 
@@ -227,6 +331,10 @@ public:
         CObjectSA* pObjectSA = GetObjectSA(pObject);
         if (!pObjectSA)
             return;
+
+        auto iter = ms_Objects.find(pObject);
+        if (!bNearRest && iter != ms_Objects.end())
+            Wake(pObject, iter->second);
 
         if (bNearRest)
         {
@@ -254,6 +362,10 @@ public:
         if (!pObjectSA)
             return;
 
+        auto iter = ms_Objects.find(pObject);
+        if (!bNearRest && iter != ms_Objects.end())
+            Wake(pObject, iter->second);
+
         if (bNearRest)
         {
             // Same rule as linear velocity: do not wake a sleeping object just
@@ -271,6 +383,11 @@ public:
     {
         if (!g_pClientGame || !g_pClientGame->GetManager())
             return;
+
+        const unsigned int uiFrame = g_pClientGame->GetFrameCount();
+        if (uiFrame == ms_uiLastPulseFrame)
+            return;
+        ms_uiLastPulseFrame = uiFrame;
 
         CClientObjectManager* pManager = g_pClientGame->GetManager()->GetObjectManager();
         if (!pManager)
@@ -292,7 +409,7 @@ public:
             }
 
             if (pObject->GetGameObject() && pObject->GetGameObject() == iter->second.pLastGameObject)
-                CacheLiveState(pObject);
+                CacheLiveState(pObject, iter->second);
 
             ++iter;
         }
@@ -301,5 +418,6 @@ public:
     static void Shutdown()
     {
         ms_Objects.clear();
+        ms_uiLastPulseFrame = 0xFFFFFFFFu;
     }
 };
