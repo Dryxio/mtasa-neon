@@ -45,9 +45,16 @@ local function getVehicleCamera()
     end
 
     local x, y, z = getElementPosition(show.vehicle)
-    local vx, vy = getElementVelocity(show.vehicle)
-    local speed = math.sqrt(vx * vx + vy * vy)
+    if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+        return nil
+    end
 
+    local vx, vy = getElementVelocity(show.vehicle)
+    if type(vx) ~= "number" or type(vy) ~= "number" then
+        vx, vy = 1, 0
+    end
+
+    local speed = math.sqrt(vx * vx + vy * vy)
     local dirX, dirY = 1, 0
     if speed > 0.005 then
         dirX, dirY = vx / speed, vy / speed
@@ -107,7 +114,10 @@ local function renderShow()
         local t = (elapsed - 7000) / 4000
         local lookX, lookY, lookZ = cx + 5, cy, cz
         if isElement(show.heroFire) then
-            lookX, lookY, lookZ = getElementPosition(show.heroFire)
+            local fireX, fireY, fireZ = getElementPosition(show.heroFire)
+            if type(fireX) == "number" and type(fireY) == "number" and type(fireZ) == "number" then
+                lookX, lookY, lookZ = fireX, fireY, fireZ
+            end
         end
 
         cameraLerp(
@@ -132,7 +142,10 @@ local function renderShow()
     else
         local vehicleX, vehicleY, vehicleZ = cx + 16, cy - 13, 16.6
         if isElement(show.vehicle) then
-            vehicleX, vehicleY, vehicleZ = getElementPosition(show.vehicle)
+            local x, y, z = getElementPosition(show.vehicle)
+            if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+                vehicleX, vehicleY, vehicleZ = x, y, z
+            end
         end
 
         local targetX = (cx + vehicleX) * 0.5
