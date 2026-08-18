@@ -91,6 +91,11 @@ local function runImmediate(player)
     check("target.set", setFireTarget(fire, player) and getFireTarget(fire) == player, tostring(getFireTarget(fire)))
     check("target.clear", setFireTarget(fire, nil) and getFireTarget(fire) == false, tostring(getFireTarget(fire)))
 
+    -- Keep this control fire stable after testing the live setters so the dedicated
+    -- spread scenario owns all propagation assertions.
+    setFireSpreadEnabled(fire, false)
+    setFireMaxGenerations(fire, 0)
+
     triggerClientEvent(player, "firetest:inspect", resourceRoot, fire, runSerial)
     return true
 end
@@ -173,7 +178,7 @@ end
 
 addEvent("firetest:clientResult", true)
 addEventHandler("firetest:clientResult", resourceRoot, function(serial, name, ok, detail)
-    if client ~= source or serial ~= runSerial then
+    if not client or serial ~= runSerial then
         return
     end
     check("client." .. tostring(name), ok == true, detail)
