@@ -201,8 +201,9 @@ function S.beginShow(mode, shot)
     state.active = true
 
     S.setPresentationUI(state.mode == "setup")
-    removeEventHandler("onClientRender", root, S.renderShow)
-    addEventHandler("onClientRender", root, S.renderShow)
+    if not isEventHandlerAdded or not isEventHandlerAdded("onClientRender", root, S.renderShow) then
+        addEventHandler("onClientRender", root, S.renderShow)
+    end
 
     if state.mode == "setup" or state.mode == "final" then
         S.applyFinalLights(0)
