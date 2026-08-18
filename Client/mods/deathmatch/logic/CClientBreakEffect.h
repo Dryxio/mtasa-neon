@@ -62,6 +62,7 @@ public:
     std::size_t GetSourceTriangleCount() const { return m_uiSourceTriangleCount; }
     std::size_t GetSleepingFragmentCount() const;
     bool        WasCacheHit() const { return m_bCacheHit; }
+    bool        IsBeingDeleted() const { return const_cast<CClientBreakEffect*>(this)->CClientEntity::IsBeingDeleted(); }
 
     bool IsPaused() const { return m_bPaused; }
     void SetPaused(bool paused) { m_bPaused = paused; }
