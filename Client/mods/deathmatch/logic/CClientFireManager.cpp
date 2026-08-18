@@ -13,7 +13,6 @@
 #include <game/CFxManager.h>
 #include <game/CFxSystem.h>
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 namespace
@@ -31,6 +30,13 @@ bool GetNumber(CClientEntity* pElement, const char* szKey, double& dValue)
 
     dValue = pArgument->GetNumber();
     return true;
+}
+
+void SetLocalNumber(CClientEntity* pElement, const char* szKey, double dValue)
+{
+    CLuaArgument argument;
+    argument.ReadNumber(dValue);
+    pElement->SetCustomData(szKey, argument, false);
 }
 
 bool GetBool(CClientEntity* pElement, const char* szKey, bool& bValue)
@@ -115,6 +121,7 @@ void CClientFireManager::Register(CClientDummy* pFire)
 
     SFireEntry entry;
     entry.pElement = pFire;
+    entry.ullLastPulse = GetTickCount64_();
     m_Fires.push_back(std::move(entry));
 }
 
@@ -197,8 +204,6 @@ void CClientFireManager::TryDamage(SFireEntry& entry, CClientEntity* pVictim, co
     arguments.PushNumber(fDamage);
     arguments.PushElement(pResponsible);
 
-    // CallEvent returns false when a handler cancels the event. Only ignite the victim
-    // after script policy has had a chance to veto the interaction.
     if (!entry.pElement->CallEvent("onClientFireDamage", arguments, true))
         return;
 
@@ -242,12 +247,23 @@ void CClientFireManager::ProcessEntry(SFireEntry& entry, std::vector<CClientDumm
     if (!pFire || pFire->IsBeingDeleted())
         return;
 
-    double expiry = 0.0;
-    GetNumber(pFire, KEY_EXPIRY, expiry);
-    if (expiry > 0.0)
+    const unsigned long long now = GetTickCount64_();
+    const unsigned long long elapsed = entry.ullLastPulse ? now - entry.ullLastPulse : 0;
+    entry.ullLastPulse = now;
+
+    double duration = 0.0;
+    double remaining = 0.0;
+    GetNumber(pFire, KEY_DURATION, duration);
+    GetNumber(pFire, KEY_REMAINING, remaining);
+    if (duration > 0.0)
     {
-        const double now = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-        if (now >= expiry)
+        if (remaining > 0.0 && elapsed > 0)
+        {
+            remaining = std::max(0.0, remaining - static_cast<double>(elapsed));
+            SetLocalNumber(pFire, KEY_REMAINING, remaining);
+        }
+
+        if (remaining <= 0.0)
         {
             DestroyFx(entry);
             if (pFire->IsLocalEntity())
