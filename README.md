@@ -48,12 +48,13 @@ Neon also ships its own GTA:SA-inspired menu and server browser, with an optiona
 
 ## GTA systems, now scriptable
 
-Four systems that used to be locked inside the engine. Each clip is a real in-game recording.
+Five systems that used to be locked inside the engine. Each clip is a real in-game recording.
 
 | | |
 | :--: | :--: |
 | [![Native CULL-zone editing](docs/media/native-cull-zone-demo.png)](https://www.youtube.com/watch?v=17QrE21uDgM)<br>**[Native CULL zones](https://mtasa-neon-wiki.vercel.app/neon/rendering-and-limits)**<br>Edit GTA's culling from Lua | [![Scripting GTA's own physics objects](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)<br>**[Dynamic world objects](https://mtasa-neon-wiki.vercel.app/neon/world-objects)**<br>Track, move, damage and break San Andreas' own props |
 | [![Collision generated at runtime](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)<br>**[Runtime collision](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)**<br>Build collision shapes from Lua, no `.col` file | [![Custom foliage](docs/media/foliage-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/foliage)<br>**[Custom foliage](https://mtasa-neon-wiki.vercel.app/neon/foliage)**<br>Grow GTA's own vegetation anywhere |
+| [![Managed fire following a car](docs/media/fire-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/fire)<br>**[Managed fire](https://mtasa-neon-wiki.vercel.app/neon/fire)**<br>Synchronized fires that keep their identity and follow a target | |
 
 ```lua
 -- Build a wall's collision from a Lua table, then change it live
@@ -65,6 +66,10 @@ engineReplaceCOL(col, modelId)
 -- Grow GTA's own grass inside a triangle
 local patch = createFoliage(v1, v2, v3, 10, 1.5)
 patch.density = 2.0
+
+-- Light a synchronized fire, then move it onto a car while it burns
+local fire = createFire(x, y, z, { duration = 10000, strength = 1.5 })
+setFireTarget(fire, theVehicle)
 ```
 
 ## Play
@@ -84,13 +89,14 @@ Server owners use the separate server package. Both downloads are linked at the 
 | Visible entity pointers | 1,000 | 8,192 |
 | Collision authoring | A packaged `.col` file | Generated from a Lua table and rebuildable live |
 | Vegetation placement | Whatever the map contains | Resource-owned foliage driving GTA's plant manager |
+| Fire | Client-only, returns a boolean, no handle | Synchronized `fire` elements you can retarget and change while burning |
 | Distant lights and draw distance | Not integrated | Built in, 300 to 5,000 units, off by default |
 
 That is the short list. The [full comparison table](https://mtasa-neon-wiki.vercel.app/neon/features) covers every pool, boundary and subsystem.
 
 ## For scripters
 
-Neon adds **186 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
+Neon adds **206 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
 
 ```lua
 engineSetRadarMapTile(column, row, txd)        -- resource-owned extended radar tiles
@@ -98,7 +104,7 @@ engineCreateCullZone(...)                      -- native CULL zones from Lua
 createFoliage(v1, v2, v3, surface, density)    -- GTA's native vegetation
 engineSetCOLData(col, collisionTable)          -- rebuild collision in place
 getAmbientPedSpawnCandidate(origin, "cop")     -- ask GTA where a ped belongs
-acquirePedNativeCouple(a, b, leaderIndex)      -- native two-ped couple behaviour
+setFireTarget(fire, vehicle)                   -- a burning fire follows an element
 ```
 
 The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the complete reference, with signatures, lifecycle rules, source commits and test evidence for every entry.
