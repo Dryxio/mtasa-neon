@@ -10,6 +10,12 @@ local show = {
     finished = false,
 }
 
+local playground = {
+    object = nil,
+    effect = nil,
+    options = nil,
+}
+
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
 local function smoothstep(t) t = clamp(t, 0, 1); return t * t * (3 - 2 * t) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -42,6 +48,14 @@ local function stopShow()
     show.finished = false
     setCameraTarget(localPlayer)
     presentation(true)
+end
+
+local function clearPlayground()
+    if isElement(playground.effect) then destroyElement(playground.effect) end
+    if isElement(playground.object) then destroyElement(playground.object) end
+    playground.object = nil
+    playground.effect = nil
+    playground.options = nil
 end
 
 local function spawn(model, x, y, z, scale, rz, bucket)
@@ -157,6 +171,141 @@ local function updateShow()
     end
 end
 
+local optionReaders = {
+    fragments = function(v) return math.floor(tonumber(v) or -1) end,
+    force = tonumber,
+    randomness = tonumber,
+    lifetime = function(v) return math.floor(tonumber(v) or -1) end,
+    gravity = tonumber,
+    bounce = tonumber,
+    drag = tonumber,
+    renderDistance = tonumber,
+    seed = function(v) return math.floor(tonumber(v) or -1) end,
+    vx = tonumber,
+    vy = tonumber,
+    vz = tonumber,
+    scale = tonumber,
+    hideOriginal = function(v) return v == "1" or v == "true" end,
+    disableOriginalCollision = function(v) return v == "1" or v == "true" end,
+}
+
+local function parsePlaygroundOptions(args)
+    local values = {
+        fragments = 20,
+        force = 5.0,
+        randomness = 1.5,
+        lifetime = 8000,
+        gravity = 9.81,
+        bounce = 0.35,
+        drag = 0.12,
+        renderDistance = 350,
+        seed = 4242,
+        vx = 0,
+        vy = 0,
+        vz = 1.0,
+        scale = 1.0,
+        hideOriginal = true,
+        disableOriginalCollision = true,
+    }
+
+    for _, arg in ipairs(args) do
+        local key, raw = arg:match("^([%w_]+)=(.+)$")
+        local reader = key and optionReaders[key]
+        if reader then
+            local value = reader(raw)
+            if value ~= nil then values[key] = value end
+        end
+    end
+
+    return values
+end
+
+local function playgroundHelp()
+    outputChatBox("[BREAKSHOW] /breakspawn <model> [key=value ...]", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] keys: fragments force randomness lifetime gravity bounce drag renderDistance seed scale vx vy vz hideOriginal disableOriginalCollision", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] then /breaknow   |   /breakclear", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] example: /breakspawn 1337 fragments=24 force=7 randomness=1.4 bounce=.4 lifetime=12000 scale=1.2", 255, 200, 80)
+end
+
+addCommandHandler("breakspawn", function(_, modelArg, ...)
+    local model = tonumber(modelArg)
+    if not model then
+        playgroundHelp()
+        return
+    end
+
+    clearPlayground()
+
+    local options = parsePlaygroundOptions({...})
+    local px, py, pz = getElementPosition(localPlayer)
+    local _, _, rz = getElementRotation(localPlayer)
+    local angle = math.rad(rz)
+    local distance = 4.0
+    local x = px - math.sin(angle) * distance
+    local y = py + math.cos(angle) * distance
+    local z = pz + 0.35
+
+    local object = createObject(model, x, y, z, 0, 0, rz)
+    if not isElement(object) then
+        outputChatBox("[BREAKSHOW] failed to create model " .. tostring(model), 255, 80, 80)
+        return
+    end
+
+    setElementDimension(object, getElementDimension(localPlayer))
+    setElementInterior(object, getElementInterior(localPlayer))
+    setElementFrozen(object, true)
+    setObjectScale(object, options.scale)
+
+    playground.object = object
+    playground.options = options
+
+    outputChatBox(("[BREAKSHOW] spawned model %d. Use /breaknow to fracture it."):format(model), 100, 255, 100)
+    outputChatBox(("[BREAKSHOW] fragments=%d force=%.2f randomness=%.2f lifetime=%d bounce=%.2f drag=%.2f scale=%.2f")
+        :format(options.fragments, options.force, options.randomness, options.lifetime, options.bounce, options.drag, options.scale), 180, 220, 255)
+end)
+
+addCommandHandler("breaknow", function()
+    local object = playground.object
+    local p = playground.options
+    if not isElement(object) or not p then
+        outputChatBox("[BREAKSHOW] no playground object. Use /breakspawn first.", 255, 80, 80)
+        return
+    end
+
+    if isElement(playground.effect) then destroyElement(playground.effect) end
+
+    local px, py, pz = getElementPosition(localPlayer)
+    local effect = createObjectBreakEffect(object, {
+        fragments = p.fragments,
+        force = p.force,
+        randomness = p.randomness,
+        lifetime = p.lifetime,
+        gravity = p.gravity,
+        bounce = p.bounce,
+        drag = p.drag,
+        renderDistance = p.renderDistance,
+        seed = p.seed,
+        velocity = {p.vx, p.vy, p.vz},
+        impactPosition = {px, py, pz + 0.7},
+        hideOriginal = p.hideOriginal,
+        disableOriginalCollision = p.disableOriginalCollision,
+    })
+
+    if not isElement(effect) then
+        outputChatBox("[BREAKSHOW] fracture failed (object may not be streamed / valid static geometry).", 255, 80, 80)
+        return
+    end
+
+    playground.effect = effect
+    outputChatBox(("[BREAKSHOW] fractured: %d fragments, %d source triangles, cacheHit=%s")
+        :format(getBreakEffectFragmentCount(effect), getBreakEffectSourceTriangleCount(effect), tostring(getBreakEffectCacheHit(effect))), 100, 255, 100)
+end)
+
+addCommandHandler("breakclear", function()
+    clearPlayground()
+    outputChatBox("[BREAKSHOW] playground cleared.", 100, 255, 100)
+end)
+
 addEvent("breakShowcase:start", true)
 addEventHandler("breakShowcase:start", resourceRoot, function(cx, cy, cz, dimension)
     stopShow()
@@ -175,4 +324,7 @@ end)
 addEvent("breakShowcase:stop", true)
 addEventHandler("breakShowcase:stop", resourceRoot, stopShow)
 addEventHandler("onClientRender", root, updateShow)
-addEventHandler("onClientResourceStop", resourceRoot, stopShow)
+addEventHandler("onClientResourceStop", resourceRoot, function()
+    stopShow()
+    clearPlayground()
+end)
