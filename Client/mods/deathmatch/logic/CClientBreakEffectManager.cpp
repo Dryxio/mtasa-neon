@@ -693,19 +693,38 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
                 if (std::isfinite(ground))
                     chunk.groundZ = ground;
             }
-            if (chunk.position.fZ - chunk.radius <= chunk.groundZ)
+
+            // Keep the cheap bounding radius as a broad-phase only. Large or
+            // elongated chunks can have radii of several metres; treating that
+            // sphere as the actual contact shape made them bounce and sleep in
+            // mid-air. Once the sphere reaches the ground, use the same rotated
+            // mesh vertices that are rendered to find the real lowest point.
+            constexpr float GROUND_CONTACT_TOLERANCE = 0.02f;
+            if (chunk.position.fZ - chunk.radius <= chunk.groundZ + GROUND_CONTACT_TOLERANCE)
             {
-                chunk.position.fZ = chunk.groundZ + chunk.radius;
-                if (chunk.velocity.fZ < 0.0f)
-                    chunk.velocity.fZ = -chunk.velocity.fZ * effect->m_fBounce;
-                chunk.velocity.fX *= 0.72f;
-                chunk.velocity.fY *= 0.72f;
-                chunk.rotationSpeed *= 0.78f;
-                if (LengthSq(chunk.velocity) < 0.12f && std::fabs(chunk.rotationSpeed) < 0.8f)
+                float lowestWorldZ = std::numeric_limits<float>::max();
+                for (const SBreakEffectBatch& batch : chunk.batches)
+                    for (const SBreakEffectVertex& vertex : batch.vertices)
+                    {
+                        const CVector rotated = RotateAxisAngle(vertex.localPosition, chunk.rotationAxis, chunk.rotation);
+                        lowestWorldZ = std::min(lowestWorldZ, chunk.position.fZ + rotated.fZ);
+                    }
+
+                if (lowestWorldZ <= chunk.groundZ + GROUND_CONTACT_TOLERANCE)
                 {
-                    chunk.velocity = CVector();
-                    chunk.rotationSpeed = 0.0f;
-                    chunk.sleeping = true;
+                    if (lowestWorldZ < chunk.groundZ)
+                        chunk.position.fZ += chunk.groundZ - lowestWorldZ;
+                    if (chunk.velocity.fZ < 0.0f)
+                        chunk.velocity.fZ = -chunk.velocity.fZ * effect->m_fBounce;
+                    chunk.velocity.fX *= 0.72f;
+                    chunk.velocity.fY *= 0.72f;
+                    chunk.rotationSpeed *= 0.78f;
+                    if (LengthSq(chunk.velocity) < 0.12f && std::fabs(chunk.rotationSpeed) < 0.8f)
+                    {
+                        chunk.velocity = CVector();
+                        chunk.rotationSpeed = 0.0f;
+                        chunk.sleeping = true;
+                    }
                 }
             }
         }
