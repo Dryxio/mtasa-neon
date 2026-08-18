@@ -38,7 +38,7 @@ public:
     static bool IsFireElement(const CClientEntity* pElement);
 
     static constexpr const char* KEY_DURATION = "__neon_fire_duration";
-    static constexpr const char* KEY_EXPIRY = "__neon_fire_expiry";
+    static constexpr const char* KEY_REMAINING = "__neon_fire_remaining";
     static constexpr const char* KEY_STRENGTH = "__neon_fire_strength";
     static constexpr const char* KEY_DAMAGE = "__neon_fire_damage";
     static constexpr const char* KEY_DAMAGE_MASK = "__neon_fire_damage_mask";
@@ -54,6 +54,7 @@ private:
         CClientDummy* pElement{};
         CFxSystem*    pFxSystem{};
         int           iFxTier{-1};
+        unsigned long long ullLastPulse{};
         std::unordered_map<CClientEntity*, unsigned long long> LastVictimPulse;
     };
 
