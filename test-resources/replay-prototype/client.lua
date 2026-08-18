@@ -1,8 +1,9 @@
 local BUFFER_DURATION_MS = 60000
 local SAMPLE_INTERVAL_MS = 16
 local KEYFRAME_INTERVAL_MS = 500
-local SOFT_CORRECTION_DISTANCE = 0.15
-local HARD_CORRECTION_DISTANCE = 0.90
+local SOFT_CORRECTION_DISTANCE = 0.75
+local HARD_CORRECTION_DISTANCE = 4.0
+local SOFT_CORRECTION_FACTOR = 0.08
 
 local CONTROL_NAMES = {
     "forwards",
@@ -35,6 +36,10 @@ local state = {
     ghostWeapon = nil,
     corrections = 0,
     hardResyncs = 0,
+    currentDrift = 0,
+    maxDrift = 0,
+    lastCorrectedKeyframe = nil,
+    replayMode = "tracked",
     debug = true,
 }
 
@@ -162,6 +167,8 @@ local function stopGhost()
     state.paused = false
     state.playbackIndex = 1
     state.playbackOffset = 0
+    state.currentDrift = 0
+    state.lastCorrectedKeyframe = nil
 end
 
 local function ensureGhostWeapon(frame)
@@ -273,8 +280,11 @@ local function startPlayback(offsetMs)
     state.playbackIndex = state.firstFrame
     state.corrections = 0
     state.hardResyncs = 0
+    state.currentDrift = 0
+    state.maxDrift = 0
+    state.lastCorrectedKeyframe = nil
 
-    chat(("Playback started (%.2fs buffered, %d samples)."):format((last.t - first.t) / 1000, #state.frames - state.firstFrame + 1), 120, 255, 120)
+    chat(("Playback started (%s mode, %.2fs buffered, %d samples)."):format(state.replayMode, (last.t - first.t) / 1000, #state.frames - state.firstFrame + 1), 120, 255, 120)
 end
 
 local function seekPlayback(seconds)
@@ -289,6 +299,7 @@ local function seekPlayback(seconds)
     state.playbackOffset = target
     state.playbackStartedAt = getTickCount()
     state.playbackIndex = state.firstFrame
+    state.lastCorrectedKeyframe = nil
 
     local frame = select(1, findPlaybackFrames(target))
     if frame and isElement(state.ghost) then
@@ -308,6 +319,59 @@ local function getPlaybackTime(now)
     return state.playbackOffset + (now - state.playbackStartedAt)
 end
 
+local function updateTrackedMovement(a, b, alpha)
+    local targetX = lerp(a.x, b.x, alpha)
+    local targetY = lerp(a.y, b.y, alpha)
+    local targetZ = lerp(a.z, b.z, alpha)
+    local targetRX = lerpAngle(a.rx, b.rx, alpha)
+    local targetRY = lerpAngle(a.ry, b.ry, alpha)
+    local targetRZ = lerpAngle(a.rz, b.rz, alpha)
+    local targetVX = lerp(a.vx, b.vx, alpha)
+    local targetVY = lerp(a.vy, b.vy, alpha)
+    local targetVZ = lerp(a.vz, b.vz, alpha)
+
+    local gx, gy, gz = getElementPosition(state.ghost)
+    state.currentDrift = distance3D(gx, gy, gz, targetX, targetY, targetZ)
+    state.maxDrift = math.max(state.maxDrift, state.currentDrift)
+
+    setElementPosition(state.ghost, targetX, targetY, targetZ)
+    setElementRotation(state.ghost, targetRX, targetRY, targetRZ)
+    setElementVelocity(state.ghost, targetVX, targetVY, targetVZ)
+end
+
+local function updateControlDrivenMovement(a, b, alpha)
+    local targetX = lerp(a.x, b.x, alpha)
+    local targetY = lerp(a.y, b.y, alpha)
+    local targetZ = lerp(a.z, b.z, alpha)
+    local gx, gy, gz = getElementPosition(state.ghost)
+    local errorDistance = distance3D(gx, gy, gz, targetX, targetY, targetZ)
+
+    state.currentDrift = errorDistance
+    state.maxDrift = math.max(state.maxDrift, errorDistance)
+
+    if not a.keyframe or state.lastCorrectedKeyframe == a.t then
+        return
+    end
+
+    state.lastCorrectedKeyframe = a.t
+
+    if errorDistance > HARD_CORRECTION_DISTANCE then
+        setElementPosition(state.ghost, a.x, a.y, a.z)
+        setElementRotation(state.ghost, a.rx, a.ry, a.rz)
+        setElementVelocity(state.ghost, a.vx, a.vy, a.vz)
+        state.hardResyncs = state.hardResyncs + 1
+    elseif errorDistance > SOFT_CORRECTION_DISTANCE then
+        local correction = math.min(0.18, SOFT_CORRECTION_FACTOR + errorDistance * 0.02)
+        setElementPosition(
+            state.ghost,
+            lerp(gx, a.x, correction),
+            lerp(gy, a.y, correction),
+            lerp(gz, a.z, correction)
+        )
+        state.corrections = state.corrections + 1
+    end
+end
+
 local function updatePlayback(now)
     if not state.playback or not isElement(state.ghost) then
         return
@@ -323,7 +387,7 @@ local function updatePlayback(now)
     if playbackTime >= last.t then
         clearControls(state.ghost)
         state.playback = false
-        chat("Playback complete.", 120, 255, 120)
+        chat(("Playback complete. Max drift %.2fm."):format(state.maxDrift), 120, 255, 120)
         return
     end
 
@@ -346,27 +410,10 @@ local function updatePlayback(now)
         setPedAimTarget(state.ghost, aimX, aimY, aimZ)
     end
 
-    if a.keyframe then
-        local gx, gy, gz = getElementPosition(state.ghost)
-        local errorDistance = distance3D(gx, gy, gz, a.x, a.y, a.z)
-
-        if errorDistance > HARD_CORRECTION_DISTANCE then
-            setElementPosition(state.ghost, a.x, a.y, a.z)
-            setElementRotation(state.ghost, a.rx, a.ry, a.rz)
-            setElementVelocity(state.ghost, a.vx, a.vy, a.vz)
-            state.hardResyncs = state.hardResyncs + 1
-        elseif errorDistance > SOFT_CORRECTION_DISTANCE then
-            local correction = math.min(0.35, errorDistance * 0.25)
-            setElementPosition(
-                state.ghost,
-                lerp(gx, a.x, correction),
-                lerp(gy, a.y, correction),
-                lerp(gz, a.z, correction)
-            )
-            local grx, gry, grz = getElementRotation(state.ghost)
-            setElementRotation(state.ghost, lerpAngle(grx, a.rx, correction), lerpAngle(gry, a.ry, correction), lerpAngle(grz, a.rz, correction))
-            state.corrections = state.corrections + 1
-        end
+    if state.replayMode == "controls" then
+        updateControlDrivenMovement(a, b, alpha)
+    else
+        updateTrackedMovement(a, b, alpha)
     end
 end
 
@@ -392,12 +439,24 @@ addEventHandler("onClientRender", root, function()
     local playbackTime = state.playback and getPlaybackTime(getTickCount()) / 1000 or 0
 
     dxDrawText(
-        ("Replay prototype\nrecording: %s | samples: %d | buffer: %.2fs\nplayback: %s%s | time: %.2fs\ncorrections: %d | hard resyncs: %d")
-            :format(tostring(state.recording), sampleCount, buffered, tostring(state.playback), state.paused and " (paused)" or "", playbackTime, state.corrections, state.hardResyncs),
+        ("Replay prototype\nrecording: %s | samples: %d | buffer: %.2fs\nplayback: %s%s | mode: %s | time: %.2fs\ndrift: %.2fm | max: %.2fm | corrections: %d | hard resyncs: %d")
+            :format(
+                tostring(state.recording),
+                sampleCount,
+                buffered,
+                tostring(state.playback),
+                state.paused and " (paused)" or "",
+                state.replayMode,
+                playbackTime,
+                state.currentDrift,
+                state.maxDrift,
+                state.corrections,
+                state.hardResyncs
+            ),
         24,
         180,
-        700,
-        300,
+        760,
+        320,
         tocolor(255, 255, 255, 230),
         1.0,
         "default-bold"
@@ -470,6 +529,20 @@ addCommandHandler("replayseek", function(_, seconds)
 
     seekPlayback(seconds)
     chat(("Seeked to %.2fs."):format(tonumber(seconds) or 0))
+end)
+
+addCommandHandler("replaymode", function(_, mode)
+    mode = mode and mode:lower() or nil
+    if mode ~= "tracked" and mode ~= "controls" then
+        chat("Usage: /replaymode [tracked|controls]. Current: " .. state.replayMode, 255, 220, 100)
+        return
+    end
+
+    state.replayMode = mode
+    state.currentDrift = 0
+    state.maxDrift = 0
+    state.lastCorrectedKeyframe = nil
+    chat("Replay mode: " .. mode .. (mode == "tracked" and " (smooth recorded trajectory)." or " (GTA controls + sparse corrections)."), 120, 255, 120)
 end)
 
 addCommandHandler("replaydebug", function()
