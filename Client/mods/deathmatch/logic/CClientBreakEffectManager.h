@@ -50,6 +50,7 @@ public:
 
     void DoPulse(CClientManager* pManager);
     void DoRender(CClientManager* pManager);
+    void DoRenderQueued(CClientManager* pManager);
 
     std::size_t GetCount() const { return m_List.size(); }
     std::size_t GetActiveFragmentCount() const;
