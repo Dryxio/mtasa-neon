@@ -361,11 +361,10 @@ local function handleBreakspawn(_, modelArg, ...)
         return
     end
 
-    warnDuplicateBreakspawnHandlers()
     clearPlayground()
 
     local options = parsePlaygroundOptions({...})
-    local object, errorReason, groundZ, objectZ = spawnPlaygroundObject(model, options)
+    local object, errorReason = spawnPlaygroundObject(model, options)
     if not isElement(object) then
         if errorReason == "ground" then
             outputChatBox("[BREAKSHOW] failed to find ground at the spawn point. Move somewhere with loaded ground and retry.", 255, 80, 80)
@@ -378,9 +377,6 @@ local function handleBreakspawn(_, modelArg, ...)
     playground.object = object
     playground.options = options
     playground.armed = false
-
-    outputChatBox(("[BREAKSHOW] model %d grounded at Z %.2f (ground %.2f); R raises +0.10m; arming in 500ms...")
-        :format(model, objectZ, groundZ), 180, 220, 255)
 
     setTimer(function()
         if playground.object ~= object or not isElement(object) then return end
@@ -402,8 +398,7 @@ local function handleBreakspawn(_, modelArg, ...)
         end
 
         playground.armed = true
-        outputChatBox(("[BREAKSHOW] model %d armed: %.1f HP, native=%s. Shoot or ram it.")
-            :format(model, options.health, tostring(options.native)), 100, 255, 100)
+        outputChatBox(("Object %d spawned and made breakable."):format(model), 100, 255, 100)
     end, 500, 1)
 end
 
