@@ -29,6 +29,9 @@
 namespace
 {
     constexpr std::uint16_t UNASSIGNED_CLUSTER = std::numeric_limits<std::uint16_t>::max();
+    constexpr std::uint8_t STABLE_GROUND_FRAMES_TO_SLEEP = 12;
+
+    std::unordered_map<const SBreakEffectChunk*, std::uint8_t> g_StableGroundFrames;
 
     float LengthSq(const CVector& value)
     {
@@ -191,7 +194,14 @@ CClientBreakEffectManager& CClientBreakEffectManager::GetSingleton()
 }
 
 void CClientBreakEffectManager::AddToList(CClientBreakEffect* effect) { m_List.push_back(effect); }
-void CClientBreakEffectManager::RemoveFromList(CClientBreakEffect* effect) { m_List.remove(effect); }
+
+void CClientBreakEffectManager::RemoveFromList(CClientBreakEffect* effect)
+{
+    if (effect)
+        for (SBreakEffectChunk& chunk : effect->m_Chunks)
+            g_StableGroundFrames.erase(&chunk);
+    m_List.remove(effect);
+}
 
 CClientBreakEffect* CClientBreakEffectManager::Get(ElementID ID)
 {
@@ -677,6 +687,8 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
             SBreakEffectChunk& chunk = effect->m_Chunks[chunkIndex];
             if (chunk.sleeping)
                 continue;
+
+            std::uint8_t& stableGroundFrames = g_StableGroundFrames[&chunk];
             const float damping = 1.0f / (1.0f + effect->m_fDrag * dt);
             chunk.velocity.fX *= damping;
             chunk.velocity.fY *= damping;
@@ -694,12 +706,8 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
                     chunk.groundZ = ground;
             }
 
-            // Keep the cheap bounding radius as a broad-phase only. Large or
-            // elongated chunks can have radii of several metres; treating that
-            // sphere as the actual contact shape made them bounce and sleep in
-            // mid-air. Once the sphere reaches the ground, use the same rotated
-            // mesh vertices that are rendered to find the real lowest point.
             constexpr float GROUND_CONTACT_TOLERANCE = 0.02f;
+            bool contactedGround = false;
             if (chunk.position.fZ - chunk.radius <= chunk.groundZ + GROUND_CONTACT_TOLERANCE)
             {
                 float lowestWorldZ = std::numeric_limits<float>::max();
@@ -712,21 +720,78 @@ void CClientBreakEffectManager::DoPulse(CClientManager* pManager)
 
                 if (lowestWorldZ <= chunk.groundZ + GROUND_CONTACT_TOLERANCE)
                 {
+                    contactedGround = true;
                     if (lowestWorldZ < chunk.groundZ)
                         chunk.position.fZ += chunk.groundZ - lowestWorldZ;
                     if (chunk.velocity.fZ < 0.0f)
                         chunk.velocity.fZ = -chunk.velocity.fZ * effect->m_fBounce;
-                    chunk.velocity.fX *= 0.72f;
-                    chunk.velocity.fY *= 0.72f;
-                    chunk.rotationSpeed *= 0.78f;
-                    if (LengthSq(chunk.velocity) < 0.12f && std::fabs(chunk.rotationSpeed) < 0.8f)
+
+                    // A single low vertex or edge is not a stable resting pose.
+                    // Measure the footprint formed by vertices close to the
+                    // lowest point and require that it actually supports the
+                    // chunk centroid before allowing sleep.
+                    const float supportBand = std::clamp(chunk.radius * 0.025f, 0.03f, 0.10f);
+                    float minSupportX = std::numeric_limits<float>::max();
+                    float maxSupportX = -std::numeric_limits<float>::max();
+                    float minSupportY = std::numeric_limits<float>::max();
+                    float maxSupportY = -std::numeric_limits<float>::max();
+                    std::size_t supportVertices = 0;
+
+                    for (const SBreakEffectBatch& batch : chunk.batches)
+                        for (const SBreakEffectVertex& vertex : batch.vertices)
+                        {
+                            const CVector rotated = RotateAxisAngle(vertex.localPosition, chunk.rotationAxis, chunk.rotation);
+                            const float worldZ = chunk.position.fZ + rotated.fZ;
+                            if (worldZ <= chunk.groundZ + supportBand)
+                            {
+                                minSupportX = std::min(minSupportX, rotated.fX);
+                                maxSupportX = std::max(maxSupportX, rotated.fX);
+                                minSupportY = std::min(minSupportY, rotated.fY);
+                                maxSupportY = std::max(maxSupportY, rotated.fY);
+                                ++supportVertices;
+                            }
+                        }
+
+                    const float spanX = supportVertices ? maxSupportX - minSupportX : 0.0f;
+                    const float spanY = supportVertices ? maxSupportY - minSupportY : 0.0f;
+                    const float requiredSpan = std::clamp(chunk.radius * 0.06f, 0.05f, 0.35f);
+                    const float centerMargin = std::clamp(chunk.radius * 0.02f, 0.02f, 0.12f);
+                    const bool supportsCenter = supportVertices >= 3 && minSupportX <= centerMargin && maxSupportX >= -centerMargin &&
+                                                minSupportY <= centerMargin && maxSupportY >= -centerMargin;
+                    const bool broadSupport = supportVertices >= 3 && std::max(spanX, spanY) >= requiredSpan &&
+                                              spanX * spanY >= requiredSpan * requiredSpan * 0.25f;
+                    const bool stableSupport = supportsCenter && broadSupport;
+
+                    chunk.velocity.fX *= stableSupport ? 0.72f : 0.86f;
+                    chunk.velocity.fY *= stableSupport ? 0.72f : 0.86f;
+                    chunk.rotationSpeed *= stableSupport ? 0.78f : 0.96f;
+
+                    if (stableSupport && std::fabs(chunk.velocity.fZ) < 0.25f)
+                        chunk.velocity.fZ = 0.0f;
+                    else if (!stableSupport && std::fabs(chunk.rotationSpeed) < 0.45f)
+                        chunk.rotationSpeed = std::copysign(0.45f, chunk.rotationSpeed == 0.0f ? 1.0f : chunk.rotationSpeed);
+
+                    const bool lowMotion = LengthSq(chunk.velocity) < 0.12f && std::fabs(chunk.rotationSpeed) < 0.8f;
+                    if (stableSupport && lowMotion)
                     {
-                        chunk.velocity = CVector();
-                        chunk.rotationSpeed = 0.0f;
-                        chunk.sleeping = true;
+                        if (stableGroundFrames < std::numeric_limits<std::uint8_t>::max())
+                            ++stableGroundFrames;
+                        if (stableGroundFrames >= STABLE_GROUND_FRAMES_TO_SLEEP)
+                        {
+                            chunk.velocity = CVector();
+                            chunk.rotationSpeed = 0.0f;
+                            chunk.sleeping = true;
+                        }
+                    }
+                    else
+                    {
+                        stableGroundFrames = 0;
                     }
                 }
             }
+
+            if (!contactedGround)
+                stableGroundFrames = 0;
         }
     }
     for (CClientBreakEffect* effect : expired)
