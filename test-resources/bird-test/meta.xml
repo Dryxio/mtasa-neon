@@ -1,0 +1,4 @@
+<meta>
+    <info author="MTA:SA Neon" name="Managed bird test harness" type="script" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>
