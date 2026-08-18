@@ -63,7 +63,12 @@ namespace
     {
         if (!texture || !texture->raster || !texture->raster->renderResource)
             return nullptr;
-        return reinterpret_cast<RwD3D9Raster*>(texture->raster->renderResource)->texture;
+
+        // RwRaster::renderResource is the first inline member of the D3D9
+        // raster extension. It already contains the texture pointer; treating
+        // its value as a pointer to RwD3D9Raster adds an invalid extra
+        // indirection and returns the COM object's vtable instead.
+        return reinterpret_cast<IDirect3DTexture9*>(texture->raster->renderResource);
     }
 }
 
