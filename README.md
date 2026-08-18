@@ -48,13 +48,13 @@ Neon also ships its own GTA:SA-inspired menu and server browser, with an optiona
 
 ## GTA systems, now scriptable
 
-Five systems that used to be locked inside the engine. Each clip is a real in-game recording.
+Six systems that used to be locked inside the engine. Each clip is a real in-game recording.
 
 | | |
 | :--: | :--: |
 | [![Native CULL-zone editing](docs/media/native-cull-zone-demo.png)](https://www.youtube.com/watch?v=17QrE21uDgM)<br>**[Native CULL zones](https://mtasa-neon-wiki.vercel.app/neon/rendering-and-limits)**<br>Edit GTA's culling from Lua | [![Scripting GTA's own physics objects](docs/media/world-object-scripting-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/world-objects)<br>**[Dynamic world objects](https://mtasa-neon-wiki.vercel.app/neon/world-objects)**<br>Track, move, damage and break San Andreas' own props |
 | [![Collision generated at runtime](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)<br>**[Runtime collision](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)**<br>Build collision shapes from Lua, no `.col` file | [![Custom foliage](docs/media/foliage-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/foliage)<br>**[Custom foliage](https://mtasa-neon-wiki.vercel.app/neon/foliage)**<br>Grow GTA's own vegetation anywhere |
-| [![Managed fire following a car](docs/media/fire-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/fire)<br>**[Managed fire](https://mtasa-neon-wiki.vercel.app/neon/fire)**<br>Synchronized fires that keep their identity and follow a target | |
+| [![Managed fire following a car](docs/media/fire-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/fire)<br>**[Managed fire](https://mtasa-neon-wiki.vercel.app/neon/fire)**<br>Synchronized fires that keep their identity and follow a target | [![A retextured SA-MP interior](docs/media/samp-map-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/samp-maps)<br>**[SA-MP maps](https://mtasa-neon-wiki.vercel.app/neon/samp-maps)**<br>Load Pawn exports directly, retextured material slots included |
 
 ```lua
 -- Build a wall's collision from a Lua table, then change it live
