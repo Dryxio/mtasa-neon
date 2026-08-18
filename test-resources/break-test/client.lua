@@ -151,6 +151,96 @@ local function runAll()
     end, 6500, 1)
 end
 
+local function parseBool(value)
+    value = tostring(value):lower()
+    if value == "true" or value == "1" or value == "yes" or value == "on" then return true end
+    if value == "false" or value == "0" or value == "no" or value == "off" then return false end
+    return nil
+end
+
+local function printBreakSpawnHelp()
+    outputChatBox("[BREAKSPAWN] /breakspawn <model> [key=value ...]", 255, 200, 80)
+    outputChatBox("[BREAKSPAWN] keys: fragments force randomness lifetime gravity bounce drag renderDistance seed", 255, 200, 80)
+    outputChatBox("[BREAKSPAWN] spawn: distance side z scale | velocity: vx vy vz | hideOriginal collision", 255, 200, 80)
+    outputChatBox("[BREAKSPAWN] example: /breakspawn 1337 fragments=24 force=8 randomness=2 bounce=0.55 lifetime=12000", 255, 200, 80)
+end
+
+addCommandHandler("breakspawn", function(_, modelArg, ...)
+    local model = tonumber(modelArg)
+    if not model then
+        printBreakSpawnHelp()
+        return
+    end
+
+    local spawn = {distance = 8, side = 0, z = 0.8, scale = 1}
+    local options = {
+        force = 5,
+        randomness = 1.5,
+        lifetime = 8000,
+        gravity = 9.81,
+        bounce = 0.35,
+        drag = 0.12,
+        renderDistance = 350,
+        hideOriginal = true,
+        disableOriginalCollision = true,
+    }
+    local velocity = {x = 0, y = 0, z = 1}
+
+    local numericOptionKeys = {
+        fragments = true, force = true, randomness = true, lifetime = true,
+        gravity = true, bounce = true, drag = true, renderDistance = true, seed = true,
+    }
+
+    for _, token in ipairs({...}) do
+        local key, raw = tostring(token):match("^([^=]+)=(.+)$")
+        if key and raw then
+            if numericOptionKeys[key] then
+                local value = tonumber(raw)
+                if value ~= nil then options[key] = value end
+            elseif key == "distance" or key == "side" or key == "z" or key == "scale" then
+                local value = tonumber(raw)
+                if value ~= nil then spawn[key] = value end
+            elseif key == "vx" or key == "vy" or key == "vz" then
+                local value = tonumber(raw)
+                if value ~= nil then velocity[key:sub(2)] = value end
+            elseif key == "hideOriginal" then
+                local value = parseBool(raw)
+                if value ~= nil then options.hideOriginal = value end
+            elseif key == "collision" then
+                local value = parseBool(raw)
+                if value ~= nil then options.disableOriginalCollision = not value end
+            elseif key == "disableOriginalCollision" then
+                local value = parseBool(raw)
+                if value ~= nil then options.disableOriginalCollision = value end
+            else
+                outputChatBox(("[BREAKSPAWN] unknown key: %s"):format(key), 255, 120, 80)
+            end
+        end
+    end
+
+    options.velocity = velocity
+
+    local object = spawnObject(model, spawn.distance, spawn.side, spawn.z, spawn.scale)
+    if not isElement(object) then
+        outputChatBox(("[BREAKSPAWN] failed to create model %s"):format(tostring(model)), 255, 80, 80)
+        return
+    end
+
+    local runSerial = serial
+    outputChatBox(("[BREAKSPAWN] model=%d spawned; fracturing in 650ms"):format(model), 100, 255, 100)
+    breakLater(runSerial, object, options, function(effect)
+        if not isElement(effect) then
+            outputChatBox("[BREAKSPAWN] fracture failed (model may not be streamed/static RenderWare geometry)", 255, 80, 80)
+            return
+        end
+        outputChatBox(("[BREAKSPAWN] effect=%s fragments=%s triangles=%s cacheHit=%s"):format(
+            tostring(effect), tostring(getBreakEffectFragmentCount(effect)), tostring(getBreakEffectSourceTriangleCount(effect)),
+            tostring(getBreakEffectCacheHit(effect))), 100, 255, 100)
+    end)
+end)
+
+addCommandHandler("breakspawnhelp", printBreakSpawnHelp)
+
 addCommandHandler("breaktest", function(_, caseName, value)
     caseName = (caseName or "all"):lower()
     if caseName == "all" then
