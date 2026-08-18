@@ -85,13 +85,17 @@ function S.configureRunway()
     local dx, dy = ex - sx, ey - sy
     local length = math.sqrt(dx * dx + dy * dy)
     local ux, uy = dx / length, dy / length
+    local yaw = math.deg(math.atan2(-ux, uy))
+    if yaw < 0 then
+        yaw = yaw + 360
+    end
     state.basis = {
         sx = sx, sy = sy, sz = sz,
         ex = ex, ey = ey, ez = ez,
         ux = ux, uy = uy,
         px = -uy, py = ux,
         length = length,
-        yaw = math.deg(math.atan2(-ux, uy)),
+        yaw = yaw,
     }
 end
 
