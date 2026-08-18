@@ -61,6 +61,46 @@ local function clearPlayground()
     playground.armed = false
 end
 
+local function getBreakspawnOwners()
+    local owners = {}
+    for _, entry in ipairs(getCommandHandlers()) do
+        if type(entry) == "table" and entry[1] == "breakspawn" and entry[2] then
+            local name = getResourceName(entry[2])
+            if name then owners[#owners + 1] = name end
+        end
+    end
+    return owners
+end
+
+local function warnDuplicateBreakspawnHandlers()
+    local owners = getBreakspawnOwners()
+    if #owners <= 1 then return end
+
+    outputChatBox(("[BREAKSHOW] WARNING: %d /breakspawn handlers are loaded: %s")
+        :format(#owners, table.concat(owners, ", ")), 255, 120, 80)
+    outputChatBox("[BREAKSHOW] Restart/resync the stale resource; MTA executes every matching command handler.", 255, 120, 80)
+end
+
+local function getGroundedObjectZ(object, x, y, referenceZ, scale, groundOffset)
+    local groundZ = getGroundPosition(x, y, referenceZ + 1000.0)
+    if type(groundZ) ~= "number" then
+        groundZ = getGroundPosition(x, y, referenceZ + 100.0)
+    end
+    if type(groundZ) ~= "number" then return nil end
+
+    local baseDistance = getElementDistanceFromCentreOfMassToBaseOfModel(object)
+    if type(baseDistance) == "number" then
+        return groundZ + baseDistance * scale + groundOffset, groundZ
+    end
+
+    local _, _, minZ = getElementBoundingBox(object)
+    if type(minZ) == "number" then
+        return groundZ - minZ * scale + groundOffset, groundZ
+    end
+
+    return groundZ + groundOffset, groundZ
+end
+
 local function spawn(model, x, y, z, scale, rz, bucket)
     local object = createObject(model, x, y, z, 0, 0, rz or 0)
     if not isElement(object) then return nil end
@@ -195,6 +235,8 @@ local optionReaders = {
     vy = tonumber,
     vz = tonumber,
     scale = tonumber,
+    distance = tonumber,
+    groundOffset = tonumber,
     health = tonumber,
     damageMultiplier = tonumber,
     instantBreakThreshold = tonumber,
@@ -218,6 +260,8 @@ local function parsePlaygroundOptions(args)
         vy = 0,
         vz = 1.0,
         scale = 1.0,
+        distance = 4.0,
+        groundOffset = 0.02,
         health = 250,
         native = true,
         damageMultiplier = 1.0,
@@ -260,45 +304,66 @@ end
 local function playgroundHelp()
     outputChatBox("[BREAKSHOW] /breakspawn <model> [key=value ...]", 255, 200, 80)
     outputChatBox("[BREAKSHOW] durability: health native damageMultiplier instantBreakThreshold", 255, 200, 80)
-    outputChatBox("[BREAKSHOW] fracture: fragments force randomness lifetime gravity bounce drag renderDistance seed scale vx vy vz", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] fracture: fragments force randomness lifetime gravity bounce drag renderDistance seed vx vy vz", 255, 200, 80)
+    outputChatBox("[BREAKSHOW] placement: distance scale groundOffset (auto-grounded by default)", 255, 200, 80)
     outputChatBox("[BREAKSHOW] shoot/ram the object, /breakhp for health, /breaknow to force, /breakclear", 255, 200, 80)
     outputChatBox("[BREAKSHOW] example: /breakspawn 1337 health=250 fragments=24 force=7", 255, 200, 80)
 end
 
-addCommandHandler("breakspawn", function(_, modelArg, ...)
-    local model = tonumber(modelArg)
-    if not model then
-        playgroundHelp()
-        return
-    end
-
-    clearPlayground()
-
-    local options = parsePlaygroundOptions({...})
+local function spawnPlaygroundObject(model, options)
     local px, py, pz = getElementPosition(localPlayer)
     local _, _, rz = getElementRotation(localPlayer)
     local angle = math.rad(rz)
-    local distance = 4.0
-    local x = px - math.sin(angle) * distance
-    local y = py + math.cos(angle) * distance
-    local z = pz + 0.8
+    local x = px - math.sin(angle) * options.distance
+    local y = py + math.cos(angle) * options.distance
 
-    local object = createObject(model, x, y, z, 0, 0, rz)
-    if not isElement(object) then
-        outputChatBox("[BREAKSHOW] failed to create model " .. tostring(model), 255, 80, 80)
-        return
-    end
+    -- Create well above the player first so native breakables cannot receive a
+    -- setup collision before we have positioned them on the actual ground.
+    local object = createObject(model, x, y, pz + 50.0, 0, 0, rz)
+    if not isElement(object) then return nil, "create" end
 
     setElementDimension(object, getElementDimension(localPlayer))
     setElementInterior(object, getElementInterior(localPlayer))
     setElementFrozen(object, true)
     setObjectScale(object, options.scale)
 
+    local objectZ, groundZ = getGroundedObjectZ(object, x, y, pz, options.scale, options.groundOffset)
+    if not objectZ then
+        destroyElement(object)
+        return nil, "ground"
+    end
+
+    setElementPosition(object, x, y, objectZ)
+    return object, nil, groundZ, objectZ
+end
+
+local function handleBreakspawn(_, modelArg, ...)
+    local model = tonumber(modelArg)
+    if not model then
+        playgroundHelp()
+        return
+    end
+
+    warnDuplicateBreakspawnHandlers()
+    clearPlayground()
+
+    local options = parsePlaygroundOptions({...})
+    local object, errorReason, groundZ, objectZ = spawnPlaygroundObject(model, options)
+    if not isElement(object) then
+        if errorReason == "ground" then
+            outputChatBox("[BREAKSHOW] failed to find ground at the spawn point. Move somewhere with loaded ground and retry.", 255, 80, 80)
+        else
+            outputChatBox("[BREAKSHOW] failed to create model " .. tostring(model), 255, 80, 80)
+        end
+        return
+    end
+
     playground.object = object
     playground.options = options
     playground.armed = false
 
-    outputChatBox(("[BREAKSHOW] model %d spawned; settling before managed break profile is armed..."):format(model), 180, 220, 255)
+    outputChatBox(("[BREAKSHOW] model %d grounded at Z %.2f (ground %.2f); arming in 500ms...")
+        :format(model, objectZ, groundZ), 180, 220, 255)
 
     setTimer(function()
         if playground.object ~= object or not isElement(object) then return end
@@ -323,7 +388,12 @@ addCommandHandler("breakspawn", function(_, modelArg, ...)
         outputChatBox(("[BREAKSHOW] model %d armed: %.1f HP, native=%s. Shoot or ram it.")
             :format(model, options.health, tostring(options.native)), 100, 255, 100)
     end, 500, 1)
-end)
+end
+
+addCommandHandler("breakspawn", handleBreakspawn)
+-- Unique alias useful when diagnosing a stale resource that still owns the old
+-- /breakspawn command. Once all resources are resynced both commands are identical.
+addCommandHandler("breakobject", handleBreakspawn)
 
 addCommandHandler("breakhp", function()
     if not isElement(playground.object) then
@@ -386,6 +456,7 @@ end)
 addEvent("breakShowcase:stop", true)
 addEventHandler("breakShowcase:stop", resourceRoot, stopShow)
 addEventHandler("onClientRender", root, updateShow)
+addEventHandler("onClientResourceStart", resourceRoot, warnDuplicateBreakspawnHandlers)
 addEventHandler("onClientResourceStop", resourceRoot, function()
     stopShow()
     clearPlayground()
