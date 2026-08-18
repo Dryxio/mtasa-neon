@@ -106,27 +106,22 @@ preferences:
   radiosity, and YCbCr color correction. This is not the complete SkyGFX
   renderer or a claim of full PS2 parity.
 
-All three feature groups remain off on a clean installation. Resource or server
-overrides for extended draw distance and Project2DFX take priority while
-connected; the player's saved baseline is restored when those runtime overrides
-are reset or the mod unloads. The corona-radius control scales every Neon
-Project2DFX distant corona, but does not resize GTA's ordinary nearby coronas.
-It tunes Neon's private renderer, which follows Project2DFX's square, buffered
-sprite projection without consuming GTA/MTA's shared corona pool.
+All three stay off on a clean installation. Servers and resources can override
+them while connected, and the player's own settings come back afterwards.
 
-Each comparison below is the same Neon client with the option toggled, not two different builds. Everything shown is off by default and switched on from the Neon settings tab.
+Neon renders all of this itself. Nothing to install and no ASI files: every option is a toggle in the settings menu, and servers can drive them too.
 
-**Extended draw distance.** MTA's original far clip on the left, Neon's extended draw distance on the right.
+**Draw distance**
 
-![Extended draw distance comparison from a rooftop over Los Santos: distant buildings are flat low-detail blobs with MTA's original far clip, and resolve into detailed geometry with Neon's extended draw distance](docs/media/compare-draw-distance.jpg)
+![Rooftop view over Los Santos: distant buildings are flat low-detail blobs in MTA:SA and resolve into detailed geometry in Neon](docs/media/compare-draw-distance.jpg)
 
-**Project2DFX at night.** The same viewpoint 13 seconds apart, with extended draw distance and Project2DFX off, then on.
+**Distant lights at night**
 
-![Night comparison over Las Venturas: the city is fogged out beyond a short distance with the features off, and appears in full with hundreds of distant coronas and traffic lights with them on](docs/media/compare-project2dfx.jpg)
+![Night view over the city: fogged out beyond a short distance in MTA:SA, full skyline with hundreds of distant lights in Neon](docs/media/compare-project2dfx.jpg)
 
-**SkyGFX.** The stock rendering on the left, Neon's selected PS2-style color path on the right.
+**PS2-style color**
 
-![Street-level comparison in Ganton: neutral stock colors on the left, warmer and more saturated PS2-style grading on the right](docs/media/compare-skygfx.jpg)
+![Street-level view in Ganton: neutral colors in MTA:SA, warmer and more saturated PS2-style grading in Neon](docs/media/compare-skygfx.jpg)
 
 ### Extended-world validation examples
 
@@ -140,13 +135,11 @@ These maps are test cases, not built-in Neon worlds or engine dependencies. Thei
 
 ### The Neon client
 
-Neon ships its own GTA:SA-inspired shell instead of the standard MTA one, with an optional Discord-backed identity shown in the corner.
+Neon ships its own GTA:SA-inspired shell instead of the standard MTA one, with an optional Discord identity.
 
-![Neon main menu in the GTA:SA visual style, with browse servers, quick connect, map editor, settings, about and quit entries, and a Discord connected identity badge](docs/media/neon-main-menu.jpg)
+![Neon main menu in the GTA:SA visual style, with browse servers, quick connect, map editor, settings, about and quit entries, and a Discord connected badge](docs/media/neon-main-menu.jpg)
 
-The server browser lists Neon servers with regions, languages, ping and player counts, and a details panel for the selected destination.
-
-![Neon server browser showing a list of community servers with flags, ping and player counts, and a details panel with description, regions and languages for the selected server](docs/media/neon-server-browser.jpg)
+![Neon server browser showing community servers with flags, ping and player counts, and a details panel for the selected server](docs/media/neon-server-browser.jpg)
 
 <!-- MEDIA PLACEHOLDER: Vehicle audio. Prefer a short captioned video/GIF demonstrating configured engine audio and a backfire; audio should also be available in the linked video rather than relying on an animated image alone. -->
 
