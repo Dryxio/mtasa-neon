@@ -12,11 +12,13 @@ local runwayRightX, runwayRightY = -runwayDirY, runwayDirX
 
 local show = {
     active = false,
+    calibrating = false,
     startedAt = 0,
     dimension = 0,
     objects = {},
     effects = {},
     entries = {},
+    calibrationOffsets = {},
     finished = false,
 }
 
@@ -46,6 +48,7 @@ local function stopShow()
     destroyList(show.objects)
     show.objects, show.effects, show.entries = {}, {}, {}
     show.active = false
+    show.calibrating = false
     show.finished = false
     setCameraTarget(localPlayer)
     presentation(true)
@@ -62,7 +65,7 @@ local function clearPlayground()
 end
 
 local function raisePlaygroundObject()
-    if show.active or not isElement(playground.object) or isElement(playground.effect) then return end
+    if show.active or show.calibrating or not isElement(playground.object) or isElement(playground.effect) then return end
     if isChatBoxInputActive and isChatBoxInputActive() then return end
     if isConsoleActive and isConsoleActive() then return end
 
@@ -184,7 +187,9 @@ local function spawnRunwayEntry(spec, index)
     setElementFrozen(object, true)
     setObjectScale(object, scale)
 
-    local objectZ = getGroundedObjectZ(object, x, y, referenceZ, scale, spec.groundOffset or 0.02, referenceZ)
+    local calibrationOffset = show.calibrationOffsets[index] or 0
+    local groundOffset = (spec.groundOffset or 0.02) + calibrationOffset
+    local objectZ = getGroundedObjectZ(object, x, y, referenceZ, scale, groundOffset, referenceZ)
     if not objectZ then
         destroyElement(object)
         return
@@ -208,6 +213,57 @@ local function buildRunway()
     for index, spec in ipairs(runwaySpecs) do
         spawnRunwayEntry(spec, index)
     end
+end
+
+local function findNearestRunwayEntry(maxDistance)
+    local px, py, pz = getElementPosition(localPlayer)
+    local nearest, nearestDistanceSq
+    local maxDistanceSq = maxDistance * maxDistance
+
+    for _, entry in ipairs(show.entries) do
+        if isElement(entry.object) then
+            local x, y, z = getElementPosition(entry.object)
+            local dx, dy, dz = x - px, y - py, z - pz
+            local distanceSq = dx * dx + dy * dy + dz * dz
+            if distanceSq <= maxDistanceSq and (not nearestDistanceSq or distanceSq < nearestDistanceSq) then
+                nearest = entry
+                nearestDistanceSq = distanceSq
+            end
+        end
+    end
+
+    return nearest
+end
+
+local function adjustNearestRunwayObject(step)
+    local entry = findNearestRunwayEntry(7.0)
+    if not entry then
+        outputChatBox("[BREAKSHOW] No runway object within 7m.", 255, 180, 80)
+        return
+    end
+
+    local offset = (show.calibrationOffsets[entry.index] or 0) + step
+    show.calibrationOffsets[entry.index] = offset
+
+    local x, y, z = getElementPosition(entry.object)
+    entry.z = z + step
+    setElementPosition(entry.object, x, y, entry.z)
+
+    outputChatBox(("[BREAKSHOW] #%d %s (%d) offset %+.2fm")
+        :format(entry.index, entry.spec.name or "object", entry.spec.model, offset), 180, 220, 255)
+end
+
+local function handleRaiseKey()
+    if isChatBoxInputActive and isChatBoxInputActive() then return end
+    if isConsoleActive and isConsoleActive() then return end
+
+    if show.calibrating then
+        local step = (getKeyState("lshift") or getKeyState("rshift")) and -0.10 or 0.10
+        adjustNearestRunwayObject(step)
+        return
+    end
+
+    raisePlaygroundObject()
 end
 
 local function fractureRunwayEntry(entry)
@@ -445,7 +501,22 @@ end
 
 addCommandHandler("breakspawn", handleBreakspawn)
 addCommandHandler("breakobject", handleBreakspawn)
-bindKey("r", "down", raisePlaygroundObject)
+bindKey("r", "down", handleRaiseKey)
+
+addCommandHandler("breakoffsets", function()
+    local count = 0
+    for index, spec in ipairs(runwaySpecs) do
+        local offset = show.calibrationOffsets[index]
+        if offset and math.abs(offset) > 0.001 then
+            count = count + 1
+            outputChatBox(("[BREAKSHOW] #%d %s (%d): %+.2fm")
+                :format(index, spec.name or "object", spec.model, offset), 180, 220, 255)
+        end
+    end
+    if count == 0 then
+        outputChatBox("[BREAKSHOW] no runway height adjustments yet.", 180, 220, 255)
+    end
+end)
 
 addCommandHandler("breakhp", function()
     if not isElement(playground.object) then
@@ -488,6 +559,20 @@ end)
 addCommandHandler("breakclear", function()
     clearPlayground()
     outputChatBox("[BREAKSHOW] playground cleared.", 100, 255, 100)
+end)
+
+addEvent("breakShowcase:calibrate", true)
+addEventHandler("breakShowcase:calibrate", resourceRoot, function(dimension)
+    stopShow()
+    clearPlayground()
+    show.dimension = dimension
+    show.calibrating = true
+    presentation(true)
+    setTime(17, 30)
+    setWeather(0)
+    buildRunway()
+    outputChatBox("[BREAKSHOW] Calibration: walk near an object and press R to raise it +0.10m.", 100, 255, 100)
+    outputChatBox("[BREAKSHOW] Hold Shift + R to lower it -0.10m. /breakshow starts the demo with these offsets.", 100, 255, 100)
 end)
 
 addEvent("breakShowcase:start", true)
