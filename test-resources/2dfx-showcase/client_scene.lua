@@ -5,10 +5,52 @@ local PALETTE = S.PALETTE
 local SEGMENTS = 6
 local EDGE_STATIONS = 30
 local CENTER_STATIONS = 24
+local MOON_COUNT = 7
 
-function S.lightProperties(color, size, range, showMode)
+function S.findFirstLight(model)
+    local count = getModel2DFXCount(model, false)
+    for index = 0, count - 1 do
+        if getModel2DFXType(model, index) == "light" then
+            return index
+        end
+    end
+    return nil
+end
+
+function S.captureLightTemplate()
+    local index = S.findFirstLight(1226)
+    if index == nil then
+        return false
+    end
+
+    local x, y, z = getModel2DFXPosition(1226, index)
+    local coronaName = getModel2DFXProperty(1226, index, "coronaName")
+    local shadowName = getModel2DFXProperty(1226, index, "shadowName")
+    local drawDistance = getModel2DFXProperty(1226, index, "drawDistance")
+    local coronaSize = getModel2DFXProperty(1226, index, "coronaSize")
+    local lightRange = getModel2DFXProperty(1226, index, "lightRange")
+
+    if type(x) ~= "number" or type(coronaName) ~= "string" or coronaName == "" then
+        return false
+    end
+
+    state.lightTemplate = {
+        position = { x, y, z },
+        coronaName = coronaName,
+        shadowName = type(shadowName) == "string" and shadowName or "shad_exp",
+        drawDistance = type(drawDistance) == "number" and drawDistance or 180,
+        coronaSize = type(coronaSize) == "number" and coronaSize or 1.0,
+        lightRange = type(lightRange) == "number" and lightRange or 12,
+    }
+    S.log(string.format("lamp template corona=%s shadow=%s", state.lightTemplate.coronaName, state.lightTemplate.shadowName))
+    return true
+end
+
+function S.lightProperties(color, size, range, showMode, coronaName, position)
+    local template = state.lightTemplate or {}
+    position = position or template.position or { 0, 0, 0.22 }
     return {
-        drawDistance = 260,
+        drawDistance = math.max(260, template.drawDistance or 0),
         lightRange = range or 0,
         coronaSize = size or 0.04,
         shadowSize = 0,
@@ -20,17 +62,27 @@ function S.lightProperties(color, size, range, showMode)
         shadowDistance = 0,
         offset = { 0, 0, 0 },
         color = color,
-        coronaName = "coronamoon",
-        shadowName = "shad_exp",
-    }
+        coronaName = coronaName or template.coronaName or "coronastar",
+        shadowName = template.shadowName or "shad_exp",
+    }, position
 end
 
-function S.addLight(model, color, size, range, showMode)
-    if not addModel2DFX(model, 0, 0, 0.22, "light", S.lightProperties(color, size, range, showMode)) then
+function S.addCustomLight(model, color, size, range, showMode, coronaName, position)
+    local props, effectPosition = S.lightProperties(color, size, range, showMode, coronaName, position)
+    if not addModel2DFX(model, effectPosition[1], effectPosition[2], effectPosition[3], "light", props) then
         return false
     end
     S.rememberTouchedModel(model)
     return getModel2DFXCount(model, true) - 1
+end
+
+function S.ensureLampLight(model, color)
+    local index = S.findFirstLight(model)
+    if index ~= nil then
+        S.rememberTouchedModel(model)
+        return index
+    end
+    return S.addCustomLight(model, color, 0.04, 0, "default")
 end
 
 function S.setLight(model, effect, color, size, range, showMode)
@@ -40,10 +92,10 @@ function S.setLight(model, effect, color, size, range, showMode)
     if color then
         setModel2DFXProperty(model, effect, "color", color)
     end
-    if size then
+    if size ~= nil then
         setModel2DFXProperty(model, effect, "coronaSize", size)
     end
-    if range then
+    if range ~= nil then
         setModel2DFXProperty(model, effect, "lightRange", range)
     end
     if showMode then
@@ -52,9 +104,7 @@ function S.setLight(model, effect, color, size, range, showMode)
 end
 
 function S.setEdgeSegment(side, segment, color, size, range, showMode)
-    local model = state.edgeModels[side][segment]
-    local effect = state.edgeEffects[side][segment]
-    S.setLight(model, effect, color, size, range, showMode)
+    S.setLight(state.edgeModels[side][segment], state.edgeEffects[side][segment], color, size, range, showMode)
 end
 
 function S.setCenterSegment(segment, color, size, range, showMode)
@@ -65,14 +115,21 @@ function S.setThreshold(index, color, size, range, showMode)
     S.setLight(state.thresholdModels[index], state.thresholdEffects[index], color, size, range, showMode)
 end
 
+function S.setMoon(index, color, size, showMode)
+    S.setLight(state.moonModels[index], state.moonEffects[index], color, size, 0, showMode or "default")
+end
+
 function S.allLightsOff()
     for segment = 1, SEGMENTS do
-        S.setEdgeSegment("left", segment, PALETTE[1], 0.035, 0, "default")
-        S.setEdgeSegment("right", segment, PALETTE[1], 0.035, 0, "default")
-        S.setCenterSegment(segment, PALETTE[6], 0.025, 0, "default")
+        S.setEdgeSegment("left", segment, PALETTE[1], 0.03, 0, "default")
+        S.setEdgeSegment("right", segment, PALETTE[1], 0.03, 0, "default")
+        S.setCenterSegment(segment, PALETTE[6], 0.02, 0, "default")
     end
-    S.setThreshold(1, tocolor(40, 255, 150, 255), 0.035, 0, "default")
-    S.setThreshold(2, tocolor(255, 65, 90, 255), 0.035, 0, "default")
+    S.setThreshold(1, tocolor(40, 255, 150, 255), 0.03, 0, "default")
+    S.setThreshold(2, tocolor(255, 65, 90, 255), 0.03, 0, "default")
+    for index = 1, MOON_COUNT do
+        S.setMoon(index, PALETTE[((index - 1) % #PALETTE) + 1], 0.03, "default")
+    end
 end
 
 function S.applyFinalLights(step)
@@ -80,18 +137,22 @@ function S.applyFinalLights(step)
     for segment = 1, SEGMENTS do
         local leftColor = PALETTE[((segment + step - 2) % #PALETTE) + 1]
         local rightColor = PALETTE[((#PALETTE - segment + step) % #PALETTE) + 1]
-        S.setEdgeSegment("left", segment, leftColor, 1.55, 4, "default")
-        S.setEdgeSegment("right", segment, rightColor, 1.55, 4, "default")
-        S.setCenterSegment(segment, PALETTE[6], 0.72, 0, "default")
+        S.setEdgeSegment("left", segment, leftColor, 1.55, 18, "default")
+        S.setEdgeSegment("right", segment, rightColor, 1.55, 18, "default")
+        S.setCenterSegment(segment, PALETTE[6], 0.62, 0, "default")
     end
-    S.setThreshold(1, tocolor(45, 255, 150, 255), 1.25, 0, "default")
-    S.setThreshold(2, tocolor(255, 55, 85, 255), 1.25, 0, "default")
+    S.setThreshold(1, tocolor(45, 255, 150, 255), 1.20, 0, "default")
+    S.setThreshold(2, tocolor(255, 55, 85, 255), 1.20, 0, "default")
 end
 
 function S.buildRuntimeModels()
+    if not S.captureLightTemplate() then
+        return false, "could not read model 1226 native light template"
+    end
+
     for segment = 1, SEGMENTS do
-        state.edgeModels.left[segment] = S.requestObjectModel(1337)
-        state.edgeModels.right[segment] = S.requestObjectModel(1337)
+        state.edgeModels.left[segment] = S.requestObjectModel(1226)
+        state.edgeModels.right[segment] = S.requestObjectModel(1226)
         state.centerModels[segment] = S.requestObjectModel(1337)
         if not state.edgeModels.left[segment] or not state.edgeModels.right[segment] or not state.centerModels[segment] then
             return false, "could not allocate runway light model group " .. segment
@@ -104,6 +165,13 @@ function S.buildRuntimeModels()
         state.roadsignModels[index] = S.requestObjectModel(1337)
         if not state.thresholdModels[index] or not state.particleModels[index] or not state.roadsignModels[index] then
             return false, "could not allocate showcase model group " .. index
+        end
+    end
+
+    for index = 1, MOON_COUNT do
+        state.moonModels[index] = S.requestObjectModel(1337)
+        if not state.moonModels[index] then
+            return false, "could not allocate moon model " .. index
         end
     end
 
@@ -128,9 +196,9 @@ function S.buildRunwayAnchors()
     for index = 1, EDGE_STATIONS do
         local segment = segmentForStation(index, EDGE_STATIONS)
         local t = 0.045 + ((index - 1) / (EDGE_STATIONS - 1)) * 0.91
-        if not S.spawnOnRunway(state.edgeModels.left[segment], t, -S.RUNWAY_HALF_WIDTH, 0.12, 0, 0.08) or
-           not S.spawnOnRunway(state.edgeModels.right[segment], t, S.RUNWAY_HALF_WIDTH, 0.12, 0, 0.08) then
-            return false, "could not create runway edge anchors"
+        if not S.spawnOnRunway(state.edgeModels.left[segment], t, -S.RUNWAY_HALF_WIDTH - 2.0, 0, 255, 1.0, 90) or
+           not S.spawnOnRunway(state.edgeModels.right[segment], t, S.RUNWAY_HALF_WIDTH + 2.0, 0, 255, 1.0, -90) then
+            return false, "could not create runway lamp posts"
         end
     end
 
@@ -170,9 +238,19 @@ function S.buildRunwayAnchors()
         return false, "could not create sun-glare anchor"
     end
 
-    state.vanillaObject = S.spawnOnRunway(state.vanillaModel, 0.53, -24.0, 0, 255, 1.0)
+    local moonLayout = {
+        { 0.62, -58, 24 }, { 0.67, -40, 35 }, { 0.72, -21, 43 },
+        { 0.76,   0, 48 }, { 0.80,  21, 43 }, { 0.85,  40, 35 }, { 0.90, 58, 24 },
+    }
+    for index, moon in ipairs(moonLayout) do
+        if not S.spawnOnRunway(state.moonModels[index], moon[1], moon[2], moon[3], 0, 0.05) then
+            return false, "could not create moon sky anchor"
+        end
+    end
+
+    state.vanillaObject = S.spawnOnRunway(state.vanillaModel, 0.53, -27.0, 0, 255, 1.0, 90)
     if not state.vanillaObject then
-        return false, "could not create vanilla lamp"
+        return false, "could not create hero vanilla lamp"
     end
 
     return true
@@ -196,25 +274,8 @@ function S.addRoadsign(model, text, reverse)
     return true
 end
 
-function S.findFirstLight(model)
-    local count = getModel2DFXCount(model, false)
-    for index = 0, count - 1 do
-        if getModel2DFXType(model, index) == "light" then
-            return index
-        end
-    end
-    return nil
-end
-
 function S.captureVanillaLight()
     local index = S.findFirstLight(state.vanillaModel)
-    if index == nil and state.vanillaModel ~= 1226 then
-        state.vanillaModel = 1226
-        if isElement(state.vanillaObject) then
-            setElementModel(state.vanillaObject, 1226)
-        end
-        index = S.findFirstLight(1226)
-    end
     if index == nil then
         return false
     end
@@ -234,23 +295,32 @@ function S.captureVanillaLight()
         lightRange = lightRange,
         color = tocolor(r, g, b, a),
     }
+    S.rememberTouchedModel(state.vanillaModel)
     return true
 end
 
 function S.addEffects()
     for segment = 1, SEGMENTS do
-        state.edgeEffects.left[segment] = S.addLight(state.edgeModels.left[segment], PALETTE[segment], 0.035, 0)
-        state.edgeEffects.right[segment] = S.addLight(state.edgeModels.right[segment], PALETTE[7 - segment], 0.035, 0)
-        state.centerEffects[segment] = S.addLight(state.centerModels[segment], PALETTE[6], 0.025, 0)
+        state.edgeEffects.left[segment] = S.ensureLampLight(state.edgeModels.left[segment], PALETTE[segment])
+        state.edgeEffects.right[segment] = S.ensureLampLight(state.edgeModels.right[segment], PALETTE[7 - segment])
+        state.centerEffects[segment] = S.addCustomLight(state.centerModels[segment], PALETTE[6], 0.02, 0)
         if state.edgeEffects.left[segment] == false or state.edgeEffects.right[segment] == false or state.centerEffects[segment] == false then
-            return false, "failed to add runway light segment " .. segment
+            return false, "failed to prepare runway light segment " .. segment
         end
     end
 
-    state.thresholdEffects[1] = S.addLight(state.thresholdModels[1], tocolor(45, 255, 150, 255), 0.035, 0)
-    state.thresholdEffects[2] = S.addLight(state.thresholdModels[2], tocolor(255, 55, 85, 255), 0.035, 0)
+    state.thresholdEffects[1] = S.addCustomLight(state.thresholdModels[1], tocolor(45, 255, 150, 255), 0.03, 0)
+    state.thresholdEffects[2] = S.addCustomLight(state.thresholdModels[2], tocolor(255, 55, 85, 255), 0.03, 0)
     if state.thresholdEffects[1] == false or state.thresholdEffects[2] == false then
         return false, "failed to add threshold lights"
+    end
+
+    for index = 1, MOON_COUNT do
+        local color = PALETTE[((index - 1) % #PALETTE) + 1]
+        state.moonEffects[index] = S.addCustomLight(state.moonModels[index], color, 0.03, 0, "default", "coronamoon", { 0, 0, 0 })
+        if state.moonEffects[index] == false then
+            return false, "failed to add moon sprite " .. index
+        end
     end
 
     if not addModel2DFX(state.particleModels[1], 0, 0, 0.2, "particle", { name = "smoke_flare" }) then
@@ -276,9 +346,10 @@ function S.addEffects()
     end
     S.rememberTouchedModel(state.sunModel)
 
-    if not S.captureVanillaLight() then
-        return false, "could not find vanilla model 1226 light 2DFX"
-    end
+    -- A requested 1226 model normally carries the native lamp effect. If this
+    -- build does not clone native 2DFX, the hero shot is skipped instead of
+    -- touching global model 1226 and affecting unrelated world lamps.
+    S.captureVanillaLight()
 
     S.allLightsOff()
     return true
@@ -295,7 +366,6 @@ function S.mutateVanillaLight()
     setModel2DFXProperty(model, index, "lightRange", state.vanillaBaseline.lightRange + 28)
     setModel2DFXProperty(model, index, "color", tocolor(30, 245, 255, 255))
     setModel2DFXProperty(model, index, "showMode", "warnlight")
-    S.rememberTouchedModel(model)
 end
 
 function S.restoreVanillaLight()
