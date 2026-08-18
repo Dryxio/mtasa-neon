@@ -9,24 +9,25 @@
 
 #pragma once
 
-extern "C"
-{
-    #include "lua.h"
-}
+#include "CLuaDefs.h"
 
-class CLuaBreakEffectDefs
+#ifndef lua_absindex
+#define lua_absindex(L, i) ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : lua_gettop(L) + (i) + 1)
+#endif
+
+class CLuaBreakEffectDefs : public CLuaDefs
 {
 public:
     static void LoadFunctions();
     static void AddClass(lua_State* luaVM);
 
-    static int CreateObjectBreakEffect(lua_State* luaVM);
-    static int GetBreakEffectFragmentCount(lua_State* luaVM);
-    static int GetBreakEffectSourceTriangleCount(lua_State* luaVM);
-    static int GetBreakEffectSleepingFragmentCount(lua_State* luaVM);
-    static int GetBreakEffectCacheHit(lua_State* luaVM);
-    static int IsBreakEffectPaused(lua_State* luaVM);
-    static int SetBreakEffectPaused(lua_State* luaVM);
-    static int GetBreakEffectCacheSize(lua_State* luaVM);
-    static int ClearBreakEffectCache(lua_State* luaVM);
+    LUA_DECLARE(CreateObjectBreakEffect);
+    LUA_DECLARE(GetBreakEffectFragmentCount);
+    LUA_DECLARE(GetBreakEffectSourceTriangleCount);
+    LUA_DECLARE(GetBreakEffectSleepingFragmentCount);
+    LUA_DECLARE(GetBreakEffectCacheHit);
+    LUA_DECLARE(IsBreakEffectPaused);
+    LUA_DECLARE(SetBreakEffectPaused);
+    LUA_DECLARE(GetBreakEffectCacheSize);
+    LUA_DECLARE(ClearBreakEffectCache);
 };
