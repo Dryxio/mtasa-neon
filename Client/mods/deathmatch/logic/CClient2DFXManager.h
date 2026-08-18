@@ -9,6 +9,7 @@
 #pragma once
 
 #include <CVector.h>
+#include <SharedUtil.MemAccess.h>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -16,6 +17,15 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+// game_sa's fast-memory helpers expect this name to be visible when HookSystem.h
+// is included from the deathmatch module rather than through game_sa/StdInc.h.
+using SharedUtil::IsSlowMem;
+
+// Neon still exposes GTA's +0x0E 2DFX store index under its legacy name
+// `usUnknown`. Keep the 2DFX implementation source compatible with the upstream
+// terminology without changing the shared CBaseModelInfoSAInterface layout.
+#define s2DEffectIndex usUnknown
 
 class CClientManager;
 class CResource;
