@@ -23,6 +23,7 @@ class CColPointSAInterface;
 #define FUNC_ProcessCollision               0x54DFB0
 #define FUNC_AttachEntityToEntity           0x54D570
 #define FUNC_DetatchEntityFromEntity        0x5442F0
+#define FUNC_CPhysical_RemoveAndAdd         0x542560
 #define FUNC_CPhysical_AddToMovingList      0x542800
 #define FUNC_CPhysical_RemoveFromMovingList 0x542860
 
@@ -142,6 +143,16 @@ public:
     void  SetCenterOfMass(CVector& vecCenterOfMass);
 
     void ProcessCollision();
+    void RemoveAndAdd()
+    {
+        DWORD dwFunc = FUNC_CPhysical_RemoveAndAdd;
+        DWORD dwThis = (DWORD)GetInterface();
+        __asm
+        {
+            mov ecx, dwThis
+            call dwFunc
+        }
+    }
     void AddToMovingList();
 
     float    GetDamageImpulseMagnitude();
