@@ -110,6 +110,7 @@ local function movementTest(runSerial)
 end
 
 local function bulkTest(runSerial, count)
+    local baseline = countBirds()
     local x, y, z = getElementPosition(localPlayer)
     local created = {}
     for i = 1, count do
@@ -133,7 +134,8 @@ local function bulkTest(runSerial, count)
             if isElement(bird) then destroyElement(bird) end
             tracked[bird] = nil
         end
-        check("bulk.cleanup", countBirds() <= 2, ("remaining=%d"):format(countBirds()))
+        local remaining = countBirds()
+        check("bulk.cleanup", remaining == baseline, ("baseline=%d remaining=%d"):format(baseline, remaining))
     end, 1800, 1)
 end
 
