@@ -63,3 +63,5 @@ There are no custom DFFs, TXDs, shaders or textures in the showcase. The runway 
 ## Recording notes
 
 Record 16:9. First run `/2dfxshow setup` and make sure both runway edges are correctly aligned with the asphalt and the roadsigns face the intended camera direction. If those are aligned, `/2dfxshow` should be ready to record without additional world restreams.
+
+The runway axis is computed directly from the two supplied endpoint coordinates, so changing the endpoints later automatically repositions every edge/center/threshold anchor and every camera path around the new line.
