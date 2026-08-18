@@ -11,8 +11,11 @@
 
 #include "CClientObject.h"
 #include "CClientObjectManager.h"
+#include "CClientColModelManager.h"
 #include "../../../game_sa/CObjectSA.h"
 
+#include <game/CModelInfo.h>
+#include <memory>
 #include <unordered_map>
 
 class CClientObjectPhysicsManager
@@ -25,6 +28,9 @@ private:
         bool     bSleeping = false;
         unsigned char ucRestFrames = 0;
         unsigned char ucContactGraceFrames = 0;
+
+        CObjectInfo*                 pOriginalObjectInfo = nullptr;
+        std::unique_ptr<CObjectInfo> pDynamicObjectInfo;
 
         bool  bApplyGravity = false;
         bool  bDisableCollisionForce = false;
@@ -60,6 +66,13 @@ private:
     static constexpr unsigned char SETTLE_FRAMES = 12;
     static constexpr unsigned char CONTACT_GRACE_FRAMES = 6;
 
+    // CObject::SpecialEntityCalcCollisionSteps uses the COL bound radius when
+    // the special response is GRENADE instead of the generic 0.3-unit step.
+    // Give dynamic objects a private copy of CObjectInfo with only that field
+    // changed so small runtime collision shapes receive enough substeps without
+    // mutating GTA's shared object.dat entry for every object of the model.
+    static constexpr unsigned char DYNAMIC_SPECIAL_COL_RESPONSE = 5;
+
     static float LengthSq(const CVector& value)
     {
         return value.fX * value.fX + value.fY * value.fY + value.fZ * value.fZ;
@@ -93,6 +106,52 @@ private:
         state.bSnapshotValid = true;
     }
 
+    static void ReapplyReplacementCollision(CClientObject* pObject, CObjectSA* pObjectSA)
+    {
+        if (!pObject || !pObjectSA || !g_pClientGame || !g_pClientGame->GetManager() || !g_pGame)
+            return;
+
+        CClientColModelManager* pColManager = g_pClientGame->GetManager()->GetColModelManager();
+        if (!pColManager)
+            return;
+
+        const unsigned short usModel = pObject->GetModel();
+        CClientColModel*      pReplacement = pColManager->GetElementThatReplaced(usModel);
+        if (!pReplacement || !pReplacement->GetColModel())
+            return;
+
+        CModelInfo* pModelInfo = g_pGame->GetModelInfo(usModel);
+        if (!pModelInfo)
+            return;
+
+        // A replacement may be registered before GTA streams the underlying
+        // model. Loading the model can replace its pColModel after the original
+        // engineReplaceCOL call. Restore+set deliberately bypasses the
+        // same-pointer early-out and makes the registered replacement current
+        // again once this native CObject actually exists.
+        pModelInfo->RestoreColModel();
+        pModelInfo->SetColModel(pReplacement->GetColModel());
+
+        // CPhysical keeps sector registration derived from the collision bound.
+        // Rebuild it after changing/reasserting the model collision so the first
+        // physics pass uses the correct broadphase sectors as well as the right
+        // narrow-phase COL.
+        pObjectSA->RemoveAndAdd();
+    }
+
+    static void InstallDynamicCollisionProfile(CObjectSAInterface* pInterface, SState& state)
+    {
+        state.pOriginalObjectInfo = pInterface ? pInterface->pObjectInfo : nullptr;
+        state.pDynamicObjectInfo.reset();
+
+        if (!pInterface || !state.pOriginalObjectInfo)
+            return;
+
+        state.pDynamicObjectInfo = std::make_unique<CObjectInfo>(*state.pOriginalObjectInfo);
+        state.pDynamicObjectInfo->ucSpecialColResponseCase = DYNAMIC_SPECIAL_COL_RESPONSE;
+        pInterface->pObjectInfo = state.pDynamicObjectInfo.get();
+    }
+
     static void Wake(CClientObject* pObject, SState& state)
     {
         CObjectSA* pObjectSA = GetObjectSA(pObject);
@@ -117,6 +176,7 @@ private:
         pInterface->bIsStuck = false;
         pInterface->bOnSolidSurface = false;
         pInterface->m_ucColFlag1 = 0;
+        pInterface->m_ucCollisionState = 0;
         pObjectSA->AddToMovingList();
     }
 
@@ -160,6 +220,9 @@ private:
 
         state.pLastGameObject = pObject->GetGameObject();
         Snapshot(pInterface, state);
+
+        ReapplyReplacementCollision(pObject, pObjectSA);
+        InstallDynamicCollisionProfile(pInterface, state);
 
         pInterface->bApplyGravity = true;
         pInterface->bDisableFriction = false;
@@ -270,6 +333,9 @@ private:
         CObjectSAInterface* pInterface = pObjectSA->GetObjectInterface();
         if (!pInterface)
             return;
+
+        if (state.pDynamicObjectInfo && pInterface->pObjectInfo == state.pDynamicObjectInfo.get())
+            pInterface->pObjectInfo = state.pOriginalObjectInfo;
 
         pInterface->bApplyGravity = state.bApplyGravity;
         pInterface->bDisableFriction = state.bDisableCollisionForce;
