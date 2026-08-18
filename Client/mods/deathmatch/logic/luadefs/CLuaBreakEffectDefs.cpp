@@ -214,7 +214,21 @@ int CLuaBreakEffectDefs::CreateObjectBreakEffect(lua_State* luaVM)
 
     CLuaMain* luaMain = m_pLuaManager->GetVirtualMachine(luaVM);
     CResource* resource = luaMain ? luaMain->GetResource() : nullptr;
-    CClientBreakEffect* effect = resource ? CClientBreakEffectManager::GetSingleton().CreateFromObject(m_pManager, object, INVALID_ELEMENT_ID, options) : nullptr;
+    CClientBreakEffect* effect = nullptr;
+    if (resource)
+    {
+        auto& manager = CClientBreakEffectManager::GetSingleton();
+        const std::size_t cacheSizeBefore = manager.GetCacheEntryCount();
+        effect = manager.CreateFromObject(m_pManager, object, INVALID_ELEMENT_ID, options);
+
+        // A newly computed fracture definition is cached before the runtime
+        // chunks are finalized. If that cache-miss path rejects the first
+        // instance, retry once through the canonical cached definition. Never
+        // retry ordinary invalid/unsupported geometry failures that did not
+        // create a cache entry.
+        if (!effect && manager.GetCacheEntryCount() > cacheSizeBefore)
+            effect = manager.CreateFromObject(m_pManager, object, INVALID_ELEMENT_ID, options);
+    }
     if (!effect)
     {
         m_pScriptDebugging->LogWarning(luaVM, "Unable to fracture object: object must be streamed and contain valid static RenderWare geometry");
