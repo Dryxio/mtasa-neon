@@ -1,7 +1,11 @@
 local BALL_MODEL = 2114
-local COURT_DISTANCE = 6.0
-local RIM_HEIGHT = 3.05
 local GRAVITY_PER_FRAME = 0.008
+
+-- Existing world hoop: model 947 (bskballhub_lax01).
+-- The supplied DFF places the rim center at this local offset from the model origin.
+local COURT_OBJECT_X, COURT_OBJECT_Y, COURT_OBJECT_Z = 1234.1, -753.5, 1085.2
+local COURT_OBJECT_HEADING = 0.0
+local RIM_LOCAL_X, RIM_LOCAL_Y, RIM_LOCAL_Z = 0.07342529296875, 0.5001220703125, 0.9108123779296875
 
 local court = false
 local ball = false
@@ -15,6 +19,12 @@ end
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
+end
+
+local function rotateLocal(x, y, heading)
+    local radians = math.rad(heading)
+    local cosHeading, sinHeading = math.cos(radians), math.sin(radians)
+    return x * cosHeading - y * sinHeading, x * sinHeading + y * cosHeading
 end
 
 local function getForward(player)
@@ -91,22 +101,21 @@ local function resetCourt(player)
         return
     end
 
-    local x, y, z = getElementPosition(player)
-    local forwardX, forwardY, heading = getForward(player)
-
+    local rimOffsetX, rimOffsetY = rotateLocal(RIM_LOCAL_X, RIM_LOCAL_Y, COURT_OBJECT_HEADING)
     court = {
         owner = player,
-        ringX = x + forwardX * COURT_DISTANCE,
-        ringY = y + forwardY * COURT_DISTANCE,
-        ringZ = z + RIM_HEIGHT,
-        heading = heading,
+        ringX = COURT_OBJECT_X + rimOffsetX,
+        ringY = COURT_OBJECT_Y + rimOffsetY,
+        ringZ = COURT_OBJECT_Z + RIM_LOCAL_Z,
+        heading = COURT_OBJECT_HEADING,
         interior = getElementInterior(player),
         dimension = getElementDimension(player)
     }
 
     publishCourt()
     if createBallFor(player) then
-        message(root, ("Court reset by %s. RMB aim, hold/release LMB to shoot, E to pick up."):format(getPlayerName(player)), 170, 230, 255)
+        message(root, ("Court aligned to model 947. A aim, hold/release E to shoot, F pickup. Rim %.3f %.3f %.3f")
+            :format(court.ringX, court.ringY, court.ringZ), 170, 230, 255)
     end
 end
 
