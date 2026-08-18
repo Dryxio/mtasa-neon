@@ -114,7 +114,19 @@ Project2DFX distant corona, but does not resize GTA's ordinary nearby coronas.
 It tunes Neon's private renderer, which follows Project2DFX's square, buffered
 sprite projection without consuming GTA/MTA's shared corona pool.
 
-<!-- MEDIA PLACEHOLDER: SkyGFX before/after comparison. Suggested files: docs/media/skygfx-off.webp and docs/media/skygfx-on.webp. Use the same scene, weather, time, camera, and resolution; label both states and add concise alt text. A short MP4/WebM toggle clip can accompany the stills, but keep still images for GitHub readers. -->
+Each comparison below is the same Neon client with the option toggled, not two different builds. Everything shown is off by default and switched on from the Neon settings tab.
+
+**Extended draw distance.** MTA's original far clip on the left, Neon's extended draw distance on the right.
+
+![Extended draw distance comparison from a rooftop over Los Santos: distant buildings are flat low-detail blobs with MTA's original far clip, and resolve into detailed geometry with Neon's extended draw distance](docs/media/compare-draw-distance.jpg)
+
+**Project2DFX at night.** The same viewpoint 13 seconds apart, with extended draw distance and Project2DFX off, then on.
+
+![Night comparison over Las Venturas: the city is fogged out beyond a short distance with the features off, and appears in full with hundreds of distant coronas and traffic lights with them on](docs/media/compare-project2dfx.jpg)
+
+**SkyGFX.** The stock rendering on the left, Neon's selected PS2-style color path on the right.
+
+![Street-level comparison in Ganton: neutral stock colors on the left, warmer and more saturated PS2-style grading on the right](docs/media/compare-skygfx.jpg)
 
 ### Extended-world validation examples
 
@@ -126,7 +138,15 @@ These maps are test cases, not built-in Neon worlds or engine dependencies. Thei
 
 <!-- MEDIA PLACEHOLDER: Synchronized NPC traffic. Suggested file: docs/media/synchronized-ai-handoff.webp or a YouTube thumbnail/link. Show at least two players observing the same peds, ideally around a syncer handoff rather than an isolated single-client scene. -->
 
-<!-- MEDIA PLACEHOLDER: Neon client experience. Suggested files: docs/media/neon-main-menu.webp and docs/media/neon-server-browser.webp. Show the GTA:SA-inspired shell and a populated server list without private server details. -->
+### The Neon client
+
+Neon ships its own GTA:SA-inspired shell instead of the standard MTA one, with an optional Discord-backed identity shown in the corner.
+
+![Neon main menu in the GTA:SA visual style, with browse servers, quick connect, map editor, settings, about and quit entries, and a Discord connected identity badge](docs/media/neon-main-menu.jpg)
+
+The server browser lists Neon servers with regions, languages, ping and player counts, and a details panel for the selected destination.
+
+![Neon server browser showing a list of community servers with flags, ping and player counts, and a details panel with description, regions and languages for the selected server](docs/media/neon-server-browser.jpg)
 
 <!-- MEDIA PLACEHOLDER: Vehicle audio. Prefer a short captioned video/GIF demonstrating configured engine audio and a backfire; audio should also be available in the linked video rather than relying on an animated image alone. -->
 
