@@ -1,5 +1,21 @@
 local BALL_MODEL, BALL_RADIUS = 2114, 0.12
-local RIM_RADIUS, RIM_SEGMENTS = 0.23, 20
+local RIM_RADIUS = 0.23
+local RIM_PIPE_RADIUS, RIM_EDGE_STEPS = 0.03, 4
+local BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_OFFSET_Z = -0.06488037109375, -0.394287109375, 0.5519981384277344
+
+-- Centerline of model 947's visible rim, extracted from the supplied
+-- bskballhub_lax01.dff and expressed relative to the rim center.
+local RIM_PATH = {
+    { 0.132629394531, -0.197875976562 },
+    { -0.065856933594, -0.222534179688 },
+    { -0.225769042969, -0.116821289062 },
+    { -0.253601074219, 0.057250976562 },
+    { -0.132751464844, 0.197875976562 },
+    { 0.065979003906, 0.222534179688 },
+    { 0.225891113281, 0.116821289062 },
+    { 0.253479003906, -0.057250976562 },
+}
+
 local ballCol, rimCol, boardCol = false, false, false
 local rimModel, boardModel = false, false
 local rimObject, boardObject = false, false
@@ -9,6 +25,12 @@ local scoreArmed, previousBallZ, lastScoreSignal = false, false, 0
 local screenW, screenH = guiGetScreenSize()
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+local function rotateLocal(x, y, heading)
+    local r = math.rad(heading)
+    local c, s = math.cos(r), math.sin(r)
+    return x * c - y * s, x * s + y * c
+end
 
 local function configureBall(object)
     if not isElement(object) or getElementType(object) ~= "object" or not getElementData(object, "basketPhysicsTest") then return false end
@@ -39,12 +61,25 @@ local function ensureHoopModels()
     if not rimModel or not boardModel then return false end
 
     local spheres = {}
-    for i = 0, RIM_SEGMENTS - 1 do
-        local a = math.pi * 2 * i / RIM_SEGMENTS
-        spheres[#spheres + 1] = { position = {math.cos(a) * RIM_RADIUS, math.sin(a) * RIM_RADIUS, 0}, radius = 0.03, material = 1 }
+    for i = 1, #RIM_PATH do
+        local current = RIM_PATH[i]
+        local nextPoint = RIM_PATH[i % #RIM_PATH + 1]
+        for step = 0, RIM_EDGE_STEPS - 1 do
+            local t = step / RIM_EDGE_STEPS
+            spheres[#spheres + 1] = {
+                position = {
+                    current[1] + (nextPoint[1] - current[1]) * t,
+                    current[2] + (nextPoint[2] - current[2]) * t,
+                    0
+                },
+                radius = RIM_PIPE_RADIUS,
+                material = 1
+            }
+        end
     end
+
     rimCol = engineLoadCOL({ spheres = spheres })
-    boardCol = engineLoadCOL({ boxes = {{ position = {0, 0, 0}, size = {1.8, 0.08, 1.05}, material = 1 }} })
+    boardCol = engineLoadCOL({ boxes = {{ position = {0, 0, 0}, size = {1.7632, 0.0784, 1.5101}, material = 1 }} })
     return isElement(rimCol) and isElement(boardCol) and engineReplaceCOL(rimCol, rimModel) and engineReplaceCOL(boardCol, boardModel)
 end
 
@@ -68,10 +103,10 @@ end
 local function rebuildCourt()
     destroyCourtObjects()
     if not readCourt() or not ensureHoopModels() then return end
-    local r = math.rad(court.heading)
-    local fx, fy = -math.sin(r), math.cos(r)
-    rimObject = createObject(rimModel, court.x, court.y, court.z)
-    boardObject = createObject(boardModel, court.x + fx * 0.30, court.y + fy * 0.30, court.z + 0.38, 0, 0, court.heading)
+
+    local boardX, boardY = rotateLocal(BOARD_OFFSET_X, BOARD_OFFSET_Y, court.heading)
+    rimObject = createObject(rimModel, court.x, court.y, court.z, 0, 0, court.heading)
+    boardObject = createObject(boardModel, court.x + boardX, court.y + boardY, court.z + BOARD_OFFSET_Z, 0, 0, court.heading)
     for _, object in ipairs({rimObject, boardObject}) do
         if isElement(object) then
             setElementFrozen(object, true)
@@ -104,19 +139,29 @@ local function pickup()
     if dx * dx + dy * dy + dz * dz <= 3.24 then triggerServerEvent("basketPhysics:pickup", resourceRoot) end
 end
 
-bindKey("mouse2", "both", function(_, state)
-    aiming = holding() and state == "down"
+-- Mac-friendly keyboard controls: A toggles aim, E charges/releases the shot.
+bindKey("a", "down", function()
+    if not holding() then
+        aiming, charging = false, false
+        return
+    end
+    aiming = not aiming
     if not aiming then charging = false end
 end)
-bindKey("mouse1", "both", function(_, state)
-    if state == "down" and aiming and holding() then charging, chargeStart = true, getTickCount() return end
+
+bindKey("e", "both", function(_, state)
+    if state == "down" and aiming and holding() then
+        charging, chargeStart = true, getTickCount()
+        return
+    end
     if state == "up" and charging and aiming and holding() then
         local c = clamp((getTickCount() - chargeStart) / 1200, 0, 1)
         shoot(c * c * (3 - 2 * c))
     end
     charging = false
 end)
-bindKey("e", "down", pickup)
+
+bindKey("f", "down", pickup)
 addCommandHandler("basketpickup", pickup)
 addCommandHandler("basketshot", function(_, value) shoot(clamp(tonumber(value) or 0.65, 0, 1)) end)
 
@@ -141,13 +186,16 @@ end
 
 local function drawCourt()
     if not court then return end
-    local prev
-    for i = 0, RIM_SEGMENTS do
-        local a = math.pi * 2 * i / RIM_SEGMENTS
-        local x, y = court.x + math.cos(a) * RIM_RADIUS, court.y + math.sin(a) * RIM_RADIUS
-        if prev then dxDrawLine3D(prev[1], prev[2], court.z, x, y, court.z, tocolor(255, 145, 40, 240), 3) end
-        prev = {x, y}
+    local firstX, firstY
+    local prevX, prevY
+    for i = 1, #RIM_PATH do
+        local ox, oy = rotateLocal(RIM_PATH[i][1], RIM_PATH[i][2], court.heading)
+        local x, y = court.x + ox, court.y + oy
+        if prevX then dxDrawLine3D(prevX, prevY, court.z, x, y, court.z, tocolor(255, 145, 40, 240), 3) end
+        if not firstX then firstX, firstY = x, y end
+        prevX, prevY = x, y
     end
+    if prevX and firstX then dxDrawLine3D(prevX, prevY, court.z, firstX, firstY, court.z, tocolor(255, 145, 40, 240), 3) end
 end
 
 addEventHandler("onClientRender", root, function()
@@ -158,7 +206,7 @@ addEventHandler("onClientRender", root, function()
         local vx, vy, vz = getElementVelocity(object)
         local ax, ay, az = getElementAngularVelocity(object)
         local score = getElementData(localPlayer, "basketPhysics:score") or 0
-        dxDrawText(("BASKET PHYSICS | score %d\nvel %.4f %.4f %.4f | spin %.4f %.4f %.4f\nRMB aim | hold/release LMB | E pickup | /basketshot [0..1]"):format(score, vx, vy, vz, ax, ay, az), 24, 24, 700, 115, tocolor(255,255,255,235), 1, "default-bold")
+        dxDrawText(("BASKET PHYSICS | score %d\nvel %.4f %.4f %.4f | spin %.4f %.4f %.4f\nA aim toggle | hold/release E shoot | F pickup | /basketshot [0..1]"):format(score, vx, vy, vz, ax, ay, az), 24, 24, 760, 115, tocolor(255,255,255,235), 1, "default-bold")
     end
     if aiming and holding() then
         local p = charging and clamp((getTickCount() - chargeStart) / 1200, 0, 1) or 0
@@ -174,7 +222,7 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
     if not ensureHoopModels() then outputDebugString("[basket-test] hoop collision setup failed", 1) end
     if readCourt() then rebuildCourt() end
     for _, object in ipairs(getElementsByType("object", root, true)) do configureBall(object) end
-    outputChatBox("[basket-test] /baskettest, RMB aim, hold/release LMB, E pickup, /basketshot [0..1]", 170,230,255)
+    outputChatBox("[basket-test] /baskettest, A aim, hold/release E shoot, F pickup, /basketshot [0..1]", 170,230,255)
 end)
 addEventHandler("onClientElementStreamIn", root, function() configureBall(source) end)
 addEventHandler("onClientElementDataChange", root, function(key)
