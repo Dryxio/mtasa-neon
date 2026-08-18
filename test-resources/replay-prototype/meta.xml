@@ -1,4 +1,5 @@
 <meta>
-    <info author="Neon" name="Player replay prototype" version="0.1.0" type="script" />
+    <info author="Neon" name="Player replay prototype" version="0.1.1" type="script" />
     <script src="client.lua" type="client" cache="false" />
+    <script src="view.lua" type="client" cache="false" />
 </meta>
