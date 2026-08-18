@@ -13,6 +13,7 @@
 #include <game/CFxManager.h>
 #include <game/CFxSystem.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace
@@ -51,10 +52,7 @@ CClientEntity* GetElement(CClientEntity* pElement, const char* szKey)
         return nullptr;
 
     CLuaArgument* pArgument = pElement->GetCustomData(szKey, false);
-    if (!pArgument || pArgument->GetType() != LUA_TLIGHTUSERDATA)
-        return nullptr;
-
-    return pArgument->GetElement();
+    return pArgument ? pArgument->GetElement() : nullptr;
 }
 
 int GetFxTier(float fStrength)
@@ -199,6 +197,8 @@ void CClientFireManager::TryDamage(SFireEntry& entry, CClientEntity* pVictim, co
     arguments.PushNumber(fDamage);
     arguments.PushElement(pResponsible);
 
+    // CallEvent returns false when a handler cancels the event. Only ignite the victim
+    // after script policy has had a chance to veto the interaction.
     if (!entry.pElement->CallEvent("onClientFireDamage", arguments, true))
         return;
 
