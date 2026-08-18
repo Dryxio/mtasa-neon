@@ -124,14 +124,6 @@ local function steerTo(bird, tx, ty, tz, strength, maxSpeed)
     return d
 end
 
-local function caption(text, sub)
-    local w,h = guiGetScreenSize()
-    dxDrawText(text, 0, h*0.78, w, h*0.86, tocolor(255,255,255,245), 1.55, "default-bold", "center", "center", false, false, true)
-    if sub then
-        dxDrawText(sub, 0, h*0.85, w, h*0.91, tocolor(220,225,235,230), 1.0, "default", "center", "center", false, false, true)
-    end
-end
-
 local function updateShow()
     if not show.active then return end
     local elapsed = getTickCount() - show.startedAt
@@ -196,19 +188,15 @@ local function updateShow()
 
     if elapsed < 6500 then
         cameraLerp({cx,cy-20,cz+3,cx,cy+8,cz+3,82},{cx+2,cy-14,cz+5,cx,cy+9,cz+4,76},elapsed/6500)
-        if elapsed < 2600 then caption("SCRIPTABLE BIRDS") else caption("96 LUA-CONTROLLED BIRDS","GTA SA's native ambient pool is 6") end
     elseif elapsed < 13500 then
         local t=(elapsed-6500)/7000
         cameraLerp({cx+2,cy-14,cz+5,cx,cy+4,cz+4,76},{cx-14,cy-8,cz+9,cx,cy+2,cz+5,68},t)
-        caption("LIVE FLIGHT CONTROL","velocity • target velocity • curved flight")
     elseif elapsed < 19000 then
         local t=(elapsed-13500)/5500
         cameraLerp({cx-14,cy-8,cz+9,cx,cy+2,cz+5,68},{cx+5,cy-12,cz+5,cx+1,cy-4,cz+4,58},t)
-        caption("EVERY BIRD IS AN ELEMENT","one bird changes color, size, motion — live")
     else
         local t=clamp((elapsed-19000)/10000,0,1)
         cameraLerp({cx+5,cy-12,cz+5,cx,cy+4,cz+5,58},{cx,cy-28,cz+11,cx,cy+4,cz+5,70},t)
-        caption(elapsed < 25500 and "96 BIRDS → ONE SCRIPTED FORMATION" or "SCRIPTABLE BIRDS","POSITION  •  FLIGHT  •  SIZE  •  COLOR  •  SHOT EVENTS")
     end
 
     if elapsed > 30500 and not show.finished then
@@ -244,13 +232,6 @@ addEventHandler("birdShowcase:shoot", resourceRoot, function()
         if isElement(bird) then show.shootBirds[#show.shootBirds+1]=bird end
     end
     show.shootUntil=getTickCount()+12000
-    outputChatBox("[BIRD SHOWCASE] Shoot the flock. Each hit is a cancellable onClientBirdShot event.",255,210,80)
-end)
-
-addEventHandler("onClientBirdShot", root, function(attacker,weapon)
-    if show.shootUntil>getTickCount() then
-        outputChatBox(("[BIRD SHOWCASE] onClientBirdShot — weapon %s"):format(tostring(weapon)),120,255,140)
-    end
 end)
 
 addEventHandler("onClientPlayerWeaponFire", localPlayer, function(weapon,ammo,ammoInClip,hitX,hitY,hitZ,hitElement,startX,startY,startZ)
@@ -258,12 +239,7 @@ addEventHandler("onClientPlayerWeaponFire", localPlayer, function(weapon,ammo,am
     processBirdGunShot(Vector3(startX,startY,startZ),Vector3(hitX,hitY,hitZ),weapon)
 end)
 
-addEventHandler("onClientRender", root, function()
-    updateShow()
-    if show.shootUntil>getTickCount() and not show.active then
-        caption("SHOOTABLE LUA BIRDS","onClientBirdShot is cancellable")
-    end
-end)
+addEventHandler("onClientRender", root, updateShow)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
     stopShow(); destroyList(show.shootBirds); show.shootBirds={}
