@@ -22,7 +22,7 @@
 
 <p align="center"><strong>An independent MTA:BLUE-derived playground for deeper GTA:SA engine work.</strong></p>
 
-MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) that opens up parts of the GTA:SA engine MTA never exposed: a bigger world, higher engine limits, and GTA's own native systems turned into Lua primitives.
+MTA:SA Neon is an experimental fork of [Multi Theft Auto: San Andreas](https://github.com/multitheftauto/mtasa-blue) that opens up parts of the GTA:SA engine that were never exposed to scripts: a bigger world, higher engine limits, and GTA's own native systems turned into Lua primitives.
 
 Its flagship system brings **GTA:SA's single-player NPCs and traffic into a shared multiplayer world**, running the original AI on one authoritative client.
 
@@ -46,7 +46,7 @@ Neon also ships its own GTA:SA-inspired menu and server browser, with an optiona
 
 ![Neon main menu in the GTA:SA visual style, with browse servers, quick connect, map editor, settings, about and quit entries, and a Discord connected badge](docs/media/neon-main-menu.jpg)
 
-## Script things MTA could not
+## GTA systems, now scriptable
 
 Four systems that used to be locked inside the engine. Each clip is a real in-game recording.
 
