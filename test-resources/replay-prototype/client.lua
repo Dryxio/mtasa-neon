@@ -1,9 +1,14 @@
 local BUFFER_DURATION_MS = 60000
 local SAMPLE_INTERVAL_MS = 16
 local KEYFRAME_INTERVAL_MS = 500
-local SOFT_CORRECTION_DISTANCE = 0.75
-local HARD_CORRECTION_DISTANCE = 4.0
-local SOFT_CORRECTION_FACTOR = 0.08
+
+-- Control-driven playback correction policy.
+-- Small drift is intentionally tolerated so GTA keeps ownership of locomotion/tasks.
+local SOFT_CORRECTION_DISTANCE = 0.30
+local HARD_CORRECTION_DISTANCE = 3.00
+local MAX_HORIZONTAL_CORRECTION_PER_FRAME = 0.025
+local MAX_VERTICAL_CORRECTION_PER_FRAME = 0.012
+local VERTICAL_CORRECTION_THRESHOLD = 0.30
 
 local CONTROL_NAMES = {
     "forwards",
@@ -38,7 +43,6 @@ local state = {
     hardResyncs = 0,
     currentDrift = 0,
     maxDrift = 0,
-    lastCorrectedKeyframe = nil,
     replayMode = "tracked",
     debug = true,
 }
@@ -168,7 +172,6 @@ local function stopGhost()
     state.playbackIndex = 1
     state.playbackOffset = 0
     state.currentDrift = 0
-    state.lastCorrectedKeyframe = nil
 end
 
 local function ensureGhostWeapon(frame)
@@ -282,7 +285,6 @@ local function startPlayback(offsetMs)
     state.hardResyncs = 0
     state.currentDrift = 0
     state.maxDrift = 0
-    state.lastCorrectedKeyframe = nil
 
     chat(("Playback started (%s mode, %.2fs buffered, %d samples)."):format(state.replayMode, (last.t - first.t) / 1000, #state.frames - state.firstFrame + 1), 120, 255, 120)
 end
@@ -299,7 +301,6 @@ local function seekPlayback(seconds)
     state.playbackOffset = target
     state.playbackStartedAt = getTickCount()
     state.playbackIndex = state.firstFrame
-    state.lastCorrectedKeyframe = nil
 
     local frame = select(1, findPlaybackFrames(target))
     if frame and isElement(state.ghost) then
@@ -344,30 +345,48 @@ local function updateControlDrivenMovement(a, b, alpha)
     local targetY = lerp(a.y, b.y, alpha)
     local targetZ = lerp(a.z, b.z, alpha)
     local gx, gy, gz = getElementPosition(state.ghost)
-    local errorDistance = distance3D(gx, gy, gz, targetX, targetY, targetZ)
+
+    local dx = targetX - gx
+    local dy = targetY - gy
+    local dz = targetZ - gz
+    local horizontalDistance = math.sqrt(dx * dx + dy * dy)
+    local errorDistance = math.sqrt(horizontalDistance * horizontalDistance + dz * dz)
 
     state.currentDrift = errorDistance
     state.maxDrift = math.max(state.maxDrift, errorDistance)
 
-    if not a.keyframe or state.lastCorrectedKeyframe == a.t then
+    if errorDistance > HARD_CORRECTION_DISTANCE then
+        -- Only large divergence is allowed to snap. This is a safety net, not normal playback.
+        setElementPosition(state.ghost, targetX, targetY, targetZ)
+        setElementRotation(state.ghost, lerpAngle(a.rx, b.rx, alpha), lerpAngle(a.ry, b.ry, alpha), lerpAngle(a.rz, b.rz, alpha))
+        setElementVelocity(state.ghost, lerp(a.vx, b.vx, alpha), lerp(a.vy, b.vy, alpha), lerp(a.vz, b.vz, alpha))
+        state.hardResyncs = state.hardResyncs + 1
         return
     end
 
-    state.lastCorrectedKeyframe = a.t
+    if errorDistance <= SOFT_CORRECTION_DISTANCE then
+        return
+    end
 
-    if errorDistance > HARD_CORRECTION_DISTANCE then
-        setElementPosition(state.ghost, a.x, a.y, a.z)
-        setElementRotation(state.ghost, a.rx, a.ry, a.rz)
-        setElementVelocity(state.ghost, a.vx, a.vy, a.vz)
-        state.hardResyncs = state.hardResyncs + 1
-    elseif errorDistance > SOFT_CORRECTION_DISTANCE then
-        local correction = math.min(0.18, SOFT_CORRECTION_FACTOR + errorDistance * 0.02)
-        setElementPosition(
-            state.ghost,
-            lerp(gx, a.x, correction),
-            lerp(gy, a.y, correction),
-            lerp(gz, a.z, correction)
-        )
+    -- Correct continuously by a tiny capped amount rather than moving a percentage
+    -- of the whole error every keyframe. This preserves native locomotion and avoids
+    -- the visible half-meter snaps produced by sparse setElementPosition calls.
+    local correctionX, correctionY, correctionZ = 0, 0, 0
+
+    if horizontalDistance > 0.001 then
+        local horizontalStep = math.min(MAX_HORIZONTAL_CORRECTION_PER_FRAME, horizontalDistance - math.min(horizontalDistance, SOFT_CORRECTION_DISTANCE))
+        if horizontalStep > 0 then
+            correctionX = dx / horizontalDistance * horizontalStep
+            correctionY = dy / horizontalDistance * horizontalStep
+        end
+    end
+
+    if math.abs(dz) > VERTICAL_CORRECTION_THRESHOLD then
+        correctionZ = math.max(-MAX_VERTICAL_CORRECTION_PER_FRAME, math.min(MAX_VERTICAL_CORRECTION_PER_FRAME, dz))
+    end
+
+    if correctionX ~= 0 or correctionY ~= 0 or correctionZ ~= 0 then
+        setElementPosition(state.ghost, gx + correctionX, gy + correctionY, gz + correctionZ)
         state.corrections = state.corrections + 1
     end
 end
@@ -439,7 +458,7 @@ addEventHandler("onClientRender", root, function()
     local playbackTime = state.playback and getPlaybackTime(getTickCount()) / 1000 or 0
 
     dxDrawText(
-        ("Replay prototype\nrecording: %s | samples: %d | buffer: %.2fs\nplayback: %s%s | mode: %s | time: %.2fs\ndrift: %.2fm | max: %.2fm | corrections: %d | hard resyncs: %d")
+        ("Replay prototype\nrecording: %s | samples: %d | buffer: %.2fs\nplayback: %s%s | mode: %s | time: %.2fs\ndrift: %.2fm | max: %.2fm | correction frames: %d | hard resyncs: %d")
             :format(
                 tostring(state.recording),
                 sampleCount,
@@ -455,7 +474,7 @@ addEventHandler("onClientRender", root, function()
             ),
         24,
         180,
-        760,
+        800,
         320,
         tocolor(255, 255, 255, 230),
         1.0,
@@ -541,8 +560,7 @@ addCommandHandler("replaymode", function(_, mode)
     state.replayMode = mode
     state.currentDrift = 0
     state.maxDrift = 0
-    state.lastCorrectedKeyframe = nil
-    chat("Replay mode: " .. mode .. (mode == "tracked" and " (smooth recorded trajectory)." or " (GTA controls + sparse corrections)."), 120, 255, 120)
+    chat("Replay mode: " .. mode .. (mode == "tracked" and " (smooth recorded trajectory)." or " (native GTA locomotion + continuous drift correction)."), 120, 255, 120)
 end)
 
 addCommandHandler("replaydebug", function()
