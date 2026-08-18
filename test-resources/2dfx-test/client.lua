@@ -15,11 +15,15 @@ local function log(message, level)
 end
 
 local function pass(name)
-    log("PASS: " .. name, 3)
+    local message = "PASS: " .. name
+    log(message, 3)
+    outputChatBox("[2dfx-test] " .. message, 90, 255, 120)
 end
 
 local function fail(name, detail)
-    log("FAIL: " .. name .. (detail and (" - " .. tostring(detail)) or ""), 1)
+    local message = "FAIL: " .. name .. (detail and (" - " .. tostring(detail)) or "")
+    log(message, 1)
+    outputChatBox("[2dfx-test] " .. message, 255, 90, 90)
 end
 
 local function check(name, condition, detail)
