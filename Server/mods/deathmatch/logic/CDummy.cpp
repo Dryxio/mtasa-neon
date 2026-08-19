@@ -14,6 +14,7 @@
 #include "CGroups.h"
 #include "CGame.h"
 #include "luadefs/CLuaFireDefs.h"
+#include "luadefs/CLuaRopeDefs.h"
 
 CDummy::CDummy(CGroups* pGroups, CElement* pParent) : CElement(pParent)
 {
@@ -33,6 +34,8 @@ CDummy::~CDummy()
 {
     if (GetTypeName() == "fire")
         CLuaFireDefs::OnFireDestroyed(this);
+    else if (GetTypeName() == "rope")
+        CLuaRopeDefs::OnRopeDestroyed(this);
 
     // Unlink from manager
     Unlink();
