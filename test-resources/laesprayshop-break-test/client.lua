@@ -22,6 +22,9 @@ local SCENE = {
     {name = "las2xref_1", model = 3783, x = 2296.5, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
     {name = "las2xref_2", model = 3783, x = 2269.20312, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
     {name = "las2xref_3", model = 3783, x = 2241.89844, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
+
+    -- Two-panel directional road sign; keep the fragment count low so the sign remains readable after fracture.
+    {name = "gen_roadsign1", model = 1311, x = 2234.75, y = -1737.47656, z = 16.5546875, rx = 0.0, ry = 0.0, rz = -90.0000153},
 }
 
 -- smallprosjmt_LAS (3628) uses lodllprosjmt_LAS (3748). One broad removal
@@ -152,7 +155,7 @@ local function armScene()
             log(("create failed: %s model=%d"):format(target.name, target.model), 255, 80, 80)
         else
             setElementFrozen(object, true)
-            local fragments = target.model == 3628 and 12 or 10
+            local fragments = target.model == 1311 and 6 or (target.model == 3628 and 12 or 10)
             if makeProfile(object, 10000 + index, fragments, 320) then
                 sceneReplacements[index] = object
                 created = created + 1
