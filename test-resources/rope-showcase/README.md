@@ -1,6 +1,6 @@
 # Managed rope showcase
 
-A cinematic visual demo for the managed Rope API.
+A short, broad-audience cinematic demo for the managed Rope API.
 
 ## Run
 
@@ -10,7 +10,7 @@ Start `rope-showcase`, join the server, then run:
 /ropeshow
 ```
 
-Stop/reset early with:
+Stop early with:
 
 ```text
 /ropeshow stop
@@ -26,32 +26,59 @@ The scene uses the same clear Las Venturas runway coordinates as `2dfx-showcase`
 center ~= 262.375, 2502.074, 16.484
 ```
 
-It remains in its own showcase dimension, so the Rope and 2DFX resources do not share runtime entities.
+It remains in its own dimension.
 
-## What the shot shows
+## Design
 
-The three native rope types are separated into clear left/center/right demonstrations with world-space labels:
+The demo deliberately uses **one native rope at a time**. Each act creates its holder, rope and payload immediately before its shot, waits for the native lease to become active, then cleans the entire act before moving on. This keeps the screen readable and avoids off-camera rope physics accumulating before the viewer sees them.
 
-1. **Left — Wrecking Ball**: a `wreckingBall` rope uses GTA's native weighted ball hook. The invisible physical holder moves laterally so the ball visibly swings. Its rope length is explicitly shortened so the native ball remains well above the runway instead of initializing below terrain.
-2. **Center — Mini Magnet**: the crate begins resting on the runway. During the center close-up it is unfrozen immediately before `attachElementToRope`, picked up by the `miniMagnet`, hoisted by shortening the rope, translated smoothly, and released in the final wide shot.
-3. **Right — Harness**: the Bobcat also begins resting on the runway. It is not attached during setup. As the right-side close-up begins, the vehicle is unfrozen, attached to the `harness`, then visibly lifted by shortening the rope.
+The choreography uses simple continuous phases rather than constantly moving every parameter at once. Payloads are frozen only while they are stationary props; they are unfrozen immediately before native pickup.
 
-The camera first establishes all three setups, then gives each one its own close-up before returning to a final wide shot. Camera endpoints and holder motion are continuous across shot boundaries to avoid showcase-only snap/stutter artifacts.
+## Act 1 — Mini Magnet: pick up objects
 
-Payloads are kept frozen only while they are static runway props. Once a native rope takes ownership, they are unfrozen so the Rope solver is not fighting MTA's frozen-element state.
+A crate is visibly sitting on the runway while the mini-magnet hook hangs several metres above it.
+
+1. the rope lengthens vertically until the magnet reaches the crate;
+2. `attachElementToRope` picks the crate up;
+3. the rope shortens and hoists the crate;
+4. the physical holder translates sideways so the suspended crate follows and swings;
+5. `detachElementFromRope` releases the crate and it falls back to the runway.
+
+This demonstrates script-controlled rope length, object pickup/release, moving holders and native carried-object physics in one immediately readable shot.
+
+## Act 2 — Wrecking Ball: native rope physics
+
+A native wrecking-ball hook hangs beside a small stack of crates.
+
+1. the ball is held still long enough to identify it;
+2. the invisible physical holder moves laterally, launching a visible rope/weight swing;
+3. the crate stack is kicked apart at the impact beat to make the collision moment readable on video.
+
+The important part of the shot is the native weighted hook and rope reacting to holder movement. The prop burst is only presentation choreography.
+
+## Act 3 — Harness: lift vehicles
+
+A Bobcat is clearly parked on the runway and the harness hangs well above it.
+
+1. the harness descends toward the vehicle;
+2. `attachElementToRope` attaches the Bobcat only during this act;
+3. the rope shortens and lifts the vehicle several metres off the ground;
+4. the holder then moves sideways so the suspended vehicle follows the rope.
+
+The final card summarizes the broader API surface: objects, vehicles, native hook types, moving holders and explicit pickup/release.
 
 ## Native-holder safety
 
-Native GTA rope types 1 through 7 require a valid physical holder: `CRope::Update` dereferences `m_pRopeHolder` during its force pass. The showcase therefore uses three invisible client-local physical holder objects. `swat` remains the only free world-anchored native type.
+Native GTA rope types 1 through 7 require a valid physical holder because `CRope::Update` dereferences `m_pRopeHolder` during its force pass. Every act therefore uses an invisible client-local physical holder. `swat` remains the free world-anchored native type.
 
-Synchronized object/vehicle authority, leasing and multiplayer behavior are covered separately by `rope-test`; this resource is deliberately a deterministic visual demo.
+Synchronized object/vehicle authority, leasing, lifetime and multiplayer behavior are covered separately by `rope-test`; this resource is deliberately a deterministic visual demo.
 
 ## Before recording
 
-After rebuilding the Rope safety fix, run:
+After rebuilding the Rope holder-safety fix, run:
 
 ```text
 /ropetest all
 ```
 
-and confirm there are no `FAIL` lines, especially the missing-holder regression and local physical-pickup checks.
+and confirm there are no `FAIL` lines.
