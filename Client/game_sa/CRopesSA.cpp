@@ -44,7 +44,17 @@ bool CRopesSA::RegisterRope(std::uint32_t uiId, eRopeType type, const CVector& v
 {
     using RegisterFn = bool(__cdecl*)(std::uint32_t, std::uint32_t, CVector, bool, std::uint8_t, std::uint8_t, CEntitySAInterface*, std::uint32_t);
     auto fn = reinterpret_cast<RegisterFn>(FUNC_CRopes_RegisterRope);
-    return fn(uiId, static_cast<std::uint32_t>(type), vecPosition, bExpires, ucFixedNode, bSitOnGround ? 1u : 0u, pHolder, uiLifetime);
+    if (!fn(uiId, static_cast<std::uint32_t>(type), vecPosition, bExpires, ucFixedNode, bSitOnGround ? 1u : 0u, pHolder, uiLifetime))
+        return false;
+
+    // Managed ropes use an explicit attachElementToRope contract. Several stock
+    // winch types otherwise scan nearby world entities and pick them up on their
+    // own. GTA's byte at 0x326 is the native pickup cooldown; refreshing it on
+    // every managed registration keeps autonomous pickup disabled while an
+    // explicitly carried entity still follows the normal carried-object path.
+    if (CRopesSAInterface* pRope = GetRope(uiId))
+        pRope->m_ucWinchDisabled = 0xFF;
+    return true;
 }
 
 CRopesSAInterface* CRopesSA::GetRope(std::uint32_t uiId)
@@ -84,7 +94,7 @@ void CRopesSA::RemoveEntityRope(CEntitySAInterface* pEntity)
     // Stock crane/object ropes use the holder pointer itself as their opaque ID.
     // Preserve that legacy cleanup behavior without assuming that every rope ID
     // is an entity pointer (managed ropes intentionally use generated IDs).
-    const std::uint32_t entityId = reinterpret_cast<std::uint32_t>(pEntity);
+    const std::uint32_t entityId = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pEntity));
     RemoveRope(entityId);
 }
 
