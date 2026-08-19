@@ -25,6 +25,9 @@ local SCENE = {
 
     -- Two-panel directional road sign; keep the fragment count low so the sign remains readable after fracture.
     {name = "gen_roadsign1", model = 1311, x = 2234.75, y = -1737.47656, z = 16.5546875, rx = 0.0, ry = 0.0, rz = -90.0000153},
+
+    -- Tall, narrow telephone pole: use a small number of long sections rather than confetti.
+    {name = "telgrphpole02", model = 1308, x = 2148.95312, y = -1791.83594, z = 19.1015625, rx = 0.0, ry = 0.0, rz = 0.0},
 }
 
 -- smallprosjmt_LAS (3628) uses lodllprosjmt_LAS (3748). One broad removal
@@ -45,14 +48,14 @@ local function log(message, r, g, b)
     outputChatBox("[BREAKSCENE] " .. message, r or 220, g or 220, b or 220)
 end
 
-local function makeProfile(object, seed, fragments, health)
+local function makeProfile(object, seed, fragments, health, force)
     return setObjectBreakProfile(object, {
         native = false,
         health = health or 350,
         instantBreakThreshold = 320,
         fracture = {
             fragments = fragments or 16,
-            force = 4.5,
+            force = force or 4.5,
             randomness = 0.9,
             lifetime = 10000,
             gravity = 9.81,
@@ -155,8 +158,9 @@ local function armScene()
             log(("create failed: %s model=%d"):format(target.name, target.model), 255, 80, 80)
         else
             setElementFrozen(object, true)
-            local fragments = target.model == 1311 and 6 or (target.model == 3628 and 12 or 10)
-            if makeProfile(object, 10000 + index, fragments, 320) then
+            local fragments = target.model == 1308 and 8 or (target.model == 1311 and 6 or (target.model == 3628 and 12 or 10))
+            local force = target.model == 1308 and 2.5 or 4.5
+            if makeProfile(object, 10000 + index, fragments, 320, force) then
                 sceneReplacements[index] = object
                 created = created + 1
             else
