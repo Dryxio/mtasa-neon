@@ -62,7 +62,9 @@ addEventHandler("ropetest:pickupInspect", resourceRoot, function(rope, object, v
     send(serial, "pickup.synced-state", getRopeCarriedElement(rope) == object, tostring(getRopeCarriedElement(rope)))
     setTimer(function()
         if serial ~= activeSerial or not isElement(rope) then return end
-        send(serial, "pickup.native-rope-active", isRopeActive(rope), tostring(isRopeActive(rope)))
+        -- Regression guard for gta_sa.exe 0x557CEA: winch/crane types 1..7
+        -- must never enter native CRope::Update without a physical holder.
+        send(serial, "pickup.unanchored-native-safe", not isRopeActive(rope), tostring(isRopeActive(rope)))
     end, 800, 1)
 end)
 
@@ -102,6 +104,35 @@ addEventHandler("ropetest:local", resourceRoot, function(serial)
     send(serial, "local.offset-set", setRopeHolderOffset(rope, Vector3(0, 0, -0.5)), vectorDetail(getRopeHolderOffset(rope)))
     send(serial, "local.velocity-set", setRopeTopVelocity(rope, Vector3(0.001, 0, 0)), vectorDetail(getRopeTopVelocity(rope)))
 
+    -- Deterministic physical pickup path: both holder and cargo are local, so
+    -- the manager can safely hand their GTA physical pointers to CRope.
+    local anchor = createObject(1337, x + 6, y, z + 5)
+    local cargo = createObject(1337, x + 6, y, z + 1)
+    if isElement(anchor) then
+        setElementAlpha(anchor, 0)
+        setElementCollisionsEnabled(anchor, false)
+        setElementFrozen(anchor, true)
+    end
+    if isElement(cargo) then
+        setElementFrozen(cargo, false)
+    end
+
+    local magnet = false
+    if isElement(anchor) and isElement(cargo) then
+        magnet = createRope(x + 6, y, z + 5, {
+            type = "miniMagnet",
+            holder = anchor,
+            holderOffset = {0, 0, 0},
+            duration = 3500,
+            physics = true,
+        })
+    end
+
+    send(serial, "local.physical-elements", isElement(anchor) and isElement(cargo) and isElement(magnet), tostring(magnet))
+    if isElement(magnet) and isElement(cargo) then
+        send(serial, "local.physical-attach", attachElementToRope(magnet, cargo), tostring(getRopeCarriedElement(magnet)))
+    end
+
     setTimer(function()
         if serial ~= activeSerial or not isElement(rope) then return end
         local active = isRopeActive(rope)
@@ -110,6 +141,17 @@ addEventHandler("ropetest:local", resourceRoot, function(serial)
             local position = getRopePositionAt(rope, 0.25)
             send(serial, "local.sample", position ~= false and position ~= nil, vectorDetail(position))
         end
+
+        local magnetActive = isElement(magnet) and isRopeActive(magnet)
+        send(serial, "local.physical-active", magnetActive == true, tostring(magnetActive))
+        if magnetActive then
+            local position = getRopePositionAt(magnet, 0.5)
+            send(serial, "local.physical-sample", position ~= false and position ~= nil, vectorDetail(position))
+        end
+
+        if isElement(magnet) then destroyElement(magnet) end
+        if isElement(cargo) then destroyElement(cargo) end
+        if isElement(anchor) then destroyElement(anchor) end
         destroyElement(rope)
     end, 650, 1)
 end)
