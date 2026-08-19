@@ -146,7 +146,7 @@ local function armScene()
 
     for index, lod in ipairs(SCENE_LODS) do
         sceneLodRemoved[index] = removeWorldModel(lod.model, lod.radius, lod.x, lod.y, lod.z, 0) == true
-        log(("remove scene LOD model %d => %s"):format(lod.model, tostring(sceneLodRemoved[index])), 120, 200, 255)
+        outputDebugString(("[BREAKSCENE] remove scene LOD model %d => %s"):format(lod.model, tostring(sceneLodRemoved[index])))
     end
 
     local created = 0
@@ -156,7 +156,7 @@ local function armScene()
 
         local object = createObject(target.model, target.x, target.y, target.z, target.rx, target.ry, target.rz)
         if not isElement(object) then
-            log(("create failed: %s model=%d"):format(target.name, target.model), 255, 80, 80)
+            outputDebugString(("[BREAKSCENE] create failed: %s model=%d"):format(target.name, target.model), 1)
         else
             setElementFrozen(object, true)
             local fragments = target.model == 1308 and 8 or (target.model == 1311 and 6 or (target.model == 3628 and 12 or 10))
@@ -166,13 +166,13 @@ local function armScene()
                 created = created + 1
             else
                 destroyElement(object)
-                log(("profile failed: %s"):format(target.name), 255, 80, 80)
+                outputDebugString(("[BREAKSCENE] profile failed: %s"):format(target.name), 1)
             end
         end
     end
 
-    log(("scene armed: %d/%d buildings converted"):format(created, #SCENE), created == #SCENE and 120 or 255, created == #SCENE and 255 or 180, 160)
-    log("3628 associated LOD 3748 removed. If 3783 leaves a ghost, send me its associated LOD too.", 120, 200, 255)
+    outputDebugString(("[BREAKSCENE] scene armed: %d/%d objects made breakable"):format(created, #SCENE))
+    outputChatBox(("%d objects made breakable"):format(created), 120, 255, 160)
     return created == #SCENE
 end
 
