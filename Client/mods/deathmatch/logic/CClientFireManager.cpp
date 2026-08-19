@@ -8,6 +8,7 @@
 
 #include "StdInc.h"
 #include "CClientFireManager.h"
+#include "CClientRopeManager.h"
 #include "CClientDummy.h"
 #include "CClientManager.h"
 #include <game/CFxManager.h>
@@ -312,6 +313,11 @@ void CClientFireManager::ProcessEntry(SFireEntry& entry, std::vector<CClientDumm
 
 void CClientFireManager::DoPulse()
 {
+    // Fire already owns an unconditional standard client pulse. Reuse that
+    // heartbeat for managed ropes so the rope subsystem does not need a second
+    // manager ownership chain or a frame hook of its own.
+    CClientRopeManager::GetSingleton().DoPulse(m_pManager);
+
     std::vector<CClientDummy*> expiredLocalFires;
 
     for (auto& fire : m_Fires)
