@@ -1,4 +1,3 @@
-local CARGO_MODEL = 2912
 local SHOW_DURATION = 33000
 
 local show = {
@@ -102,25 +101,21 @@ local function createRopeAt(x, y, z, ropeType, winchHeight)
     return rope
 end
 
-local function createScene()
+local function createScene(cargo)
     destroyScene()
 
-    local cx, cy, cz = show.centerX, show.centerY, show.centerZ
-
-    show.cargo = track(createObject(CARGO_MODEL, cx, cy, cz + 0.9, 0, 0, 18))
-    if not isElement(show.cargo) then
-        outputDebugString("[ROPE SHOWCASE] Failed to create cargo object", 1)
+    if not isElement(cargo) or getElementType(cargo) ~= "object" then
+        outputDebugString("[ROPE SHOWCASE] Missing synchronized cargo object", 1)
         return false
     end
 
-    configureElement(show.cargo)
-    setElementCollisionsEnabled(show.cargo, true)
-    setElementFrozen(show.cargo, false)
+    local cx, cy, cz = show.centerX, show.centerY, show.centerZ
+    show.cargo = cargo
+
     setObjectProperty(show.cargo, "mass", 45.0)
     setObjectProperty(show.cargo, "turn_mass", 55.0)
     setObjectProperty(show.cargo, "air_resistance", 0.995)
     setObjectProperty(show.cargo, "elasticity", 0.18)
-    setObjectDynamicPhysics(show.cargo, true)
     setElementVelocity(show.cargo, 0, 0, 0)
     setElementAngularVelocity(show.cargo, 0, 0, 0)
 
@@ -189,7 +184,6 @@ local function animateRopes(elapsed)
     if elapsed >= 24750 and not show.cargoReleased and isElement(show.cargo) then
         show.cargoReleased = true
         detachElementFromRope(show.heroRope)
-        setObjectDynamicPhysics(show.cargo, true)
         setElementFrozen(show.cargo, false)
         setElementVelocity(show.cargo, 0.045, 0.015, 0.035)
         setElementAngularVelocity(show.cargo, 0.04, -0.07, 0.12)
@@ -288,7 +282,7 @@ local function stopShow()
 end
 
 addEvent("ropeShowcase:start", true)
-addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension)
+addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension, cargo)
     stopShow()
 
     show.centerX = centerX
@@ -298,7 +292,7 @@ addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, c
     show.startedAt = getTickCount()
     show.finished = false
 
-    if not createScene() then
+    if not createScene(cargo) then
         outputChatBox("[ROPE SHOWCASE] Scene creation failed; run /ropetest all first.", 255, 90, 90)
         triggerServerEvent("ropeShowcase:finished", resourceRoot)
         return
