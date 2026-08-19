@@ -7,6 +7,9 @@ local SHOT_LIFT_MIN = 0.025
 local SHOT_LIFT_MAX = 0.085
 local SHOT_SPIN_MIN = 0.08
 local SHOT_SPIN_MAX = 0.18
+local RELEASE_FORWARD_OFFSET = 0.72
+local RELEASE_RIGHT_OFFSET = 0.38
+local RELEASE_HEIGHT = 1.25
 
 local readyPlayers = {}
 local playerBalls = {}
@@ -85,10 +88,11 @@ local function createThrownBall(player, dirX, dirY, dirZ, power)
     end
 
     local horizontalX, horizontalY = dirX / horizontalLength, dirY / horizontalLength
+    local rightX, rightY = horizontalY, -horizontalX
     local playerX, playerY, playerZ = getElementPosition(player)
-    local releaseX = playerX + horizontalX * 0.72
-    local releaseY = playerY + horizontalY * 0.72
-    local releaseZ = playerZ + 1.25
+    local releaseX = playerX + horizontalX * RELEASE_FORWARD_OFFSET + rightX * RELEASE_RIGHT_OFFSET
+    local releaseY = playerY + horizontalY * RELEASE_FORWARD_OFFSET + rightY * RELEASE_RIGHT_OFFSET
+    local releaseZ = playerZ + RELEASE_HEIGHT
 
     local object = createObject(BALL_MODEL, releaseX, releaseY, releaseZ)
     if not object then
