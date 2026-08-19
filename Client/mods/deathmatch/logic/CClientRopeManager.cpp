@@ -406,8 +406,46 @@ void CClientRopeManager::DoPulse()
 
     for (SCandidate& candidate : candidates)
     {
+        if (g_pGame->GetRopes()->GetFreeRopeCount() == 0 && candidate.physicsCritical)
+        {
+            // A gameplay rope carrying the sync-owner object must not be starved
+            // by eight nearby visual ropes. Evict the farthest non-authoritative
+            // lease; stock GTA ropes are never candidates because they are not in
+            // m_Ropes and therefore remain untouched.
+            SRopeEntry* victim = nullptr;
+            float victimDistanceSq = -1.0f;
+            for (auto& leased : m_Ropes)
+            {
+                if (!leased.bLeased || &leased == candidate.pEntry || !leased.pElement || leased.pElement->IsBeingDeleted())
+                    continue;
+
+                CVector leasedAnchor;
+                CClientEntity* leasedHolder = nullptr;
+                if (!ResolveAnchor(leased.pElement, leasedAnchor, leasedHolder))
+                    continue;
+
+                bool leasedPhysics = true;
+                GetBool(leased.pElement, KEY_PHYSICS, leasedPhysics);
+                CClientEntity* leasedCarried = GetElement(leased.pElement, KEY_CARRIED);
+                const bool leasedCritical = leasedPhysics && leasedCarried && ShouldOwnPhysics(leasedCarried) &&
+                                            (!leasedHolder || ShouldOwnPhysics(leasedHolder));
+                if (leasedCritical)
+                    continue;
+
+                const float leasedDistanceSq = DistanceSquared(cameraPosition, leasedAnchor);
+                if (!victim || leasedDistanceSq > victimDistanceSq)
+                {
+                    victim = &leased;
+                    victimDistanceSq = leasedDistanceSq;
+                }
+            }
+
+            if (victim)
+                ReleaseLease(*victim);
+        }
+
         if (g_pGame->GetRopes()->GetFreeRopeCount() == 0)
-            break;
+            continue;
         AcquireLease(*candidate.pEntry, candidate.anchor, candidate.pHolder);
     }
 
