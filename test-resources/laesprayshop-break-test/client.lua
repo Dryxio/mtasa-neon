@@ -1,9 +1,14 @@
 local MODEL = 5532
+local LOD_MODEL = 5527
 local BASE = {x = 2057.00, y = -1830.50, z = 20.60, rx = 0.0, ry = 0.0, rz = 0.0}
+-- The associated LOD is centered noticeably away from the HD building origin.
+-- A wider removal radius around the HD origin catches that exact LOD instance too.
 local REMOVE_RADIUS = 6.0
+local LOD_REMOVE_RADIUS = 80.0
 
 local replacement
 local removed = false
+local lodRemoved = false
 
 local function log(message, r, g, b)
     outputDebugString("[SPRAYBREAK] " .. message)
@@ -24,6 +29,10 @@ local function restoreVanilla()
         restoreWorldModel(MODEL, REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
         removed = false
     end
+    if lodRemoved then
+        restoreWorldModel(LOD_MODEL, LOD_REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
+        lodRemoved = false
+    end
 end
 
 local function armReplacement()
@@ -32,7 +41,13 @@ local function armReplacement()
     if not removed then
         local ok = removeWorldModel(MODEL, REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
         removed = ok == true
-        log("removeWorldModel => " .. tostring(ok), ok and 120 or 255, ok and 255 or 120, 160)
+        log("remove HD model 5532 => " .. tostring(ok), ok and 120 or 255, ok and 255 or 120, 160)
+    end
+
+    if not lodRemoved then
+        local ok = removeWorldModel(LOD_MODEL, LOD_REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
+        lodRemoved = ok == true
+        log("remove LOD model 5527 => " .. tostring(ok), ok and 120 or 255, ok and 255 or 120, 160)
     end
 
     replacement = createObject(MODEL, BASE.x, BASE.y, BASE.z, BASE.rx, BASE.ry, BASE.rz)
@@ -70,7 +85,7 @@ local function armReplacement()
     log(("replacement armed: model=%d pos=%.2f %.2f %.2f rot=%.1f %.1f %.1f"):format(
         MODEL, BASE.x, BASE.y, BASE.z, BASE.rx, BASE.ry, BASE.rz
     ), 120, 255, 160)
-    log("Test with bullets / grenade / rocket. /sprayhealth shows managed health.", 120, 200, 255)
+    log("HD + LOD removed. Test with bullets / grenade / rocket. /sprayhealth shows managed health.", 120, 200, 255)
     return true
 end
 
@@ -78,7 +93,7 @@ addCommandHandler("spraybreak", armReplacement)
 
 addCommandHandler("sprayreset", function()
     restoreVanilla()
-    log("vanilla laesprayshop restored", 120, 255, 160)
+    log("vanilla laesprayshop + LOD restored", 120, 255, 160)
 end)
 
 addCommandHandler("sprayhealth", function()
