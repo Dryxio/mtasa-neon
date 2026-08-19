@@ -1,5 +1,9 @@
+local ANCHOR_MODEL = 1337
 local CARGO_MODEL = 2912
-local SHOW_DURATION = 33000
+local HARNESS_VEHICLE_MODEL = 422
+local SHOW_DURATION = 36000
+local STAGE_SPACING = 18.0
+local ANCHOR_Z_OFFSET = 18.0
 
 local show = {
     active = false,
@@ -9,7 +13,9 @@ local show = {
     centerY = 0,
     centerZ = 0,
     dimension = 0,
+    stageY = 0,
     cargo = nil,
+    harnessVehicle = nil,
     heroAnchor = nil,
     leftAnchor = nil,
     rightAnchor = nil,
@@ -18,6 +24,8 @@ local show = {
     rightRope = nil,
     elements = {},
     cargoReleased = false,
+    prepareTimer = nil,
+    beginTimer = nil,
 }
 
 local function clamp(value, minimum, maximum)
@@ -48,9 +56,23 @@ local function configureElement(element)
     setElementDimension(element, show.dimension)
 end
 
+local function clearTimers()
+    if isTimer(show.prepareTimer) then
+        killTimer(show.prepareTimer)
+    end
+    if isTimer(show.beginTimer) then
+        killTimer(show.beginTimer)
+    end
+    show.prepareTimer = nil
+    show.beginTimer = nil
+end
+
 local function destroyScene()
     if isElement(show.heroRope) and isElement(show.cargo) then
         detachElementFromRope(show.heroRope)
+    end
+    if isElement(show.rightRope) and isElement(show.harnessVehicle) then
+        detachElementFromRope(show.rightRope)
     end
 
     for i = #show.elements, 1, -1 do
@@ -62,6 +84,7 @@ local function destroyScene()
 
     show.elements = {}
     show.cargo = nil
+    show.harnessVehicle = nil
     show.heroAnchor = nil
     show.leftAnchor = nil
     show.rightAnchor = nil
@@ -91,7 +114,7 @@ local function cameraLerp(ax, ay, az, alx, aly, alz, bx, by, bz, blx, bly, blz, 
 end
 
 local function createAnchor(x, y, z)
-    local anchor = track(createObject(CARGO_MODEL, x, y, z, 0, 0, 0))
+    local anchor = track(createObject(ANCHOR_MODEL, x, y, z, 0, 0, 0))
     if not isElement(anchor) then
         return false
     end
@@ -103,7 +126,7 @@ local function createAnchor(x, y, z)
     return anchor
 end
 
-local function createRopeForAnchor(anchor, ropeType, winchHeight)
+local function createRopeForAnchor(anchor, ropeType, length, winchHeight)
     if not isElement(anchor) then
         return false
     end
@@ -116,7 +139,8 @@ local function createRopeForAnchor(anchor, ropeType, winchHeight)
         duration = 0,
         fixedNode = 0,
         sitOnGround = false,
-        winchHeight = winchHeight or 0.35,
+        winchHeight = winchHeight or 0.5,
+        length = length,
         physics = true,
     })
     if not isElement(rope) then
@@ -132,49 +156,59 @@ local function createScene()
     destroyScene()
 
     local cx, cy, cz = show.centerX, show.centerY, show.centerZ
+    local stageY = show.stageY
+    local leftX = cx - STAGE_SPACING
+    local rightX = cx + STAGE_SPACING
+    local anchorZ = cz + ANCHOR_Z_OFFSET
 
-    -- Keep the showcase cargo local. Local elements are authoritative by
-    -- construction in CClientRopeManager, and native CRope::PickUpObject turns a
-    -- static GTA object into a moving physical object when it is attached.
-    show.cargo = track(createObject(CARGO_MODEL, cx, cy, cz + 0.9, 0, 0, 18))
-    if not isElement(show.cargo) then
-        outputDebugString("[ROPE SHOWCASE] Failed to create local cargo object", 1)
-        return false
-    end
-
-    configureElement(show.cargo)
-    setElementCollisionsEnabled(show.cargo, true)
-    setElementFrozen(show.cargo, false)
-    setObjectProperty(show.cargo, "mass", 45.0)
-    setObjectProperty(show.cargo, "turn_mass", 55.0)
-    setObjectProperty(show.cargo, "air_resistance", 0.995)
-    setObjectProperty(show.cargo, "elasticity", 0.18)
-    setElementVelocity(show.cargo, 0, 0, 0)
-    setElementAngularVelocity(show.cargo, 0, 0, 0)
-
-    -- GTA's winch/crane rope types dereference m_pRopeHolder during CRope::Update.
-    -- Use explicit invisible local objects as stable physical holders instead of
-    -- creating free world-anchored magnet/harness ropes.
-    show.heroAnchor = createAnchor(cx, cy, cz + 12.5)
-    show.leftAnchor = createAnchor(cx - 7.0, cy + 1.5, cz + 12.0)
-    show.rightAnchor = createAnchor(cx + 7.0, cy + 1.5, cz + 12.0)
+    show.heroAnchor = createAnchor(cx, stageY, anchorZ)
+    show.leftAnchor = createAnchor(leftX, stageY, anchorZ)
+    show.rightAnchor = createAnchor(rightX, stageY, anchorZ)
 
     if not isElement(show.heroAnchor) or not isElement(show.leftAnchor) or not isElement(show.rightAnchor) then
-        outputDebugString("[ROPE SHOWCASE] Failed to create one or more rope anchors", 1)
+        outputDebugString("[ROPE SHOWCASE] Failed to create rope holders", 1)
         return false
     end
 
-    show.heroRope = createRopeForAnchor(show.heroAnchor, "miniMagnet", 0.22)
-    show.leftRope = createRopeForAnchor(show.leftAnchor, "wreckingBall", 0.45)
-    show.rightRope = createRopeForAnchor(show.rightAnchor, "harness", 0.60)
+    -- Explicit short lengths keep the native hook objects well above runway Z.
+    -- WRECKING_BALL otherwise initializes with roughly 68 units of rope.
+    show.leftRope = createRopeForAnchor(show.leftAnchor, "wreckingBall", 12.5, 0.48)
+    show.heroRope = createRopeForAnchor(show.heroAnchor, "miniMagnet", 11.0, 0.52)
+    show.rightRope = createRopeForAnchor(show.rightAnchor, "harness", 12.0, 0.56)
 
     if not isElement(show.heroRope) or not isElement(show.leftRope) or not isElement(show.rightRope) then
         outputDebugString("[ROPE SHOWCASE] Failed to create one or more ropes", 1)
         return false
     end
 
+    show.cargo = track(createObject(CARGO_MODEL, cx, stageY, cz + 6.0, 0, 0, 18))
+    if not isElement(show.cargo) then
+        outputDebugString("[ROPE SHOWCASE] Failed to create center cargo", 1)
+        return false
+    end
+    configureElement(show.cargo)
+    setElementCollisionsEnabled(show.cargo, true)
+    setElementFrozen(show.cargo, true)
+    setObjectProperty(show.cargo, "mass", 45.0)
+    setObjectProperty(show.cargo, "turn_mass", 55.0)
+    setObjectProperty(show.cargo, "air_resistance", 0.995)
+    setObjectProperty(show.cargo, "elasticity", 0.18)
+
+    show.harnessVehicle = track(createVehicle(HARNESS_VEHICLE_MODEL, rightX, stageY, cz + 5.0, 0, 0, 180))
+    if not isElement(show.harnessVehicle) then
+        outputDebugString("[ROPE SHOWCASE] Failed to create harness vehicle", 1)
+        return false
+    end
+    configureElement(show.harnessVehicle)
+    setElementCollisionsEnabled(show.harnessVehicle, true)
+    setElementFrozen(show.harnessVehicle, true)
+
     if not attachElementToRope(show.heroRope, show.cargo) then
-        outputDebugString("[ROPE SHOWCASE] attachElementToRope failed", 1)
+        outputDebugString("[ROPE SHOWCASE] Center miniMagnet attach failed", 1)
+        return false
+    end
+    if not attachElementToRope(show.rightRope, show.harnessVehicle) then
+        outputDebugString("[ROPE SHOWCASE] Harness vehicle attach failed", 1)
         return false
     end
 
@@ -182,120 +216,193 @@ local function createScene()
 end
 
 local function animateRopes(elapsed)
-    local cx, cy, cz = show.centerX, show.centerY, show.centerZ
+    local cx, cz = show.centerX, show.centerZ
+    local stageY = show.stageY
+    local leftX = cx - STAGE_SPACING
+    local rightX = cx + STAGE_SPACING
+    local anchorZ = cz + ANCHOR_Z_OFFSET
     local time = elapsed / 1000.0
 
+    -- LEFT: the native wrecking-ball hook is the payload. Moving the holder
+    -- laterally makes its weight/swing immediately distinguishable from a bare rope.
     if isElement(show.leftAnchor) and isElement(show.leftRope) then
-        setElementPosition(show.leftAnchor, cx - 7.0 + math.sin(time * 0.55) * 0.45, cy + 1.5, cz + 12.0)
-        setRopeWinchHeight(show.leftRope, 0.30 + (math.sin(time * 0.85) * 0.5 + 0.5) * 0.42)
+        local swing = math.sin(time * 1.05)
+        setElementPosition(show.leftAnchor, leftX + swing * 3.7, stageY + math.sin(time * 0.52) * 0.7, anchorZ)
+        setRopeLength(show.leftRope, 12.5 + math.sin(time * 0.7) * 0.35)
+        setRopeWinchHeight(show.leftRope, 0.48)
     end
 
+    -- CENTER: visibly hoist the crate, translate it, then release it in the final shot.
+    if isElement(show.heroAnchor) and isElement(show.heroRope) then
+        local heroX, heroY, heroZ = cx, stageY, anchorZ
+        local heroLength = 11.0
+
+        if elapsed >= 9000 and elapsed < 16000 then
+            heroLength = lerp(11.0, 6.6, smoothstep((elapsed - 9000) / 7000))
+        elseif elapsed >= 16000 and elapsed < 24500 then
+            local t = (elapsed - 16000) / 8500
+            heroX = cx + math.sin(t * math.pi * 1.35) * 5.2
+            heroY = stageY + math.sin(t * math.pi * 2.0) * 1.5
+            heroZ = anchorZ + math.sin(t * math.pi) * 1.0
+            heroLength = 6.6
+        elseif elapsed >= 24500 and elapsed < 30200 then
+            heroLength = lerp(6.6, 9.2, smoothstep((elapsed - 24500) / 5700))
+            heroX = cx + 1.5
+        elseif elapsed >= 30200 then
+            heroLength = 9.2
+            heroX = cx + 1.5
+        end
+
+        setElementPosition(show.heroAnchor, heroX, heroY, heroZ)
+        setRopeLength(show.heroRope, heroLength)
+        setRopeWinchHeight(show.heroRope, 0.52)
+    end
+
+    -- RIGHT: the harness carries a real local Bobcat. It starts lower, then the
+    -- rope shortens during the right-side close-up so the whole vehicle lifts.
     if isElement(show.rightAnchor) and isElement(show.rightRope) then
-        setElementPosition(show.rightAnchor, cx + 7.0 + math.sin(time * 0.48 + 1.7) * 0.35, cy + 1.5, cz + 12.0)
-        setRopeWinchHeight(show.rightRope, 0.25 + (math.sin(time * 0.72 + 2.2) * 0.5 + 0.5) * 0.48)
+        local rightLength = 12.0
+        local rightZ = anchorZ
+        if elapsed >= 19000 and elapsed < 28500 then
+            rightLength = lerp(12.0, 8.0, smoothstep((elapsed - 19000) / 9500))
+            rightZ = anchorZ + smoothstep((elapsed - 19000) / 9500) * 1.2
+        elseif elapsed >= 28500 then
+            rightLength = 8.0
+            rightZ = anchorZ + 1.2
+        end
+        setElementPosition(show.rightAnchor, rightX + math.sin(time * 0.55) * 1.4, stageY, rightZ)
+        setRopeLength(show.rightRope, rightLength)
+        setRopeWinchHeight(show.rightRope, 0.56)
     end
 
-    if not isElement(show.heroRope) or not isElement(show.heroAnchor) then
-        return
-    end
-
-    local anchorX, anchorY, anchorZ = cx, cy, cz + 12.5
-    local winch = 0.22
-
-    if elapsed < 6000 then
-        winch = 0.22
-    elseif elapsed < 12000 then
-        local t = smoothstep((elapsed - 6000) / 6000)
-        winch = lerp(0.22, 0.82, t)
-    elseif elapsed < 20000 then
-        local t = (elapsed - 12000) / 8000
-        anchorX = cx + math.sin(t * math.pi * 1.25) * 6.5
-        anchorY = cy + math.sin(t * math.pi * 2.0) * 1.4
-        anchorZ = cz + 12.5 + math.sin(t * math.pi) * 1.2
-        winch = 0.82
-    elseif elapsed < 24500 then
-        local t = smoothstep((elapsed - 20000) / 4500)
-        anchorX = lerp(cx, cx + 2.0, t)
-        anchorZ = cz + 12.5
-        winch = lerp(0.82, 0.18, t)
-    else
-        anchorX = cx + 2.0 + math.sin(time * 1.1) * 0.55
-        winch = 0.18
-    end
-
-    setElementPosition(show.heroAnchor, anchorX, anchorY, anchorZ)
-    setRopeWinchHeight(show.heroRope, winch)
-
-    if elapsed >= 24750 and not show.cargoReleased and isElement(show.cargo) then
+    if elapsed >= 30600 and not show.cargoReleased and isElement(show.cargo) and isElement(show.heroRope) then
         show.cargoReleased = true
         detachElementFromRope(show.heroRope)
         setElementFrozen(show.cargo, false)
-        setElementVelocity(show.cargo, 0.045, 0.015, 0.035)
-        setElementAngularVelocity(show.cargo, 0.04, -0.07, 0.12)
+        setElementVelocity(show.cargo, 0.035, 0.010, 0.020)
+        setElementAngularVelocity(show.cargo, 0.03, -0.05, 0.10)
     end
 end
 
 local function updateCamera(elapsed)
-    local cx, cy, cz = show.centerX, show.centerY, show.centerZ
+    local cx, cz = show.centerX, show.centerZ
+    local stageY = show.stageY
+    local leftX = cx - STAGE_SPACING
+    local rightX = cx + STAGE_SPACING
 
+    -- 0-7s: establish all three demonstrations at once.
     if elapsed < 7000 then
-        local t = elapsed / 7000
         cameraLerp(
-            cx, cy - 24.0, cz + 7.0,
-            cx, cy, cz + 5.5,
-            cx + 3.0, cy - 21.0, cz + 6.0,
-            cx, cy, cz + 5.0,
-            t,
-            78, 70
+            cx, stageY - 50.0, cz + 10.5,
+            cx, stageY, cz + 8.0,
+            cx + 2.0, stageY - 43.0, cz + 11.5,
+            cx, stageY, cz + 8.0,
+            elapsed / 7000,
+            76, 70
         )
-    elseif elapsed < 15000 then
-        local t = (elapsed - 7000) / 8000
-        cameraLerp(
-            cx + 3.0, cy - 21.0, cz + 6.0,
-            cx, cy, cz + 5.0,
-            cx + 15.0, cy - 14.0, cz + 8.5,
-            cx, cy, cz + 4.0,
-            t,
-            70, 64
-        )
-    elseif elapsed < 24500 then
-        local cargoX, cargoY, cargoZ = cx, cy, cz + 2.0
-        if isElement(show.cargo) then
-            local x, y, z = getElementPosition(show.cargo)
-            if type(x) == "number" then
-                cargoX, cargoY, cargoZ = x, y, z
-            end
-        end
+        return
+    end
 
-        local t = smoothstep((elapsed - 15000) / 9500)
+    -- 7-13s: wrecking ball close-up.
+    if elapsed < 13000 then
+        local t = (elapsed - 7000) / 6000
         cameraLerp(
-            cx + 15.0, cy - 14.0, cz + 8.5,
-            cx, cy, cz + 4.0,
-            cargoX + 8.5, cargoY - 10.0, cargoZ + 5.0,
+            cx + 2.0, stageY - 43.0, cz + 11.5,
+            cx, stageY, cz + 8.0,
+            leftX + 8.0, stageY - 19.0, cz + 9.0,
+            leftX, stageY, cz + 7.5,
+            t,
+            70, 58
+        )
+        return
+    end
+
+    -- 13-23s: mini magnet + crate hoist.
+    if elapsed < 23000 then
+        local t = (elapsed - 13000) / 10000
+        local cargoX, cargoY, cargoZ = cx, stageY, cz + 5.0
+        if isElement(show.cargo) then
+            cargoX, cargoY, cargoZ = getElementPosition(show.cargo)
+        end
+        cameraLerp(
+            leftX + 8.0, stageY - 19.0, cz + 9.0,
+            leftX, stageY, cz + 7.5,
+            cargoX + 9.5, cargoY - 18.0, cargoZ + 6.5,
             cargoX, cargoY, cargoZ + 1.0,
             t,
-            64, 58
+            58, 56
         )
-    elseif elapsed < 29500 then
-        local cargoX, cargoY, cargoZ = cx + 2.0, cy, cz
-        if isElement(show.cargo) then
-            local x, y, z = getElementPosition(show.cargo)
-            if type(x) == "number" then
-                cargoX, cargoY, cargoZ = x, y, z
-            end
-        end
+        return
+    end
 
-        setCameraMatrix(cargoX + 8.0, cargoY - 10.5, cargoZ + 5.0, cargoX, cargoY, cargoZ + 0.8, 0, 58)
-    else
-        local t = smoothstep((elapsed - 29500) / 3500)
+    -- 23-30s: harness + vehicle lift.
+    if elapsed < 30000 then
+        local t = (elapsed - 23000) / 7000
+        local vx, vy, vz = rightX, stageY, cz + 4.0
+        if isElement(show.harnessVehicle) then
+            vx, vy, vz = getElementPosition(show.harnessVehicle)
+        end
         cameraLerp(
-            cx + 10.0, cy - 13.0, cz + 5.5,
-            cx, cy, cz + 3.0,
-            cx, cy - 25.0, cz + 8.0,
-            cx, cy, cz + 5.0,
+            cx + 9.5, stageY - 18.0, cz + 11.0,
+            cx, stageY, cz + 6.0,
+            vx - 8.5, vy - 19.0, vz + 6.5,
+            vx, vy, vz + 1.2,
             t,
-            62, 76
+            58, 58
         )
+        return
+    end
+
+    -- 30-36s: final wide shot, including the center crate release.
+    cameraLerp(
+        rightX - 8.5, stageY - 19.0, cz + 10.0,
+        rightX, stageY, cz + 6.0,
+        cx, stageY - 48.0, cz + 12.0,
+        cx, stageY, cz + 7.0,
+        (elapsed - 30000) / 6000,
+        58, 74
+    )
+end
+
+local function worldLabel(text, x, y, z)
+    local sx, sy = getScreenFromWorldPosition(x, y, z, 0.05)
+    if not sx then
+        return
+    end
+
+    dxDrawText(text, sx - 150, sy - 30, sx + 150, sy + 30, tocolor(255, 255, 255, 235), 1.0,
+        "default-bold", "center", "center", false, false, true, true)
+end
+
+local function drawLabels(elapsed)
+    local cx, cz = show.centerX, show.centerZ
+    local stageY = show.stageY
+    local leftX = cx - STAGE_SPACING
+    local rightX = cx + STAGE_SPACING
+
+    if elapsed < 7000 then
+        local sw = guiGetScreenSize()
+        dxDrawText("MANAGED ROPE API  -  3 NATIVE ROPE TYPES", 0, 45, sw, 85, tocolor(255, 255, 255, 235), 1.25,
+            "default-bold", "center", "center", false, false, true, true)
+    end
+
+    local leftPos = isElement(show.leftRope) and getRopePositionAt(show.leftRope, 0.96) or nil
+    if leftPos then
+        worldLabel("WRECKING BALL\nnative weighted hook", leftPos.x, leftPos.y, leftPos.z + 3.0)
+    else
+        worldLabel("WRECKING BALL", leftX, stageY, cz + 8.0)
+    end
+
+    if isElement(show.cargo) then
+        local x, y, z = getElementPosition(show.cargo)
+        worldLabel("MINI MAGNET\nscripted object pickup", x, y, z + 3.0)
+    end
+
+    if isElement(show.harnessVehicle) then
+        local x, y, z = getElementPosition(show.harnessVehicle)
+        worldLabel("HARNESS\nvehicle lift", x, y, z + 3.4)
+    else
+        worldLabel("HARNESS", rightX, stageY, cz + 8.0)
     end
 end
 
@@ -307,6 +414,7 @@ local function renderShow()
     local elapsed = getTickCount() - show.startedAt
     animateRopes(elapsed)
     updateCamera(elapsed)
+    drawLabels(elapsed)
 
     if elapsed >= SHOW_DURATION and not show.finished then
         show.finished = true
@@ -315,6 +423,7 @@ local function renderShow()
 end
 
 local function stopShow()
+    clearTimers()
     if show.active then
         removeEventHandler("onClientRender", root, renderShow)
     end
@@ -326,6 +435,52 @@ local function stopShow()
     setPresentationUI(true)
 end
 
+local function beginWhenNativeReady()
+    local attempts = 0
+    show.prepareTimer = setTimer(function()
+        attempts = attempts + 1
+        local ready = isElement(show.leftRope) and isElement(show.heroRope) and isElement(show.rightRope) and
+            isRopeActive(show.leftRope) and isRopeActive(show.heroRope) and isRopeActive(show.rightRope)
+
+        if ready then
+            if isTimer(show.prepareTimer) then
+                killTimer(show.prepareTimer)
+            end
+            show.prepareTimer = nil
+
+            -- Reassert display lengths after native creation and let the hooks settle
+            -- for a few frames before the fade-in starts.
+            setRopeLength(show.leftRope, 12.5)
+            setRopeLength(show.heroRope, 11.0)
+            setRopeLength(show.rightRope, 12.0)
+            setElementFrozen(show.cargo, false)
+            setElementFrozen(show.harnessVehicle, false)
+
+            setCameraMatrix(show.centerX, show.stageY - 50.0, show.centerZ + 10.5,
+                show.centerX, show.stageY, show.centerZ + 8.0, 0, 76)
+            setPresentationUI(false)
+
+            show.beginTimer = setTimer(function()
+                show.beginTimer = nil
+                show.startedAt = getTickCount()
+                show.active = true
+                addEventHandler("onClientRender", root, renderShow)
+                triggerServerEvent("ropeShowcase:ready", resourceRoot)
+            end, 450, 1)
+            return
+        end
+
+        if attempts >= 30 then
+            if isTimer(show.prepareTimer) then
+                killTimer(show.prepareTimer)
+            end
+            show.prepareTimer = nil
+            outputChatBox("[ROPE SHOWCASE] Native rope slots did not become ready.", 255, 90, 90)
+            triggerServerEvent("ropeShowcase:finished", resourceRoot)
+        end
+    end, 100, 30)
+end
+
 addEvent("ropeShowcase:start", true)
 addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension)
     stopShow()
@@ -333,8 +488,8 @@ addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, c
     show.centerX = centerX
     show.centerY = centerY
     show.centerZ = centerZ
+    show.stageY = centerY + 4.0
     show.dimension = dimension
-    show.startedAt = getTickCount()
     show.finished = false
 
     if not createScene() then
@@ -343,9 +498,7 @@ addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, c
         return
     end
 
-    show.active = true
-    setPresentationUI(false)
-    addEventHandler("onClientRender", root, renderShow)
+    beginWhenNativeReady()
 end)
 
 addEvent("ropeShowcase:stop", true)
