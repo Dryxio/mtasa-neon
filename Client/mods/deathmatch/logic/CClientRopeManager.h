@@ -19,12 +19,22 @@ class CVector;
 class CClientRopeManager
 {
 public:
-    static CClientRopeManager& GetSingleton();
+    static CClientRopeManager& GetSingleton()
+    {
+        static CClientRopeManager manager(nullptr);
+        return manager;
+    }
+
     ~CClientRopeManager();
 
     void Register(CClientDummy* pRope);
     void Unregister(CClientDummy* pRope);
-    void DoPulse(CClientManager* pManager);
+    void DoPulse();
+    void DoPulse(CClientManager* pManager)
+    {
+        m_pManager = pManager;
+        DoPulse();
+    }
 
     static bool IsRopeElement(const CClientEntity* pElement);
 
@@ -49,7 +59,7 @@ public:
     static constexpr const char* KEY_PHYSICS = "__neon_rope_physics";
 
 private:
-    CClientRopeManager() = default;
+    explicit CClientRopeManager(CClientManager* pManager);
 
     struct SRopeEntry
     {
