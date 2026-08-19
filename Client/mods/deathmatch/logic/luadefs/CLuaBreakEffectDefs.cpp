@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CExplosion.h>
 #include "CLuaBreakEffectDefs.h"
 #include "../CClientBreakEffect.h"
 #include "../CClientBreakEffectManager.h"
@@ -37,6 +38,8 @@ namespace
 
         unsigned long long lastVehicleDamageTick = 0;
         CEntitySAInterface* lastVehicleAttacker = nullptr;
+        unsigned long long lastExplosionDamageTick = 0;
+        CEntitySAInterface* lastExplosionAttacker = nullptr;
         CVector             lastImpactPosition;
         CVector             lastImpactVelocity;
         bool                hasLastImpactPosition = false;
@@ -297,11 +300,32 @@ namespace
         if (!profile)
             return true;
 
+        const unsigned long long now = GetTickCount64_();
+
+        // Managed explosion damage is applied immediately before GTA enters
+        // CWorld::TriggerExplosion. If the vanilla path also reaches
+        // CObject::ObjectDamage, consume that synchronous callback so the
+        // profile is charged only once. Explosion-proof objects never reach
+        // this callback, and the short window expires before later gameplay damage.
+        if (profile->lastExplosionDamageTick != 0)
+        {
+            if (profile->lastExplosionAttacker == attackerInterface && now - profile->lastExplosionDamageTick <= 10)
+            {
+                profile->lastExplosionAttacker = nullptr;
+                profile->lastExplosionDamageTick = 0;
+                return false;
+            }
+            if (now - profile->lastExplosionDamageTick > 10)
+            {
+                profile->lastExplosionAttacker = nullptr;
+                profile->lastExplosionDamageTick = 0;
+            }
+        }
+
         // Vehicle collision is also hooked because arbitrary DFFs do not all
         // enter CObject::ObjectDamage from physical impacts. If GTA does call
         // ObjectDamage for the same collision, consume the callback without
         // charging managed health a second time.
-        const unsigned long long now = GetTickCount64_();
         if (profile->lastVehicleAttacker == attackerInterface && profile->lastVehicleDamageTick != 0 && now - profile->lastVehicleDamageTick <= 100)
         {
             profile->lastVehicleAttacker = nullptr;
@@ -504,6 +528,95 @@ namespace
         lua_pushboolean(luaVM, profile.fracture.disableOriginalCollision);
         lua_setfield(luaVM, -2, "disableOriginalCollision");
         lua_setfield(luaVM, -2, "fracture");
+    }
+}
+
+void CLuaBreakEffectDefs::HandleExplosionDamage(const CVector& position, int explosionType, CEntitySAInterface* attackerInterface)
+{
+    float radius = 0.0f;
+    float damageScale = 1.0f;
+
+    switch (static_cast<eExplosionType>(explosionType))
+    {
+        case EXP_TYPE_GRENADE:
+            radius = 9.0f;
+            break;
+        case EXP_TYPE_ROCKET:
+            radius = 10.0f;
+            break;
+        case EXP_TYPE_ROCKET_WEAK:
+            radius = 10.0f;
+            damageScale = 0.2f;
+            break;
+        case EXP_TYPE_CAR:
+        case EXP_TYPE_CAR_QUICK:
+            radius = 9.0f;
+            break;
+        case EXP_TYPE_BOAT:
+        case EXP_TYPE_HELI:
+            radius = 25.0f;
+            break;
+        case EXP_TYPE_MINE:
+        case EXP_TYPE_OBJECT:
+        case EXP_TYPE_TANK_GRENADE:
+            radius = 10.0f;
+            break;
+        case EXP_TYPE_SMALL:
+        case EXP_TYPE_TINY:
+            radius = 3.0f;
+            break;
+        case EXP_TYPE_MOLOTOV:
+        default:
+            return;
+    }
+
+    PruneObjectBreakProfiles();
+    if (g_ObjectBreakProfiles.empty())
+        return;
+
+    CClientEntity* attacker = nullptr;
+    if (attackerInterface && g_pGame && g_pGame->GetPools())
+        attacker = g_pGame->GetPools()->GetClientEntity(reinterpret_cast<DWORD*>(attackerInterface));
+
+    constexpr float BASE_OBJECT_EXPLOSION_DAMAGE = 300.0f;
+    const float radiusSq = radius * radius;
+
+    for (std::size_t index = 0; index < g_ObjectBreakProfiles.size();)
+    {
+        SObjectBreakProfile& profile = g_ObjectBreakProfiles[index];
+        CVector objectPosition;
+        profile.object->GetPosition(objectPosition);
+
+        const float dx = objectPosition.fX - position.fX;
+        const float dy = objectPosition.fY - position.fY;
+        const float dz = objectPosition.fZ - position.fZ;
+        const float distanceSq = dx * dx + dy * dy + dz * dz;
+        if (distanceSq >= radiusSq)
+        {
+            ++index;
+            continue;
+        }
+
+        const float distance = std::sqrt(std::max(0.0f, distanceSq));
+        const float falloff = std::clamp(2.0f * (radius - distance) / radius, 0.0f, 1.0f);
+        const float effectiveDamage = BASE_OBJECT_EXPLOSION_DAMAGE * falloff * damageScale;
+        if (effectiveDamage <= 0.0f)
+        {
+            ++index;
+            continue;
+        }
+
+        profile.lastExplosionDamageTick = GetTickCount64_();
+        profile.lastExplosionAttacker = attackerInterface;
+
+        CClientObject* object = profile.object;
+        if (ApplyManagedDamage(profile, effectiveDamage, attacker, &position))
+        {
+            EraseObjectBreakProfile(object);
+            continue;
+        }
+
+        ++index;
     }
 }
 

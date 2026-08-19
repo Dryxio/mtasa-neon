@@ -15,11 +15,15 @@
 #define lua_absindex(L, i) ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : lua_gettop(L) + (i) + 1)
 #endif
 
+class CEntitySAInterface;
+class CVector;
+
 class CLuaBreakEffectDefs : public CLuaDefs
 {
 public:
     static void LoadFunctions();
     static void AddClass(lua_State* luaVM);
+    static void HandleExplosionDamage(const CVector& position, int explosionType, CEntitySAInterface* attackerInterface);
 
     LUA_DECLARE(CreateObjectBreakEffect);
     LUA_DECLARE(GetBreakEffectFragmentCount);
