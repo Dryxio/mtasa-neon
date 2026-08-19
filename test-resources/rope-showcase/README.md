@@ -23,14 +23,16 @@ The resource moves the player into an isolated dimension, hides the HUD/chat, ru
 The shot is intentionally built around visible API behavior rather than debug text:
 
 1. three managed ropes are created close together using native GTA rope types (`miniMagnet`, `wreckingBall`, `harness`);
-2. a synchronized dynamic crate is explicitly assigned to the showcase player as its physics syncer;
+2. a client-local crate is created for deterministic native rope physics;
 3. the hero magnet rope picks the crate up with `attachElementToRope`;
 4. `setRopeWinchHeight` lowers and raises the suspended load while the scripted top anchor moves sideways, producing native rope/cargo motion;
 5. the two secondary rope types animate independently in the same shot;
-6. `detachElementFromRope` releases the crate and native dynamic-object physics takes over for the drop;
+6. `detachElementFromRope` releases the crate and the native GTA object continues moving with the release velocity;
 7. the camera follows the release and pulls back for the final frame.
 
-The cargo is server-owned and has `setObjectDynamicPhysics` enabled server-side. Because this is a deterministic one-player showcase, the server explicitly calls `setElementSyncer(cargo, player)` and then waits a short grace period for the client-side object-sync ownership transition before starting. The Rope manager therefore exercises the same sync-owner-safe physical path used in multiplayer rather than relying on a purely local fake.
+The showcase intentionally uses a client-local cargo object. Local elements are authoritative by construction in the managed Rope runtime, and GTA's native `CRope::PickUpObject` promotes a picked-up object into the moving physical-object path. This keeps the recording resource deterministic and removes any dependency on server object-sync election.
+
+Synchronized object/vehicle authority, leasing and multiplayer state are covered separately by `rope-test`; the showcase is only the visual demonstration resource.
 
 ## Recording intent
 
