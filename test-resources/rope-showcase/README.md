@@ -33,10 +33,12 @@ It remains in its own showcase dimension, so the Rope and 2DFX resources do not 
 The three native rope types are separated into clear left/center/right demonstrations with world-space labels:
 
 1. **Left — Wrecking Ball**: a `wreckingBall` rope uses GTA's native weighted ball hook. The invisible physical holder moves laterally so the ball visibly swings. Its rope length is explicitly shortened so the native ball remains well above the runway instead of initializing below terrain.
-2. **Center — Mini Magnet**: a `miniMagnet` rope explicitly picks up a local crate. The rope shortens to hoist it, the holder translates while the crate follows through native rope physics, and the crate is released near the final wide shot.
-3. **Right — Harness**: a `harness` rope explicitly carries a local Bobcat vehicle. During the right-side close-up the rope shortens and the vehicle is visibly lifted off the runway.
+2. **Center — Mini Magnet**: the crate begins resting on the runway. During the center close-up it is unfrozen immediately before `attachElementToRope`, picked up by the `miniMagnet`, hoisted by shortening the rope, translated smoothly, and released in the final wide shot.
+3. **Right — Harness**: the Bobcat also begins resting on the runway. It is not attached during setup. As the right-side close-up begins, the vehicle is unfrozen, attached to the `harness`, then visibly lifted by shortening the rope.
 
-The camera first establishes all three setups, then gives each one its own close-up before returning to a final wide shot. Labels remain attached to the relevant payload so the differences are obvious while recording.
+The camera first establishes all three setups, then gives each one its own close-up before returning to a final wide shot. Camera endpoints and holder motion are continuous across shot boundaries to avoid showcase-only snap/stutter artifacts.
+
+Payloads are kept frozen only while they are static runway props. Once a native rope takes ownership, they are unfrozen so the Rope solver is not fighting MTA's frozen-element state.
 
 ## Native-holder safety
 
