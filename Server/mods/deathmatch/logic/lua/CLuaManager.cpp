@@ -19,6 +19,7 @@
 #include "luadefs/CLuaUtilDefs.h"
 #include "luadefs/CLuaElementDefs.h"
 #include "luadefs/CLuaFireDefs.h"
+#include "luadefs/CLuaRopeDefs.h"
 #include "luadefs/CLuaAccountDefs.h"
 #include "luadefs/CLuaACLDefs.h"
 #include "luadefs/CLuaBanDefs.h"
@@ -136,6 +137,7 @@ void CLuaManager::DoPulse()
     }
     m_pLuaModuleManager->DoPulse();
     CLuaFireDefs::DoPulse();
+    CLuaRopeDefs::DoPulse();
 }
 
 CLuaMain* CLuaManager::GetVirtualMachine(lua_State* luaVM)
@@ -205,7 +207,7 @@ CLuaTimer* CLuaManager::FindTimerGlobally(unsigned long scriptID) const
     }
 
     // Timer exists in global ID array but not in any resource manager
-    // This indicates the timer has been cleaned up
+    // This indicates that it has been cleaned up
     return nullptr;
 }
 
@@ -223,6 +225,7 @@ void CLuaManager::LoadCFunctions()
     CLuaDatabaseDefs::LoadFunctions();
     CLuaElementDefs::LoadFunctions();
     CLuaFireDefs::LoadFunctions();
+    CLuaRopeDefs::LoadFunctions();
     CLuaHandlingDefs::LoadFunctions();
     CLuaMarkerDefs::LoadFunctions();
     CLuaModelDefs::LoadFunctions();
