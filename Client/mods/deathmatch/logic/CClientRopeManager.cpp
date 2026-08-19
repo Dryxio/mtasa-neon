@@ -72,8 +72,9 @@ CClientRopeManager::CClientRopeManager(CClientManager* pManager) : m_pManager(pM
 
 CClientRopeManager::~CClientRopeManager()
 {
-    for (auto& rope : m_Ropes)
-        ReleaseLease(rope);
+    // Resource/entity teardown unregisters every rope while the game layer is
+    // still alive. Do not touch GTA from this process-static destructor: the
+    // singleton may be destroyed after g_pGame and its pools are already gone.
     m_Ropes.clear();
 }
 
@@ -118,13 +119,14 @@ const CClientRopeManager::SRopeEntry* CClientRopeManager::FindEntry(const CClien
 bool CClientRopeManager::IsActive(const CClientEntity* pElement) const
 {
     const SRopeEntry* pEntry = FindEntry(pElement);
-    return pEntry && pEntry->bLeased && g_pGame->GetRopes()->FindRope(pEntry->uiNativeId) >= 0;
+    return pEntry && pEntry->bLeased && g_pGame && g_pGame->GetRopes() && g_pGame->GetRopes()->FindRope(pEntry->uiNativeId) >= 0;
 }
 
 bool CClientRopeManager::GetPositionAt(const CClientEntity* pElement, float fProgress, CVector& vecPosition, CVector* pVelocity) const
 {
     const SRopeEntry* pEntry = FindEntry(pElement);
-    return pEntry && pEntry->bLeased && g_pGame->GetRopes()->FindCoorsAlongRope(pEntry->uiNativeId, fProgress, vecPosition, pVelocity);
+    return pEntry && pEntry->bLeased && g_pGame && g_pGame->GetRopes() &&
+           g_pGame->GetRopes()->FindCoorsAlongRope(pEntry->uiNativeId, fProgress, vecPosition, pVelocity);
 }
 
 bool CClientRopeManager::ResolveAnchor(CClientDummy* pRope, CVector& vecAnchor, CClientEntity*& pHolder) const
@@ -151,7 +153,7 @@ bool CClientRopeManager::ResolveAnchor(CClientDummy* pRope, CVector& vecAnchor, 
 
     CMatrix matrix;
     if (pHolder->GetMatrix(matrix))
-        offset = matrix.TransformVector(offset);
+        offset = matrix.TransformVectorByRotation(offset);
 
     vecAnchor = CVector(holderPosition.fX + offset.fX, holderPosition.fY + offset.fY, holderPosition.fZ + offset.fZ);
     return true;
@@ -329,11 +331,11 @@ void CClientRopeManager::DoPulse()
 
     struct SCandidate
     {
-        SRopeEntry* pEntry{};
-        CVector     anchor;
+        SRopeEntry*    pEntry{};
+        CVector        anchor;
         CClientEntity* pHolder{};
-        float       distanceSq{};
-        bool        physicsCritical{};
+        float          distanceSq{};
+        bool           physicsCritical{};
     };
 
     std::vector<SCandidate> candidates;
