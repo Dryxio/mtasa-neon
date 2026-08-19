@@ -24,11 +24,18 @@ local SCENE = {
     {name = "las2xref_3", model = 3783, x = 2241.89844, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
 }
 
+-- smallprosjmt_LAS (3628) uses lodllprosjmt_LAS (3748). One broad removal
+-- catches the LOD instances for the five hardcoded HD buildings in this block.
+local SCENE_LODS = {
+    {model = 3748, x = 2285.0, y = -1910.0, z = 15.2, radius = 100.0},
+}
+
 local sprayReplacement
 local sprayRemoved = false
 local sprayLodRemoved = false
 local sceneReplacements = {}
 local sceneRemoved = {}
+local sceneLodRemoved = {}
 
 local function log(message, r, g, b)
     outputDebugString("[BREAKSCENE] " .. message)
@@ -118,10 +125,22 @@ local function restoreScene()
         end
     end
     sceneRemoved = {}
+
+    for index, lod in ipairs(SCENE_LODS) do
+        if sceneLodRemoved[index] then
+            restoreWorldModel(lod.model, lod.radius, lod.x, lod.y, lod.z, 0)
+        end
+    end
+    sceneLodRemoved = {}
 end
 
 local function armScene()
     restoreScene()
+
+    for index, lod in ipairs(SCENE_LODS) do
+        sceneLodRemoved[index] = removeWorldModel(lod.model, lod.radius, lod.x, lod.y, lod.z, 0) == true
+        log(("remove scene LOD model %d => %s"):format(lod.model, tostring(sceneLodRemoved[index])), 120, 200, 255)
+    end
 
     local created = 0
     for index, target in ipairs(SCENE) do
@@ -145,7 +164,7 @@ local function armScene()
     end
 
     log(("scene armed: %d/%d buildings converted"):format(created, #SCENE), created == #SCENE and 120 or 255, created == #SCENE and 255 or 180, 160)
-    log("If a ghost building remains after fracture, it is an associated LOD; tell me which instance and I'll add its LOD model.", 120, 200, 255)
+    log("3628 associated LOD 3748 removed. If 3783 leaves a ghost, send me its associated LOD too.", 120, 200, 255)
     return created == #SCENE
 end
 
