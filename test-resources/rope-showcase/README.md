@@ -1,6 +1,6 @@
 # Managed rope showcase
 
-A short cinematic resource for recording the managed Rope API in action.
+A cinematic visual demo for the managed Rope API.
 
 ## Run
 
@@ -16,35 +16,40 @@ Stop/reset early with:
 /ropeshow stop
 ```
 
-The resource moves the player into an isolated dimension, hides the HUD/chat, runs the sequence, then restores the original player state automatically.
+The resource moves the player into an isolated dimension, hides the normal HUD/chat, runs the sequence, then restores the original player state automatically.
 
-## Sequence
+## Location
 
-The shot is intentionally built around visible API behavior rather than debug text:
+The scene uses the same clear Las Venturas runway coordinates as `2dfx-showcase`:
 
-1. three managed ropes are created close together using native GTA rope types (`miniMagnet`, `wreckingBall`, `harness`);
-2. three invisible client-local objects act as the required physical holders for those native winch/crane rope types;
-3. a client-local crate is created for deterministic native rope physics;
-4. the hero magnet rope picks the crate up with `attachElementToRope`;
-5. `setRopeWinchHeight` lowers and raises the suspended load while the hero holder moves sideways, producing native rope/cargo motion;
-6. the two secondary holder/rope pairs animate independently in the same shot;
-7. `detachElementFromRope` releases the crate and the native GTA object continues moving with the release velocity;
-8. the camera follows the release and pulls back for the final frame.
+```text
+center ~= 262.375, 2502.074, 16.484
+```
 
-The showcase intentionally uses client-local holder and cargo objects. Local elements are authoritative by construction in the managed Rope runtime, and GTA's native `CRope::PickUpObject` promotes a picked-up object into the moving physical-object path. This keeps the recording resource deterministic and removes any dependency on server object-sync election.
+It remains in its own showcase dimension, so the Rope and 2DFX resources do not share runtime entities.
 
-Native GTA rope types 1 through 7 require a valid physical holder: `CRope::Update` dereferences that holder during its weight/force pass. Managed ropes of those types remain logical but are not native-leased until an authoritative holder is available. `swat` is the free world-anchored type.
+## What the shot shows
 
-Synchronized object/vehicle authority, leasing and multiplayer state are covered separately by `rope-test`; the showcase is only the visual demonstration resource.
+The three native rope types are separated into clear left/center/right demonstrations with world-space labels:
 
-## Recording intent
+1. **Left — Wrecking Ball**: a `wreckingBall` rope uses GTA's native weighted ball hook. The invisible physical holder moves laterally so the ball visibly swings. Its rope length is explicitly shortened so the native ball remains well above the runway instead of initializing below terrain.
+2. **Center — Mini Magnet**: a `miniMagnet` rope explicitly picks up a local crate. The rope shortens to hoist it, the holder translates while the crate follows through native rope physics, and the crate is released near the final wide shot.
+3. **Right — Harness**: a `harness` rope explicitly carries a local Bobcat vehicle. During the right-side close-up the rope shortens and the vehicle is visibly lifted off the runway.
 
-The full sequence is about 33 seconds. For a short README clip, the strongest section starts around the winch movement and runs through the crate release.
+The camera first establishes all three setups, then gives each one its own close-up before returning to a final wide shot. Labels remain attached to the relevant payload so the differences are obvious while recording.
 
-Before recording, run:
+## Native-holder safety
+
+Native GTA rope types 1 through 7 require a valid physical holder: `CRope::Update` dereferences `m_pRopeHolder` during its force pass. The showcase therefore uses three invisible client-local physical holder objects. `swat` remains the only free world-anchored native type.
+
+Synchronized object/vehicle authority, leasing and multiplayer behavior are covered separately by `rope-test`; this resource is deliberately a deterministic visual demo.
+
+## Before recording
+
+After rebuilding the Rope safety fix, run:
 
 ```text
 /ropetest all
 ```
 
-and confirm the Rope harness has no `FAIL` lines.
+and confirm there are no `FAIL` lines, especially the missing-holder regression and local physical-pickup checks.
