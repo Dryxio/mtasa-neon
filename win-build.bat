@@ -1,24 +1,28 @@
 @echo off
-set VSWHERE=utils\vswhere.exe
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 
-rem Download vswhere (command line utility to find MSBuild path)
-if not exist %VSWHERE% (
-	echo vswhere utility doesn't exist. Downloading...
-	powershell -Command "Invoke-WebRequest https://mirror-cdn.multitheftauto.com/bdata/vswhere.exe -OutFile %VSWHERE%"
+rem Prefer the vswhere installed with Visual Studio. Fall back to the vendored copy if available.
+if not exist "%VSWHERE%" (
+    if exist "utils\vswhere.exe" (
+        set "VSWHERE=utils\vswhere.exe"
+    ) else (
+        echo Could not find vswhere.exe. Make sure Visual Studio Installer is installed.
+        goto end
+    )
 )
 
 rem Find MSBuild installation path
-for /f "usebackq tokens=1* delims=: " %%i in (`%VSWHERE% -latest -requires Microsoft.Component.MSBuild`) do (
-	if /i "%%i"=="installationPath" set INSTALLDIR=%%j
+for /f "usebackq tokens=1* delims=: " %%i in (`"%VSWHERE%" -latest -requires Microsoft.Component.MSBuild`) do (
+    if /i "%%i"=="installationPath" set "INSTALLDIR=%%j"
 )
 
 rem Output an error if not exists
-set MSBUILDPATH="%InstallDir%\MSBuild\Current\Bin\MSBuild.exe"
-if not exist %MSBUILDPATH% (
-	echo Could not find MSBuild. Make sure you have Visual Studio 2026 installed
-	goto end
+set "MSBUILDPATH=%INSTALLDIR%\MSBuild\Current\Bin\MSBuild.exe"
+if not exist "%MSBUILDPATH%" (
+    echo Could not find MSBuild. Make sure you have Visual Studio 2026 installed
+    goto end
 )
-echo Found MSBuild at: %MSBUILDPATH%
+echo Found MSBuild at: "%MSBUILDPATH%"
 
 set BUILD_CONFIGURATION=Release
 set BUILD_PLATFORM=Win32
@@ -60,7 +64,7 @@ call win-create-projects.bat < nul
 echo.
 
 rem Start compiling
-%MSBUILDPATH% Build/MTASA.sln ^
+"%MSBUILDPATH%" Build/MTASA.sln ^
     -property:Configuration="%BUILD_CONFIGURATION%" ^
     -property:Platform="%BUILD_PLATFORM%" ^
     -maxCpuCount
