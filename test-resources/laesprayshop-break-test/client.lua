@@ -28,6 +28,7 @@ local SCENE = {
 
     -- Tall, narrow telephone pole: use a small number of long sections rather than confetti.
     {name = "telgrphpole02", model = 1308, x = 2148.95312, y = -1791.83594, z = 19.1015625, rx = 0.0, ry = 0.0, rz = 0.0},
+    {name = "telgrphpole02_2", model = 1308, x = 2171.57031, y = -1761.64062, z = 12.703125, rx = 0.0, ry = 0.0, rz = 0.0},
 }
 
 -- smallprosjmt_LAS (3628) uses lodllprosjmt_LAS (3748). One broad removal
