@@ -10,6 +10,9 @@ local show = {
     centerZ = 0,
     dimension = 0,
     cargo = nil,
+    heroAnchor = nil,
+    leftAnchor = nil,
+    rightAnchor = nil,
     heroRope = nil,
     leftRope = nil,
     rightRope = nil,
@@ -59,6 +62,9 @@ local function destroyScene()
 
     show.elements = {}
     show.cargo = nil
+    show.heroAnchor = nil
+    show.leftAnchor = nil
+    show.rightAnchor = nil
     show.heroRope = nil
     show.leftRope = nil
     show.rightRope = nil
@@ -84,9 +90,29 @@ local function cameraLerp(ax, ay, az, alx, aly, alz, bx, by, bz, blx, bly, blz, 
     )
 end
 
-local function createRopeAt(x, y, z, ropeType, winchHeight)
+local function createAnchor(x, y, z)
+    local anchor = track(createObject(CARGO_MODEL, x, y, z, 0, 0, 0))
+    if not isElement(anchor) then
+        return false
+    end
+
+    configureElement(anchor)
+    setElementAlpha(anchor, 0)
+    setElementCollisionsEnabled(anchor, false)
+    setElementFrozen(anchor, true)
+    return anchor
+end
+
+local function createRopeForAnchor(anchor, ropeType, winchHeight)
+    if not isElement(anchor) then
+        return false
+    end
+
+    local x, y, z = getElementPosition(anchor)
     local rope = createRope(x, y, z, {
         type = ropeType,
+        holder = anchor,
+        holderOffset = {0, 0, 0},
         duration = 0,
         fixedNode = 0,
         sitOnGround = false,
@@ -126,9 +152,21 @@ local function createScene()
     setElementVelocity(show.cargo, 0, 0, 0)
     setElementAngularVelocity(show.cargo, 0, 0, 0)
 
-    show.heroRope = createRopeAt(cx, cy, cz + 12.5, "miniMagnet", 0.22)
-    show.leftRope = createRopeAt(cx - 7.0, cy + 1.5, cz + 12.0, "wreckingBall", 0.45)
-    show.rightRope = createRopeAt(cx + 7.0, cy + 1.5, cz + 12.0, "harness", 0.60)
+    -- GTA's winch/crane rope types dereference m_pRopeHolder during CRope::Update.
+    -- Use explicit invisible local objects as stable physical holders instead of
+    -- creating free world-anchored magnet/harness ropes.
+    show.heroAnchor = createAnchor(cx, cy, cz + 12.5)
+    show.leftAnchor = createAnchor(cx - 7.0, cy + 1.5, cz + 12.0)
+    show.rightAnchor = createAnchor(cx + 7.0, cy + 1.5, cz + 12.0)
+
+    if not isElement(show.heroAnchor) or not isElement(show.leftAnchor) or not isElement(show.rightAnchor) then
+        outputDebugString("[ROPE SHOWCASE] Failed to create one or more rope anchors", 1)
+        return false
+    end
+
+    show.heroRope = createRopeForAnchor(show.heroAnchor, "miniMagnet", 0.22)
+    show.leftRope = createRopeForAnchor(show.leftAnchor, "wreckingBall", 0.45)
+    show.rightRope = createRopeForAnchor(show.rightAnchor, "harness", 0.60)
 
     if not isElement(show.heroRope) or not isElement(show.leftRope) or not isElement(show.rightRope) then
         outputDebugString("[ROPE SHOWCASE] Failed to create one or more ropes", 1)
@@ -147,17 +185,17 @@ local function animateRopes(elapsed)
     local cx, cy, cz = show.centerX, show.centerY, show.centerZ
     local time = elapsed / 1000.0
 
-    if isElement(show.leftRope) then
-        setElementPosition(show.leftRope, cx - 7.0 + math.sin(time * 0.55) * 0.45, cy + 1.5, cz + 12.0)
+    if isElement(show.leftAnchor) and isElement(show.leftRope) then
+        setElementPosition(show.leftAnchor, cx - 7.0 + math.sin(time * 0.55) * 0.45, cy + 1.5, cz + 12.0)
         setRopeWinchHeight(show.leftRope, 0.30 + (math.sin(time * 0.85) * 0.5 + 0.5) * 0.42)
     end
 
-    if isElement(show.rightRope) then
-        setElementPosition(show.rightRope, cx + 7.0 + math.sin(time * 0.48 + 1.7) * 0.35, cy + 1.5, cz + 12.0)
+    if isElement(show.rightAnchor) and isElement(show.rightRope) then
+        setElementPosition(show.rightAnchor, cx + 7.0 + math.sin(time * 0.48 + 1.7) * 0.35, cy + 1.5, cz + 12.0)
         setRopeWinchHeight(show.rightRope, 0.25 + (math.sin(time * 0.72 + 2.2) * 0.5 + 0.5) * 0.48)
     end
 
-    if not isElement(show.heroRope) then
+    if not isElement(show.heroRope) or not isElement(show.heroAnchor) then
         return
     end
 
@@ -185,7 +223,7 @@ local function animateRopes(elapsed)
         winch = 0.18
     end
 
-    setElementPosition(show.heroRope, anchorX, anchorY, anchorZ)
+    setElementPosition(show.heroAnchor, anchorX, anchorY, anchorZ)
     setRopeWinchHeight(show.heroRope, winch)
 
     if elapsed >= 24750 and not show.cargoReleased and isElement(show.cargo) then
