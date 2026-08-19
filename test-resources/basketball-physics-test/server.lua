@@ -1,5 +1,15 @@
 local BALL_MODEL = 2114
-local GRAVITY_PER_FRAME = 0.008
+
+-- Free-aim launch tuning. MTA object velocity is expressed in GTA physics
+-- units per frame, so these values are deliberately close to the old assisted
+-- shot velocities while no longer depending on the hoop position.
+local SHOT_HORIZONTAL_MIN = 0.055
+local SHOT_HORIZONTAL_MAX = 0.165
+local SHOT_VERTICAL_MIN = 0.115
+local SHOT_VERTICAL_POWER_GAIN = 0.065
+local SHOT_VERTICAL_AIM_GAIN = 0.045
+local SHOT_SPIN_MIN = 0.08
+local SHOT_SPIN_GAIN = 0.08
 
 -- Existing world hoop: model 947 (bskballhub_lax01).
 -- The supplied DFF places the rim center at this local offset from the model origin.
@@ -34,12 +44,6 @@ local function rotateLocal(x, y, heading)
     local radians = math.rad(heading)
     local cosHeading, sinHeading = math.cos(radians), math.sin(radians)
     return x * cosHeading - y * sinHeading, x * sinHeading + y * cosHeading
-end
-
-local function getForward(player)
-    local _, _, heading = getElementRotation(player)
-    local radians = math.rad(heading)
-    return -math.sin(radians), math.cos(radians), heading
 end
 
 local function publishCourt()
@@ -130,40 +134,44 @@ local function resetCourt(player)
     end
 end
 
-local function launchBall(player, power)
+local function launchBall(player, dirX, dirY, aimZ, power)
     if not court or not isElement(ball) or holder ~= player then
         return false
     end
 
-    power = clamp(tonumber(power) or 0, 0, 1)
+    dirX = finiteNumber(dirX)
+    dirY = finiteNumber(dirY)
+    aimZ = finiteNumber(aimZ)
+    power = finiteNumber(power)
+    if not dirX or not dirY or not aimZ or not power then
+        return false
+    end
+
+    local horizontalLength = math.sqrt(dirX * dirX + dirY * dirY)
+    if horizontalLength < 0.001 or horizontalLength > 2.0 then
+        return false
+    end
+
+    dirX = dirX / horizontalLength
+    dirY = dirY / horizontalLength
+    aimZ = clamp(aimZ, -0.65, 0.75)
+    power = clamp(power, 0, 1)
+
+    local horizontalSpeed = SHOT_HORIZONTAL_MIN + (SHOT_HORIZONTAL_MAX - SHOT_HORIZONTAL_MIN) * power
+    local verticalSpeed = SHOT_VERTICAL_MIN + SHOT_VERTICAL_POWER_GAIN * power + SHOT_VERTICAL_AIM_GAIN * aimZ
+    verticalSpeed = clamp(verticalSpeed, 0.08, 0.24)
+    local spin = SHOT_SPIN_MIN + SHOT_SPIN_GAIN * power
 
     if isElementAttached(ball) then
         detachElements(ball)
     end
 
     local px, py, pz = getElementPosition(player)
-    local forwardX, forwardY = getForward(player)
-    local releaseX = px + forwardX * 0.62
-    local releaseY = py + forwardY * 0.62
+    local releaseX = px + dirX * 0.62
+    local releaseY = py + dirY * 0.62
     local releaseZ = pz + 1.25
-
-    local dx = court.ringX - releaseX
-    local dy = court.ringY - releaseY
-    local dz = court.ringZ - releaseZ
-    local horizontalDistance = math.sqrt(dx * dx + dy * dy)
-    if horizontalDistance < 0.01 then
-        return false
-    end
-
-    local horizontalSpeed = 0.105 + power * 0.055
-    local frames = math.max(12, horizontalDistance / horizontalSpeed)
-    local velocityX = dx / frames
-    local velocityY = dy / frames
-    local velocityZ = (dz + 0.5 * GRAVITY_PER_FRAME * frames * frames) / frames
-
-    local dirX = dx / horizontalDistance
-    local dirY = dy / horizontalDistance
-    local spin = 0.10 + power * 0.08
+    local velocityX = dirX * horizontalSpeed
+    local velocityY = dirY * horizontalSpeed
 
     setElementPosition(ball, releaseX, releaseY, releaseZ)
     setElementInterior(ball, getElementInterior(player))
@@ -171,7 +179,7 @@ local function launchBall(player, power)
     setElementFrozen(ball, false)
     setElementCollisionsEnabled(ball, true)
     setObjectDynamicPhysics(ball, true)
-    setElementVelocity(ball, velocityX, velocityY, velocityZ)
+    setElementVelocity(ball, velocityX, velocityY, verticalSpeed)
     setElementAngularVelocity(ball, -dirY * spin, dirX * spin, 0)
 
     holder = false
@@ -179,8 +187,10 @@ local function launchBall(player, power)
     setElementData(ball, "basketPhysics:holder", false)
     setElementData(ball, "basketPhysics:free", true)
     setElementData(ball, "basketPhysics:lastPower", power)
+    setElementData(ball, "basketPhysics:lastAimZ", aimZ)
 
-    message(player, ("Shot power %.0f%%, velocity=(%.3f %.3f %.3f)"):format(power * 100, velocityX, velocityY, velocityZ), 180, 255, 190)
+    message(player, ("Free shot %.0f%%, velocity=(%.3f %.3f %.3f), aimZ=%.2f")
+        :format(power * 100, velocityX, velocityY, verticalSpeed, aimZ), 180, 255, 190)
     return true
 end
 
@@ -203,9 +213,9 @@ addCommandHandler("basketreset", function(player)
 end)
 
 addEvent("basketPhysics:shoot", true)
-addEventHandler("basketPhysics:shoot", resourceRoot, function(power)
+addEventHandler("basketPhysics:shoot", resourceRoot, function(dirX, dirY, aimZ, power)
     if client and isElement(client) then
-        launchBall(client, power)
+        launchBall(client, dirX, dirY, aimZ, power)
     end
 end)
 
