@@ -35,6 +35,7 @@ public:
     void RestoreAll();
 
     bool        HasReplaced(unsigned short usModel);
+    CColModel*  GetColModel() const { return m_pColModel; }
     static bool IsCOLData(const SString& strData);
 
     // Sorta a hack that these are required by CClientEntity...

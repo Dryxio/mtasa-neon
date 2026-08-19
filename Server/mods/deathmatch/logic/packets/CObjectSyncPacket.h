@@ -23,6 +23,8 @@ public:
         ElementID     ID;
         CVector       vecPosition;
         CVector       vecRotation;
+        CVector       vecVelocity;
+        CVector       vecTurnVelocity;
         float         fHealth;
         unsigned char ucSyncTimeContext;
         unsigned char ucFlags;

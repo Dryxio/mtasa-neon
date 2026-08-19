@@ -37,6 +37,7 @@ public:
     virtual void  SetCenterOfMass(CVector& vecCenterOfMass) = 0;
 
     virtual void ProcessCollision() = 0;
+    virtual void RemoveAndAdd() = 0;
     virtual void AddToMovingList() = 0;
 
     virtual float    GetDamageImpulseMagnitude() = 0;
