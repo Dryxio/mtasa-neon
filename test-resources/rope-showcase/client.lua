@@ -1,3 +1,4 @@
+local CARGO_MODEL = 2912
 local SHOW_DURATION = 33000
 
 local show = {
@@ -101,17 +102,23 @@ local function createRopeAt(x, y, z, ropeType, winchHeight)
     return rope
 end
 
-local function createScene(cargo)
+local function createScene()
     destroyScene()
 
-    if not isElement(cargo) or getElementType(cargo) ~= "object" then
-        outputDebugString("[ROPE SHOWCASE] Missing synchronized cargo object", 1)
+    local cx, cy, cz = show.centerX, show.centerY, show.centerZ
+
+    -- Keep the showcase cargo local. Local elements are authoritative by
+    -- construction in CClientRopeManager, and native CRope::PickUpObject turns a
+    -- static GTA object into a moving physical object when it is attached.
+    show.cargo = track(createObject(CARGO_MODEL, cx, cy, cz + 0.9, 0, 0, 18))
+    if not isElement(show.cargo) then
+        outputDebugString("[ROPE SHOWCASE] Failed to create local cargo object", 1)
         return false
     end
 
-    local cx, cy, cz = show.centerX, show.centerY, show.centerZ
-    show.cargo = cargo
-
+    configureElement(show.cargo)
+    setElementCollisionsEnabled(show.cargo, true)
+    setElementFrozen(show.cargo, false)
     setObjectProperty(show.cargo, "mass", 45.0)
     setObjectProperty(show.cargo, "turn_mass", 55.0)
     setObjectProperty(show.cargo, "air_resistance", 0.995)
@@ -282,7 +289,7 @@ local function stopShow()
 end
 
 addEvent("ropeShowcase:start", true)
-addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension, cargo)
+addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension)
     stopShow()
 
     show.centerX = centerX
@@ -292,7 +299,7 @@ addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, c
     show.startedAt = getTickCount()
     show.finished = false
 
-    if not createScene(cargo) then
+    if not createScene() then
         outputChatBox("[ROPE SHOWCASE] Scene creation failed; run /ropetest all first.", 255, 90, 90)
         triggerServerEvent("ropeShowcase:finished", resourceRoot)
         return
