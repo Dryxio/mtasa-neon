@@ -1,69 +1,47 @@
-local MODEL = 5532
-local LOD_MODEL = 5527
-local BASE = {x = 2057.00, y = -1830.50, z = 20.60, rx = 0.0, ry = 0.0, rz = 0.0}
--- The associated LOD is centered noticeably away from the HD building origin.
--- A wider removal radius around the HD origin catches that exact LOD instance too.
-local REMOVE_RADIUS = 6.0
-local LOD_REMOVE_RADIUS = 80.0
+local SPRAY = {
+    name = "laesprayshop",
+    model = 5532,
+    lodModel = 5527,
+    x = 2057.00,
+    y = -1830.50,
+    z = 20.60,
+    rx = 0.0,
+    ry = 0.0,
+    rz = 0.0,
+    removeRadius = 6.0,
+    lodRemoveRadius = 80.0,
+}
 
-local replacement
-local removed = false
-local lodRemoved = false
+local SCENE = {
+    {name = "smallprosjmt_1", model = 3628, x = 2333.40625, y = -1933.96094, z = 15.21875, rx = 0.0, ry = 0.0, rz = 179.999985},
+    {name = "smallprosjmt_2", model = 3628, x = 2333.39844, y = -1892.83594, z = 15.25, rx = 0.0, ry = 0.0, rz = 0.0},
+    {name = "smallprosjmt_3", model = 3628, x = 2261.46094, y = -1916.03125, z = 15.1875, rx = 0.0, ry = 0.0, rz = 0.0},
+    {name = "smallprosjmt_4", model = 3628, x = 2284.70312, y = -1915.875, z = 15.1796875, rx = 0.0, ry = 0.0, rz = 0.0},
+    {name = "smallprosjmt_5", model = 3628, x = 2238.21875, y = -1916.10938, z = 15.1875, rx = 0.0, ry = 0.0, rz = 0.0},
+
+    {name = "las2xref_1", model = 3783, x = 2296.5, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
+    {name = "las2xref_2", model = 3783, x = 2269.20312, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
+    {name = "las2xref_3", model = 3783, x = 2241.89844, y = -1878.30469, z = 15.5234375, rx = 0.0, ry = 0.0, rz = 0.0},
+}
+
+local sprayReplacement
+local sprayRemoved = false
+local sprayLodRemoved = false
+local sceneReplacements = {}
+local sceneRemoved = {}
 
 local function log(message, r, g, b)
-    outputDebugString("[SPRAYBREAK] " .. message)
-    outputChatBox("[SPRAYBREAK] " .. message, r or 220, g or 220, b or 220)
+    outputDebugString("[BREAKSCENE] " .. message)
+    outputChatBox("[BREAKSCENE] " .. message, r or 220, g or 220, b or 220)
 end
 
-local function clearReplacement()
-    if isElement(replacement) then
-        clearObjectBreakProfile(replacement)
-        destroyElement(replacement)
-    end
-    replacement = nil
-end
-
-local function restoreVanilla()
-    clearReplacement()
-    if removed then
-        restoreWorldModel(MODEL, REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
-        removed = false
-    end
-    if lodRemoved then
-        restoreWorldModel(LOD_MODEL, LOD_REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
-        lodRemoved = false
-    end
-end
-
-local function armReplacement()
-    clearReplacement()
-
-    if not removed then
-        local ok = removeWorldModel(MODEL, REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
-        removed = ok == true
-        log("remove HD model 5532 => " .. tostring(ok), ok and 120 or 255, ok and 255 or 120, 160)
-    end
-
-    if not lodRemoved then
-        local ok = removeWorldModel(LOD_MODEL, LOD_REMOVE_RADIUS, BASE.x, BASE.y, BASE.z, 0)
-        lodRemoved = ok == true
-        log("remove LOD model 5527 => " .. tostring(ok), ok and 120 or 255, ok and 255 or 120, 160)
-    end
-
-    replacement = createObject(MODEL, BASE.x, BASE.y, BASE.z, BASE.rx, BASE.ry, BASE.rz)
-    if not isElement(replacement) then
-        log("createObject failed for model 5532", 255, 80, 80)
-        return false
-    end
-
-    setElementFrozen(replacement, true)
-
-    local profileOk = setObjectBreakProfile(replacement, {
+local function makeProfile(object, seed, fragments, health)
+    return setObjectBreakProfile(object, {
         native = false,
-        health = 350,
+        health = health or 350,
         instantBreakThreshold = 320,
         fracture = {
-            fragments = 16,
+            fragments = fragments or 16,
             force = 4.5,
             randomness = 0.9,
             lifetime = 10000,
@@ -71,72 +49,150 @@ local function armReplacement()
             bounce = 0.25,
             drag = 0.10,
             renderDistance = 500,
-            seed = 5532,
+            seed = seed,
             hideOriginal = true,
             disableOriginalCollision = true,
         },
     })
+end
 
-    if not profileOk then
-        log("setObjectBreakProfile failed", 255, 80, 80)
+local function clearObject(object)
+    if isElement(object) then
+        clearObjectBreakProfile(object)
+        destroyElement(object)
+    end
+end
+
+local function clearSprayReplacement()
+    clearObject(sprayReplacement)
+    sprayReplacement = nil
+end
+
+local function restoreSpray()
+    clearSprayReplacement()
+    if sprayRemoved then
+        restoreWorldModel(SPRAY.model, SPRAY.removeRadius, SPRAY.x, SPRAY.y, SPRAY.z, 0)
+        sprayRemoved = false
+    end
+    if sprayLodRemoved then
+        restoreWorldModel(SPRAY.lodModel, SPRAY.lodRemoveRadius, SPRAY.x, SPRAY.y, SPRAY.z, 0)
+        sprayLodRemoved = false
+    end
+end
+
+local function armSpray()
+    clearSprayReplacement()
+
+    if not sprayRemoved then
+        sprayRemoved = removeWorldModel(SPRAY.model, SPRAY.removeRadius, SPRAY.x, SPRAY.y, SPRAY.z, 0) == true
+    end
+    if not sprayLodRemoved then
+        sprayLodRemoved = removeWorldModel(SPRAY.lodModel, SPRAY.lodRemoveRadius, SPRAY.x, SPRAY.y, SPRAY.z, 0) == true
+    end
+
+    sprayReplacement = createObject(SPRAY.model, SPRAY.x, SPRAY.y, SPRAY.z, SPRAY.rx, SPRAY.ry, SPRAY.rz)
+    if not isElement(sprayReplacement) then
+        log("createObject failed for spray shop", 255, 80, 80)
         return false
     end
 
-    log(("replacement armed: model=%d pos=%.2f %.2f %.2f rot=%.1f %.1f %.1f"):format(
-        MODEL, BASE.x, BASE.y, BASE.z, BASE.rx, BASE.ry, BASE.rz
-    ), 120, 255, 160)
-    log("HD + LOD removed. Test with bullets / grenade / rocket. /sprayhealth shows managed health.", 120, 200, 255)
+    setElementFrozen(sprayReplacement, true)
+    if not makeProfile(sprayReplacement, SPRAY.model, 16, 350) then
+        log("setObjectBreakProfile failed for spray shop", 255, 80, 80)
+        return false
+    end
+
+    log("spray shop armed (HD + LOD removed)", 120, 255, 160)
     return true
 end
 
-addCommandHandler("spraybreak", armReplacement)
+local function restoreScene()
+    for _, object in pairs(sceneReplacements) do
+        clearObject(object)
+    end
+    sceneReplacements = {}
 
+    for index, target in ipairs(SCENE) do
+        if sceneRemoved[index] then
+            restoreWorldModel(target.model, 2.0, target.x, target.y, target.z, 0)
+        end
+    end
+    sceneRemoved = {}
+end
+
+local function armScene()
+    restoreScene()
+
+    local created = 0
+    for index, target in ipairs(SCENE) do
+        local removed = removeWorldModel(target.model, 2.0, target.x, target.y, target.z, 0)
+        sceneRemoved[index] = removed == true
+
+        local object = createObject(target.model, target.x, target.y, target.z, target.rx, target.ry, target.rz)
+        if not isElement(object) then
+            log(("create failed: %s model=%d"):format(target.name, target.model), 255, 80, 80)
+        else
+            setElementFrozen(object, true)
+            local fragments = target.model == 3628 and 12 or 10
+            if makeProfile(object, 10000 + index, fragments, 320) then
+                sceneReplacements[index] = object
+                created = created + 1
+            else
+                destroyElement(object)
+                log(("profile failed: %s"):format(target.name), 255, 80, 80)
+            end
+        end
+    end
+
+    log(("scene armed: %d/%d buildings converted"):format(created, #SCENE), created == #SCENE and 120 or 255, created == #SCENE and 255 or 180, 160)
+    log("If a ghost building remains after fracture, it is an associated LOD; tell me which instance and I'll add its LOD model.", 120, 200, 255)
+    return created == #SCENE
+end
+
+addCommandHandler("spraybreak", armSpray)
 addCommandHandler("sprayreset", function()
-    restoreVanilla()
-    log("vanilla laesprayshop + LOD restored", 120, 255, 160)
+    restoreSpray()
+    log("vanilla spray shop + LOD restored", 120, 255, 160)
 end)
 
 addCommandHandler("sprayhealth", function()
-    if not isElement(replacement) then
-        log("no replacement active; use /spraybreak", 255, 180, 100)
+    if not isElement(sprayReplacement) then
+        log("no spray replacement active; use /spraybreak", 255, 180, 100)
         return
     end
-    log("health=" .. tostring(getObjectBreakHealth(replacement)), 120, 220, 255)
-end)
-
-addCommandHandler("sprayrz", function(_, value)
-    local rz = tonumber(value)
-    if not rz then
-        log("usage: /sprayrz <degrees>", 255, 180, 100)
-        return
-    end
-    BASE.rz = rz
-    if isElement(replacement) then
-        setElementRotation(replacement, BASE.rx, BASE.ry, BASE.rz)
-    end
-    log("rotation Z => " .. tostring(BASE.rz), 120, 220, 255)
-end)
-
-addCommandHandler("spraypos", function(_, x, y, z)
-    x, y, z = tonumber(x), tonumber(y), tonumber(z)
-    if not x or not y or not z then
-        log("usage: /spraypos <x> <y> <z>", 255, 180, 100)
-        return
-    end
-    BASE.x, BASE.y, BASE.z = x, y, z
-    if isElement(replacement) then
-        setElementPosition(replacement, x, y, z)
-    end
-    log(("position => %.3f %.3f %.3f"):format(x, y, z), 120, 220, 255)
+    log("spray health=" .. tostring(getObjectBreakHealth(sprayReplacement)), 120, 220, 255)
 end)
 
 addCommandHandler("spraytp", function()
-    setElementPosition(localPlayer, BASE.x + 20.0, BASE.y, BASE.z - 7.0)
+    setElementPosition(localPlayer, SPRAY.x + 20.0, SPRAY.y, SPRAY.z - 7.0)
     log("teleported near laesprayshop", 120, 220, 255)
 end)
 
-addEventHandler("onClientResourceStart", resourceRoot, function()
-    log("ready: /spraytp then /spraybreak", 120, 220, 255)
+addCommandHandler("breakscene", armScene)
+addCommandHandler("breakscenereset", function()
+    restoreScene()
+    log("hardcoded scene restored", 120, 255, 160)
 end)
 
-addEventHandler("onClientResourceStop", resourceRoot, restoreVanilla)
+addCommandHandler("breakscenetp", function()
+    setElementPosition(localPlayer, 2310.0, -1907.0, 13.5)
+    log("teleported near hardcoded building scene", 120, 220, 255)
+end)
+
+addCommandHandler("breakscenehealth", function()
+    for index, target in ipairs(SCENE) do
+        local object = sceneReplacements[index]
+        if isElement(object) then
+            log(("%s model=%d health=%s"):format(target.name, target.model, tostring(getObjectBreakHealth(object))), 120, 220, 255)
+        end
+    end
+end)
+
+addEventHandler("onClientResourceStart", resourceRoot, function()
+    log("ready: /breakscenetp then /breakscene (or /spraytp + /spraybreak)", 120, 220, 255)
+end)
+
+addEventHandler("onClientResourceStop", resourceRoot, function()
+    restoreScene()
+    restoreSpray()
+end)
