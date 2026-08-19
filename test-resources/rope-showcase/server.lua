@@ -1,11 +1,9 @@
 local SHOW_DIMENSION = 64988
 local CENTER_X, CENTER_Y, CENTER_Z = 405.0, 2535.0, 22.0
-local CARGO_MODEL = 2912
 
 local state = {
     player = nil,
     saved = nil,
-    cargo = nil,
     startTimer = nil,
     running = false,
 }
@@ -22,7 +20,7 @@ local function restore()
         return
     end
 
-    local player, saved, cargo = state.player, state.saved, state.cargo
+    local player, saved = state.player, state.saved
     state.running = false
     clearStartTimer()
 
@@ -38,13 +36,8 @@ local function restore()
         end
     end
 
-    if isElement(cargo) then
-        destroyElement(cargo)
-    end
-
     state.player = nil
     state.saved = nil
-    state.cargo = nil
 end
 
 local function start(player)
@@ -77,64 +70,15 @@ local function start(player)
     setElementAlpha(player, 0)
     setElementFrozen(player, true)
 
-    local cargo = createObject(CARGO_MODEL, CENTER_X, CENTER_Y, CENTER_Z + 0.9, 0, 0, 18)
-    if not isElement(cargo) then
-        outputChatBox("[ROPE SHOWCASE] Failed to create cargo object.", player, 255, 90, 90)
-        restore()
-        return
-    end
-
-    state.cargo = cargo
-    setElementInterior(cargo, 0)
-    setElementDimension(cargo, SHOW_DIMENSION)
-    setElementCollisionsEnabled(cargo, true)
-    setElementFrozen(cargo, true)
-    setObjectDynamicPhysics(cargo, true)
-
-    -- This is a deterministic one-player showcase. Do not wait for the normal
-    -- object-sync election: explicitly nominate the showcase player, then give
-    -- OBJECT_STARTSYNC a short grace period before the rope touches the object.
-    setElementSyncer(cargo, player)
-
-    local attempts = 0
-    local ownershipConfirmedAt = false
-    local function beginWhenAuthoritative()
-        if not state.running or state.player ~= player or state.cargo ~= cargo or not isElement(player) or not isElement(cargo) then
-            return
+    -- The visual cargo is client-local. The synchronized/object-authority path is
+    -- already covered by rope-test; the showcase must be deterministic and must
+    -- not depend on the server object-sync election.
+    state.startTimer = setTimer(function()
+        if state.running and state.player == player and isElement(player) then
+            state.startTimer = nil
+            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION)
         end
-
-        if getElementSyncer(cargo) ~= player then
-            attempts = attempts + 1
-            setElementSyncer(cargo, player)
-            ownershipConfirmedAt = false
-
-            if attempts >= 24 then
-                outputChatBox("[ROPE SHOWCASE] Could not force cargo sync ownership; showcase aborted.", player, 255, 90, 90)
-                restore()
-                return
-            end
-
-            state.startTimer = setTimer(beginWhenAuthoritative, 250, 1)
-            return
-        end
-
-        if not ownershipConfirmedAt then
-            ownershipConfirmedAt = getTickCount()
-            state.startTimer = setTimer(beginWhenAuthoritative, 500, 1)
-            return
-        end
-
-        if getTickCount() - ownershipConfirmedAt < 500 then
-            state.startTimer = setTimer(beginWhenAuthoritative, 100, 1)
-            return
-        end
-
-        state.startTimer = nil
-        setElementFrozen(cargo, false)
-        triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION, cargo)
-    end
-
-    state.startTimer = setTimer(beginWhenAuthoritative, 500, 1)
+    end, 600, 1)
 end
 
 addCommandHandler("ropeshow", function(player, _, action)
@@ -168,13 +112,9 @@ end)
 addEventHandler("onPlayerQuit", root, function()
     if source == state.player then
         clearStartTimer()
-        if isElement(state.cargo) then
-            destroyElement(state.cargo)
-        end
         state.running = false
         state.player = nil
         state.saved = nil
-        state.cargo = nil
     end
 end)
 
