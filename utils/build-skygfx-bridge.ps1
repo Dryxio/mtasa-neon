@@ -51,10 +51,16 @@ foreach ($relativePath in $requiredSourceFiles)
     }
 }
 
-$vswhere = Join-Path $repositoryRoot 'utils\vswhere.exe'
-if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf))
+$vswhereCandidates = @(
+    (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe')
+    (Join-Path $repositoryRoot 'utils\vswhere.exe')
+)
+$vswhere = $vswhereCandidates |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($vswhere))
 {
-    throw "Visual Studio locator is missing: $vswhere"
+    throw 'Visual Studio locator is missing from the installed Visual Studio tools and the repository fallback'
 }
 $visualStudioRoot = @(& $vswhere -latest -products '*' -property installationPath) | Select-Object -First 1
 if ([string]::IsNullOrWhiteSpace($visualStudioRoot))
