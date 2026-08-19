@@ -1,19 +1,30 @@
 local SHOW_DIMENSION = 64988
 local CENTER_X, CENTER_Y, CENTER_Z = 405.0, 2535.0, 22.0
+local CARGO_MODEL = 2912
 
 local state = {
     player = nil,
     saved = nil,
+    cargo = nil,
+    startTimer = nil,
     running = false,
 }
+
+local function clearStartTimer()
+    if isTimer(state.startTimer) then
+        killTimer(state.startTimer)
+    end
+    state.startTimer = nil
+end
 
 local function restore()
     if not state.running then
         return
     end
 
-    local player, saved = state.player, state.saved
+    local player, saved, cargo = state.player, state.saved, state.cargo
     state.running = false
+    clearStartTimer()
 
     if isElement(player) then
         triggerClientEvent(player, "ropeShowcase:stop", resourceRoot)
@@ -27,8 +38,13 @@ local function restore()
         end
     end
 
+    if isElement(cargo) then
+        destroyElement(cargo)
+    end
+
     state.player = nil
     state.saved = nil
+    state.cargo = nil
 end
 
 local function start(player)
@@ -61,11 +77,44 @@ local function start(player)
     setElementAlpha(player, 0)
     setElementFrozen(player, true)
 
-    setTimer(function()
-        if state.running and state.player == player and isElement(player) then
-            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION)
+    local cargo = createObject(CARGO_MODEL, CENTER_X, CENTER_Y, CENTER_Z + 0.9, 0, 0, 18)
+    if not isElement(cargo) then
+        outputChatBox("[ROPE SHOWCASE] Failed to create cargo object.", player, 255, 90, 90)
+        restore()
+        return
+    end
+
+    state.cargo = cargo
+    setElementInterior(cargo, 0)
+    setElementDimension(cargo, SHOW_DIMENSION)
+    setElementCollisionsEnabled(cargo, true)
+    setElementFrozen(cargo, true)
+    setObjectDynamicPhysics(cargo, true)
+
+    local attempts = 0
+    local function beginWhenAuthoritative()
+        if not state.running or state.player ~= player or state.cargo ~= cargo or not isElement(player) or not isElement(cargo) then
+            return
         end
-    end, 600, 1)
+
+        attempts = attempts + 1
+        if getElementSyncer(cargo) == player then
+            state.startTimer = nil
+            setElementFrozen(cargo, false)
+            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION, cargo)
+            return
+        end
+
+        if attempts >= 24 then
+            outputChatBox("[ROPE SHOWCASE] Cargo sync ownership was not assigned; showcase aborted.", player, 255, 90, 90)
+            restore()
+            return
+        end
+
+        state.startTimer = setTimer(beginWhenAuthoritative, 250, 1)
+    end
+
+    state.startTimer = setTimer(beginWhenAuthoritative, 750, 1)
 end
 
 addCommandHandler("ropeshow", function(player, _, action)
@@ -98,9 +147,14 @@ end)
 
 addEventHandler("onPlayerQuit", root, function()
     if source == state.player then
+        clearStartTimer()
+        if isElement(state.cargo) then
+            destroyElement(state.cargo)
+        end
         state.running = false
         state.player = nil
         state.saved = nil
+        state.cargo = nil
     end
 end)
 
