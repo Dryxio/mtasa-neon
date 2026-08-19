@@ -10,10 +10,25 @@
 
 #include <StdInc.h>
 #include <game/CExplosionManager.h>
+#include "luadefs/CLuaBreakEffectDefs.h"
 
 extern CClientGame* g_pClientGame;
 
 CClientExplosionManager* g_pExplosionManager = NULL;
+
+namespace
+{
+    bool g_bSuppressManagedBreakExplosionDamage = false;
+
+    void HandleManagedBreakExplosionDamage(const CVector& position, eExplosionType explosionType, CEntity* gameCreator)
+    {
+        if (g_bSuppressManagedBreakExplosionDamage)
+            return;
+
+        CLuaBreakEffectDefs::HandleExplosionDamage(position, static_cast<int>(explosionType),
+                                                   gameCreator ? gameCreator->GetInterface() : nullptr);
+    }
+}
 
 CClientExplosionManager::CClientExplosionManager(CClientManager* pManager)
 {
@@ -86,7 +101,10 @@ bool CClientExplosionManager::Hook_ExplosionCreation(CEntity* pGameExplodingEnti
         arguments.PushNumber(vecPosition.fY);
         arguments.PushNumber(vecPosition.fZ);
         arguments.PushNumber(explosionWeaponType);
-        return localPlayer->CallEvent("onClientExplosion", arguments, true);
+        const bool allowExplosion = localPlayer->CallEvent("onClientExplosion", arguments, true);
+        if (allowExplosion)
+            HandleManagedBreakExplosionDamage(vecPosition, explosionType, pGameCreator);
+        return allowExplosion;
     }
 
     // Determine the used weapon
@@ -142,6 +160,8 @@ bool CClientExplosionManager::Hook_ExplosionCreation(CEntity* pGameExplodingEnti
             vehicle->SetBlowState(VehicleBlowState::BLOWN);
         }
 
+        if (allowExplosion)
+            HandleManagedBreakExplosionDamage(vecPosition, explosionType, pGameCreator);
         return allowExplosion;
     }
 
@@ -203,11 +223,16 @@ CExplosion* CClientExplosionManager::Create(eExplosionType explosionType, CVecto
     else
         m_LastWeaponType = GetWeaponTypeFromExplosionType(explosionType);
 
+    bool managedDamageHandledByHook = false;
     if (pCreator && pCreator->IsLocalEntity())
     {
+        const bool previousSuppress = g_bSuppressManagedBreakExplosionDamage;
+        g_bSuppressManagedBreakExplosionDamage = bNoDamage;
         bool allowExplosion = Hook_ExplosionCreation(nullptr, pGameCreator, vecPosition, explosionType);
+        g_bSuppressManagedBreakExplosionDamage = previousSuppress;
         if (!allowExplosion)
             return nullptr;
+        managedDamageHandledByHook = !bNoDamage;
     }
     else if (!pCreator)
     {
@@ -228,6 +253,9 @@ CExplosion* CClientExplosionManager::Create(eExplosionType explosionType, CVecto
                 return nullptr;
         }
     }
+
+    if (!bNoDamage && !managedDamageHandledByHook)
+        HandleManagedBreakExplosionDamage(vecPosition, explosionType, pGameCreator);
 
     CExplosion* pExplosion = g_pGame->GetExplosionManager()->AddExplosion(NULL, pGameCreator, explosionType, vecPosition, 0, bMakeSound, fCamShake, bNoDamage);
     return pExplosion;
