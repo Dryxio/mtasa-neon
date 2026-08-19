@@ -6,6 +6,20 @@ local BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_OFFSET_Z = -0.06488037109375, -0.394
 local CALIBRATION_STEP = 0.01
 local CALIBRATION_HEADING_STEP = 1.0
 
+-- GTA6-style shot presentation: the reticle itself is the power meter.
+-- It starts large and contracts toward the center while E is held.
+local CHARGE_DURATION_MS = 1200
+local RETICLE_MAX_RADIUS = 42
+local RETICLE_MIN_RADIUS = 10
+local RETICLE_SEGMENTS = 40
+
+-- Mirror the authoritative server formula only for the temporary tuning HUD.
+local SHOT_HORIZONTAL_MIN = 0.055
+local SHOT_HORIZONTAL_MAX = 0.165
+local SHOT_VERTICAL_MIN = 0.115
+local SHOT_VERTICAL_POWER_GAIN = 0.065
+local SHOT_VERTICAL_AIM_GAIN = 0.045
+
 -- Centerline of model 947's visible rim, extracted from the supplied
 -- bskballhub_lax01.dff and expressed relative to the rim center.
 local RIM_PATH = {
@@ -34,6 +48,29 @@ local function rotateLocal(x, y, heading)
     local r = math.rad(heading)
     local c, s = math.cos(r), math.sin(r)
     return x * c - y * s, x * s + y * c
+end
+
+local function smoothstep(value)
+    value = clamp(value, 0, 1)
+    return value * value * (3 - 2 * value)
+end
+
+local function getChargePower()
+    if not charging then return 0 end
+    return smoothstep((getTickCount() - chargeStart) / CHARGE_DURATION_MS)
+end
+
+local function getAimVector()
+    local cameraX, cameraY, cameraZ, targetX, targetY, targetZ = getCameraMatrix()
+    local dx, dy, dz = targetX - cameraX, targetY - cameraY, targetZ - cameraZ
+    local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length < 0.001 then return false end
+
+    dx, dy, dz = dx / length, dy / length, dz / length
+    local horizontalLength = math.sqrt(dx * dx + dy * dy)
+    if horizontalLength < 0.05 then return false end
+
+    return dx / horizontalLength, dy / horizontalLength, clamp(dz, -0.65, 0.75)
 end
 
 local function configureBall(object)
@@ -128,10 +165,17 @@ local function holding()
 end
 
 local function shoot(power)
-    if holding() then
-        aiming, charging = false, false
-        triggerServerEvent("basketPhysics:shoot", resourceRoot, clamp(power, 0, 1))
+    if not holding() then return end
+
+    local dirX, dirY, aimZ = getAimVector()
+    if not dirX then
+        outputChatBox("[basket-test] Camera aim is too vertical to shoot.", 255, 140, 140)
+        return
     end
+
+    power = clamp(power, 0, 1)
+    aiming, charging = false, false
+    triggerServerEvent("basketPhysics:shoot", resourceRoot, dirX, dirY, aimZ, power)
 end
 
 local function pickup()
@@ -168,6 +212,44 @@ local function copyCalibration()
     outputChatBox("[basket-test] " .. text, 235, 235, 235)
 end
 
+local function drawReticleCircle(centerX, centerY, radius, color)
+    local previousX, previousY
+    local firstX, firstY
+    for segment = 0, RETICLE_SEGMENTS do
+        local angle = math.pi * 2 * segment / RETICLE_SEGMENTS
+        local x = centerX + math.cos(angle) * radius
+        local y = centerY + math.sin(angle) * radius
+        if previousX then
+            dxDrawLine(previousX, previousY, x, y, color, 2)
+        else
+            firstX, firstY = x, y
+        end
+        previousX, previousY = x, y
+    end
+    if previousX and firstX then
+        dxDrawLine(previousX, previousY, firstX, firstY, color, 2)
+    end
+end
+
+local function drawAimReticle()
+    local power = getChargePower()
+    local radius = RETICLE_MAX_RADIUS - (RETICLE_MAX_RADIUS - RETICLE_MIN_RADIUS) * power
+    local centerX, centerY = screenW * 0.5, screenH * 0.5
+    local color = tocolor(245, 245, 245, 235)
+
+    drawReticleCircle(centerX, centerY, radius, color)
+    dxDrawRectangle(centerX - 1.5, centerY - 1.5, 3, 3, color)
+
+    local dirX, dirY, aimZ = getAimVector()
+    if dirX then
+        local horizontalSpeed = SHOT_HORIZONTAL_MIN + (SHOT_HORIZONTAL_MAX - SHOT_HORIZONTAL_MIN) * power
+        local verticalSpeed = clamp(SHOT_VERTICAL_MIN + SHOT_VERTICAL_POWER_GAIN * power + SHOT_VERTICAL_AIM_GAIN * aimZ, 0.08, 0.24)
+        dxDrawText(("%3.0f%%  aimZ %.2f  h %.3f  v %.3f"):format(power * 100, aimZ, horizontalSpeed, verticalSpeed),
+            centerX - 180, centerY + radius + 12, centerX + 180, centerY + radius + 32,
+            tocolor(255, 255, 255, 205), 0.9, "default-bold", "center", "top")
+    end
+end
+
 -- Mac-friendly keyboard controls: A toggles aim, E charges/releases the shot.
 bindKey("a", "down", function()
     if calibrating then return end
@@ -186,8 +268,7 @@ bindKey("e", "both", function(_, state)
         return
     end
     if state == "up" and charging and aiming and holding() then
-        local c = clamp((getTickCount() - chargeStart) / 1200, 0, 1)
-        shoot(c * c * (3 - 2 * c))
+        shoot(getChargePower())
     end
     charging = false
 end)
@@ -223,7 +304,9 @@ addCommandHandler("basketcal", function()
 end)
 addCommandHandler("basketcopy", copyCalibration)
 addCommandHandler("basketpickup", pickup)
-addCommandHandler("basketshot", function(_, value) shoot(clamp(tonumber(value) or 0.65, 0, 1)) end)
+addCommandHandler("basketshot", function(_, value)
+    shoot(clamp(tonumber(value) or 0.65, 0, 1))
+end)
 
 local function updateScore(object)
     if not court or not isElement(object) or not getElementData(object, "basketPhysics:free") then scoreArmed, previousBallZ = false, false return end
@@ -266,7 +349,7 @@ addEventHandler("onClientRender", root, function()
         local vx, vy, vz = getElementVelocity(object)
         local ax, ay, az = getElementAngularVelocity(object)
         local score = getElementData(localPlayer, "basketPhysics:score") or 0
-        dxDrawText(("BASKET PHYSICS | score %d\nvel %.4f %.4f %.4f | spin %.4f %.4f %.4f\nA aim toggle | hold/release E shoot | F pickup | /basketcal"):format(score, vx, vy, vz, ax, ay, az), 24, 24, 760, 115, tocolor(255,255,255,235), 1, "default-bold")
+        dxDrawText(("BASKET PHYSICS | score %d\nvel %.4f %.4f %.4f | spin %.4f %.4f %.4f\nA free aim | hold/release E shoot | F pickup | /basketcal"):format(score, vx, vy, vz, ax, ay, az), 24, 24, 760, 115, tocolor(255,255,255,235), 1, "default-bold")
     end
 
     if calibrating and court then
@@ -277,11 +360,7 @@ addEventHandler("onClientRender", root, function()
     end
 
     if aiming and holding() then
-        local p = charging and clamp((getTickCount() - chargeStart) / 1200, 0, 1) or 0
-        local w, h = 260, 16 local x, y = (screenW - w) * 0.5, screenH * 0.82
-        dxDrawRectangle(x, y, w, h, tocolor(0,0,0,170))
-        dxDrawRectangle(x + 2, y + 2, (w - 4) * p, h - 4, tocolor(245,245,245,230))
-        dxDrawText("THROW", x, y - 24, x + w, y, tocolor(255,255,255,240), 1, "default-bold", "center", "bottom")
+        drawAimReticle()
     end
 end)
 
@@ -290,7 +369,7 @@ addEventHandler("onClientResourceStart", resourceRoot, function()
     if not ensureHoopModels() then outputDebugString("[basket-test] hoop collision setup failed", 1) end
     if readCourt() then rebuildCourt() end
     for _, object in ipairs(getElementsByType("object", root, true)) do configureBall(object) end
-    outputChatBox("[basket-test] /baskettest | A aim | E shoot | F pickup | /basketcal align hoop", 170,230,255)
+    outputChatBox("[basket-test] /baskettest | A free aim | hold/release E shoot | F pickup | /basketcal", 170,230,255)
 end)
 addEventHandler("onClientElementStreamIn", root, function() configureBall(source) end)
 addEventHandler("onClientElementDataChange", root, function(key)
