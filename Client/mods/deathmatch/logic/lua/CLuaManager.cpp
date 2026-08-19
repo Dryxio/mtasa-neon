@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "../luadefs/CLua2DFXDefs.h"
 #include "../luadefs/CLuaFireDefs.h"
+#include "../luadefs/CLuaRopeDefs.h"
 #include "../luadefs/CLuaClientDefs.h"
 #include "../luadefs/CLuaVectorGraphicDefs.h"
 #include "../luadefs/CLuaPostfxDefs.h"
@@ -261,6 +262,7 @@ void CLuaManager::LoadCFunctions()
     CLuaEngineDefs::LoadFunctions();
     CLua2DFXDefs::LoadFunctions();
     CLuaFireDefs::LoadFunctions();
+    CLuaRopeDefs::LoadFunctions();
     CLuaGUIDefs::LoadFunctions();
     CLuaMarkerDefs::LoadFunctions();
     CLuaNetworkDefs::LoadFunctions();
