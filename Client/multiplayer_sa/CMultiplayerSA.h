@@ -19,6 +19,9 @@
 #include "CRemoteDataSA.h"
 
 class CRemoteDataSA;
+struct IDirect3DDevice9;
+struct IDirect3DTexture9;
+struct IDirect3DSurface9;
 #define DEFAULT_NEAR_CLIP_DISTANCE (0.3f)
 #define DEFAULT_SHADOWS_OFFSET     (0.013f)  // GTA default = 0.06f
 
@@ -204,6 +207,7 @@ public:
     float GetSunSize();
     void  SetSunSize(float fSize);
     void  ResetSunSize();
+    void  GetSunDirection(CVector& vecDirection);
     void  SetMoonSize(int iSize);
     int   GetMoonSize();
     void  ResetMoonSize();
@@ -280,6 +284,12 @@ public:
     void           SetDrawRadarAreasHandler(DrawRadarAreasHandler* pRadarAreasHandler);
     void           SetRender3DStuffHandler(Render3DStuffHandler* pHandler);
     void           SetPreRenderSkyHandler(PreRenderSkyHandler* pHandler);
+    void           SetPreConstructRenderListHandler(PreConstructRenderListHandler* pHandler) override;
+    void           SetSceneViewProjection(bool bOrthographic, float fWidth, float fHeight, float fNearClip, float fFarClip) override;
+    void           SetSceneViewSquarePerspective(bool bEnable) override;
+    bool           RenderSecondaryScene() override;
+    const SString& GetLastSecondarySceneRenderError() const override { return m_strLastSecondarySceneRenderError; }
+    void           ReleaseSecondarySceneResources() override;
     void           SetRenderHeliLightHandler(RenderHeliLightHandler* pHandler);
     void           SetRenderEverythingBarRoadsHandler(RenderEverythingBarRoadsHandler* pHandler) override;
     SRendererStats GetRendererStats() override;
@@ -384,6 +394,38 @@ public:
     bool         m_bBadDrivebyHitboxesDisabled;
 
 private:
+    // These RenderWare-owned targets must outlive one world pass, but not the scene-view subsystem or the
+    // D3D9 device. Keeping ownership here makes their reset/resource-stop lifetime explicit.
+    RwCamera* m_pSecondarySceneCamera{};
+    RwFrame*  m_pSecondarySceneCameraFrame{};
+    bool      m_bSecondarySceneCameraAddedToWorld{};
+    RwRaster* m_pSecondarySceneColorRaster{};
+    RwRaster* m_pSecondarySceneDepthRaster{};
+    UINT      m_uiSecondarySceneRasterWidth{};
+    UINT      m_uiSecondarySceneRasterHeight{};
+    SString   m_strLastSecondarySceneRenderError;
+
+    // Private D3D9-only scratch copy of the SceneView's own colour raster, used solely to reproduce
+    // CPostEffects::ColourFilter's per-frame tint (see ApplySecondarySceneColourFilter). Never shared with
+    // GTA's own CPostEffects::pRasterFrontBuffer, which is sized/UV'd for the primary screen only.
+    IDirect3DTexture9* m_pSecondaryScenePostFxTexture{};
+    IDirect3DSurface9* m_pSecondaryScenePostFxSurface{};
+
+    void ApplySecondarySceneColourFilter(IDirect3DDevice9* pDevice, IDirect3DSurface9* pColorSurface, UINT uiWidth, UINT uiHeight);
+
+    // Set by SetSceneViewProjection immediately before RenderSecondaryScene consumes it. m_pSecondarySceneCamera
+    // is a single RwCamera object reused sequentially by every SceneView slot each frame, so projection mode is
+    // applied unconditionally on every render (never conditionally skipped) - otherwise an orthographic view
+    // this frame would leak its projection into a later perspective view sharing the same camera object.
+    bool  m_bSecondarySceneOrthographic{};
+    float m_fSecondarySceneOrthoWidth{};
+    float m_fSecondarySceneOrthoHeight{};
+    float m_fSecondarySceneOrthoNearClip{};
+    float m_fSecondarySceneOrthoFarClip{};
+    // Set by SetSceneViewSquarePerspective, consumed the same way. Only meaningful while
+    // m_bSecondarySceneOrthographic is false - see RenderSecondaryScene's projection override block.
+    bool m_bSecondarySceneSquarePerspective{};
+
     std::vector<char>   m_PlayerImgCache;
     EFastClothesLoading m_FastClothesLoading;
     CLimitsSA           m_limits;
