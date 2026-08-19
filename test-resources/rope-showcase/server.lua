@@ -91,30 +91,50 @@ local function start(player)
     setElementFrozen(cargo, true)
     setObjectDynamicPhysics(cargo, true)
 
+    -- This is a deterministic one-player showcase. Do not wait for the normal
+    -- object-sync election: explicitly nominate the showcase player, then give
+    -- OBJECT_STARTSYNC a short grace period before the rope touches the object.
+    setElementSyncer(cargo, player)
+
     local attempts = 0
+    local ownershipConfirmedAt = false
     local function beginWhenAuthoritative()
         if not state.running or state.player ~= player or state.cargo ~= cargo or not isElement(player) or not isElement(cargo) then
             return
         end
 
-        attempts = attempts + 1
-        if getElementSyncer(cargo) == player then
-            state.startTimer = nil
-            setElementFrozen(cargo, false)
-            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION, cargo)
+        if getElementSyncer(cargo) ~= player then
+            attempts = attempts + 1
+            setElementSyncer(cargo, player)
+            ownershipConfirmedAt = false
+
+            if attempts >= 24 then
+                outputChatBox("[ROPE SHOWCASE] Could not force cargo sync ownership; showcase aborted.", player, 255, 90, 90)
+                restore()
+                return
+            end
+
+            state.startTimer = setTimer(beginWhenAuthoritative, 250, 1)
             return
         end
 
-        if attempts >= 24 then
-            outputChatBox("[ROPE SHOWCASE] Cargo sync ownership was not assigned; showcase aborted.", player, 255, 90, 90)
-            restore()
+        if not ownershipConfirmedAt then
+            ownershipConfirmedAt = getTickCount()
+            state.startTimer = setTimer(beginWhenAuthoritative, 500, 1)
             return
         end
 
-        state.startTimer = setTimer(beginWhenAuthoritative, 250, 1)
+        if getTickCount() - ownershipConfirmedAt < 500 then
+            state.startTimer = setTimer(beginWhenAuthoritative, 100, 1)
+            return
+        end
+
+        state.startTimer = nil
+        setElementFrozen(cargo, false)
+        triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION, cargo)
     end
 
-    state.startTimer = setTimer(beginWhenAuthoritative, 750, 1)
+    state.startTimer = setTimer(beginWhenAuthoritative, 500, 1)
 end
 
 addCommandHandler("ropeshow", function(player, _, action)
