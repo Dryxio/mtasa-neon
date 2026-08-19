@@ -50,7 +50,7 @@ Neon also ships its own GTA:SA-inspired menu and server browser, with an optiona
 
 ## GTA systems, now scriptable
 
-Nine systems that used to be locked inside the engine. Each clip is a real in-game recording.
+Ten systems that used to be locked inside the engine. Each clip is a real in-game recording.
 
 | | |
 | :--: | :--: |
@@ -58,7 +58,7 @@ Nine systems that used to be locked inside the engine. Each clip is a real in-ga
 | [![Collision generated at runtime](docs/media/runtime-collision-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)<br>**[Runtime collision](https://mtasa-neon-wiki.vercel.app/neon/runtime-collision)**<br>Build collision shapes from Lua, no `.col` file | [![Custom foliage](docs/media/foliage-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/foliage)<br>**[Custom foliage](https://mtasa-neon-wiki.vercel.app/neon/foliage)**<br>Grow GTA's own vegetation anywhere |
 | [![Managed fire following a car](docs/media/fire-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/fire)<br>**[Managed fire](https://mtasa-neon-wiki.vercel.app/neon/fire)**<br>Synchronized fires that keep their identity and follow a target | [![A retextured SA-MP interior](docs/media/samp-map-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/samp-maps)<br>**[SA-MP maps](https://mtasa-neon-wiki.vercel.app/neon/samp-maps)**<br>Load Pawn exports directly, retextured material slots included |
 | [![A Lua-controlled flock of birds](docs/media/bird-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/birds)<br>**[Scriptable birds](https://mtasa-neon-wiki.vercel.app/neon/birds)**<br>Steerable flocks with their own renderer, past GTA's six slots | [![A runway of GTA lamp posts running a colour wave](docs/media/2dfx-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/model-2dfx)<br>**[Model 2DFX effects](https://mtasa-neon-wiki.vercel.app/neon/model-2dfx)**<br>Drive the lights baked into GTA models, no custom assets |
-| [![An ordinary GTA prop breaking into fragments](docs/media/break-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/break-effects)<br>**[Object fracture](https://mtasa-neon-wiki.vercel.app/neon/break-effects)**<br>Make any object breakable at runtime, no `.dff` editing | |
+| [![An ordinary GTA prop breaking into fragments](docs/media/break-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/break-effects)<br>**[Object fracture](https://mtasa-neon-wiki.vercel.app/neon/break-effects)**<br>Make any object breakable at runtime, no `.dff` editing | [![Basketballs bouncing and rolling under GTA physics](docs/media/object-physics-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/object-physics)<br>**[Object physics](https://mtasa-neon-wiki.vercel.app/neon/object-physics)**<br>Give any object GTA's real rigid-body simulation, synchronized |
 
 ```lua
 -- Build a wall's collision from a Lua table, then change it live
@@ -97,13 +97,14 @@ Server owners use the separate server package. Both downloads are linked at the 
 | Ambient birds | Six native slots, no script access | Resource-owned `bird` elements you steer, restyle and shoot; 128 verified at once |
 | Model 2DFX effects | Baked into models, not exposed | Read, edit, add and remove them from Lua, with per-resource rollback |
 | Breakable objects | Only models shipping the breakable plugin | Any streamed object, fractured from its own geometry |
+| Object physics | Static unless scripted frame by frame | Opt-in native rigid-body simulation, with velocities synchronized through syncer changes |
 | Distant lights and draw distance | Not integrated | Built in, 300 to 5,000 units, off by default |
 
 That is the short list. The [full comparison table](https://mtasa-neon-wiki.vercel.app/neon/features) covers every pool, boundary and subsystem.
 
 ## For scripters
 
-Neon adds **254 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
+Neon adds **256 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
 
 ```lua
 engineSetRadarMapTile(column, row, txd)        -- resource-owned extended radar tiles
@@ -115,6 +116,7 @@ setFireTarget(fire, vehicle)                   -- a burning fire follows an elem
 createBird(x, y, z, { preset = "desert" })     -- flocks with their own renderer
 setModel2DFXProperty(1226, 0, "color", c)      -- recolour every lamp post of a model
 createObjectBreakEffect(obj, { force = 4 })    -- fracture any object, no breakable DFF
+setObjectDynamicPhysics(ball, true)            -- real GTA physics, synchronized
 ```
 
 The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the complete reference, with signatures, lifecycle rules, source commits and test evidence for every entry.
