@@ -69,6 +69,9 @@ project "Client Deathmatch"
 	filter "files:logic/CSampMapParser.cpp"
 		flags { "NoPCH" }
 
+	filter "files:logic/CRuntimeColModel.cpp"
+		flags { "NoPCH" }
+
 	filter "architecture:not x86"
 		flags { "ExcludeFromBuild" }
 

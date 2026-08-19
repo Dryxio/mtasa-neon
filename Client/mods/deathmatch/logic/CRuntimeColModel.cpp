@@ -6,7 +6,9 @@
  *
  *****************************************************************************/
 
-#include "StdInc.h"
+#ifndef SAMP_MAP_PARSER_STANDALONE
+    #include "StdInc.h"
+#endif
 #include "CRuntimeColModel.h"
 
 #include <algorithm>
