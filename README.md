@@ -98,13 +98,14 @@ Server owners use the separate server package. Both downloads are linked at the 
 | Model 2DFX effects | Baked into models, not exposed | Read, edit, add and remove them from Lua, with per-resource rollback |
 | Breakable objects | Only models shipping the breakable plugin | Any streamed object, fractured from its own geometry |
 | Object physics | Static unless scripted frame by frame | Opt-in native rigid-body simulation, with velocities synchronized through syncer changes |
+| Ropes | Only the legacy `createSWATRope` call | All eight native rope types as synchronized elements, with cargo attachment and slot leasing |
 | Distant lights and draw distance | Not integrated | Built in, 300 to 5,000 units, off by default |
 
 That is the short list. The [full comparison table](https://mtasa-neon-wiki.vercel.app/neon/features) covers every pool, boundary and subsystem.
 
 ## For scripters
 
-Neon adds **256 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
+Neon adds **284 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
 
 ```lua
 engineSetRadarMapTile(column, row, txd)        -- resource-owned extended radar tiles
@@ -117,6 +118,7 @@ createBird(x, y, z, { preset = "desert" })     -- flocks with their own renderer
 setModel2DFXProperty(1226, 0, "color", c)      -- recolour every lamp post of a model
 createObjectBreakEffect(obj, { force = 4 })    -- fracture any object, no breakable DFF
 setObjectDynamicPhysics(ball, true)            -- real GTA physics, synchronized
+createRope(x, y, z, { type = "wreckingBall" }) -- GTA's own cranes and winches
 ```
 
 The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the complete reference, with signatures, lifecycle rules, source commits and test evidence for every entry.
