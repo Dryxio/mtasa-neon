@@ -1,5 +1,8 @@
 local SHOW_DIMENSION = 64988
-local CENTER_X, CENTER_Y, CENTER_Z = 405.0, 2535.0, 22.0
+local RUNWAY_START_X, RUNWAY_START_Y, RUNWAY_Z = 100.74450, 2501.11401, 16.48438
+local RUNWAY_END_X, RUNWAY_END_Y = 424.00473, 2503.03442
+local CENTER_X = (RUNWAY_START_X + RUNWAY_END_X) * 0.5
+local CENTER_Y = (RUNWAY_START_Y + RUNWAY_END_Y) * 0.5
 
 local state = {
     player = nil,
@@ -25,15 +28,23 @@ local function restore()
     clearStartTimer()
 
     if isElement(player) then
-        triggerClientEvent(player, "ropeShowcase:stop", resourceRoot)
-        if saved then
-            setElementInterior(player, saved.interior)
-            setElementDimension(player, saved.dimension)
-            setElementPosition(player, saved.x, saved.y, saved.z)
-            setElementRotation(player, saved.rx, saved.ry, saved.rz)
-            setElementAlpha(player, saved.alpha)
-            setElementFrozen(player, saved.frozen)
-        end
+        fadeCamera(player, false, 0.2)
+        setTimer(function()
+            if not isElement(player) then
+                return
+            end
+
+            triggerClientEvent(player, "ropeShowcase:stop", resourceRoot)
+            if saved then
+                setElementInterior(player, saved.interior)
+                setElementDimension(player, saved.dimension)
+                setElementPosition(player, saved.x, saved.y, saved.z)
+                setElementRotation(player, saved.rx, saved.ry, saved.rz)
+                setElementAlpha(player, saved.alpha)
+                setElementFrozen(player, saved.frozen)
+            end
+            fadeCamera(player, true, 0.45)
+        end, 220, 1)
     end
 
     state.player = nil
@@ -64,21 +75,20 @@ local function start(player)
     }
     state.running = true
 
+    fadeCamera(player, false, 0.25)
     setElementInterior(player, 0)
     setElementDimension(player, SHOW_DIMENSION)
-    setElementPosition(player, CENTER_X, CENTER_Y - 40.0, 16.8)
+    setElementPosition(player, CENTER_X, CENTER_Y - 55.0, RUNWAY_Z + 1.0)
+    setElementRotation(player, 0, 0, 0)
     setElementAlpha(player, 0)
     setElementFrozen(player, true)
 
-    -- The visual cargo is client-local. The synchronized/object-authority path is
-    -- already covered by rope-test; the showcase must be deterministic and must
-    -- not depend on the server object-sync election.
     state.startTimer = setTimer(function()
         if state.running and state.player == player and isElement(player) then
             state.startTimer = nil
-            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, CENTER_Z, SHOW_DIMENSION)
+            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, RUNWAY_Z, SHOW_DIMENSION)
         end
-    end, 600, 1)
+    end, 350, 1)
 end
 
 addCommandHandler("ropeshow", function(player, _, action)
@@ -100,6 +110,13 @@ addCommandHandler("ropeshow", function(player, _, action)
     end
 
     start(player)
+end)
+
+addEvent("ropeShowcase:ready", true)
+addEventHandler("ropeShowcase:ready", resourceRoot, function()
+    if client and client == state.player and state.running then
+        fadeCamera(client, true, 0.8)
+    end
 end)
 
 addEvent("ropeShowcase:finished", true)
