@@ -222,14 +222,19 @@ bool CClientRopeManager::UpdateNative(SRopeEntry& entry, const CVector& vecAncho
     GetBool(pRope, KEY_SIT_ON_GROUND, sitOnGround);
     GetBool(pRope, KEY_PHYSICS, physics);
 
-    // A non-syncer may still render and simulate a rope, but it must not give GTA
-    // a physical holder pointer because CRope::Update applies reaction forces to it.
+    // GTA's winch/crane rope types (1..7) unconditionally dereference
+    // m_pRopeHolder in CRope::Update once the solver reaches its weight pass.
+    // Never register those types with a null or non-authoritative holder. SWAT
+    // is the only stock rope type that is safe as a free world-anchored rope.
     CEntitySAInterface* pNativeHolder = nullptr;
     if (physics && pHolder && ShouldOwnPhysics(pHolder))
     {
         CEntity* pGameEntity = pHolder->GetGameEntity();
         pNativeHolder = pGameEntity ? pGameEntity->GetInterface() : nullptr;
     }
+
+    if (ropeType != eRopeType::SWAT && !pNativeHolder)
+        return false;
 
     if (!g_pGame->GetRopes()->RegisterRope(entry.uiNativeId, ropeType, vecAnchor, false, fixedNode, sitOnGround, pNativeHolder, 20000))
         return false;
@@ -247,7 +252,7 @@ bool CClientRopeManager::UpdateNative(SRopeEntry& entry, const CVector& vecAncho
 
     CClientEntity* pCarried = GetElement(pRope, KEY_CARRIED);
     const bool carriedTypeAllowed = pCarried && (pCarried->GetType() == CCLIENTOBJECT || pCarried->GetType() == CCLIENTVEHICLE);
-    const bool canOwnCarried = physics && carriedTypeAllowed && ShouldOwnPhysics(pCarried) && (!pHolder || ShouldOwnPhysics(pHolder));
+    const bool canOwnCarried = ropeType != eRopeType::SWAT && physics && carriedTypeAllowed && ShouldOwnPhysics(pCarried) && pNativeHolder;
 
     CEntitySAInterface* pNativeCarried = nullptr;
     if (canOwnCarried)
@@ -379,7 +384,7 @@ void CClientRopeManager::DoPulse()
         bool physics = true;
         GetBool(pRope, KEY_PHYSICS, physics);
         CClientEntity* pCarried = GetElement(pRope, KEY_CARRIED);
-        const bool physicsCritical = physics && pCarried && ShouldOwnPhysics(pCarried) && (!pHolder || ShouldOwnPhysics(pHolder));
+        const bool physicsCritical = physics && pCarried && ShouldOwnPhysics(pCarried) && pHolder && ShouldOwnPhysics(pHolder);
 
         if (!contextMatches || (!physicsCritical && distanceSq > RELEASE_DISTANCE * RELEASE_DISTANCE))
         {
@@ -428,7 +433,7 @@ void CClientRopeManager::DoPulse()
                 GetBool(leased.pElement, KEY_PHYSICS, leasedPhysics);
                 CClientEntity* leasedCarried = GetElement(leased.pElement, KEY_CARRIED);
                 const bool leasedCritical = leasedPhysics && leasedCarried && ShouldOwnPhysics(leasedCarried) &&
-                                            (!leasedHolder || ShouldOwnPhysics(leasedHolder));
+                                            leasedHolder && ShouldOwnPhysics(leasedHolder);
                 if (leasedCritical)
                     continue;
 
