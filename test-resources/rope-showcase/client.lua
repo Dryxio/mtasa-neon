@@ -102,12 +102,27 @@ local function placeOnGround(element, x, y, referenceZ, offset)
     end
 
     local ground = getGroundZ(x, y, referenceZ)
-    local _, _, minZ = getElementBoundingBox(element)
-    if type(minZ) == "number" then
-        setElementPosition(element, x, y, ground - minZ + (offset or 0.02))
-    else
-        setElementPosition(element, x, y, ground + (offset or 0.02))
+    local baseDistance
+    local getBaseDistance = getElementDistanceFromCentreOfMassToBaseOfModel
+    if type(getBaseDistance) == "function" then
+        local ok, value = pcall(getBaseDistance, element)
+        if ok and type(value) == "number" and value >= 0 then
+            baseDistance = value
+        end
     end
+
+    -- The model-aware native distance is more reliable for large DFFs whose
+    -- visual base does not line up with the generic element bounding box.
+    -- Keep the bbox path for older clients/models where that native returns
+    -- no value.
+    if not baseDistance then
+        local _, _, minZ = getElementBoundingBox(element)
+        if type(minZ) == "number" then
+            baseDistance = -minZ
+        end
+    end
+
+    setElementPosition(element, x, y, ground + (baseDistance or 0) + (offset or 0.02))
     return true
 end
 
