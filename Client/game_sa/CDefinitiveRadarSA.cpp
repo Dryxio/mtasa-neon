@@ -30,7 +30,6 @@
 #include <game/CPools.h>
 #include <game/CVehicle.h>
 #include <game/RenderWareD3D.h>
-#include <enums/RadarSprite.h>
 #include <unrar/dll.hpp>
 
 #include <algorithm>
@@ -947,6 +946,27 @@ namespace
             m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices.data(), sizeof(ScreenVertex));
         }
 
+        void DrawDefaultCoordinateBlip(float centerX, float centerY, float size, DWORD color)
+        {
+            const float half = size * 0.5f;
+            const std::array<ScreenVertex, 4> vertices = {
+                ScreenVertex{centerX - half - 0.5f, centerY - half - 0.5f, 0.0f, 1.0f, color, 0.0f, 0.0f},
+                ScreenVertex{centerX + half - 0.5f, centerY - half - 0.5f, 0.0f, 1.0f, color, 1.0f, 0.0f},
+                ScreenVertex{centerX - half - 0.5f, centerY + half - 0.5f, 0.0f, 1.0f, color, 0.0f, 1.0f},
+                ScreenVertex{centerX + half - 0.5f, centerY + half - 0.5f, 0.0f, 1.0f, color, 1.0f, 1.0f},
+            };
+
+            // The DE atlas does not provide a stable texture for MTA's
+            // sprite-0 default coordinate blip. Drawing this primitive keeps
+            // that vanilla square independent from the atlas' player and
+            // waypoint indices, while retaining the resource-supplied color.
+            m_Device->SetTexture(0, nullptr);
+            m_Device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+            m_Device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+            m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices.data(), sizeof(ScreenVertex));
+            ConfigureTexturedDrawing();
+        }
+
         void DrawBlips(const CameraState& camera, float radarX, float radarY, float radarSize, float targetSize)
         {
             const float centerX = radarX + radarSize * 0.5f;
@@ -962,18 +982,8 @@ namespace
                     continue;
 
                 int sprite = marker.nBlipSprite;
-                if (sprite == 0 && (marker.BlipType == 4 || marker.BlipType == 5 || marker.BlipType == 6))
-                {
-                    // MTA uses sprite 0 for its default coordinate blip. The
-                    // vanilla renderer presents that marker as the small
-                    // square, while the Definitive atlas reserves sprite 41
-                    // for an explicit waypoint. Keep the two semantics
-                    // separate so resources such as mission navigation and
-                    // tag markers do not silently change appearance when the
-                    // user enables the Definitive radar.
-                    sprite = static_cast<int>(RadarSprite::RADAR_SPRITE_MAP_HERE);
-                }
-                if (sprite < 0 || sprite >= static_cast<int>(m_BlipTextures.size()) || !m_BlipTextures[sprite])
+                const bool defaultCoordinateBlip = sprite == 0 && (marker.BlipType == 4 || marker.BlipType == 5 || marker.BlipType == 6);
+                if (!defaultCoordinateBlip && (sprite < 0 || sprite >= static_cast<int>(m_BlipTextures.size()) || !m_BlipTextures[sprite]))
                     continue;
 
                 const Vec3  worldPosition{marker.position.fX + MAP_OFFSET_X, marker.position.fY + MAP_OFFSET_Y, 0.1f};
@@ -999,7 +1009,7 @@ namespace
 
                 if (!inside)
                 {
-                    if (sprite != 41)
+                    if (defaultCoordinateBlip || sprite != 41)
                         continue;
                     float directionX = screenX - centerX;
                     float directionY = screenY - centerY;
@@ -1015,7 +1025,14 @@ namespace
                     screenY = centerY + directionY / length * usableRadius;
                 }
 
-                DrawSprite(m_BlipTextures[sprite], screenX, screenY, iconSize);
+                if (defaultCoordinateBlip)
+                {
+                    const DWORD color = D3DCOLOR_ARGB((marker.nColour)&0xFF, (marker.nColour >> 24) & 0xFF, (marker.nColour >> 16) & 0xFF,
+                                                       (marker.nColour >> 8) & 0xFF);
+                    DrawDefaultCoordinateBlip(screenX, screenY, iconSize, color);
+                }
+                else
+                    DrawSprite(m_BlipTextures[sprite], screenX, screenY, iconSize);
             }
         }
 
