@@ -16,6 +16,8 @@ local ACT_DURATION = {
 
 local FADE_MS = 450
 local NATIVE_READY_TIMEOUT = 4000
+local MAGNET_GROUND_OFFSET = 0.10
+local MAGNET_FIRE_OFFSET_Z = 0.75
 
 local show = {
     running = false,
@@ -216,7 +218,9 @@ local function createMagnetAct()
     local cx, y, z = show.centerX, show.stageY, show.centerZ
 
     show.holder = createHolder(cx, y, z + 11.5)
-    show.rope = createManagedRope(show.holder, "miniMagnet", 5.0, 0.52)
+    -- Start with the magnet already in frame, then extend the rope slowly
+    -- before pickup so the opening shot has a readable physical ramp.
+    show.rope = createManagedRope(show.holder, "miniMagnet", 6.5, 0.80)
     show.payload = track(createObject(CARGO_MODEL, cx, y, z + 4.0, 0, 0, 18))
 
     if not isElement(show.holder) or not isElement(show.rope) or not isElement(show.payload) then
@@ -224,7 +228,7 @@ local function createMagnetAct()
     end
 
     configureElement(show.payload)
-    placeOnGround(show.payload, cx, y, z, 0.03)
+    placeOnGround(show.payload, cx, y, z, MAGNET_GROUND_OFFSET)
     setElementCollisionsEnabled(show.payload, true)
     setElementFrozen(show.payload, true)
     setObjectProperty(show.payload, "mass", 45.0)
@@ -351,7 +355,7 @@ local function setInitialCamera(act)
     local cx, y, z = show.centerX, show.stageY, show.centerZ
 
     if act == ACT_MAGNET then
-        setCameraMatrix(cx + 11.5, y - 18.5, z + 7.5, cx, y, z + 3.5, 0, 58)
+        setCameraMatrix(cx + 11.5, y - 18.5, z + 6.4, cx, y, z + 2.6, 0, 58)
     elseif act == ACT_WRECKING_BALL then
         setCameraMatrix(cx + 12.5, y - 20.0, z + 8.0, cx + 1.5, y, z + 4.0, 0, 60)
     else
@@ -401,18 +405,31 @@ local function igniteMagnetPayload()
     end
 end
 
+local function updateMagnetFire()
+    if not isElement(show.fire) or not isElement(show.payload) then
+        return
+    end
+
+    -- `target` controls managed-fire damage; it does not parent the fire to
+    -- the target. Keep the visual flame on the carried object while the rope
+    -- moves it; otherwise the showcase leaves a fire suspended at the old
+    -- pickup position and makes the sequence look stuck.
+    local x, y, z = getElementPosition(show.payload)
+    setElementPosition(show.fire, x, y, z + MAGNET_FIRE_OFFSET_Z)
+end
+
 local function animateMagnet(elapsed)
     local cx, y, z = show.centerX, show.stageY, show.centerZ
-    local length = 5.0
+    local length = 6.5
 
-    if elapsed >= 1400 and elapsed < 3200 then
-        length = lerp(5.0, 10.0, smoothstep((elapsed - 1400) / 1800))
-    elseif elapsed >= 3200 and elapsed < 3500 then
+    if elapsed >= 1200 and elapsed < 3500 then
+        length = lerp(6.5, 10.0, smoothstep((elapsed - 1200) / 2300))
+    elseif elapsed >= 3500 and elapsed < 3900 then
         length = 10.0
-    elseif elapsed >= 3500 and elapsed < 5700 then
+    elseif elapsed >= 3900 and elapsed < 6800 then
         attachCurrentPayload()
-        length = lerp(10.0, 5.2, smoothstep((elapsed - 3500) / 2200))
-    elseif elapsed >= 5700 then
+        length = lerp(10.0, 5.2, smoothstep((elapsed - 3900) / 2900))
+    elseif elapsed >= 6800 then
         attachCurrentPayload()
         length = 5.2
     end
@@ -421,15 +438,17 @@ local function animateMagnet(elapsed)
         setRopeLength(show.rope, length)
     end
 
-    if elapsed >= 5900 then
+    updateMagnetFire()
+
+    if elapsed >= 7000 then
         moveHolderOnce("magnet-carry", 2300, cx + 6.0, y, z + 11.5, "InOutQuad")
     end
 
-    if elapsed >= 6900 then
+    if elapsed >= 7600 then
         igniteMagnetPayload()
     end
 
-    if elapsed >= 9000 and not show.released and show.attached and isElement(show.rope) and isElement(show.payload) then
+    if elapsed >= 10200 and not show.released and show.attached and isElement(show.rope) and isElement(show.payload) then
         show.released = true
         detachElementFromRope(show.rope)
         show.attached = false
