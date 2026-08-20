@@ -30,6 +30,7 @@
 #include <game/CPools.h>
 #include <game/CVehicle.h>
 #include <game/RenderWareD3D.h>
+#include <enums/RadarSprite.h>
 #include <unrar/dll.hpp>
 
 #include <algorithm>
@@ -962,7 +963,16 @@ namespace
 
                 int sprite = marker.nBlipSprite;
                 if (sprite == 0 && (marker.BlipType == 4 || marker.BlipType == 5 || marker.BlipType == 6))
-                    sprite = 41;
+                {
+                    // MTA uses sprite 0 for its default coordinate blip. The
+                    // vanilla renderer presents that marker as the small
+                    // square, while the Definitive atlas reserves sprite 41
+                    // for an explicit waypoint. Keep the two semantics
+                    // separate so resources such as mission navigation and
+                    // tag markers do not silently change appearance when the
+                    // user enables the Definitive radar.
+                    sprite = static_cast<int>(RadarSprite::RADAR_SPRITE_MAP_HERE);
+                }
                 if (sprite < 0 || sprite >= static_cast<int>(m_BlipTextures.size()) || !m_BlipTextures[sprite])
                     continue;
 
