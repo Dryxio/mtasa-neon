@@ -1,0 +1,20 @@
+<meta>
+    <info author="MTA Neon" name="Native radio carousel" type="script" version="1.0.0" />
+    <script src="stations.lua" type="client" />
+    <script src="client.lua" type="client" />
+    <script src="server.lua" type="server" />
+    <file src="blur.fx" />
+    <file src="logo.fx" />
+    <file src="icons/radio_TPLAYER.png" />
+    <file src="icons/radio_csr.png" />
+    <file src="icons/radio_WCTR.png" />
+    <file src="icons/radio_SFUR.png" />
+    <file src="icons/radio_RLS.png" />
+    <file src="icons/radio_RADIOX.png" />
+    <file src="icons/radio_playback.png" />
+    <file src="icons/radio_mastersounds.png" />
+    <file src="icons/radio_krose.png" />
+    <file src="icons/radio_kjah.png" />
+    <file src="icons/radio_KDST.png" />
+    <file src="icons/radio_bounce.png" />
+</meta>
