@@ -97,25 +97,53 @@ export interface ServerItem {
 }
 
 export interface ServerAddress {
+  /** Adresse IPv4 ou nom d'hôte accepté par le gestionnaire de connexion natif. */
   ip: string
   port: number
 }
 
 export const DEFAULT_GAME_PORT = 22003
 
-/** "ip", "ip:port" ou "mtasa://ip:port" — mêmes formes que CConnectManager. */
+/**
+ * Adresse directe acceptée par l'omnibox. Les deux protocoles restent valides
+ * en entrée, mais les liens partagés utilisent mtaneon:// pour ouvrir le bon
+ * client lorsque MTA officiel et Neon sont installés sur la même machine.
+ */
 export function parseServerAddress(raw: string): ServerAddress | null {
   let text = raw.trim()
   if (text === '') return null
-  const scheme = /^mtasa:\/\//i
+  const scheme = /^(?:mtasa|mtaneon):\/\//i
   if (scheme.test(text)) text = text.replace(scheme, '')
   text = text.replace(/\/+$/, '')
 
-  const match = /^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/.exec(text)
+  const match = /^([^\s/:?#@]+)(?::(\d{1,5}))?$/.exec(text)
   if (!match || !match[1]) return null
+  const host = match[1].toLowerCase()
+  const looksLikeIpv4 = /^\d+(?:\.\d+){3}$/.test(host)
+  if (looksLikeIpv4 ? !isValidIpv4(host) : !isValidHostname(host)) return null
   const port = match[2] ? Number(match[2]) : DEFAULT_GAME_PORT
   if (port < 1 || port > 65535) return null
-  return { ip: match[1], port }
+  return { ip: host, port }
+}
+
+export function formatNeonServerLink(address: ServerAddress): string {
+  return `mtaneon://${address.ip}:${address.port}`
+}
+
+function isValidIpv4(host: string): boolean {
+  const parts = host.split('.')
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+}
+
+function isValidHostname(host: string): boolean {
+  if (host.length > 253) return false
+  if (host === 'localhost') return true
+  if (!host.includes('.')) return false
+  return host.split('.').every((label) =>
+    label.length >= 1 &&
+    label.length <= 63 &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+  )
 }
 
 export function serverKey(ip: string, port: number): string {

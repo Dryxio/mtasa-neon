@@ -262,6 +262,10 @@ export const actions = {
     return false
   },
 
+  copyServerLink(server: ServerItem): Promise<boolean> {
+    return backend.copyServerLink({ ip: server.ip, port: server.gamePort })
+  },
+
   /** Ferme le navigateur (retour au menu côté natif). */
   closeBrowser(): void {
     if (backend.close) backend.close()

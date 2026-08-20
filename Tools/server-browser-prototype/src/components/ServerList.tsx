@@ -3,14 +3,17 @@ import { useI18n } from '../i18n'
 import type { ServerItem } from '../types'
 import { Flag, IconLock, IconStar, IconStarFilled } from './Icons'
 
-const ROW_HEIGHT = 120
-const ROW_GAP = 2
+// Keep these values aligned with `.server-row`: the virtualizer needs the
+// painted card height and the intentional breathing room between cards.
+const ROW_HEIGHT = 118
+const ROW_GAP = 4
 const STRIDE = ROW_HEIGHT + ROW_GAP
 const OVERSCAN = 6
 
 interface ServerListProps {
   servers: readonly ServerItem[]
   selectedId: string | null
+  directTarget: string | null
   onSelect: (id: string) => void
   onJoin: (server: ServerItem) => void
   onToggleFavourite: (server: ServerItem) => void
@@ -58,9 +61,11 @@ const Row = memo(function Row({
       <div className="server-row__body">
         <div className="server-row__top">
           <span className="server-row__name">{server.name}</span>
+        </div>
+        <div className="server-row__bottom">
+          <span className="server-row__tagline">{server.tagline}</span>
           {server.isFeatured && <span className="server-row__featured">{t('server.featured')}</span>}
         </div>
-        <span className="server-row__tagline">{server.tagline}</span>
       </div>
       <div className="server-row__side">
         {server.passworded && (
@@ -141,11 +146,19 @@ export function ServerList(props: ServerListProps) {
   if (props.servers.length === 0) {
     return (
       <div className="server-list">
-        <div className="list-empty">
-          {t('browser.empty')}
-          <br />
-          {t('browser.emptyHint')}
-        </div>
+        {props.directTarget ? (
+          <div className="list-empty list-empty--direct">
+            <strong>{t('browser.directReady')}</strong>
+            <code>{props.directTarget}</code>
+            <span>{t('browser.directHint')}</span>
+          </div>
+        ) : (
+          <div className="list-empty">
+            {t('browser.empty')}
+            <br />
+            {t('browser.emptyHint')}
+          </div>
+        )}
       </div>
     )
   }

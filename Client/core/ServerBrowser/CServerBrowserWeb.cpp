@@ -12,20 +12,28 @@
 
 #include "CMainMenu.h"
 #include "CNeonIdentityManager.h"
+#include "CSettings.h"
 #include "CServerBrowser.h"
 #include "CServerList.h"
+#include "DXHook/CProxyDirect3DDevice9.h"
+#include "Graphics/CVideoModeManager.h"
+#include "SkyGfx/CSkyGfxManager.h"
 #include <core/CAjaxResourceHandlerInterface.h>
 #include <core/CWebCoreInterface.h>
 #include <core/CWebViewInterface.h>
 #include <game/CAudioEngine.h>
+#include <game/CCoronas.h>
+#include <game/CSettings.h>
 #include <gui/CGUIWebBrowser.h>
 #include <json.h>
+#include <SharedUtil.Misc.h>
 
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <set>
@@ -35,7 +43,11 @@ namespace
 {
     constexpr std::size_t MAX_EVENTS_PER_FRAME = 60;
     constexpr char        WEB_ROOT[] = "MTA\\cef\\serverbrowser";
-    constexpr char        FEATURED_SERVER_ID[] = "blitz-production";
+    // Set this to a registry server ID whenever Neon should promote a server
+    // on the main menu again. An empty ID keeps the reusable card hidden.
+    constexpr char  FEATURED_SERVER_ID[] = "";
+    constexpr float DISPLAY_CALIBRATION_MIN = 0.5f;
+    constexpr float DISPLAY_CALIBRATION_MAX = 2.0f;
 
     enum class EWebTranslationDomain
     {
@@ -115,7 +127,13 @@ namespace
         {"browser.destinationsCount", _td("{count} destinations"), _td("{count} destinations"), EWebTranslationDomain::Client},
         {"browser.playersOnlineCount", _td("{count} players online"), _td("{count} players online"), EWebTranslationDomain::Client},
         {"browser.backToMain", _td("Back to main menu"), _td("Back to main menu"), EWebTranslationDomain::Client},
-        {"browser.searchPlaceholder", _td("Find a Neon server"), _td("Search servers..."), EWebTranslationDomain::Client},
+        {"browser.searchPlaceholder", _td("Search servers or enter an address"), _td("Search servers..."), EWebTranslationDomain::Client},
+        {"browser.direct", _td("Direct"), _td("Direct"), EWebTranslationDomain::Client},
+        {"browser.directConnect", _td("Direct connect"), _td("Direct connect"), EWebTranslationDomain::Client},
+        {"browser.connectToAddress", _td("Connect to address"), _td("Connect to address"), EWebTranslationDomain::Client},
+        {"browser.directReady", _td("Direct connection ready"), _td("Direct connection ready"), EWebTranslationDomain::Client},
+        {"browser.directHint", _td("Press Enter or choose Connect to address."), _td("Press Enter or choose Connect to address."),
+         EWebTranslationDomain::Client},
         {"browser.heading.destinations", _td("Neon destinations"), _td("Neon destinations"), EWebTranslationDomain::Client},
         {"browser.filter.hideFull", _td("Hide full servers"), _td("Hide full servers"), EWebTranslationDomain::Client},
         {"browser.filter.hideEmpty", _td("Hide empty servers"), _td("Hide empty servers"), EWebTranslationDomain::Client},
@@ -135,6 +153,10 @@ namespace
         {"details.selectServerHint", _td("its details here."), _td("its details here."), EWebTranslationDomain::Client},
         {"details.selectedDestination", _td("Selected destination"), _td("Server information"), EWebTranslationDomain::Client},
         {"details.copyAddress", _td("Copy {address}"), _td("Copy {address}"), EWebTranslationDomain::Client},
+        {"details.serverLink", _td("Server link"), _td("Server link"), EWebTranslationDomain::Client},
+        {"details.copyLink", _td("Copy link"), _td("Copy link"), EWebTranslationDomain::Client},
+        {"details.copied", _td("Copied"), _td("Copied"), EWebTranslationDomain::Client},
+        {"details.copyFailed", _td("Copy failed"), _td("Copy failed"), EWebTranslationDomain::Client},
         {"details.regionsLanguages", _td("Regions & languages"), _td("Regions & languages"), EWebTranslationDomain::Client},
         {"details.playersOnline", _td("{count} players online"), _td("{count} players online"), EWebTranslationDomain::Client},
         {"details.viewAllPlayers", _td("View all {count} players"), _td("View all {count} players"), EWebTranslationDomain::Client},
@@ -224,6 +246,11 @@ namespace
     void AddInteger(json_object* object, const char* name, std::int64_t value)
     {
         json_object_object_add(object, name, json_object_new_int64(value));
+    }
+
+    void AddDouble(json_object* object, const char* name, double value)
+    {
+        json_object_object_add(object, name, json_object_new_double(value));
     }
 
     void AddBoolean(json_object* object, const char* name, bool value)
@@ -838,8 +865,8 @@ private:
         std::string hash;
         const char* extension = nullptr;
         const bool  valid = result.bSuccess && result.iErrorCode >= 200 && result.iErrorCode < 300 && result.pData && result.dataSize > 0 &&
-                            result.dataSize <= MAX_REGISTRY_ARTWORK_BYTES && ExtractRegistryArtworkHash(sourceUrl, hash) &&
-                            (extension = DetectRegistryArtworkExtension(result.pData, result.dataSize));
+                           result.dataSize <= MAX_REGISTRY_ARTWORK_BYTES && ExtractRegistryArtworkHash(sourceUrl, hash) &&
+                           (extension = DetectRegistryArtworkExtension(result.pData, result.dataSize));
 
         if (!valid || !FileSave(PathJoin(GetRegistryArtworkCacheRoot(), (hash + "." + (extension ? extension : "")).c_str()), result.pData,
                                 static_cast<unsigned long>(result.dataSize)))
@@ -876,10 +903,769 @@ private:
     bool                                       m_refreshStatuses{};
 };
 
+class CWebSettingsSession
+{
+public:
+    struct SState
+    {
+        bool              extendedWorldEnabled{};
+        int               extendedWorldDistance{2000};
+        bool              distantLightsEnabled{};
+        int               distantLightsDistance{2000};
+        float             distantLightsCoronaSize{0.25f};
+        SkyGfxMTAConfigV1 skyGfx{};
+        int               radarStyle{};
+        float             radarPositionX{40.0f};
+        float             radarPositionY{104.0f};
+        float             radarWidth{85.5f};
+        float             radarHeight{78.0f};
+        bool              radarWidescreenSafe{true};
+
+        int   graphicsVideoMode{};
+        int   graphicsDisplayMode{1};
+        bool  graphicsFullscreenMinimize{};
+        bool  graphicsVSync{true};
+        bool  graphicsDPIAware{};
+        int   graphicsFieldOfView{70};
+        int   graphicsDrawDistance{31};
+        int   graphicsBrightness{66};
+        int   graphicsFXQuality{2};
+        int   graphicsAnisotropic{};
+        int   graphicsAntiAliasing{1};
+        int   graphicsAspectRatio{};
+        bool  graphicsHudMatchAspectRatio{true};
+        bool  graphicsVolumetricShadows{};
+        bool  graphicsGrass{true};
+        bool  graphicsHeatHaze{};
+        bool  graphicsTyreSmoke{true};
+        bool  graphicsDynamicPedShadows{};
+        bool  graphicsMotionBlur{};
+        bool  graphicsCoronaReflections{};
+        bool  graphicsHighDetailVehicles{};
+        bool  graphicsHighDetailPeds{};
+        bool  graphicsShowUnsafeResolutions{};
+        bool  graphicsDeviceSelectionDialog{true};
+        float graphicsGamma{0.95f};
+        float graphicsBrightnessScale{1.03f};
+        float graphicsContrast{1.0f};
+        float graphicsSaturation{1.0f};
+        bool  graphicsGammaEnabled{};
+        bool  graphicsBrightnessEnabled{};
+        bool  graphicsContrastEnabled{};
+        bool  graphicsSaturationEnabled{};
+        bool  graphicsApplyWindowed{};
+        bool  graphicsApplyFullscreen{};
+    };
+
+    struct SResolution
+    {
+        int  mode{};
+        int  width{};
+        int  height{};
+        int  depth{};
+        bool unsafe{};
+    };
+
+    void Begin()
+    {
+        m_draft = ReadCurrentState();
+        m_original = m_draft;
+        m_active = true;
+        m_restartRequired = false;
+        m_wasSkyGfxManaged = IsSkyGfxManaged();
+        m_wasRadarManaged = IsRadarManaged();
+    }
+
+    bool SetValue(const std::string& id, const std::string& value)
+    {
+        if (!m_active)
+            return false;
+
+        bool   booleanValue{};
+        double numberValue{};
+        if (id == "extendedWorld.enabled" && ParseBoolean(value, booleanValue))
+            m_draft.extendedWorldEnabled = booleanValue;
+        else if (id == "extendedWorld.distance" && ParseNumber(value, numberValue))
+            m_draft.extendedWorldDistance = QuantizeInteger(numberValue, 300, 5000, 100);
+        else if (id == "distantLights.enabled" && ParseBoolean(value, booleanValue))
+            m_draft.distantLightsEnabled = booleanValue;
+        else if (id == "distantLights.distance" && ParseNumber(value, numberValue))
+            m_draft.distantLightsDistance = QuantizeInteger(numberValue, 300, 5000, 100);
+        else if (id == "distantLights.coronaSize" && ParseNumber(value, numberValue))
+            m_draft.distantLightsCoronaSize = QuantizeFloat(numberValue, 0.1f, 1.0f, 0.05f);
+        else if (id == "skyGfx.enabled" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.enabled = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.colorFilter" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.ps2ColorFilter = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.colorFilterBlur" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.ps2ColorFilterBlur = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.pcTimecycle" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.ps2ColorFilterPcTimecycle = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.depthBias" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.ps2DepthBias = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.ycbcr" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.ycbcrCorrection = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.radiosity" && !IsSkyGfxManaged() && ParseBoolean(value, booleanValue))
+            m_draft.skyGfx.ps2Radiosity = booleanValue ? 1u : 0u;
+        else if (id == "skyGfx.radiosityIntensity" && !IsSkyGfxManaged() && ParseNumber(value, numberValue) &&
+                 (numberValue == 24.0 || numberValue == 35.0 || numberValue == 48.0 || numberValue == 64.0))
+            m_draft.skyGfx.ps2RadiosityIntensity = static_cast<std::uint32_t>(numberValue);
+        else if (id == "skyGfx.radiosityFilterPasses" && !IsSkyGfxManaged() && ParseNumber(value, numberValue))
+            m_draft.skyGfx.ps2RadiosityFilterPasses = static_cast<std::uint32_t>(QuantizeInteger(numberValue, 1, 4, 1));
+        else if (id == "skyGfx.radiosityRenderPasses" && !IsSkyGfxManaged() && ParseNumber(value, numberValue))
+            m_draft.skyGfx.ps2RadiosityRenderPasses = static_cast<std::uint32_t>(QuantizeInteger(numberValue, 1, 4, 1));
+        else if (id == "radar.style" && !IsRadarManaged() && ParseNumber(value, numberValue))
+            m_draft.radarStyle = QuantizeInteger(numberValue, 0, 1, 1);
+        else if (id == "radar.positionX" && !IsRadarManaged() && ParseNumber(value, numberValue))
+            m_draft.radarPositionX = QuantizeFloat(numberValue, 0.0f, 640.0f, 1.0f);
+        else if (id == "radar.positionY" && !IsRadarManaged() && ParseNumber(value, numberValue))
+            m_draft.radarPositionY = QuantizeFloat(numberValue, 0.0f, 448.0f, 1.0f);
+        else if (id == "radar.width" && !IsRadarManaged() && ParseNumber(value, numberValue))
+            m_draft.radarWidth = QuantizeFloat(numberValue, 40.0f, 200.0f, 0.5f);
+        else if (id == "radar.height" && !IsRadarManaged() && ParseNumber(value, numberValue))
+            m_draft.radarHeight = QuantizeFloat(numberValue, 40.0f, 200.0f, 0.5f);
+        else if (id == "radar.widescreenSafe" && !IsRadarManaged() && ParseBoolean(value, booleanValue))
+            m_draft.radarWidescreenSafe = booleanValue;
+        else if (id == "graphics.videoMode" && ParseNumber(value, numberValue) && IsVideoModeAvailable(static_cast<int>(numberValue)))
+            m_draft.graphicsVideoMode = static_cast<int>(numberValue);
+        else if (id == "graphics.displayMode" && ParseNumber(value, numberValue))
+            m_draft.graphicsDisplayMode = QuantizeInteger(numberValue, 0, 3, 1);
+        else if (id == "graphics.fullscreenMinimize" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsFullscreenMinimize = booleanValue;
+        else if (id == "graphics.vsync" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsVSync = booleanValue;
+        else if (id == "graphics.dpiAware" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsDPIAware = booleanValue;
+        else if (id == "graphics.fov" && ParseNumber(value, numberValue))
+            m_draft.graphicsFieldOfView = QuantizeInteger(numberValue, 70, 90, 5);
+        else if (id == "graphics.drawDistance" && ParseNumber(value, numberValue))
+            m_draft.graphicsDrawDistance = QuantizeInteger(numberValue, 0, 100, 1);
+        else if (id == "graphics.brightness" && ParseNumber(value, numberValue))
+            m_draft.graphicsBrightness = QuantizeInteger(numberValue, 0, 100, 1);
+        else if (id == "graphics.fxQuality" && ParseNumber(value, numberValue))
+        {
+            m_draft.graphicsFXQuality = QuantizeInteger(numberValue, 0, 3, 1);
+            if (m_draft.graphicsFXQuality == 0)
+                m_draft.graphicsVolumetricShadows = false;
+        }
+        else if (id == "graphics.anisotropic" && ParseNumber(value, numberValue))
+            m_draft.graphicsAnisotropic = QuantizeInteger(numberValue, 0, GetMaxAnisotropic(), 1);
+        else if (id == "graphics.antiAliasing" && ParseNumber(value, numberValue))
+            m_draft.graphicsAntiAliasing = QuantizeInteger(numberValue, 1, 4, 1);
+        else if (id == "graphics.aspectRatio" && ParseNumber(value, numberValue))
+            m_draft.graphicsAspectRatio = QuantizeInteger(numberValue, ASPECT_RATIO_AUTO, ASPECT_RATIO_16_9, 1);
+        else if (id == "graphics.hudMatchAspectRatio" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsHudMatchAspectRatio = booleanValue;
+        else if (id == "graphics.volumetricShadows" && ParseBoolean(value, booleanValue) && m_draft.graphicsFXQuality != 0)
+            m_draft.graphicsVolumetricShadows = booleanValue;
+        else if (id == "graphics.grass" && ParseBoolean(value, booleanValue) && m_draft.graphicsFXQuality != 0)
+            m_draft.graphicsGrass = booleanValue;
+        else if (id == "graphics.heatHaze" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsHeatHaze = booleanValue;
+        else if (id == "graphics.tyreSmoke" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsTyreSmoke = booleanValue;
+        else if (id == "graphics.dynamicPedShadows" && ParseBoolean(value, booleanValue) && m_draft.graphicsFXQuality >= 2)
+            m_draft.graphicsDynamicPedShadows = booleanValue;
+        else if (id == "graphics.motionBlur" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsMotionBlur = booleanValue;
+        else if (id == "graphics.coronaReflections" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsCoronaReflections = booleanValue;
+        else if (id == "graphics.highDetailVehicles" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsHighDetailVehicles = booleanValue;
+        else if (id == "graphics.highDetailPeds" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsHighDetailPeds = booleanValue;
+        else if (id == "graphics.showUnsafeResolutions" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsShowUnsafeResolutions = booleanValue;
+        else if (id == "graphics.deviceSelectionDialog" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsDeviceSelectionDialog = booleanValue;
+        else if (id == "graphics.gamma" && ParseNumber(value, numberValue))
+            m_draft.graphicsGamma = QuantizeFloat(numberValue, DISPLAY_CALIBRATION_MIN, DISPLAY_CALIBRATION_MAX, 0.01f);
+        else if (id == "graphics.brightnessScale" && ParseNumber(value, numberValue))
+            m_draft.graphicsBrightnessScale = QuantizeFloat(numberValue, DISPLAY_CALIBRATION_MIN, DISPLAY_CALIBRATION_MAX, 0.01f);
+        else if (id == "graphics.contrast" && ParseNumber(value, numberValue))
+            m_draft.graphicsContrast = QuantizeFloat(numberValue, DISPLAY_CALIBRATION_MIN, DISPLAY_CALIBRATION_MAX, 0.01f);
+        else if (id == "graphics.saturation" && ParseNumber(value, numberValue))
+            m_draft.graphicsSaturation = QuantizeFloat(numberValue, DISPLAY_CALIBRATION_MIN, DISPLAY_CALIBRATION_MAX, 0.01f);
+        else if (id == "graphics.gammaEnabled" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsGammaEnabled = booleanValue;
+        else if (id == "graphics.brightnessEnabled" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsBrightnessEnabled = booleanValue;
+        else if (id == "graphics.contrastEnabled" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsContrastEnabled = booleanValue;
+        else if (id == "graphics.saturationEnabled" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsSaturationEnabled = booleanValue;
+        else if (id == "graphics.applyWindowed" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsApplyWindowed = booleanValue;
+        else if (id == "graphics.applyFullscreen" && ParseBoolean(value, booleanValue))
+            m_draft.graphicsApplyFullscreen = booleanValue;
+        else
+            return false;
+
+        if (id == "graphics.vsync")
+            ApplyVSyncPreview(m_draft);
+        else if (id.compare(0, 9, "graphics.") == 0 &&
+                 (id == "graphics.gamma" || id == "graphics.brightnessScale" || id == "graphics.contrast" || id == "graphics.saturation" ||
+                  id == "graphics.gammaEnabled" || id == "graphics.brightnessEnabled" || id == "graphics.contrastEnabled" ||
+                  id == "graphics.saturationEnabled" || id == "graphics.applyWindowed" || id == "graphics.applyFullscreen"))
+            ApplyDisplayCalibrationPreview(m_draft);
+
+        return true;
+    }
+
+    bool RunAction(const std::string& action, const std::string& argument)
+    {
+        if (!m_active)
+            return false;
+
+        if (action == "rebuildDistantLights" && IsDistantLightsRebuildAvailable())
+        {
+            // Rebuilding is deliberately immediate: unlike preference edits,
+            // it is a one-shot repair action with no meaningful draft state.
+            CCore::GetSingleton().GetGame()->GetCoronas()->RebuildDistantLights();
+            return true;
+        }
+
+        if (action == "radarPreset" && !IsRadarManaged())
+        {
+            m_draft.radarPositionX = 40.0f;
+            m_draft.radarPositionY = 104.0f;
+            m_draft.radarWidescreenSafe = true;
+            if (argument == "neon")
+            {
+                m_draft.radarWidth = 85.5f;
+                m_draft.radarHeight = 78.0f;
+                return true;
+            }
+            if (argument == "vanilla")
+            {
+                m_draft.radarWidth = 94.0f;
+                m_draft.radarHeight = 76.0f;
+                return true;
+            }
+        }
+        if (action == "resetDisplayCalibration")
+        {
+            m_draft.graphicsGamma = 1.0f;
+            m_draft.graphicsBrightnessScale = 1.0f;
+            m_draft.graphicsContrast = 1.0f;
+            m_draft.graphicsSaturation = 1.0f;
+            m_draft.graphicsGammaEnabled = false;
+            m_draft.graphicsBrightnessEnabled = false;
+            m_draft.graphicsContrastEnabled = false;
+            m_draft.graphicsSaturationEnabled = false;
+            m_draft.graphicsApplyWindowed = false;
+            m_draft.graphicsApplyFullscreen = false;
+            ApplyDisplayCalibrationPreview(m_draft);
+            return true;
+        }
+        if (action == "restartNow" && m_restartRequired)
+        {
+            SetOnQuitCommand("restart");
+            CCore::GetSingleton().Quit();
+            return true;
+        }
+        return false;
+    }
+
+    void Reset(const std::string& section)
+    {
+        if (!m_active)
+            return;
+
+        SState defaults;
+        if (section == "neon")
+        {
+            if (!IsSkyGfxManaged())
+                m_draft.skyGfx = defaults.skyGfx;
+            if (!IsRadarManaged())
+            {
+                m_draft.radarStyle = defaults.radarStyle;
+                m_draft.radarPositionX = defaults.radarPositionX;
+                m_draft.radarPositionY = defaults.radarPositionY;
+                m_draft.radarWidth = defaults.radarWidth;
+                m_draft.radarHeight = defaults.radarHeight;
+                m_draft.radarWidescreenSafe = defaults.radarWidescreenSafe;
+            }
+            m_draft.extendedWorldEnabled = defaults.extendedWorldEnabled;
+            m_draft.extendedWorldDistance = defaults.extendedWorldDistance;
+            m_draft.distantLightsEnabled = defaults.distantLightsEnabled;
+            m_draft.distantLightsDistance = defaults.distantLightsDistance;
+            m_draft.distantLightsCoronaSize = defaults.distantLightsCoronaSize;
+        }
+        else if (section == "graphics")
+        {
+            const SState current = m_draft;
+            CopyGraphics(defaults, m_draft);
+            if (!IsMultiMonitor())
+            {
+                m_draft.graphicsFullscreenMinimize = current.graphicsFullscreenMinimize;
+                m_draft.graphicsDeviceSelectionDialog = current.graphicsDeviceSelectionDialog;
+            }
+            if (!HasUnsafeResolutions())
+                m_draft.graphicsShowUnsafeResolutions = current.graphicsShowUnsafeResolutions;
+            ApplyVSyncPreview(m_draft);
+            ApplyDisplayCalibrationPreview(m_draft);
+        }
+    }
+
+    void Cancel()
+    {
+        if (m_active)
+        {
+            ApplyVSyncPreview(m_original);
+            ApplyDisplayCalibrationPreview(m_original);
+            m_draft = m_original;
+        }
+    }
+
+    void Apply()
+    {
+        if (!m_active)
+            return;
+
+        CVARS_SET("extended_draw_distance_enabled", m_draft.extendedWorldEnabled);
+        CVARS_SET("extended_draw_distance", m_draft.extendedWorldDistance);
+        CCore::GetSingleton().ApplyExtendedWorldDrawDistancePreferences();
+
+        CVARS_SET("distant_lights_enabled", m_draft.distantLightsEnabled);
+        CVARS_SET("distant_lights_draw_distance", m_draft.distantLightsDistance);
+        CVARS_SET("distant_lights_corona_radius_multiplier", m_draft.distantLightsCoronaSize);
+        if (CGame* game = g_pCore->GetGame())
+        {
+            CCoronas* coronas = game->GetCoronas();
+            coronas->SetDistantLightsDrawDistance(static_cast<float>(m_draft.distantLightsDistance));
+            coronas->SetDistantLightsCoronaRadiusMultiplier(m_draft.distantLightsCoronaSize);
+            coronas->SetDistantLightsEnabled(m_draft.distantLightsEnabled);
+        }
+
+        if (!IsSkyGfxManaged())
+        {
+            m_draft.skyGfx.preset = SkyGfxMTAPreset::PlayStation2;
+            SkyGfx::CManager::Get().SetConfig(m_draft.skyGfx, true);
+        }
+
+        if (!IsRadarManaged())
+        {
+            CVARS_SET("radar_style", m_draft.radarStyle);
+            CVARS_SET("radar_position_x", m_draft.radarPositionX);
+            CVARS_SET("radar_position_y", m_draft.radarPositionY);
+            CVARS_SET("radar_width", m_draft.radarWidth);
+            CVARS_SET("radar_height", m_draft.radarHeight);
+            CVARS_SET("radar_widescreen_safe", m_draft.radarWidescreenSafe);
+        }
+
+        CGameSettings* gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
+        if (gameSettings)
+        {
+            int fullscreenStyle = FULLSCREEN_STANDARD;
+            if (m_draft.graphicsDisplayMode == 2)
+                fullscreenStyle = FULLSCREEN_BORDERLESS;
+            else if (m_draft.graphicsDisplayMode == 3)
+                fullscreenStyle = FULLSCREEN_BORDERLESS_KEEP_RES;
+
+            const bool windowed = m_draft.graphicsDisplayMode == 0;
+            const bool videoModeChanged =
+                GetVideoModeManager()->SetVideoMode(m_draft.graphicsVideoMode, windowed, m_draft.graphicsFullscreenMinimize, fullscreenStyle);
+            const bool antiAliasingChanged = gameSettings->GetAntiAliasing() != static_cast<unsigned int>(m_draft.graphicsAntiAliasing);
+            const bool dpiAwareChanged = CVARS_GET_VALUE<bool>("process_dpi_aware") != m_draft.graphicsDPIAware;
+            const bool deviceSelectionChanged = (GetApplicationSettingInt("device-selection-disabled") == 0) != m_draft.graphicsDeviceSelectionDialog;
+
+            gameSettings->SetAntiAliasing(m_draft.graphicsAntiAliasing, true);
+            gameSettings->SetDrawDistance((static_cast<float>(m_draft.graphicsDrawDistance) / 100.0f * 0.875f) + 0.925f);
+            gameSettings->SetBrightness(static_cast<unsigned int>(std::round(static_cast<float>(m_draft.graphicsBrightness) / 100.0f * 384.0f)));
+            gameSettings->SetFXQuality(m_draft.graphicsFXQuality);
+
+            CVARS_SET("process_dpi_aware", m_draft.graphicsDPIAware);
+            CVARS_SET("fov", m_draft.graphicsFieldOfView);
+            gameSettings->UpdateFieldOfViewFromSettings();
+            CVARS_SET("anisotropic", m_draft.graphicsAnisotropic);
+            CVARS_SET("aspect_ratio", m_draft.graphicsAspectRatio);
+            CVARS_SET("hud_match_aspect_ratio", m_draft.graphicsHudMatchAspectRatio);
+            gameSettings->SetAspectRatio(static_cast<eAspectRatio>(m_draft.graphicsAspectRatio), m_draft.graphicsHudMatchAspectRatio);
+
+            CVARS_SET("volumetric_shadows", m_draft.graphicsVolumetricShadows);
+            gameSettings->SetVolumetricShadowsEnabled(m_draft.graphicsVolumetricShadows);
+            CVARS_SET("grass", m_draft.graphicsGrass);
+            gameSettings->SetGrassEnabled(m_draft.graphicsGrass);
+            CVARS_SET("heat_haze", m_draft.graphicsHeatHaze);
+            CVARS_SET("tyre_smoke_enabled", m_draft.graphicsTyreSmoke);
+            if (g_pCore->GetMultiplayer())
+            {
+                g_pCore->GetMultiplayer()->SetHeatHazeEnabled(m_draft.graphicsHeatHaze);
+                g_pCore->GetMultiplayer()->SetTyreSmokeEnabled(m_draft.graphicsTyreSmoke);
+            }
+
+            CVARS_SET("high_detail_vehicles", m_draft.graphicsHighDetailVehicles);
+            gameSettings->ResetVehiclesLODDistance(false);
+            CVARS_SET("high_detail_peds", m_draft.graphicsHighDetailPeds);
+            gameSettings->ResetPedsLODDistance(false);
+            CVARS_SET("blur", m_draft.graphicsMotionBlur);
+            gameSettings->ResetBlurEnabled();
+            CVARS_SET("corona_reflections", m_draft.graphicsCoronaReflections);
+            gameSettings->ResetCoronaReflectionsEnabled();
+            CVARS_SET("dynamic_ped_shadows", m_draft.graphicsDynamicPedShadows);
+            gameSettings->SetDynamicPedShadowsEnabled(m_draft.graphicsDynamicPedShadows);
+
+            CVARS_SET("show_unsafe_resolutions", m_draft.graphicsShowUnsafeResolutions);
+            SetApplicationSettingInt("device-selection-disabled", m_draft.graphicsDeviceSelectionDialog ? 0 : 1);
+            ApplyVSyncPreview(m_draft);
+            ApplyDisplayCalibrationPreview(m_draft);
+
+            // Video mode, multisampling and process DPI awareness are consumed
+            // during device creation, so applying them schedules one restart
+            // instead of attempting an unsafe D3D reset from the web menu.
+            m_restartRequired = m_restartRequired || videoModeChanged || antiAliasingChanged || dpiAwareChanged || deviceSelectionChanged;
+            gameSettings->Save();
+        }
+
+        CClientVariables::GetSingleton().ValidateValues();
+        CCore::GetSingleton().SaveConfig();
+        m_original = m_draft;
+    }
+
+    void RefreshManagedValues()
+    {
+        const bool skyGfxManaged = IsSkyGfxManaged();
+        if (skyGfxManaged)
+            m_draft.skyGfx = SkyGfx::CManager::Get().GetConfig();
+        else if (m_wasSkyGfxManaged)
+        {
+            m_draft.skyGfx = SkyGfx::CManager::Get().GetUserConfig();
+            m_original.skyGfx = m_draft.skyGfx;
+        }
+        m_wasSkyGfxManaged = skyGfxManaged;
+
+        const bool radarManaged = IsRadarManaged();
+        if (radarManaged || m_wasRadarManaged)
+            ReadRadarValues(m_draft);
+        if (!radarManaged && m_wasRadarManaged)
+        {
+            m_original.radarStyle = m_draft.radarStyle;
+            m_original.radarPositionX = m_draft.radarPositionX;
+            m_original.radarPositionY = m_draft.radarPositionY;
+            m_original.radarWidth = m_draft.radarWidth;
+            m_original.radarHeight = m_draft.radarHeight;
+            m_original.radarWidescreenSafe = m_draft.radarWidescreenSafe;
+        }
+        m_wasRadarManaged = radarManaged;
+    }
+
+    const SState& GetState() const { return m_draft; }
+    bool          IsActive() const { return m_active; }
+    bool          IsSkyGfxManaged() const { return SkyGfx::CManager::Get().HasRuntimeOverrides(); }
+    bool          IsRadarManaged() const
+    {
+        const CClientVariables& variables = CClientVariables::GetSingleton();
+        return variables.HasRuntimeOverride("radar_style") || variables.HasRuntimeOverride("radar_position_x") ||
+               variables.HasRuntimeOverride("radar_position_y") || variables.HasRuntimeOverride("radar_width") ||
+               variables.HasRuntimeOverride("radar_height") || variables.HasRuntimeOverride("radar_widescreen_safe");
+    }
+    bool IsDistantLightsRebuildAvailable() const
+    {
+        return m_draft.distantLightsEnabled && CModManager::GetSingleton().IsLoaded() && g_pCore && g_pCore->GetGame() && g_pCore->GetGame()->GetCoronas();
+    }
+
+    int GetMaxAnisotropic() const { return g_pDeviceState ? std::max(0, g_pDeviceState->AdapterState.MaxAnisotropicSetting) : 0; }
+
+    bool IsMultiMonitor() const { return GetVideoModeManager() && GetVideoModeManager()->IsMultiMonitor(); }
+    bool HasUnsafeResolutions() const
+    {
+        CGame* game = g_pCore ? g_pCore->GetGame() : nullptr;
+        return game && game->GetSettings() && game->GetSettings()->HasUnsafeResolutions();
+    }
+    bool RequiresRestart() const { return m_restartRequired; }
+
+    std::vector<SResolution> GetResolutions() const
+    {
+        std::vector<SResolution> resolutions;
+        CGame*                   game = g_pCore ? g_pCore->GetGame() : nullptr;
+        CGameSettings*           settings = game ? game->GetSettings() : nullptr;
+        if (!settings)
+            return resolutions;
+
+        VideoMode info;
+        for (unsigned int mode = 0; mode < settings->GetNumVideoModes(); ++mode)
+        {
+            if (!settings->GetVideoModeInfo(&info, mode) || info.width < 640 || info.height < 480 || !(info.flags & rwVIDEOMODEEXCLUSIVE))
+                continue;
+
+            const bool unsafe = settings->IsUnsafeResolution(info.width, info.height);
+            if (unsafe && !m_draft.graphicsShowUnsafeResolutions && static_cast<int>(mode) != m_draft.graphicsVideoMode)
+                continue;
+
+            const auto duplicate = std::find_if(resolutions.begin(), resolutions.end(), [&](const SResolution& value)
+                                                { return value.width == info.width && value.height == info.height && value.depth == info.depth; });
+            if (duplicate == resolutions.end())
+                resolutions.push_back({static_cast<int>(mode), info.width, info.height, info.depth, unsafe});
+            else if (static_cast<int>(mode) == m_draft.graphicsVideoMode)
+                *duplicate = {static_cast<int>(mode), info.width, info.height, info.depth, unsafe};
+        }
+        std::sort(resolutions.begin(), resolutions.end(),
+                  [](const SResolution& left, const SResolution& right)
+                  {
+                      if (left.width != right.width)
+                          return left.width > right.width;
+                      if (left.height != right.height)
+                          return left.height > right.height;
+                      return left.depth > right.depth;
+                  });
+        return resolutions;
+    }
+
+    bool IsDirty() const
+    {
+        const bool generalDirty =
+            m_draft.extendedWorldEnabled != m_original.extendedWorldEnabled || m_draft.extendedWorldDistance != m_original.extendedWorldDistance ||
+            m_draft.distantLightsEnabled != m_original.distantLightsEnabled || m_draft.distantLightsDistance != m_original.distantLightsDistance ||
+            m_draft.distantLightsCoronaSize != m_original.distantLightsCoronaSize;
+        const bool skyGfxDirty = !IsSkyGfxManaged() && std::memcmp(&m_draft.skyGfx, &m_original.skyGfx, sizeof(m_draft.skyGfx)) != 0;
+        const bool radarDirty =
+            !IsRadarManaged() && (m_draft.radarStyle != m_original.radarStyle || m_draft.radarPositionX != m_original.radarPositionX ||
+                                  m_draft.radarPositionY != m_original.radarPositionY || m_draft.radarWidth != m_original.radarWidth ||
+                                  m_draft.radarHeight != m_original.radarHeight || m_draft.radarWidescreenSafe != m_original.radarWidescreenSafe);
+        return generalDirty || skyGfxDirty || radarDirty || !GraphicsEqual(m_draft, m_original);
+    }
+
+    const char* GetSkyGfxStatus() const
+    {
+        switch (SkyGfx::CManager::Get().GetStatus())
+        {
+            case SkyGfx::IntegrationStatus::Disabled:
+                return "Disabled";
+            case SkyGfx::IntegrationStatus::ModuleMissing:
+                return "skygfx_mta.dll was not found";
+            case SkyGfx::IntegrationStatus::ApiMismatch:
+                return "Incompatible API version";
+            case SkyGfx::IntegrationStatus::BridgeReady:
+                return "Active";
+            case SkyGfx::IntegrationStatus::Failed:
+                return "Initialization failed";
+        }
+        return "Unavailable";
+    }
+
+private:
+    static bool IsVideoModeAvailable(int requestedMode)
+    {
+        CGame*         game = g_pCore ? g_pCore->GetGame() : nullptr;
+        CGameSettings* settings = game ? game->GetSettings() : nullptr;
+        VideoMode      info;
+        return requestedMode >= 0 && settings && settings->GetVideoModeInfo(&info, static_cast<unsigned int>(requestedMode)) && info.width >= 640 &&
+               info.height >= 480 && (info.flags & rwVIDEOMODEEXCLUSIVE);
+    }
+
+    static void RefreshDisplayCalibration()
+    {
+        CScopedActiveProxyDevice proxyDevice;
+        if (proxyDevice)
+            proxyDevice->ApplyBorderlessPresentationTuning();
+    }
+
+    static void ApplyVSyncPreview(const SState& state)
+    {
+        if (g_pCore && g_pCore->GetFPSLimiter())
+            g_pCore->GetFPSLimiter()->SetDisplayVSync(state.graphicsVSync);
+    }
+
+    static void ApplyDisplayCalibrationPreview(const SState& state)
+    {
+        CVARS_SET("borderless_gamma_power", state.graphicsGamma);
+        CVARS_SET("borderless_brightness_scale", state.graphicsBrightnessScale);
+        CVARS_SET("borderless_contrast_scale", state.graphicsContrast);
+        CVARS_SET("borderless_saturation_scale", state.graphicsSaturation);
+        CVARS_SET("borderless_gamma_enabled", state.graphicsGammaEnabled);
+        CVARS_SET("borderless_brightness_enabled", state.graphicsBrightnessEnabled);
+        CVARS_SET("borderless_contrast_enabled", state.graphicsContrastEnabled);
+        CVARS_SET("borderless_saturation_enabled", state.graphicsSaturationEnabled);
+        CVARS_SET("borderless_apply_windowed", state.graphicsApplyWindowed);
+        CVARS_SET("borderless_apply_fullscreen", state.graphicsApplyFullscreen);
+        RefreshDisplayCalibration();
+    }
+
+    static void CopyGraphics(const SState& source, SState& destination)
+    {
+        destination.graphicsVideoMode = source.graphicsVideoMode;
+        destination.graphicsDisplayMode = source.graphicsDisplayMode;
+        destination.graphicsFullscreenMinimize = source.graphicsFullscreenMinimize;
+        destination.graphicsVSync = source.graphicsVSync;
+        destination.graphicsDPIAware = source.graphicsDPIAware;
+        destination.graphicsFieldOfView = source.graphicsFieldOfView;
+        destination.graphicsDrawDistance = source.graphicsDrawDistance;
+        destination.graphicsBrightness = source.graphicsBrightness;
+        destination.graphicsFXQuality = source.graphicsFXQuality;
+        destination.graphicsAnisotropic = source.graphicsAnisotropic;
+        destination.graphicsAntiAliasing = source.graphicsAntiAliasing;
+        destination.graphicsAspectRatio = source.graphicsAspectRatio;
+        destination.graphicsHudMatchAspectRatio = source.graphicsHudMatchAspectRatio;
+        destination.graphicsVolumetricShadows = source.graphicsVolumetricShadows;
+        destination.graphicsGrass = source.graphicsGrass;
+        destination.graphicsHeatHaze = source.graphicsHeatHaze;
+        destination.graphicsTyreSmoke = source.graphicsTyreSmoke;
+        destination.graphicsDynamicPedShadows = source.graphicsDynamicPedShadows;
+        destination.graphicsMotionBlur = source.graphicsMotionBlur;
+        destination.graphicsCoronaReflections = source.graphicsCoronaReflections;
+        destination.graphicsHighDetailVehicles = source.graphicsHighDetailVehicles;
+        destination.graphicsHighDetailPeds = source.graphicsHighDetailPeds;
+        destination.graphicsShowUnsafeResolutions = source.graphicsShowUnsafeResolutions;
+        destination.graphicsDeviceSelectionDialog = source.graphicsDeviceSelectionDialog;
+        destination.graphicsGamma = source.graphicsGamma;
+        destination.graphicsBrightnessScale = source.graphicsBrightnessScale;
+        destination.graphicsContrast = source.graphicsContrast;
+        destination.graphicsSaturation = source.graphicsSaturation;
+        destination.graphicsGammaEnabled = source.graphicsGammaEnabled;
+        destination.graphicsBrightnessEnabled = source.graphicsBrightnessEnabled;
+        destination.graphicsContrastEnabled = source.graphicsContrastEnabled;
+        destination.graphicsSaturationEnabled = source.graphicsSaturationEnabled;
+        destination.graphicsApplyWindowed = source.graphicsApplyWindowed;
+        destination.graphicsApplyFullscreen = source.graphicsApplyFullscreen;
+    }
+
+    static bool GraphicsEqual(const SState& left, const SState& right)
+    {
+        SState copy = left;
+        CopyGraphics(right, copy);
+        return copy.graphicsVideoMode == left.graphicsVideoMode && copy.graphicsDisplayMode == left.graphicsDisplayMode &&
+               copy.graphicsFullscreenMinimize == left.graphicsFullscreenMinimize && copy.graphicsVSync == left.graphicsVSync &&
+               copy.graphicsDPIAware == left.graphicsDPIAware && copy.graphicsFieldOfView == left.graphicsFieldOfView &&
+               copy.graphicsDrawDistance == left.graphicsDrawDistance && copy.graphicsBrightness == left.graphicsBrightness &&
+               copy.graphicsFXQuality == left.graphicsFXQuality && copy.graphicsAnisotropic == left.graphicsAnisotropic &&
+               copy.graphicsAntiAliasing == left.graphicsAntiAliasing && copy.graphicsAspectRatio == left.graphicsAspectRatio &&
+               copy.graphicsHudMatchAspectRatio == left.graphicsHudMatchAspectRatio && copy.graphicsVolumetricShadows == left.graphicsVolumetricShadows &&
+               copy.graphicsGrass == left.graphicsGrass && copy.graphicsHeatHaze == left.graphicsHeatHaze && copy.graphicsTyreSmoke == left.graphicsTyreSmoke &&
+               copy.graphicsDynamicPedShadows == left.graphicsDynamicPedShadows && copy.graphicsMotionBlur == left.graphicsMotionBlur &&
+               copy.graphicsCoronaReflections == left.graphicsCoronaReflections && copy.graphicsHighDetailVehicles == left.graphicsHighDetailVehicles &&
+               copy.graphicsHighDetailPeds == left.graphicsHighDetailPeds && copy.graphicsShowUnsafeResolutions == left.graphicsShowUnsafeResolutions &&
+               copy.graphicsDeviceSelectionDialog == left.graphicsDeviceSelectionDialog && copy.graphicsGamma == left.graphicsGamma &&
+               copy.graphicsBrightnessScale == left.graphicsBrightnessScale && copy.graphicsContrast == left.graphicsContrast &&
+               copy.graphicsSaturation == left.graphicsSaturation && copy.graphicsGammaEnabled == left.graphicsGammaEnabled &&
+               copy.graphicsBrightnessEnabled == left.graphicsBrightnessEnabled && copy.graphicsContrastEnabled == left.graphicsContrastEnabled &&
+               copy.graphicsSaturationEnabled == left.graphicsSaturationEnabled && copy.graphicsApplyWindowed == left.graphicsApplyWindowed &&
+               copy.graphicsApplyFullscreen == left.graphicsApplyFullscreen;
+    }
+
+    static bool ParseBoolean(const std::string& value, bool& result)
+    {
+        if (value == "1" || value == "true")
+        {
+            result = true;
+            return true;
+        }
+        if (value == "0" || value == "false")
+        {
+            result = false;
+            return true;
+        }
+        return false;
+    }
+
+    static bool ParseNumber(const std::string& value, double& result)
+    {
+        if (value.empty())
+            return false;
+        char* end = nullptr;
+        errno = 0;
+        result = std::strtod(value.c_str(), &end);
+        return errno == 0 && end != value.c_str() && *end == '\0' && std::isfinite(result);
+    }
+
+    static int QuantizeInteger(double value, int minimum, int maximum, int step)
+    {
+        const int quantized = static_cast<int>(std::round(value / step)) * step;
+        return std::clamp(quantized, minimum, maximum);
+    }
+
+    static float QuantizeFloat(double value, float minimum, float maximum, float step)
+    {
+        const float quantized = std::round(static_cast<float>(value) / step) * step;
+        return std::clamp(quantized, minimum, maximum);
+    }
+
+    static void ReadRadarValues(SState& state)
+    {
+        CVARS_GET("radar_style", state.radarStyle);
+        CVARS_GET("radar_position_x", state.radarPositionX);
+        CVARS_GET("radar_position_y", state.radarPositionY);
+        CVARS_GET("radar_width", state.radarWidth);
+        CVARS_GET("radar_height", state.radarHeight);
+        CVARS_GET("radar_widescreen_safe", state.radarWidescreenSafe);
+    }
+
+    static SState ReadCurrentState()
+    {
+        SState state;
+        CVARS_GET("extended_draw_distance_enabled", state.extendedWorldEnabled);
+        CVARS_GET("extended_draw_distance", state.extendedWorldDistance);
+        CVARS_GET("distant_lights_enabled", state.distantLightsEnabled);
+        CVARS_GET("distant_lights_draw_distance", state.distantLightsDistance);
+        CVARS_GET("distant_lights_corona_radius_multiplier", state.distantLightsCoronaSize);
+        state.skyGfx = SkyGfx::CManager::Get().HasRuntimeOverrides() ? SkyGfx::CManager::Get().GetConfig() : SkyGfx::CManager::Get().GetUserConfig();
+        ReadRadarValues(state);
+
+        CGame*         game = g_pCore ? g_pCore->GetGame() : nullptr;
+        CGameSettings* gameSettings = game ? game->GetSettings() : nullptr;
+        if (gameSettings)
+        {
+            bool windowed = false;
+            bool fullscreenMinimize = false;
+            int  fullscreenStyle = FULLSCREEN_STANDARD;
+            GetVideoModeManager()->GetNextVideoMode(state.graphicsVideoMode, windowed, fullscreenMinimize, fullscreenStyle);
+            state.graphicsDisplayMode = windowed ? 0 : 1;
+            if (!windowed && fullscreenStyle == FULLSCREEN_BORDERLESS)
+                state.graphicsDisplayMode = 2;
+            else if (!windowed && fullscreenStyle == FULLSCREEN_BORDERLESS_KEEP_RES)
+                state.graphicsDisplayMode = 3;
+            state.graphicsFullscreenMinimize = fullscreenMinimize;
+            state.graphicsDrawDistance = std::clamp(static_cast<int>(std::round((gameSettings->GetDrawDistance() - 0.925f) / 0.875f * 100.0f)), 0, 100);
+            state.graphicsBrightness = std::clamp(static_cast<int>(std::round(static_cast<float>(gameSettings->GetBrightness()) / 384.0f * 100.0f)), 0, 100);
+            state.graphicsFXQuality = std::clamp(static_cast<int>(gameSettings->GetFXQuality()), 0, 3);
+            state.graphicsAntiAliasing = std::clamp(static_cast<int>(gameSettings->GetAntiAliasing()), 1, 4);
+        }
+
+        CVARS_GET("vsync", state.graphicsVSync);
+        CVARS_GET("process_dpi_aware", state.graphicsDPIAware);
+        CVARS_GET("fov", state.graphicsFieldOfView);
+        CVARS_GET("anisotropic", state.graphicsAnisotropic);
+        CVARS_GET("aspect_ratio", state.graphicsAspectRatio);
+        CVARS_GET("hud_match_aspect_ratio", state.graphicsHudMatchAspectRatio);
+        CVARS_GET("volumetric_shadows", state.graphicsVolumetricShadows);
+        CVARS_GET("grass", state.graphicsGrass);
+        CVARS_GET("heat_haze", state.graphicsHeatHaze);
+        CVARS_GET("tyre_smoke_enabled", state.graphicsTyreSmoke);
+        CVARS_GET("dynamic_ped_shadows", state.graphicsDynamicPedShadows);
+        CVARS_GET("blur", state.graphicsMotionBlur);
+        CVARS_GET("corona_reflections", state.graphicsCoronaReflections);
+        CVARS_GET("high_detail_vehicles", state.graphicsHighDetailVehicles);
+        CVARS_GET("high_detail_peds", state.graphicsHighDetailPeds);
+        CVARS_GET("show_unsafe_resolutions", state.graphicsShowUnsafeResolutions);
+        state.graphicsDeviceSelectionDialog = GetApplicationSettingInt("device-selection-disabled") == 0;
+        CVARS_GET("borderless_gamma_power", state.graphicsGamma);
+        CVARS_GET("borderless_brightness_scale", state.graphicsBrightnessScale);
+        CVARS_GET("borderless_contrast_scale", state.graphicsContrast);
+        CVARS_GET("borderless_saturation_scale", state.graphicsSaturation);
+        CVARS_GET("borderless_gamma_enabled", state.graphicsGammaEnabled);
+        CVARS_GET("borderless_brightness_enabled", state.graphicsBrightnessEnabled);
+        CVARS_GET("borderless_contrast_enabled", state.graphicsContrastEnabled);
+        CVARS_GET("borderless_saturation_enabled", state.graphicsSaturationEnabled);
+        CVARS_GET("borderless_apply_windowed", state.graphicsApplyWindowed);
+        CVARS_GET("borderless_apply_fullscreen", state.graphicsApplyFullscreen);
+        return state;
+    }
+
+    SState m_original;
+    SState m_draft;
+    bool   m_active{};
+    bool   m_wasSkyGfxManaged{};
+    bool   m_wasRadarManaged{};
+    bool   m_restartRequired{};
+};
+
 CServerBrowserWeb* CServerBrowserWeb::ms_instance = nullptr;
 
 CServerBrowserWeb::CServerBrowserWeb(CMainMenu& mainMenu, CServerBrowser& serverBrowser)
-    : m_mainMenu(mainMenu), m_serverBrowser(serverBrowser), m_registry(std::make_unique<CNeonServerRegistry>())
+    : m_mainMenu(mainMenu),
+      m_serverBrowser(serverBrowser),
+      m_registry(std::make_unique<CNeonServerRegistry>()),
+      m_settings(std::make_unique<CWebSettingsSession>())
 {
     ms_instance = this;
 }
@@ -1292,6 +2078,11 @@ bool CServerBrowserWeb::DoPulse()
 
     QueueIdentity(false);
     QueueMenuContext(false);
+    if (m_settingsReady && ++m_settingsUpdatePulses >= 30)
+    {
+        m_settingsUpdatePulses = 0;
+        QueueSettingsState(false);
+    }
     UpdateRenderingPauseState();
 
     if (m_serverBrowserReady && m_registry)
@@ -1414,6 +2205,8 @@ void CServerBrowserWeb::Events_OnTriggerEvent(const SString& eventName, const st
         HandleMenuEvent(eventName, arguments);
     else if (eventName.BeginsWith("sb:"))
         HandleServerBrowserEvent(eventName, arguments);
+    else if (eventName.BeginsWith("settings:"))
+        HandleSettingsEvent(eventName, arguments);
 }
 
 void CServerBrowserWeb::Events_OnTooltip(const SString&)
@@ -1540,8 +2333,17 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
         m_mainMenu.OnEditorButtonClick();
     else if (eventName == "menu:settings")
     {
-        SetNativeDialogVisible(true);
-        m_mainMenu.OnSettingsButtonClick(nullptr);
+        if (GetApplicationSettingInt("neon-web-settings-preview") != 0)
+        {
+            JsonPtr event = MakeObject();
+            AddString(event.get(), "type", "open-settings");
+            QueueEvent("menu", ToJson(event.get()));
+        }
+        else
+        {
+            SetNativeDialogVisible(true);
+            m_mainMenu.OnSettingsButtonClick(nullptr);
+        }
     }
     else if (eventName == "menu:about")
     {
@@ -1574,6 +2376,53 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
         const auto locales = g_pCore->GetLocalization()->GetAvailableLocales();
         if (std::find(locales.begin(), locales.end(), arguments[0]) != locales.end())
             CLocalGUI::GetSingleton().RequestLocaleChange(arguments[0]);
+    }
+}
+
+void CServerBrowserWeb::HandleSettingsEvent(const SString& eventName, const std::vector<std::string>& arguments)
+{
+    if (eventName == "settings:ready")
+    {
+        if (GetApplicationSettingInt("neon-web-settings-preview") == 0)
+            return;
+        m_settingsReady = true;
+        m_settings->Begin();
+        m_lastSettingsState.clear();
+        QueueSettingsState(true);
+    }
+    else if (eventName == "settings:set" && arguments.size() == 2 && m_settingsReady)
+    {
+        if (m_settings->SetValue(arguments[0], arguments[1]))
+            QueueSettingsState(false);
+    }
+    else if (eventName == "settings:resetSection" && arguments.size() == 1 && (arguments[0] == "neon" || arguments[0] == "graphics") && m_settingsReady)
+    {
+        m_settings->Reset(arguments[0]);
+        QueueSettingsState(false);
+    }
+    else if (eventName == "settings:action" && !arguments.empty() && arguments.size() <= 2 && m_settingsReady)
+    {
+        m_settings->RunAction(arguments[0], arguments.size() == 2 ? arguments[1] : std::string{});
+        QueueSettingsState(false);
+    }
+    else if (eventName == "settings:apply" && m_settingsReady)
+    {
+        m_settings->Apply();
+        QueueSettingsState(false);
+    }
+    else if (eventName == "settings:cancel" && m_settingsReady)
+    {
+        m_settings->Cancel();
+        QueueSettingsState(false);
+    }
+    else if (eventName == "settings:close")
+    {
+        if (m_settings && m_settings->IsActive())
+            m_settings->Cancel();
+        m_settingsReady = false;
+        m_settingsUpdatePulses = 0;
+        m_lastSettingsState.clear();
+        m_settingsEvents.clear();
     }
 }
 
@@ -1627,6 +2476,28 @@ void CServerBrowserWeb::HandleServerBrowserEvent(const SString& eventName, const
     }
     else if (eventName == "sb:favourite" && arguments.size() == 3)
         SetFavourite(arguments[0], ParsePort(arguments[1]), arguments[2] == "1");
+    else if (eventName == "sb:copyServerLink" && arguments.size() == 3)
+    {
+        const std::string&   requestId = arguments[0];
+        const std::string&   host = arguments[1];
+        const unsigned short port = ParsePort(arguments[2]);
+        const bool           safeRequest =
+            !requestId.empty() && requestId.size() <= 64 && !host.empty() && host.size() <= 253 && port != 0 &&
+            std::none_of(host.begin(), host.end(), [](unsigned char character)
+                         { return std::isspace(character) || character == '/' || character == '\\' || character == '@' || character == '#'; });
+
+        // Local CEF pages intentionally have JavaScript clipboard access
+        // disabled. Keeping this narrowly scoped bridge avoids granting that
+        // permission globally while still providing an honest copy result.
+        if (safeRequest)
+            SharedUtil::SetClipboardText(SString("mtaneon://%s:%u", host.c_str(), port));
+
+        JsonPtr result = MakeObject();
+        AddString(result.get(), "type", "clipboard-result");
+        AddString(result.get(), "requestId", requestId);
+        AddBoolean(result.get(), "success", safeRequest);
+        QueueEvent("server", ToJson(result.get()));
+    }
     else if (eventName == "sb:openExternal" && arguments.size() == 1)
     {
         const std::string& url = arguments[0];
@@ -1814,9 +2685,117 @@ void CServerBrowserWeb::QueueServer(const CServerListItem& server)
     QueueEvent("server", ToJson(event.get()));
 }
 
+void CServerBrowserWeb::QueueSettingsState(bool initial)
+{
+    if (!m_settingsReady || !m_settings || !m_settings->IsActive())
+        return;
+
+    m_settings->RefreshManagedValues();
+    const CWebSettingsSession::SState& state = m_settings->GetState();
+
+    JsonPtr      event = MakeObject();
+    json_object* values = json_object_new_object();
+    AddBoolean(values, "extendedWorld.enabled", state.extendedWorldEnabled);
+    AddInteger(values, "extendedWorld.distance", state.extendedWorldDistance);
+    AddBoolean(values, "distantLights.enabled", state.distantLightsEnabled);
+    AddInteger(values, "distantLights.distance", state.distantLightsDistance);
+    AddDouble(values, "distantLights.coronaSize", state.distantLightsCoronaSize);
+    AddBoolean(values, "skyGfx.enabled", state.skyGfx.enabled != 0);
+    AddBoolean(values, "skyGfx.colorFilter", state.skyGfx.ps2ColorFilter != 0);
+    AddBoolean(values, "skyGfx.colorFilterBlur", state.skyGfx.ps2ColorFilterBlur != 0);
+    AddBoolean(values, "skyGfx.pcTimecycle", state.skyGfx.ps2ColorFilterPcTimecycle != 0);
+    AddBoolean(values, "skyGfx.depthBias", state.skyGfx.ps2DepthBias != 0);
+    AddBoolean(values, "skyGfx.ycbcr", state.skyGfx.ycbcrCorrection != 0);
+    AddBoolean(values, "skyGfx.radiosity", state.skyGfx.ps2Radiosity != 0);
+    AddInteger(values, "skyGfx.radiosityIntensity", state.skyGfx.ps2RadiosityIntensity);
+    AddInteger(values, "skyGfx.radiosityFilterPasses", state.skyGfx.ps2RadiosityFilterPasses);
+    AddInteger(values, "skyGfx.radiosityRenderPasses", state.skyGfx.ps2RadiosityRenderPasses);
+    AddInteger(values, "radar.style", state.radarStyle);
+    AddDouble(values, "radar.positionX", state.radarPositionX);
+    AddDouble(values, "radar.positionY", state.radarPositionY);
+    AddDouble(values, "radar.width", state.radarWidth);
+    AddDouble(values, "radar.height", state.radarHeight);
+    AddBoolean(values, "radar.widescreenSafe", state.radarWidescreenSafe);
+    AddInteger(values, "graphics.videoMode", state.graphicsVideoMode);
+    AddInteger(values, "graphics.displayMode", state.graphicsDisplayMode);
+    AddBoolean(values, "graphics.fullscreenMinimize", state.graphicsFullscreenMinimize);
+    AddBoolean(values, "graphics.vsync", state.graphicsVSync);
+    AddBoolean(values, "graphics.dpiAware", state.graphicsDPIAware);
+    AddInteger(values, "graphics.fov", state.graphicsFieldOfView);
+    AddInteger(values, "graphics.drawDistance", state.graphicsDrawDistance);
+    AddInteger(values, "graphics.brightness", state.graphicsBrightness);
+    AddInteger(values, "graphics.fxQuality", state.graphicsFXQuality);
+    AddInteger(values, "graphics.anisotropic", state.graphicsAnisotropic);
+    AddInteger(values, "graphics.antiAliasing", state.graphicsAntiAliasing);
+    AddInteger(values, "graphics.aspectRatio", state.graphicsAspectRatio);
+    AddBoolean(values, "graphics.hudMatchAspectRatio", state.graphicsHudMatchAspectRatio);
+    AddBoolean(values, "graphics.volumetricShadows", state.graphicsVolumetricShadows);
+    AddBoolean(values, "graphics.grass", state.graphicsGrass);
+    AddBoolean(values, "graphics.heatHaze", state.graphicsHeatHaze);
+    AddBoolean(values, "graphics.tyreSmoke", state.graphicsTyreSmoke);
+    AddBoolean(values, "graphics.dynamicPedShadows", state.graphicsDynamicPedShadows);
+    AddBoolean(values, "graphics.motionBlur", state.graphicsMotionBlur);
+    AddBoolean(values, "graphics.coronaReflections", state.graphicsCoronaReflections);
+    AddBoolean(values, "graphics.highDetailVehicles", state.graphicsHighDetailVehicles);
+    AddBoolean(values, "graphics.highDetailPeds", state.graphicsHighDetailPeds);
+    AddBoolean(values, "graphics.showUnsafeResolutions", state.graphicsShowUnsafeResolutions);
+    AddBoolean(values, "graphics.deviceSelectionDialog", state.graphicsDeviceSelectionDialog);
+    AddDouble(values, "graphics.gamma", state.graphicsGamma);
+    AddDouble(values, "graphics.brightnessScale", state.graphicsBrightnessScale);
+    AddDouble(values, "graphics.contrast", state.graphicsContrast);
+    AddDouble(values, "graphics.saturation", state.graphicsSaturation);
+    AddBoolean(values, "graphics.gammaEnabled", state.graphicsGammaEnabled);
+    AddBoolean(values, "graphics.brightnessEnabled", state.graphicsBrightnessEnabled);
+    AddBoolean(values, "graphics.contrastEnabled", state.graphicsContrastEnabled);
+    AddBoolean(values, "graphics.saturationEnabled", state.graphicsSaturationEnabled);
+    AddBoolean(values, "graphics.applyWindowed", state.graphicsApplyWindowed);
+    AddBoolean(values, "graphics.applyFullscreen", state.graphicsApplyFullscreen);
+    json_object_object_add(event.get(), "values", values);
+
+    json_object* managed = json_object_new_object();
+    AddBoolean(managed, "skyGfx", m_settings->IsSkyGfxManaged());
+    AddBoolean(managed, "radar", m_settings->IsRadarManaged());
+    json_object_object_add(event.get(), "managed", managed);
+
+    json_object* availability = json_object_new_object();
+    AddBoolean(availability, "rebuildDistantLights", m_settings->IsDistantLightsRebuildAvailable());
+    AddInteger(availability, "maxAnisotropic", m_settings->GetMaxAnisotropic());
+    AddBoolean(availability, "multiMonitor", m_settings->IsMultiMonitor());
+    AddBoolean(availability, "unsafeResolutions", m_settings->HasUnsafeResolutions());
+    json_object_object_add(event.get(), "availability", availability);
+    json_object* resolutions = json_object_new_array();
+    for (const CWebSettingsSession::SResolution& resolution : m_settings->GetResolutions())
+    {
+        json_object* value = json_object_new_object();
+        AddInteger(value, "mode", resolution.mode);
+        AddInteger(value, "width", resolution.width);
+        AddInteger(value, "height", resolution.height);
+        AddInteger(value, "depth", resolution.depth);
+        AddBoolean(value, "unsafe", resolution.unsafe);
+        json_object_array_add(resolutions, value);
+    }
+    json_object_object_add(event.get(), "resolutions", resolutions);
+    AddString(event.get(), "skyGfxStatus", m_settings->GetSkyGfxStatus());
+    AddBoolean(event.get(), "dirty", m_settings->IsDirty());
+    AddBoolean(event.get(), "restartRequired", m_settings->RequiresRestart());
+
+    const std::string signature = ToJson(event.get());
+    if (!initial && signature == m_lastSettingsState)
+        return;
+
+    m_lastSettingsState = signature;
+    AddString(event.get(), "type", initial ? "init" : "state");
+    QueueEvent("settings", ToJson(event.get()));
+}
+
 void CServerBrowserWeb::QueueEvent(const std::string& channel, const std::string& json)
 {
-    (channel == "menu" ? m_menuEvents : m_serverEvents).push_back(json);
+    if (channel == "menu")
+        m_menuEvents.push_back(json);
+    else if (channel == "settings")
+        m_settingsEvents.push_back(json);
+    else
+        m_serverEvents.push_back(json);
 }
 
 void CServerBrowserWeb::QueueConnectionEvent(const std::string& json)
@@ -1831,7 +2810,7 @@ void CServerBrowserWeb::QueueConnectionEvent(const std::string& json)
 
 void CServerBrowserWeb::FlushEvents()
 {
-    if (!m_webView || !m_documentReady || (m_menuEvents.empty() && m_serverEvents.empty()))
+    if (!m_webView || !m_documentReady || (m_menuEvents.empty() && m_serverEvents.empty() && m_settingsEvents.empty()))
         return;
 
     std::string script;
@@ -1859,6 +2838,7 @@ void CServerBrowserWeb::FlushEvents()
 
     appendChannel("__neonMenu", m_menuEvents, remaining, script);
     appendChannel("__neonSB", m_serverEvents, remaining, script);
+    appendChannel("__neonSettings", m_settingsEvents, remaining, script);
     if (!script.empty())
         m_webView->ExecuteJavascript(script);
 }

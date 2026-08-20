@@ -81,6 +81,9 @@ export interface BrowserBackend {
   /** Statistiques réseau globales (master server). */
   getNetworkStats(): Promise<{ playersOnline: number; peakPlayers: number; serverCount: number }>
 
+  /** Copie un lien mtaneon:// par le mécanisme sûr de la plateforme. */
+  copyServerLink(address: ServerAddress): Promise<boolean>
+
   /** Ouvre un lien dans le navigateur système (CEF uniquement). */
   openExternal?(url: string): void
 

@@ -12,6 +12,7 @@
  *  - sb:refresh     → re-scan avec progression
  *  - sb:connect     → mot de passe ou séquence started/progress/succeeded
  *  - sb:favourite   → favourites (clés mises à jour)
+ *  - sb:copyServerLink → copie simulée + accusé de réception
  *  - sb:close       → console.log (le natif masque la vue)
  */
 
@@ -186,6 +187,18 @@ export function installCefDevStub(): void {
         case 'sb:openExternal':
           console.log('[cefsim] openExternal', args[0])
           break
+        case 'sb:copyServerLink': {
+          const [requestId, host, port] = args
+          if (!navigator.clipboard) {
+            emit([{ type: 'clipboard-result', requestId, success: false }])
+            break
+          }
+          void navigator.clipboard
+            .writeText(`mtaneon://${host}:${port}`)
+            .then(() => emit([{ type: 'clipboard-result', requestId, success: true }]))
+            .catch(() => emit([{ type: 'clipboard-result', requestId, success: false }]))
+          break
+        }
         case 'sb:close':
           console.log('[cefsim] close (le natif masque la vue et rend le menu)')
           break

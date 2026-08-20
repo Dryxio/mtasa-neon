@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n'
-import type { ServerItem } from '../types'
+import { formatNeonServerLink, type ServerItem } from '../types'
 import { playUiSound } from '../uiSound'
 import {
   IconArrowLeft,
@@ -19,6 +19,7 @@ interface DetailsPanelProps {
   onOpenPlayers: () => void
   onClosePlayers: () => void
   onConnect: (server: ServerItem) => void
+  onCopyLink: (server: ServerItem) => Promise<boolean>
   /** Retourne true si le lien est pris en charge nativement (CEF). */
   onOpenLink: (url: string) => boolean
 }
@@ -29,9 +30,12 @@ export function DetailsPanel({
   onOpenPlayers,
   onClosePlayers,
   onConnect,
+  onCopyLink,
   onOpenLink,
 }: DetailsPanelProps) {
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const copyGeneration = useRef(0)
   const playersButtonRef = useRef<HTMLButtonElement>(null)
   const backButtonRef = useRef<HTMLButtonElement>(null)
   const previousPlayersViewOpen = useRef(playersViewOpen)
@@ -43,6 +47,16 @@ export function DetailsPanel({
     previousPlayersViewOpen.current = playersViewOpen
   }, [playersViewOpen])
 
+  useEffect(() => {
+    copyGeneration.current += 1
+    setCopyState('idle')
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+    return () => {
+      copyGeneration.current += 1
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+    }
+  }, [server?.id])
+
   if (!server) {
     return (
       <aside className="details-empty">
@@ -53,12 +67,18 @@ export function DetailsPanel({
     )
   }
 
-  const copyAddress = () => {
+  const copyAddress = async () => {
     playUiSound('select')
-    void navigator.clipboard?.writeText(`mtasa://${server.ip}:${server.gamePort}`)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1200)
+    const generation = ++copyGeneration.current
+    const success = await onCopyLink(server)
+    if (generation !== copyGeneration.current) return
+    setCopyState(success ? 'copied' : 'failed')
+    if (!success) playUiSound('error')
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+    copyResetTimer.current = setTimeout(() => setCopyState('idle'), 1600)
   }
+
+  const serverLink = formatNeonServerLink({ ip: server.ip, port: server.gamePort })
 
   return (
     <aside className="details">
@@ -123,19 +143,32 @@ export function DetailsPanel({
                 <span className="details__kicker">{t('details.selectedDestination')}</span>
                 <div className="details__name">
                   <span>{shortName(server.name)}</span>
-                  <button
-                    type="button"
-                    className="details__copy"
-                    title={t('details.copyAddress', { address: `mtasa://${server.ip}:${server.gamePort}` })}
-                    onClick={copyAddress}
-                  >
-                    {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-                  </button>
                 </div>
               </div>
             </div>
 
             <p className="details__desc">{server.description}</p>
+
+            <div className={`details__share details__share--${copyState}`}>
+              <div>
+                <span>{t('details.serverLink')}</span>
+                <code>{serverLink}</code>
+              </div>
+              <button
+                type="button"
+                title={t('details.copyAddress', { address: serverLink })}
+                onClick={() => void copyAddress()}
+              >
+                {copyState === 'copied' ? <IconCheck size={14} /> : <IconCopy size={14} />}
+                <span aria-live="polite">
+                  {copyState === 'copied'
+                    ? t('details.copied')
+                    : copyState === 'failed'
+                      ? t('details.copyFailed')
+                      : t('details.copyLink')}
+                </span>
+              </button>
+            </div>
 
             <div className="details__facts">
               <div>
