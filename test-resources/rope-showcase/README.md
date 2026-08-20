@@ -9,6 +9,21 @@ start rope-showcase
 /ropeshow
 ```
 
+For the player-controlled version:
+
+```text
+/ropeshow interactive
+```
+
+The interactive scene keeps a mini-magnet with a crate and a wrecking ball
+active at the same time. Select the rig with `1` (harness) or `2` (wrecking
+ball), move its holder with `ZQSD`, and change rope length with `A`/`E`.
+`LMB` attaches the crate to the harness and `R` releases it. A stationary
+managed fire is placed between the starting point and the far side of the
+runway; crossing it automatically ignites the carried crate. The wrecking
+ball samples the swept rope-end segment and fractures the caravan
+automatically on contact, without a manual trigger key.
+
 Stop early with:
 
 ```text

@@ -51,6 +51,8 @@ local show = {
     savedTime = nil,
     lampLightIndex = nil,
     lamp2DFXTouched = false,
+    mode = "auto",
+    interactive = nil,
 }
 
 local function clamp(value, minimum, maximum)
@@ -164,6 +166,12 @@ local function resetLamp2DFX()
 end
 
 local function cleanupAct()
+    if show.interactive then
+        if show.interactive.harness and show.interactive.harness.attached and isElement(show.interactive.harness.rope) then
+            detachElementFromRope(show.interactive.harness.rope)
+        end
+        show.interactive.harness.attached = false
+    end
     detachPayload()
     resetLamp2DFX()
 
@@ -188,6 +196,7 @@ local function cleanupAct()
     show.released = false
     show.impactTriggered = false
     show.actReady = false
+    show.interactive = nil
 end
 
 local function attachCurrentPayload()
@@ -362,6 +371,298 @@ local function cameraLerp(fromX, fromY, fromZ, fromLookX, fromLookY, fromLookZ,
         lerp(fromLookX, toLookX, t), lerp(fromLookY, toLookY, t), lerp(fromLookZ, toLookZ, t),
         0, lerp(fromFov, toFov, t)
     )
+end
+
+local function distanceToSegment(point, startPoint, endPoint)
+    local dx = endPoint.x - startPoint.x
+    local dy = endPoint.y - startPoint.y
+    local dz = endPoint.z - startPoint.z
+    local lengthSquared = dx * dx + dy * dy + dz * dz
+    if lengthSquared <= 0.0001 then
+        local px = point.x - startPoint.x
+        local py = point.y - startPoint.y
+        local pz = point.z - startPoint.z
+        return math.sqrt(px * px + py * py + pz * pz)
+    end
+
+    local t = ((point.x - startPoint.x) * dx + (point.y - startPoint.y) * dy + (point.z - startPoint.z) * dz) / lengthSquared
+    t = clamp(t, 0, 1)
+    local closestX = startPoint.x + dx * t
+    local closestY = startPoint.y + dy * t
+    local closestZ = startPoint.z + dz * t
+    local px = point.x - closestX
+    local py = point.y - closestY
+    local pz = point.z - closestZ
+    return math.sqrt(px * px + py * py + pz * pz)
+end
+
+local function interactiveRig()
+    local interactive = show.interactive
+    if not interactive then
+        return nil
+    end
+    return interactive.active == "harness" and interactive.harness or interactive.wrecking
+end
+
+local function selectInteractiveHarness()
+    if show.interactive then
+        show.interactive.active = "harness"
+    end
+end
+
+local function selectInteractiveWrecking()
+    if show.interactive then
+        show.interactive.active = "wrecking"
+    end
+end
+
+local function interactiveAttach()
+    local interactive = show.interactive
+    if not interactive or interactive.active ~= "harness" or interactive.harness.attached then
+        return
+    end
+
+    local rig = interactive.harness
+    if isElement(rig.rope) and isElement(rig.payload) then
+        setElementFrozen(rig.payload, false)
+        rig.attached = attachElementToRope(rig.rope, rig.payload) == true
+    end
+end
+
+local function interactiveRelease()
+    local interactive = show.interactive
+    if not interactive or interactive.active ~= "harness" then
+        return
+    end
+
+    local rig = interactive.harness
+    if rig.attached and isElement(rig.rope) then
+        detachElementFromRope(rig.rope)
+        rig.attached = false
+        if isElement(rig.payload) then
+            setElementVelocity(rig.payload, 0, 0, -0.08)
+        end
+    end
+end
+
+local function bindInteractiveKeys()
+    bindKey("1", "down", selectInteractiveHarness)
+    bindKey("2", "down", selectInteractiveWrecking)
+    bindKey("mouse1", "down", interactiveAttach)
+    bindKey("r", "down", interactiveRelease)
+end
+
+local function unbindInteractiveKeys()
+    unbindKey("1", "down", selectInteractiveHarness)
+    unbindKey("2", "down", selectInteractiveWrecking)
+    unbindKey("mouse1", "down", interactiveAttach)
+    unbindKey("r", "down", interactiveRelease)
+end
+
+local function createInteractiveShowcase()
+    local cx, y, z = show.centerX, show.stageY, show.centerZ
+    local harnessHolder = createHolder(cx + 7.0, y, z + 11.5)
+    local wreckingHolder = createHolder(cx - 7.0, y, z + 12.5)
+    local harnessRope = createManagedRope(harnessHolder, "miniMagnet", 8.0, 0.80)
+    local wreckingRope = createManagedRope(wreckingHolder, "wreckingBall", 9.0, 0.48)
+    local cargo = track(createObject(CARGO_MODEL, cx + 7.0, y, z + 4.0, 0, 0, 18))
+    local target = track(createObject(WRECK_TARGET_MODEL, cx - 2.0, y, z + 8.0, 0, 0, 90))
+    local fireZone = track(createFire(cx + 1.5, y, z + 1.0, {
+        duration = 60000,
+        strength = 1.35,
+        damage = false,
+        spread = false,
+    }))
+
+    if not isElement(harnessHolder) or not isElement(wreckingHolder) or not isElement(harnessRope) or
+        not isElement(wreckingRope) or not isElement(cargo) or not isElement(target) or not isElement(fireZone) then
+        return false
+    end
+
+    configureElement(cargo)
+    placeOnGround(cargo, cx + 7.0, y, z, MAGNET_GROUND_OFFSET)
+    setElementFrozen(cargo, true)
+    setElementCollisionsEnabled(cargo, true)
+    setObjectProperty(cargo, "mass", 45.0)
+    setObjectProperty(cargo, "turn_mass", 55.0)
+    setObjectProperty(cargo, "air_resistance", 0.995)
+    setObjectProperty(cargo, "elasticity", 0.18)
+
+    configureElement(target)
+    placeOnGround(target, cx - 2.0, y, z, 0.04)
+    setElementFrozen(target, true)
+    setElementCollisionsEnabled(target, true)
+    configureElement(fireZone)
+
+    show.interactive = {
+        active = "harness",
+        harness = {holder = harnessHolder, rope = harnessRope, payload = cargo, attached = false, length = 8.0},
+        wrecking = {holder = wreckingHolder, rope = wreckingRope, target = target, length = 9.0, fractured = false, lastBall = nil},
+        fireZone = fireZone,
+        fire = nil,
+        ready = false,
+        createdAt = getTickCount(),
+    }
+    bindInteractiveKeys()
+    return true
+end
+
+local function igniteInteractiveCargo()
+    local interactive = show.interactive
+    if not interactive or isElement(interactive.fire) or not isElement(interactive.harness.payload) then
+        return
+    end
+
+    local payload = interactive.harness.payload
+    local x, y, z = getElementPosition(payload)
+    interactive.fire = track(createFire(x, y, z + MAGNET_FIRE_OFFSET_Z, {
+        duration = 30000,
+        strength = 1.65,
+        damage = false,
+        spread = false,
+        target = payload,
+    }))
+    if isElement(interactive.fire) then
+        configureElement(interactive.fire)
+    end
+end
+
+local function fractureInteractiveTarget(ballPosition)
+    local interactive = show.interactive
+    if not interactive or interactive.wrecking.fractured or not isElement(interactive.wrecking.target) then
+        return
+    end
+
+    interactive.wrecking.fractured = true
+    local target = interactive.wrecking.target
+    createObjectBreakEffect(target, {
+        fragments = 40,
+        force = 6.0,
+        randomness = 1.0,
+        velocity = {1.0, 0.0, 0.55},
+        impactPosition = {ballPosition.x, ballPosition.y, ballPosition.z},
+        lifetime = 7000,
+        gravity = 9.81,
+        bounce = 0.18,
+        drag = 0.10,
+        renderDistance = 380,
+        seed = 20260820,
+        hideOriginal = true,
+        disableOriginalCollision = true,
+    })
+end
+
+local function updateInteractiveControls(deltaSeconds)
+    local interactive = show.interactive
+    local rig = interactiveRig()
+    if not interactive or not rig or not isElement(rig.holder) then
+        return
+    end
+
+    local x, y, z = getElementPosition(rig.holder)
+    local moveX, moveY = 0, 0
+    if getKeyState("q") then moveX = moveX - 1 end
+    if getKeyState("d") then moveX = moveX + 1 end
+    if getKeyState("z") then moveY = moveY + 1 end
+    if getKeyState("s") then moveY = moveY - 1 end
+    local moveLength = math.sqrt(moveX * moveX + moveY * moveY)
+    if moveLength > 0 then
+        local speed = 7.0
+        x = x + moveX / moveLength * speed * deltaSeconds
+        y = y + moveY / moveLength * speed * deltaSeconds
+        x = clamp(x, show.centerX - 18.0, show.centerX + 18.0)
+        y = clamp(y, show.stageY - 13.0, show.stageY + 13.0)
+        setElementPosition(rig.holder, x, y, z)
+    end
+
+    if getKeyState("a") then
+        rig.length = clamp(rig.length - 4.0 * deltaSeconds, 2.5, 16.0)
+    elseif getKeyState("e") then
+        rig.length = clamp(rig.length + 4.0 * deltaSeconds, 2.5, 16.0)
+    end
+    if isElement(rig.rope) then
+        setRopeLength(rig.rope, rig.length)
+    end
+end
+
+local function updateInteractivePhysics()
+    local interactive = show.interactive
+    if not interactive then
+        return
+    end
+
+    local cargo = interactive.harness.payload
+    if isElement(interactive.fire) and isElement(cargo) then
+        local x, y, z = getElementPosition(cargo)
+        pcall(setElementPosition, interactive.fire, x, y, z + MAGNET_FIRE_OFFSET_Z)
+    end
+
+    if isElement(cargo) and interactive.harness.attached and not isElement(interactive.fire) then
+        local x, y, z = getElementPosition(cargo)
+        local zoneX, zoneY, zoneZ = getElementPosition(interactive.fireZone)
+        local current = {x = x, y = y, z = z}
+        local previous = interactive.harness.lastCargo or current
+        if distanceToSegment({x = zoneX, y = zoneY, z = zoneZ}, previous, current) <= 1.8 then
+            igniteInteractiveCargo()
+        end
+        interactive.harness.lastCargo = current
+    end
+
+    if isElement(interactive.wrecking.rope) and not interactive.wrecking.fractured then
+        local ball = getRopePositionAt(interactive.wrecking.rope, 0.98)
+        if ball then
+            local current = {x = ball.x, y = ball.y, z = ball.z}
+            local previous = interactive.wrecking.lastBall or current
+            local tx, ty, tz = getElementPosition(interactive.wrecking.target)
+            if distanceToSegment({x = tx, y = ty, z = tz + 1.2}, previous, current) <= 3.2 then
+                fractureInteractiveTarget(current)
+            end
+            interactive.wrecking.lastBall = current
+        end
+    end
+end
+
+local function renderInteractive()
+    local interactive = show.interactive
+    if not interactive then
+        return
+    end
+
+    if not interactive.ready then
+        if isRopeActive(interactive.harness.rope) and isRopeActive(interactive.wrecking.rope) then
+            interactive.ready = true
+            if not show.readySent then
+                show.readySent = true
+                triggerServerEvent("ropeShowcase:ready", resourceRoot)
+            end
+        elseif getTickCount() - interactive.createdAt >= NATIVE_READY_TIMEOUT then
+            outputChatBox("[ROPE SHOWCASE] Interactive ropes did not become ready.", 255, 90, 90)
+            show.finished = true
+            triggerServerEvent("ropeShowcase:finished", resourceRoot)
+        end
+        drawBlackOverlay(255)
+        return
+    end
+
+    local now = getTickCount()
+    local deltaSeconds = math.min(0.05, (now - (interactive.lastTick or now)) / 1000)
+    interactive.lastTick = now
+    updateInteractiveControls(deltaSeconds)
+    updateInteractivePhysics()
+
+    local rig = interactiveRig()
+    local x, y, z = getElementPosition(rig.holder)
+    setCameraMatrix(x + 13.0, y - 18.0, z + 7.5, x, y, show.centerZ + 3.8, 0, 58)
+
+    local sw, sh = guiGetScreenSize()
+    local cargoState = interactive.harness.attached and "attached" or "released"
+    local fireState = isElement(interactive.fire) and "ON" or "off"
+    local fractureState = interactive.wrecking.fractured and "fractured" or "armed"
+    dxDrawText("INTERACTIVE MANAGED ROPE SHOWCASE", 30, 30, sw, 60, tocolor(255, 255, 255, 245), 1.2, "default-bold")
+    dxDrawText("1 harness  |  2 wrecking ball  |  ZQSD move  |  A/E rope  |  LMB attach  |  R release",
+        30, 64, sw, 90, tocolor(225, 225, 225, 235), 1.0, "default-bold")
+    dxDrawText("active: " .. interactive.active .. "   cargo: " .. cargoState .. "   fire: " .. fireState .. "   target: " .. fractureState,
+        30, 94, sw, 120, tocolor(255, 190, 100, 235), 1.0, "default-bold")
 end
 
 local function setInitialCamera(act)
@@ -688,6 +989,11 @@ local function renderShow()
         return
     end
 
+    if show.mode == "interactive" then
+        renderInteractive()
+        return
+    end
+
     local now = getTickCount()
 
     if not show.actReady then
@@ -752,7 +1058,12 @@ local function stopShow()
         removeEventHandler("onClientRender", root, renderShow)
     end
 
+    if show.mode == "interactive" then
+        unbindInteractiveKeys()
+    end
+
     show.running = false
+    show.mode = "auto"
     show.readySent = false
     show.finished = false
     cleanupAct()
@@ -767,7 +1078,7 @@ local function stopShow()
 end
 
 addEvent("ropeShowcase:start", true)
-addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension)
+addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, centerZ, dimension, mode)
     stopShow()
 
     local hour, minute = getTime()
@@ -777,6 +1088,7 @@ addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, c
     show.centerZ = centerZ
     show.stageY = centerY + 4.0
     show.dimension = dimension
+    show.mode = mode == "interactive" and "interactive" or "auto"
     show.running = true
     show.readySent = false
     show.finished = false
@@ -785,7 +1097,8 @@ addEventHandler("ropeShowcase:start", resourceRoot, function(centerX, centerY, c
     setPresentationUI(false)
     addEventHandler("onClientRender", root, renderShow)
 
-    if not startAct(ACT_MAGNET) then
+    local created = show.mode == "interactive" and createInteractiveShowcase() or startAct(ACT_MAGNET)
+    if not created then
         failShow("Could not create the mini-magnet act.")
     end
 end)
