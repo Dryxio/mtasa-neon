@@ -351,6 +351,19 @@ local function createHarnessAct()
     return true
 end
 
+local function cameraLerp(fromX, fromY, fromZ, fromLookX, fromLookY, fromLookZ,
+                          toX, toY, toZ, toLookX, toLookY, toLookZ, progress, fromFov, toFov)
+    -- Keep camera interpolation local to the showcase. MTA does not expose a
+    -- cameraLerp native; leaving this as an implicit global makes the render
+    -- handler fail on the first frame and freezes the entire sequence.
+    local t = smoothstep(progress)
+    setCameraMatrix(
+        lerp(fromX, toX, t), lerp(fromY, toY, t), lerp(fromZ, toZ, t),
+        lerp(fromLookX, toLookX, t), lerp(fromLookY, toLookY, t), lerp(fromLookZ, toLookZ, t),
+        0, lerp(fromFov, toFov, t)
+    )
+end
+
 local function setInitialCamera(act)
     local cx, y, z = show.centerX, show.stageY, show.centerZ
 
