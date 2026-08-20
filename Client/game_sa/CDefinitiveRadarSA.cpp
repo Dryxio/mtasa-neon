@@ -49,6 +49,8 @@ namespace
     constexpr DWORD FUNC_DRAW_HUD = 0x58FAE0;
     constexpr DWORD VAR_FRONTEND_MAP_ACTIVE = 0xBA67A1;
     constexpr DWORD VAR_RADAR_RANGE = 0xBA8314;
+    constexpr DWORD VAR_SCREEN_WIDTH = 0xC17044;
+    constexpr DWORD VAR_SCREEN_HEIGHT = 0xC17048;
 
     constexpr int   MAP_TILE_COUNT = 144;
     constexpr int   MAP_TILES_PER_ROW = 12;
@@ -946,24 +948,35 @@ namespace
             m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices.data(), sizeof(ScreenVertex));
         }
 
-        void DrawDefaultCoordinateBlip(float centerX, float centerY, float size, DWORD color)
+        void DrawDefaultCoordinateBlip(float centerX, float centerY, float halfWidth, float halfHeight, DWORD color)
         {
-            const float half = size * 0.5f;
-            const std::array<ScreenVertex, 4> vertices = {
-                ScreenVertex{centerX - half - 0.5f, centerY - half - 0.5f, 0.0f, 1.0f, color, 0.0f, 0.0f},
-                ScreenVertex{centerX + half - 0.5f, centerY - half - 0.5f, 0.0f, 1.0f, color, 1.0f, 0.0f},
-                ScreenVertex{centerX - half - 0.5f, centerY + half - 0.5f, 0.0f, 1.0f, color, 0.0f, 1.0f},
-                ScreenVertex{centerX + half - 0.5f, centerY + half - 0.5f, 0.0f, 1.0f, color, 1.0f, 1.0f},
+            const float                       screenWidth = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_WIDTH));
+            const float                       screenHeight = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_HEIGHT));
+            const float                       borderX = screenWidth / 640.0f;
+            const float                       borderY = screenHeight / 448.0f;
+            const DWORD                       alpha = color & 0xFF000000;
+            const std::array<ScreenVertex, 4> borderVertices = {
+                ScreenVertex{centerX - halfWidth - borderX - 0.5f, centerY - halfHeight - borderY - 0.5f, 0.0f, 1.0f, alpha, 0.0f, 0.0f},
+                ScreenVertex{centerX + halfWidth + borderX - 0.5f, centerY - halfHeight - borderY - 0.5f, 0.0f, 1.0f, alpha, 1.0f, 0.0f},
+                ScreenVertex{centerX - halfWidth - borderX - 0.5f, centerY + halfHeight + borderY - 0.5f, 0.0f, 1.0f, alpha, 0.0f, 1.0f},
+                ScreenVertex{centerX + halfWidth + borderX - 0.5f, centerY + halfHeight + borderY - 0.5f, 0.0f, 1.0f, alpha, 1.0f, 1.0f},
+            };
+            const std::array<ScreenVertex, 4> fillVertices = {
+                ScreenVertex{centerX - halfWidth - 0.5f, centerY - halfHeight - 0.5f, 0.0f, 1.0f, color, 0.0f, 0.0f},
+                ScreenVertex{centerX + halfWidth - 0.5f, centerY - halfHeight - 0.5f, 0.0f, 1.0f, color, 1.0f, 0.0f},
+                ScreenVertex{centerX - halfWidth - 0.5f, centerY + halfHeight - 0.5f, 0.0f, 1.0f, color, 0.0f, 1.0f},
+                ScreenVertex{centerX + halfWidth - 0.5f, centerY + halfHeight - 0.5f, 0.0f, 1.0f, color, 1.0f, 1.0f},
             };
 
-            // The DE atlas does not provide a stable texture for MTA's
-            // sprite-0 default coordinate blip. Drawing this primitive keeps
-            // that vanilla square independent from the atlas' player and
-            // waypoint indices, while retaining the resource-supplied color.
+            // GTA's ShowRadarTraceWithHeight draws the normal-height branch as
+            // a colored rectangle surrounded by a one-reference-pixel black
+            // border. Reproduce that primitive instead of using the DE atlas:
+            // sprite 0 deliberately has no atlas icon in the native renderer.
             m_Device->SetTexture(0, nullptr);
             m_Device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
             m_Device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
-            m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices.data(), sizeof(ScreenVertex));
+            m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, borderVertices.data(), sizeof(ScreenVertex));
+            m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, fillVertices.data(), sizeof(ScreenVertex));
             ConfigureTexturedDrawing();
         }
 
@@ -971,7 +984,9 @@ namespace
         {
             const float centerX = radarX + radarSize * 0.5f;
             const float centerY = radarY + radarSize * 0.5f;
-            const float iconSize = std::max(12.0f, 24.0f * static_cast<float>(*reinterpret_cast<const int*>(0xC17044)) / 1920.0f);
+            const float screenWidth = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_WIDTH));
+            const float screenHeight = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_HEIGHT));
+            const float iconSize = std::max(12.0f, 24.0f * screenWidth / 1920.0f);
             const float usableRadius = radarSize * 0.5f - iconSize * 0.55f;
             const float radarRange = *reinterpret_cast<const float*>(VAR_RADAR_RANGE);
 
@@ -981,7 +996,7 @@ namespace
                 if (!marker.bTrackingBlip || marker.nBlipDisplayFlag == 0 || marker.nBlipSprite == 2 || marker.nBlipSprite == 4)
                     continue;
 
-                int sprite = marker.nBlipSprite;
+                int        sprite = marker.nBlipSprite;
                 const bool defaultCoordinateBlip = sprite == 0 && (marker.BlipType == 4 || marker.BlipType == 5 || marker.BlipType == 6);
                 if (!defaultCoordinateBlip && (sprite < 0 || sprite >= static_cast<int>(m_BlipTextures.size()) || !m_BlipTextures[sprite]))
                     continue;
@@ -1027,9 +1042,11 @@ namespace
 
                 if (defaultCoordinateBlip)
                 {
-                    const DWORD color = D3DCOLOR_ARGB((marker.nColour)&0xFF, (marker.nColour >> 24) & 0xFF, (marker.nColour >> 16) & 0xFF,
-                                                       (marker.nColour >> 8) & 0xFF);
-                    DrawDefaultCoordinateBlip(screenX, screenY, iconSize, color);
+                    const DWORD color =
+                        D3DCOLOR_ARGB((marker.nColour) & 0xFF, (marker.nColour >> 24) & 0xFF, (marker.nColour >> 16) & 0xFF, (marker.nColour >> 8) & 0xFF);
+                    const float halfWidth = static_cast<float>(marker.nBlipScale) * screenWidth / 640.0f;
+                    const float halfHeight = static_cast<float>(marker.nBlipScale) * screenHeight / 448.0f;
+                    DrawDefaultCoordinateBlip(screenX, screenY, halfWidth, halfHeight, color);
                 }
                 else
                     DrawSprite(m_BlipTextures[sprite], screenX, screenY, iconSize);
