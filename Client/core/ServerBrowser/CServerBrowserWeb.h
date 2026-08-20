@@ -25,6 +25,7 @@ class CWebViewInterface;
 class CGUIWebBrowser;
 class CAjaxResourceHandlerInterface;
 class CNeonServerRegistry;
+class CWebSettingsSession;
 
 class CServerBrowserWeb final : public CWebBrowserEventsInterface
 {
@@ -75,6 +76,7 @@ private:
 
     void HandleMenuEvent(const SString& eventName, const std::vector<std::string>& arguments);
     void HandleServerBrowserEvent(const SString& eventName, const std::vector<std::string>& arguments);
+    void HandleSettingsEvent(const SString& eventName, const std::vector<std::string>& arguments);
     bool InitialiseWebView();
     bool CanHibernate() const;
     void CancelHibernateRequest();
@@ -88,6 +90,7 @@ private:
     void QueueFavourites();
     void QueueListReset();
     void QueueServer(const CServerListItem& server);
+    void QueueSettingsState(bool initial);
     void QueueEvent(const std::string& channel, const std::string& json);
     void QueueConnectionEvent(const std::string& json);
     void FlushEvents();
@@ -105,6 +108,7 @@ private:
     CMainMenu&                           m_mainMenu;
     CServerBrowser&                      m_serverBrowser;
     std::unique_ptr<CNeonServerRegistry> m_registry;
+    std::unique_ptr<CWebSettingsSession> m_settings;
     CTextureItem*                        m_loadingTexture{};
     CGUIWebBrowser*                      m_widget{};
     CWebViewInterface*                   m_webView{};
@@ -116,6 +120,7 @@ private:
     bool                                 m_visible{};
     bool                                 m_nativeDialogVisible{};
     bool                                 m_serverBrowserReady{};
+    bool                                 m_settingsReady{};
     bool                                 m_connectionUiActive{};
     bool                                 m_refreshing{};
     bool                                 m_sentRefreshFinished{};
@@ -126,6 +131,9 @@ private:
     std::map<std::string, unsigned int>  m_sentRevisions;
     std::vector<std::string>             m_serverEvents;
     std::vector<std::string>             m_menuEvents;
+    std::vector<std::string>             m_settingsEvents;
+    unsigned int                         m_settingsUpdatePulses{};
+    std::string                          m_lastSettingsState;
     int                                  m_lastInGameContext{-1};
     std::string                          m_lastIdentitySignature;
 

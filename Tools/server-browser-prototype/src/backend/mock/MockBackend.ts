@@ -1,5 +1,5 @@
 import type { ServerAddress, ServerItem, ServerSource } from '../../types'
-import { serverKey } from '../../types'
+import { formatNeonServerLink, serverKey } from '../../types'
 import type { BackendEvent, BackendListener, BrowserBackend, Unsubscribe } from '../BrowserBackend'
 import { buildInternetList, buildLanList } from './data'
 
@@ -191,6 +191,15 @@ export class MockBackend implements BrowserBackend {
       peakPlayers: Math.round(players * 2.4),
       serverCount: this.internet.size,
     })
+  }
+
+  async copyServerLink(address: ServerAddress): Promise<boolean> {
+    try {
+      await navigator.clipboard.writeText(formatNeonServerLink(address))
+      return true
+    } catch {
+      return false
+    }
   }
 }
 

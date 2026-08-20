@@ -7,7 +7,7 @@ import { Toolbar } from './components/Toolbar'
 import { visibleServers } from './search'
 import { actions, useBrowserState } from './store'
 import { chooseLaunchLoadscreen } from './loadscreen'
-import { parseServerAddress } from './types'
+import { formatNeonServerLink, parseServerAddress } from './types'
 import { playUiSound } from './uiSound'
 import { useI18n } from './i18n'
 
@@ -23,13 +23,25 @@ export function App() {
     void actions.init()
   }, [])
 
+  const directAddress = useMemo(() => parseServerAddress(state.query), [state.query])
+  const directTarget = directAddress ? formatNeonServerLink(directAddress) : null
   const servers = useMemo(
-    () => visibleServers([...state.servers.values()], state.query, state.filters),
-    [state.servers, state.query, state.filters],
+    // A recognized address is a connection intent, not a search term. Keep the
+    // current destinations visible so Direct mode never looks like an empty list.
+    () => visibleServers([...state.servers.values()], directAddress ? '' : state.query, state.filters),
+    [directAddress, state.servers, state.query, state.filters],
   )
 
   const selected = state.selectedId ? (state.servers.get(state.selectedId) ?? null) : null
   const playersViewOpen = selected !== null && playersViewServerId === selected.id
+
+  useEffect(() => {
+    if (!directAddress) return
+    const matchingServer = [...state.servers.values()].find(
+      (server) => server.ip.toLowerCase() === directAddress.ip && server.gamePort === directAddress.port,
+    )
+    if (matchingServer && matchingServer.id !== state.selectedId) actions.select(matchingServer.id)
+  }, [directAddress, state.selectedId, state.servers])
 
   useEffect(() => {
     if (!state.selectedId) return
@@ -42,10 +54,9 @@ export function App() {
   }, [playersViewServerId, state.selectedId])
 
   // Bouton Connect de la barre d'outils : adresse directe si la recherche en
-  // contient une ("ip:port" / "mtasa://…"), sinon serveur sélectionné.
+  // contient une, sinon serveur sélectionné.
   const connectFromToolbar = () => {
-    const address = parseServerAddress(state.query)
-    if (address) actions.connectToAddress(address)
+    if (directAddress) actions.connectToAddress(directAddress)
     else if (selected) actions.connectTo(selected)
   }
 
@@ -74,10 +85,9 @@ export function App() {
           e.key === 'ArrowDown' ? 1 : -1,
         )
       } else if (e.key === 'Enter') {
-        const address = inSearch ? parseServerAddress(state.query) : null
-        if (address) {
+        if (directAddress) {
           playUiSound('select')
-          actions.connectToAddress(address)
+          actions.connectToAddress(directAddress)
         } else if (selected) {
           playUiSound('select')
           actions.connectTo(selected)
@@ -93,7 +103,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [playersViewOpen, servers, selected, state.connect.phase, state.query])
+  }, [directAddress, playersViewOpen, servers, selected, state.connect.phase, state.query])
 
   return (
     <div className="shell">
@@ -114,6 +124,7 @@ export function App() {
           refreshing={state.refreshing}
           query={state.query}
           filters={state.filters}
+          directTarget={directTarget}
           searchRef={searchRef}
           onSource={(source) => void actions.setSource(source)}
           onRefresh={() => void actions.refresh()}
@@ -129,6 +140,7 @@ export function App() {
           <ServerList
             servers={servers}
             selectedId={state.selectedId}
+            directTarget={directTarget}
             onSelect={actions.select}
             onJoin={(server) => {
               playUiSound('select')
@@ -157,6 +169,7 @@ export function App() {
               playUiSound('select')
               actions.connectTo(server)
             }}
+            onCopyLink={actions.copyServerLink}
             onOpenLink={actions.openExternal}
           />
         </div>

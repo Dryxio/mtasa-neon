@@ -48,6 +48,7 @@ type NativeMenuEvent =
   | { type: 'connect-failed'; code: string; message: string }
   | { type: 'connect-succeeded' }
   | { type: 'hibernate-request'; generation: number }
+  | { type: 'open-settings' }
 
 declare global {
   interface Window {
@@ -77,17 +78,7 @@ const INITIAL_STATE: MenuState = {
     displayName: 'Dryxio',
     status: 'Neon ID connected',
   },
-  featuredServer: typeof window.mta?.triggerEvent === 'function'
-    ? null
-    : {
-        serverId: 'blitz-production',
-        host: '213.32.90.138',
-        port: 22004,
-        name: 'MTA:SA Neon - BUST',
-        tagline: 'Competitive 1v1 Pursuits - Ranked ON',
-        logoUrl: 'https://identity.mta-neon.com/v1/server-registry/assets/fbb84b984b9417e04af995e0984b04fff76f152aab66dc0bedab1f2c61c0a0fa',
-        bannerUrl: 'https://identity.mta-neon.com/v1/server-registry/assets/b884ecc5c538e248772a1c2e00b41f06ed9b0d7cb5952093f40ccd2d87a1ab47',
-      },
+  featuredServer: null,
   translations: {},
   connect: { phase: 'idle', address: null },
   hibernateGeneration: null,
@@ -286,6 +277,9 @@ export function useMenuBridge() {
           }
           else if (event.type === 'hibernate-request') {
             setState((current) => ({ ...current, hibernateGeneration: event.generation }))
+          }
+          else if (event.type === 'open-settings') {
+            window.location.hash = '/settings'
           }
         }
       },

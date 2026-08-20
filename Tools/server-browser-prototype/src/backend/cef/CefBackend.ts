@@ -35,6 +35,7 @@ type NativeEvent =
   | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; code: string; message: string }
   | { type: 'connect-succeeded' }
+  | { type: 'clipboard-result'; requestId: string; success: boolean }
 
 interface NativeServer {
   id: string
@@ -79,6 +80,11 @@ export class CefBackend implements BrowserBackend {
   private currentSource: ServerSource = 'internet'
   private peakPlayers = 0
   private activeConnection: ServerAddress | null = null
+  private nextClipboardRequest = 0
+  private clipboardRequests = new Map<
+    string,
+    { resolve: (success: boolean) => void; timeout: ReturnType<typeof setTimeout> }
+  >()
 
   constructor() {
     window.__neonSB = { emit: (events) => events.forEach((e) => this.onNativeEvent(e)) }
@@ -206,6 +212,14 @@ export class CefBackend implements BrowserBackend {
         if (this.activeConnection) this.emit({ type: 'connect-succeeded', address: this.activeConnection })
         this.activeConnection = null
         break
+      case 'clipboard-result': {
+        const request = this.clipboardRequests.get(event.requestId)
+        if (!request) break
+        clearTimeout(request.timeout)
+        this.clipboardRequests.delete(event.requestId)
+        request.resolve(event.success)
+        break
+      }
     }
   }
 
@@ -260,11 +274,28 @@ export class CefBackend implements BrowserBackend {
     return Promise.resolve({ playersOnline, peakPlayers: this.peakPlayers, serverCount: internet.size })
   }
 
+  copyServerLink(address: ServerAddress): Promise<boolean> {
+    const requestId = `copy-${++this.nextClipboardRequest}`
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.clipboardRequests.delete(requestId)
+        resolve(false)
+      }, 3000)
+      this.clipboardRequests.set(requestId, { resolve, timeout })
+      this.send('sb:copyServerLink', requestId, address.ip, String(address.port))
+    })
+  }
+
   openExternal(url: string): void {
     this.send('sb:openExternal', url)
   }
 
   close(): void {
+    for (const request of this.clipboardRequests.values()) {
+      clearTimeout(request.timeout)
+      request.resolve(false)
+    }
+    this.clipboardRequests.clear()
     this.send('sb:close')
   }
 }

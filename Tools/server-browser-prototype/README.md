@@ -51,9 +51,10 @@ serveur plein laisse entrer à la 3ᵉ tentative (file d'attente simulée).
 
 ## Fonctionnalités
 
-- **Recherche** : texte libre sur le nom et la description, `langs:fr` sur les
-  langues, `@pseudo` pour trouver un joueur. Une
-  adresse (`ip[:port]`, `mtasa://…`) + Entrée ou Connect = connexion directe.
+- **Recherche / connexion directe** : l'omnibox filtre le nom et la
+  description, accepte `langs:fr` et `@pseudo`, puis passe visuellement en mode
+  Direct Connect pour une IPv4, un hostname, `mtasa://…` ou `mtaneon://…`.
+  Entrée ou Connect rejoint alors cette adresse.
 - **Sources** : Neon Network / Favourites / Recent (menu déroulant). Toutes les
   vues restent limitées aux endpoints publiés par le registre officiel ; Quick
   Connect conserve volontairement la connexion directe vers une adresse libre.
@@ -63,7 +64,8 @@ serveur plein laisse entrer à la 3ᵉ tentative (file d'attente simulée).
   public HTTPS de Neon Identity, conserve son dernier manifeste valide et
   interroge uniquement ces endpoints via ASE pour les données temps réel.
 - **Détails intégrés** : description, mode, communautés, liens sociaux, langues,
-  nombre de joueurs et action de connexion.
+  nombre de joueurs, action de connexion et copie native d'un lien
+  `mtaneon://` partageable.
 - **Clavier** : ↑/↓ naviguent, ↵ rejoint, Échap ferme/efface, taper au
   clavier focalise la recherche.
 - **Audio** : les interactions utilisent les sons frontend résidents de GTA

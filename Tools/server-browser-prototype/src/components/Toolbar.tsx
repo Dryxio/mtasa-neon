@@ -7,6 +7,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconFilter,
+  IconLink,
   IconPlay,
   IconRefresh,
   IconSearch,
@@ -17,6 +18,7 @@ interface ToolbarProps {
   refreshing: boolean
   query: string
   filters: BrowserFilters
+  directTarget: string | null
   searchRef: React.RefObject<HTMLInputElement | null>
   onSource: (source: ServerSource) => void
   onRefresh: () => void
@@ -117,8 +119,8 @@ export function Toolbar(props: ToolbarProps) {
         <IconRefresh size={15} />
       </button>
 
-      <div className="searchbar">
-        <IconSearch size={15} />
+      <div className={`searchbar${props.directTarget ? ' searchbar--direct' : ''}`}>
+        {props.directTarget ? <IconLink size={15} /> : <IconSearch size={15} />}
         <input
           ref={props.searchRef}
           value={props.query}
@@ -126,6 +128,7 @@ export function Toolbar(props: ToolbarProps) {
           placeholder={t('browser.searchPlaceholder')}
           spellCheck={false}
         />
+        {props.directTarget && <span className="searchbar__mode">{t('browser.direct')}</span>}
       </div>
 
       <button
@@ -137,7 +140,7 @@ export function Toolbar(props: ToolbarProps) {
         }}
       >
         <IconPlay size={12} />
-        {t('common.connect')}
+        {props.directTarget ? t('browser.connectToAddress') : t('common.connect')}
       </button>
 
       <div className="menu-anchor" ref={filtersRef}>
