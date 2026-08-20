@@ -415,7 +415,10 @@ local function updateMagnetFire()
     -- moves it; otherwise the showcase leaves a fire suspended at the old
     -- pickup position and makes the sequence look stuck.
     local x, y, z = getElementPosition(show.payload)
-    setElementPosition(show.fire, x, y, z + MAGNET_FIRE_OFFSET_Z)
+    -- Some managed-fire implementations can disappear or reject a transform
+    -- while their native lifetime is being serviced. Never let that optional
+    -- presentation update abort onClientRender and freeze the whole showcase.
+    pcall(setElementPosition, show.fire, x, y, z + MAGNET_FIRE_OFFSET_Z)
 end
 
 local function animateMagnet(elapsed)
