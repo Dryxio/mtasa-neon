@@ -170,6 +170,9 @@ void CResourceFileDownloadManager::DoPulse()
         // callback observes an already-retired transfer and cannot erase it a
         // second time.
         http->CancelDownload(file, StaticDownloadFinished);
+        // The aborted transfer may already have replaced or partially written
+        // the destination. Retire its cached identity before deleting it.
+        CChecksum::InvalidateChecksum(file->GetName());
         FileDelete(file->GetName());
         m_strLastHTTPError = SString("Native world download exceeded or omitted its declared byte identity [%s expected=%u header=%u received=%u]",
                                      *ConformResourcePath(file->GetName()), declared, status.uiContentLength, status.uiBytesReceived);
@@ -310,6 +313,10 @@ bool CResourceFileDownloadManager::BeginResourceFileDownload(CDownloadableResour
     options.bCheckContents = true;
     options.bIsLocal = g_pClientGame->IsLocalGame();
 
+    // QueueFile owns the destination write, including fallback replacements.
+    // Invalidate first so no cached checksum can make the new bytes appear
+    // verified before the mandatory post-download bypass below.
+    CChecksum::InvalidateChecksum(pResourceFile->GetName());
     bool bUniqueDownload = pHTTP->QueueFile(strHTTPDownloadURLFull, pResourceFile->GetName(), pResourceFile, StaticDownloadFinished, options);
 
     if (!bUniqueDownload)
@@ -364,6 +371,9 @@ void CResourceFileDownloadManager::DownloadFinished(const SHttpDownloadResult& r
         if (pResourceFile->IsNativeWorldTransportFile() &&
             (result.uiContentLength != pResourceFile->GetDownloadSize() || FileSize(pResourceFile->GetName()) != pResourceFile->GetDownloadSize()))
         {
+            // Length rejection is also a write boundary: invalidate before
+            // removing the untrusted payload.
+            CChecksum::InvalidateChecksum(pResourceFile->GetName());
             FileDelete(pResourceFile->GetName());
             m_strLastHTTPError = SString("Native world download final length differs from ResourceStart [%s expected=%u header=%u]",
                                          *ConformResourcePath(pResourceFile->GetName()), pResourceFile->GetDownloadSize(), result.uiContentLength);
@@ -371,7 +381,11 @@ void CResourceFileDownloadManager::DownloadFinished(const SHttpDownloadResult& r
         else
         {
             CDownloadableResource::EndChecksumBatch();
-            CChecksum checksum = pResourceFile->GenerateClientChecksum();
+            // A downloaded file must never be accepted through size/mtime cache
+            // metadata. Read the bytes again and refresh the cache only with that
+            // post-write result.
+            CChecksum checksum = CChecksum::GenerateChecksumFromFileUnsafe(pResourceFile->GetName(), CChecksum::CachePolicy::BypassAndRefresh);
+            pResourceFile->SetLastClientChecksum(checksum);
             if (checksum != pResourceFile->GetServerChecksum())
             {
                 // Checksum failed - Try download on next server
@@ -389,11 +403,18 @@ void CResourceFileDownloadManager::DownloadFinished(const SHttpDownloadResult& r
     }
     else if (result.iErrorCode == 1007)
     {
+        // Creation failures may still follow a partial replacement attempt.
+        CChecksum::InvalidateChecksum(pResourceFile->GetName());
+
         // Download failed due to being unable to create file
         // Ignore here so it will be processed at CResource::HandleDownloadedFileTrouble
     }
     else
     {
+        // A failed request can leave a partial destination behind. Ensure later
+        // validation cannot reuse any identity observed during the transfer.
+        CChecksum::InvalidateChecksum(pResourceFile->GetName());
+
         // Download failed due to connection type problem
         CNetHTTPDownloadManagerInterface* pHTTP = g_pNet->GetHTTPDownloadManager(m_HttpServerList[pResourceFile->GetHttpServerIndex()].downloadChannel);
         SString                           strHTTPError = pHTTP->GetError();

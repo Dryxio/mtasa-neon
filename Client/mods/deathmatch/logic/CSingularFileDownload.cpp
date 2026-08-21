@@ -36,6 +36,9 @@ CSingularFileDownload::CSingularFileDownload(CResource* pResource, const char* s
         SHttpRequestOptions options;
         options.bCheckContents = true;
         CNetHTTPDownloadManagerInterface* pHTTP = g_pCore->GetNetwork()->GetHTTPDownloadManager(EDownloadMode::RESOURCE_SINGULAR_FILES);
+        // The HTTP manager replaces this path. Invalidate before handing over
+        // the write so an old size/mtime identity cannot survive the transfer.
+        CChecksum::InvalidateChecksum(m_strName);
         pHTTP->QueueFile(strHTTPURL.c_str(), szName, this, DownloadFinishedCallBack, options);
         m_bComplete = false;
         g_pClientGame->SetTransferringSingularFiles(true);
@@ -53,13 +56,30 @@ CSingularFileDownload::~CSingularFileDownload()
 void CSingularFileDownload::DownloadFinishedCallBack(const SHttpDownloadResult& result)
 {
     CSingularFileDownload* pFile = (CSingularFileDownload*)result.pObj;
-    pFile->CallFinished(result.bSuccess);
+    bool                   bVerifiedSuccess = false;
+    if (result.bSuccess)
+    {
+        // Successful transport is not sufficient for integrity. Bypass metadata
+        // caching and only expose the file after hashing the bytes written by HTTP.
+        pFile->m_LastClientChecksum = CChecksum::GenerateChecksumFromFileUnsafe(pFile->m_strName, CChecksum::CachePolicy::BypassAndRefresh);
+        bVerifiedSuccess = pFile->DoesClientAndServerChecksumMatch();
+    }
+    else
+    {
+        // Failed requests can leave partial files; retire anything cached while
+        // the transfer was active before reporting completion.
+        CChecksum::InvalidateChecksum(pFile->m_strName);
+    }
+
+    pFile->CallFinished(bVerifiedSuccess);
 }
 
 void CSingularFileDownload::CallFinished(bool bSuccess)
 {
-    // Flag file as loadable
-    g_pClientGame->GetResourceManager()->OnDownloadedResourceFile(GetName());
+    // Only a cached pre-existing match or a forced post-download match is
+    // loadable. Transport success by itself must not cross this boundary.
+    if (bSuccess)
+        g_pClientGame->GetResourceManager()->OnDownloadedResourceFile(GetName());
 
     if (!m_bBeingDeleted && m_pResource)
     {

@@ -20,8 +20,6 @@ CResourceManager::CResourceManager()
 
 CResourceManager::~CResourceManager()
 {
-    CChecksum::ClearChecksumCache();
-
     while (!m_resources.empty())
     {
         CResource* pResource = m_resources.back();
@@ -344,6 +342,10 @@ bool CResourceManager::IsResourceFile(const SString& strInFilename)
 // Remove this file from the checks as it has been changed by script actions
 void CResourceManager::OnFileModifedByScript(const SString& strInFilename, const SString& strReason)
 {
+    // The checksum cache outlives a connection so every script mutation must
+    // retire its entry, including files which are not in the current manifest.
+    CChecksum::InvalidateChecksum(strInFilename);
+
     SString                strFilename = PathConform(strInFilename).ToLower();
     CDownloadableResource* pResourceFile = MapFindRef(m_ResourceFileMap, strFilename);
     if (pResourceFile && !pResourceFile->IsModifedByScript())

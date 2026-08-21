@@ -564,8 +564,10 @@ int CLuaFileDefs::fileRename(lua_State* luaVM)
                     if (!FileExists(strDestAbsPath))
                     {
 #ifdef MTA_CLIENT
-                        // Inform file verifier
+                        // Rename changes both path identities, so the verifier must
+                        // invalidate and mark both manifest entries before the move.
                         g_pClientGame->GetResourceManager()->OnFileModifedByScript(strSrcAbsPath, "fileRename");
+                        g_pClientGame->GetResourceManager()->OnFileModifedByScript(strDestAbsPath, "fileRename");
 #endif
                         // Make sure the destination folder exists so we can move the file
                         MakeSureDirExists(strDestAbsPath);
