@@ -3,10 +3,17 @@ import { LanguageSelector } from './components/LanguageSelector'
 import { useI18n } from './i18n'
 import { chooseLaunchLoadscreen } from './loadscreen'
 import { notifyMenuVisualReady, type MenuFeaturedServer, type MenuIdentity, type MenuLanguage } from './menuBridge'
+import {
+  findNeonRelease,
+  formatReleaseVersion,
+  LATEST_NEON_RELEASE,
+  type NeonRelease,
+} from './releaseNotes'
 import { playUiSound } from './uiSound'
 import './MainMenu.css'
 
 interface MainMenuProps {
+  buildNumber: number
   inGame: boolean
   identity: MenuIdentity
   featuredServer: MenuFeaturedServer | null
@@ -33,21 +40,20 @@ interface MenuItem {
   action?: () => void
 }
 
-const UPDATE_PROMPT_RELEASE = '2026.08.21.184'
 const UPDATE_PROMPT_STORAGE_KEY = 'neon:last-seen-update'
 
-function shouldShowUpdatePrompt(): boolean {
+function shouldShowUpdatePrompt(release: NeonRelease): boolean {
   if (new URLSearchParams(window.location.search).has('shownews')) return true
   try {
-    return window.localStorage.getItem(UPDATE_PROMPT_STORAGE_KEY) !== UPDATE_PROMPT_RELEASE
+    return window.localStorage.getItem(UPDATE_PROMPT_STORAGE_KEY) !== String(release.build)
   } catch {
     return true
   }
 }
 
-function rememberUpdatePrompt(): void {
+function rememberUpdatePrompt(release: NeonRelease): void {
   try {
-    window.localStorage.setItem(UPDATE_PROMPT_STORAGE_KEY, UPDATE_PROMPT_RELEASE)
+    window.localStorage.setItem(UPDATE_PROMPT_STORAGE_KEY, String(release.build))
   } catch {
     // A read-only browser profile should not prevent the notification from closing.
   }
@@ -70,6 +76,11 @@ export function MainMenu(props: MainMenuProps) {
   const previousSelectedIndex = useRef(selectedIndex)
   const visualReadySent = useRef(false)
   const updatePromptChecked = useRef(false)
+  const forceUpdatePrompt = new URLSearchParams(window.location.search).has('shownews')
+  const updateRelease = findNeonRelease(props.buildNumber)
+    ?? ((props.buildNumber === 0 || forceUpdatePrompt || typeof window.mta?.triggerEvent !== 'function')
+      ? LATEST_NEON_RELEASE
+      : undefined)
   const discordTitle = props.identity.signingIn
     ? t('main.discordConnecting')
     : props.identity.authenticated
@@ -87,9 +98,9 @@ export function MainMenu(props: MainMenuProps) {
       : t('main.linkDiscordToPlay')
 
   const dismissUpdatePrompt = useCallback(() => {
-    rememberUpdatePrompt()
+    if (updateRelease) rememberUpdatePrompt(updateRelease)
     setShowUpdatePrompt(false)
-  }, [])
+  }, [updateRelease])
 
   const items = useMemo<MenuItem[]>(
     () => props.inGame
@@ -144,7 +155,7 @@ export function MainMenu(props: MainMenuProps) {
           {
             id: 'updates',
             label: 'What’s new',
-            caption: 'Discover the latest Neon features, fixes and complete release history.',
+            caption: 'Read the latest Neon features, fixes and earlier release notes.',
             action: props.onUpdates,
           },
           {
@@ -170,10 +181,10 @@ export function MainMenu(props: MainMenuProps) {
       setShowUpdatePrompt(false)
       return
     }
-    if (!artReady || updatePromptChecked.current) return
+    if (!artReady || !updateRelease || updatePromptChecked.current) return
     updatePromptChecked.current = true
-    setShowUpdatePrompt(shouldShowUpdatePrompt())
-  }, [artReady, props.inGame])
+    setShowUpdatePrompt(shouldShowUpdatePrompt(updateRelease))
+  }, [artReady, props.inGame, updateRelease])
 
   useEffect(() => {
     if (previousSelectedIndex.current !== selectedIndex) playUiSound('highlight')
@@ -352,19 +363,17 @@ export function MainMenu(props: MainMenuProps) {
         </button>
       )}
 
-      {showUpdatePrompt && (
+      {showUpdatePrompt && updateRelease && (
         <div className="main-menu__update-overlay">
           <section className="main-menu__update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
             <header className="main-menu__update-prompt-header">
               <span>What’s new in Neon</span>
-              <small>2026.08.21</small>
+              <small>{formatReleaseVersion(updateRelease)}</small>
             </header>
-            <h2 id="update-prompt-title">A smoother, sharper Neon</h2>
-            <p>Here are the highlights included with your new version.</p>
+            <h2 id="update-prompt-title">{updateRelease.title}</h2>
+            <p>{updateRelease.summary}</p>
             <ul>
-              <li>New radio station selector</li>
-              <li>Improved radar markers</li>
-              <li>More tools for creators</li>
+              {updateRelease.highlights.map((highlight) => <li key={highlight}>{highlight}</li>)}
             </ul>
             <footer className="main-menu__update-prompt-actions">
               <button

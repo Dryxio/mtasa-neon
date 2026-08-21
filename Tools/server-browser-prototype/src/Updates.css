@@ -9,7 +9,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--updates-ink);
+  background: #171916;
   color: var(--updates-white);
   font-family: 'SA Bank Gothic', 'Arial Narrow', 'Noto Sans', sans-serif;
   text-transform: uppercase;
@@ -34,7 +34,7 @@
 
 .updates-shell__art {
   overflow: hidden;
-  background: #131614;
+  background: #171916;
 }
 
 .updates-shell__art img {
@@ -42,16 +42,15 @@
   height: 100%;
   object-fit: cover;
   object-position: center;
-  opacity: 0.38;
-  filter: saturate(0.72) contrast(1.05) brightness(0.58);
+  opacity: 1;
   transform: scale(1.02);
 }
 
 .updates-shell__wash {
   z-index: -1;
   background:
-    linear-gradient(90deg, rgba(2, 3, 3, 0.98) 0%, rgba(2, 3, 3, 0.9) 50%, rgba(2, 3, 3, 0.7)),
-    linear-gradient(0deg, rgba(2, 3, 3, 0.92), rgba(2, 3, 3, 0.2) 54%, rgba(2, 3, 3, 0.68));
+    linear-gradient(90deg, #020303 0%, rgba(2, 3, 3, 0.98) 34%, rgba(2, 3, 3, 0.9) 68%, rgba(2, 3, 3, 0.62)),
+    linear-gradient(0deg, rgba(1, 2, 2, 0.96), rgba(1, 2, 2, 0.15) 55%, rgba(2, 3, 3, 0.34));
 }
 
 .updates-header {
@@ -172,6 +171,7 @@
 .updates-history__list {
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
@@ -263,6 +263,7 @@
 
 .updates-detail {
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: clamp(24px, 3.5vh, 42px) clamp(28px, 3.2vw, 58px) 26px;
   background: #070a0c;
   border-top: 2px solid rgba(172, 203, 241, 0.68);

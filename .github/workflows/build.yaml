@@ -7,6 +7,11 @@ on:
   push:
   workflow_dispatch:
     inputs:
+      prepare_release:
+        description: Build the next sequential Neon release identity without publishing it
+        required: true
+        type: boolean
+        default: false
       publish_release:
         description: Publish this successful master build as the public Neon update
         required: true
@@ -26,12 +31,57 @@ env:
   SKYGFX_BRIDGE_COMMIT: 5daf7f63f15a33cbde3f917c65dd5fce6fb498b9
 
 jobs:
+  release_version:
+    name: Resolve Neon build identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build_number: ${{ steps.version.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate release catalogue and resolve build number
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_BUILD: ${{ github.repository == 'Dryxio/mtasa-neon' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && (inputs.prepare_release == true || inputs.publish_release == true) }}
+        run: |
+          set -euo pipefail
+
+          catalog='Tools/server-browser-prototype/src/releaseNotes.json'
+          python3 utils/neon-release/release_catalog.py validate --catalog "$catalog"
+
+          if [[ "$PUBLIC_BUILD" == 'true' ]]; then
+            tags_file="$RUNNER_TEMP/neon-public-release-tags.txt"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' > "$tags_file"
+            build_number="$(python3 utils/neon-release/release_catalog.py next-build --catalog "$catalog" < "$tags_file")"
+            python3 utils/neon-release/release_catalog.py validate \
+              --catalog "$catalog" \
+              --expected-build "$build_number" \
+              --expected-date "$(date -u +'%Y-%m-%d')"
+          else
+            build_number="$GITHUB_RUN_NUMBER"
+          fi
+
+          if [[ ! "$build_number" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "Neon build number must be between 1 and 99999, got $build_number" >&2
+            exit 1
+          fi
+
+          printf 'build_number=%s\n' "$build_number" >> "$GITHUB_OUTPUT"
+          echo "Resolved Neon build $build_number (release identity: $PUBLIC_BUILD)"
+
   windows:
+    needs: release_version
     strategy:
       matrix:
         platform: [win32, x64, arm64]
     name: windows-${{ matrix.platform }}
     runs-on: windows-2025-vs2026
+    env:
+      NEON_BUILD_NUMBER: ${{ needs.release_version.outputs.build_number }}
     steps:
       - uses: actions/checkout@v6
 
@@ -54,9 +104,9 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $buildNumber = [int]$env:GITHUB_RUN_NUMBER
+          $buildNumber = [int]$env:NEON_BUILD_NUMBER
           if ($buildNumber -lt 1 -or $buildNumber -gt 99999) {
-            throw "GITHUB_RUN_NUMBER must be between 1 and 99999, got $buildNumber"
+            throw "NEON_BUILD_NUMBER must be between 1 and 99999, got $buildNumber"
           }
 
           @(
@@ -294,8 +344,8 @@ jobs:
               '/DCLIENT_ONLY' `
               "/DFILES_ROOT=$filesRoot" `
               "/DINSTALL_OUTPUT=$outputPath" `
-              "/DPRODUCT_VERSION=v1.7.0-neon-$env:GITHUB_RUN_NUMBER" `
-              "/DREVISION=$env:GITHUB_RUN_NUMBER" `
+              "/DPRODUCT_VERSION=v1.7.0-neon-$env:NEON_BUILD_NUMBER" `
+              "/DREVISION=$env:NEON_BUILD_NUMBER" `
               'nightly.nsi'
             if ($LASTEXITCODE -ne 0) {
               throw "makensis.exe failed with exit code $LASTEXITCODE"
@@ -411,6 +461,7 @@ jobs:
         run: ./linux-build.sh
 
   linux:
+    needs: release_version
     strategy:
       fail-fast: false
       matrix:
@@ -421,6 +472,8 @@ jobs:
             launcher: mta-server-arm64
     name: linux-${{ matrix.architecture }}
     runs-on: ubuntu-latest
+    env:
+      NEON_BUILD_NUMBER: ${{ needs.release_version.outputs.build_number }}
     container:
       image: docker://ghcr.io/multitheftauto/mtasa-blue-build:latest
     steps:
@@ -440,8 +493,8 @@ jobs:
         run: |
           set -eu
 
-          if [[ ! "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]; then
-            echo "GITHUB_RUN_NUMBER must be between 1 and 99999, got $GITHUB_RUN_NUMBER" >&2
+          if [[ ! "$NEON_BUILD_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "NEON_BUILD_NUMBER must be between 1 and 99999, got $NEON_BUILD_NUMBER" >&2
             exit 1
           fi
 
@@ -451,7 +504,7 @@ jobs:
             '#undef MTASA_VERSION_TYPE' \
             '#define MTASA_VERSION_TYPE VERSION_TYPE_UNSTABLE' \
             '#undef MTASA_VERSION_BUILD' \
-            "#define MTASA_VERSION_BUILD $GITHUB_RUN_NUMBER" \
+            "#define MTASA_VERSION_BUILD $NEON_BUILD_NUMBER" \
             '#define MTASA_SKIP_VERSION_CHECKS' \
             > Shared/build_overrides.h
 
@@ -581,7 +634,7 @@ jobs:
           retention-days: 14
 
   neon-updater-manifest:
-    name: Test Neon update manifest
+    name: Test Neon release metadata
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -592,12 +645,17 @@ jobs:
         run: |
           python3 -m unittest discover -s utils/neon-updater -p 'test_*.py' -v
           python3 utils/neon-updater/manifest.py --help >/dev/null
+          python3 -m unittest discover -s utils/neon-release -p 'test_*.py' -v
+          python3 utils/neon-release/release_catalog.py validate \
+            --catalog Tools/server-browser-prototype/src/releaseNotes.json
 
   publish-latest:
     name: Publish approved Neon release
     if: github.repository == 'Dryxio/mtasa-neon' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.publish_release == true
-    needs: [windows, macOS, linux, neon-updater-manifest]
+    needs: [release_version, windows, macOS, linux, neon-updater-manifest]
     runs-on: ubuntu-latest
+    env:
+      NEON_BUILD_NUMBER: ${{ needs.release_version.outputs.build_number }}
     permissions:
       contents: write
     steps:
@@ -646,23 +704,27 @@ jobs:
             sha256sum "${required_assets[@]}" > SHA256SUMS.txt
           )
 
-          if [[ ! "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]; then
-            echo "GITHUB_RUN_NUMBER must be between 1 and 99999, got $GITHUB_RUN_NUMBER" >&2
+          if [[ ! "$NEON_BUILD_NUMBER" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "NEON_BUILD_NUMBER must be between 1 and 99999, got $NEON_BUILD_NUMBER" >&2
             exit 1
           fi
 
           short_sha="${GITHUB_SHA:0:9}"
           build_date="$(date -u +'%Y-%m-%d %H:%M UTC')"
-          version_date="$(date -u +'%Y.%m.%d')"
-          display_version="${version_date}.${GITHUB_RUN_NUMBER}"
-          printf -v padded_build '%05d' "$GITHUB_RUN_NUMBER"
-          technical_version="1.7.0-5.${padded_build}"
-          release_tag="neon-${display_version}"
-          release_title="MTA:SA Neon — ${display_version}"
+          catalog='Tools/server-browser-prototype/src/releaseNotes.json'
+          display_version="$(python3 utils/neon-release/release_catalog.py identity --catalog "$catalog" --build "$NEON_BUILD_NUMBER" --field display-version)"
+          technical_version="$(python3 utils/neon-release/release_catalog.py identity --catalog "$catalog" --build "$NEON_BUILD_NUMBER" --field technical-version)"
+          release_tag="$(python3 utils/neon-release/release_catalog.py identity --catalog "$catalog" --build "$NEON_BUILD_NUMBER" --field tag)"
+          release_title="$(python3 utils/neon-release/release_catalog.py identity --catalog "$catalog" --build "$NEON_BUILD_NUMBER" --field title)"
           printf 'tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           printf 'title=%s\n' "$release_title" >> "$GITHUB_OUTPUT"
           printf 'display_version=%s\n' "$display_version" >> "$GITHUB_OUTPUT"
           printf 'technical_version=%s\n' "$technical_version" >> "$GITHUB_OUTPUT"
+
+          python3 utils/neon-release/release_catalog.py render \
+            --catalog "$catalog" \
+            --build "$NEON_BUILD_NUMBER" \
+            --output ReleaseChangelog.md
 
           cat > ReleaseNotes.md <<EOF
           ## 🎮 Windows player
@@ -677,6 +739,10 @@ jobs:
           - **Linux x64 or ARM64:** download the matching \`.tar.gz\` package.
 
           Client and server files in this release come from the same successful \`master\` build. Keep them together when using Neon-specific network features.
+
+          EOF
+          cat ReleaseChangelog.md >> ReleaseNotes.md
+          cat >> ReleaseNotes.md <<EOF
 
           ## Build information
 
@@ -756,7 +822,7 @@ jobs:
             --private-key "$signing_key" \
             --expected-public-key-base64url 'oc55WO1PYJFiyipKMTAoDR-nVPLgUZ7bgyDfvl3WhsI' \
             --repository "$GITHUB_REPOSITORY" \
-            --build "$GITHUB_RUN_NUMBER" \
+            --build "$NEON_BUILD_NUMBER" \
             --display-version "$DISPLAY_VERSION" \
             --technical-version "$TECHNICAL_VERSION" \
             --release-tag "$RELEASE_TAG" \

@@ -4236,6 +4236,10 @@ void CServerBrowserWeb::QueueMenuInit()
 {
     JsonPtr init = MakeObject();
     AddString(init.get(), "type", "init");
+    // The web shell must use the identity compiled into this exact binary for
+    // one-time release notices. A catalogue constant can drift from the signed
+    // updater manifest, while this value is shared by both producers.
+    AddInteger(init.get(), "buildNumber", MTASA_VERSION_BUILD);
     AddBoolean(init.get(), "inGame", m_mainMenu.GetIsIngame());
     AddString(init.get(), "locale", g_pCore->GetLocalization()->GetLanguageCode());
     AddWebTranslations(init.get());

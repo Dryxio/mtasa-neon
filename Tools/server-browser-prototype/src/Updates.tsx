@@ -1,140 +1,67 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { chooseLaunchLoadscreen } from './loadscreen'
+import {
+  findNeonRelease,
+  formatReleaseDate,
+  formatReleaseVersion,
+  LATEST_NEON_RELEASE,
+  NEON_RELEASES,
+} from './releaseNotes'
 import { playUiSound } from './uiSound'
 import './Updates.css'
 
-interface UpdateSection {
-  label: string
-  tone: 'players' | 'creators' | 'servers'
-  items: readonly string[]
-}
-
-interface UpdateEntry {
-  version: string
-  date: string
-  title: string
-  summary: string
-  current?: boolean
-  sections: readonly UpdateSection[]
-}
-
-const PLACEHOLDER_UPDATES: readonly UpdateEntry[] = [
-  {
-    version: '2026.08.21.184',
-    date: 'August 21, 2026',
-    title: 'The streets enter a new dimension',
-    summary:
-      'An update focused on smoother play, more ambitious worlds and dependable long sessions.',
-    current: true,
-    sections: [
-      {
-        label: 'For players',
-        tone: 'players',
-        items: [
-          'A direct radio station selector designed to stay readable while driving.',
-          'The radar now preserves native markers and custom destinations more reliably.',
-          'Menu and server browser transitions feel faster and more consistent.',
-        ],
-      },
-      {
-        label: 'For creators',
-        tone: 'creators',
-        items: [
-          'New managed rope tools for physical interactions and cinematic scenes.',
-          'More control over native worlds, their objects and visual effects.',
-        ],
-      },
-      {
-        label: 'Servers & stability',
-        tone: 'servers',
-        items: [
-          'Lower rendering cost in dense lists and interface-heavy screens.',
-          'Reconnect fixes and better continuity between Neon clients and servers.',
-        ],
-      },
-    ],
-  },
-  {
-    version: '2026.08.09.179',
-    date: 'August 9, 2026',
-    title: 'A stronger foundation for Neon',
-    summary: 'This release strengthens public distribution and the network foundations unique to Neon.',
-    sections: [
-      {
-        label: 'Highlights',
-        tone: 'players',
-        items: [
-          'Simplified Windows installation from a signed public release.',
-          'Client and server builds ship together to preserve compatibility with Neon features.',
-          'Clearer version information throughout the launcher.',
-        ],
-      },
-    ],
-  },
-  {
-    version: '2026.08.08.177',
-    date: 'August 8, 2026',
-    title: 'Neon servers are easier to discover',
-    summary: 'The browser gives communities published on the Neon network a clearer identity.',
-    sections: [
-      {
-        label: 'Discovery',
-        tone: 'players',
-        items: [
-          'Richer server profiles with descriptions, languages and community links.',
-          'Faster access to favourites and recent destinations.',
-        ],
-      },
-      {
-        label: 'Hosting',
-        tone: 'servers',
-        items: ['Secure publication of public servers through the Neon registry.'],
-      },
-    ],
-  },
-  {
-    version: '2026.08.07.174',
-    date: 'August 7, 2026',
-    title: 'Neon Identity across the whole experience',
-    summary: 'A linked Discord identity can now follow the player between Neon experiences.',
-    sections: [
-      {
-        label: 'Account',
-        tone: 'players',
-        items: [
-          'Discord linking is available directly from the main menu.',
-          'Session status stays visible without interrupting navigation.',
-        ],
-      },
-    ],
-  },
-  {
-    version: '2026.07',
-    date: 'July 2026',
-    title: 'Extended worlds and native tools',
-    summary: 'A series of experiments opens the door to more ambitious maps and scenarios.',
-    sections: [
-      {
-        label: 'Creation',
-        tone: 'creators',
-        items: [
-          'Controlled loading of additional native worlds.',
-          'New tools for missions, traffic and scripted scenes.',
-          'Dedicated test harnesses for validating content before publication.',
-        ],
-      },
-    ],
-  },
-]
-
 interface UpdatesProps {
+  buildNumber: number
   onClose: () => void
 }
 
-export function Updates({ onClose }: UpdatesProps) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
+export function Updates({ buildNumber, onClose }: UpdatesProps) {
+  const currentRelease = findNeonRelease(buildNumber) ?? (buildNumber === 0 ? LATEST_NEON_RELEASE : undefined)
+  const currentIndex = Math.max(0, NEON_RELEASES.findIndex((release) => release.build === currentRelease?.build))
+  const [selectedIndex, setSelectedIndex] = useState(currentIndex)
   const [loadscreen] = useState(chooseLaunchLoadscreen)
-  const selected = PLACEHOLDER_UPDATES[selectedIndex] ?? PLACEHOLDER_UPDATES[0]!
+  const shellRef = useRef<HTMLElement>(null)
+  const historyRef = useRef<HTMLDivElement>(null)
+  const detailRef = useRef<HTMLElement>(null)
+  const selected = NEON_RELEASES[selectedIndex] ?? LATEST_NEON_RELEASE
+
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!shell) return
+
+    const onWheel = (event: WheelEvent) => {
+      const detail = detailRef.current
+      const target = event.target
+      if (!detail || !(target instanceof Node) || event.deltaY === 0 || detail.contains(target)) return
+
+      const history = historyRef.current
+      if (history?.contains(target)) {
+        const historyCanMove = event.deltaY < 0
+          ? history.scrollTop > 0
+          : history.scrollTop + history.clientHeight < history.scrollHeight
+        if (historyCanMove) return
+      }
+
+      const detailCanMove = event.deltaY < 0
+        ? detail.scrollTop > 0
+        : detail.scrollTop + detail.clientHeight < detail.scrollHeight
+      if (!detailCanMove) return
+
+      const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 40
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? detail.clientHeight
+          : 1
+      detail.scrollTop += event.deltaY * scale
+      event.preventDefault()
+    }
+
+    // CEF latches a wheel gesture to the element beneath its first event. The
+    // history, gutters and header are not useful scroll targets most of the
+    // time, so forward only those otherwise inert gestures to the release body.
+    shell.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    return () => shell.removeEventListener('wheel', onWheel, { capture: true })
+  }, [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -145,14 +72,14 @@ export function Updates({ onClose }: UpdatesProps) {
       } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
         const direction = event.key === 'ArrowDown' ? 1 : -1
-        setSelectedIndex((current) => (current + direction + PLACEHOLDER_UPDATES.length) % PLACEHOLDER_UPDATES.length)
+        setSelectedIndex((current) => (current + direction + NEON_RELEASES.length) % NEON_RELEASES.length)
         playUiSound('highlight')
       } else if (event.key === 'Home') {
         event.preventDefault()
         setSelectedIndex(0)
       } else if (event.key === 'End') {
         event.preventDefault()
-        setSelectedIndex(PLACEHOLDER_UPDATES.length - 1)
+        setSelectedIndex(NEON_RELEASES.length - 1)
       }
     }
 
@@ -161,7 +88,7 @@ export function Updates({ onClose }: UpdatesProps) {
   }, [onClose])
 
   return (
-    <main className="updates-shell">
+    <main ref={shellRef} className="updates-shell">
       <div className="updates-shell__art" aria-hidden="true">
         <img src={loadscreen} alt="" draggable={false} />
       </div>
@@ -189,15 +116,15 @@ export function Updates({ onClose }: UpdatesProps) {
         <aside className="updates-history" aria-label="Release history">
           <div className="updates-history__heading">
             <span>Release history</span>
-            <small>{PLACEHOLDER_UPDATES.length} releases</small>
+            <small>{NEON_RELEASES.length} releases</small>
           </div>
-          <div className="updates-history__list">
-            {PLACEHOLDER_UPDATES.map((entry, index) => {
+          <div ref={historyRef} className="updates-history__list">
+            {NEON_RELEASES.map((entry, index) => {
               const active = index === selectedIndex
               return (
                 <button
                   type="button"
-                  key={entry.version}
+                  key={entry.build}
                   className={`updates-history__item${active ? ' updates-history__item--active' : ''}`}
                   aria-current={active ? 'true' : undefined}
                   onMouseEnter={() => setSelectedIndex(index)}
@@ -209,22 +136,22 @@ export function Updates({ onClose }: UpdatesProps) {
                 >
                   <span className="updates-history__marker" aria-hidden="true">▸</span>
                   <span className="updates-history__copy">
-                    <strong>Neon {entry.version}</strong>
+                    <strong>Neon {formatReleaseVersion(entry)}</strong>
                     <span>{entry.title}</span>
-                    <time>{entry.date}</time>
+                    <time dateTime={entry.date}>{formatReleaseDate(entry)}</time>
                   </span>
-                  {entry.current && <span className="updates-history__badge">Current</span>}
+                  {entry.build === currentRelease?.build && <span className="updates-history__badge">Current</span>}
                 </button>
               )
             })}
           </div>
         </aside>
 
-        <article className="updates-detail" key={selected.version}>
+        <article ref={detailRef} className="updates-detail" key={selected.build}>
           <header className="updates-detail__header">
             <div className="updates-detail__meta">
-              <span>Version {selected.version}</span>
-              <time>{selected.date}</time>
+              <span>Version {formatReleaseVersion(selected)}</span>
+              <time dateTime={selected.date}>{formatReleaseDate(selected)}</time>
             </div>
             <h2>{selected.title}</h2>
             <p>{selected.summary}</p>
@@ -242,14 +169,14 @@ export function Updates({ onClose }: UpdatesProps) {
           </div>
 
           <footer className="updates-detail__footer">
-            <span>Preview content</span>
-            <span>Final notes will be published with each release.</span>
+            <span>Neon build {selected.build}</span>
+            <span>{selected.sections.reduce((total, section) => total + section.items.length, 0)} documented changes</span>
           </footer>
         </article>
       </div>
 
       <footer className="updates-controls">
-        <span>Visual prototype · placeholder content</span>
+        <span>Neon release notes</span>
         <span><kbd>↑</kbd><kbd>↓</kbd> Change release&nbsp;&nbsp; <kbd>Esc</kbd> Back</span>
       </footer>
     </main>

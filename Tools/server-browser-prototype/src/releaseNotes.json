@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "releases": [
+    {
+      "build": 180,
+      "date": "2026-08-21",
+      "title": "New menus, faster downloads and new Lua tools",
+      "summary": "Build 180 replaces the main client menus, speeds up resource downloads and adds APIs for maps, collision, physics, effects and GTA world systems.",
+      "highlights": [
+        "New main menu, server browser and complete settings menu",
+        "Direct server addresses and shareable mtaneon:// links",
+        "New Lua APIs for GTA maps, objects, effects and world systems"
+      ],
+      "sections": [
+        {
+          "label": "For players",
+          "tone": "players",
+          "items": [
+            "The main menu, server browser and settings menu have been rebuilt.",
+            "Settings now covers gameplay, graphics, audio, controls, interface, Neon features and advanced options.",
+            "Paste an IP address, hostname, mtasa:// link or mtaneon:// link into the server browser to connect directly.",
+            "Use Copy link on a selected server to share its mtaneon:// address.",
+            "Connection errors, password requests and update prompts now appear over the new menu instead of being hidden behind it.",
+            "Resource files can download in parallel, reducing join time when a server sends several files.",
+            "Radio selection and saved GTA volume levels now restore correctly.",
+            "Radar icons now stay below the player marker."
+          ]
+        },
+        {
+          "label": "For creators",
+          "tone": "creators",
+          "items": [
+            "Load SA-MP Pawn map exports directly, including material replacements.",
+            "Create collision shapes from Lua or replace a model's collision data without shipping a .col file.",
+            "Track and control GTA world objects, or give MTA objects synchronized GTA rigid-body physics.",
+            "Place GTA foliage anywhere and create synchronized fires that can follow an element.",
+            "Create and control bird flocks and synchronized ropes. Ropes support all eight GTA rope types and cargo attachment.",
+            "Read, edit, add or remove model 2DFX entries, and create break effects from an object's own geometry without editing its DFF.",
+            "Enable GTA ambient civilians, gangs, police patrols, dealers and couples through the native population runtime.",
+            "Read native radio playback state and the object streaming quota split from Lua."
+          ]
+        },
+        {
+          "label": "Servers and fixes",
+          "tone": "servers",
+          "items": [
+            "Replacing a resource file now invalidates its old cached checksum instead of reusing stale data.",
+            "Reconnect and server-connection UI state no longer gets stuck behind old CEGUI windows.",
+            "Secondary clients skip CEF initialization, and multi-client windows tile without resizing GTA."
+          ]
+        }
+      ]
+    },
+    {
+      "build": 179,
+      "date": "2026-08-09",
+      "title": "Signed client and server releases",
+      "summary": "Build 179 added signed client updates and matching Windows and Linux server packages.",
+      "highlights": [
+        "Signed public client updates",
+        "Matching Windows and Linux server packages",
+        "Strict installer and manifest verification"
+      ],
+      "sections": [
+        {
+          "label": "Release infrastructure",
+          "tone": "servers",
+          "items": [
+            "A simplified Windows installer became available from the public GitHub release.",
+            "Client and server packages ship from the same successful master build.",
+            "The updater verifies signed metadata, installer size and SHA-256 before installation."
+          ]
+        }
+      ]
+    },
+    {
+      "build": 177,
+      "date": "2026-08-08",
+      "title": "Neon server registry",
+      "summary": "Build 177 added a dedicated list for compatible servers published on the Neon network.",
+      "highlights": [
+        "Richer server profiles",
+        "Community links and languages",
+        "Secure Neon registry publication"
+      ],
+      "sections": [
+        {
+          "label": "Discovery",
+          "tone": "players",
+          "items": [
+            "Server profiles can include descriptions, languages and community links.",
+            "The Neon registry provides a dedicated list of published compatible servers."
+          ]
+        }
+      ]
+    },
+    {
+      "build": 174,
+      "date": "2026-08-07",
+      "title": "Discord-backed Neon Identity",
+      "summary": "Build 174 added Discord account linking and authenticated Neon sessions.",
+      "highlights": [
+        "Discord identity linking",
+        "Visible account status",
+        "Authenticated Neon sessions"
+      ],
+      "sections": [
+        {
+          "label": "Identity",
+          "tone": "players",
+          "items": [
+            "Discord identity can be linked from Neon.",
+            "Authentication and session status remain visible during the client flow."
+          ]
+        }
+      ]
+    }
+  ]
+}

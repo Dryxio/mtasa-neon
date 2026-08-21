@@ -41,6 +41,7 @@ export interface NativeMessageDialog {
 }
 
 interface MenuState {
+  buildNumber: number
   inGame: boolean
   locale: string
   languages: MenuLanguage[]
@@ -87,6 +88,7 @@ const DEVELOPMENT_LANGUAGES: MenuLanguage[] = [
 ]
 
 const INITIAL_STATE: MenuState = {
+  buildNumber: 0,
   inGame: false,
   locale: 'en_US',
   languages: DEVELOPMENT_LANGUAGES,

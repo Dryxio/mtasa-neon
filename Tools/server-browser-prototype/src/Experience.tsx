@@ -57,10 +57,11 @@ export function Experience() {
         </Suspense>
       ) : view === 'updates' ? (
         <Suspense fallback={<div className="route-loading" aria-label="Loading updates" />}>
-          <Updates onClose={() => { window.location.hash = '' }} />
+          <Updates buildNumber={menu.state.buildNumber} onClose={() => { window.location.hash = '' }} />
         </Suspense>
       ) : (
           <MainMenu
+            buildNumber={menu.state.buildNumber}
             inGame={menu.state.inGame}
             identity={menu.state.identity}
             featuredServer={menu.state.featuredServer}
