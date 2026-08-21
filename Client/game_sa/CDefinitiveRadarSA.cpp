@@ -519,7 +519,6 @@ namespace
             ConfigureWorldDrawing(camera);
             if (drawMap)
                 DrawMap();
-            DrawPlayer(player);
 
             if (FAILED(m_Device->SetRenderTarget(0, oldTarget)) || FAILED(m_Device->SetDepthStencilSurface(oldDepth)) ||
                 FAILED(m_Device->SetViewport(&oldViewport)))
@@ -539,6 +538,38 @@ namespace
                 DrawBlips(camera, radarX, radarY, radarSize, static_cast<float>(targetSize));
                 DrawNorth(camera, radarX, radarY, radarSize);
             }
+
+            // Preserve the projected DE player marker while compositing it last,
+            // matching GTA's ordering when another blip shares its position. Reuse
+            // the map target for a transparent player-only pass after its pixels
+            // have already been presented, avoiding a second per-frame allocation.
+            m_Device->SetTexture(0, nullptr);
+            if (FAILED(m_Device->SetDepthStencilSurface(nullptr)) || FAILED(m_Device->SetRenderTarget(0, targetSurface)) ||
+                FAILED(m_Device->SetViewport(&radarViewport)) || FAILED(m_Device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0)))
+            {
+                safeToFallback = RestoreDevice(oldTarget, oldDepth, oldViewport, stateBlock);
+                SafeRelease(targetSurface);
+                SafeRelease(targetTexture);
+                return false;
+            }
+
+            ConfigureWorldDrawing(camera);
+            // Store the texture's straight alpha in the cleared overlay target;
+            // blending here and again during composition would attenuate its edges twice.
+            m_Device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+            DrawPlayer(player);
+
+            if (FAILED(m_Device->SetRenderTarget(0, oldTarget)) || FAILED(m_Device->SetDepthStencilSurface(oldDepth)) ||
+                FAILED(m_Device->SetViewport(&oldViewport)))
+            {
+                safeToFallback = RestoreDevice(oldTarget, oldDepth, oldViewport, stateBlock);
+                SafeRelease(targetSurface);
+                SafeRelease(targetTexture);
+                return false;
+            }
+
+            ConfigureTexturedDrawing();
+            DrawCircle(targetTexture, radarX, radarY, radarSize);
 
             const bool restored = RestoreDevice(oldTarget, oldDepth, oldViewport, stateBlock);
             SafeRelease(targetSurface);
