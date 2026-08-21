@@ -750,30 +750,37 @@ static void __declspec(naked) HOOK_IKChainManager_PointArm()
     }
     // clang-format on
 
-    pATargetingPed = GetTargetingPed();
-    if (pATargetingPed)
+    // GTA legitimately calls PointArm without an offset in a few IK cleanup
+    // paths. There is then no target to synchronize, just as in the LookAt
+    // hook below, so leave the retail call untouched instead of dereferencing
+    // a null vector.
+    if (pTargetVector)
     {
-        // If this is the local player
-        if (IsLocalPlayer(pATargetingPed))
+        pATargetingPed = GetTargetingPed();
+        if (pATargetingPed)
         {
-            // Store the position his aiming at
-            pMultiplayer->m_vecAkimboTarget.fX = pTargetVector[0];
-            pMultiplayer->m_vecAkimboTarget.fY = pTargetVector[1];
-            pMultiplayer->m_vecAkimboTarget.fZ = pTargetVector[2];
-        }
-        else
-        {
-            // Grab his remote storage
-            pTempRemote = CRemoteDataSA::GetRemoteDataStorage(
-                pAPed);  // TODO: Can be optimized further by using the PlayerPed class. Not sure how to convert CPed to CPlayerPed
-            if (pTempRemote)
+            // If this is the local player
+            if (IsLocalPlayer(pATargetingPed))
             {
-                if (pTempRemote->ProcessPlayerWeapon())
+                // Store the position his aiming at
+                pMultiplayer->m_vecAkimboTarget.fX = pTargetVector[0];
+                pMultiplayer->m_vecAkimboTarget.fY = pTargetVector[1];
+                pMultiplayer->m_vecAkimboTarget.fZ = pTargetVector[2];
+            }
+            else
+            {
+                // Grab his remote storage
+                pTempRemote = CRemoteDataSA::GetRemoteDataStorage(
+                    pAPed);  // TODO: Can be optimized further by using the PlayerPed class. Not sure how to convert CPed to CPlayerPed
+                if (pTempRemote)
                 {
-                    // If this is remote player, use the data in his remote storage to point his aim position
-                    pTargetVector[0] = pTempRemote->m_vecAkimboTarget.fX;
-                    pTargetVector[1] = pTempRemote->m_vecAkimboTarget.fY;
-                    pTargetVector[2] = pTempRemote->m_vecAkimboTarget.fZ;
+                    if (pTempRemote->ProcessPlayerWeapon())
+                    {
+                        // If this is remote player, use the data in his remote storage to point his aim position
+                        pTargetVector[0] = pTempRemote->m_vecAkimboTarget.fX;
+                        pTargetVector[1] = pTempRemote->m_vecAkimboTarget.fY;
+                        pTargetVector[2] = pTempRemote->m_vecAkimboTarget.fZ;
+                    }
                 }
             }
         }
