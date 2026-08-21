@@ -485,8 +485,12 @@ void CPacketHandler::Packet_ServerJoined(NetBitStreamInterface& bitStream)
     }
 
     // Last (or only) HTTP server is internal
-    SString strInternalHTTPDownloadURL = SString("http://%s:%d", g_pNet->GetConnectedServer(), usHTTPDownloadPort);
-    g_pClientGame->GetResourceFileDownloadManager()->AddServer(strInternalHTTPDownloadURL, 1, EDownloadMode::RESOURCE_INITIAL_FILES_INTERNAL, 10, 10000);
+    // Keep enough parallelism to hide per-file latency without letting one client saturate the
+    // built-in server's worker pool. single_download is preserved because it forced the value to 1 above.
+    const int iInternalHTTPMaxConnectionsPerClient = Clamp(1, iHTTPMaxConnectionsPerClient, 4);
+    SString   strInternalHTTPDownloadURL = SString("http://%s:%d", g_pNet->GetConnectedServer(), usHTTPDownloadPort);
+    g_pClientGame->GetResourceFileDownloadManager()->AddServer(strInternalHTTPDownloadURL, iInternalHTTPMaxConnectionsPerClient,
+                                                               EDownloadMode::RESOURCE_INITIAL_FILES_INTERNAL, 10, 10000);
 
     // Set appropriate server for stupid SingularFileDownloadManager
     g_pClientGame->m_strHTTPDownloadURL = !strExternalHTTPDownloadURL.empty() ? strExternalHTTPDownloadURL : strInternalHTTPDownloadURL;
