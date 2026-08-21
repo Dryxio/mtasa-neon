@@ -59,6 +59,7 @@ private:
     CEGUI::Image*           m_pImage;
 
     CWebViewInterface* m_pWebView;
+    float              m_fWheelPixelRemainder{};
 
 #define EXCLUDE_SET_SIZE  // WTF? TODO: Refactor this
 #include "CGUIElement_Inc.h"

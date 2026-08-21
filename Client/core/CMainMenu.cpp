@@ -489,6 +489,11 @@ void CMainMenu::Update()
 {
     UpdateNeonIdentityControls();
 
+    // Question boxes can be requested by the updater before React has
+    // installed its native bridge. Promote a pending web dialog as soon as
+    // the shell is ready, falling back to CEGUI only if CEF startup fails.
+    m_QuestionBox.TryShowPendingWeb();
+
     // Keep ownership in sync before any early return below. In particular,
     // F8 can open the console while the menu is in its one-frame transition.
     if (m_pServerBrowserWeb)
@@ -783,8 +788,9 @@ void CMainMenu::Update()
 
 bool CMainMenu::HasNativeInputOwner()
 {
-    return m_Settings.IsVisible() || m_Credits.IsVisible() || m_QuestionBox.IsVisible() || m_ServerInfo.IsVisible() ||
-           (m_pNewsBrowser && m_pNewsBrowser->IsVisible()) || g_pCore->GetConsole()->IsVisible() || g_pCore->IsChatInputEnabled();
+    return m_Settings.IsVisible() || m_Credits.IsVisible() || m_QuestionBox.IsNativeVisible() || m_ServerInfo.IsVisible() ||
+           (m_pNewsBrowser && m_pNewsBrowser->IsVisible()) || g_pCore->HasNativeMessageBox() || g_pCore->GetConsole()->IsVisible() ||
+           g_pCore->IsChatInputEnabled();
 }
 
 bool CMainMenu::OnNeonIdentityButtonClick(CGUIElement* pElement)

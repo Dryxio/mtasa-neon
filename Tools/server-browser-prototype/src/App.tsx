@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DetailsPanel } from './components/DetailsPanel'
 import { Header } from './components/Header'
 import { ServerList } from './components/ServerList'
@@ -20,7 +20,9 @@ export function App() {
   const [playersViewServerId, setPlayersViewServerId] = useState<string | null>(null)
 
   useEffect(() => {
+    actions.resume()
     void actions.init()
+    return actions.suspend
   }, [])
 
   const directAddress = useMemo(() => parseServerAddress(state.query), [state.query])
@@ -55,10 +57,22 @@ export function App() {
 
   // Bouton Connect de la barre d'outils : adresse directe si la recherche en
   // contient une, sinon serveur sélectionné.
-  const connectFromToolbar = () => {
+  const connectFromToolbar = useCallback(() => {
     if (directAddress) actions.connectToAddress(directAddress)
     else if (selected) actions.connectTo(selected)
-  }
+  }, [directAddress, selected])
+
+  // Keep row callbacks stable so background scan/progress updates do not
+  // invalidate every memoized server card while the list is scrolling.
+  const joinServer = useCallback((server: Parameters<typeof actions.connectTo>[0]) => {
+    playUiSound('select')
+    actions.connectTo(server)
+  }, [])
+
+  const toggleFavourite = useCallback((server: Parameters<typeof actions.toggleFavourite>[0]) => {
+    playUiSound('select')
+    actions.toggleFavourite(server)
+  }, [])
 
   // Navigation clavier globale : ↑/↓ naviguent, ↵ rejoint, Échap ferme.
   useEffect(() => {
@@ -142,14 +156,8 @@ export function App() {
             selectedId={state.selectedId}
             directTarget={directTarget}
             onSelect={actions.select}
-            onJoin={(server) => {
-              playUiSound('select')
-              actions.connectTo(server)
-            }}
-            onToggleFavourite={(server) => {
-              playUiSound('select')
-              actions.toggleFavourite(server)
-            }}
+            onJoin={joinServer}
+            onToggleFavourite={toggleFavourite}
           />
         </div>
         <div className="details-zone">
@@ -174,7 +182,7 @@ export function App() {
           />
         </div>
       </div>
-      <StatusBar stats={state.stats} progress={state.progress} notice={state.notice} />
+      <StatusBar progress={state.progress} notice={state.notice} />
 
     </div>
   )

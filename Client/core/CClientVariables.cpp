@@ -262,6 +262,9 @@ void CClientVariables::ValidateValues()
     ClampValue("sfxvolume", 0.0f, 1.0f);
     ClampValue("mtavolume", 0.0f, 1.0f);
     ClampValue("voicevolume", 0.0f, 1.0f);
+    // Process priority is later used as an array index. Normalize legacy or
+    // hand-edited configurations before any consumer can apply it.
+    ClampValue("process_priority", 0, 2);
     ClampValue("mapalpha", 0, 255);
     ClampValue("mapimage", 0, 1);
     ClampValue("radar_position_x", 0.0f, 640.0f);
@@ -428,9 +431,25 @@ void CClientVariables::LoadDefaults()
     }
     DEFAULT("browser_enable_gpu", true);                 // Enable GPU in CEF? (allows stuff like WebGL to function)
     DEFAULT("browser_enable_video_acceleration", true);  // Enable hardware video decoding in CEF?
-    DEFAULT("process_cpu_affinity", true);               // Set CPU 0 affinity to improve game performance and fix the known issue in single-threaded games
-    DEFAULT("ask_before_disconnect", true);              // Ask before disconnecting from a server
-    DEFAULT("allow_steam_client", false);                // Allow connecting with the local Steam client (to set GTA:SA ingame status)
+    // Keep browser composition independent from unusually high or unlimited game FPS targets. CEF OSR has its own renderer and benefits from a stable
+    // cadence that matches the display instead of producing frames the D3D9 consumer cannot present.
+    DEFAULT("browser_frame_rate", 60);
+    // External begin-frame scheduling remains available for controlled A/B testing. Automatic CEF scheduling is the default because it avoids racing an
+    // asynchronous OnPaint callback against the texture upload in the same MTA pulse.
+    DEFAULT("browser_external_frame_scheduling", false);
+    DEFAULT("browser_frame_stats", false);  // Aggregated CEF paint/upload diagnostics; disabled outside targeted performance testing
+    // Experimental D3D11 shared-texture OSR path. Keep the proven software
+    // OnPaint pipeline as the default until accelerated rendering has been
+    // validated across native Windows GPUs and virtualized adapters.
+    DEFAULT("browser_shared_texture", false);
+    // Chromium's animated wheel path is especially important for windowless browsers, where raw wheel messages otherwise expose host timing jitter.
+    DEFAULT("browser_smooth_scrolling", true);
+    // Diagnostic opt-in for OSR hosts that Chromium incorrectly treats as background content. Keep this disabled globally because hidden resource browsers
+    // should normally retain Chromium's power-saving behavior.
+    DEFAULT("browser_disable_background_throttling", false);
+    DEFAULT("process_cpu_affinity", true);   // Set CPU 0 affinity to improve game performance and fix the known issue in single-threaded games
+    DEFAULT("ask_before_disconnect", true);  // Ask before disconnecting from a server
+    DEFAULT("allow_steam_client", false);    // Allow connecting with the local Steam client (to set GTA:SA ingame status)
     DEFAULT("use_mouse_sensitivity_for_aiming",
             false);  // It uses the horizontal mouse sensitivity for aiming, making the Y-axis sensitivity the same as the X-axis
 

@@ -12,13 +12,18 @@
 
 #include "CMainMenu.h"
 #include "CNeonIdentityManager.h"
+#include "CJoystickManager.h"
+#include "CKeyBinds.h"
+#include "CNickGen.h"
 #include "CSettings.h"
 #include "CServerBrowser.h"
 #include "CServerList.h"
+#include "CSteamClient.h"
 #include "DXHook/CProxyDirect3DDevice9.h"
 #include "Graphics/CVideoModeManager.h"
 #include "SkyGfx/CSkyGfxManager.h"
 #include <core/CAjaxResourceHandlerInterface.h>
+#include <core/CClientCommands.h>
 #include <core/CWebCoreInterface.h>
 #include <core/CWebViewInterface.h>
 #include <game/CAudioEngine.h>
@@ -35,9 +40,13 @@
 #include <cstring>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <utility>
+
+extern SBindableGTAControl g_bcControls[];
 
 namespace
 {
@@ -80,25 +89,12 @@ namespace
         {"main.playFeatured", _td("Play now"), _td("Play now"), EWebTranslationDomain::Client},
         {"main.linkDiscordToPlay", _td("Link Discord to play"), _td("Link Discord to play"), EWebTranslationDomain::Client},
         {"main.resumeGame", _td("Resume game"), _td("Resume game"), EWebTranslationDomain::Client},
-        {"main.resumeCaption", _td("Return to the streets."), _td("Return to the streets."), EWebTranslationDomain::Client},
-        {"main.settingsCaption", _td("Video, audio, controls and account preferences."), _td("Video, audio, controls and account preferences."),
-         EWebTranslationDomain::Client},
-        {"main.disconnectCaption", _td("Leave the current server and return to the main menu."), _td("Leave the current server and return to the main menu."),
-         EWebTranslationDomain::Client},
-        {"main.quitInGameCaption", _td("Leave the server and return to the desktop."), _td("Leave the server and return to the desktop."),
-         EWebTranslationDomain::Client},
         {"main.browseServers", _td("Browse servers"), _td("Server browser"), EWebTranslationDomain::MainMenu},
-        {"main.browseCaption", _td("Find a world and join the streets of San Andreas."), _td("Find a world and join the streets of San Andreas."),
-         EWebTranslationDomain::Client},
         {"main.quickConnect", _td("Quick connect"), _td("Quick connect"), EWebTranslationDomain::MainMenu},
-        {"main.quickConnectCaption", _td("Reconnect instantly or enter a server address."), _td("Reconnect instantly or enter a server address."),
+        {"main.quickConnectCaption", _td("Join by IP, hostname or mtaneon:// link."), _td("Join by IP, hostname or mtaneon:// link."),
          EWebTranslationDomain::Client},
         {"main.mapEditor", _td("Map editor"), _td("Map editor"), EWebTranslationDomain::MainMenu},
-        {"main.mapEditorCaption", _td("Build your own corner of San Andreas."), _td("Build your own corner of San Andreas."), EWebTranslationDomain::Client},
-        {"main.aboutCaption", _td("Credits, contributors and information about MTA Neon."), _td("Credits, contributors and information about MTA Neon."),
-         EWebTranslationDomain::Client},
         {"main.quitGame", _td("Quit game"), _td("Quit"), EWebTranslationDomain::MainMenu},
-        {"main.quitCaption", _td("Return to the desktop."), _td("Return to the desktop."), EWebTranslationDomain::Client},
         {"main.identity", _td("Neon Identity"), _td("Neon Identity"), EWebTranslationDomain::Client},
         {"main.inGame", _td("MTA Neon — In game"), _td("MTA Neon — In game"), EWebTranslationDomain::Client},
         {"main.preview", _td("v1.6 — Neon Preview"), _td("v1.6 — Neon Preview"), EWebTranslationDomain::Client},
@@ -124,34 +120,31 @@ namespace
         {"source.favourites", _td("Favourites"), _td("Favourites"), EWebTranslationDomain::Client},
         {"source.recent", _td("Recent"), _td("Recent"), EWebTranslationDomain::Client},
         {"browser.title", _td("Choose your server"), _td("Server browser"), EWebTranslationDomain::MainMenu},
-        {"browser.destinationsCount", _td("{count} destinations"), _td("{count} destinations"), EWebTranslationDomain::Client},
+        {"browser.destinationsCount", _td("{count} servers"), _td("{count} servers"), EWebTranslationDomain::Client},
         {"browser.playersOnlineCount", _td("{count} players online"), _td("{count} players online"), EWebTranslationDomain::Client},
         {"browser.backToMain", _td("Back to main menu"), _td("Back to main menu"), EWebTranslationDomain::Client},
         {"browser.searchPlaceholder", _td("Search servers or enter an address"), _td("Search servers..."), EWebTranslationDomain::Client},
         {"browser.direct", _td("Direct"), _td("Direct"), EWebTranslationDomain::Client},
         {"browser.directConnect", _td("Direct connect"), _td("Direct connect"), EWebTranslationDomain::Client},
         {"browser.connectToAddress", _td("Connect to address"), _td("Connect to address"), EWebTranslationDomain::Client},
-        {"browser.directReady", _td("Direct connection ready"), _td("Direct connection ready"), EWebTranslationDomain::Client},
-        {"browser.directHint", _td("Press Enter or choose Connect to address."), _td("Press Enter or choose Connect to address."),
-         EWebTranslationDomain::Client},
-        {"browser.heading.destinations", _td("Neon destinations"), _td("Neon destinations"), EWebTranslationDomain::Client},
+        {"browser.directReady", _td("Direct connect"), _td("Direct connect"), EWebTranslationDomain::Client},
+        {"browser.directHint", _td("Press Enter to connect."), _td("Press Enter to connect."), EWebTranslationDomain::Client},
+        {"browser.heading.destinations", _td("Servers"), _td("Servers"), EWebTranslationDomain::Client},
         {"browser.filter.hideFull", _td("Hide full servers"), _td("Hide full servers"), EWebTranslationDomain::Client},
         {"browser.filter.hideEmpty", _td("Hide empty servers"), _td("Hide empty servers"), EWebTranslationDomain::Client},
         {"browser.filter.hideLocked", _td("Hide locked servers"), _td("Hide locked servers"), EWebTranslationDomain::Client},
         {"browser.filter.hideIncompatible", _td("Hide other versions"), _td("Hide other versions"), EWebTranslationDomain::Client},
         {"browser.filter.hideOffline", _td("Hide offline servers"), _td("Hide offline servers"), EWebTranslationDomain::Client},
-        {"browser.empty", _td("No servers match your search."), _td("No servers match your search."), EWebTranslationDomain::Client},
-        {"browser.emptyHint", _td("Try clearing filters or refreshing the list."), _td("Try clearing filters or refreshing the list."),
-         EWebTranslationDomain::Client},
+        {"browser.empty", _td("No servers found."), _td("No servers found."), EWebTranslationDomain::Client},
+        {"browser.emptyHint", _td("Clear filters or refresh."), _td("Clear filters or refresh."), EWebTranslationDomain::Client},
         {"server.passwordProtected", _td("Password protected"), _td("Password protected"), EWebTranslationDomain::Client},
         {"server.removeFavourite", _td("Remove from favourites"), _td("Remove from favourites"), EWebTranslationDomain::Client},
         {"server.addFavourite", _td("Add to favourites"), _td("Add Favorite"), EWebTranslationDomain::Client},
         {"server.playersUnverified", _td("Player count not verified"), _td("Player count not verified"), EWebTranslationDomain::Client},
         {"server.offline", _td("Offline"), _td("Offline"), EWebTranslationDomain::Client},
         {"server.featured", _td("Neon featured"), _td("Neon featured"), EWebTranslationDomain::Client},
-        {"details.selectServer", _td("Select a server to see"), _td("Select a server to see"), EWebTranslationDomain::Client},
-        {"details.selectServerHint", _td("its details here."), _td("its details here."), EWebTranslationDomain::Client},
-        {"details.selectedDestination", _td("Selected destination"), _td("Server information"), EWebTranslationDomain::Client},
+        {"details.selectServer", _td("Select a server to view details."), _td("Select a server to view details."), EWebTranslationDomain::Client},
+        {"details.selectedDestination", _td("Selected server"), _td("Selected server"), EWebTranslationDomain::Client},
         {"details.copyAddress", _td("Copy {address}"), _td("Copy {address}"), EWebTranslationDomain::Client},
         {"details.serverLink", _td("Server link"), _td("Server link"), EWebTranslationDomain::Client},
         {"details.copyLink", _td("Copy link"), _td("Copy link"), EWebTranslationDomain::Client},
@@ -162,41 +155,35 @@ namespace
         {"details.viewAllPlayers", _td("View all {count} players"), _td("View all {count} players"), EWebTranslationDomain::Client},
         {"details.noPlayersOnline", _td("No players online"), _td("No players online"), EWebTranslationDomain::Client},
         {"details.backToServerDetails", _td("Back to server details"), _td("Back to server details"), EWebTranslationDomain::Client},
-        {"details.ready", _td("Selected server — ready to join"), _td("Selected server — ready to join"), EWebTranslationDomain::Client},
         {"details.joinServer", _td("Join server"), _td("Join Game"), EWebTranslationDomain::Client},
         {"modal.passwordRequired", _td("Password required"), _td("Password required"), EWebTranslationDomain::Client},
-        {"modal.connectionKicker", _td("Neon network // connection"), _td("Neon network // connection"), EWebTranslationDomain::Client},
         {"modal.restrictedServer", _td("Restricted server"), _td("Restricted server"), EWebTranslationDomain::Client},
         {"modal.thisServer", _td("This server"), _td("This server"), EWebTranslationDomain::Client},
-        {"modal.protectedServer", _td("{server} is protected. Enter the server password to join."),
-         _td("{server} is protected. Enter the server password to join."), EWebTranslationDomain::Client},
+        {"modal.protectedServer", _td("{server} requires a password."), _td("{server} requires a password."), EWebTranslationDomain::Client},
         {"modal.serverPassword", _td("Server password"), _td("Server password"), EWebTranslationDomain::Client},
         {"modal.connecting", _td("Connecting…"), _td("Connecting…"), EWebTranslationDomain::Client},
         {"modal.joining", _td("Joining {server}"), _td("Joining {server}"), EWebTranslationDomain::Client},
         {"modal.enteringSanAndreas", _td("Entering San Andreas"), _td("Entering San Andreas"), EWebTranslationDomain::Client},
-        {"modal.contactingServer", _td("Contacting the server and checking its version…"), _td("Contacting the server and checking its version…"),
-         EWebTranslationDomain::Client},
+        {"modal.contactingServer", _td("Checking server…"), _td("Checking server…"), EWebTranslationDomain::Client},
         {"modal.authorizingIdentity", _td("Neon Identity"), _td("Neon Identity"), EWebTranslationDomain::Client},
-        {"modal.authorizingHint", _td("Authorizing this server with your linked Discord identity…"),
-         _td("Authorizing this server with your linked Discord identity…"), EWebTranslationDomain::Client},
+        {"modal.authorizingHint", _td("Authorizing identity…"), _td("Authorizing identity…"), EWebTranslationDomain::Client},
         {"modal.connectionAccepted", _td("Welcome to the streets"), _td("Welcome to the streets"), EWebTranslationDomain::Client},
-        {"modal.enteringGame", _td("Connection accepted. Preparing the game…"), _td("Connection accepted. Preparing the game…"), EWebTranslationDomain::Client},
+        {"modal.enteringGame", _td("Loading game…"), _td("Loading game…"), EWebTranslationDomain::Client},
         {"modal.connectionFailed", _td("Connection failed"), _td("Connection failed"), EWebTranslationDomain::Client},
         {"modal.unknownError", _td("Unknown error."), _td("Unknown error."), EWebTranslationDomain::Client},
         {"modal.serverFull", _td("Server is full"), _td("Server is full"), EWebTranslationDomain::Client},
         {"modal.serverFullHint", _td("No free slot is available. Try again in a moment."), _td("No free slot is available. Try again in a moment."),
          EWebTranslationDomain::Client},
-        {"modal.connectionTimedOut", _td("No answer from the streets"), _td("No answer from the streets"), EWebTranslationDomain::Client},
-        {"modal.connectionTimedOutHint", _td("The server did not answer in time. Check your connection and try again."),
-         _td("The server did not answer in time. Check your connection and try again."), EWebTranslationDomain::Client},
+        {"modal.connectionTimedOut", _td("Connection timed out"), _td("Connection timed out"), EWebTranslationDomain::Client},
+        {"modal.connectionTimedOutHint", _td("The server did not respond. Check your connection and try again."),
+         _td("The server did not respond. Check your connection and try again."), EWebTranslationDomain::Client},
         {"modal.passwordRejected", _td("Wrong password"), _td("Wrong password"), EWebTranslationDomain::Client},
         {"modal.passwordRejectedHint", _td("Enter the server password again."), _td("Enter the server password again."), EWebTranslationDomain::Client},
         {"modal.identityRequired", _td("Neon Identity required"), _td("Neon Identity required"), EWebTranslationDomain::Client},
         {"modal.identityRequiredHint", _td("Return to the main menu and link Discord before joining this server."),
          _td("Return to the main menu and link Discord before joining this server."), EWebTranslationDomain::Client},
         {"modal.identityFailed", _td("Identity check failed"), _td("Identity check failed"), EWebTranslationDomain::Client},
-        {"modal.identityFailedHint", _td("Neon could not authorize this connection. Try again in a moment."),
-         _td("Neon could not authorize this connection. Try again in a moment."), EWebTranslationDomain::Client},
+        {"modal.identityFailedHint", _td("Authorization failed. Try again."), _td("Authorization failed. Try again."), EWebTranslationDomain::Client},
         {"modal.versionMismatch", _td("Different game version"), _td("Different game version"), EWebTranslationDomain::Client},
         {"modal.versionMismatchHint", _td("This server requires another MTA version."), _td("This server requires another MTA version."),
          EWebTranslationDomain::Client},
@@ -209,10 +196,8 @@ namespace
         {"modal.playerNameInvalidHint", _td("Change your nickname in Settings before connecting."), _td("Change your nickname in Settings before connecting."),
          EWebTranslationDomain::Client},
         {"modal.connectionLost", _td("Connection lost"), _td("Connection lost"), EWebTranslationDomain::Client},
-        {"modal.connectionLostHint", _td("The server closed the connection. You can try again."), _td("The server closed the connection. You can try again."),
+        {"modal.connectionLostHint", _td("The server closed the connection. Try again."), _td("The server closed the connection. Try again."),
          EWebTranslationDomain::Client},
-        {"status.registeredServers", _td("{count} registered servers"), _td("{count} registered servers"), EWebTranslationDomain::Client},
-        {"status.playersOnline", _td("{count} players online."), _td("{count} players online."), EWebTranslationDomain::Client},
         {"status.scanning", _td("Scanning {scanned} / {total}…"), _td("Scanning {scanned} / {total}…"), EWebTranslationDomain::Client},
         {"status.joinServer", _td("Join server"), _td("Join Game"), EWebTranslationDomain::Client},
     };
@@ -906,8 +891,110 @@ private:
 class CWebSettingsSession
 {
 public:
+    struct SBindRow
+    {
+        std::string              id;
+        std::string              section;
+        std::string              label;
+        std::string              control;
+        std::string              command;
+        std::string              arguments;
+        std::string              resource;
+        std::vector<std::string> keys;
+        bool                     gtaControl{};
+    };
+
+    struct SChatPreset
+    {
+        std::string                        id;
+        std::string                        name;
+        std::map<std::string, std::string> values;
+    };
+
     struct SState
     {
+        std::string gameNickname;
+        bool        gameSavePasswords{true};
+        bool        gameAutoRefreshBrowser{true};
+        bool        gameAllowScreenUpload{true};
+        bool        gameAllowExternalSounds{true};
+        bool        gameAlwaysShowTransferBox{};
+        bool        gameDiscordRichPresence{true};
+        bool        gameDiscordShareData{};
+        bool        gameSteamStatus{};
+        bool        gameSaveCameraPhotos{};
+        bool        gameAskBeforeDisconnect{true};
+        bool        gameCustomizedSAFiles{};
+        int         gameMapOpacity{61};
+        int         gameMapAlpha{155};
+        int         gameMapImage{};
+
+        int  audioMasterVolume{100};
+        int  audioRadioVolume{100};
+        int  audioSfxVolume{100};
+        int  audioMtaVolume{100};
+        int  audioVoiceVolume{100};
+        bool audioRadioEqualizer{true};
+        bool audioRadioAutotune{true};
+        bool audioUserTrackAutoScan{};
+        int  audioUserTrackMode{};
+        bool audioMuteMaster{};
+        bool audioMuteRadio{};
+        bool audioMuteSfx{};
+        bool audioMuteMta{};
+        bool audioMuteVoice{};
+
+        bool controlsInvertMouse{};
+        bool controlsSteerWithMouse{};
+        bool controlsFlyWithMouse{};
+        int  controlsMouseSensitivity{50};
+        int  controlsVerticalAimSensitivity{50};
+        bool controlsUseMouseSensitivityForAiming{};
+        bool controlsClassic{};
+        int  controlsJoypadDeadZone{15};
+        int  controlsJoypadSaturation{100};
+
+        std::string   interfaceLocale{"en_US"};
+        std::string   interfaceSkin{"Default"};
+        std::uint32_t interfaceChatBackgroundColor{};
+        std::uint32_t interfaceChatTextColor{0xFFACD5FE};
+        std::uint32_t interfaceChatInputBackgroundColor{};
+        std::uint32_t interfaceChatInputTextColor{0xFFACD5FE};
+        int           interfaceChatFont{2};
+        int           interfaceChatLines{10};
+        float         interfaceChatScaleX{1.0f};
+        float         interfaceChatScaleY{1.0f};
+        float         interfaceChatWidth{1.5f};
+        bool          interfaceChatCssText{};
+        bool          interfaceChatCssBackground{};
+        bool          interfaceChatNickCompletion{true};
+        bool          interfaceChatTextOutline{};
+        float         interfaceChatLineLife{12.0f};
+        float         interfaceChatLineFadeOut{3.0f};
+        int           interfaceChatPositionHorizontal{};
+        int           interfaceChatPositionVertical{};
+        int           interfaceChatTextAlignment{};
+        float         interfaceChatOffsetX{0.0125f};
+        float         interfaceChatOffsetY{0.015f};
+        bool          interfaceFlashWindow{true};
+        bool          interfaceTrayNotifications{true};
+        bool          browserRemoteWebsites{true};
+        bool          browserRemoteJavascript{true};
+        bool          browserGpuRendering{true};
+        bool          browserVideoAcceleration{true};
+
+        int  advancedFastClothesLoading{1};
+        int  advancedBrowserSpeed{1};
+        int  advancedSingleConnection{};
+        int  advancedPacketTag{};
+        int  advancedProgressAnimation{1};
+        int  advancedProcessPriority{};
+        int  advancedDebugSetting{};
+        int  advancedStreamingMemory{50};
+        bool advancedCpuAffinity{true};
+        int  advancedUpdateBuildType{};
+        int  advancedUpdateAutoInstall{1};
+
         bool              extendedWorldEnabled{};
         int               extendedWorldDistance{2000};
         bool              distantLightsEnabled{};
@@ -923,6 +1010,7 @@ public:
 
         int   graphicsVideoMode{};
         int   graphicsDisplayMode{1};
+        int   graphicsFullscreenStyle{FULLSCREEN_STANDARD};
         bool  graphicsFullscreenMinimize{};
         bool  graphicsVSync{true};
         bool  graphicsDPIAware{};
@@ -955,6 +1043,10 @@ public:
         bool  graphicsSaturationEnabled{};
         bool  graphicsApplyWindowed{};
         bool  graphicsApplyFullscreen{};
+
+        std::vector<std::string> browserBlacklist;
+        std::vector<std::string> browserWhitelist;
+        std::vector<SBindRow>    binds;
     };
 
     struct SResolution
@@ -969,17 +1061,32 @@ public:
     void Begin()
     {
         m_draft = ReadCurrentState();
+        ReadBrowserLists(m_draft);
+        ReadBindings(m_draft);
+        ReadChatPresets();
         m_original = m_draft;
+        m_restartBaseline = m_draft;
+        m_connectionBaseline = m_draft;
         m_active = true;
         m_restartRequired = false;
+        m_disconnectRequired = false;
+        m_captureBindId.clear();
+        m_captureBindSlot = -1;
+        m_captureAxis = -1;
+        m_error.clear();
         m_wasSkyGfxManaged = IsSkyGfxManaged();
         m_wasRadarManaged = IsRadarManaged();
+        m_wasConnected = g_pCore->IsConnected();
     }
 
     bool SetValue(const std::string& id, const std::string& value)
     {
         if (!m_active)
             return false;
+        m_error.clear();
+
+        if (SetLegacyValue(id, value))
+            return true;
 
         bool   booleanValue{};
         double numberValue{};
@@ -1029,7 +1136,11 @@ public:
         else if (id == "graphics.videoMode" && ParseNumber(value, numberValue) && IsVideoModeAvailable(static_cast<int>(numberValue)))
             m_draft.graphicsVideoMode = static_cast<int>(numberValue);
         else if (id == "graphics.displayMode" && ParseNumber(value, numberValue))
+        {
             m_draft.graphicsDisplayMode = QuantizeInteger(numberValue, 0, 3, 1);
+            if (m_draft.graphicsDisplayMode > 0)
+                m_draft.graphicsFullscreenStyle = m_draft.graphicsDisplayMode - 1;
+        }
         else if (id == "graphics.fullscreenMinimize" && ParseBoolean(value, booleanValue))
             m_draft.graphicsFullscreenMinimize = booleanValue;
         else if (id == "graphics.vsync" && ParseBoolean(value, booleanValue))
@@ -1116,12 +1227,105 @@ public:
     {
         if (!m_active)
             return false;
+        m_error.clear();
 
         if (action == "rebuildDistantLights" && IsDistantLightsRebuildAvailable())
         {
             // Rebuilding is deliberately immediate: unlike preference edits,
             // it is a one-shot repair action with no meaningful draft state.
             CCore::GetSingleton().GetGame()->GetCoronas()->RebuildDistantLights();
+            return true;
+        }
+
+        if (action == "randomNickname")
+        {
+            m_draft.gameNickname = CNickGen::GetRandomNickname();
+            return true;
+        }
+        if (action == "chatPreset")
+        {
+            const auto found = std::find_if(m_chatPresets.begin(), m_chatPresets.end(), [&](const SChatPreset& preset) { return preset.id == argument; });
+            if (found == m_chatPresets.end())
+                return false;
+            ApplyChatPreset(*found);
+            return true;
+        }
+        if (action == "captureBind")
+        {
+            const std::size_t separator = argument.rfind('|');
+            if (separator == std::string::npos)
+                return false;
+            const int         slot = std::atoi(argument.substr(separator + 1).c_str());
+            const std::string id = argument.substr(0, separator);
+            if (slot < 0 || slot > 3 || std::none_of(m_draft.binds.begin(), m_draft.binds.end(), [&](const SBindRow& row) { return row.id == id; }))
+                return false;
+            m_captureBindId = id;
+            m_captureBindSlot = slot;
+            return true;
+        }
+        if (action == "resetBinds")
+        {
+            // Legacy CEGUI also applies this operation immediately rather than
+            // rolling it back on Cancel. Preserve that long-standing behavior.
+            CCore::GetSingleton().GetKeyBinds()->LoadDefaultBinds();
+            ReadBindings(m_draft);
+            ReadBindings(m_original);
+            return true;
+        }
+        if (action == "captureJoypadAxis")
+        {
+            const int                  index = std::atoi(argument.c_str());
+            CJoystickManagerInterface* joystick = GetJoystickManager();
+            if (!joystick || index < 0 || index >= joystick->GetOutputCount() || !joystick->BindNextUsedAxisToOutput(index))
+                return false;
+            m_captureAxis = index;
+            return true;
+        }
+        if (action == "browserBlacklistAdd")
+        {
+            if (AddDomain(m_draft.browserBlacklist, argument))
+                return true;
+            m_error = "Enter a valid domain that is not already in the blacklist.";
+            return false;
+        }
+        if (action == "browserBlacklistRemove")
+            return RemoveDomain(m_draft.browserBlacklist, argument);
+        if (action == "browserBlacklistClear")
+        {
+            m_draft.browserBlacklist.clear();
+            return true;
+        }
+        if (action == "browserWhitelistAdd")
+        {
+            if (AddDomain(m_draft.browserWhitelist, argument))
+                return true;
+            m_error = "Enter a valid domain that is not already in the whitelist.";
+            return false;
+        }
+        if (action == "browserWhitelistRemove")
+            return RemoveDomain(m_draft.browserWhitelist, argument);
+        if (action == "browserWhitelistClear")
+        {
+            m_draft.browserWhitelist.clear();
+            return true;
+        }
+        if (action == "openResourceFolder")
+        {
+            const SString path = GetCommonRegistryValue("", "File Cache Path");
+            if (DirectoryExists(path))
+                ShellExecuteNonBlocking("open", path);
+            return true;
+        }
+        if (action == "checkForUpdates")
+        {
+            CVARS_SET("update_build_type", m_draft.advancedUpdateBuildType);
+            GetVersionUpdater()->InitiateManualCheck();
+            return true;
+        }
+        if (action == "disconnectNow" && m_disconnectRequired && g_pCore->IsConnected())
+        {
+            m_disconnectRequired = false;
+            CCore::GetSingleton().GetCommands()->Execute("disconnect", "");
             return true;
         }
 
@@ -1173,7 +1377,41 @@ public:
             return;
 
         SState defaults;
-        if (section == "neon")
+        if (section == "game")
+        {
+            const std::string nickname = m_draft.gameNickname;
+            CopyGame(defaults, m_draft);
+            m_draft.gameNickname = nickname;
+        }
+        else if (section == "audio")
+        {
+            CopyAudio(defaults, m_draft);
+            ApplyAudioPreview(m_draft);
+        }
+        else if (section == "controls")
+        {
+            CopyControls(defaults, m_draft);
+            GetJoystickManager()->SetDefaults();
+            m_draft.controlsJoypadDeadZone = GetJoystickManager()->GetDeadZone();
+            m_draft.controlsJoypadSaturation = GetJoystickManager()->GetSaturation();
+        }
+        else if (section == "interface")
+        {
+            const std::string locale = m_draft.interfaceLocale;
+            const std::string skin = m_draft.interfaceSkin;
+            CopyInterface(defaults, m_draft);
+            m_draft.interfaceLocale = locale;
+            m_draft.interfaceSkin = skin;
+        }
+        else if (section == "advanced")
+        {
+            CopyAdvanced(defaults, m_draft);
+            // The static schema fallback predates the runtime streaming-memory
+            // bounds. Match the legacy defaults action and never create a
+            // draft below the safe range detected for this machine.
+            m_draft.advancedStreamingMemory = static_cast<int>(g_pCore->GetMaxStreamingMemory());
+        }
+        else if (section == "neon")
         {
             if (!IsSkyGfxManaged())
                 m_draft.skyGfx = defaults.skyGfx;
@@ -1214,7 +1452,14 @@ public:
         {
             ApplyVSyncPreview(m_original);
             ApplyDisplayCalibrationPreview(m_original);
+            ApplyAudioPreview(m_original);
+            if (GetJoystickManager()->IsCapturingAxis())
+                GetJoystickManager()->CancelCaptureAxis(false);
             m_draft = m_original;
+            m_captureBindId.clear();
+            m_captureBindSlot = -1;
+            m_captureAxis = -1;
+            m_error.clear();
         }
     }
 
@@ -1222,6 +1467,24 @@ public:
     {
         if (!m_active)
             return;
+
+        m_error.clear();
+        if (!CCore::GetSingleton().IsValidNick(m_draft.gameNickname.c_str()))
+        {
+            m_error = "Your nickname contains invalid characters.";
+            return;
+        }
+
+        ApplyGameSettings();
+        ApplyAudioSettings();
+        ApplyControlSettings();
+        ApplyInterfaceSettings();
+        ApplyAdvancedSettings();
+        ApplyBindings();
+        // Bind conflict resolution can legitimately discard a duplicate key.
+        // Re-read the authoritative table so the post-Apply UI and the new
+        // Cancel baseline exactly match what the input system accepted.
+        ReadBindings(m_draft);
 
         CVARS_SET("extended_draw_distance_enabled", m_draft.extendedWorldEnabled);
         CVARS_SET("extended_draw_distance", m_draft.extendedWorldDistance);
@@ -1257,15 +1520,9 @@ public:
         CGameSettings* gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
         if (gameSettings)
         {
-            int fullscreenStyle = FULLSCREEN_STANDARD;
-            if (m_draft.graphicsDisplayMode == 2)
-                fullscreenStyle = FULLSCREEN_BORDERLESS;
-            else if (m_draft.graphicsDisplayMode == 3)
-                fullscreenStyle = FULLSCREEN_BORDERLESS_KEEP_RES;
-
             const bool windowed = m_draft.graphicsDisplayMode == 0;
             const bool videoModeChanged =
-                GetVideoModeManager()->SetVideoMode(m_draft.graphicsVideoMode, windowed, m_draft.graphicsFullscreenMinimize, fullscreenStyle);
+                GetVideoModeManager()->SetVideoMode(m_draft.graphicsVideoMode, windowed, m_draft.graphicsFullscreenMinimize, m_draft.graphicsFullscreenStyle);
             const bool antiAliasingChanged = gameSettings->GetAntiAliasing() != static_cast<unsigned int>(m_draft.graphicsAntiAliasing);
             const bool dpiAwareChanged = CVARS_GET_VALUE<bool>("process_dpi_aware") != m_draft.graphicsDPIAware;
             const bool deviceSelectionChanged = (GetApplicationSettingInt("device-selection-disabled") == 0) != m_draft.graphicsDeviceSelectionDialog;
@@ -1320,14 +1577,51 @@ public:
 
         CClientVariables::GetSingleton().ValidateValues();
         CCore::GetSingleton().SaveConfig();
+        // Requirements describe the current applied configuration relative to
+        // the state that is actually running, not whether such a change ever
+        // happened earlier in this Settings session. Reverting a change before
+        // restarting/reconnecting therefore clears the corresponding prompt.
+        m_restartRequired = !RestartSensitiveEqual(m_draft, m_restartBaseline);
+        m_disconnectRequired = g_pCore->IsConnected() && !BrowserPermissionsEqual(m_draft, m_connectionBaseline);
         m_original = m_draft;
     }
 
-    void RefreshManagedValues()
+    bool RefreshManagedValues()
     {
+        bool       changed = false;
+        const bool connected = g_pCore->IsConnected();
+        if (connected != m_wasConnected)
+        {
+            changed = true;
+            m_wasConnected = connected;
+            if (!connected)
+                m_disconnectRequired = false;
+            else
+            {
+                m_connectionBaseline = ReadCurrentState();
+                ReadBrowserLists(m_connectionBaseline);
+
+                // Locale and skin cannot change while connected. If a
+                // connection starts with either value still in the draft,
+                // discard only those edits so Apply cannot report a rejected
+                // value as successfully applied.
+                m_draft.interfaceLocale = m_connectionBaseline.interfaceLocale;
+                m_draft.interfaceSkin = m_connectionBaseline.interfaceSkin;
+                m_original.interfaceLocale = m_connectionBaseline.interfaceLocale;
+                m_original.interfaceSkin = m_connectionBaseline.interfaceSkin;
+            }
+        }
         const bool skyGfxManaged = IsSkyGfxManaged();
+        changed = changed || skyGfxManaged != m_wasSkyGfxManaged;
         if (skyGfxManaged)
-            m_draft.skyGfx = SkyGfx::CManager::Get().GetConfig();
+        {
+            const auto runtimeConfig = SkyGfx::CManager::Get().GetConfig();
+            if (std::memcmp(&m_draft.skyGfx, &runtimeConfig, sizeof(runtimeConfig)) != 0)
+            {
+                m_draft.skyGfx = runtimeConfig;
+                changed = true;
+            }
+        }
         else if (m_wasSkyGfxManaged)
         {
             m_draft.skyGfx = SkyGfx::CManager::Get().GetUserConfig();
@@ -1336,8 +1630,19 @@ public:
         m_wasSkyGfxManaged = skyGfxManaged;
 
         const bool radarManaged = IsRadarManaged();
+        changed = changed || radarManaged != m_wasRadarManaged;
         if (radarManaged || m_wasRadarManaged)
+        {
+            const int    previousStyle = m_draft.radarStyle;
+            const double previousX = m_draft.radarPositionX;
+            const double previousY = m_draft.radarPositionY;
+            const double previousWidth = m_draft.radarWidth;
+            const double previousHeight = m_draft.radarHeight;
+            const bool   previousWidescreenSafe = m_draft.radarWidescreenSafe;
             ReadRadarValues(m_draft);
+            changed = changed || previousStyle != m_draft.radarStyle || previousX != m_draft.radarPositionX || previousY != m_draft.radarPositionY ||
+                      previousWidth != m_draft.radarWidth || previousHeight != m_draft.radarHeight || previousWidescreenSafe != m_draft.radarWidescreenSafe;
+        }
         if (!radarManaged && m_wasRadarManaged)
         {
             m_original.radarStyle = m_draft.radarStyle;
@@ -1348,6 +1653,7 @@ public:
             m_original.radarWidescreenSafe = m_draft.radarWidescreenSafe;
         }
         m_wasRadarManaged = radarManaged;
+        return changed;
     }
 
     const SState& GetState() const { return m_draft; }
@@ -1423,8 +1729,56 @@ public:
             !IsRadarManaged() && (m_draft.radarStyle != m_original.radarStyle || m_draft.radarPositionX != m_original.radarPositionX ||
                                   m_draft.radarPositionY != m_original.radarPositionY || m_draft.radarWidth != m_original.radarWidth ||
                                   m_draft.radarHeight != m_original.radarHeight || m_draft.radarWidescreenSafe != m_original.radarWidescreenSafe);
-        return generalDirty || skyGfxDirty || radarDirty || !GraphicsEqual(m_draft, m_original);
+        return generalDirty || skyGfxDirty || radarDirty || !GraphicsEqual(m_draft, m_original) || !LegacyEqual(m_draft, m_original);
     }
+
+    bool ProcessCapturedInput(UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        if (m_captureBindId.empty())
+            return false;
+
+        if (message == WM_KEYDOWN && wParam == VK_ESCAPE)
+        {
+            SetCapturedBindKey("");
+            return true;
+        }
+
+        bool                state = false;
+        const SBindableKey* key = CCore::GetSingleton().GetKeyBinds()->GetBindableFromMessage(message, wParam, lParam, state);
+        if (!key || !state)
+            return false;
+
+        SetCapturedBindKey(key->szKey);
+        return true;
+    }
+
+    bool UpdateInputCapture()
+    {
+        CJoystickManagerInterface* joystick = GetJoystickManager();
+        if (m_captureAxis >= 0 && joystick && joystick->IsAxisBindComplete())
+        {
+            m_captureAxis = -1;
+            return true;
+        }
+        return false;
+    }
+
+    const std::string& GetCapturedBindId() const { return m_captureBindId; }
+    int                GetCapturedBindSlot() const { return m_captureBindSlot; }
+    int                GetCapturedAxis() const { return m_captureAxis; }
+    const std::string& GetError() const { return m_error; }
+    bool               RequiresDisconnect() const { return m_disconnectRequired; }
+
+    std::vector<std::string> GetLocales() const
+    {
+        const auto locales = g_pCore->GetLocalization()->GetAvailableLocales();
+        return {locales.begin(), locales.end()};
+    }
+
+    std::vector<std::string>        GetSkins() const { return GetAvailableSkins(); }
+    const std::vector<SChatPreset>& GetChatPresets() const { return m_chatPresets; }
+
+    static bool HasCustomizedSAFilesOption() { return GetApplicationSettingInt("customized-sa-files-show") != 0; }
 
     const char* GetSkyGfxStatus() const
     {
@@ -1445,6 +1799,553 @@ public:
     }
 
 private:
+    static std::uint32_t PackColor(const CColor& color)
+    {
+        return (static_cast<std::uint32_t>(color.A) << 24) | (static_cast<std::uint32_t>(color.R) << 16) | (static_cast<std::uint32_t>(color.G) << 8) |
+               static_cast<std::uint32_t>(color.B);
+    }
+
+    static CColor UnpackColor(std::uint32_t value)
+    {
+        return CColor(static_cast<unsigned char>((value >> 16) & 0xFF), static_cast<unsigned char>((value >> 8) & 0xFF),
+                      static_cast<unsigned char>(value & 0xFF), static_cast<unsigned char>((value >> 24) & 0xFF));
+    }
+
+    static std::uint32_t ClampPackedAlpha(std::uint32_t value, unsigned char minimum)
+    {
+        const std::uint32_t alpha = std::max<std::uint32_t>(minimum, value >> 24);
+        return (alpha << 24) | (value & 0x00FFFFFF);
+    }
+
+    static bool IsAvailableLocale(const std::string& locale)
+    {
+        const auto locales = g_pCore->GetLocalization()->GetAvailableLocales();
+        return std::find(locales.begin(), locales.end(), locale) != locales.end();
+    }
+
+    static std::vector<std::string> GetAvailableSkins()
+    {
+        std::vector<std::string> skins;
+        for (const SString& skin : FindFiles(CalcMTASAPath("skins/*"), false, true))
+            skins.emplace_back(skin);
+        if (skins.empty())
+        {
+            std::string current;
+            CVARS_GET("current_skin", current);
+            skins.push_back(current.empty() ? "Default" : current);
+        }
+        return skins;
+    }
+
+    static bool IsAvailableSkin(const std::string& skin)
+    {
+        const auto skins = GetAvailableSkins();
+        return std::find(skins.begin(), skins.end(), skin) != skins.end();
+    }
+
+    static bool IsValidDomain(const std::string& domain)
+    {
+        if (domain.empty() || domain.size() > 253 || domain.front() == '.' || domain.back() == '.')
+            return false;
+        return std::all_of(domain.begin(), domain.end(), [](unsigned char c) { return std::isalnum(c) || c == '.' || c == '-' || c == '*'; });
+    }
+
+    static bool AddDomain(std::vector<std::string>& domains, std::string domain)
+    {
+        std::transform(domain.begin(), domain.end(), domain.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (!IsValidDomain(domain) || std::find(domains.begin(), domains.end(), domain) != domains.end())
+            return false;
+        domains.push_back(std::move(domain));
+        std::sort(domains.begin(), domains.end());
+        return true;
+    }
+
+    static bool RemoveDomain(std::vector<std::string>& domains, const std::string& domain)
+    {
+        const auto found = std::find(domains.begin(), domains.end(), domain);
+        if (found == domains.end())
+            return false;
+        domains.erase(found);
+        return true;
+    }
+
+    void ReadChatPresets()
+    {
+        m_chatPresets.clear();
+        const SString presetsPath = g_pCore->GetClientProfilePath(CHAT_PRESETS_PATH);
+        SString       fullPresetsPath = CalcMTASAPath(presetsPath);
+        if (g_pCore->IsSecondaryClient() && !FileExists(fullPresetsPath))
+            fullPresetsPath = CalcMTASAPath(CHAT_PRESETS_PATH);
+        CXMLFile* file = CCore::GetSingleton().GetXML()->CreateXML(fullPresetsPath);
+        if (!file || !file->Parse())
+        {
+            if (file)
+                CCore::GetSingleton().GetXML()->DeleteXML(file);
+            return;
+        }
+
+        if (CXMLNode* root = file->GetRootNode())
+        {
+            unsigned int index = 0;
+            for (auto iter = root->ChildrenBegin(); iter != root->ChildrenEnd(); ++iter)
+            {
+                CXMLNode* node = *iter;
+                if (!node || node->GetTagName() != "preset")
+                    continue;
+                CXMLAttribute* name = node->GetAttributes().Find("name");
+                if (!name || name->GetValue().size() < 2)
+                    continue;
+
+                SChatPreset preset;
+                preset.id = std::to_string(index++);
+                preset.name = name->GetValue();
+                for (auto child = node->ChildrenBegin(); child != node->ChildrenEnd(); ++child)
+                {
+                    CXMLNode* value = *child;
+                    if (value && !value->GetTagContent().empty())
+                        preset.values[value->GetTagName()] = value->GetTagContent();
+                }
+                m_chatPresets.emplace_back(std::move(preset));
+            }
+        }
+        CCore::GetSingleton().GetXML()->DeleteXML(file);
+    }
+
+    static bool ParsePresetColor(const std::string& value, std::uint32_t& packed)
+    {
+        std::istringstream stream(value);
+        int                red{}, green{}, blue{}, alpha{};
+        if (!(stream >> red >> green >> blue >> alpha))
+            return false;
+        packed = PackColor(CColor(static_cast<unsigned char>(std::clamp(red, 0, 255)), static_cast<unsigned char>(std::clamp(green, 0, 255)),
+                                  static_cast<unsigned char>(std::clamp(blue, 0, 255)), static_cast<unsigned char>(std::clamp(alpha, 0, 255))));
+        return true;
+    }
+
+    void ApplyChatPreset(const SChatPreset& preset)
+    {
+        const auto get = [&](const char* name) -> const std::string*
+        {
+            const auto found = preset.values.find(name);
+            return found == preset.values.end() ? nullptr : &found->second;
+        };
+        const auto set = [&](const char* tag, const char* id)
+        {
+            if (const std::string* value = get(tag))
+                SetLegacyValue(id, *value);
+        };
+
+        const std::pair<const char*, std::uint32_t*> colors[] = {
+            {"color_text", &m_draft.interfaceChatTextColor},
+            {"color_background", &m_draft.interfaceChatBackgroundColor},
+            {"color_input_text", &m_draft.interfaceChatInputTextColor},
+            {"color_input_background", &m_draft.interfaceChatInputBackgroundColor},
+        };
+        for (const auto& [tag, target] : colors)
+            if (const std::string* value = get(tag))
+                ParsePresetColor(*value, *target);
+        m_draft.interfaceChatTextColor = ClampPackedAlpha(m_draft.interfaceChatTextColor, 128);
+        m_draft.interfaceChatInputTextColor = ClampPackedAlpha(m_draft.interfaceChatInputTextColor, 128);
+
+        set("font", "interface.chatFont");
+        set("lines", "interface.chatLines");
+        set("position_horizontal", "interface.chatPositionHorizontal");
+        set("position_vertical", "interface.chatPositionVertical");
+        set("text_alignment", "interface.chatTextAlignment");
+        set("offset_x", "interface.chatOffsetX");
+        set("offset_y", "interface.chatOffsetY");
+        set("width", "interface.chatWidth");
+        set("css_text", "interface.chatCssText");
+        set("css_background", "interface.chatCssBackground");
+
+        if (const std::string* scale = get("scale"))
+        {
+            std::istringstream stream(*scale);
+            double             x{}, y{};
+            if (stream >> x >> y)
+            {
+                m_draft.interfaceChatScaleX = QuantizeFloat(x, 0.5f, 3.0f, 0.1f);
+                m_draft.interfaceChatScaleY = QuantizeFloat(y, 0.5f, 3.0f, 0.1f);
+            }
+        }
+        if (const std::string* milliseconds = get("line_life"))
+            SetLegacyValue("interface.chatLineLife", std::to_string(std::atof(milliseconds->c_str()) / 1000.0));
+        if (const std::string* milliseconds = get("line_fadeout"))
+            SetLegacyValue("interface.chatLineFadeOut", std::to_string(std::atof(milliseconds->c_str()) / 1000.0));
+    }
+
+    static void ReadBrowserLists(SState& state)
+    {
+        state.browserBlacklist.clear();
+        state.browserWhitelist.clear();
+        CWebCoreInterface* webCore = g_pCore->GetWebCore();
+        if (!webCore)
+            return;
+        std::vector<std::pair<SString, bool>> entries;
+        webCore->GetFilterEntriesByType(entries, eWebFilterType::WEBFILTER_USER);
+        for (const auto& [domain, allowed] : entries)
+            (allowed ? state.browserWhitelist : state.browserBlacklist).emplace_back(domain);
+        std::sort(state.browserBlacklist.begin(), state.browserBlacklist.end());
+        std::sort(state.browserWhitelist.begin(), state.browserWhitelist.end());
+    }
+
+    static void ReadBindings(SState& state)
+    {
+        state.binds.clear();
+        CKeyBindsInterface* keyBinds = CCore::GetSingleton().GetKeyBinds();
+        if (!keyBinds)
+            return;
+
+        for (int index = 0; g_bcControls[index].szControl[0] != '\0'; ++index)
+        {
+            SBindableGTAControl* control = &g_bcControls[index];
+            SBindRow             row;
+            row.id = std::string("gta:") + control->szControl;
+            row.section = "GTA game controls";
+            row.label = _(control->szDescription);
+            row.control = control->szControl;
+            row.gtaControl = true;
+            std::list<CGTAControlBind*> matches;
+            keyBinds->GetBoundControls(control, matches);
+            for (CGTAControlBind* bind : matches)
+                if (bind && !bind->isBeingDeleted && bind->boundKey && row.keys.size() < 4)
+                    row.keys.emplace_back(bind->boundKey->szKey);
+            state.binds.emplace_back(std::move(row));
+        }
+
+        std::map<std::string, std::size_t> commandRows;
+        for (const CKeyBindsInterface::KeyBindPtr& bind : *keyBinds)
+        {
+            if (!bind || bind->isBeingDeleted || bind->type != KeyBindType::COMMAND)
+                continue;
+            const CCommandBind* command = static_cast<const CCommandBind*>(bind.get());
+            if (!command->triggerState || !command->isActive || !command->boundKey)
+                continue;
+            const std::string identity = command->resource + "\x1f" + command->command + "\x1f" + command->arguments;
+            auto              found = commandRows.find(identity);
+            if (found == commandRows.end())
+            {
+                SBindRow row;
+                row.id = "cmd:" + std::to_string(commandRows.size());
+                row.section = command->resource.empty() ? "Multiplayer controls" : command->resource;
+                row.label = command->arguments.empty() ? command->command : command->command + ": " + command->arguments;
+                row.command = command->command;
+                row.arguments = command->arguments;
+                row.resource = command->resource;
+                state.binds.emplace_back(std::move(row));
+                found = commandRows.emplace(identity, state.binds.size() - 1).first;
+            }
+            SBindRow& row = state.binds[found->second];
+            if (row.keys.size() < 4)
+                row.keys.emplace_back(command->boundKey->szKey);
+        }
+    }
+
+    void SetCapturedBindKey(const std::string& key)
+    {
+        const auto found = std::find_if(m_draft.binds.begin(), m_draft.binds.end(), [&](const SBindRow& row) { return row.id == m_captureBindId; });
+        if (found != m_draft.binds.end() && m_captureBindSlot >= 0 && m_captureBindSlot < 4)
+        {
+            found->keys.resize(4);
+            found->keys[m_captureBindSlot] = key;
+            while (!found->keys.empty() && found->keys.back().empty())
+                found->keys.pop_back();
+        }
+        m_captureBindId.clear();
+        m_captureBindSlot = -1;
+    }
+
+    static void ApplyAudioPreview(const SState& state)
+    {
+        CGame*         game = g_pCore ? g_pCore->GetGame() : nullptr;
+        CGameSettings* settings = game ? game->GetSettings() : nullptr;
+        if (!settings)
+            return;
+        const float master = state.audioMasterVolume / 100.0f;
+        CVARS_SET("mastervolume", master);
+        CVARS_SET("mtavolume", state.audioMtaVolume / 100.0f);
+        CVARS_SET("voicevolume", state.audioVoiceVolume / 100.0f);
+        settings->SetRadioVolume(static_cast<unsigned char>(std::round(state.audioRadioVolume / 100.0f * master * 64.0f)));
+        settings->SetSFXVolume(static_cast<unsigned char>(std::round(state.audioSfxVolume / 100.0f * master * 64.0f)));
+    }
+
+    void ApplyGameSettings()
+    {
+        std::string currentNickname;
+        CVARS_GET("nick", currentNickname);
+        if (currentNickname != m_draft.gameNickname)
+        {
+            if (CModManager::GetSingleton().IsLoaded())
+                CCore::GetSingleton().GetCommands()->Execute("nick", m_draft.gameNickname.c_str());
+            else
+                CVARS_SET("nick", m_draft.gameNickname);
+        }
+        CVARS_SET("save_server_passwords", m_draft.gameSavePasswords);
+        if (!m_draft.gameSavePasswords)
+            CLocalGUI::GetSingleton().GetMainMenu()->GetServerBrowser()->ClearServerPasswords();
+        CVARS_SET("auto_refresh_browser", m_draft.gameAutoRefreshBrowser);
+        CVARS_SET("allow_screen_upload", m_draft.gameAllowScreenUpload);
+        CVARS_SET("allow_external_sounds", m_draft.gameAllowExternalSounds);
+        CVARS_SET("always_show_transferbox", m_draft.gameAlwaysShowTransferBox);
+        g_pCore->GetModManager()->TriggerCommand(mtasa::CMD_ALWAYS_SHOW_TRANSFERBOX, m_draft.gameAlwaysShowTransferBox);
+        const bool discordShareChanged = CVARS_GET_VALUE<bool>("discord_rpc_share_data") != m_draft.gameDiscordShareData;
+        CVARS_SET("allow_discord_rpc", m_draft.gameDiscordRichPresence);
+        CVARS_SET("discord_rpc_share_data", m_draft.gameDiscordShareData);
+        if (g_pCore->GetDiscord())
+        {
+            // Consent is consulted when Discord supplies its user ID. Restart
+            // an already-enabled session when that consent changes so the
+            // stored identity immediately follows the new choice.
+            if (m_draft.gameDiscordRichPresence && discordShareChanged)
+                g_pCore->GetDiscord()->SetDiscordRPCEnabled(false);
+            g_pCore->GetDiscord()->SetDiscordRPCEnabled(m_draft.gameDiscordRichPresence);
+            if (m_draft.gameDiscordRichPresence)
+            {
+                const char* state = _("Main menu");
+                if (g_pCore->IsConnected())
+                {
+                    state = _("In-game");
+                    g_pCore->GetDiscord()->SetPresenceDetails(g_pCore->GetLastConnectedServerName().c_str(), false);
+                }
+                g_pCore->GetDiscord()->SetPresenceState(state, false);
+            }
+        }
+        CVARS_SET("allow_steam_client", m_draft.gameSteamStatus);
+        if (m_draft.gameSteamStatus && g_pCore->GetSteamClient())
+            g_pCore->GetSteamClient()->Connect();
+        CVARS_SET("photosaving", m_draft.gameSaveCameraPhotos);
+        CScreenShot::SetPhotoSavingInsideDocuments(m_draft.gameSaveCameraPhotos);
+        CVARS_SET("ask_before_disconnect", m_draft.gameAskBeforeDisconnect);
+        const bool customizedChanged = (GetApplicationSettingInt("customized-sa-files-request") != 0) != m_draft.gameCustomizedSAFiles;
+        SetApplicationSettingInt("customized-sa-files-request", m_draft.gameCustomizedSAFiles ? 1 : 0);
+        m_restartRequired = m_restartRequired || customizedChanged;
+        CVARS_SET("mapalpha", m_draft.gameMapAlpha);
+        CVARS_SET("mapimage", m_draft.gameMapImage);
+    }
+
+    void ApplyAudioSettings()
+    {
+        ApplyAudioPreview(m_draft);
+        CVARS_SET("radiovolume", m_draft.audioRadioVolume / 100.0f);
+        CVARS_SET("sfxvolume", m_draft.audioSfxVolume / 100.0f);
+        CVARS_SET("mute_master_when_minimized", m_draft.audioMuteMaster);
+        CVARS_SET("mute_radio_when_minimized", m_draft.audioMuteRadio);
+        CVARS_SET("mute_sfx_when_minimized", m_draft.audioMuteSfx);
+        CVARS_SET("mute_mta_when_minimized", m_draft.audioMuteMta);
+        CVARS_SET("mute_voice_when_minimized", m_draft.audioMuteVoice);
+        CGameSettings* settings = CCore::GetSingleton().GetGame()->GetSettings();
+        settings->SetRadioEqualizerEnabled(m_draft.audioRadioEqualizer);
+        settings->SetRadioAutotuneEnabled(m_draft.audioRadioAutotune);
+        settings->SetUsertrackAutoScan(m_draft.audioUserTrackAutoScan);
+        settings->SetUsertrackMode(m_draft.audioUserTrackMode);
+    }
+
+    void ApplyControlSettings()
+    {
+        CGameSettings*            settings = CCore::GetSingleton().GetGame()->GetSettings();
+        CControllerConfigManager* controller = g_pCore->GetGame()->GetControllerConfigManager();
+        CVARS_SET("invert_mouse", m_draft.controlsInvertMouse);
+        CVARS_SET("steer_with_mouse", m_draft.controlsSteerWithMouse);
+        CVARS_SET("fly_with_mouse", m_draft.controlsFlyWithMouse);
+        CVARS_SET("classic_controls", m_draft.controlsClassic);
+        controller->SetMouseInverted(m_draft.controlsInvertMouse);
+        controller->SetSteerWithMouse(m_draft.controlsSteerWithMouse);
+        controller->SetFlyWithMouse(m_draft.controlsFlyWithMouse);
+        controller->SetClassicControls(m_draft.controlsClassic);
+        settings->SetMouseSensitivity(m_draft.controlsMouseSensitivity / 100.0f);
+        controller->SetVerticalAimSensitivity(m_draft.controlsVerticalAimSensitivity / 100.0f);
+        CVARS_SET("vertical_aim_sensitivity", controller->GetVerticalAimSensitivityRawValue());
+        CVARS_SET("use_mouse_sensitivity_for_aiming", m_draft.controlsUseMouseSensitivityForAiming);
+        controller->SetVerticalAimSensitivitySameAsHorizontal(m_draft.controlsUseMouseSensitivityForAiming);
+        GetJoystickManager()->SetDeadZone(m_draft.controlsJoypadDeadZone);
+        GetJoystickManager()->SetSaturation(m_draft.controlsJoypadSaturation);
+        GetJoystickManager()->SaveToXML();
+    }
+
+    void ApplyInterfaceSettings()
+    {
+        if (!g_pCore->IsConnected())
+        {
+            const std::string currentLocale = CVARS_GET_VALUE<std::string>("locale");
+            if (currentLocale != m_draft.interfaceLocale)
+                CLocalGUI::GetSingleton().RequestLocaleChange(m_draft.interfaceLocale);
+            CVARS_SET("current_skin", m_draft.interfaceSkin);
+        }
+        else
+        {
+            // A connection can complete between the web edit and Apply. Keep
+            // the draft/baseline authoritative instead of persisting values
+            // that CLocalGUI must reject while a mod is loaded.
+            CVARS_GET("locale", m_draft.interfaceLocale);
+            CVARS_GET("current_skin", m_draft.interfaceSkin);
+        }
+        CVARS_SET("chat_color", UnpackColor(m_draft.interfaceChatBackgroundColor));
+        CVARS_SET("chat_text_color", UnpackColor(m_draft.interfaceChatTextColor));
+        CVARS_SET("chat_input_color", UnpackColor(m_draft.interfaceChatInputBackgroundColor));
+        CVARS_SET("chat_input_text_color", UnpackColor(m_draft.interfaceChatInputTextColor));
+        CVARS_SET("chat_font", m_draft.interfaceChatFont);
+        CVARS_SET("chat_lines", m_draft.interfaceChatLines);
+        const CVector2D chatScale(m_draft.interfaceChatScaleX, m_draft.interfaceChatScaleY);
+        CVARS_SET("chat_scale", chatScale);
+        CVARS_SET("chat_width", m_draft.interfaceChatWidth);
+        CVARS_SET("chat_css_style_text", m_draft.interfaceChatCssText);
+        CVARS_SET("chat_css_style_background", m_draft.interfaceChatCssBackground);
+        CVARS_SET("chat_nickcompletion", m_draft.interfaceChatNickCompletion);
+        CVARS_SET("chat_text_outline", m_draft.interfaceChatTextOutline);
+        CVARS_SET("chat_line_life", static_cast<int>(std::round(m_draft.interfaceChatLineLife * 1000.0f)));
+        CVARS_SET("chat_line_fade_out", static_cast<int>(std::round(m_draft.interfaceChatLineFadeOut * 1000.0f)));
+        CVARS_SET("chat_position_horizontal", m_draft.interfaceChatPositionHorizontal);
+        CVARS_SET("chat_position_vertical", m_draft.interfaceChatPositionVertical);
+        CVARS_SET("chat_text_alignment", m_draft.interfaceChatTextAlignment);
+        CVARS_SET("chat_position_offset_x", m_draft.interfaceChatOffsetX);
+        CVARS_SET("chat_position_offset_y", m_draft.interfaceChatOffsetY);
+        CVARS_SET("server_can_flash_window", m_draft.interfaceFlashWindow);
+        CVARS_SET("allow_tray_notifications", m_draft.interfaceTrayNotifications);
+
+        const bool permissionsChanged = CVARS_GET_VALUE<bool>("browser_remote_websites") != m_draft.browserRemoteWebsites ||
+                                        CVARS_GET_VALUE<bool>("browser_remote_javascript") != m_draft.browserRemoteJavascript ||
+                                        m_draft.browserBlacklist != m_original.browserBlacklist || m_draft.browserWhitelist != m_original.browserWhitelist;
+        CVARS_SET("browser_remote_websites", m_draft.browserRemoteWebsites);
+        CVARS_SET("browser_remote_javascript", m_draft.browserRemoteJavascript);
+        if (CWebCoreInterface* webCore = g_pCore->GetWebCore())
+        {
+            std::vector<SString> blacklist(m_draft.browserBlacklist.begin(), m_draft.browserBlacklist.end());
+            std::vector<SString> whitelist(m_draft.browserWhitelist.begin(), m_draft.browserWhitelist.end());
+            webCore->WriteCustomList("customblacklist", blacklist);
+            webCore->WriteCustomList("customwhitelist", whitelist);
+        }
+        m_disconnectRequired = m_disconnectRequired || (g_pCore->IsConnected() && permissionsChanged);
+        const bool gpuChanged = CVARS_GET_VALUE<bool>("browser_enable_gpu") != m_draft.browserGpuRendering;
+        const bool videoChanged = CVARS_GET_VALUE<bool>("browser_enable_video_acceleration") != m_draft.browserVideoAcceleration;
+        CVARS_SET("browser_enable_gpu", m_draft.browserGpuRendering);
+        CVARS_SET("browser_enable_video_acceleration", m_draft.browserVideoAcceleration);
+        m_restartRequired = m_restartRequired || gpuChanged || videoChanged;
+    }
+
+    void ApplyAdvancedSettings()
+    {
+        CVARS_SET("fast_clothes_loading", m_draft.advancedFastClothesLoading);
+        if (g_pCore->GetMultiplayer())
+            g_pCore->GetMultiplayer()->SetFastClothesLoading(static_cast<CMultiplayer::EFastClothesLoading>(m_draft.advancedFastClothesLoading));
+        CVARS_SET("browser_speed", m_draft.advancedBrowserSpeed);
+        CVARS_SET("single_download", m_draft.advancedSingleConnection);
+        CVARS_SET("packet_tag", m_draft.advancedPacketTag);
+        CVARS_SET("progress_animation", m_draft.advancedProgressAnimation);
+        // Keep this defensive clamp next to the array access as well as in
+        // global CVar validation; Settings can be opened with a hand-edited or
+        // historical coreconfig before the user changes this field.
+        m_draft.advancedProcessPriority = std::clamp(m_draft.advancedProcessPriority, 0, 2);
+        CVARS_SET("process_priority", m_draft.advancedProcessPriority);
+        const DWORD priorities[] = {NORMAL_PRIORITY_CLASS, ABOVE_NORMAL_PRIORITY_CLASS, HIGH_PRIORITY_CLASS};
+        SetPriorityClass(GetCurrentProcess(), priorities[m_draft.advancedProcessPriority]);
+        g_pCore->SetDiagnosticDebug(static_cast<EDiagnosticDebugType>(m_draft.advancedDebugSetting));
+        CVARS_SET("streaming_memory", m_draft.advancedStreamingMemory);
+        CVARS_SET("process_cpu_affinity", m_draft.advancedCpuAffinity);
+        DWORD_PTR processMask = 0;
+        DWORD_PTR systemMask = 0;
+        if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask))
+        {
+            DWORD_PTR desiredMask = m_draft.advancedCpuAffinity ? (systemMask & ~static_cast<DWORD_PTR>(1)) : systemMask;
+            if (desiredMask != 0)
+                SetProcessAffinityMask(GetCurrentProcess(), desiredMask);
+        }
+        CVARS_SET("update_build_type", m_draft.advancedUpdateBuildType);
+        CVARS_SET("update_auto_install", m_draft.advancedUpdateAutoInstall);
+    }
+
+    void ApplyBindings()
+    {
+        CKeyBindsInterface* keyBinds = CCore::GetSingleton().GetKeyBinds();
+        for (const SBindRow& row : m_draft.binds)
+        {
+            if (row.gtaControl)
+            {
+                SBindableGTAControl* control = keyBinds->GetBindableFromControl(row.control.c_str());
+                if (!control)
+                    continue;
+                std::list<CGTAControlBind*> existingList;
+                keyBinds->GetBoundControls(control, existingList);
+                std::vector<CGTAControlBind*> existing(existingList.begin(), existingList.end());
+                for (std::size_t slot = 0; slot < 4; ++slot)
+                {
+                    const std::string   desired = slot < row.keys.size() ? row.keys[slot] : std::string{};
+                    const SBindableKey* key = desired.empty() ? nullptr : keyBinds->GetBindableFromKey(desired.c_str());
+                    if (slot < existing.size() && existing[slot])
+                    {
+                        if (!key)
+                            keyBinds->Remove(existing[slot]);
+                        else if (existing[slot]->boundKey != key)
+                        {
+                            if (slot == 0 || !keyBinds->GTAControlExists(key, control))
+                                existing[slot]->boundKey = key;
+                            else
+                                keyBinds->Remove(existing[slot]);
+                        }
+                    }
+                    else if (key && !keyBinds->GTAControlExists(key, control))
+                        keyBinds->AddGTAControl(key, control);
+                }
+                continue;
+            }
+
+            std::vector<CCommandBind*> existing;
+            for (const CKeyBindsInterface::KeyBindPtr& bind : *keyBinds)
+            {
+                if (!bind || bind->isBeingDeleted || bind->type != KeyBindType::COMMAND)
+                    continue;
+                CCommandBind* command = static_cast<CCommandBind*>(bind.get());
+                if (command->triggerState && command->command == row.command && command->arguments == row.arguments && command->resource == row.resource)
+                    existing.push_back(command);
+            }
+
+            // Some commands are represented by a down/up pair. Remember the
+            // release-side metadata before editing the down binds so a newly
+            // filled secondary slot keeps the same press/release semantics as
+            // the mature CEGUI editor.
+            bool        hasMatchingUp = false;
+            std::string matchingUpArguments;
+            std::string matchingUpResource;
+            for (CCommandBind* command : existing)
+            {
+                if (CCommandBind* up = keyBinds->FindMatchingUpBind(command))
+                {
+                    hasMatchingUp = true;
+                    matchingUpArguments = up->arguments;
+                    matchingUpResource = up->resource;
+                    break;
+                }
+            }
+            for (std::size_t slot = 0; slot < 4; ++slot)
+            {
+                const std::string   desired = slot < row.keys.size() ? row.keys[slot] : std::string{};
+                const SBindableKey* key = desired.empty() ? nullptr : keyBinds->GetBindableFromKey(desired.c_str());
+                if (slot < existing.size() && existing[slot])
+                {
+                    if (!key)
+                    {
+                        if (CCommandBind* up = keyBinds->FindMatchingUpBind(existing[slot]))
+                            keyBinds->UserRemoveCommandBoundKey(up);
+                        keyBinds->UserRemoveCommandBoundKey(existing[slot]);
+                    }
+                    else if (existing[slot]->boundKey != key)
+                    {
+                        if (CCommandBind* up = keyBinds->FindMatchingUpBind(existing[slot]))
+                            keyBinds->UserChangeCommandBoundKey(up, key);
+                        keyBinds->UserChangeCommandBoundKey(existing[slot], key);
+                    }
+                }
+                else if (key)
+                {
+                    keyBinds->AddCommand(key->szKey, row.command.c_str(), row.arguments.empty() ? nullptr : row.arguments.c_str(), true,
+                                         row.resource.empty() ? nullptr : row.resource.c_str());
+                    if (hasMatchingUp)
+                        keyBinds->AddCommand(key->szKey, row.command.c_str(), matchingUpArguments.empty() ? nullptr : matchingUpArguments.c_str(), false,
+                                             matchingUpResource.empty() ? nullptr : matchingUpResource.c_str());
+                }
+            }
+        }
+    }
+
     static bool IsVideoModeAvailable(int requestedMode)
     {
         CGame*         game = g_pCore ? g_pCore->GetGame() : nullptr;
@@ -1486,6 +2387,7 @@ private:
     {
         destination.graphicsVideoMode = source.graphicsVideoMode;
         destination.graphicsDisplayMode = source.graphicsDisplayMode;
+        destination.graphicsFullscreenStyle = source.graphicsFullscreenStyle;
         destination.graphicsFullscreenMinimize = source.graphicsFullscreenMinimize;
         destination.graphicsVSync = source.graphicsVSync;
         destination.graphicsDPIAware = source.graphicsDPIAware;
@@ -1525,13 +2427,14 @@ private:
         SState copy = left;
         CopyGraphics(right, copy);
         return copy.graphicsVideoMode == left.graphicsVideoMode && copy.graphicsDisplayMode == left.graphicsDisplayMode &&
-               copy.graphicsFullscreenMinimize == left.graphicsFullscreenMinimize && copy.graphicsVSync == left.graphicsVSync &&
-               copy.graphicsDPIAware == left.graphicsDPIAware && copy.graphicsFieldOfView == left.graphicsFieldOfView &&
-               copy.graphicsDrawDistance == left.graphicsDrawDistance && copy.graphicsBrightness == left.graphicsBrightness &&
-               copy.graphicsFXQuality == left.graphicsFXQuality && copy.graphicsAnisotropic == left.graphicsAnisotropic &&
-               copy.graphicsAntiAliasing == left.graphicsAntiAliasing && copy.graphicsAspectRatio == left.graphicsAspectRatio &&
-               copy.graphicsHudMatchAspectRatio == left.graphicsHudMatchAspectRatio && copy.graphicsVolumetricShadows == left.graphicsVolumetricShadows &&
-               copy.graphicsGrass == left.graphicsGrass && copy.graphicsHeatHaze == left.graphicsHeatHaze && copy.graphicsTyreSmoke == left.graphicsTyreSmoke &&
+               copy.graphicsFullscreenStyle == left.graphicsFullscreenStyle && copy.graphicsFullscreenMinimize == left.graphicsFullscreenMinimize &&
+               copy.graphicsVSync == left.graphicsVSync && copy.graphicsDPIAware == left.graphicsDPIAware &&
+               copy.graphicsFieldOfView == left.graphicsFieldOfView && copy.graphicsDrawDistance == left.graphicsDrawDistance &&
+               copy.graphicsBrightness == left.graphicsBrightness && copy.graphicsFXQuality == left.graphicsFXQuality &&
+               copy.graphicsAnisotropic == left.graphicsAnisotropic && copy.graphicsAntiAliasing == left.graphicsAntiAliasing &&
+               copy.graphicsAspectRatio == left.graphicsAspectRatio && copy.graphicsHudMatchAspectRatio == left.graphicsHudMatchAspectRatio &&
+               copy.graphicsVolumetricShadows == left.graphicsVolumetricShadows && copy.graphicsGrass == left.graphicsGrass &&
+               copy.graphicsHeatHaze == left.graphicsHeatHaze && copy.graphicsTyreSmoke == left.graphicsTyreSmoke &&
                copy.graphicsDynamicPedShadows == left.graphicsDynamicPedShadows && copy.graphicsMotionBlur == left.graphicsMotionBlur &&
                copy.graphicsCoronaReflections == left.graphicsCoronaReflections && copy.graphicsHighDetailVehicles == left.graphicsHighDetailVehicles &&
                copy.graphicsHighDetailPeds == left.graphicsHighDetailPeds && copy.graphicsShowUnsafeResolutions == left.graphicsShowUnsafeResolutions &&
@@ -1541,6 +2444,179 @@ private:
                copy.graphicsBrightnessEnabled == left.graphicsBrightnessEnabled && copy.graphicsContrastEnabled == left.graphicsContrastEnabled &&
                copy.graphicsSaturationEnabled == left.graphicsSaturationEnabled && copy.graphicsApplyWindowed == left.graphicsApplyWindowed &&
                copy.graphicsApplyFullscreen == left.graphicsApplyFullscreen;
+    }
+
+    static void CopyGame(const SState& source, SState& destination)
+    {
+        destination.gameNickname = source.gameNickname;
+        destination.gameSavePasswords = source.gameSavePasswords;
+        destination.gameAutoRefreshBrowser = source.gameAutoRefreshBrowser;
+        destination.gameAllowScreenUpload = source.gameAllowScreenUpload;
+        destination.gameAllowExternalSounds = source.gameAllowExternalSounds;
+        destination.gameAlwaysShowTransferBox = source.gameAlwaysShowTransferBox;
+        destination.gameDiscordRichPresence = source.gameDiscordRichPresence;
+        destination.gameDiscordShareData = source.gameDiscordShareData;
+        destination.gameSteamStatus = source.gameSteamStatus;
+        destination.gameSaveCameraPhotos = source.gameSaveCameraPhotos;
+        destination.gameAskBeforeDisconnect = source.gameAskBeforeDisconnect;
+        destination.gameCustomizedSAFiles = source.gameCustomizedSAFiles;
+        destination.gameMapOpacity = source.gameMapOpacity;
+        destination.gameMapAlpha = source.gameMapAlpha;
+        destination.gameMapImage = source.gameMapImage;
+    }
+
+    static void CopyAudio(const SState& source, SState& destination)
+    {
+        destination.audioMasterVolume = source.audioMasterVolume;
+        destination.audioRadioVolume = source.audioRadioVolume;
+        destination.audioSfxVolume = source.audioSfxVolume;
+        destination.audioMtaVolume = source.audioMtaVolume;
+        destination.audioVoiceVolume = source.audioVoiceVolume;
+        destination.audioRadioEqualizer = source.audioRadioEqualizer;
+        destination.audioRadioAutotune = source.audioRadioAutotune;
+        destination.audioUserTrackAutoScan = source.audioUserTrackAutoScan;
+        destination.audioUserTrackMode = source.audioUserTrackMode;
+        destination.audioMuteMaster = source.audioMuteMaster;
+        destination.audioMuteRadio = source.audioMuteRadio;
+        destination.audioMuteSfx = source.audioMuteSfx;
+        destination.audioMuteMta = source.audioMuteMta;
+        destination.audioMuteVoice = source.audioMuteVoice;
+    }
+
+    static void CopyControls(const SState& source, SState& destination)
+    {
+        destination.controlsInvertMouse = source.controlsInvertMouse;
+        destination.controlsSteerWithMouse = source.controlsSteerWithMouse;
+        destination.controlsFlyWithMouse = source.controlsFlyWithMouse;
+        destination.controlsMouseSensitivity = source.controlsMouseSensitivity;
+        destination.controlsVerticalAimSensitivity = source.controlsVerticalAimSensitivity;
+        destination.controlsUseMouseSensitivityForAiming = source.controlsUseMouseSensitivityForAiming;
+        destination.controlsClassic = source.controlsClassic;
+        destination.controlsJoypadDeadZone = source.controlsJoypadDeadZone;
+        destination.controlsJoypadSaturation = source.controlsJoypadSaturation;
+    }
+
+    static void CopyInterface(const SState& source, SState& destination)
+    {
+        destination.interfaceLocale = source.interfaceLocale;
+        destination.interfaceSkin = source.interfaceSkin;
+        destination.interfaceChatBackgroundColor = source.interfaceChatBackgroundColor;
+        destination.interfaceChatTextColor = source.interfaceChatTextColor;
+        destination.interfaceChatInputBackgroundColor = source.interfaceChatInputBackgroundColor;
+        destination.interfaceChatInputTextColor = source.interfaceChatInputTextColor;
+        destination.interfaceChatFont = source.interfaceChatFont;
+        destination.interfaceChatLines = source.interfaceChatLines;
+        destination.interfaceChatScaleX = source.interfaceChatScaleX;
+        destination.interfaceChatScaleY = source.interfaceChatScaleY;
+        destination.interfaceChatWidth = source.interfaceChatWidth;
+        destination.interfaceChatCssText = source.interfaceChatCssText;
+        destination.interfaceChatCssBackground = source.interfaceChatCssBackground;
+        destination.interfaceChatNickCompletion = source.interfaceChatNickCompletion;
+        destination.interfaceChatTextOutline = source.interfaceChatTextOutline;
+        destination.interfaceChatLineLife = source.interfaceChatLineLife;
+        destination.interfaceChatLineFadeOut = source.interfaceChatLineFadeOut;
+        destination.interfaceChatPositionHorizontal = source.interfaceChatPositionHorizontal;
+        destination.interfaceChatPositionVertical = source.interfaceChatPositionVertical;
+        destination.interfaceChatTextAlignment = source.interfaceChatTextAlignment;
+        destination.interfaceChatOffsetX = source.interfaceChatOffsetX;
+        destination.interfaceChatOffsetY = source.interfaceChatOffsetY;
+        destination.interfaceFlashWindow = source.interfaceFlashWindow;
+        destination.interfaceTrayNotifications = source.interfaceTrayNotifications;
+        destination.browserRemoteWebsites = source.browserRemoteWebsites;
+        destination.browserRemoteJavascript = source.browserRemoteJavascript;
+        destination.browserGpuRendering = source.browserGpuRendering;
+        destination.browserVideoAcceleration = source.browserVideoAcceleration;
+        destination.browserBlacklist = source.browserBlacklist;
+        destination.browserWhitelist = source.browserWhitelist;
+    }
+
+    static void CopyAdvanced(const SState& source, SState& destination)
+    {
+        destination.advancedFastClothesLoading = source.advancedFastClothesLoading;
+        destination.advancedBrowserSpeed = source.advancedBrowserSpeed;
+        destination.advancedSingleConnection = source.advancedSingleConnection;
+        destination.advancedPacketTag = source.advancedPacketTag;
+        destination.advancedProgressAnimation = source.advancedProgressAnimation;
+        destination.advancedProcessPriority = source.advancedProcessPriority;
+        destination.advancedDebugSetting = source.advancedDebugSetting;
+        destination.advancedStreamingMemory = source.advancedStreamingMemory;
+        destination.advancedCpuAffinity = source.advancedCpuAffinity;
+        destination.advancedUpdateBuildType = source.advancedUpdateBuildType;
+        destination.advancedUpdateAutoInstall = source.advancedUpdateAutoInstall;
+    }
+
+    static bool BindingsEqual(const std::vector<SBindRow>& left, const std::vector<SBindRow>& right)
+    {
+        if (left.size() != right.size())
+            return false;
+        for (std::size_t index = 0; index < left.size(); ++index)
+            if (left[index].id != right[index].id || left[index].keys != right[index].keys)
+                return false;
+        return true;
+    }
+
+    static bool LegacyEqual(const SState& left, const SState& right)
+    {
+        SState copy = left;
+        CopyGame(right, copy);
+        CopyAudio(right, copy);
+        CopyControls(right, copy);
+        CopyInterface(right, copy);
+        CopyAdvanced(right, copy);
+        return copy.gameNickname == left.gameNickname && copy.gameSavePasswords == left.gameSavePasswords &&
+               copy.gameAutoRefreshBrowser == left.gameAutoRefreshBrowser && copy.gameAllowScreenUpload == left.gameAllowScreenUpload &&
+               copy.gameAllowExternalSounds == left.gameAllowExternalSounds && copy.gameAlwaysShowTransferBox == left.gameAlwaysShowTransferBox &&
+               copy.gameDiscordRichPresence == left.gameDiscordRichPresence && copy.gameDiscordShareData == left.gameDiscordShareData &&
+               copy.gameSteamStatus == left.gameSteamStatus && copy.gameSaveCameraPhotos == left.gameSaveCameraPhotos &&
+               copy.gameAskBeforeDisconnect == left.gameAskBeforeDisconnect && copy.gameCustomizedSAFiles == left.gameCustomizedSAFiles &&
+               copy.gameMapOpacity == left.gameMapOpacity && copy.gameMapAlpha == left.gameMapAlpha && copy.gameMapImage == left.gameMapImage &&
+               copy.audioMasterVolume == left.audioMasterVolume && copy.audioRadioVolume == left.audioRadioVolume &&
+               copy.audioSfxVolume == left.audioSfxVolume && copy.audioMtaVolume == left.audioMtaVolume && copy.audioVoiceVolume == left.audioVoiceVolume &&
+               copy.audioRadioEqualizer == left.audioRadioEqualizer && copy.audioRadioAutotune == left.audioRadioAutotune &&
+               copy.audioUserTrackAutoScan == left.audioUserTrackAutoScan && copy.audioUserTrackMode == left.audioUserTrackMode &&
+               copy.audioMuteMaster == left.audioMuteMaster && copy.audioMuteRadio == left.audioMuteRadio && copy.audioMuteSfx == left.audioMuteSfx &&
+               copy.audioMuteMta == left.audioMuteMta && copy.audioMuteVoice == left.audioMuteVoice && copy.controlsInvertMouse == left.controlsInvertMouse &&
+               copy.controlsSteerWithMouse == left.controlsSteerWithMouse && copy.controlsFlyWithMouse == left.controlsFlyWithMouse &&
+               copy.controlsMouseSensitivity == left.controlsMouseSensitivity && copy.controlsVerticalAimSensitivity == left.controlsVerticalAimSensitivity &&
+               copy.controlsUseMouseSensitivityForAiming == left.controlsUseMouseSensitivityForAiming && copy.controlsClassic == left.controlsClassic &&
+               copy.controlsJoypadDeadZone == left.controlsJoypadDeadZone && copy.controlsJoypadSaturation == left.controlsJoypadSaturation &&
+               copy.interfaceLocale == left.interfaceLocale && copy.interfaceSkin == left.interfaceSkin &&
+               copy.interfaceChatBackgroundColor == left.interfaceChatBackgroundColor && copy.interfaceChatTextColor == left.interfaceChatTextColor &&
+               copy.interfaceChatInputBackgroundColor == left.interfaceChatInputBackgroundColor &&
+               copy.interfaceChatInputTextColor == left.interfaceChatInputTextColor && copy.interfaceChatFont == left.interfaceChatFont &&
+               copy.interfaceChatLines == left.interfaceChatLines && copy.interfaceChatScaleX == left.interfaceChatScaleX &&
+               copy.interfaceChatScaleY == left.interfaceChatScaleY && copy.interfaceChatWidth == left.interfaceChatWidth &&
+               copy.interfaceChatCssText == left.interfaceChatCssText && copy.interfaceChatCssBackground == left.interfaceChatCssBackground &&
+               copy.interfaceChatNickCompletion == left.interfaceChatNickCompletion && copy.interfaceChatTextOutline == left.interfaceChatTextOutline &&
+               copy.interfaceChatLineLife == left.interfaceChatLineLife && copy.interfaceChatLineFadeOut == left.interfaceChatLineFadeOut &&
+               copy.interfaceChatPositionHorizontal == left.interfaceChatPositionHorizontal &&
+               copy.interfaceChatPositionVertical == left.interfaceChatPositionVertical && copy.interfaceChatTextAlignment == left.interfaceChatTextAlignment &&
+               copy.interfaceChatOffsetX == left.interfaceChatOffsetX && copy.interfaceChatOffsetY == left.interfaceChatOffsetY &&
+               copy.interfaceFlashWindow == left.interfaceFlashWindow && copy.interfaceTrayNotifications == left.interfaceTrayNotifications &&
+               copy.browserRemoteWebsites == left.browserRemoteWebsites && copy.browserRemoteJavascript == left.browserRemoteJavascript &&
+               copy.browserGpuRendering == left.browserGpuRendering && copy.browserVideoAcceleration == left.browserVideoAcceleration &&
+               copy.browserBlacklist == left.browserBlacklist && copy.browserWhitelist == left.browserWhitelist &&
+               copy.advancedFastClothesLoading == left.advancedFastClothesLoading && copy.advancedBrowserSpeed == left.advancedBrowserSpeed &&
+               copy.advancedSingleConnection == left.advancedSingleConnection && copy.advancedPacketTag == left.advancedPacketTag &&
+               copy.advancedProgressAnimation == left.advancedProgressAnimation && copy.advancedProcessPriority == left.advancedProcessPriority &&
+               copy.advancedDebugSetting == left.advancedDebugSetting && copy.advancedStreamingMemory == left.advancedStreamingMemory &&
+               copy.advancedCpuAffinity == left.advancedCpuAffinity && copy.advancedUpdateBuildType == left.advancedUpdateBuildType &&
+               copy.advancedUpdateAutoInstall == left.advancedUpdateAutoInstall && BindingsEqual(left.binds, right.binds);
+    }
+
+    static bool RestartSensitiveEqual(const SState& left, const SState& right)
+    {
+        return left.gameCustomizedSAFiles == right.gameCustomizedSAFiles && left.graphicsVideoMode == right.graphicsVideoMode &&
+               left.graphicsDisplayMode == right.graphicsDisplayMode && left.graphicsFullscreenStyle == right.graphicsFullscreenStyle &&
+               left.graphicsFullscreenMinimize == right.graphicsFullscreenMinimize && left.graphicsAntiAliasing == right.graphicsAntiAliasing &&
+               left.graphicsDPIAware == right.graphicsDPIAware && left.graphicsDeviceSelectionDialog == right.graphicsDeviceSelectionDialog &&
+               left.browserGpuRendering == right.browserGpuRendering && left.browserVideoAcceleration == right.browserVideoAcceleration;
+    }
+
+    static bool BrowserPermissionsEqual(const SState& left, const SState& right)
+    {
+        return left.browserRemoteWebsites == right.browserRemoteWebsites && left.browserRemoteJavascript == right.browserRemoteJavascript &&
+               left.browserBlacklist == right.browserBlacklist && left.browserWhitelist == right.browserWhitelist;
     }
 
     static bool ParseBoolean(const std::string& value, bool& result)
@@ -1580,6 +2656,201 @@ private:
         return std::clamp(quantized, minimum, maximum);
     }
 
+    bool SetLegacyValue(const std::string& id, const std::string& value)
+    {
+        // Keep the mature CEGUI preferences data-driven here. Apart from
+        // avoiding a compiler-depth limit, one table makes the native ranges
+        // auditable against the web controls instead of duplicating branches.
+        if (id == "game.nickname" && value.size() <= 22)
+        {
+            m_draft.gameNickname = value;
+            return true;
+        }
+        if (id == "interface.locale" && !g_pCore->IsConnected() && IsAvailableLocale(value))
+        {
+            m_draft.interfaceLocale = value;
+            return true;
+        }
+        if (id == "interface.skin" && !g_pCore->IsConnected() && value.size() <= 128 && IsAvailableSkin(value))
+        {
+            m_draft.interfaceSkin = value;
+            return true;
+        }
+
+        struct SBooleanBinding
+        {
+            const char* id;
+            bool SState::* member;
+        };
+        static constexpr SBooleanBinding booleanBindings[] = {
+            {"game.savePasswords", &SState::gameSavePasswords},
+            {"game.autoRefreshBrowser", &SState::gameAutoRefreshBrowser},
+            {"game.allowScreenUpload", &SState::gameAllowScreenUpload},
+            {"game.allowExternalSounds", &SState::gameAllowExternalSounds},
+            {"game.alwaysShowTransferBox", &SState::gameAlwaysShowTransferBox},
+            {"game.discordRichPresence", &SState::gameDiscordRichPresence},
+            {"game.discordShareData", &SState::gameDiscordShareData},
+            {"game.steamStatus", &SState::gameSteamStatus},
+            {"game.saveCameraPhotos", &SState::gameSaveCameraPhotos},
+            {"game.askBeforeDisconnect", &SState::gameAskBeforeDisconnect},
+            {"game.customizedSAFiles", &SState::gameCustomizedSAFiles},
+            {"audio.radioEqualizer", &SState::audioRadioEqualizer},
+            {"audio.radioAutotune", &SState::audioRadioAutotune},
+            {"audio.userTrackAutoScan", &SState::audioUserTrackAutoScan},
+            {"audio.muteMaster", &SState::audioMuteMaster},
+            {"audio.muteRadio", &SState::audioMuteRadio},
+            {"audio.muteSfx", &SState::audioMuteSfx},
+            {"audio.muteMta", &SState::audioMuteMta},
+            {"audio.muteVoice", &SState::audioMuteVoice},
+            {"controls.invertMouse", &SState::controlsInvertMouse},
+            {"controls.steerWithMouse", &SState::controlsSteerWithMouse},
+            {"controls.flyWithMouse", &SState::controlsFlyWithMouse},
+            {"controls.useMouseSensitivityForAiming", &SState::controlsUseMouseSensitivityForAiming},
+            {"controls.classicControls", &SState::controlsClassic},
+            {"interface.chatCssText", &SState::interfaceChatCssText},
+            {"interface.chatCssBackground", &SState::interfaceChatCssBackground},
+            {"interface.chatNickCompletion", &SState::interfaceChatNickCompletion},
+            {"interface.chatTextOutline", &SState::interfaceChatTextOutline},
+            {"interface.flashWindow", &SState::interfaceFlashWindow},
+            {"interface.trayNotifications", &SState::interfaceTrayNotifications},
+            {"browser.remoteWebsites", &SState::browserRemoteWebsites},
+            {"browser.remoteJavascript", &SState::browserRemoteJavascript},
+            {"browser.gpuRendering", &SState::browserGpuRendering},
+            {"browser.videoAcceleration", &SState::browserVideoAcceleration},
+            {"advanced.cpuAffinity", &SState::advancedCpuAffinity},
+        };
+        for (const SBooleanBinding& binding : booleanBindings)
+        {
+            if (id != binding.id)
+                continue;
+            if (id == "game.customizedSAFiles" && !HasCustomizedSAFilesOption())
+                return false;
+            bool parsed{};
+            if (!ParseBoolean(value, parsed))
+                return false;
+            m_draft.*binding.member = parsed;
+            return true;
+        }
+
+        struct SIntegerBinding
+        {
+            const char* id;
+            int SState::* member;
+            int           minimum;
+            int           maximum;
+        };
+        static constexpr SIntegerBinding integerBindings[] = {
+            {"game.mapImage", &SState::gameMapImage, 0, 1},
+            {"audio.masterVolume", &SState::audioMasterVolume, 0, 100},
+            {"audio.radioVolume", &SState::audioRadioVolume, 0, 100},
+            {"audio.sfxVolume", &SState::audioSfxVolume, 0, 100},
+            {"audio.mtaVolume", &SState::audioMtaVolume, 0, 100},
+            {"audio.voiceVolume", &SState::audioVoiceVolume, 0, 100},
+            {"audio.userTrackMode", &SState::audioUserTrackMode, 0, 2},
+            {"controls.mouseSensitivity", &SState::controlsMouseSensitivity, 0, 100},
+            {"controls.verticalAimSensitivity", &SState::controlsVerticalAimSensitivity, 0, 100},
+            {"controls.joypadDeadZone", &SState::controlsJoypadDeadZone, 0, 49},
+            {"controls.joypadSaturation", &SState::controlsJoypadSaturation, 0, 100},
+            {"interface.chatFont", &SState::interfaceChatFont, 0, 3},
+            {"interface.chatLines", &SState::interfaceChatLines, 3, 62},
+            {"interface.chatPositionHorizontal", &SState::interfaceChatPositionHorizontal, 0, 2},
+            {"interface.chatPositionVertical", &SState::interfaceChatPositionVertical, 0, 2},
+            {"interface.chatTextAlignment", &SState::interfaceChatTextAlignment, 0, 1},
+            {"advanced.fastClothesLoading", &SState::advancedFastClothesLoading, 0, 2},
+            {"advanced.browserSpeed", &SState::advancedBrowserSpeed, 0, 2},
+            {"advanced.singleConnection", &SState::advancedSingleConnection, 0, 1},
+            {"advanced.packetTag", &SState::advancedPacketTag, 0, 1},
+            {"advanced.progressAnimation", &SState::advancedProgressAnimation, 0, 1},
+            {"advanced.processPriority", &SState::advancedProcessPriority, 0, 2},
+            {"advanced.debugSetting", &SState::advancedDebugSetting, 0, 8},
+            {"advanced.updateAutoInstall", &SState::advancedUpdateAutoInstall, 0, 1},
+        };
+        for (const SIntegerBinding& binding : integerBindings)
+        {
+            if (id != binding.id)
+                continue;
+            double parsed{};
+            if (!ParseNumber(value, parsed) || (id == "advanced.debugSetting" && static_cast<int>(parsed) == static_cast<int>(EDiagnosticDebug::BIDI_6778)))
+                return false;
+            m_draft.*binding.member = QuantizeInteger(parsed, binding.minimum, binding.maximum, 1);
+            if (id.compare(0, 6, "audio") == 0 && id.find("Volume") != std::string::npos)
+                ApplyAudioPreview(m_draft);
+            return true;
+        }
+
+        if (id == "game.mapOpacity")
+        {
+            double parsed{};
+            if (!ParseNumber(value, parsed))
+                return false;
+            m_draft.gameMapOpacity = QuantizeInteger(parsed, 0, 100, 1);
+            m_draft.gameMapAlpha = static_cast<int>(std::round(m_draft.gameMapOpacity / 100.0 * 255.0));
+            return true;
+        }
+
+        struct SFloatBinding
+        {
+            const char* id;
+            float SState::* member;
+            float           minimum;
+            float           maximum;
+            float           step;
+        };
+        static constexpr SFloatBinding floatBindings[] = {
+            {"interface.chatScaleX", &SState::interfaceChatScaleX, 0.5f, 3.0f, 0.1f},
+            {"interface.chatScaleY", &SState::interfaceChatScaleY, 0.5f, 3.0f, 0.1f},
+            {"interface.chatWidth", &SState::interfaceChatWidth, 0.5f, 4.0f, 0.1f},
+            {"interface.chatLineLife", &SState::interfaceChatLineLife, 1.0f, 120000.0f, 1.0f},
+            {"interface.chatLineFadeOut", &SState::interfaceChatLineFadeOut, 1.0f, 30000.0f, 1.0f},
+            {"interface.chatOffsetX", &SState::interfaceChatOffsetX, -1.0f, 1.0f, 0.0025f},
+            {"interface.chatOffsetY", &SState::interfaceChatOffsetY, -1.0f, 1.0f, 0.0025f},
+        };
+        for (const SFloatBinding& binding : floatBindings)
+        {
+            if (id != binding.id)
+                continue;
+            double parsed{};
+            if (!ParseNumber(value, parsed))
+                return false;
+            m_draft.*binding.member = QuantizeFloat(parsed, binding.minimum, binding.maximum, binding.step);
+            return true;
+        }
+
+        std::uint32_t SState::* colorMember = nullptr;
+        if (id == "interface.chatBackgroundColor")
+            colorMember = &SState::interfaceChatBackgroundColor;
+        else if (id == "interface.chatTextColor")
+            colorMember = &SState::interfaceChatTextColor;
+        else if (id == "interface.chatInputBackgroundColor")
+            colorMember = &SState::interfaceChatInputBackgroundColor;
+        else if (id == "interface.chatInputTextColor")
+            colorMember = &SState::interfaceChatInputTextColor;
+        if (colorMember)
+        {
+            double parsed{};
+            if (!ParseNumber(value, parsed))
+                return false;
+            std::uint32_t packed = static_cast<std::uint32_t>(std::clamp(parsed, 0.0, 4294967295.0));
+            if (id == "interface.chatTextColor" || id == "interface.chatInputTextColor")
+                packed = ClampPackedAlpha(packed, 128);
+            m_draft.*colorMember = packed;
+            return true;
+        }
+
+        double parsed{};
+        if (id == "advanced.streamingMemory" && ParseNumber(value, parsed))
+        {
+            m_draft.advancedStreamingMemory = QuantizeInteger(parsed, g_pCore->GetMinStreamingMemory(), g_pCore->GetMaxStreamingMemory(), 1);
+            return true;
+        }
+        if (id == "advanced.updateBuildType" && ParseNumber(value, parsed) && (parsed == 0.0 || parsed == 2.0))
+        {
+            m_draft.advancedUpdateBuildType = static_cast<int>(parsed);
+            return true;
+        }
+        return false;
+    }
+
     static void ReadRadarValues(SState& state)
     {
         CVARS_GET("radar_style", state.radarStyle);
@@ -1593,6 +2864,98 @@ private:
     static SState ReadCurrentState()
     {
         SState state;
+        CVARS_GET("nick", state.gameNickname);
+        if (!CCore::GetSingleton().IsValidNick(state.gameNickname.c_str()))
+            state.gameNickname = CNickGen::GetRandomNickname();
+        CVARS_GET("save_server_passwords", state.gameSavePasswords);
+        CVARS_GET("auto_refresh_browser", state.gameAutoRefreshBrowser);
+        CVARS_GET("allow_screen_upload", state.gameAllowScreenUpload);
+        CVARS_GET("allow_external_sounds", state.gameAllowExternalSounds);
+        CVARS_GET("always_show_transferbox", state.gameAlwaysShowTransferBox);
+        CVARS_GET("allow_discord_rpc", state.gameDiscordRichPresence);
+        CVARS_GET("discord_rpc_share_data", state.gameDiscordShareData);
+        CVARS_GET("allow_steam_client", state.gameSteamStatus);
+        CVARS_GET("photosaving", state.gameSaveCameraPhotos);
+        CVARS_GET("ask_before_disconnect", state.gameAskBeforeDisconnect);
+        state.gameCustomizedSAFiles = GetApplicationSettingInt("customized-sa-files-request") != 0;
+        CVARS_GET("mapalpha", state.gameMapAlpha);
+        state.gameMapAlpha = std::clamp(state.gameMapAlpha, 0, 255);
+        state.gameMapOpacity = std::clamp(static_cast<int>(std::round(state.gameMapAlpha / 255.0 * 100.0)), 0, 100);
+        CVARS_GET("mapimage", state.gameMapImage);
+
+        state.audioMasterVolume = QuantizeInteger(CVARS_GET_VALUE<float>("mastervolume") * 100.0, 0, 100, 1);
+        state.audioRadioVolume = QuantizeInteger(CVARS_GET_VALUE<float>("radiovolume") * 100.0, 0, 100, 1);
+        state.audioSfxVolume = QuantizeInteger(CVARS_GET_VALUE<float>("sfxvolume") * 100.0, 0, 100, 1);
+        state.audioMtaVolume = QuantizeInteger(CVARS_GET_VALUE<float>("mtavolume") * 100.0, 0, 100, 1);
+        state.audioVoiceVolume = QuantizeInteger(CVARS_GET_VALUE<float>("voicevolume") * 100.0, 0, 100, 1);
+        CVARS_GET("mute_master_when_minimized", state.audioMuteMaster);
+        CVARS_GET("mute_radio_when_minimized", state.audioMuteRadio);
+        CVARS_GET("mute_sfx_when_minimized", state.audioMuteSfx);
+        CVARS_GET("mute_mta_when_minimized", state.audioMuteMta);
+        CVARS_GET("mute_voice_when_minimized", state.audioMuteVoice);
+
+        CVARS_GET("invert_mouse", state.controlsInvertMouse);
+        CVARS_GET("steer_with_mouse", state.controlsSteerWithMouse);
+        CVARS_GET("fly_with_mouse", state.controlsFlyWithMouse);
+        CVARS_GET("classic_controls", state.controlsClassic);
+        CVARS_GET("use_mouse_sensitivity_for_aiming", state.controlsUseMouseSensitivityForAiming);
+        state.controlsJoypadDeadZone = std::clamp(GetJoystickManager()->GetDeadZone(), 0, 49);
+        state.controlsJoypadSaturation = std::clamp(GetJoystickManager()->GetSaturation(), 0, 100);
+
+        CVARS_GET("locale", state.interfaceLocale);
+        CVARS_GET("current_skin", state.interfaceSkin);
+        CColor chatColor;
+        CVARS_GET("chat_color", chatColor);
+        state.interfaceChatBackgroundColor = PackColor(chatColor);
+        CVARS_GET("chat_text_color", chatColor);
+        state.interfaceChatTextColor = PackColor(chatColor);
+        CVARS_GET("chat_input_color", chatColor);
+        state.interfaceChatInputBackgroundColor = PackColor(chatColor);
+        CVARS_GET("chat_input_text_color", chatColor);
+        state.interfaceChatInputTextColor = PackColor(chatColor);
+        CVARS_GET("chat_font", state.interfaceChatFont);
+        CVARS_GET("chat_lines", state.interfaceChatLines);
+        CVector2D chatScale;
+        CVARS_GET("chat_scale", chatScale);
+        state.interfaceChatScaleX = chatScale.fX;
+        state.interfaceChatScaleY = chatScale.fY;
+        CVARS_GET("chat_width", state.interfaceChatWidth);
+        CVARS_GET("chat_css_style_text", state.interfaceChatCssText);
+        CVARS_GET("chat_css_style_background", state.interfaceChatCssBackground);
+        CVARS_GET("chat_nickcompletion", state.interfaceChatNickCompletion);
+        CVARS_GET("chat_text_outline", state.interfaceChatTextOutline);
+        int milliseconds = 0;
+        CVARS_GET("chat_line_life", milliseconds);
+        state.interfaceChatLineLife = std::max(1.0f, milliseconds / 1000.0f);
+        CVARS_GET("chat_line_fade_out", milliseconds);
+        state.interfaceChatLineFadeOut = std::max(1.0f, milliseconds / 1000.0f);
+        CVARS_GET("chat_position_horizontal", state.interfaceChatPositionHorizontal);
+        CVARS_GET("chat_position_vertical", state.interfaceChatPositionVertical);
+        CVARS_GET("chat_text_alignment", state.interfaceChatTextAlignment);
+        CVARS_GET("chat_position_offset_x", state.interfaceChatOffsetX);
+        CVARS_GET("chat_position_offset_y", state.interfaceChatOffsetY);
+        CVARS_GET("server_can_flash_window", state.interfaceFlashWindow);
+        CVARS_GET("allow_tray_notifications", state.interfaceTrayNotifications);
+        CVARS_GET("browser_remote_websites", state.browserRemoteWebsites);
+        CVARS_GET("browser_remote_javascript", state.browserRemoteJavascript);
+        CVARS_GET("browser_enable_gpu", state.browserGpuRendering);
+        CVARS_GET("browser_enable_video_acceleration", state.browserVideoAcceleration);
+
+        CVARS_GET("fast_clothes_loading", state.advancedFastClothesLoading);
+        CVARS_GET("browser_speed", state.advancedBrowserSpeed);
+        CVARS_GET("single_download", state.advancedSingleConnection);
+        CVARS_GET("packet_tag", state.advancedPacketTag);
+        CVARS_GET("progress_animation", state.advancedProgressAnimation);
+        CVARS_GET("process_priority", state.advancedProcessPriority);
+        state.advancedProcessPriority = std::clamp(state.advancedProcessPriority, 0, 2);
+        state.advancedDebugSetting = static_cast<int>(g_pCore->GetDiagnosticDebug());
+        CVARS_GET("streaming_memory", state.advancedStreamingMemory);
+        state.advancedStreamingMemory =
+            std::clamp(state.advancedStreamingMemory, static_cast<int>(g_pCore->GetMinStreamingMemory()), static_cast<int>(g_pCore->GetMaxStreamingMemory()));
+        CVARS_GET("process_cpu_affinity", state.advancedCpuAffinity);
+        CVARS_GET("update_build_type", state.advancedUpdateBuildType);
+        CVARS_GET("update_auto_install", state.advancedUpdateAutoInstall);
+
         CVARS_GET("extended_draw_distance_enabled", state.extendedWorldEnabled);
         CVARS_GET("extended_draw_distance", state.extendedWorldDistance);
         CVARS_GET("distant_lights_enabled", state.distantLightsEnabled);
@@ -1605,10 +2968,18 @@ private:
         CGameSettings* gameSettings = game ? game->GetSettings() : nullptr;
         if (gameSettings)
         {
+            state.audioRadioEqualizer = gameSettings->IsRadioEqualizerEnabled();
+            state.audioRadioAutotune = gameSettings->IsRadioAutotuneEnabled();
+            state.audioUserTrackAutoScan = gameSettings->IsUsertrackAutoScan();
+            state.audioUserTrackMode = static_cast<int>(gameSettings->GetUsertrackMode());
+            state.controlsMouseSensitivity = QuantizeInteger(gameSettings->GetMouseSensitivity() * 100.0, 0, 100, 1);
+            if (CControllerConfigManager* controller = game->GetControllerConfigManager())
+                state.controlsVerticalAimSensitivity = QuantizeInteger(controller->GetVerticalAimSensitivity() * 100.0, 0, 100, 1);
             bool windowed = false;
             bool fullscreenMinimize = false;
             int  fullscreenStyle = FULLSCREEN_STANDARD;
             GetVideoModeManager()->GetNextVideoMode(state.graphicsVideoMode, windowed, fullscreenMinimize, fullscreenStyle);
+            state.graphicsFullscreenStyle = fullscreenStyle;
             state.graphicsDisplayMode = windowed ? 0 : 1;
             if (!windowed && fullscreenStyle == FULLSCREEN_BORDERLESS)
                 state.graphicsDisplayMode = 2;
@@ -1651,12 +3022,21 @@ private:
         return state;
     }
 
-    SState m_original;
-    SState m_draft;
-    bool   m_active{};
-    bool   m_wasSkyGfxManaged{};
-    bool   m_wasRadarManaged{};
-    bool   m_restartRequired{};
+    SState                   m_original;
+    SState                   m_draft;
+    SState                   m_restartBaseline;
+    SState                   m_connectionBaseline;
+    bool                     m_active{};
+    bool                     m_wasSkyGfxManaged{};
+    bool                     m_wasRadarManaged{};
+    bool                     m_wasConnected{};
+    bool                     m_restartRequired{};
+    bool                     m_disconnectRequired{};
+    std::string              m_captureBindId;
+    int                      m_captureBindSlot{-1};
+    int                      m_captureAxis{-1};
+    std::string              m_error;
+    std::vector<SChatPreset> m_chatPresets;
 };
 
 CServerBrowserWeb* CServerBrowserWeb::ms_instance = nullptr;
@@ -1713,6 +3093,12 @@ bool CServerBrowserWeb::HandleEscapeKey()
     if (!ms_instance || !ms_instance->m_visible || !ms_instance->m_documentReady || ms_instance->m_nativeDialogVisible || !ms_instance->m_webView)
         return false;
 
+    if (ms_instance->m_settingsReady && ms_instance->m_settings && ms_instance->m_settings->ProcessCapturedInput(WM_KEYDOWN, VK_ESCAPE, 0))
+    {
+        ms_instance->QueueSettingsState(false);
+        return true;
+    }
+
     // Escape is owned by the always-mounted menu shell while it is visible.
     // Dispatch it directly into the document instead of depending on CEGUI's
     // transient active/focused state, which can change after mouse input.
@@ -1725,7 +3111,7 @@ bool CServerBrowserWeb::CanHandleConnectionUi()
     // A connection can hide the menu before its asynchronous network states
     // arrive. Ownership therefore follows the live web document, not the
     // widget's transient visibility or the lazy Server Browser route.
-    return ms_instance && ms_instance->m_documentReady;
+    return ms_instance && ms_instance->m_menuReady;
 }
 
 bool CServerBrowserWeb::OwnsConnectionUi()
@@ -1767,6 +3153,13 @@ bool CServerBrowserWeb::NotifyConnectionProgress(const std::string& stage, const
     if (!CanHandleConnectionUi())
         return false;
 
+    // A progress event belongs to the web connection flow. Keep that ownership
+    // until the user dismisses it, the connection succeeds, or we explicitly
+    // hand off to a native dialog such as the full-server queue.
+    ms_instance->m_connectionUiActive = true;
+    ms_instance->CancelHibernateRequest();
+    ms_instance->UpdateRenderingPauseState();
+
     JsonPtr event = MakeObject();
     AddString(event.get(), "type", "connect-progress");
     AddString(event.get(), "stage", stage);
@@ -1784,12 +3177,55 @@ bool CServerBrowserWeb::NotifyConnectionFailed(const std::string& code, const st
         return false;
     }
 
+    // The network attempt has ended, but the web failure/password dialog is
+    // still the active connection UI. Releasing ownership here lets delayed
+    // connection events fall through to the legacy CEGUI dialogs underneath
+    // the web shell. Ownership is released only by an explicit terminal path.
+    ms_instance->m_connectionUiActive = true;
+    ms_instance->CancelHibernateRequest();
+    ms_instance->UpdateRenderingPauseState();
+
     JsonPtr event = MakeObject();
     AddString(event.get(), "type", "connect-failed");
     AddString(event.get(), "code", code);
     AddString(event.get(), "message", message);
     ms_instance->QueueConnectionEvent(ToJson(event.get()));
-    ms_instance->m_connectionUiActive = false;
+    return true;
+}
+
+bool CServerBrowserWeb::NotifyConnectionPasswordRequired(const std::string& host, unsigned short port, bool rejected)
+{
+    if (!CanHandleConnectionUi() || host.empty() || !port)
+        return false;
+
+    ms_instance->m_connectionUiActive = true;
+    ms_instance->CancelHibernateRequest();
+
+    // A password can be rejected after the deathmatch module has already
+    // hidden the menu. Reopen the shell before that module unloads so the
+    // replacement prompt never falls through to CServerInfo underneath it.
+    if (!ms_instance->m_visible)
+        ms_instance->m_mainMenu.Show(true);
+    else
+        ms_instance->UpdateRenderingPauseState();
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "connect-password-required");
+    AddString(event.get(), "host", host);
+    AddInteger(event.get(), "port", port);
+
+    CServerListItem* server = ms_instance->m_registry ? ms_instance->m_registry->Find(host, port) : nullptr;
+    if (!server)
+        server = ms_instance->m_serverBrowser.FindServer(host, port);
+    if (server)
+    {
+        const SNeonServerMetadata* metadata = ms_instance->m_registry ? ms_instance->m_registry->FindMetadata(*server) : nullptr;
+        AddString(event.get(), "name", metadata ? metadata->name : server->strName);
+    }
+
+    ms_instance->QueueConnectionEvent(ToJson(event.get()));
+    if (rejected)
+        NotifyConnectionFailed("bad-password", _("Invalid password"));
     return true;
 }
 
@@ -1809,10 +3245,206 @@ bool CServerBrowserWeb::NotifyConnectionSucceeded()
     return true;
 }
 
+void CServerBrowserWeb::RelinquishConnectionUi()
+{
+    if (!ms_instance)
+        return;
+
+    if (CanHandleConnectionUi())
+    {
+        JsonPtr event = MakeObject();
+        AddString(event.get(), "type", "connect-dismissed");
+        ms_instance->QueueConnectionEvent(ToJson(event.get()));
+    }
+    ms_instance->m_connectionUiActive = false;
+    ms_instance->UpdateRenderingPauseState();
+}
+
+bool CServerBrowserWeb::CanDeferQuestionDialog()
+{
+    return ms_instance && !ms_instance->m_initialisationFailed;
+}
+
+bool CServerBrowserWeb::ShowQuestionDialog(const std::string& title, const std::string& message, const std::vector<std::string>& buttons)
+{
+    if (!ms_instance || !ms_instance->m_menuReady || ms_instance->m_nativeDialogVisible || ms_instance->m_messageDialogActive)
+        return false;
+
+    if (!ms_instance->m_questionDialogActive)
+    {
+        if (++ms_instance->m_messageDialogId == 0)
+            ++ms_instance->m_messageDialogId;
+        ms_instance->m_questionDialogActive = true;
+        ms_instance->m_questionDialogOpenedMenu = !ms_instance->m_visible;
+        ms_instance->m_questionDialogResponded = false;
+        ms_instance->CancelHibernateRequest();
+
+        if (ms_instance->m_questionDialogOpenedMenu)
+            ms_instance->m_mainMenu.Show(true);
+        else
+            ms_instance->UpdateRenderingPauseState();
+    }
+
+    ms_instance->m_questionDialogButtonCount = static_cast<unsigned int>(buttons.size());
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "dialog-show");
+    AddInteger(event.get(), "id", ms_instance->m_messageDialogId);
+    AddString(event.get(), "severity", "question");
+    AddString(event.get(), "title", title);
+    AddString(event.get(), "message", message);
+    AddBoolean(event.get(), "dismissible", false);
+
+    json_object* actions = json_object_new_array();
+    for (std::size_t index = 0; index < buttons.size(); ++index)
+    {
+        json_object* action = json_object_new_object();
+        AddString(action, "id", SString("button-%u", static_cast<unsigned int>(index)));
+        AddString(action, "label", buttons[index]);
+        AddString(action, "variant", index + 1 == buttons.size() ? "primary" : "default");
+        json_object_array_add(actions, action);
+    }
+    json_object_object_add(event.get(), "actions", actions);
+    if (!buttons.empty())
+        AddString(event.get(), "escapeAction", "button-0");
+
+    ms_instance->QueueEvent("menu", ToJson(event.get()));
+    return true;
+}
+
+bool CServerBrowserWeb::CloseQuestionDialog()
+{
+    if (!ms_instance || !ms_instance->m_questionDialogActive)
+        return false;
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "dialog-close");
+    AddInteger(event.get(), "id", ms_instance->m_messageDialogId);
+    ms_instance->QueueEvent("menu", ToJson(event.get()));
+
+    const bool restoreGameplay = ms_instance->m_questionDialogOpenedMenu && ms_instance->m_mainMenu.GetIsIngame();
+    ms_instance->m_questionDialogActive = false;
+    ms_instance->m_questionDialogOpenedMenu = false;
+    ms_instance->m_questionDialogResponded = false;
+    ms_instance->m_questionDialogButtonCount = 0;
+    if (restoreGameplay && !ms_instance->m_mainMenu.HasNativeInputOwner())
+        ms_instance->m_mainMenu.Hide();
+    else
+        ms_instance->UpdateRenderingPauseState();
+    return true;
+}
+
+bool CServerBrowserWeb::ShowMessageDialog(const std::string& title, const std::string& message, unsigned int flags)
+{
+    if (!ms_instance || !ms_instance->m_menuReady || ms_instance->m_nativeDialogVisible || ms_instance->m_questionDialogActive)
+        return false;
+
+    const bool important = (flags & (MB_ICON_ERROR | MB_ICON_WARNING)) != 0;
+    if (!ms_instance->m_visible && !important)
+        return false;
+
+    if (++ms_instance->m_messageDialogId == 0)
+        ++ms_instance->m_messageDialogId;
+
+    ms_instance->m_messageDialogActive = true;
+    ms_instance->m_messageDialogOpenedMenu = !ms_instance->m_visible;
+    ms_instance->CancelHibernateRequest();
+
+    // Lifecycle errors can be raised immediately before the deathmatch module
+    // unloads. Surface the web overlay at once; when the user closes it we only
+    // resume gameplay if that module is still active.
+    if (ms_instance->m_messageDialogOpenedMenu)
+        ms_instance->m_mainMenu.Show(true);
+    else
+        ms_instance->UpdateRenderingPauseState();
+
+    const char* severity = "info";
+    if (flags & MB_ICON_ERROR)
+        severity = "error";
+    else if (flags & MB_ICON_WARNING)
+        severity = "warning";
+    else if (flags & MB_ICON_QUESTION)
+        severity = "question";
+
+    const char* buttonLabel = nullptr;
+    const char* buttonAction = nullptr;
+    if (flags & MB_BUTTON_OK)
+    {
+        buttonLabel = _("OK");
+        buttonAction = "close";
+    }
+    else if (flags & MB_BUTTON_CANCEL)
+    {
+        buttonLabel = _("Cancel");
+        buttonAction = "cancel";
+    }
+    else if (flags & MB_BUTTON_YES)
+    {
+        buttonLabel = _("Yes");
+        buttonAction = "confirm";
+    }
+    else if (flags & MB_BUTTON_NO)
+    {
+        buttonLabel = _("No");
+        buttonAction = "cancel";
+    }
+
+    ms_instance->m_messageDialogAction = buttonAction ? buttonAction : "";
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "dialog-show");
+    AddInteger(event.get(), "id", ms_instance->m_messageDialogId);
+    AddString(event.get(), "severity", severity);
+    AddString(event.get(), "title", title);
+    AddString(event.get(), "message", message);
+    AddBoolean(event.get(), "dismissible", buttonLabel != nullptr);
+    if (buttonLabel)
+    {
+        json_object* actions = json_object_new_array();
+        json_object* action = json_object_new_object();
+        AddString(action, "id", buttonAction);
+        AddString(action, "label", buttonLabel);
+        AddString(action, "variant", "primary");
+        json_object_array_add(actions, action);
+        json_object_object_add(event.get(), "actions", actions);
+        if (strcmp(buttonAction, "close") == 0 || strcmp(buttonAction, "cancel") == 0)
+            AddString(event.get(), "escapeAction", buttonAction);
+    }
+    ms_instance->QueueEvent("menu", ToJson(event.get()));
+    return true;
+}
+
+bool CServerBrowserWeb::CloseMessageDialog()
+{
+    if (!ms_instance || !ms_instance->m_messageDialogActive)
+        return false;
+
+    JsonPtr event = MakeObject();
+    AddString(event.get(), "type", "dialog-close");
+    AddInteger(event.get(), "id", ms_instance->m_messageDialogId);
+    ms_instance->QueueEvent("menu", ToJson(event.get()));
+
+    const bool restoreGameplay = ms_instance->m_messageDialogOpenedMenu && ms_instance->m_mainMenu.GetIsIngame();
+    ms_instance->m_messageDialogActive = false;
+    ms_instance->m_messageDialogOpenedMenu = false;
+    ms_instance->m_messageDialogAction.clear();
+    // Native flows such as CQuestionBox::Show can display their own owner
+    // before removing the previous core message box. Keep the menu visible
+    // instead of hiding that replacement during the transition.
+    if (restoreGameplay && !ms_instance->m_mainMenu.HasNativeInputOwner())
+        ms_instance->m_mainMenu.Hide();
+    else
+        ms_instance->UpdateRenderingPauseState();
+    return true;
+}
+
 bool CServerBrowserWeb::RouteInputMessage(UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (!IsInputRoutedToWeb())
         return false;
+
+    if (CaptureSettingsInputMessage(message, wParam, lParam))
+        return true;
 
     CWebCoreInterface* webCore = g_pCore->GetWebCoreUnchecked();
     if (!webCore)
@@ -1821,6 +3453,21 @@ bool CServerBrowserWeb::RouteInputMessage(UINT message, WPARAM wParam, LPARAM lP
     // Focus is granted only by the CEGUI widget activation path. Input
     // routing must never steal it back from a native edit box or modal.
     webCore->ProcessInputMessage(message, wParam, lParam);
+    return true;
+}
+
+bool CServerBrowserWeb::CaptureSettingsInputMessage(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (!IsInputRoutedToWeb() || !ms_instance->m_settingsReady || !ms_instance->m_settings ||
+        !ms_instance->m_settings->ProcessCapturedInput(message, wParam, lParam))
+    {
+        return false;
+    }
+
+    // Binding capture must happen before the regular key pipeline. Apart from
+    // preventing Chromium navigation, this keeps the captured press out of
+    // onClientKey and the active GTA/command bind state.
+    ms_instance->QueueSettingsState(false);
     return true;
 }
 
@@ -1843,7 +3490,12 @@ bool CServerBrowserWeb::Initialise()
 
 void CServerBrowserWeb::DrawLoadingPlaceholder()
 {
-    if (!m_visible || m_visualReady || m_nativeDialogVisible || !m_loadingTexture || g_pCore->IsWindowMinimized())
+    // During the initial offline launch CEF is intentionally warmed before
+    // the menu becomes visible. Draw the native shell in that short window as
+    // well, otherwise CefInitialize blocks presentation on a black GTA frame
+    // even though the placeholder texture was already prepared.
+    const bool offlineStartup = !m_mainMenu.GetIsIngame() && !m_visualReady;
+    if ((!m_visible && !offlineStartup) || m_visualReady || m_nativeDialogVisible || !m_loadingTexture || g_pCore->IsWindowMinimized())
         return;
 
     CGraphicsInterface* graphics = g_pCore->GetGraphics();
@@ -2016,7 +3668,8 @@ void CServerBrowserWeb::UpdateRenderingPauseState()
 
 bool CServerBrowserWeb::CanHibernate() const
 {
-    return m_webView && m_documentReady && m_visualReady && !m_visible && !m_nativeDialogVisible && !m_connectionUiActive && m_mainMenu.GetIsIngame();
+    return m_webView && m_documentReady && m_visualReady && !m_visible && !m_nativeDialogVisible && !m_connectionUiActive && !m_messageDialogActive &&
+           !m_questionDialogActive && m_mainMenu.GetIsIngame();
 }
 
 void CServerBrowserWeb::CancelHibernateRequest()
@@ -2081,11 +3734,15 @@ bool CServerBrowserWeb::DoPulse()
     if (m_settingsReady && ++m_settingsUpdatePulses >= 30)
     {
         m_settingsUpdatePulses = 0;
-        QueueSettingsState(false);
+        // Managed overrides can change at runtime, but rebuilding the full
+        // settings JSON and resolution list every half-second is unnecessary.
+        // Axis capture is the one other asynchronous settings operation.
+        if (m_settings->UpdateInputCapture() || m_settings->RefreshManagedValues())
+            QueueSettingsState(false);
     }
     UpdateRenderingPauseState();
 
-    if (m_serverBrowserReady && m_registry)
+    if (m_serverBrowserReady && m_serverBrowserActive && m_registry)
     {
         m_registry->DoPulse();
         if (m_registry->ConsumeChanged())
@@ -2095,6 +3752,7 @@ bool CServerBrowserWeb::DoPulse()
             QueueListReset();
             m_refreshing = true;
             m_sentRefreshFinished = false;
+            m_hasSentRefreshProgress = false;
             SendSnapshot(true);
         }
 
@@ -2117,7 +3775,7 @@ bool CServerBrowserWeb::DoPulse()
     }
 
     CServerList* list = GetCurrentList();
-    if (m_visible && m_serverBrowserReady && list)
+    if (m_visible && m_serverBrowserReady && m_serverBrowserActive && list)
     {
         list->Pulse();
         SendSnapshot(false);
@@ -2126,12 +3784,21 @@ bool CServerBrowserWeb::DoPulse()
         {
             const unsigned int scanned = list->GetScannedCount();
             const unsigned int total = list->GetServerCount();
-            JsonPtr            progress = MakeObject();
-            AddString(progress.get(), "type", "progress");
-            AddString(progress.get(), "source", GetSourceName(m_source));
-            AddInteger(progress.get(), "scanned", scanned);
-            AddInteger(progress.get(), "total", total);
-            QueueEvent("server", ToJson(progress.get()));
+            // ASE can stay in the refreshing state for many frames while
+            // waiting for a reply. Publishing only changed counters avoids
+            // waking and repainting the whole web UI on every client pulse.
+            if (!m_hasSentRefreshProgress || scanned != m_lastRefreshScanned || total != m_lastRefreshTotal)
+            {
+                JsonPtr progress = MakeObject();
+                AddString(progress.get(), "type", "progress");
+                AddString(progress.get(), "source", GetSourceName(m_source));
+                AddInteger(progress.get(), "scanned", scanned);
+                AddInteger(progress.get(), "total", total);
+                QueueEvent("server", ToJson(progress.get()));
+                m_hasSentRefreshProgress = true;
+                m_lastRefreshScanned = scanned;
+                m_lastRefreshTotal = total;
+            }
 
             if (!list->IsRefreshing() && !m_sentRefreshFinished)
             {
@@ -2167,8 +3834,13 @@ void CServerBrowserWeb::Events_OnCreated()
 {
 }
 
-void CServerBrowserWeb::Events_OnLoadingStart(const SString&, bool)
+void CServerBrowserWeb::Events_OnLoadingStart(const SString&, bool mainFrame)
 {
+    if (mainFrame)
+    {
+        m_documentReady = false;
+        m_menuReady = false;
+    }
 }
 
 void CServerBrowserWeb::Events_OnDocumentReady(const SString& url)
@@ -2182,6 +3854,13 @@ void CServerBrowserWeb::Events_OnDocumentReady(const SString& url)
 void CServerBrowserWeb::Events_OnLoadingFailed(const SString& url, int errorCode, const SString& errorDescription)
 {
     WriteDebugEvent(SString("Neon menu failed to load %s (%d): %s", url.c_str(), errorCode, errorDescription.c_str()));
+
+    // Startup question boxes wait for React to install the menu bridge so an
+    // updater prompt cannot briefly replace the Neon shell with CEGUI. Stop
+    // waiting when the shell document itself fails, allowing CQuestionBox to
+    // use its native fallback instead of leaving the user without a dialog.
+    if (url.BeginsWith("http://mta/local/index.html"))
+        m_initialisationFailed = true;
 }
 
 void CServerBrowserWeb::Events_OnNavigate(const SString&, bool, bool)
@@ -2279,6 +3958,10 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
 {
     if (eventName == "menu:ready")
     {
+        // DocumentReady fires before React effects install __neonMenu. This
+        // explicit handshake prevents lifecycle dialogs from being accepted
+        // and then discarded into a receiver that does not exist yet.
+        m_menuReady = true;
         QueueMenuInit();
         QueueIdentity(true);
         if (m_registry)
@@ -2306,6 +3989,31 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
             // complete client pulse alive after the acknowledgement so CEF can
             // publish the confirmed frame before its external clock stops.
             m_hibernatePauseDelayPulses = 2;
+        }
+    }
+    else if (eventName == "menu:dialogAction" && arguments.size() == 2)
+    {
+        const char* text = arguments[0].c_str();
+        char*       end = nullptr;
+        errno = 0;
+        const unsigned long dialogId = std::strtoul(text, &end, 10);
+        if (errno == 0 && end != text && *end == '\0' && dialogId == m_messageDialogId)
+        {
+            if (m_messageDialogActive && arguments[1] == m_messageDialogAction)
+                g_pCore->RespondToWebMessageBox();
+            else if (m_questionDialogActive && !m_questionDialogResponded && arguments[1].rfind("button-", 0) == 0)
+            {
+                const char* buttonText = arguments[1].c_str() + 7;
+                char*       buttonEnd = nullptr;
+                errno = 0;
+                const unsigned long button = std::strtoul(buttonText, &buttonEnd, 10);
+                if (errno == 0 && buttonEnd != buttonText && *buttonEnd == '\0' && button < m_questionDialogButtonCount)
+                {
+                    m_questionDialogResponded = true;
+                    if (CQuestionBox* questionBox = m_mainMenu.GetQuestionWindow())
+                        questionBox->RespondToWeb(static_cast<unsigned int>(button));
+                }
+            }
         }
     }
     else if (eventName == "menu:quickConnect")
@@ -2392,10 +4100,16 @@ void CServerBrowserWeb::HandleSettingsEvent(const SString& eventName, const std:
     }
     else if (eventName == "settings:set" && arguments.size() == 2 && m_settingsReady)
     {
-        if (m_settings->SetValue(arguments[0], arguments[1]))
-            QueueSettingsState(false);
+        m_settings->SetValue(arguments[0], arguments[1]);
+        // Always acknowledge with authoritative native state. React updates
+        // optimistically for responsive sliders; rejected/stale edits must be
+        // snapped back instead of remaining dirty only in the web process.
+        QueueSettingsState(false);
     }
-    else if (eventName == "settings:resetSection" && arguments.size() == 1 && (arguments[0] == "neon" || arguments[0] == "graphics") && m_settingsReady)
+    else if (eventName == "settings:resetSection" && arguments.size() == 1 &&
+             (arguments[0] == "game" || arguments[0] == "graphics" || arguments[0] == "audio" || arguments[0] == "controls" || arguments[0] == "interface" ||
+              arguments[0] == "neon" || arguments[0] == "advanced") &&
+             m_settingsReady)
     {
         m_settings->Reset(arguments[0]);
         QueueSettingsState(false);
@@ -2452,6 +4166,7 @@ void CServerBrowserWeb::HandleServerBrowserEvent(const SString& eventName, const
     if (eventName == "sb:ready")
     {
         m_serverBrowserReady = true;
+        m_serverBrowserActive = true;
         if (m_registry)
             m_registry->Start(true);
         JsonPtr init = MakeObject();
@@ -2462,6 +4177,15 @@ void CServerBrowserWeb::HandleServerBrowserEvent(const SString& eventName, const
         QueueFavourites();
         // App::init selects and refreshes the source immediately afterwards.
         // Waiting for it avoids an eager duplicate snapshot and scan.
+    }
+    else if (eventName == "sb:resume")
+        m_serverBrowserActive = true;
+    else if (eventName == "sb:suspend")
+    {
+        // The backend singleton survives route changes. Stop feeding its
+        // hidden store so Settings does not compete with an ASE scan.
+        m_serverBrowserActive = false;
+        m_serverEvents.clear();
     }
     else if (eventName == "sb:setSource" && arguments.size() == 1)
         SelectSource(arguments[0], false);
@@ -2690,11 +4414,88 @@ void CServerBrowserWeb::QueueSettingsState(bool initial)
     if (!m_settingsReady || !m_settings || !m_settings->IsActive())
         return;
 
+    m_settings->UpdateInputCapture();
     m_settings->RefreshManagedValues();
     const CWebSettingsSession::SState& state = m_settings->GetState();
 
     JsonPtr      event = MakeObject();
     json_object* values = json_object_new_object();
+    AddString(values, "game.nickname", state.gameNickname);
+    AddBoolean(values, "game.savePasswords", state.gameSavePasswords);
+    AddBoolean(values, "game.autoRefreshBrowser", state.gameAutoRefreshBrowser);
+    AddBoolean(values, "game.allowScreenUpload", state.gameAllowScreenUpload);
+    AddBoolean(values, "game.allowExternalSounds", state.gameAllowExternalSounds);
+    AddBoolean(values, "game.alwaysShowTransferBox", state.gameAlwaysShowTransferBox);
+    AddBoolean(values, "game.discordRichPresence", state.gameDiscordRichPresence);
+    AddBoolean(values, "game.discordShareData", state.gameDiscordShareData);
+    AddBoolean(values, "game.steamStatus", state.gameSteamStatus);
+    AddBoolean(values, "game.saveCameraPhotos", state.gameSaveCameraPhotos);
+    AddBoolean(values, "game.askBeforeDisconnect", state.gameAskBeforeDisconnect);
+    AddBoolean(values, "game.customizedSAFiles", state.gameCustomizedSAFiles);
+    AddInteger(values, "game.mapOpacity", state.gameMapOpacity);
+    AddInteger(values, "game.mapImage", state.gameMapImage);
+    AddInteger(values, "audio.masterVolume", state.audioMasterVolume);
+    AddInteger(values, "audio.radioVolume", state.audioRadioVolume);
+    AddInteger(values, "audio.sfxVolume", state.audioSfxVolume);
+    AddInteger(values, "audio.mtaVolume", state.audioMtaVolume);
+    AddInteger(values, "audio.voiceVolume", state.audioVoiceVolume);
+    AddBoolean(values, "audio.radioEqualizer", state.audioRadioEqualizer);
+    AddBoolean(values, "audio.radioAutotune", state.audioRadioAutotune);
+    AddBoolean(values, "audio.userTrackAutoScan", state.audioUserTrackAutoScan);
+    AddInteger(values, "audio.userTrackMode", state.audioUserTrackMode);
+    AddBoolean(values, "audio.muteMaster", state.audioMuteMaster);
+    AddBoolean(values, "audio.muteRadio", state.audioMuteRadio);
+    AddBoolean(values, "audio.muteSfx", state.audioMuteSfx);
+    AddBoolean(values, "audio.muteMta", state.audioMuteMta);
+    AddBoolean(values, "audio.muteVoice", state.audioMuteVoice);
+    AddBoolean(values, "controls.invertMouse", state.controlsInvertMouse);
+    AddBoolean(values, "controls.steerWithMouse", state.controlsSteerWithMouse);
+    AddBoolean(values, "controls.flyWithMouse", state.controlsFlyWithMouse);
+    AddInteger(values, "controls.mouseSensitivity", state.controlsMouseSensitivity);
+    AddInteger(values, "controls.verticalAimSensitivity", state.controlsVerticalAimSensitivity);
+    AddBoolean(values, "controls.useMouseSensitivityForAiming", state.controlsUseMouseSensitivityForAiming);
+    AddBoolean(values, "controls.classicControls", state.controlsClassic);
+    AddInteger(values, "controls.joypadDeadZone", state.controlsJoypadDeadZone);
+    AddInteger(values, "controls.joypadSaturation", state.controlsJoypadSaturation);
+    AddString(values, "interface.locale", state.interfaceLocale);
+    AddString(values, "interface.skin", state.interfaceSkin);
+    AddDouble(values, "interface.chatBackgroundColor", state.interfaceChatBackgroundColor);
+    AddDouble(values, "interface.chatTextColor", state.interfaceChatTextColor);
+    AddDouble(values, "interface.chatInputBackgroundColor", state.interfaceChatInputBackgroundColor);
+    AddDouble(values, "interface.chatInputTextColor", state.interfaceChatInputTextColor);
+    AddInteger(values, "interface.chatFont", state.interfaceChatFont);
+    AddInteger(values, "interface.chatLines", state.interfaceChatLines);
+    AddDouble(values, "interface.chatScaleX", state.interfaceChatScaleX);
+    AddDouble(values, "interface.chatScaleY", state.interfaceChatScaleY);
+    AddDouble(values, "interface.chatWidth", state.interfaceChatWidth);
+    AddBoolean(values, "interface.chatCssText", state.interfaceChatCssText);
+    AddBoolean(values, "interface.chatCssBackground", state.interfaceChatCssBackground);
+    AddBoolean(values, "interface.chatNickCompletion", state.interfaceChatNickCompletion);
+    AddBoolean(values, "interface.chatTextOutline", state.interfaceChatTextOutline);
+    AddDouble(values, "interface.chatLineLife", state.interfaceChatLineLife);
+    AddDouble(values, "interface.chatLineFadeOut", state.interfaceChatLineFadeOut);
+    AddInteger(values, "interface.chatPositionHorizontal", state.interfaceChatPositionHorizontal);
+    AddInteger(values, "interface.chatPositionVertical", state.interfaceChatPositionVertical);
+    AddInteger(values, "interface.chatTextAlignment", state.interfaceChatTextAlignment);
+    AddDouble(values, "interface.chatOffsetX", state.interfaceChatOffsetX);
+    AddDouble(values, "interface.chatOffsetY", state.interfaceChatOffsetY);
+    AddBoolean(values, "interface.flashWindow", state.interfaceFlashWindow);
+    AddBoolean(values, "interface.trayNotifications", state.interfaceTrayNotifications);
+    AddBoolean(values, "browser.remoteWebsites", state.browserRemoteWebsites);
+    AddBoolean(values, "browser.remoteJavascript", state.browserRemoteJavascript);
+    AddBoolean(values, "browser.gpuRendering", state.browserGpuRendering);
+    AddBoolean(values, "browser.videoAcceleration", state.browserVideoAcceleration);
+    AddInteger(values, "advanced.fastClothesLoading", state.advancedFastClothesLoading);
+    AddInteger(values, "advanced.browserSpeed", state.advancedBrowserSpeed);
+    AddInteger(values, "advanced.singleConnection", state.advancedSingleConnection);
+    AddInteger(values, "advanced.packetTag", state.advancedPacketTag);
+    AddInteger(values, "advanced.progressAnimation", state.advancedProgressAnimation);
+    AddInteger(values, "advanced.processPriority", state.advancedProcessPriority);
+    AddInteger(values, "advanced.debugSetting", state.advancedDebugSetting);
+    AddInteger(values, "advanced.streamingMemory", state.advancedStreamingMemory);
+    AddBoolean(values, "advanced.cpuAffinity", state.advancedCpuAffinity);
+    AddInteger(values, "advanced.updateBuildType", state.advancedUpdateBuildType);
+    AddInteger(values, "advanced.updateAutoInstall", state.advancedUpdateAutoInstall);
     AddBoolean(values, "extendedWorld.enabled", state.extendedWorldEnabled);
     AddInteger(values, "extendedWorld.distance", state.extendedWorldDistance);
     AddBoolean(values, "distantLights.enabled", state.distantLightsEnabled);
@@ -2762,6 +4563,11 @@ void CServerBrowserWeb::QueueSettingsState(bool initial)
     AddInteger(availability, "maxAnisotropic", m_settings->GetMaxAnisotropic());
     AddBoolean(availability, "multiMonitor", m_settings->IsMultiMonitor());
     AddBoolean(availability, "unsafeResolutions", m_settings->HasUnsafeResolutions());
+    AddBoolean(availability, "customizedSAFiles", CWebSettingsSession::HasCustomizedSAFilesOption());
+    AddBoolean(availability, "connected", g_pCore->IsConnected());
+    AddInteger(availability, "streamingMemoryMin", g_pCore->GetMinStreamingMemory());
+    AddInteger(availability, "streamingMemoryMax", g_pCore->GetMaxStreamingMemory());
+    AddString(availability, "resourceCachePath", GetCommonRegistryValue("", "File Cache Path"));
     json_object_object_add(event.get(), "availability", availability);
     json_object* resolutions = json_object_new_array();
     for (const CWebSettingsSession::SResolution& resolution : m_settings->GetResolutions())
@@ -2775,9 +4581,89 @@ void CServerBrowserWeb::QueueSettingsState(bool initial)
         json_object_array_add(resolutions, value);
     }
     json_object_object_add(event.get(), "resolutions", resolutions);
+
+    json_object* locales = json_object_new_array();
+    for (const std::string& locale : m_settings->GetLocales())
+    {
+        json_object* value = json_object_new_object();
+        AddString(value, "code", locale);
+        AddString(value, "label", g_pLocalization->GetLanguageNativeName(locale));
+        json_object_array_add(locales, value);
+    }
+    json_object_object_add(event.get(), "locales", locales);
+
+    json_object* chatPresets = json_object_new_array();
+    for (const CWebSettingsSession::SChatPreset& preset : m_settings->GetChatPresets())
+    {
+        json_object* value = json_object_new_object();
+        AddString(value, "id", preset.id);
+        AddString(value, "name", preset.name);
+        json_object_array_add(chatPresets, value);
+    }
+    json_object_object_add(event.get(), "chatPresets", chatPresets);
+
+    json_object* skins = json_object_new_array();
+    for (const std::string& skin : m_settings->GetSkins())
+        json_object_array_add(skins, json_object_new_string(skin.c_str()));
+    json_object_object_add(event.get(), "skins", skins);
+
+    const auto addStringArray = [](json_object* owner, const char* name, const std::vector<std::string>& entries)
+    {
+        json_object* array = json_object_new_array();
+        for (const std::string& entry : entries)
+            json_object_array_add(array, json_object_new_string(entry.c_str()));
+        json_object_object_add(owner, name, array);
+    };
+    addStringArray(event.get(), "browserBlacklist", state.browserBlacklist);
+    addStringArray(event.get(), "browserWhitelist", state.browserWhitelist);
+
+    json_object* binds = json_object_new_array();
+    for (const CWebSettingsSession::SBindRow& bind : state.binds)
+    {
+        json_object* value = json_object_new_object();
+        AddString(value, "id", bind.id);
+        AddString(value, "section", bind.section);
+        AddString(value, "label", bind.label);
+        addStringArray(value, "keys", bind.keys);
+        json_object_array_add(binds, value);
+    }
+    json_object_object_add(event.get(), "binds", binds);
+
+    CJoystickManagerInterface* joystick = GetJoystickManager();
+    json_object*               joypad = json_object_new_object();
+    const bool                 joypadConnected = joystick && joystick->IsJoypadConnected();
+    AddBoolean(joypad, "connected", joypadConnected);
+    AddString(joypad, "name", joypadConnected ? joystick->GetControllerName() : "No joypad detected");
+    AddInteger(joypad, "capturingAxis", m_settings->GetCapturedAxis());
+    json_object* axes = json_object_new_array();
+    if (joystick)
+    {
+        for (int index = 0; index < joystick->GetOutputCount(); ++index)
+        {
+            json_object* axis = json_object_new_object();
+            AddInteger(axis, "index", index);
+            AddString(axis, "output", joystick->GetOutputName(index));
+            AddString(axis, "input", joystick->GetOutputInputName(index));
+            json_object_array_add(axes, axis);
+        }
+    }
+    json_object_object_add(joypad, "axes", axes);
+    json_object_object_add(event.get(), "joypad", joypad);
+
+    if (m_settings->GetCapturedBindId().empty())
+        json_object_object_add(event.get(), "capture", json_object_new_null());
+    else
+    {
+        json_object* capture = json_object_new_object();
+        AddString(capture, "bindId", m_settings->GetCapturedBindId());
+        AddInteger(capture, "slot", m_settings->GetCapturedBindSlot());
+        json_object_object_add(event.get(), "capture", capture);
+    }
+    AddString(event.get(), "error", m_settings->GetError());
     AddString(event.get(), "skyGfxStatus", m_settings->GetSkyGfxStatus());
     AddBoolean(event.get(), "dirty", m_settings->IsDirty());
     AddBoolean(event.get(), "restartRequired", m_settings->RequiresRestart());
+    AddBoolean(event.get(), "disconnectRequired", m_settings->RequiresDisconnect());
 
     const std::string signature = ToJson(event.get());
     if (!initial && signature == m_lastSettingsState)
@@ -2872,6 +4758,7 @@ void CServerBrowserWeb::RefreshCurrentSource()
     list->Refresh();
     m_refreshing = true;
     m_sentRefreshFinished = false;
+    m_hasSentRefreshProgress = false;
     SendSnapshot(true);
 }
 
@@ -2927,25 +4814,25 @@ void CServerBrowserWeb::Connect(const std::string& host, unsigned short port, co
     if (!port)
         return;
 
+    // Claim the connection UI before any early modal path. Passworded servers
+    // can ask for credentials without starting a network attempt, and that
+    // prompt must still remain owned by the web server browser.
+    m_connectionUiActive = true;
+    CancelHibernateRequest();
+    UpdateRenderingPauseState();
+
     CServerListItem* server = m_registry ? m_registry->Find(host, port) : nullptr;
     if (!server)
         server = m_serverBrowser.FindServer(host, port);
     if (server && server->bPassworded && password.empty())
     {
-        JsonPtr event = MakeObject();
-        AddString(event.get(), "type", "connect-password-required");
-        AddString(event.get(), "host", host);
-        AddInteger(event.get(), "port", port);
-        const SNeonServerMetadata* metadata = m_registry ? m_registry->FindMetadata(*server) : nullptr;
-        AddString(event.get(), "name", metadata ? metadata->name : server->strName);
-        QueueConnectionEvent(ToJson(event.get()));
+        NotifyConnectionPasswordRequired(host, port, false);
         return;
     }
 
     // Publish the target before native validation begins. This gives the
     // always-mounted shell enough context to present even an immediate local
     // failure (for example an invalid nickname or unavailable network module).
-    m_connectionUiActive = true;
     NotifyConnectionStarted(host, port);
 
     std::string nick;

@@ -134,10 +134,10 @@ a:focus-visible {
   height: 100%;
   object-fit: cover;
   object-position: center;
-  opacity: 0.86;
+  opacity: 0.88;
   filter: saturate(0.82) contrast(1.05) brightness(0.68);
   transform: scale(1.02);
-  animation: sa-scene-enter 700ms ease-out both;
+  animation: browser-scene-enter 700ms ease-out backwards;
 }
 
 .browser-wash {
@@ -153,7 +153,7 @@ a:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 30px;
-  animation: sa-content-enter 420ms ease-out both;
+  animation: browser-content-enter 420ms ease-out backwards;
 }
 
 .header__identity {
@@ -258,7 +258,7 @@ a:focus-visible {
   grid-template-columns: minmax(0, 1.72fr) minmax(340px, 0.82fr);
   grid-template-rows: auto 1fr;
   gap: clamp(12px, 1.5vh, 16px) clamp(20px, 2vw, 32px);
-  animation: sa-content-enter 460ms 60ms ease-out both;
+  animation: browser-content-enter 460ms 60ms ease-out backwards;
 }
 
 .toolbar {
@@ -442,11 +442,27 @@ a:focus-visible {
   min-height: 0;
   overflow-y: auto;
   padding-right: 8px;
+  /* Keep the moving virtualized rows on an opaque plane so their translucent
+   * card styling never has to blend against the full-screen artwork. */
+  background: #050708;
+  contain: layout paint;
   scrollbar-gutter: stable;
 }
 
 .server-list__spacer {
   position: relative;
+}
+
+.server-list--flow {
+  will-change: scroll-position;
+}
+
+.server-list__flow-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .server-row {
@@ -469,6 +485,13 @@ a:focus-visible {
   transition: border-color 110ms linear, background 110ms linear, box-shadow 110ms ease-out, transform 110ms ease-out;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.server-row--flow {
+  position: relative;
+  left: auto;
+  right: auto;
+  flex: 0 0 118px;
 }
 
 .server-row::before {
@@ -788,6 +811,8 @@ a:focus-visible {
   min-height: 0;
   overflow-y: auto;
   padding: 22px 24px 18px;
+  background: #080b0d;
+  contain: layout paint;
 }
 
 .details__banner {
@@ -1428,6 +1453,13 @@ a:focus-visible {
     rgba(0, 0, 0, 0.64);
 }
 
+.overlay--system {
+  z-index: 110;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.97), rgba(5, 7, 7, 0.82) 50%, rgba(0, 0, 0, 0.94)),
+    rgba(0, 0, 0, 0.72);
+}
+
 .modal {
   width: min(440px, 100%);
   padding: 28px 30px;
@@ -1447,7 +1479,7 @@ a:focus-visible {
     linear-gradient(135deg, rgba(25, 25, 20, 0.5), transparent 46%),
     rgba(3, 4, 3, 0.96);
   box-shadow: 18px 18px 0 rgba(0, 0, 0, 0.58), 0 0 70px rgba(0, 0, 0, 0.58);
-  animation: sa-content-enter 220ms ease-out both;
+  animation: browser-content-enter 220ms ease-out backwards;
 }
 
 .modal--connection::after {
@@ -1462,6 +1494,38 @@ a:focus-visible {
 
 .modal--failed {
   border-left-color: var(--danger);
+}
+
+.modal--system {
+  width: min(620px, 100%);
+  max-height: min(78vh, 680px);
+  overflow: auto;
+  padding: 36px 40px 32px;
+  border: 1px solid rgba(228, 210, 159, 0.24);
+  border-left: 4px solid var(--cream);
+  background: rgba(3, 5, 5, 0.98);
+  box-shadow: 18px 18px 0 rgba(0, 0, 0, 0.58);
+  animation: browser-content-enter 180ms ease-out backwards;
+}
+
+.modal--system.modal--error,
+.modal--system.modal--warning {
+  border-left-color: var(--danger);
+}
+
+.modal--system .modal__title {
+  color: var(--blue);
+  font-size: clamp(25px, 2vw, 32px);
+  line-height: 1.15;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.modal__message {
+  max-height: 42vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .modal__kicker {
@@ -1659,12 +1723,12 @@ a:focus-visible {
   to { opacity: 1; }
 }
 
-@keyframes sa-content-enter {
+@keyframes browser-content-enter {
   from { opacity: 0; transform: translateX(-18px); }
   to { opacity: 1; transform: translateX(0); }
 }
 
-@keyframes sa-scene-enter {
+@keyframes browser-scene-enter {
   from { opacity: 0; transform: scale(1.06); }
   to { opacity: 0.88; transform: scale(1.02); }
 }

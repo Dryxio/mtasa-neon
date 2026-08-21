@@ -99,8 +99,13 @@ backend.subscribe((event) => {
     }
     case 'refresh-progress':
       if (event.source === state.source) {
-        setState({ progress: { scanned: event.scanned, total: event.total } })
-        void refreshStats()
+        const progress = state.progress
+        // The native browser pulses much faster than ASE results change. Do
+        // not repaint the whole UI for duplicate progress snapshots.
+        if (!progress || progress.scanned !== event.scanned || progress.total !== event.total) {
+          setState({ progress: { scanned: event.scanned, total: event.total } })
+          void refreshStats()
+        }
       }
       break
     case 'refresh-finished':
@@ -164,10 +169,23 @@ const refreshedSources = new Set<ServerSource>()
 
 async function refreshStats(): Promise<void> {
   const stats = await backend.getNetworkStats()
+  if (
+    stats.playersOnline === state.stats.playersOnline
+    && stats.peakPlayers === state.stats.peakPlayers
+    && stats.serverCount === state.stats.serverCount
+  ) return
   setState({ stats })
 }
 
 export const actions = {
+  resume(): void {
+    backend.resume?.()
+  },
+
+  suspend(): void {
+    backend.suspend?.()
+  },
+
   async init(): Promise<void> {
     await refreshStats()
     await actions.setSource('internet')

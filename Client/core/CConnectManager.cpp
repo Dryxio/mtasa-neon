@@ -462,13 +462,13 @@ void CConnectManager::DoPulse()
                         strWebErrorCode = "banned";
                         break;
                     case RID_NO_FREE_INCOMING_CONNECTIONS:
+                        // The mature queue dialog polls every 2.5 seconds and
+                        // can auto-join when a slot opens. A one-shot web Retry
+                        // button is not equivalent, so hand this case back to
+                        // CServerInfo until that complete workflow is ported.
                         if (UsesWebConnectionUi())
-                        {
-                            strError = _("Server is full");
-                            strWebErrorCode = "server-full";
-                        }
-                        else
-                            CServerInfo::GetSingletonPtr()->Show(eWindowTypes::SERVER_INFO_QUEUE, m_strHost.c_str(), m_usPort, m_strPassword.c_str());
+                            CServerBrowserWeb::RelinquishConnectionUi();
+                        CServerInfo::GetSingletonPtr()->Show(eWindowTypes::SERVER_INFO_QUEUE, m_strHost.c_str(), m_usPort, m_strPassword.c_str());
                         break;
                     case RID_DISCONNECTION_NOTIFICATION:
                         strError = _("Disconnected: disconnected from the server");

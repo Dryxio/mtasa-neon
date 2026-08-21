@@ -25,6 +25,8 @@
 #include <SString.h>
 #include <audiopolicy.h>
 #include <functional>
+#include <atomic>
+#include <deque>
 #include <memory>
 #include <mmdeviceapi.h>
 #include <mutex>
@@ -59,7 +61,7 @@ class CWebView : public CWebViewInterface,
     friend bool WebViewAuth::HandleInputFocus(CWebView*, CefRefPtr<CefListValue>, const bool);
 
 public:
-    CWebView(bool bIsLocal, CWebBrowserItem* pWebBrowserRenderItem, bool bTransparent = false);
+    CWebView(bool bIsLocal, CWebBrowserItem* pWebBrowserRenderItem, bool bTransparent = false, bool bFrameStatsEnabled = false);
     virtual ~CWebView();
     void                  Initialise();
     void                  SetWebBrowserEvents(CWebBrowserEventsInterface* pInterface);
@@ -84,6 +86,12 @@ public:
     void               ClearTexture();
 
     void UpdateTexture();
+    void RecordExternalBeginFrame();
+    void ArmInteractionRefreshFrames(int frameCount);
+    bool HasInteractionRefreshFrames() const;
+    bool ConsumeInteractionRefreshFrame();
+    void RecordInteractionInvalidate();
+    void LogFrameStatsIfDue(int targetFrameRate, bool externalScheduling);
 
     bool                        HasInputFocus() { return m_bHasInputFocus; }
     void                        SetInputFocus(bool bFocus) { m_bHasInputFocus = bFocus; }  // Setter for IPC handlers
@@ -144,6 +152,8 @@ public:
     virtual void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
     virtual void OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType paintType, const CefRenderHandler::RectList& dirtyRects,
                          const void* buffer, int width, int height) override;
+    virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType paintType, const CefRenderHandler::RectList& dirtyRects,
+                                    const CefAcceleratedPaintInfo& info) override;
 
     // CefLoadHandler methods
     virtual void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transitionType) override;
@@ -208,6 +218,8 @@ public:
 
 private:
     void ApplyRenderingPaused(bool bPaused, bool preserveLastFrame);
+    void FlushPendingMouseMove();
+    void ConsumeAcceleratedPaint();
     void QueueBrowserEvent(const char* name, std::function<void(CWebBrowserEventsInterface*)>&& fn);
 
     struct FEventTarget
@@ -286,22 +298,81 @@ private:
     bool                                  m_bHasInputFocus;
     std::set<std::string>                 m_AjaxHandlers;
     std::shared_ptr<FEventTarget>         m_pEventTarget;
+    bool                                  m_bFrameStatsEnabled = false;
+    std::atomic<int>                      m_iInteractionRefreshFrames{0};
 
     struct
     {
-        bool       changed = false;
-        std::mutex dataMutex;
+        std::atomic<uint64_t>                 beginFrames{0};
+        std::atomic<uint64_t>                 interactionInvalidates{0};
+        std::atomic<uint64_t>                 paints{0};
+        std::atomic<uint64_t>                 acceleratedPaints{0};
+        std::atomic<uint64_t>                 acceleratedFailures{0};
+        std::atomic<uint64_t>                 acceleratedDroppedFrames{0};
+        std::atomic<uint64_t>                 acceleratedSubmitNanoseconds{0};
+        std::atomic<uint64_t>                 acceleratedReadbacks{0};
+        std::atomic<uint64_t>                 acceleratedReadbackNanoseconds{0};
+        std::atomic<uint64_t>                 uploads{0};
+        std::atomic<uint64_t>                 supersededPaints{0};
+        std::atomic<uint64_t>                 dirtyPixels{0};
+        std::atomic<uint64_t>                 paintBytes{0};
+        std::atomic<uint64_t>                 paintCopyNanoseconds{0};
+        std::atomic<uint64_t>                 paintMutexWaitNanoseconds{0};
+        std::atomic<uint64_t>                 paintMutexWaitSamples{0};
+        std::atomic<uint64_t>                 uploadNanoseconds{0};
+        std::atomic<uint64_t>                 uploadMutexWaitNanoseconds{0};
+        std::atomic<uint64_t>                 uploadMutexWaitSamples{0};
+        std::atomic<uint64_t>                 paintIntervalNanoseconds{0};
+        std::atomic<uint64_t>                 paintIntervalSamples{0};
+        std::atomic<uint64_t>                 maxPaintIntervalNanoseconds{0};
+        std::atomic<uint64_t>                 uploadAgeNanoseconds{0};
+        std::atomic<uint64_t>                 uploadAgeSamples{0};
+        std::atomic<uint64_t>                 maxUploadAgeNanoseconds{0};
+        std::atomic<uint64_t>                 lastPaintTimestampNanoseconds{0};
+        std::chrono::steady_clock::time_point lastReportTime = std::chrono::steady_clock::now();
+    } m_FrameStats;
 
-        // Main frame buffer - we now own this buffer (copied in OnPaint)
-        std::unique_ptr<byte[]> buffer;
-        size_t                  bufferSize = 0;
-        int                     width = 0;
-        int                     height = 0;
+    struct
+    {
+        struct FMainFrame
+        {
+            std::unique_ptr<byte[]> buffer;
+            size_t                  bufferSize = 0;
+            int                     width = 0;
+            int                     height = 0;
+            uint64_t                paintCompletedNanoseconds = 0;
+            uint64_t                generation = 0;
+        };
+
+        struct FDirtyFrame
+        {
+            uint64_t             generation = 0;
+            std::vector<CefRect> rects;
+        };
+
+        // CEF writes into paintFrame without holding dataMutex. Publishing is a
+        // short pointer swap, so the game thread never waits for an 8 MiB memcpy.
+        std::mutex              paintMutex;
+        std::mutex              dataMutex;
+        FMainFrame              paintFrame;
+        FMainFrame              pendingFrame;
+        FMainFrame              uploadFrame;
+        bool                    pendingChanged = false;
+        bool                    forceFullUpload = false;
+        uint64_t                latestPaintGeneration = 0;
+        int                     dirtyHistoryWidth = 0;
+        int                     dirtyHistoryHeight = 0;
+        std::deque<FDirtyFrame> dirtyHistory;
 
         CefRect                 popupRect;
         bool                    popupShown = false;
+        bool                    popupChanged = false;
         std::unique_ptr<byte[]> popupBuffer;
     } m_RenderData;
+
+    struct FAcceleratedPaintBackend;
+    std::unique_ptr<FAcceleratedPaintBackend> m_pAcceleratedPaintBackend;
+    std::atomic_bool                          m_bHasPendingAcceleratedPaint = false;
 
     CWebBrowserEventsInterface* m_pEventsInterface;
 

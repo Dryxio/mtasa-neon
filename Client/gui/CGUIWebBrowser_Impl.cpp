@@ -208,7 +208,14 @@ bool CGUIWebBrowser_Impl::Event_MouseWheel(const CEGUI::EventArgs& e)
 {
     const CEGUI::MouseEventArgs& args = reinterpret_cast<const CEGUI::MouseEventArgs&>(e);
 
-    m_pWebView->InjectMouseWheel((int)(args.wheelChange * 40), 0);
+    // CEF accepts integer pixel deltas while precision touchpads can produce
+    // sub-pixel values after CEGUI's notch conversion. Carry the fraction into
+    // the next event so a slow gesture is not truncated into inert wheel input.
+    const float wheelPixels = args.wheelChange * 40.0f + m_fWheelPixelRemainder;
+    const int   wholePixels = static_cast<int>(wheelPixels);
+    m_fWheelPixelRemainder = wheelPixels - static_cast<float>(wholePixels);
+    if (wholePixels != 0)
+        m_pWebView->InjectMouseWheel(wholePixels, 0);
     return true;
 }
 

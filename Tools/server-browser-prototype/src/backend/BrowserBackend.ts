@@ -51,6 +51,7 @@ export type BackendEvent =
   | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; error: ConnectError }
   | { type: 'connect-succeeded'; address: ServerAddress }
+  | { type: 'connect-dismissed' }
   | { type: 'favourites-changed'; servers: ServerItem[] }
   | { type: 'history-changed'; servers: ServerItem[] }
 
@@ -59,6 +60,10 @@ export type Unsubscribe = () => void
 
 export interface BrowserBackend {
   subscribe(listener: BackendListener): Unsubscribe
+
+  /** Reprend ou suspend le scan lorsque la route navigateur est montée. */
+  resume?(): void
+  suspend?(): void
 
   /** Snapshot initial d'une source (cache disque côté natif). */
   getServers(source: ServerSource): Promise<ServerItem[]>

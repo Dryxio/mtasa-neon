@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { I18nProvider, useI18n } from './i18n'
 import { MainMenu } from './MainMenu'
-import { ConnectModals } from './components/Modals'
+import { ConnectModals, NativeMessageModal } from './components/Modals'
 import { useMenuBridge } from './menuBridge'
 
 // Keep the server store and its native bridge out of the startup path. This
@@ -9,12 +9,14 @@ import { useMenuBridge } from './menuBridge'
 const ServerBrowser = lazy(() => import('./App').then(({ App }) => ({ default: App })))
 const loadSettings = () => import('./Settings').then(({ Settings }) => ({ default: Settings }))
 const Settings = lazy(loadSettings)
+const Updates = lazy(() => import('./Updates').then(({ Updates }) => ({ default: Updates })))
 
-type View = 'main-menu' | 'server-browser' | 'settings'
+type View = 'main-menu' | 'server-browser' | 'settings' | 'updates'
 
 function viewFromLocation(): View {
   if (window.location.hash === '#/servers') return 'server-browser'
   if (window.location.hash === '#/settings') return 'settings'
+  if (window.location.hash === '#/updates') return 'updates'
   return 'main-menu'
 }
 
@@ -34,21 +36,17 @@ export function Experience() {
   }, [])
 
   useEffect(() => {
-    // Settings is still kept out of the critical first paint, but its small
-    // JS/CSS chunk is warmed as soon as the main menu becomes idle. The first
-    // click then opens immediately instead of waiting on a local CEF request.
-    const preload = () => { void loadSettings() }
-    const idleWindow = window as unknown as {
-      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number
-      cancelIdleCallback?: (handle: number) => void
+    // Keep Settings out of the first paint, then warm its small JS/CSS chunk
+    // immediately afterwards. Waiting for an idle callback was observable on
+    // busy game frames and made the first visit feel slower than later visits.
+    let secondFrame: number | undefined
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => { void loadSettings() })
+    })
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      if (secondFrame !== undefined) window.cancelAnimationFrame(secondFrame)
     }
-    if (idleWindow.requestIdleCallback) {
-      const idleId = idleWindow.requestIdleCallback(preload, { timeout: 1200 })
-      return () => idleWindow.cancelIdleCallback?.(idleId)
-    }
-
-    const timeoutId = setTimeout(preload, 500)
-    return () => clearTimeout(timeoutId)
   }, [])
 
   return (
@@ -56,6 +54,10 @@ export function Experience() {
       {view === 'server-browser' ? <ServerBrowserRoute /> : view === 'settings' ? (
         <Suspense fallback={<div className="route-loading" aria-label="Loading settings" />}>
           <Settings onClose={() => { window.location.hash = '' }} />
+        </Suspense>
+      ) : view === 'updates' ? (
+        <Suspense fallback={<div className="route-loading" aria-label="Loading updates" />}>
+          <Updates onClose={() => { window.location.hash = '' }} />
         </Suspense>
       ) : (
           <MainMenu
@@ -73,6 +75,7 @@ export function Experience() {
             onMapEditor={() => menu.command('menu:mapEditor')}
             onSettings={() => menu.command('menu:settings', () => { window.location.hash = '/settings' })}
             onAbout={() => menu.command('menu:about')}
+            onUpdates={() => { window.location.hash = '/updates' }}
             onIdentity={() => menu.command('menu:identity')}
             onPlayFeatured={() => menu.command('menu:playFeatured')}
             onLanguage={menu.setLanguage}
@@ -92,6 +95,7 @@ export function Experience() {
           menu.command('menu:identity')
         }}
       />
+      <NativeMessageModal dialog={menu.state.dialog} onRespond={menu.respondToDialog} />
     </I18nProvider>
   )
 }

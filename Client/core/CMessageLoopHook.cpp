@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "ServerBrowser/CServerBrowserWeb.h"
 #include <game/CGame.h>
 
 extern CCore* g_pCore;
@@ -163,7 +164,7 @@ LRESULT CALLBACK CMessageLoopHook::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM w
             }
         }
 
-        // When updating m_bFocused in CClientGame from CPacketHandler (to fix another bug — see the note there),
+        // When updating m_bFocused in CClientGame from CPacketHandler (to fix another bug â€” see the note there),
         // the window might not actually have focus at that moment (even though Windows reports it as focused).
         // In this case, isMTAWindowFocused returns false even though the window has focus.
         // Therefore, we need to intercept the window return operation and manually set the focus in CClientGame.
@@ -313,6 +314,8 @@ LRESULT CALLBACK CMessageLoopHook::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM w
                     return true;
                 }
                 bWasCaptureKey = (pSettings->IsCapturingKey() && pSettings->ProcessMessage(uMsg, wParam, lParam));
+                if (!bWasCaptureKey)
+                    bWasCaptureKey = CServerBrowserWeb::CaptureSettingsInputMessage(uMsg, wParam, lParam);
                 if (!bWasCaptureKey)
                 {
                     // If Escape is pressed and we're playing ingame, we show/hide the menu

@@ -89,6 +89,21 @@ bool CWebCore::Initialise(bool gpuEnabled)
 
     m_bGPUEnabled = gpuEnabled;
 
+    // OSR rendering has its own compositor. Driving it at the raw game target (including "unlimited") either wastes full-screen texture uploads or falls
+    // back to CEF's 30 FPS default. Keep a stable browser target and only lower it when the game itself cannot present that many frames.
+    if (auto* cvars = g_pCore->GetCVars())
+    {
+        cvars->Get("browser_frame_rate", m_iBrowserFrameRate);
+        cvars->Get("browser_external_frame_scheduling", m_bExternalFrameScheduling);
+        cvars->Get("browser_frame_stats", m_bFrameStatsEnabled);
+        cvars->Get("browser_shared_texture", m_bSharedTextureEnabled);
+    }
+    // Shared textures require Chromium's GPU compositor. Keep the software
+    // OnPaint path available automatically when GPU rendering is disabled.
+    m_bSharedTextureEnabled = m_bSharedTextureEnabled && m_bGPUEnabled;
+    m_iBrowserFrameRate = std::clamp(m_iBrowserFrameRate, 1, 240);
+    m_iWindowlessFrameRate = CalculateWindowlessFrameRate(g_pCore->GetFPSLimiter()->GetFPSTarget());
+
     // The core-owned browser can be initialized before CLocalGUI has created its console. Keep early CEF diagnostics best-effort so a
     // recoverable warning (for example, running elevated) cannot crash the client during startup.
     const auto PrintToConsoleIfReady = [](const SString& message)
@@ -324,7 +339,7 @@ CWebViewInterface* CWebCore::CreateWebView(unsigned int uiWidth, unsigned int ui
         return nullptr;
 
     // Create our webview implementation
-    CefRefPtr<CWebView> pWebView = new CWebView(bIsLocal, pWebBrowserRenderItem, bTransparent);
+    CefRefPtr<CWebView> pWebView = new CWebView(bIsLocal, pWebBrowserRenderItem, bTransparent, m_bFrameStatsEnabled);
     m_WebViews.push_back(pWebView);
 
     return static_cast<CWebViewInterface*>(pWebView.get());
@@ -448,23 +463,95 @@ void CWebCore::DoEventQueuePulse()
         event.callback();
     }
 
-    // Request new frames from CEF using external begin frame scheduling
-    // This synchronizes CEF rendering with MTA's render loop, eliminating
-    // the previous 250ms blocking wait in OnPaint
-    for (auto& view : m_WebViews)
-    {
-        if (view->IsBeingDestroyed() || view->GetRenderingPaused())
-            continue;
-
-        auto browser = view->GetCefBrowser();
-        if (browser)
-            browser->GetHost()->SendExternalBeginFrame();
-    }
-
-    // Copy rendered data to D3D textures on the main thread
+    // Consume the last completed CEF frame before requesting another one. OnPaint is asynchronous; requesting first made same-pulse delivery a race and
+    // produced variable zero/one-frame latency depending on thread timing.
     for (auto& view : m_WebViews)
     {
         view->UpdateTexture();
+    }
+
+    const bool hasInteractionRefresh = std::ranges::any_of(
+        m_WebViews, [](const auto& view)
+        { return !view->IsBeingDestroyed() && !view->GetRenderingPaused() && view->GetCefBrowser() && view->HasInteractionRefreshFrames(); });
+
+    if (!hasInteractionRefresh)
+    {
+        m_NextInteractionRefreshFrame = {};
+    }
+    else
+    {
+        using Clock = std::chrono::steady_clock;
+        const auto now = Clock::now();
+        const auto frameInterval = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / m_iWindowlessFrameRate));
+
+        if (m_NextInteractionRefreshFrame == Clock::time_point{} || now >= m_NextInteractionRefreshFrame)
+        {
+            // In auto-scheduled mode Invalidate requests a fresh OSR capture;
+            // in external mode the separately paced BeginFrame remains in
+            // charge of advancing Chromium. Discard missed slots so a stalled
+            // game pulse never produces a burst of repaint requests.
+            if (m_NextInteractionRefreshFrame == Clock::time_point{} || now - m_NextInteractionRefreshFrame >= frameInterval)
+                m_NextInteractionRefreshFrame = now + frameInterval;
+            else
+                m_NextInteractionRefreshFrame += frameInterval;
+
+            for (auto& view : m_WebViews)
+            {
+                if (view->IsBeingDestroyed() || view->GetRenderingPaused())
+                    continue;
+
+                if (auto browser = view->GetCefBrowser(); browser && view->ConsumeInteractionRefreshFrame())
+                {
+                    browser->GetHost()->Invalidate(PET_VIEW);
+                    view->RecordInteractionInvalidate();
+                }
+            }
+        }
+    }
+
+    if (m_bExternalFrameScheduling)
+    {
+        const bool hasRenderableView =
+            std::ranges::any_of(m_WebViews, [](const auto& view) { return !view->IsBeingDestroyed() && !view->GetRenderingPaused() && view->GetCefBrowser(); });
+
+        if (!hasRenderableView)
+        {
+            m_NextExternalBeginFrame = {};
+        }
+        else
+        {
+            using Clock = std::chrono::steady_clock;
+            const auto now = Clock::now();
+            const auto frameInterval = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / m_iWindowlessFrameRate));
+
+            if (m_NextExternalBeginFrame == Clock::time_point{} || now >= m_NextExternalBeginFrame)
+            {
+                // The main-menu loop can run above 1,000 pulses per second. Sending a BeginFrame on every pulse floods CEF and lowers its effective paint
+                // rate, so pace requests at the configured windowless rate and discard missed slots instead of issuing catch-up bursts.
+                if (m_NextExternalBeginFrame == Clock::time_point{} || now - m_NextExternalBeginFrame >= frameInterval)
+                    m_NextExternalBeginFrame = now + frameInterval;
+                else
+                    m_NextExternalBeginFrame += frameInterval;
+
+                for (auto& view : m_WebViews)
+                {
+                    if (view->IsBeingDestroyed() || view->GetRenderingPaused())
+                        continue;
+
+                    if (auto browser = view->GetCefBrowser(); browser)
+                    {
+                        browser->GetHost()->SendExternalBeginFrame();
+                        view->RecordExternalBeginFrame();
+                    }
+                }
+            }
+        }
+    }
+
+    if (m_bFrameStatsEnabled)
+    {
+        for (auto& view : m_WebViews)
+            view->LogFrameStatsIfDue(m_iWindowlessFrameRate, m_bExternalFrameScheduling);
     }
 }
 
@@ -802,11 +889,22 @@ void CWebCore::OnPostScreenshot()
 void CWebCore::OnFPSLimitChange(std::uint16_t fps)
 {
     dassert(g_pCore->GetNetwork() != nullptr);  // Ensure network module is loaded
+    m_iWindowlessFrameRate = CalculateWindowlessFrameRate(fps);
+    m_NextExternalBeginFrame = {};
+    m_NextInteractionRefreshFrame = {};
     for (auto& webView : m_WebViews)
     {
         if (auto browser = webView->GetCefBrowser(); browser) [[likely]]
-            browser->GetHost()->SetWindowlessFrameRate(fps);
+            browser->GetHost()->SetWindowlessFrameRate(m_iWindowlessFrameRate);
     }
+}
+
+int CWebCore::CalculateWindowlessFrameRate(std::uint16_t gameFps) const noexcept
+{
+    if (gameFps == FPSLimits::FPS_UNLIMITED)
+        return m_iBrowserFrameRate;
+
+    return std::min(m_iBrowserFrameRate, static_cast<int>(gameFps));
 }
 
 void CWebCore::ProcessInputMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)

@@ -622,11 +622,14 @@ bool CLocalGUI::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
         switch (uMsg)
         {
             case WM_MOUSEWHEEL:
-                if (GET_WHEEL_DELTA_WPARAM(wParam) > 0)
-                    pGUI->ProcessMouseInput(CGUI_MI_MOUSEWHEEL, 1, NULL);
-                else
-                    pGUI->ProcessMouseInput(CGUI_MI_MOUSEWHEEL, 0, NULL);
+            {
+                // Preserve high-resolution wheel deltas from precision
+                // touchpads instead of reducing every message to one notch.
+                const long wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+                if (wheelDelta != 0)
+                    pGUI->ProcessMouseInput(CGUI_MI_MOUSEWHEEL, static_cast<unsigned long>(wheelDelta), 0);
                 return true;
+            }
 
             case WM_MOUSEMOVE:
                 pGUI->ProcessMouseInput(CGUI_MI_MOUSEPOS, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));

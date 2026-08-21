@@ -319,11 +319,12 @@ void CGUI_Impl::ProcessMouseInput(CGUIMouseInput eMouseInput, unsigned long ulX,
             break;
 
         case CGUI_MI_MOUSEWHEEL:
-            if ((signed long)ulX > 0)
-                m_pSystem->injectMouseWheelChange(+1);
-            else
-                m_pSystem->injectMouseWheelChange(-1);
+        {
+            const long wheelDelta = static_cast<signed long>(ulX);
+            if (wheelDelta != 0)
+                m_pSystem->injectMouseWheelChange(static_cast<float>(wheelDelta) / static_cast<float>(WHEEL_DELTA));
             break;
+        }
     }
 }
 

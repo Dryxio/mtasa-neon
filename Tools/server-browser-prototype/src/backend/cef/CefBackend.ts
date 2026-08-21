@@ -35,6 +35,7 @@ type NativeEvent =
   | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; code: string; message: string }
   | { type: 'connect-succeeded' }
+  | { type: 'connect-dismissed' }
   | { type: 'clipboard-result'; requestId: string; success: boolean }
 
 interface NativeServer {
@@ -212,6 +213,13 @@ export class CefBackend implements BrowserBackend {
         if (this.activeConnection) this.emit({ type: 'connect-succeeded', address: this.activeConnection })
         this.activeConnection = null
         break
+      case 'connect-dismissed':
+        // A native owner (currently the full-server queue) takes over here.
+        // Clear the shared web state so reopening CEF cannot resurrect a
+        // stale connecting modal or trap keyboard input behind it.
+        this.activeConnection = null
+        this.emit({ type: 'connect-dismissed' })
+        break
       case 'clipboard-result': {
         const request = this.clipboardRequests.get(event.requestId)
         if (!request) break
@@ -226,6 +234,14 @@ export class CefBackend implements BrowserBackend {
   subscribe(listener: BackendListener): Unsubscribe {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  resume(): void {
+    this.send('sb:resume')
+  }
+
+  suspend(): void {
+    this.send('sb:suspend')
   }
 
   getServers(source: ServerSource): Promise<ServerItem[]> {

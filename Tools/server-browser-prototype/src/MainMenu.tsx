@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LanguageSelector } from './components/LanguageSelector'
 import { useI18n } from './i18n'
 import { chooseLaunchLoadscreen } from './loadscreen'
@@ -19,6 +19,7 @@ interface MainMenuProps {
   onMapEditor: () => void
   onSettings: () => void
   onAbout: () => void
+  onUpdates: () => void
   onIdentity: () => void
   onPlayFeatured: () => void
   onLanguage: (locale: string) => void
@@ -28,8 +29,28 @@ interface MainMenuProps {
 interface MenuItem {
   id: string
   label: string
-  caption: string
+  caption?: string
   action?: () => void
+}
+
+const UPDATE_PROMPT_RELEASE = '2026.08.21.184'
+const UPDATE_PROMPT_STORAGE_KEY = 'neon:last-seen-update'
+
+function shouldShowUpdatePrompt(): boolean {
+  if (new URLSearchParams(window.location.search).has('shownews')) return true
+  try {
+    return window.localStorage.getItem(UPDATE_PROMPT_STORAGE_KEY) !== UPDATE_PROMPT_RELEASE
+  } catch {
+    return true
+  }
+}
+
+function rememberUpdatePrompt(): void {
+  try {
+    window.localStorage.setItem(UPDATE_PROMPT_STORAGE_KEY, UPDATE_PROMPT_RELEASE)
+  } catch {
+    // A read-only browser profile should not prevent the notification from closing.
+  }
 }
 
 function DiscordIcon() {
@@ -45,8 +66,10 @@ export function MainMenu(props: MainMenuProps) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loadscreen] = useState(chooseLaunchLoadscreen)
   const [artReady, setArtReady] = useState(false)
+  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false)
   const previousSelectedIndex = useRef(selectedIndex)
   const visualReadySent = useRef(false)
+  const updatePromptChecked = useRef(false)
   const discordTitle = props.identity.signingIn
     ? t('main.discordConnecting')
     : props.identity.authenticated
@@ -63,31 +86,32 @@ export function MainMenu(props: MainMenuProps) {
       ? t('main.playFeatured')
       : t('main.linkDiscordToPlay')
 
+  const dismissUpdatePrompt = useCallback(() => {
+    rememberUpdatePrompt()
+    setShowUpdatePrompt(false)
+  }, [])
+
   const items = useMemo<MenuItem[]>(
     () => props.inGame
       ? [
           {
             id: 'resume',
             label: t('main.resumeGame'),
-            caption: t('main.resumeCaption'),
             action: props.onResume,
           },
           {
             id: 'settings',
             label: t('common.settings'),
-            caption: t('main.settingsCaption'),
             action: props.onSettings,
           },
           {
             id: 'disconnect',
             label: t('common.disconnect'),
-            caption: t('main.disconnectCaption'),
             action: props.onDisconnect,
           },
           {
             id: 'quit',
             label: t('main.quitGame'),
-            caption: t('main.quitInGameCaption'),
             action: props.onQuit,
           },
         ]
@@ -95,7 +119,6 @@ export function MainMenu(props: MainMenuProps) {
           {
             id: 'play',
             label: t('main.browseServers'),
-            caption: t('main.browseCaption'),
             action: props.onBrowseServers,
           },
           {
@@ -104,28 +127,34 @@ export function MainMenu(props: MainMenuProps) {
             caption: t('main.quickConnectCaption'),
             action: props.onQuickConnect,
           },
-          {
-            id: 'map-editor',
-            label: t('main.mapEditor'),
-            caption: t('main.mapEditorCaption'),
-            action: props.onMapEditor,
-          },
+          // Keep the editor route available to the native shell, but leave it
+          // out of the player-facing menu while Neon focuses this screen on
+          // joining servers and discovering public client updates.
+          // {
+          //   id: 'map-editor',
+          //   label: t('main.mapEditor'),
+          //   caption: t('main.mapEditorCaption'),
+          //   action: props.onMapEditor,
+          // },
           {
             id: 'settings',
             label: t('common.settings'),
-            caption: t('main.settingsCaption'),
             action: props.onSettings,
+          },
+          {
+            id: 'updates',
+            label: 'What’s new',
+            caption: 'Discover the latest Neon features, fixes and complete release history.',
+            action: props.onUpdates,
           },
           {
             id: 'about',
             label: t('common.about'),
-            caption: t('main.aboutCaption'),
             action: props.onAbout,
           },
           {
             id: 'quit',
             label: t('main.quitGame'),
-            caption: t('main.quitCaption'),
             action: props.onQuit,
           },
         ],
@@ -135,6 +164,16 @@ export function MainMenu(props: MainMenuProps) {
   useEffect(() => {
     setSelectedIndex(0)
   }, [props.inGame])
+
+  useEffect(() => {
+    if (props.inGame) {
+      setShowUpdatePrompt(false)
+      return
+    }
+    if (!artReady || updatePromptChecked.current) return
+    updatePromptChecked.current = true
+    setShowUpdatePrompt(shouldShowUpdatePrompt())
+  }, [artReady, props.inGame])
 
   useEffect(() => {
     if (previousSelectedIndex.current !== selectedIndex) playUiSound('highlight')
@@ -180,6 +219,14 @@ export function MainMenu(props: MainMenuProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (showUpdatePrompt) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          playUiSound('back')
+          dismissUpdatePrompt()
+        }
+        return
+      }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
         const direction = event.key === 'ArrowDown' ? 1 : -1
@@ -192,7 +239,7 @@ export function MainMenu(props: MainMenuProps) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [items, selectedIndex])
+  }, [dismissUpdatePrompt, items, selectedIndex, showUpdatePrompt])
 
   const selected = items[selectedIndex] ?? items[0]!
 
@@ -243,9 +290,11 @@ export function MainMenu(props: MainMenuProps) {
           })}
         </nav>
 
-        <p className="main-menu__caption" aria-live="polite">
-          {selected.caption}
-        </p>
+        {selected.caption && (
+          <p className="main-menu__caption" aria-live="polite">
+            {selected.caption}
+          </p>
+        )}
       </section>
 
       {!props.inGame && props.featuredServer && (
@@ -301,6 +350,48 @@ export function MainMenu(props: MainMenuProps) {
             </span>
           </span>
         </button>
+      )}
+
+      {showUpdatePrompt && (
+        <div className="main-menu__update-overlay">
+          <section className="main-menu__update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
+            <header className="main-menu__update-prompt-header">
+              <span>What’s new in Neon</span>
+              <small>2026.08.21</small>
+            </header>
+            <h2 id="update-prompt-title">A smoother, sharper Neon</h2>
+            <p>Here are the highlights included with your new version.</p>
+            <ul>
+              <li>New radio station selector</li>
+              <li>Improved radar markers</li>
+              <li>More tools for creators</li>
+            </ul>
+            <footer className="main-menu__update-prompt-actions">
+              <button
+                type="button"
+                className="main-menu__update-prompt-more"
+                onClick={() => {
+                  dismissUpdatePrompt()
+                  playUiSound('select')
+                  props.onUpdates()
+                }}
+              >
+                View all changes <span aria-hidden="true">▸</span>
+              </button>
+              <button
+                type="button"
+                className="main-menu__update-prompt-dismiss"
+                autoFocus
+                onClick={() => {
+                  playUiSound('back')
+                  dismissUpdatePrompt()
+                }}
+              >
+                Got it
+              </button>
+            </footer>
+          </section>
+        </div>
       )}
 
       <footer className="main-menu__footer">

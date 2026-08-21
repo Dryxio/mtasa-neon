@@ -61,8 +61,6 @@ export function DetailsPanel({
     return (
       <aside className="details-empty">
         {t('details.selectServer')}
-        <br />
-        {t('details.selectServerHint')}
       </aside>
     )
   }
@@ -266,7 +264,6 @@ export function DetailsPanel({
       </div>
 
       <div className="details__footer" key={server.id}>
-        <span>{t('details.ready')}</span>
         <button type="button" className="connect-btn" onClick={() => onConnect(server)}>
           <IconPlay size={18} />
           {t('details.joinServer')}

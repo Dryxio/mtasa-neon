@@ -1,23 +1,19 @@
 import { useI18n } from '../i18n'
-import type { NetworkStats } from '../store'
 import { IconArrowDown, IconArrowUp, IconEnter } from './Icons'
 
 interface StatusBarProps {
-  stats: NetworkStats
   progress: { scanned: number; total: number } | null
   notice: string | null
 }
 
-export function StatusBar({ stats, progress, notice }: StatusBarProps) {
+export function StatusBar({ progress, notice }: StatusBarProps) {
   const { formatNumber, t } = useI18n()
   return (
     <footer className="statusbar">
       <span>
-        Neon Network — {t('status.registeredServers', { count: formatNumber(stats.serverCount) })} ·{' '}
-        {t('status.playersOnline', { count: formatNumber(stats.playersOnline) })}
         {progress && (
           <span className="statusbar__progress">
-            {'  '}{t('status.scanning', {
+            {t('status.scanning', {
               scanned: formatNumber(progress.scanned),
               total: formatNumber(progress.total),
             })}

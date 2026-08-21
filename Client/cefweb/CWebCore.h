@@ -11,6 +11,7 @@
 
 #undef GetNextSibling
 #undef GetFirstChild
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <unordered_set>
@@ -104,6 +105,11 @@ public:
 
     void OnFPSLimitChange(std::uint16_t fps) override;
 
+    int  GetWindowlessFrameRate() const noexcept { return m_iWindowlessFrameRate; }
+    bool IsExternalFrameSchedulingEnabled() const noexcept { return m_bExternalFrameScheduling; }
+    bool IsFrameStatsEnabled() const noexcept { return m_bFrameStatsEnabled; }
+    bool IsSharedTextureEnabled() const noexcept { return m_bSharedTextureEnabled; }
+
     bool SetGlobalAudioVolume(float fVolume);
 
     bool        UpdateListsFromMaster();
@@ -141,8 +147,17 @@ private:
     int       m_iBlacklistRevision;
 
     // Shouldn't be changed after init
-    bool m_bGPUEnabled;
-    bool m_bInitialised = false;  // Track if CefInitialize() succeeded
+    bool                                  m_bGPUEnabled;
+    bool                                  m_bInitialised = false;  // Track if CefInitialize() succeeded
+    bool                                  m_bExternalFrameScheduling = false;
+    bool                                  m_bSharedTextureEnabled = false;
+    std::chrono::steady_clock::time_point m_NextExternalBeginFrame{};
+    std::chrono::steady_clock::time_point m_NextInteractionRefreshFrame{};
+    bool                                  m_bFrameStatsEnabled = false;
+    int                                   m_iBrowserFrameRate = 60;
+    int                                   m_iWindowlessFrameRate = 60;
+
+    int CalculateWindowlessFrameRate(std::uint16_t gameFps) const noexcept;
 
     // ===== AUTH: IPC message validation =====
 public:

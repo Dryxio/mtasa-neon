@@ -11,6 +11,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "ServerBrowser/CServerBrowserWeb.h"
 
 extern CCore* g_pCore;
 
@@ -48,11 +49,79 @@ CQuestionBox::~CQuestionBox()
 
 void CQuestionBox::Hide()
 {
+    m_bWebPending = false;
+    if (m_bWebVisible)
+    {
+        m_bWebVisible = false;
+        CServerBrowserWeb::CloseQuestionDialog();
+    }
     m_pWindow->SetVisible(false);
 }
 
 void CQuestionBox::Show()
 {
+    // Edit callbacks still need CEGUI's mature text-input behavior. Every
+    // ordinary question/status box can keep its native state machine while
+    // using the always-mounted Neon shell for presentation.
+    if (m_uiActiveEditboxes == 0)
+    {
+        if (ShowWeb())
+            return;
+        if (CServerBrowserWeb::CanDeferQuestionDialog())
+        {
+            m_bWebPending = true;
+            m_pWindow->SetVisible(false);
+            return;
+        }
+    }
+
+    ShowNative();
+}
+
+void CQuestionBox::TryShowPendingWeb()
+{
+    if (!m_bWebPending)
+        return;
+
+    if (ShowWeb())
+        return;
+
+    if (!CServerBrowserWeb::CanDeferQuestionDialog())
+    {
+        m_bWebPending = false;
+        ShowNative();
+    }
+}
+
+bool CQuestionBox::ShowWeb()
+{
+    std::vector<std::string> buttons;
+    buttons.reserve(m_uiActiveButtons);
+    for (unsigned int i = 0; i < m_uiActiveButtons; ++i)
+        buttons.emplace_back(m_ButtonList[i]->GetText());
+
+    if (!CServerBrowserWeb::ShowQuestionDialog(m_pWindow->GetText(), m_pMessage->GetText(), buttons))
+        return false;
+
+    m_bWebPending = false;
+    m_bWebVisible = true;
+    m_pWindow->SetVisible(false);
+    g_pCore->RemoveMessageBox();
+    AddReportLog(9100, SString("QuestionBox::ShowWeb [%s] %s", m_pWindow->GetText().c_str(), *m_strMsg.Left(200).Replace("\n", "|")));
+    return true;
+}
+
+void CQuestionBox::RefreshWeb()
+{
+    if (m_bWebVisible)
+        ShowWeb();
+}
+
+void CQuestionBox::ShowNative()
+{
+    m_bWebPending = false;
+    m_bWebVisible = false;
+
     // Layout - Calc how many lines of text
     SString      strMsg = m_pMessage->GetText();
     unsigned int uiNumLines = std::count(strMsg.begin(), strMsg.end(), '\n') + 1;
@@ -126,17 +195,20 @@ void CQuestionBox::Reset()
 void CQuestionBox::SetTitle(const SString& strTitle)
 {
     m_pWindow->SetText(strTitle);
+    RefreshWeb();
 }
 
 void CQuestionBox::SetMessage(const SString& strMsg)
 {
     m_strMsg = strMsg;
     m_pMessage->SetText(strMsg);
+    RefreshWeb();
 }
 
 void CQuestionBox::AppendMessage(const SString& strMsg)
 {
     m_pMessage->SetText(SString(m_strMsg + strMsg));
+    RefreshWeb();
 }
 
 void CQuestionBox::SetButton(unsigned int uiButton, const SString& strText)
@@ -154,6 +226,7 @@ void CQuestionBox::SetButton(unsigned int uiButton, const SString& strText)
 
     m_ButtonList[uiButton]->SetText(strText);
     m_ButtonList[uiButton]->SetVisible(true);
+    RefreshWeb();
 }
 
 CGUIEdit* CQuestionBox::SetEditbox(unsigned int uiEditbox, const SString& strText)
@@ -198,14 +271,30 @@ void CQuestionBox::SetOnLineHelpOption(const SString& strTroubleLink)
 
 unsigned int CQuestionBox::PollButtons()
 {
-    if (!m_pWindow->IsVisible())
+    if (!IsVisible())
         return -1;
     return m_uiLastButton;
 }
 
 bool CQuestionBox::IsVisible()
 {
+    return m_bWebPending || m_bWebVisible || m_pWindow->IsVisible();
+}
+
+bool CQuestionBox::IsNativeVisible() const
+{
     return m_pWindow->IsVisible();
+}
+
+void CQuestionBox::RespondToWeb(unsigned int uiButton)
+{
+    if (!m_bWebVisible || uiButton >= m_uiActiveButtons || m_uiLastButton != static_cast<unsigned int>(-1))
+        return;
+
+    WatchDogUserDidInteractWithMenu();
+    m_uiLastButton = uiButton;
+    if (m_Callback)
+        m_Callback(m_CallbackParameter, m_uiLastButton);
 }
 
 bool CQuestionBox::OnButtonClick(CGUIElement* pElement)

@@ -35,6 +35,7 @@
 #include "CModelCacheManager.h"
 #include <SharedUtil.Detours.h>
 #include <ServerBrowser/CServerCache.h>
+#include <ServerBrowser/CServerBrowserWeb.h>
 #include "CDiscordRichPresence.h"
 #include "CNeonIdentityManager.h"
 #include "CSteamClient.h"
@@ -1863,6 +1864,17 @@ void CCore::ShowMessageBox(const char* szTitle, const char* szText, unsigned int
 {
     RemoveMessageBox();
 
+    // Simple core message boxes used to sit underneath the always-on-top CEF
+    // menu and only became visible after opening F8. Let the web shell own
+    // their presentation when available while retaining the original CEGUI
+    // path for startup, complex dialogs and renderer failures.
+    if (CServerBrowserWeb::ShowMessageDialog(szTitle ? szTitle : "", szText ? szText : "", uiFlags))
+    {
+        m_bWebMessageBoxVisible = true;
+        m_WebMessageBoxResponseHandler = ResponseHandler ? *ResponseHandler : GUI_CALLBACK();
+        return;
+    }
+
     // Create the message box
     m_pMessageBox = m_pGUI->CreateMessageBox(szTitle, szText, uiFlags);
     if (ResponseHandler)
@@ -1880,12 +1892,43 @@ void CCore::RemoveMessageBox(bool bNextFrame)
     }
     else
     {
+        if (m_bWebMessageBoxVisible)
+        {
+            m_bWebMessageBoxVisible = false;
+            m_WebMessageBoxResponseHandler = GUI_CALLBACK();
+            CServerBrowserWeb::CloseMessageDialog();
+        }
+
         if (m_pMessageBox)
         {
             delete m_pMessageBox;
             m_pMessageBox = NULL;
         }
     }
+}
+
+void CCore::RespondToWebMessageBox()
+{
+    if (!m_bWebMessageBoxVisible)
+        return;
+
+    // Clear ownership before invoking user code because a legacy callback can
+    // synchronously call RemoveMessageBox or open a replacement dialog.
+    const GUI_CALLBACK responseHandler = m_WebMessageBoxResponseHandler;
+    m_bWebMessageBoxVisible = false;
+    m_WebMessageBoxResponseHandler = GUI_CALLBACK();
+    CServerBrowserWeb::CloseMessageDialog();
+
+    if (responseHandler)
+        responseHandler(nullptr);
+}
+
+bool CCore::HasNativeMessageBox() const
+{
+    // CEGUI message boxes are deliberately not auto-destroyed. Their pointer
+    // survives an OK/Cancel click, so ownership must follow window visibility
+    // or the web menu would remain hidden forever after a fallback dialog.
+    return m_pMessageBox && m_pMessageBox->IsVisible();
 }
 
 //
@@ -1976,6 +2019,15 @@ void CCore::HideMainMenu()
 void CCore::ShowServerInfo(unsigned int WindowType)
 {
     RemoveMessageBox();
+
+    // The server can reject a password only after the deathmatch module has
+    // loaded, bypassing CConnectManager's earlier RakNet error path. Preserve
+    // the initiating web browser's UI ownership across that late packet and
+    // rebuild its password context from the last immutable connect target.
+    if (WindowType == eWindowTypes::SERVER_INFO_PASSWORD && m_pConnectManager->UsesWebConnectionUi() &&
+        CServerBrowserWeb::NotifyConnectionPasswordRequired(m_pConnectManager->m_strLastHost, m_pConnectManager->m_usLastPort, true))
+        return;
+
     CServerInfo::GetSingletonPtr()->Show((eWindowType)WindowType);
 }
 

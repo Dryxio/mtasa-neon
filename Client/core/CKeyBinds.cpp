@@ -359,7 +359,13 @@ bool CKeyBinds::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
     if (g_pCore->IsWebCoreLoaded() && !m_pCore->GetConsole()->IsVisible() && !m_pCore->IsChatInputEnabled())
     {
         if (CServerBrowserWeb::IsInputRoutedToWeb())
+        {
+            // A Settings bind capture is an input sink, not merely another
+            // observer. Stop before updating bind state or firing onClientKey.
+            if (CServerBrowserWeb::CaptureSettingsInputMessage(uMsg, wParam, lParam))
+                return true;
             CServerBrowserWeb::RouteInputMessage(uMsg, wParam, lParam);
+        }
         else if (!m_pCore->IsMenuVisible())
             g_pCore->GetWebCore()->ProcessInputMessage(uMsg, wParam, lParam);
     }

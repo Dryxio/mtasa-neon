@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
+import type { NativeMessageDialog } from '../menuBridge'
 import type { ConnectFlow } from '../store'
 import { playUiSound } from '../uiSound'
 import { IconClose, IconLock } from './Icons'
@@ -49,7 +50,7 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss, o
   const failure = getFailurePresentation(connect.error?.code, t)
 
   return (
-    <div className="overlay overlay--connection" onMouseDown={(e) => e.target === e.currentTarget && onDismiss()}>
+    <div className="overlay overlay--connection">
       {connect.phase === 'password' && (
         <form
           className="modal modal--connection"
@@ -58,7 +59,6 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss, o
             onSubmitPassword(password)
           }}
         >
-          <div className="modal__kicker">{t('modal.connectionKicker')}</div>
           <div className="modal__title">{t('modal.restrictedServer')}</div>
           <div className="modal__destination">
             <IconLock size={14} />
@@ -91,7 +91,6 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss, o
 
       {connect.phase === 'connecting' && (
         <div className="modal modal--connection" role="dialog" aria-modal="true" aria-live="polite">
-          <div className="modal__kicker">{t('modal.connectionKicker')}</div>
           <div className="modal__title">{stageTitle}</div>
           <div className="modal__destination">
             <span className="modal__marker">▶</span>
@@ -111,7 +110,6 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss, o
 
       {connect.phase === 'failed' && (
         <div className="modal modal--connection modal--failed" role="alertdialog" aria-modal="true">
-          <div className="modal__kicker">{t('modal.connectionKicker')}</div>
           <div className="modal__title">{failure.title}</div>
           <div className="modal__destination">
             <IconClose size={14} />
@@ -143,6 +141,94 @@ export function ConnectModals({ connect, onSubmitPassword, onRetry, onDismiss, o
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+interface NativeMessageModalProps {
+  dialog: NativeMessageDialog | null
+  onRespond: (id: number, action: string) => void
+}
+
+/** Presents translated core lifecycle errors without exposing the CEGUI layer below CEF. */
+export function NativeMessageModal({ dialog, onRespond }: NativeMessageModalProps) {
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const modalRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (!dialog) return
+    if (dialog.severity === 'error' || dialog.severity === 'warning') playUiSound('error')
+    const primaryIndex = dialog.actions.findIndex((action) => action.variant === 'primary')
+    ;(buttonRefs.current[primaryIndex >= 0 ? primaryIndex : 0] ?? modalRef.current)?.focus()
+  }, [dialog])
+
+  useEffect(() => {
+    if (!dialog) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      // Match CEGUI modal ownership: navigation, shortcuts and text must not
+      // reach the Settings or Server Browser route underneath the overlay.
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (event.key === 'Tab') {
+        const buttons = buttonRefs.current.filter((button): button is HTMLButtonElement => button !== null)
+        if (buttons.length === 0) {
+          modalRef.current?.focus()
+          return
+        }
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        const direction = event.shiftKey ? -1 : 1
+        buttons[(current + direction + buttons.length) % buttons.length]?.focus()
+        return
+      }
+      if (event.key === 'Escape' && dialog.escapeAction) {
+        onRespond(dialog.id, dialog.escapeAction)
+        return
+      }
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      const focusedIndex = buttonRefs.current.findIndex((button) => button === document.activeElement)
+      const action = dialog.actions[focusedIndex] ?? dialog.actions.find((candidate) => candidate.variant === 'primary') ?? dialog.actions[0]
+      if (action) onRespond(dialog.id, action.id)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [dialog, onRespond])
+
+  if (!dialog) return null
+
+  return (
+    <div className="overlay overlay--system">
+      <section
+        ref={modalRef}
+        className={`modal modal--system modal--${dialog.severity}`}
+        role={dialog.severity === 'error' || dialog.severity === 'warning' ? 'alertdialog' : 'dialog'}
+        aria-modal="true"
+        aria-labelledby="native-dialog-title"
+        aria-describedby="native-dialog-message"
+        tabIndex={-1}
+      >
+        <h2 id="native-dialog-title" className="modal__title">
+          {(dialog.severity === 'error' || dialog.severity === 'warning') && <IconClose size={16} />}
+          {dialog.title}
+        </h2>
+        <p id="native-dialog-message" className={dialog.severity === 'error' ? 'modal__error modal__message' : 'modal__text modal__message'}>
+          {dialog.message}
+        </p>
+        {dialog.actions.length > 0 && (
+          <div className="modal__actions">
+            {dialog.actions.map((action, index) => (
+              <button
+                key={action.id}
+                ref={(element) => { buttonRefs.current[index] = element }}
+                type="button"
+                className={`modal__btn${action.variant === 'primary' ? ' modal__btn--primary' : ''}`}
+                onClick={() => onRespond(dialog.id, action.id)}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   )
 }

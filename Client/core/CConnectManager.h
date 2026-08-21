@@ -28,6 +28,7 @@ public:
 
     bool Abort();
     bool CancelWebConnection();
+    bool UsesWebConnectionUi() const;
 
     bool WasQuickConnect() const noexcept { return m_quickConnect; }
 
@@ -46,11 +47,9 @@ public:
     std::string    m_strLastPassword;
 
 private:
-    bool Event_OnCancelClick(CGUIElement* pElement);
-    void ClearPendingIdentityConnection();
-    void CompleteConnectionToMod(const std::string& modName);
-    bool UsesWebConnectionUi() const;
-
+    bool           Event_OnCancelClick(CGUIElement* pElement);
+    void           ClearPendingIdentityConnection();
+    void           CompleteConnectionToMod(const std::string& modName);
     in_addr        m_Address;
     std::string    m_strHost;
     unsigned short m_usPort;

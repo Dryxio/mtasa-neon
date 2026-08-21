@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n'
 import type { ServerItem } from '../types'
 import { Flag, IconLock, IconStar, IconStarFilled } from './Icons'
@@ -8,7 +8,17 @@ import { Flag, IconLock, IconStar, IconStarFilled } from './Icons'
 const ROW_HEIGHT = 118
 const ROW_GAP = 4
 const STRIDE = ROW_HEIGHT + ROW_GAP
-const OVERSCAN = 6
+const VIRTUALIZATION_THRESHOLD = 30
+// Three rows absorb fast wheel bursts without keeping a large stack of
+// off-screen cards in CEF's paint tree.
+const OVERSCAN = 3
+
+function visibleWindow(scrollTop: number, viewport: number, serverCount: number) {
+  return {
+    first: Math.max(0, Math.floor(scrollTop / STRIDE) - OVERSCAN),
+    last: Math.min(serverCount, Math.ceil((scrollTop + viewport) / STRIDE) + OVERSCAN),
+  }
+}
 
 interface ServerListProps {
   servers: readonly ServerItem[]
@@ -27,13 +37,15 @@ function serverCountries(server: ServerItem): string[] {
 const Row = memo(function Row({
   server,
   top,
+  flow,
   selected,
   onSelect,
   onJoin,
   onToggleFavourite,
 }: {
   server: ServerItem
-  top: number
+  top?: number
+  flow?: boolean
   selected: boolean
   onSelect: (id: string) => void
   onJoin: (server: ServerItem) => void
@@ -43,8 +55,8 @@ const Row = memo(function Row({
   const offline = server.scanState === 'offline'
   return (
     <div
-      className={`server-row${selected ? ' server-row--selected' : ''}${server.isFeatured ? ' server-row--featured' : ''}${offline ? ' server-row--offline' : ''}`}
-      style={{ top }}
+      className={`server-row${flow ? ' server-row--flow' : ''}${selected ? ' server-row--selected' : ''}${server.isFeatured ? ' server-row--featured' : ''}${offline ? ' server-row--offline' : ''}`}
+      style={top === undefined ? undefined : { top }}
       onClick={() => onSelect(server.id)}
       onDoubleClick={() => onJoin(server)}
       role="row"
@@ -112,19 +124,31 @@ function serverInitials(name: string): string {
   return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'N'
 }
 
-export function ServerList(props: ServerListProps) {
+export const ServerList = memo(function ServerList(props: ServerListProps) {
   const { t } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [scrollTop, setScrollTop] = useState(0)
-  const [viewport, setViewport] = useState(600)
+  const serverCountRef = useRef(props.servers.length)
+  serverCountRef.current = props.servers.length
+  const [visibleRange, setVisibleRange] = useState(() => visibleWindow(0, 600, props.servers.length))
+
+  const updateVisibleWindow = useCallback((el: HTMLDivElement) => {
+    const next = visibleWindow(el.scrollTop, el.clientHeight, serverCountRef.current)
+    setVisibleRange((current) => current.first === next.first && current.last === next.last ? current : next)
+  }, [])
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const observer = new ResizeObserver(() => setViewport(el.clientHeight))
+    const observer = new ResizeObserver(() => updateVisibleWindow(el))
     observer.observe(el)
+    updateVisibleWindow(el)
     return () => observer.disconnect()
-  }, [])
+  }, [updateVisibleWindow])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) updateVisibleWindow(el)
+  }, [props.servers.length, updateVisibleWindow])
 
   // Garde la sélection visible lors de la navigation clavier — uniquement
   // quand la sélection change, pas quand la liste bouge pendant le scan.
@@ -163,26 +187,40 @@ export function ServerList(props: ServerListProps) {
     )
   }
 
-  const first = Math.max(0, Math.floor(scrollTop / STRIDE) - OVERSCAN)
-  const last = Math.min(
-    props.servers.length,
-    Math.ceil((scrollTop + viewport) / STRIDE) + OVERSCAN,
-  )
+  if (props.servers.length <= VIRTUALIZATION_THRESHOLD) {
+    return (
+      <div className="server-list server-list--flow" ref={scrollRef} role="grid" aria-label={t('aria.serverList')}>
+        <div className="server-list__flow-content">
+          {props.servers.map((server) => (
+            <Row
+              key={server.id}
+              server={server}
+              flow
+              selected={server.id === props.selectedId}
+              onSelect={props.onSelect}
+              onJoin={props.onJoin}
+              onToggleFavourite={props.onToggleFavourite}
+            />
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
       className="server-list"
       ref={scrollRef}
-      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      onScroll={(e) => updateVisibleWindow(e.currentTarget)}
       role="grid"
       aria-label={t('aria.serverList')}
     >
       <div className="server-list__spacer" style={{ height: props.servers.length * STRIDE - ROW_GAP }}>
-        {props.servers.slice(first, last).map((server, i) => (
+        {props.servers.slice(visibleRange.first, visibleRange.last).map((server, i) => (
           <Row
             key={server.id}
             server={server}
-            top={(first + i) * STRIDE}
+            top={(visibleRange.first + i) * STRIDE}
             selected={server.id === props.selectedId}
             onSelect={props.onSelect}
             onJoin={props.onJoin}
@@ -192,4 +230,4 @@ export function ServerList(props: ServerListProps) {
       </div>
     </div>
   )
-}
+})

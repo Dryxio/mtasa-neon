@@ -41,6 +41,13 @@ export class MockBackend implements BrowserBackend {
     return () => this.listeners.delete(listener)
   }
 
+  resume(): void {}
+
+  suspend(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer)
+    this.refreshTimer = null
+  }
+
   private emit(event: BackendEvent): void {
     for (const listener of this.listeners) listener(event)
   }

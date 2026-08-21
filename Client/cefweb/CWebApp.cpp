@@ -57,8 +57,6 @@ namespace
         // Prevent Chromium from dropping privileges; required for elevated launches (see chromium/3960)
         commandLine->AppendSwitch("do-not-de-elevate");
 
-        // Enable external begin frame scheduling for MTA-controlled rendering
-        commandLine->AppendSwitch("enable-begin-frame-scheduling");
         // Explicitly block account sign-in to avoid crashes when Google API keys are registered on the system
         commandLine->AppendSwitchWithValue("allow-browser-signin", "false");
 
@@ -71,6 +69,9 @@ namespace
 
         bool disableGpu = false;
         bool enableVideoAccel = true;
+        bool externalFrameScheduling = false;
+        bool smoothScrolling = true;
+        bool disableBackgroundThrottling = false;
         if (g_pCore && IsReadablePointer(g_pCore, sizeof(void*)))
         {
             auto* cvars = g_pCore->GetCVars();
@@ -81,7 +82,29 @@ namespace
                 disableGpu = !gpuEnabled;
 
                 cvars->Get("browser_enable_video_acceleration", enableVideoAccel);
+                cvars->Get("browser_external_frame_scheduling", externalFrameScheduling);
+                cvars->Get("browser_smooth_scrolling", smoothScrolling);
+                cvars->Get("browser_disable_background_throttling", disableBackgroundThrottling);
             }
+        }
+
+        // The Chromium process switch must match the per-window CEF setting.
+        // Leaving it enabled for self-scheduled WebViews produced irregular paints.
+        if (externalFrameScheduling)
+            commandLine->AppendSwitch("enable-begin-frame-scheduling");
+
+        if (smoothScrolling)
+            commandLine->AppendSwitch("enable-smooth-scrolling");
+
+        // Windowless CEF content has no native foreground window for Chromium's visibility heuristics. Some hosts are consequently demoted to Idle process
+        // priority even while their texture is visible. These switches provide an explicit diagnostic/compatibility path without keeping hidden resource
+        // browsers awake by default.
+        if (disableBackgroundThrottling)
+        {
+            commandLine->AppendSwitch("disable-renderer-backgrounding");
+            commandLine->AppendSwitch("disable-renderer-priority-management");
+            commandLine->AppendSwitch("disable-background-timer-throttling");
+            commandLine->AppendSwitch("disable-backgrounding-occluded-windows");
         }
 
         // Wine/Proton compatibility: Allow GPU unless explicitly disabled or forced software

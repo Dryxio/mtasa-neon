@@ -1,7 +1,9 @@
-import { type ReactNode, type UIEvent, useEffect, useId, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { IconArrowLeft } from './components/Icons'
+import { chooseLaunchLoadscreen } from './loadscreen'
 import { SETTINGS_COPY, type SettingId, type SettingValue } from './settingsSchema'
-import { type SettingsState, useSettingsBridge } from './settingsBridge'
+import { type SettingsBindRow, type SettingsState, useSettingsBridge } from './settingsBridge'
 import './Settings.css'
 
 interface SettingsProps {
@@ -9,15 +11,26 @@ interface SettingsProps {
 }
 
 const CATEGORIES = ['Game', 'Graphics', 'Audio', 'Controls', 'Interface', 'Neon', 'Advanced'] as const
+type SettingsCategory = typeof CATEGORIES[number]
+
+const CATEGORY_COPY: Record<SettingsCategory, { eyebrow: string; reset: 'game' | 'graphics' | 'audio' | 'controls' | 'interface' | 'neon' | 'advanced' }> = {
+  Game: { eyebrow: 'Player and multiplayer', reset: 'game' },
+  Graphics: { eyebrow: 'Display and rendering', reset: 'graphics' },
+  Audio: { eyebrow: 'Sound and user tracks', reset: 'audio' },
+  Controls: { eyebrow: 'Input and key bindings', reset: 'controls' },
+  Interface: { eyebrow: 'Chat, language and web privacy', reset: 'interface' },
+  Neon: { eyebrow: 'Neon-specific features', reset: 'neon' },
+  Advanced: { eyebrow: 'Compatibility and diagnostics', reset: 'advanced' },
+}
 
 export function Settings({ onClose }: SettingsProps) {
   const settings = useSettingsBridge()
   const { state } = settings
   const values = state.values
-  const [activeCategory, setActiveCategory] = useState<'Graphics' | 'Neon'>('Graphics')
+  const [loadscreen] = useState(chooseLaunchLoadscreen)
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>('Graphics')
   const [confirmation, setConfirmation] = useState<{ id: SettingId; value: SettingValue; title: string; message: string } | null>(null)
-  const scrollEndTimer = useRef<number | undefined>(undefined)
-  const scrollActive = useRef(false)
+  const contentRef = useRef<HTMLElement>(null)
 
   const closeAndDiscard = () => {
     settings.cancel()
@@ -39,20 +52,13 @@ export function Settings({ onClose }: SettingsProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
-  useEffect(() => () => window.clearTimeout(scrollEndTimer.current), [])
+  const selectCategory = (category: SettingsCategory) => {
+    if (category === activeCategory) return
 
-  const handleContentScroll = (event: UIEvent<HTMLElement>) => {
-    const content = event.currentTarget
-    if (!scrollActive.current) {
-      scrollActive.current = true
-      content.classList.add('settings__content--scrolling')
-      window.dispatchEvent(new Event('neon-settings-scroll-start'))
-    }
-    window.clearTimeout(scrollEndTimer.current)
-    scrollEndTimer.current = window.setTimeout(() => {
-      scrollActive.current = false
-      content.classList.remove('settings__content--scrolling')
-    }, 120)
+    // Both categories reuse the same scroll container, so reset it before React
+    // replaces the rows instead of carrying the previous category's position.
+    if (contentRef.current) contentRef.current.scrollTop = 0
+    setActiveCategory(category)
   }
 
   const skyEnabled = Boolean(values['skyGfx.enabled']) && !state.managed.skyGfx
@@ -73,19 +79,44 @@ export function Settings({ onClose }: SettingsProps) {
       })
       return
     }
+    if (id === 'game.allowScreenUpload' && value === false && values[id]) {
+      setConfirmation({ id, value, title: 'Screenshot compatibility', message: 'Some servers require screenshot uploads for anti-cheat. The chat box and MTA interface are excluded. Disable screenshot uploads anyway?' })
+      return
+    }
+    if (id === 'game.allowExternalSounds' && value === false && values[id]) {
+      setConfirmation({ id, value, title: 'External sounds', message: 'Some server scripts use internet radio and other external audio. Disabling this may reduce bandwidth use, but those sounds will no longer play. Disable them?' })
+      return
+    }
+    if (id === 'game.customizedSAFiles' && value !== values[id]) {
+      setConfirmation({ id, value, title: 'Restart required', message: 'Changing customized GTA file support requires an MTA restart and can affect server compatibility.' })
+      return
+    }
+    if (id === 'game.discordShareData' && value === true && !values[id]) {
+      setConfirmation({ id, value, title: 'Discord data sharing', message: 'Connected servers will be allowed to receive your Discord client ID and game-state information. Allow this data sharing?' })
+      return
+    }
+    if (id === 'advanced.cpuAffinity' && value === false && values[id]) {
+      setConfirmation({ id, value, title: 'Performance warning', message: 'Excluding CPU 0 is the recommended compatibility setting. Disable it only if you are troubleshooting a performance issue. Continue?' })
+      return
+    }
     settings.setValue(id, value)
   }
 
   return (
-    <main className="settings" aria-label="Settings preview">
-      <div className="settings__wash" />
+    <main className="settings" aria-label="Settings">
+      <div className="settings__art" aria-hidden="true">
+        <img src={loadscreen} alt="" draggable={false} />
+      </div>
+      <div className="settings__wash" aria-hidden="true" />
       <header className="settings__header">
         <div>
-          <span className="settings__eyebrow">Neon control center</span>
+          <span className="settings__eyebrow">MTA Neon Control Center</span>
           <h1>Settings</h1>
         </div>
-        <button className="settings__close" type="button" onClick={closeAndDiscard} aria-label="Close settings and discard unapplied changes">
-          <span aria-hidden="true">Esc</span> Back
+        <button className="settings__close" type="button" onClick={closeAndDiscard} title="Back to main menu"
+          aria-label="Close settings and discard unapplied changes">
+          <IconArrowLeft size={18} />
+          <span>Back to main menu</span>
         </button>
       </header>
 
@@ -96,36 +127,43 @@ export function Settings({ onClose }: SettingsProps) {
               key={category}
               type="button"
               className={category === activeCategory ? 'settings__nav-item settings__nav-item--active' : 'settings__nav-item'}
-              disabled={category !== 'Neon' && category !== 'Graphics'}
               aria-current={category === activeCategory ? 'page' : undefined}
-              onClick={() => (category === 'Neon' || category === 'Graphics') && setActiveCategory(category)}
+              onClick={() => selectCategory(category)}
             >
               <span aria-hidden="true">›</span>{category}
-              {category !== 'Neon' && category !== 'Graphics' && <small>Later</small>}
             </button>
           ))}
         </nav>
 
-        <section className="settings__content" aria-labelledby="settings-category-heading" onScroll={handleContentScroll}>
+        <section ref={contentRef} className="settings__content" aria-labelledby="settings-category-heading">
           <div className="settings__content-heading">
             <div>
-              <span>{activeCategory === 'Neon' ? 'Neon-specific features' : 'Display and rendering'}</span>
+              <span>{CATEGORY_COPY[activeCategory].eyebrow}</span>
               <h2 id="settings-category-heading">{activeCategory}</h2>
             </div>
-            <button type="button" className="settings__reset" onClick={() => settings.reset(activeCategory === 'Neon' ? 'neon' : 'graphics')}>Reset {activeCategory}</button>
+            <button type="button" className="settings__reset" onClick={() => settings.reset(CATEGORY_COPY[activeCategory].reset)}>Reset {activeCategory}</button>
           </div>
 
           {!state.ready && <div className="settings__loading">Reading native settings…</div>}
+          {state.error && <div className="settings__error" role="alert">{state.error}</div>}
+
+          {activeCategory === 'Game' && <GameSettings state={state} onChange={setValue} onAction={settings.action} />}
 
           {activeCategory === 'Graphics' && <GraphicsSettings state={state} onChange={setValue} onAction={settings.action} />}
 
-          {activeCategory === 'Neon' && <><SettingsGroup title="Extended world" caption="Stock world visibility beyond GTA's original limits.">
+          {activeCategory === 'Audio' && <AudioSettings state={state} onChange={setValue} />}
+
+          {activeCategory === 'Controls' && <ControlsSettings state={state} onChange={setValue} onAction={settings.action} />}
+
+          {activeCategory === 'Interface' && <InterfaceSettings state={state} onChange={setValue} onAction={settings.action} />}
+
+          {activeCategory === 'Neon' && <><SettingsGroup title="Extended world">
             <ToggleRow id="extendedWorld.enabled" value={Boolean(values['extendedWorld.enabled'])} onChange={setValue} />
             <RangeRow id="extendedWorld.distance" value={Number(values['extendedWorld.distance'])} min={300} max={5000} step={100} suffix=" m"
               disabled={!values['extendedWorld.enabled']} onChange={setValue} />
           </SettingsGroup>
 
-          <SettingsGroup title="Project2DFX" caption="Integrated distant city lights — no ASI plugin required.">
+          <SettingsGroup title="Project2DFX">
             <ToggleRow id="distantLights.enabled" value={Boolean(values['distantLights.enabled'])} onChange={setValue} />
             <RangeRow id="distantLights.distance" value={Number(values['distantLights.distance'])} min={300} max={5000} step={100} suffix=" m"
               disabled={!values['distantLights.enabled']} onChange={setValue} />
@@ -170,12 +208,15 @@ export function Settings({ onClose }: SettingsProps) {
             <RangeRow id="radar.height" value={Number(values['radar.height'])} min={40} max={200} step={0.5} disabled={state.managed.radar} onChange={setValue} />
             <ToggleRow id="radar.widescreenSafe" value={Boolean(values['radar.widescreenSafe'])} disabled={state.managed.radar} onChange={setValue} />
           </SettingsGroup></>}
+
+          {activeCategory === 'Advanced' && <AdvancedSettings state={state} onChange={setValue} onAction={settings.action} />}
         </section>
       </div>
 
       <footer className="settings__footer">
-        <p>{state.dirty ? 'Unapplied changes' : state.restartRequired ? 'Applied · restart required' : 'All changes applied'}</p>
+        <p>{state.dirty ? 'Unapplied changes' : state.restartRequired ? 'Applied · restart required' : state.disconnectRequired ? 'Applied · reconnect to activate browser permissions' : 'All changes applied'}</p>
         <div>
+          {state.disconnectRequired && <button type="button" className="settings__button settings__button--restart" onClick={() => settings.action('disconnectNow')}>Disconnect now</button>}
           {state.restartRequired && <button type="button" className="settings__button settings__button--restart" onClick={() => settings.action('restartNow')}>Restart now</button>}
           <button type="button" className="settings__button settings__button--quiet" onClick={closeAndDiscard}>Cancel</button>
           <button type="button" className="settings__button settings__button--primary" disabled={!state.dirty || !state.ready} onClick={settings.apply}>Apply</button>
@@ -184,7 +225,7 @@ export function Settings({ onClose }: SettingsProps) {
       {confirmation && (
         <div className="settings-confirm" role="dialog" aria-modal="true" aria-labelledby="settings-confirm-title">
           <div className="settings-confirm__panel">
-            <span>Graphics // confirmation</span>
+            <span>Settings // confirmation</span>
             <h2 id="settings-confirm-title">{confirmation.title}</h2>
             <p>{confirmation.message}</p>
             <div>
@@ -192,13 +233,190 @@ export function Settings({ onClose }: SettingsProps) {
               <button type="button" className="settings__button settings__button--primary" onClick={() => {
                 settings.setValue(confirmation.id, confirmation.value)
                 setConfirmation(null)
-              }}>Enable</button>
+              }}>Confirm</button>
             </div>
           </div>
         </div>
       )}
     </main>
   )
+}
+
+function GameSettings({ state, onChange, onAction }: SettingsSectionProps) {
+  const values = state.values
+  return <>
+    <SettingsGroup title="Player identity">
+      <TextRow id="game.nickname" value={String(values['game.nickname'])} maxLength={22} onChange={onChange} />
+      <ActionRow label="Generate a nickname" description="Creates a random valid nickname without contacting a server." button="Randomize"
+        disabled={false} onAction={() => onAction('randomNickname')} />
+      <ToggleRow id="game.savePasswords" value={Boolean(values['game.savePasswords'])} onChange={onChange} />
+      <ToggleRow id="game.autoRefreshBrowser" value={Boolean(values['game.autoRefreshBrowser'])} onChange={onChange} />
+      <ToggleRow id="game.askBeforeDisconnect" value={Boolean(values['game.askBeforeDisconnect'])} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Server permissions">
+      <ToggleRow id="game.allowScreenUpload" value={Boolean(values['game.allowScreenUpload'])} onChange={onChange} />
+      <ToggleRow id="game.allowExternalSounds" value={Boolean(values['game.allowExternalSounds'])} onChange={onChange} />
+      <ToggleRow id="game.alwaysShowTransferBox" value={Boolean(values['game.alwaysShowTransferBox'])} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Presence and files">
+      <ToggleRow id="game.discordRichPresence" value={Boolean(values['game.discordRichPresence'])} onChange={onChange} />
+      <ToggleRow id="game.discordShareData" value={Boolean(values['game.discordShareData'])} disabled={!values['game.discordRichPresence']} onChange={onChange} />
+      <ToggleRow id="game.steamStatus" value={Boolean(values['game.steamStatus'])} onChange={onChange} />
+      <ToggleRow id="game.saveCameraPhotos" value={Boolean(values['game.saveCameraPhotos'])} onChange={onChange} />
+      {state.availability.customizedSAFiles && <ToggleRow id="game.customizedSAFiles" value={Boolean(values['game.customizedSAFiles'])} onChange={onChange} />}
+    </SettingsGroup>
+    <SettingsGroup title="Player map">
+      <RangeRow id="game.mapOpacity" value={Number(values['game.mapOpacity'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <SelectRow id="game.mapImage" value={Number(values['game.mapImage'])} options={[["Standard", 0], ["High detail", 1]]} onChange={onChange} />
+    </SettingsGroup>
+  </>
+}
+
+function AudioSettings({ state, onChange }: Omit<SettingsSectionProps, 'onAction'>) {
+  const values = state.values
+  const masterMuted = Boolean(values['audio.muteMaster'])
+  return <>
+    <SettingsGroup title="Volume">
+      <RangeRow id="audio.masterVolume" value={Number(values['audio.masterVolume'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <RangeRow id="audio.radioVolume" value={Number(values['audio.radioVolume'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <RangeRow id="audio.sfxVolume" value={Number(values['audio.sfxVolume'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <RangeRow id="audio.mtaVolume" value={Number(values['audio.mtaVolume'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <RangeRow id="audio.voiceVolume" value={Number(values['audio.voiceVolume'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Radio & user tracks">
+      <ToggleRow id="audio.radioEqualizer" value={Boolean(values['audio.radioEqualizer'])} onChange={onChange} />
+      <ToggleRow id="audio.radioAutotune" value={Boolean(values['audio.radioAutotune'])} onChange={onChange} />
+      <ToggleRow id="audio.userTrackAutoScan" value={Boolean(values['audio.userTrackAutoScan'])} onChange={onChange} />
+      <SelectRow id="audio.userTrackMode" value={Number(values['audio.userTrackMode'])}
+        options={[["Radio", 0], ["Random", 1], ["Sequential", 2]]} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="When minimized">
+      <ToggleRow id="audio.muteMaster" value={masterMuted} onChange={onChange} />
+      <ToggleRow id="audio.muteRadio" value={Boolean(values['audio.muteRadio'])} disabled={masterMuted} onChange={onChange} />
+      <ToggleRow id="audio.muteSfx" value={Boolean(values['audio.muteSfx'])} disabled={masterMuted} onChange={onChange} />
+      <ToggleRow id="audio.muteMta" value={Boolean(values['audio.muteMta'])} disabled={masterMuted} onChange={onChange} />
+      <ToggleRow id="audio.muteVoice" value={Boolean(values['audio.muteVoice'])} disabled={masterMuted} onChange={onChange} />
+    </SettingsGroup>
+  </>
+}
+
+function ControlsSettings({ state, onChange, onAction }: SettingsSectionProps) {
+  const values = state.values
+  const linkedAim = Boolean(values['controls.useMouseSensitivityForAiming'])
+  return <>
+    <SettingsGroup title="Mouse">
+      <ToggleRow id="controls.invertMouse" value={Boolean(values['controls.invertMouse'])} onChange={onChange} />
+      <ToggleRow id="controls.steerWithMouse" value={Boolean(values['controls.steerWithMouse'])} onChange={onChange} />
+      <ToggleRow id="controls.flyWithMouse" value={Boolean(values['controls.flyWithMouse'])} onChange={onChange} />
+      <RangeRow id="controls.mouseSensitivity" value={Number(values['controls.mouseSensitivity'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <ToggleRow id="controls.useMouseSensitivityForAiming" value={linkedAim} onChange={onChange} />
+      <RangeRow id="controls.verticalAimSensitivity" value={Number(values['controls.verticalAimSensitivity'])} min={0} max={100} step={1}
+        suffix="%" disabled={linkedAim} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Joypad" caption={state.joypad.connected ? `${state.joypad.name} · axis binding and defaults are immediate actions` : 'No joypad detected — connect one and restart MTA.'}>
+      <ToggleRow id="controls.classicControls" value={Boolean(values['controls.classicControls'])} onChange={onChange} />
+      <RangeRow id="controls.joypadDeadZone" value={Number(values['controls.joypadDeadZone'])} min={0} max={49} step={1} suffix="%" onChange={onChange} />
+      <RangeRow id="controls.joypadSaturation" value={Number(values['controls.joypadSaturation'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      {state.joypad.axes.map((axis) => <ActionRow key={axis.index} label={axis.output}
+        description={`Current controller input: ${axis.input || 'Unbound'}. Choose this row, then move an axis; Escape clears it.`}
+        button={state.joypad.capturingAxis === axis.index ? 'Move an axis…' : axis.input || 'Bind axis'} disabled={!state.joypad.connected}
+        onAction={() => onAction('captureJoypadAxis', String(axis.index))} />)}
+    </SettingsGroup>
+    <SettingsGroup title="Key bindings" caption="Select any slot, then press a keyboard, mouse or joypad button. Escape clears that slot.">
+      <BindEditor rows={state.binds} capture={state.capture} onCapture={(id, slot) => onAction('captureBind', `${id}|${slot}`)} />
+      <ActionRow label="Restore default bindings" description="Replaces user GTA and MTA bindings with the standard defaults."
+        button="Load defaults" disabled={false} onAction={() => onAction('resetBinds')} />
+    </SettingsGroup>
+  </>
+}
+
+function InterfaceSettings({ state, onChange, onAction }: SettingsSectionProps) {
+  const values = state.values
+  return <>
+    <SettingsGroup title="Language & legacy windows">
+      <StringSelectRow id="interface.locale" value={String(values['interface.locale'])} disabled={state.availability.connected}
+        options={state.locales.map((locale) => [locale.label, locale.code])} onChange={onChange} />
+      <StringSelectRow id="interface.skin" value={String(values['interface.skin'])} disabled={state.availability.connected}
+        options={state.skins.map((skin) => [skin, skin])} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Chat appearance">
+      <ChatPresetRow presets={state.chatPresets} onLoad={(id) => onAction('chatPreset', id)} />
+      <ColorRow id="interface.chatBackgroundColor" value={Number(values['interface.chatBackgroundColor'])} onChange={onChange} />
+      <ColorRow id="interface.chatTextColor" value={Number(values['interface.chatTextColor'])} minAlpha={128} onChange={onChange} />
+      <ColorRow id="interface.chatInputBackgroundColor" value={Number(values['interface.chatInputBackgroundColor'])} onChange={onChange} />
+      <ColorRow id="interface.chatInputTextColor" value={Number(values['interface.chatInputTextColor'])} minAlpha={128} onChange={onChange} />
+      <SelectRow id="interface.chatFont" value={Number(values['interface.chatFont'])}
+        options={[["Tahoma", 0], ["Verdana", 1], ["Tahoma Bold", 2], ["Arial", 3]]} onChange={onChange} />
+      <RangeRow id="interface.chatLines" value={Number(values['interface.chatLines'])} min={3} max={62} step={1} onChange={onChange} />
+      <RangeRow id="interface.chatScaleX" value={Number(values['interface.chatScaleX'])} min={0.5} max={3} step={0.1} format={(v) => `${v.toFixed(1)}x`} onChange={onChange} />
+      <RangeRow id="interface.chatScaleY" value={Number(values['interface.chatScaleY'])} min={0.5} max={3} step={0.1} format={(v) => `${v.toFixed(1)}x`} onChange={onChange} />
+      <RangeRow id="interface.chatWidth" value={Number(values['interface.chatWidth'])} min={0.5} max={4} step={0.1} format={(v) => `${v.toFixed(1)}x`} onChange={onChange} />
+      <ToggleRow id="interface.chatCssText" value={Boolean(values['interface.chatCssText'])} onChange={onChange} />
+      <ToggleRow id="interface.chatCssBackground" value={Boolean(values['interface.chatCssBackground'])} onChange={onChange} />
+      <ToggleRow id="interface.chatNickCompletion" value={Boolean(values['interface.chatNickCompletion'])} onChange={onChange} />
+      <ToggleRow id="interface.chatTextOutline" value={Boolean(values['interface.chatTextOutline'])} onChange={onChange} />
+      <NumberRow id="interface.chatLineLife" value={Number(values['interface.chatLineLife'])} min={1} max={120000} step={1} suffix=" seconds" onChange={onChange} />
+      <NumberRow id="interface.chatLineFadeOut" value={Number(values['interface.chatLineFadeOut'])} min={1} max={30000} step={1} suffix=" seconds" onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Chat layout" caption="Offsets use relative screen coordinates.">
+      <SelectRow id="interface.chatPositionHorizontal" value={Number(values['interface.chatPositionHorizontal'])} options={[["Left", 0], ["Center", 1], ["Right", 2]]} onChange={onChange} />
+      <SelectRow id="interface.chatPositionVertical" value={Number(values['interface.chatPositionVertical'])} options={[["Top", 0], ["Center", 1], ["Bottom", 2]]} onChange={onChange} />
+      <SelectRow id="interface.chatTextAlignment" value={Number(values['interface.chatTextAlignment'])} options={[["Left", 0], ["Right", 1]]} onChange={onChange} />
+      <RangeRow id="interface.chatOffsetX" value={Number(values['interface.chatOffsetX'])} min={-1} max={1} step={0.0025} format={(v) => v.toFixed(4)} onChange={onChange} />
+      <RangeRow id="interface.chatOffsetY" value={Number(values['interface.chatOffsetY'])} min={-1} max={1} step={0.0025} format={(v) => v.toFixed(4)} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Desktop notifications">
+      <ToggleRow id="interface.flashWindow" value={Boolean(values['interface.flashWindow'])} onChange={onChange} />
+      <ToggleRow id="interface.trayNotifications" value={Boolean(values['interface.trayNotifications'])} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Web content & privacy" caption="CEF permissions used by browser resources. Domain lists apply after reconnecting.">
+      <ToggleRow id="browser.remoteWebsites" value={Boolean(values['browser.remoteWebsites'])} onChange={onChange} />
+      <ToggleRow id="browser.remoteJavascript" value={Boolean(values['browser.remoteJavascript'])} disabled={!values['browser.remoteWebsites']} onChange={onChange} />
+      <ToggleRow id="browser.gpuRendering" value={Boolean(values['browser.gpuRendering'])} onChange={onChange} />
+      <ToggleRow id="browser.videoAcceleration" value={Boolean(values['browser.videoAcceleration'])} onChange={onChange} />
+      <DomainList title="Custom blacklist" entries={state.browserBlacklist} addLabel="Block domain"
+        onAdd={(domain) => onAction('browserBlacklistAdd', domain)} onRemove={(domain) => onAction('browserBlacklistRemove', domain)}
+        onClear={() => onAction('browserBlacklistClear')} />
+      <DomainList title="Custom whitelist" entries={state.browserWhitelist} addLabel="Allow domain"
+        onAdd={(domain) => onAction('browserWhitelistAdd', domain)} onRemove={(domain) => onAction('browserWhitelistRemove', domain)}
+        onClear={() => onAction('browserWhitelistClear')} />
+    </SettingsGroup>
+  </>
+}
+
+function AdvancedSettings({ state, onChange, onAction }: SettingsSectionProps) {
+  const values = state.values
+  return <>
+    <SettingsGroup title="Compatibility & performance">
+      <SelectRow id="advanced.fastClothesLoading" value={Number(values['advanced.fastClothesLoading'])} options={[["Off", 0], ["Auto", 1], ["On", 2]]} onChange={onChange} />
+      <SelectRow id="advanced.browserSpeed" value={Number(values['advanced.browserSpeed'])} options={[["Very slow", 0], ["Default", 1], ["Fast", 2]]} onChange={onChange} />
+      <SelectRow id="advanced.singleConnection" value={Number(values['advanced.singleConnection'])} options={[["Default", 0], ["On", 1]]} onChange={onChange} />
+      <SelectRow id="advanced.packetTag" value={Number(values['advanced.packetTag'])} options={[["Default", 0], ["On", 1]]} onChange={onChange} />
+      <SelectRow id="advanced.progressAnimation" value={Number(values['advanced.progressAnimation'])} options={[["Off", 0], ["Default", 1]]} onChange={onChange} />
+      <SelectRow id="advanced.processPriority" value={Number(values['advanced.processPriority'])} options={[["Normal", 0], ["Above normal", 1], ["High", 2]]} onChange={onChange} />
+      <RangeRow id="advanced.streamingMemory" value={Number(values['advanced.streamingMemory'])} min={state.availability.streamingMemoryMin}
+        max={state.availability.streamingMemoryMax} step={1} suffix=" MB" onChange={onChange} />
+      <ToggleRow id="advanced.cpuAffinity" value={Boolean(values['advanced.cpuAffinity'])} onChange={onChange} />
+    </SettingsGroup>
+    <SettingsGroup title="Diagnostics">
+      <SelectRow id="advanced.debugSetting" value={Number(values['advanced.debugSetting'])}
+        options={[["Default", 0], ["#6734 Graphics", 1], ["#6732 D3D", 3], ["Log timing", 4], ["Joystick", 5], ["Lua trace", 6], ["Resize always", 7], ["Resize never", 8]]} onChange={onChange} />
+      <ActionRow label="Client resource files" description={`Opens the MTA client resource cache in Windows Explorer.${state.availability.resourceCachePath ? ` Current location: ${state.availability.resourceCachePath}` : ''}`}
+        button="Show in Explorer" disabled={false} onAction={() => onAction('openResourceFolder')} />
+    </SettingsGroup>
+    <SettingsGroup title="Updater">
+      <SelectRow id="advanced.updateBuildType" value={Number(values['advanced.updateBuildType'])} options={[["Default", 0], ["Nightly", 2]]} onChange={onChange} />
+      <SelectRow id="advanced.updateAutoInstall" value={Number(values['advanced.updateAutoInstall'])} options={[["Off", 0], ["Default", 1]]} onChange={onChange} />
+      <ActionRow label="Check for updates" description="Starts an immediate update check using the selected channel."
+        button="Check now" disabled={false} onAction={() => onAction('checkForUpdates')} />
+    </SettingsGroup>
+  </>
+}
+
+interface SettingsSectionProps {
+  state: SettingsState
+  onChange(id: SettingId, value: SettingValue): void
+  onAction(name: string, argument?: string): void
 }
 
 function GraphicsSettings({ state, onChange, onAction }: {
@@ -213,7 +431,7 @@ function GraphicsSettings({ state, onChange, onAction }: {
   for (let level = 1; level <= state.availability.maxAnisotropic; level += 1) anisotropicOptions.push([`${2 ** level}x`, level])
 
   return <>
-    <SettingsGroup title="Display" caption="Window mode, output resolution and presentation timing.">
+    <SettingsGroup title="Display">
       <SelectRow id="graphics.displayMode" value={Number(values['graphics.displayMode'])}
         options={[["Windowed", 0], ["Fullscreen", 1], ["Borderless window", 2], ["Borderless · keep resolution", 3]]} onChange={onChange} />
       <SelectRow id="graphics.videoMode" value={Number(values['graphics.videoMode'])}
@@ -226,7 +444,7 @@ function GraphicsSettings({ state, onChange, onAction }: {
         disabled={Number(values['graphics.displayMode']) === 0} onChange={onChange} />}
     </SettingsGroup>
 
-    <SettingsGroup title="View & HUD" caption="Camera framing, original brightness and widescreen layout.">
+    <SettingsGroup title="View & HUD">
       <RangeRow id="graphics.fov" value={Number(values['graphics.fov'])} min={70} max={90} step={5} suffix="°" onChange={onChange} />
       <RangeRow id="graphics.brightness" value={Number(values['graphics.brightness'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
       <SelectRow id="graphics.aspectRatio" value={Number(values['graphics.aspectRatio'])}
@@ -234,7 +452,7 @@ function GraphicsSettings({ state, onChange, onAction }: {
       <ToggleRow id="graphics.hudMatchAspectRatio" value={Boolean(values['graphics.hudMatchAspectRatio'])} onChange={onChange} />
     </SettingsGroup>
 
-    <SettingsGroup title="Rendering quality" caption="GTA world range, filtering and multisampling.">
+    <SettingsGroup title="Rendering quality">
       <RangeRow id="graphics.drawDistance" value={Number(values['graphics.drawDistance'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
       <SelectRow id="graphics.fxQuality" value={fxQuality}
         options={[["Low", 0], ["Medium", 1], ["High", 2], ["Very high", 3]]} onChange={onChange} />
@@ -244,7 +462,7 @@ function GraphicsSettings({ state, onChange, onAction }: {
         options={anisotropicOptions} onChange={onChange} />}
     </SettingsGroup>
 
-    <SettingsGroup title="Visual effects" caption="Original GTA particles, shadows and camera effects.">
+    <SettingsGroup title="Visual effects">
       <ToggleRow id="graphics.volumetricShadows" value={Boolean(values['graphics.volumetricShadows'])} disabled={fxQuality === 0} onChange={onChange} />
       <ToggleRow id="graphics.grass" value={Boolean(values['graphics.grass'])} disabled={fxQuality === 0} onChange={onChange} />
       <ToggleRow id="graphics.dynamicPedShadows" value={Boolean(values['graphics.dynamicPedShadows'])} disabled={fxQuality < 2} onChange={onChange} />
@@ -254,7 +472,7 @@ function GraphicsSettings({ state, onChange, onAction }: {
       <ToggleRow id="graphics.coronaReflections" value={Boolean(values['graphics.coronaReflections'])} onChange={onChange} />
     </SettingsGroup>
 
-    <SettingsGroup title="World details" caption="Force nearby actors to retain their highest-detail models.">
+    <SettingsGroup title="World details">
       <ToggleRow id="graphics.highDetailVehicles" value={Boolean(values['graphics.highDetailVehicles'])} onChange={onChange} />
       <ToggleRow id="graphics.highDetailPeds" value={Boolean(values['graphics.highDetailPeds'])} onChange={onChange} />
     </SettingsGroup>
@@ -278,7 +496,7 @@ function GraphicsSettings({ state, onChange, onAction }: {
         disabled={false} button="Reset calibration" onAction={() => onAction('resetDisplayCalibration')} />
     </SettingsGroup>
 
-    <SettingsGroup title="Compatibility" caption="Advanced display startup and troubleshooting options.">
+    <SettingsGroup title="Compatibility">
       <ToggleRow id="graphics.dpiAware" value={Boolean(values['graphics.dpiAware'])} onChange={onChange} />
       {state.availability.unsafeResolutions && <ToggleRow id="graphics.showUnsafeResolutions" value={Boolean(values['graphics.showUnsafeResolutions'])}
         onChange={onChange} />}
@@ -288,11 +506,11 @@ function GraphicsSettings({ state, onChange, onAction }: {
   </>
 }
 
-function SettingsGroup({ title, caption, managed = false, children }: { title: string; caption: string; managed?: boolean; children: ReactNode }) {
+function SettingsGroup({ title, caption, managed = false, children }: { title: string; caption?: string; managed?: boolean; children: ReactNode }) {
   return (
     <section className="settings-group">
-      <header>
-        <div><h3>{title}</h3><p>{caption}</p></div>
+      <header className={caption ? undefined : 'settings-group__header--compact'}>
+        <div><h3>{title}</h3>{caption && <p>{caption}</p>}</div>
         {managed && <span className="settings-group__managed">Managed by server</span>}
       </header>
       <div className="settings-group__rows">{children}</div>
@@ -340,6 +558,126 @@ function SelectRow({ id, value, options, disabled = false, onChange }: RowProps 
   )
 }
 
+function StringSelectRow({ id, value, options, disabled = false, onChange }: RowProps & { value: string; options: Array<[string, string]> }) {
+  return (
+    <SettingRow id={id} disabled={disabled}>
+      <select aria-label={SETTINGS_COPY[id].label} value={value} disabled={disabled} onChange={(event) => onChange(id, event.target.value)}>
+        {options.map(([label, optionValue]) => <option key={optionValue} value={optionValue}>{label}</option>)}
+      </select>
+    </SettingRow>
+  )
+}
+
+function TextRow({ id, value, maxLength, disabled = false, onChange }: RowProps & { value: string; maxLength: number }) {
+  return (
+    <SettingRow id={id} disabled={disabled}>
+      <input className="settings-text" type="text" aria-label={SETTINGS_COPY[id].label} value={value} maxLength={maxLength} disabled={disabled}
+        onChange={(event) => onChange(id, event.target.value)} />
+    </SettingRow>
+  )
+}
+
+function NumberRow({ id, value, min, max, step, suffix, disabled = false, onChange }: RowProps & {
+  value: number; min: number; max: number; step: number; suffix?: string
+}) {
+  return (
+    <SettingRow id={id} disabled={disabled}>
+      <label className="settings-number">
+        <input type="number" aria-label={SETTINGS_COPY[id].label} value={value} min={min} max={max} step={step} disabled={disabled}
+          onChange={(event) => event.target.value !== '' && onChange(id, Number(event.target.value))} />
+        {suffix && <span>{suffix}</span>}
+      </label>
+    </SettingRow>
+  )
+}
+
+function ColorRow({ id, value, minAlpha = 0, disabled = false, onChange }: RowProps & { value: number; minAlpha?: number }) {
+  const packed = value >>> 0
+  const alpha = (packed >>> 24) & 0xff
+  const rgb = packed & 0xffffff
+  const color = `#${rgb.toString(16).padStart(6, '0')}`
+  const setRgb = (hex: string) => onChange(id, ((alpha << 24) | Number.parseInt(hex.slice(1), 16)) >>> 0)
+  const setAlpha = (nextAlpha: number) => onChange(id, ((Math.max(minAlpha, nextAlpha) << 24) | rgb) >>> 0)
+  return (
+    <SettingRow id={id} disabled={disabled}>
+      <div className="settings-color">
+        <input type="color" value={color} disabled={disabled} aria-label={`${SETTINGS_COPY[id].label} RGB`} onChange={(event) => setRgb(event.target.value)} />
+        <input type="range" value={Math.max(minAlpha, alpha)} min={minAlpha} max={255} step={1} disabled={disabled} aria-label={`${SETTINGS_COPY[id].label} opacity`}
+          onChange={(event) => setAlpha(Number(event.target.value))} />
+        <output>{Math.round(alpha / 255 * 100)}%</output>
+      </div>
+    </SettingRow>
+  )
+}
+
+function BindEditor({ rows, capture, onCapture }: {
+  rows: SettingsBindRow[]
+  capture: SettingsState['capture']
+  onCapture(id: string, slot: number): void
+}) {
+  if (rows.length === 0) return <p className="settings-empty">No editable bindings are available.</p>
+  let previousSection = ''
+  return <div className="settings-binds">
+    {rows.map((row) => {
+      const showSection = row.section !== previousSection
+      previousSection = row.section
+      return <div key={row.id} className="settings-bind">
+        {showSection && <h4>{row.section}</h4>}
+        <span>{row.label}</span>
+        <div>{[0, 1, 2, 3].map((slot) => {
+          const active = capture?.bindId === row.id && capture.slot === slot
+          return <button key={slot} type="button" className={active ? 'settings-bind__key settings-bind__key--capture' : 'settings-bind__key'}
+            onClick={() => onCapture(row.id, slot)}>{active ? 'Press a key…' : row.keys[slot] || '—'}</button>
+        })}</div>
+      </div>
+    })}
+  </div>
+}
+
+function ChatPresetRow({ presets, onLoad }: { presets: SettingsState['chatPresets']; onLoad(id: string): void }) {
+  const [selected, setSelected] = useState(presets[0]?.id ?? '')
+  useEffect(() => {
+    if (!presets.some((preset) => preset.id === selected)) setSelected(presets[0]?.id ?? '')
+  }, [presets, selected])
+  return (
+    <SettingRow copy={{ label: 'Chat preset', description: 'Loads a saved chatbox preset into this draft. Review the resulting values, then choose Apply to keep them.' }} disabled={presets.length === 0}>
+      <div className="settings-preset-select">
+        <select aria-label="Chat preset" value={selected} disabled={presets.length === 0} onChange={(event) => setSelected(event.target.value)}>
+          {presets.length === 0 && <option value="">No presets found</option>}
+          {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+        </select>
+        <button className="settings-action" type="button" disabled={!selected} onClick={() => onLoad(selected)}>Load</button>
+      </div>
+    </SettingRow>
+  )
+}
+
+function DomainList({ title, entries, addLabel, onAdd, onRemove, onClear }: {
+  title: string
+  entries: string[]
+  addLabel: string
+  onAdd(domain: string): void
+  onRemove(domain: string): void
+  onClear(): void
+}) {
+  const [domain, setDomain] = useState('')
+  const submit = () => {
+    const value = domain.trim().toLowerCase()
+    if (!value) return
+    onAdd(value)
+    setDomain('')
+  }
+  return <section className="settings-domains">
+    <header><h4>{title}</h4><button type="button" disabled={entries.length === 0} onClick={onClear}>Remove all</button></header>
+    <div className="settings-domains__add">
+      <input type="text" value={domain} maxLength={253} placeholder="example.com" aria-label={`${title} domain`}
+        onChange={(event) => setDomain(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} />
+      <button type="button" onClick={submit}>{addLabel}</button>
+    </div>
+    {entries.length > 0 && <ul>{entries.map((entry) => <li key={entry}><span>{entry}</span><button type="button" onClick={() => onRemove(entry)}>Remove</button></li>)}</ul>}
+  </section>
+}
+
 function ActionRow({ label, description, button, disabled, onAction }: { label: string; description: string; button: string; disabled: boolean; onAction(): void }) {
   return (
     <SettingRow copy={{ label, description }} disabled={disabled}>
@@ -383,13 +721,15 @@ function SettingRow({ id, copy, disabled = false, children }: { id?: SettingId; 
   }, [visible])
 
   useEffect(() => {
+    if (!visible) return
     const hideForScroll = () => {
       window.clearTimeout(delayRef.current)
       setVisible(false)
     }
-    window.addEventListener('neon-settings-scroll-start', hideForScroll)
-    return () => window.removeEventListener('neon-settings-scroll-start', hideForScroll)
-  }, [])
+    const scrollContainer = rowRef.current?.closest('.settings__content')
+    scrollContainer?.addEventListener('scroll', hideForScroll, { passive: true })
+    return () => scrollContainer?.removeEventListener('scroll', hideForScroll)
+  }, [visible])
 
   useEffect(() => {
     if (!visible) return

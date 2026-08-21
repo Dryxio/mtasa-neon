@@ -26,6 +26,20 @@ export interface MenuFeaturedServer {
   bannerUrl: string
 }
 
+export interface NativeMessageDialog {
+  id: number
+  severity: 'info' | 'question' | 'warning' | 'error'
+  title: string
+  message: string
+  dismissible: boolean
+  actions: Array<{
+    id: string
+    label: string
+    variant: 'default' | 'primary'
+  }>
+  escapeAction?: string
+}
+
 interface MenuState {
   inGame: boolean
   locale: string
@@ -34,11 +48,12 @@ interface MenuState {
   featuredServer: MenuFeaturedServer | null
   translations: TranslationMap
   connect: ConnectFlow
+  dialog: NativeMessageDialog | null
   hibernateGeneration: number | null
 }
 
 type NativeMenuEvent =
-  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations' | 'connect' | 'hibernateGeneration'>)
+  | ({ type: 'init'; translations?: Record<string, string> } & Omit<MenuState, 'translations' | 'connect' | 'dialog' | 'hibernateGeneration'>)
   | { type: 'context'; inGame: boolean }
   | { type: 'identity'; identity: MenuIdentity }
   | { type: 'featured-server'; server: MenuFeaturedServer | null }
@@ -47,6 +62,9 @@ type NativeMenuEvent =
   | { type: 'connect-progress'; stage: ConnectStage; message?: string }
   | { type: 'connect-failed'; code: string; message: string }
   | { type: 'connect-succeeded' }
+  | { type: 'connect-dismissed' }
+  | ({ type: 'dialog-show' } & NativeMessageDialog)
+  | { type: 'dialog-close'; id: number }
   | { type: 'hibernate-request'; generation: number }
   | { type: 'open-settings' }
 
@@ -81,6 +99,7 @@ const INITIAL_STATE: MenuState = {
   featuredServer: null,
   translations: {},
   connect: { phase: 'idle', address: null },
+  dialog: null,
   hibernateGeneration: null,
 }
 
@@ -275,6 +294,26 @@ export function useMenuBridge() {
               )
             }, 900)
           }
+          else if (event.type === 'connect-dismissed') {
+            setState((current) => ({ ...current, connect: { phase: 'idle', address: null } }))
+          }
+          else if (event.type === 'dialog-show') {
+            setState((current) => ({
+              ...current,
+              dialog: {
+                id: event.id,
+                severity: event.severity,
+                title: event.title,
+                message: event.message,
+                dismissible: event.dismissible,
+                actions: event.actions ?? [],
+                escapeAction: event.escapeAction,
+              },
+            }))
+          }
+          else if (event.type === 'dialog-close') {
+            setState((current) => current.dialog?.id === event.id ? { ...current, dialog: null } : current)
+          }
           else if (event.type === 'hibernate-request') {
             setState((current) => ({ ...current, hibernateGeneration: event.generation }))
           }
@@ -333,5 +372,9 @@ export function useMenuBridge() {
     publishConnectionUiEvent({ type: 'connect-dismissed' })
   }, [])
 
-  return { state, command, setLanguage, submitConnectionPassword, retryConnection, dismissConnection }
+  const respondToDialog = useCallback((id: number, action: string) => {
+    send('menu:dialogAction', String(id), action)
+  }, [])
+
+  return { state, command, setLanguage, submitConnectionPassword, retryConnection, dismissConnection, respondToDialog }
 }

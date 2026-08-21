@@ -207,6 +207,8 @@ public:
     void        SetMessageProcessor(pfnProcessMessage pfnMessageProcessor);
     void        ShowMessageBox(const char* szTitle, const char* szText, unsigned int uiFlags, GUI_CALLBACK* ResponseHandler = NULL);
     void        RemoveMessageBox(bool bNextFrame = false);
+    void        RespondToWebMessageBox();
+    bool        HasNativeMessageBox() const;
     void        ShowErrorMessageBox(const SString& strTitle, SString strMessage, const SString& strTroubleLink = "");
     void        ShowNetErrorMessageBox(const SString& strTitle, SString strMessage, SString strTroubleLink = "", bool bLinkRequiresErrorCode = false);
     static void ErrorMessageBoxCallBack(void* pData, uint uiButton);
@@ -421,6 +423,8 @@ private:
     pfnProcessMessage m_pfnMessageProcessor;
 
     CGUIMessageBox* m_pMessageBox;
+    GUI_CALLBACK    m_WebMessageBoxResponseHandler;
+    bool            m_bWebMessageBoxVisible{};
 
     // screen res
     DEVMODE m_Current;

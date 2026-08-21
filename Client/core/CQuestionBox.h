@@ -27,6 +27,7 @@ public:
 
     void         Hide();
     void         Show();
+    void         TryShowPendingWeb();
     void         Reset();
     void         SetTitle(const SString& strTitle);
     void         SetMessage(const SString& strMsg);
@@ -38,11 +39,16 @@ public:
     void         SetOnLineHelpOption(const SString& strTroubleType);
     unsigned int PollButtons();
     bool         IsVisible();
+    bool         IsNativeVisible() const;
+    void         RespondToWeb(unsigned int uiButton);
     void         SetAutoCloseOnConnect(bool bEnable);
     void         OnConnect();
 
 private:
     bool OnButtonClick(CGUIElement* pElement);
+    void ShowNative();
+    bool ShowWeb();
+    void RefreshWeb();
 
     CGUIWindow*              m_pWindow;
     CGUILabel*               m_pMessage;
@@ -56,4 +62,6 @@ private:
     void*                    m_CallbackParameter;
     SString                  m_strMsg;
     bool                     m_bAutoCloseOnConnect;
+    bool                     m_bWebVisible{};
+    bool                     m_bWebPending{};
 };

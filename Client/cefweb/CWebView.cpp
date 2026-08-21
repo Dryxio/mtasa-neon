@@ -17,17 +17,223 @@
 #include "CWebViewAuth.h"  // AUTH: IPC validation helpers
 #include <utility>
 #include <algorithm>
+#include <array>
+#include <d3d11_1.h>
+
+#pragma comment(lib, "d3d11.lib")
 
 namespace
 {
     const int CEF_PIXEL_STRIDE = 4;
+
+    uint64_t GetSteadyClockNanoseconds()
+    {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    void UpdateAtomicMaximum(std::atomic<uint64_t>& maximum, uint64_t value)
+    {
+        uint64_t previous = maximum.load(std::memory_order_relaxed);
+        while (previous < value && !maximum.compare_exchange_weak(previous, value, std::memory_order_relaxed))
+        {
+        }
+    }
 }
 
-CWebView::CWebView(bool bIsLocal, CWebBrowserItem* pWebBrowserRenderItem, bool bTransparent)
+struct CWebView::FAcceleratedPaintBackend
+{
+    static constexpr size_t BUFFER_COUNT = 3;
+
+    struct FReadbackSlot
+    {
+        ID3D11Texture2D*     stagingTexture = nullptr;
+        ID3D11Query*         completionQuery = nullptr;
+        std::vector<CefRect> dirtyRects;
+        CefRect              visibleRect;
+        cef_color_type_t     format = CEF_COLOR_TYPE_BGRA_8888;
+        uint64_t             sequence = 0;
+        bool                 pending = false;
+    };
+
+    struct FReadbackPipeline
+    {
+        std::array<FReadbackSlot, BUFFER_COUNT> slots;
+        D3D11_TEXTURE2D_DESC                    description{};
+        uint64_t                                nextSequence = 1;
+        bool                                    initialized = false;
+    };
+
+    ~FAcceleratedPaintBackend()
+    {
+        ReleasePipeline(viewPipeline);
+        ReleasePipeline(popupPipeline);
+        if (deviceContext)
+            deviceContext->Release();
+        if (device)
+            device->Release();
+    }
+
+    bool EnsureDevice()
+    {
+        if (device && deviceContext)
+            return true;
+        if (initializationAttempted)
+            return false;
+
+        initializationAttempted = true;
+
+        ID3D11Device*        baseDevice = nullptr;
+        D3D_FEATURE_LEVEL    featureLevel{};
+        ID3D11DeviceContext* newContext = nullptr;
+        const HRESULT result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
+                                                 &baseDevice, &featureLevel, &newContext);
+        if (FAILED(result))
+        {
+            lastFailure = result;
+            return false;
+        }
+
+        const HRESULT queryResult = baseDevice->QueryInterface(__uuidof(ID3D11Device1), reinterpret_cast<void**>(&device));
+        baseDevice->Release();
+        if (FAILED(queryResult))
+        {
+            newContext->Release();
+            lastFailure = queryResult;
+            return false;
+        }
+
+        deviceContext = newContext;
+        return true;
+    }
+
+    static void ReleasePipeline(FReadbackPipeline& pipeline)
+    {
+        for (auto& slot : pipeline.slots)
+        {
+            if (slot.completionQuery)
+                slot.completionQuery->Release();
+            if (slot.stagingTexture)
+                slot.stagingTexture->Release();
+            slot = {};
+        }
+        pipeline = {};
+    }
+
+    bool EnsurePipeline(FReadbackPipeline& pipeline, const D3D11_TEXTURE2D_DESC& sourceDescription)
+    {
+        if (pipeline.initialized && pipeline.description.Width == sourceDescription.Width && pipeline.description.Height == sourceDescription.Height &&
+            pipeline.description.Format == sourceDescription.Format)
+        {
+            return true;
+        }
+
+        ReleasePipeline(pipeline);
+        pipeline.description = sourceDescription;
+        pipeline.description.Usage = D3D11_USAGE_STAGING;
+        pipeline.description.BindFlags = 0;
+        pipeline.description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        pipeline.description.MiscFlags = 0;
+
+        D3D11_QUERY_DESC queryDescription{};
+        queryDescription.Query = D3D11_QUERY_EVENT;
+        for (auto& slot : pipeline.slots)
+        {
+            lastFailure = device->CreateTexture2D(&pipeline.description, nullptr, &slot.stagingTexture);
+            if (FAILED(lastFailure))
+            {
+                ReleasePipeline(pipeline);
+                return false;
+            }
+
+            lastFailure = device->CreateQuery(&queryDescription, &slot.completionQuery);
+            if (FAILED(lastFailure))
+            {
+                ReleasePipeline(pipeline);
+                return false;
+            }
+        }
+
+        pipeline.initialized = true;
+        return true;
+    }
+
+    FReadbackSlot* AcquireSubmissionSlot(FReadbackPipeline& pipeline, bool& droppedCompletedFrame)
+    {
+        for (auto& slot : pipeline.slots)
+        {
+            if (!slot.pending)
+                return &slot;
+        }
+
+        FReadbackSlot* oldestCompleted = nullptr;
+        for (auto& slot : pipeline.slots)
+        {
+            if (deviceContext->GetData(slot.completionQuery, nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                (!oldestCompleted || slot.sequence < oldestCompleted->sequence))
+            {
+                oldestCompleted = &slot;
+            }
+        }
+
+        if (oldestCompleted)
+        {
+            oldestCompleted->pending = false;
+            droppedCompletedFrame = true;
+        }
+        return oldestCompleted;
+    }
+
+    FReadbackSlot* FindNewestCompleted(FReadbackPipeline& pipeline)
+    {
+        FReadbackSlot* newestCompleted = nullptr;
+        for (auto& slot : pipeline.slots)
+        {
+            if (slot.pending && deviceContext->GetData(slot.completionQuery, nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                (!newestCompleted || slot.sequence > newestCompleted->sequence))
+            {
+                newestCompleted = &slot;
+            }
+        }
+
+        if (!newestCompleted)
+            return nullptr;
+
+        // A complete texture contains the whole current browser frame. Older
+        // completed submissions can be discarded without breaking dirty-rect
+        // reconstruction, keeping latency bounded when the game misses a beat.
+        for (auto& slot : pipeline.slots)
+        {
+            if (slot.pending && slot.sequence < newestCompleted->sequence)
+                slot.pending = false;
+        }
+        return newestCompleted;
+    }
+
+    bool HasPendingFrames() const
+    {
+        const auto PipelineHasPending = [](const FReadbackPipeline& pipeline)
+        { return std::ranges::any_of(pipeline.slots, [](const FReadbackSlot& slot) { return slot.pending; }); };
+        return PipelineHasPending(viewPipeline) || PipelineHasPending(popupPipeline);
+    }
+
+    std::mutex           mutex;
+    ID3D11Device1*       device = nullptr;
+    ID3D11DeviceContext* deviceContext = nullptr;
+    FReadbackPipeline    viewPipeline;
+    FReadbackPipeline    popupPipeline;
+    std::vector<byte>    tightPixels;
+    bool                 initializationAttempted = false;
+    bool                 failureLogged = false;
+    HRESULT              lastFailure = S_OK;
+};
+
+CWebView::CWebView(bool bIsLocal, CWebBrowserItem* pWebBrowserRenderItem, bool bTransparent, bool bFrameStatsEnabled)
 {
     m_pEventTarget = std::make_shared<FEventTarget>();
+    m_pAcceleratedPaintBackend = std::make_unique<FAcceleratedPaintBackend>();
     m_bIsLocal = bIsLocal;
     m_bIsTransparent = bTransparent;
+    m_bFrameStatsEnabled = bFrameStatsEnabled;
     m_pWebBrowserRenderItem = pWebBrowserRenderItem;
     if (m_pWebBrowserRenderItem)
         m_pWebBrowserRenderItem->AddRef();
@@ -145,7 +351,8 @@ bool CWebView::EnsureBrowserCreated()
 
     // Initialise the web session (which holds the actual settings) in in-memory mode
     CefBrowserSettings browserSettings;
-    browserSettings.windowless_frame_rate = g_pCore->GetFPSLimiter()->GetFPSTarget();
+    const auto         pWebCore = static_cast<CWebCore*>(g_pCore->GetWebCore());
+    browserSettings.windowless_frame_rate = pWebCore ? pWebCore->GetWindowlessFrameRate() : 60;
     browserSettings.javascript_access_clipboard = cef_state_t::STATE_DISABLED;
     browserSettings.javascript_dom_paste = cef_state_t::STATE_DISABLED;
     browserSettings.webgl = cef_state_t::STATE_ENABLED;
@@ -164,8 +371,14 @@ bool CWebView::EnsureBrowserCreated()
     CefWindowInfo windowInfo;
     windowInfo.SetAsWindowless(g_pCore->GetHookedWindow());
 
-    // Enable external begin frame scheduling - allows MTA to control when CEF renders
-    windowInfo.external_begin_frame_enabled = true;
+    // Automatic CEF scheduling is the default because OnPaint is asynchronous. The external path remains available as a measured fallback and is driven
+    // only after MTA has consumed the previous completed frame.
+    windowInfo.external_begin_frame_enabled = pWebCore && pWebCore->IsExternalFrameSchedulingEnabled();
+    // CEF's accelerated OSR callback avoids the synchronous GPU-to-CPU
+    // readback performed before software OnPaint. It is opt-in because the
+    // shared handle must still be bridged to MTA's D3D9 renderer and some
+    // virtualized adapters may not support that interop reliably.
+    windowInfo.shared_texture_enabled = pWebCore && pWebCore->IsSharedTextureEnabled();
 
     CefBrowserHost::CreateBrowser(windowInfo, this, "", browserSettings, nullptr, nullptr);
     m_bBrowserCreated = true;
@@ -298,18 +511,29 @@ void CWebView::ApplyRenderingPaused(bool bPaused, bool preserveLastFrame)
     // browser creation cannot lose the requested visibility state.
     m_bIsRenderingPaused = bPaused;
 
+    if (bPaused)
+        m_iInteractionRefreshFrames.store(0, std::memory_order_relaxed);
+
     if (m_pWebView)
     {
         m_pWebView->GetHost()->WasHidden(bPaused);
 
         if (bPaused && !preserveLastFrame)
         {
-            // Free memory held by render data when paused
-            std::lock_guard<std::mutex> lock{m_RenderData.dataMutex};
-            m_RenderData.changed = false;
+            // CEF owns paintFrame while copying; take both locks so a late
+            // OnPaint cannot publish a buffer while the hidden view is freed.
+            std::scoped_lock lock{m_RenderData.paintMutex, m_RenderData.dataMutex};
+            m_RenderData.pendingChanged = false;
+            m_RenderData.forceFullUpload = false;
             m_RenderData.popupShown = false;
-            m_RenderData.buffer.reset();
-            m_RenderData.bufferSize = 0;
+            m_RenderData.popupChanged = false;
+            m_RenderData.paintFrame = {};
+            m_RenderData.pendingFrame = {};
+            m_RenderData.uploadFrame = {};
+            m_RenderData.latestPaintGeneration = 0;
+            m_RenderData.dirtyHistoryWidth = 0;
+            m_RenderData.dirtyHistoryHeight = 0;
+            m_RenderData.dirtyHistory.clear();
             m_RenderData.popupBuffer.reset();
         }
     }
@@ -365,21 +589,17 @@ void CWebView::ClearTexture()
 
 void CWebView::UpdateTexture()
 {
-    const std::scoped_lock lock(m_RenderData.dataMutex);
-
-    // Validate render item exists before accessing
     if (!m_pWebBrowserRenderItem) [[unlikely]]
-    {
-        m_RenderData.changed = m_RenderData.popupShown = false;
         return;
-    }
+
+    if (m_bBeingDestroyed) [[unlikely]]
+        return;
+
+    // Poll the non-blocking D3D11 readback ring before consuming the regular
+    // mailbox. Software OnPaint views skip this with one atomic load.
+    ConsumeAcceleratedPaint();
 
     auto* const pSurface = m_pWebBrowserRenderItem->m_pD3DRenderTargetSurface;
-    if (m_bBeingDestroyed) [[unlikely]]
-    {
-        m_RenderData.changed = m_RenderData.popupShown = false;
-        return;
-    }
 
     if (!pSurface) [[unlikely]]
     {
@@ -389,169 +609,257 @@ void CWebView::UpdateTexture()
         return;
     }
 
-    // Discard current buffer if size doesn't match
-    // This happens when resizing the browser as OnPaint is called asynchronously
-    if (m_RenderData.changed && (m_pWebBrowserRenderItem->m_uiSizeX != m_RenderData.width || m_pWebBrowserRenderItem->m_uiSizeY != m_RenderData.height))
+    bool              requestFreshPaint = false;
+    bool              uploadMainFrame = false;
+    uint64_t          uploadedPaintTimestamp = 0;
+    CefRect           popupRect;
+    std::vector<byte> popupPixels;
+
     {
-        // Request a fresh paint at the current render size. Without this,
-        // we can drop the only buffered frame and remain visually blank
-        // until the page generates another update on its own.
-        if (m_pWebView)
+        const uint64_t   mutexWaitStarted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+        std::unique_lock dataLock{m_RenderData.dataMutex};
+        if (m_bFrameStatsEnabled)
         {
-            m_pWebView->GetHost()->WasResized();
-            m_pWebView->GetHost()->Invalidate(PET_VIEW);
+            m_FrameStats.uploadMutexWaitNanoseconds.fetch_add(GetSteadyClockNanoseconds() - mutexWaitStarted, std::memory_order_relaxed);
+            m_FrameStats.uploadMutexWaitSamples.fetch_add(1, std::memory_order_relaxed);
         }
-        m_RenderData.changed = false;
+
+        const auto renderWidth = static_cast<int>(m_pWebBrowserRenderItem->m_uiSizeX);
+        const auto renderHeight = static_cast<int>(m_pWebBrowserRenderItem->m_uiSizeY);
+
+        // An asynchronous resize can leave one old-sized paint in the mailbox.
+        // Drop only that pending frame and explicitly request the correctly sized one.
+        if (m_RenderData.pendingChanged && (m_RenderData.pendingFrame.width != renderWidth || m_RenderData.pendingFrame.height != renderHeight)) [[unlikely]]
+        {
+            m_RenderData.pendingChanged = false;
+            requestFreshPaint = true;
+        }
+
+        if (m_pWebBrowserRenderItem->m_bTextureWasRecreated)
+        {
+            m_pWebBrowserRenderItem->m_bTextureWasRecreated = false;
+            m_RenderData.forceFullUpload = true;
+        }
+
+        if (m_RenderData.pendingChanged)
+        {
+            std::swap(m_RenderData.pendingFrame, m_RenderData.uploadFrame);
+            m_RenderData.pendingChanged = false;
+            uploadMainFrame = true;
+        }
+
+        const auto& uploadFrame = m_RenderData.uploadFrame;
+        const bool  uploadFrameMatches =
+            uploadFrame.buffer && uploadFrame.bufferSize > 0 && uploadFrame.width == renderWidth && uploadFrame.height == renderHeight;
+
+        if (m_RenderData.forceFullUpload && uploadFrameMatches)
+            uploadMainFrame = true;
+
+        // Popup visibility changes must restore or composite against the full
+        // main frame because D3DLOCK_DISCARD invalidates the entire texture.
+        if (m_RenderData.popupChanged && uploadFrameMatches)
+            uploadMainFrame = true;
+
+        if (uploadMainFrame && uploadFrameMatches)
+        {
+            uploadedPaintTimestamp = uploadFrame.paintCompletedNanoseconds;
+            m_RenderData.forceFullUpload = false;
+            m_RenderData.popupChanged = false;
+
+            const auto& currentPopupRect = m_RenderData.popupRect;
+            const bool  popupRectValid = currentPopupRect.x >= 0 && currentPopupRect.y >= 0 && currentPopupRect.width > 0 && currentPopupRect.height > 0 &&
+                                        currentPopupRect.x <= renderWidth - currentPopupRect.width &&
+                                        currentPopupRect.y <= renderHeight - currentPopupRect.height;
+            if (m_RenderData.popupShown && popupRectValid && m_RenderData.popupBuffer)
+            {
+                const size_t popupSize = static_cast<size_t>(currentPopupRect.width) * static_cast<size_t>(currentPopupRect.height) * CEF_PIXEL_STRIDE;
+                popupRect = currentPopupRect;
+                popupPixels.assign(m_RenderData.popupBuffer.get(), m_RenderData.popupBuffer.get() + popupSize);
+            }
+        }
     }
 
-    // After device reset (minimize/restore), force full copy from our buffer to new texture
-    if (m_pWebBrowserRenderItem->m_bTextureWasRecreated)
+    if (requestFreshPaint && m_pWebView)
     {
-        m_pWebBrowserRenderItem->m_bTextureWasRecreated = false;
+        m_pWebView->GetHost()->WasResized();
+        m_pWebView->GetHost()->Invalidate(PET_VIEW);
+    }
 
-        // If we have valid buffer data matching texture size, trigger full update
-        if (m_RenderData.buffer && m_RenderData.bufferSize > 0 && m_RenderData.width == static_cast<int>(m_pWebBrowserRenderItem->m_uiSizeX) &&
-            m_RenderData.height == static_cast<int>(m_pWebBrowserRenderItem->m_uiSizeY))
+    if (!uploadMainFrame)
+        return;
+
+    const auto& uploadFrame = m_RenderData.uploadFrame;
+    if (!uploadFrame.buffer || uploadFrame.width <= 0 || uploadFrame.height <= 0 || uploadFrame.width > INT_MAX / CEF_PIXEL_STRIDE) [[unlikely]]
+        return;
+
+    const uint64_t uploadStarted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+    const auto*    sourceData = uploadFrame.buffer.get();
+    const int      sourcePitch = uploadFrame.width * CEF_PIXEL_STRIDE;
+    D3DLOCKED_RECT lockedRect;
+
+    if (FAILED(pSurface->LockRect(&lockedRect, nullptr, D3DLOCK_DISCARD))) [[unlikely]]
+    {
+        OutputDebugLine("[CWebView] UpdateTexture: LockRect failed");
+        std::lock_guard retryLock{m_RenderData.dataMutex};
+        m_RenderData.forceFullUpload = true;
+        return;
+    }
+
+    if (lockedRect.Pitch <= 0) [[unlikely]]
+    {
+        pSurface->UnlockRect();
+        return;
+    }
+
+    auto* const destData = static_cast<byte*>(lockedRect.pBits);
+    if (lockedRect.Pitch == sourcePitch) [[likely]]
+    {
+        std::memcpy(destData, sourceData, static_cast<size_t>(sourcePitch) * static_cast<size_t>(uploadFrame.height));
+    }
+    else
+    {
+        const size_t rowBytes = std::min(static_cast<size_t>(sourcePitch), static_cast<size_t>(lockedRect.Pitch));
+        for (int y = 0; y < uploadFrame.height; ++y)
         {
-            m_RenderData.changed = true;
+            std::memcpy(destData + static_cast<size_t>(y) * static_cast<size_t>(lockedRect.Pitch),
+                        sourceData + static_cast<size_t>(y) * static_cast<size_t>(sourcePitch), rowBytes);
         }
     }
 
-    if (m_RenderData.changed || m_RenderData.popupShown) [[likely]]
+    if (!popupPixels.empty())
     {
-        // Lock surface with D3DLOCK_DISCARD for dynamic textures - tells driver we'll overwrite entire content
-        // This avoids GPU stalls waiting for previous frame to finish rendering
-        D3DLOCKED_RECT LockedRect;
-        if (SUCCEEDED(pSurface->LockRect(&LockedRect, nullptr, D3DLOCK_DISCARD)))
+        const int popupPitch = popupRect.width * CEF_PIXEL_STRIDE;
+        for (int y = 0; y < popupRect.height; ++y)
         {
-            auto* const       destData = static_cast<byte*>(LockedRect.pBits);
-            const auto* const sourceData = m_RenderData.buffer.get();
-            const auto        destPitch = LockedRect.Pitch;
-
-            // Validate destination pitch
-            if (destPitch <= 0) [[unlikely]]
-            {
-                pSurface->UnlockRect();
-                m_RenderData.changed = false;
-                m_RenderData.popupShown = false;
-                return;
-            }
-
-            // Validate sourcePitch calculation won't overflow
-            constexpr auto maxWidthForPitch = INT_MAX / CEF_PIXEL_STRIDE;
-            if (m_RenderData.width > maxWidthForPitch) [[unlikely]]
-            {
-                pSurface->UnlockRect();
-                m_RenderData.changed = false;
-                m_RenderData.popupShown = false;
-                return;
-            }
-            const auto sourcePitch = m_RenderData.width * CEF_PIXEL_STRIDE;
-
-            // Validate source buffer exists before accessing it
-            if (!sourceData) [[unlikely]]
-            {
-                pSurface->UnlockRect();
-                m_RenderData.changed = false;
-                m_RenderData.popupShown = false;
-                return;
-            }
-
-            // Update view area
-            if (m_RenderData.changed) [[likely]]
-            {
-                m_RenderData.changed = false;
-
-                // Always do full frame copy since D3DLOCK_DISCARD invalidates entire texture
-                // Our buffer contains the complete frame from OnPaint's full memcpy
-                if (destPitch == sourcePitch) [[likely]]
-                {
-                    if (m_RenderData.height > 0 && static_cast<size_t>(m_RenderData.height) > SIZE_MAX / static_cast<size_t>(destPitch)) [[unlikely]]
-                    {
-                        pSurface->UnlockRect();
-                        m_RenderData.changed = false;
-                        m_RenderData.popupShown = false;
-                        return;
-                    }
-                    std::memcpy(destData, sourceData, static_cast<size_t>(destPitch) * static_cast<size_t>(m_RenderData.height));
-                }
-                else
-                {
-                    // Row-by-row copy when pitches differ
-                    if (destPitch <= 0 || sourcePitch <= 0) [[unlikely]]
-                    {
-                        pSurface->UnlockRect();
-                        m_RenderData.changed = false;
-                        m_RenderData.popupShown = false;
-                        return;
-                    }
-
-                    if (m_RenderData.height > 0 && (static_cast<size_t>(m_RenderData.height) > SIZE_MAX / static_cast<size_t>(destPitch) ||
-                                                    static_cast<size_t>(m_RenderData.height) > SIZE_MAX / static_cast<size_t>(sourcePitch))) [[unlikely]]
-                    {
-                        pSurface->UnlockRect();
-                        m_RenderData.changed = false;
-                        m_RenderData.popupShown = false;
-                        return;
-                    }
-
-                    for (int y = 0; y < m_RenderData.height; ++y)
-                    {
-                        const auto sourceIndex = static_cast<size_t>(y) * static_cast<size_t>(sourcePitch);
-                        const auto destIndex = static_cast<size_t>(y) * static_cast<size_t>(destPitch);
-                        const auto copySize = std::min(static_cast<size_t>(sourcePitch), static_cast<size_t>(destPitch));
-
-                        std::memcpy(&destData[destIndex], &sourceData[sourceIndex], copySize);
-                    }
-                }
-            }
-
-            // Update popup area
-            const auto& popupRect = m_RenderData.popupRect;
-            const auto  renderWidth = static_cast<int>(m_pWebBrowserRenderItem->m_uiSizeX);
-            const auto  renderHeight = static_cast<int>(m_pWebBrowserRenderItem->m_uiSizeY);
-            const auto  popupSizeMismatches = popupRect.x < 0 || popupRect.y < 0 || popupRect.width <= 0 || popupRect.height <= 0 ||
-                                             popupRect.x >= renderWidth || popupRect.y >= renderHeight || popupRect.width > renderWidth ||
-                                             popupRect.height > renderHeight || popupRect.x > renderWidth - popupRect.width ||
-                                             popupRect.y > renderHeight - popupRect.height;
-
-            if (m_RenderData.popupShown && !popupSizeMismatches && m_RenderData.popupBuffer) [[likely]]
-            {
-                constexpr auto maxWidthForPopupPitch = INT_MAX / CEF_PIXEL_STRIDE;
-                if (popupRect.width > maxWidthForPopupPitch) [[unlikely]]
-                {
-                    pSurface->UnlockRect();
-                    m_RenderData.popupShown = false;
-                    return;
-                }
-                const auto popupPitch = popupRect.width * CEF_PIXEL_STRIDE;
-
-                if (static_cast<size_t>(destPitch) < static_cast<size_t>(popupRect.x + popupRect.width) * CEF_PIXEL_STRIDE) [[unlikely]]
-                {
-                    pSurface->UnlockRect();
-                    m_RenderData.popupShown = false;
-                    return;
-                }
-
-                for (int y = 0; y < popupRect.height; ++y)
-                {
-                    const auto sourceIndex = static_cast<size_t>(y) * static_cast<size_t>(popupPitch);
-                    const auto destY = static_cast<size_t>(popupRect.y) + static_cast<size_t>(y);
-                    const auto destIndex = destY * static_cast<size_t>(destPitch) + static_cast<size_t>(popupRect.x) * CEF_PIXEL_STRIDE;
-
-                    std::memcpy(&destData[destIndex], &m_RenderData.popupBuffer[sourceIndex], static_cast<size_t>(popupPitch));
-                }
-            }
-
-            pSurface->UnlockRect();
-        }
-        else
-        {
-            OutputDebugLine("[CWebView] UpdateTexture: LockRect failed");
-            // Keep pending frame flags so we retry on the next pulse instead
-            // of dropping the frame after a transient D3D lock failure.
+            const size_t destOffset =
+                static_cast<size_t>(popupRect.y + y) * static_cast<size_t>(lockedRect.Pitch) + static_cast<size_t>(popupRect.x) * CEF_PIXEL_STRIDE;
+            const size_t sourceOffset = static_cast<size_t>(y) * static_cast<size_t>(popupPitch);
+            std::memcpy(destData + destOffset, popupPixels.data() + sourceOffset, static_cast<size_t>(popupPitch));
         }
     }
+
+    pSurface->UnlockRect();
+
+    if (m_bFrameStatsEnabled)
+    {
+        const uint64_t uploadCompleted = GetSteadyClockNanoseconds();
+        const uint64_t uploadDuration = uploadCompleted - uploadStarted;
+        const uint64_t uploadAge = uploadedPaintTimestamp > 0 ? uploadCompleted - uploadedPaintTimestamp : 0;
+        m_FrameStats.uploads.fetch_add(1, std::memory_order_relaxed);
+        m_FrameStats.uploadNanoseconds.fetch_add(uploadDuration, std::memory_order_relaxed);
+        if (uploadAge > 0)
+        {
+            m_FrameStats.uploadAgeNanoseconds.fetch_add(uploadAge, std::memory_order_relaxed);
+            m_FrameStats.uploadAgeSamples.fetch_add(1, std::memory_order_relaxed);
+            UpdateAtomicMaximum(m_FrameStats.maxUploadAgeNanoseconds, uploadAge);
+        }
+    }
+}
+
+void CWebView::RecordExternalBeginFrame()
+{
+    if (m_bFrameStatsEnabled)
+        m_FrameStats.beginFrames.fetch_add(1, std::memory_order_relaxed);
+}
+
+void CWebView::ArmInteractionRefreshFrames(int frameCount)
+{
+    int current = m_iInteractionRefreshFrames.load(std::memory_order_relaxed);
+    while (current < frameCount &&
+           !m_iInteractionRefreshFrames.compare_exchange_weak(current, frameCount, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+}
+
+bool CWebView::HasInteractionRefreshFrames() const
+{
+    return m_iInteractionRefreshFrames.load(std::memory_order_relaxed) > 0;
+}
+
+bool CWebView::ConsumeInteractionRefreshFrame()
+{
+    int remaining = m_iInteractionRefreshFrames.load(std::memory_order_relaxed);
+    while (remaining > 0)
+    {
+        if (m_iInteractionRefreshFrames.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed))
+            return true;
+    }
+    return false;
+}
+
+void CWebView::RecordInteractionInvalidate()
+{
+    if (m_bFrameStatsEnabled)
+        m_FrameStats.interactionInvalidates.fetch_add(1, std::memory_order_relaxed);
+}
+
+void CWebView::LogFrameStatsIfDue(int targetFrameRate, bool externalScheduling)
+{
+    if (!m_bFrameStatsEnabled)
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = now - m_FrameStats.lastReportTime;
+    if (elapsed < std::chrono::seconds(2))
+        return;
+
+    m_FrameStats.lastReportTime = now;
+    const double seconds = std::chrono::duration<double>(elapsed).count();
+    const auto   beginFrames = m_FrameStats.beginFrames.exchange(0, std::memory_order_relaxed);
+    const auto   interactionInvalidates = m_FrameStats.interactionInvalidates.exchange(0, std::memory_order_relaxed);
+    const auto   paints = m_FrameStats.paints.exchange(0, std::memory_order_relaxed);
+    const auto   acceleratedPaints = m_FrameStats.acceleratedPaints.exchange(0, std::memory_order_relaxed);
+    const auto   acceleratedFailures = m_FrameStats.acceleratedFailures.exchange(0, std::memory_order_relaxed);
+    const auto   acceleratedDroppedFrames = m_FrameStats.acceleratedDroppedFrames.exchange(0, std::memory_order_relaxed);
+    const auto   acceleratedSubmitNanoseconds = m_FrameStats.acceleratedSubmitNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   acceleratedReadbacks = m_FrameStats.acceleratedReadbacks.exchange(0, std::memory_order_relaxed);
+    const auto   acceleratedReadbackNanoseconds = m_FrameStats.acceleratedReadbackNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   uploads = m_FrameStats.uploads.exchange(0, std::memory_order_relaxed);
+    const auto   supersededPaints = m_FrameStats.supersededPaints.exchange(0, std::memory_order_relaxed);
+    const auto   dirtyPixels = m_FrameStats.dirtyPixels.exchange(0, std::memory_order_relaxed);
+    const auto   paintBytes = m_FrameStats.paintBytes.exchange(0, std::memory_order_relaxed);
+    const auto   paintCopyNanoseconds = m_FrameStats.paintCopyNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   paintMutexWaitNanoseconds = m_FrameStats.paintMutexWaitNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   paintMutexWaitSamples = m_FrameStats.paintMutexWaitSamples.exchange(0, std::memory_order_relaxed);
+    const auto   uploadNanoseconds = m_FrameStats.uploadNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   uploadMutexWaitNanoseconds = m_FrameStats.uploadMutexWaitNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   uploadMutexWaitSamples = m_FrameStats.uploadMutexWaitSamples.exchange(0, std::memory_order_relaxed);
+    const auto   paintIntervalNanoseconds = m_FrameStats.paintIntervalNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   paintIntervalSamples = m_FrameStats.paintIntervalSamples.exchange(0, std::memory_order_relaxed);
+    const auto   maxPaintIntervalNanoseconds = m_FrameStats.maxPaintIntervalNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   uploadAgeNanoseconds = m_FrameStats.uploadAgeNanoseconds.exchange(0, std::memory_order_relaxed);
+    const auto   uploadAgeSamples = m_FrameStats.uploadAgeSamples.exchange(0, std::memory_order_relaxed);
+    const auto   maxUploadAgeNanoseconds = m_FrameStats.maxUploadAgeNanoseconds.exchange(0, std::memory_order_relaxed);
+
+    const auto width = m_pWebBrowserRenderItem ? m_pWebBrowserRenderItem->m_uiSizeX : 0;
+    const auto height = m_pWebBrowserRenderItem ? m_pWebBrowserRenderItem->m_uiSizeY : 0;
+    const auto framePixels = static_cast<double>(width) * static_cast<double>(height);
+    const auto dirtyPercent = paints > 0 && framePixels > 0.0 ? std::min(100.0, static_cast<double>(dirtyPixels) * 100.0 / (framePixels * paints)) : 0.0;
+    const auto paintCopyMs = paints > 0 ? static_cast<double>(paintCopyNanoseconds) / paints / 1'000'000.0 : 0.0;
+    const auto acceleratedSubmitMs = acceleratedPaints > 0 ? static_cast<double>(acceleratedSubmitNanoseconds) / acceleratedPaints / 1'000'000.0 : 0.0;
+    const auto acceleratedReadbackMs =
+        acceleratedReadbacks > 0 ? static_cast<double>(acceleratedReadbackNanoseconds) / acceleratedReadbacks / 1'000'000.0 : 0.0;
+    const auto paintWaitMs = paintMutexWaitSamples > 0 ? static_cast<double>(paintMutexWaitNanoseconds) / paintMutexWaitSamples / 1'000'000.0 : 0.0;
+    const auto uploadMs = uploads > 0 ? static_cast<double>(uploadNanoseconds) / uploads / 1'000'000.0 : 0.0;
+    const auto uploadWaitMs = uploadMutexWaitSamples > 0 ? static_cast<double>(uploadMutexWaitNanoseconds) / uploadMutexWaitSamples / 1'000'000.0 : 0.0;
+    const auto paintIntervalMs = paintIntervalSamples > 0 ? static_cast<double>(paintIntervalNanoseconds) / paintIntervalSamples / 1'000'000.0 : 0.0;
+    const auto uploadAgeMs = uploadAgeSamples > 0 ? static_cast<double>(uploadAgeNanoseconds) / uploadAgeSamples / 1'000'000.0 : 0.0;
+    const auto browserId = m_pWebView ? m_pWebView->GetIdentifier() : -1;
+
+    // This path is reached only when browser_frame_stats is enabled. Persist
+    // the sample in MTA's event log so VM profiling does not require an
+    // attached Windows debugger that can itself perturb frame pacing.
+    WriteDebugEvent(
+        SString("[CEF PERF] id=%d size=%ux%u transparent=%d scheduler=%s target=%d begin=%.1fHz forcedInvalidate=%.1fHz paint=%.1fHz "
+                "accelerated=%.1fHz accelFail=%llu "
+                "accelDrop=%llu accelSubmit=%.2fms accelReadback=%.2fms upload=%.1fHz superseded=%llu dirty=%.1f%% copy=%.2fms paintWait=%.2fms "
+                "upload=%.2fms uploadWait=%.2fms interval=%.2fms maxInterval=%.2fms age=%.2fms maxAge=%.2fms copyRate=%.1fMiB/s",
+                browserId, width, height, m_bIsTransparent, externalScheduling ? "external" : "cef", targetFrameRate, beginFrames / seconds,
+                interactionInvalidates / seconds, paints / seconds, acceleratedPaints / seconds, static_cast<unsigned long long>(acceleratedFailures),
+                static_cast<unsigned long long>(acceleratedDroppedFrames), acceleratedSubmitMs, acceleratedReadbackMs, uploads / seconds,
+                static_cast<unsigned long long>(supersededPaints), dirtyPercent, paintCopyMs, paintWaitMs, uploadMs, uploadWaitMs, paintIntervalMs,
+                static_cast<double>(maxPaintIntervalNanoseconds) / 1'000'000.0, uploadAgeMs, static_cast<double>(maxUploadAgeNanoseconds) / 1'000'000.0,
+                static_cast<double>(paintBytes) / seconds / (1024.0 * 1024.0)));
 }
 
 void CWebView::ExecuteJavascript(const SString& strJavascriptCode)
@@ -595,24 +903,37 @@ void CWebView::InjectMouseMove(int iPosX, int iPosY)
     // Always update the pending position
     m_vecPendingMousePosition.x = iPosX;
     m_vecPendingMousePosition.y = iPosY;
+    m_bHasPendingMouseMove = true;
+
+    // A scrollbar drag changes compositor state on every mouse move. Keep a
+    // short refresh tail armed even when this particular move is retained by
+    // the input throttle, otherwise CEF OSR can publish drag frames sparsely.
+    if (m_mouseButtonStates[BROWSER_MOUSEBUTTON_LEFT])
+        ArmInteractionRefreshFrames(3);
 
     // Check if enough time has passed since last mouse move
     if (now - m_lastMouseMoveTime < MOUSE_THROTTLE_INTERVAL)
     {
-        // Store as pending - will be sent on next allowed interval or on click
-        m_bHasPendingMouseMove = true;
+        // Keep the latest coordinates for the next move or input action.
         return;
     }
 
-    // Send the mouse move event
-    m_lastMouseMoveTime = now;
+    FlushPendingMouseMove();
+}
+
+void CWebView::FlushPendingMouseMove()
+{
+    if (!m_pWebView || !m_bHasPendingMouseMove)
+        return;
+
+    m_vecMousePosition = m_vecPendingMousePosition;
     m_bHasPendingMouseMove = false;
+    m_lastMouseMoveTime = std::chrono::steady_clock::now();
 
     CefMouseEvent mouseEvent;
-    mouseEvent.x = iPosX;
-    mouseEvent.y = iPosY;
+    mouseEvent.x = m_vecMousePosition.x;
+    mouseEvent.y = m_vecMousePosition.y;
 
-    // Set modifiers from mouse states
     if (m_mouseButtonStates[BROWSER_MOUSEBUTTON_LEFT])
         mouseEvent.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
     if (m_mouseButtonStates[BROWSER_MOUSEBUTTON_MIDDLE])
@@ -621,9 +942,6 @@ void CWebView::InjectMouseMove(int iPosX, int iPosY)
         mouseEvent.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
 
     m_pWebView->GetHost()->SendMouseMoveEvent(mouseEvent, false);
-
-    m_vecMousePosition.x = iPosX;
-    m_vecMousePosition.y = iPosY;
 }
 
 void CWebView::InjectMouseDown(eWebBrowserMouseButton mouseButton, int count)
@@ -631,18 +949,9 @@ void CWebView::InjectMouseDown(eWebBrowserMouseButton mouseButton, int count)
     if (!m_pWebView)
         return;
 
-    // Flush any pending mouse move before click to ensure accurate position
-    if (m_bHasPendingMouseMove)
-    {
-        m_vecMousePosition.x = m_vecPendingMousePosition.x;
-        m_vecMousePosition.y = m_vecPendingMousePosition.y;
-        m_bHasPendingMouseMove = false;
-
-        CefMouseEvent moveEvent;
-        moveEvent.x = m_vecMousePosition.x;
-        moveEvent.y = m_vecMousePosition.y;
-        m_pWebView->GetHost()->SendMouseMoveEvent(moveEvent, false);
-    }
+    // Actions must use the latest physical cursor position even when the
+    // 60 Hz move throttle retained the final move of a short gesture.
+    FlushPendingMouseMove();
 
     CefMouseEvent mouseEvent;
     mouseEvent.x = m_vecMousePosition.x;
@@ -650,6 +959,9 @@ void CWebView::InjectMouseDown(eWebBrowserMouseButton mouseButton, int count)
 
     // Save mouse button states
     m_mouseButtonStates[static_cast<int>(mouseButton)] = true;
+
+    if (mouseButton == BROWSER_MOUSEBUTTON_LEFT)
+        ArmInteractionRefreshFrames(4);
 
     m_pWebView->GetHost()->SendMouseClickEvent(mouseEvent, static_cast<CefBrowserHost::MouseButtonType>(mouseButton), false, count);
 }
@@ -659,12 +971,17 @@ void CWebView::InjectMouseUp(eWebBrowserMouseButton mouseButton)
     if (!m_pWebView)
         return;
 
+    FlushPendingMouseMove();
+
     CefMouseEvent mouseEvent;
     mouseEvent.x = m_vecMousePosition.x;
     mouseEvent.y = m_vecMousePosition.y;
 
     // Save mouse button states
     m_mouseButtonStates[static_cast<int>(mouseButton)] = false;
+
+    if (mouseButton == BROWSER_MOUSEBUTTON_LEFT)
+        ArmInteractionRefreshFrames(4);
 
     m_pWebView->GetHost()->SendMouseClickEvent(mouseEvent, static_cast<CefBrowserHost::MouseButtonType>(mouseButton), true, 1);
 }
@@ -674,11 +991,20 @@ void CWebView::InjectMouseWheel(int iScrollVert, int iScrollHorz)
     if (!m_pWebView)
         return;
 
+    // Without this flush, a wheel immediately following a throttled move is
+    // hit-tested at stale coordinates and can target a non-scrollable panel.
+    FlushPendingMouseMove();
+
     CefMouseEvent mouseEvent;
     mouseEvent.x = m_vecMousePosition.x;
     mouseEvent.y = m_vecMousePosition.y;
 
     m_pWebView->GetHost()->SendMouseWheelEvent(mouseEvent, iScrollHorz, iScrollVert);
+
+    // CEF's off-screen frame sink can publish scroll damage much more slowly
+    // than its configured frame-rate ceiling. Request a bounded refresh
+    // window after input without continuously redrawing static menus.
+    ArmInteractionRefreshFrames(24);
 }
 
 void CWebView::InjectKeyboardEvent(const CefKeyEvent& keyEvent)
@@ -965,6 +1291,7 @@ void CWebView::OnPopupShow(CefRefPtr<CefBrowser> browser, bool show)
 {
     std::lock_guard<std::mutex> lock{m_RenderData.dataMutex};
     m_RenderData.popupShown = show;
+    m_RenderData.popupChanged = true;
 
     // Free popup buffer memory if hidden
     if (!show)
@@ -991,6 +1318,7 @@ void CWebView::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect)
 
     // Update rect
     m_RenderData.popupRect = rect;
+    m_RenderData.popupChanged = true;
 
     // Note: Don't allocate buffer here - OnPaint may provide different dimensions
     // Buffer allocation moved to OnPaint to prevent dimension mismatch
@@ -1009,8 +1337,6 @@ void CWebView::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintEle
     if (m_bBeingDestroyed) [[unlikely]]
         return;
 
-    std::unique_lock lock(m_RenderData.dataMutex);
-
     // Copy popup buffer
     if (paintType == PET_POPUP)
     {
@@ -1027,7 +1353,8 @@ void CWebView::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintEle
         if (static_cast<size_t>(width) > SIZE_MAX / (static_cast<size_t>(height) * CEF_PIXEL_STRIDE)) [[unlikely]]
             return;  // width * height * stride would overflow
 
-        const auto requiredSize = static_cast<size_t>(width) * static_cast<size_t>(height) * CEF_PIXEL_STRIDE;
+        std::lock_guard<std::mutex> lock{m_RenderData.dataMutex};
+        const auto                  requiredSize = static_cast<size_t>(width) * static_cast<size_t>(height) * CEF_PIXEL_STRIDE;
 
         // Calculate current size safely to avoid overflow
         size_t      currentSize = 0;
@@ -1048,53 +1375,349 @@ void CWebView::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintEle
         }
 
         std::memcpy(m_RenderData.popupBuffer.get(), buffer, requiredSize);
+        m_RenderData.popupChanged = true;
 
         return;
+    }
+
+    // Only the CEF callback touches paintFrame. A dedicated lock lets pause
+    // safely free it without serialising the game-thread texture upload.
+    const uint64_t   mutexWaitStarted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+    std::unique_lock paintLock{m_RenderData.paintMutex};
+    if (m_bFrameStatsEnabled)
+    {
+        m_FrameStats.paintMutexWaitNanoseconds.fetch_add(GetSteadyClockNanoseconds() - mutexWaitStarted, std::memory_order_relaxed);
+        m_FrameStats.paintMutexWaitSamples.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Validate main frame buffer parameter
     if (!buffer || width <= 0 || height <= 0) [[unlikely]]
-    {
-        m_RenderData.changed = false;
         return;
-    }
 
     // Check for integer overflow in size calculation
     constexpr auto maxDimension = INT_MAX / CEF_PIXEL_STRIDE;
     if (width > maxDimension || height > maxDimension) [[unlikely]]
-    {
-        m_RenderData.changed = false;
         return;
+
+    if (static_cast<size_t>(width) > SIZE_MAX / (static_cast<size_t>(height) * CEF_PIXEL_STRIDE)) [[unlikely]]
+        return;
+
+    auto&      paintFrame = m_RenderData.paintFrame;
+    const auto requiredSize = static_cast<size_t>(width) * static_cast<size_t>(height) * CEF_PIXEL_STRIDE;
+    const auto sourcePitch = static_cast<size_t>(width) * CEF_PIXEL_STRIDE;
+
+    std::vector<CefRect> currentDirtyRects;
+    currentDirtyRects.reserve(dirtyRects.size());
+    uint64_t currentDirtyPixels = 0;
+    for (const auto& rect : dirtyRects)
+    {
+        const int64_t left = std::clamp<int64_t>(rect.x, 0, width);
+        const int64_t top = std::clamp<int64_t>(rect.y, 0, height);
+        const int64_t right = std::clamp<int64_t>(static_cast<int64_t>(rect.x) + rect.width, 0, width);
+        const int64_t bottom = std::clamp<int64_t>(static_cast<int64_t>(rect.y) + rect.height, 0, height);
+        if (right <= left || bottom <= top)
+            continue;
+
+        currentDirtyRects.emplace_back(static_cast<int>(left), static_cast<int>(top), static_cast<int>(right - left), static_cast<int>(bottom - top));
+        currentDirtyPixels += static_cast<uint64_t>(right - left) * static_cast<uint64_t>(bottom - top);
     }
 
-    const auto requiredSize = static_cast<size_t>(width) * static_cast<size_t>(height) * CEF_PIXEL_STRIDE;
-    if (static_cast<size_t>(width) > SIZE_MAX / (static_cast<size_t>(height) * CEF_PIXEL_STRIDE)) [[unlikely]]
+    // An empty damage list is not useful for synchronising a recycled mailbox
+    // buffer. Treat it as a full paint rather than risk retaining stale pixels.
+    if (currentDirtyRects.empty())
     {
-        m_RenderData.changed = false;
-        return;
+        currentDirtyRects.emplace_back(0, 0, width, height);
+        currentDirtyPixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
     }
+
+    if (m_RenderData.dirtyHistoryWidth != width || m_RenderData.dirtyHistoryHeight != height)
+    {
+        m_RenderData.dirtyHistoryWidth = width;
+        m_RenderData.dirtyHistoryHeight = height;
+        m_RenderData.latestPaintGeneration = 0;
+        m_RenderData.dirtyHistory.clear();
+    }
+    const uint64_t incomingGeneration = ++m_RenderData.latestPaintGeneration;
 
     // Allocate or reallocate buffer if size changed
-    const bool bSizeChanged = !m_RenderData.buffer || m_RenderData.bufferSize != requiredSize;
+    const bool bSizeChanged = !paintFrame.buffer || paintFrame.bufferSize != requiredSize;
     if (bSizeChanged) [[unlikely]]
     {
-        m_RenderData.buffer = std::make_unique<byte[]>(requiredSize);
-        m_RenderData.bufferSize = requiredSize;
+        paintFrame.buffer = std::make_unique<byte[]>(requiredSize);
+        paintFrame.bufferSize = requiredSize;
         // Zero-initialize new buffer to avoid garbage pixels in areas not painted yet
-        std::memset(m_RenderData.buffer.get(), 0, requiredSize);
+        std::memset(paintFrame.buffer.get(), 0, requiredSize);
+        paintFrame.generation = 0;
     }
 
-    // Always do a full copy from CEF's buffer
-    // CEF's buffer contains the complete frame state, and dirty rects indicate what changed
-    // However, we must copy the full buffer because:
-    // 1. Our intermediate buffer may be stale if frames were skipped
-    // 2. CEF may combine multiple
-    // 3. Partial copies can cause rendering artifacts with popups/modals
-    std::memcpy(m_RenderData.buffer.get(), buffer, requiredSize);
+    std::vector<CefRect> copyRects;
+    bool                 copyFullFrame = bSizeChanged || paintFrame.generation == 0;
+    if (!copyFullFrame)
+    {
+        const uint64_t oldestNeededGeneration = paintFrame.generation + 1;
+        if (oldestNeededGeneration < incomingGeneration &&
+            (m_RenderData.dirtyHistory.empty() || m_RenderData.dirtyHistory.front().generation > oldestNeededGeneration))
+        {
+            // This mailbox buffer is older than the retained damage history.
+            copyFullFrame = true;
+        }
+        else
+        {
+            for (const auto& dirtyFrame : m_RenderData.dirtyHistory)
+            {
+                if (dirtyFrame.generation > paintFrame.generation)
+                    copyRects.insert(copyRects.end(), dirtyFrame.rects.begin(), dirtyFrame.rects.end());
+            }
+            copyRects.insert(copyRects.end(), currentDirtyRects.begin(), currentDirtyRects.end());
 
-    m_RenderData.width = width;
-    m_RenderData.height = height;
-    m_RenderData.changed = true;
+            uint64_t accumulatedPixels = 0;
+            for (const auto& rect : copyRects)
+                accumulatedPixels += static_cast<uint64_t>(rect.width) * static_cast<uint64_t>(rect.height);
+
+            // Many overlapping rectangles cost more to walk than one linear copy.
+            // At that point the full path is both simpler and faster.
+            const uint64_t framePixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+            copyFullFrame = accumulatedPixels >= framePixels * 65 / 100;
+        }
+    }
+
+    const uint64_t copyStarted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+    size_t         copiedBytes = 0;
+    if (copyFullFrame)
+    {
+        std::memcpy(paintFrame.buffer.get(), buffer, requiredSize);
+        copiedBytes = requiredSize;
+    }
+    else
+    {
+        const auto* sourcePixels = static_cast<const byte*>(buffer);
+        for (const auto& rect : copyRects)
+        {
+            const size_t rowBytes = static_cast<size_t>(rect.width) * CEF_PIXEL_STRIDE;
+            for (int y = 0; y < rect.height; ++y)
+            {
+                const size_t offset = static_cast<size_t>(rect.y + y) * sourcePitch + static_cast<size_t>(rect.x) * CEF_PIXEL_STRIDE;
+                std::memcpy(paintFrame.buffer.get() + offset, sourcePixels + offset, rowBytes);
+                copiedBytes += rowBytes;
+            }
+        }
+    }
+    const uint64_t paintCompleted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+
+    paintFrame.width = width;
+    paintFrame.height = height;
+    paintFrame.paintCompletedNanoseconds = paintCompleted;
+    paintFrame.generation = incomingGeneration;
+
+    m_RenderData.dirtyHistory.push_back({incomingGeneration, currentDirtyRects});
+    constexpr size_t MAX_DIRTY_HISTORY = 8;
+    while (m_RenderData.dirtyHistory.size() > MAX_DIRTY_HISTORY)
+        m_RenderData.dirtyHistory.pop_front();
+
+    bool supersededPendingFrame = false;
+    {
+        std::lock_guard publishLock{m_RenderData.dataMutex};
+        supersededPendingFrame = m_RenderData.pendingChanged;
+        std::swap(m_RenderData.paintFrame, m_RenderData.pendingFrame);
+        m_RenderData.pendingChanged = true;
+    }
+
+    if (m_bFrameStatsEnabled)
+    {
+        m_FrameStats.paints.fetch_add(1, std::memory_order_relaxed);
+        if (supersededPendingFrame)
+            m_FrameStats.supersededPaints.fetch_add(1, std::memory_order_relaxed);
+        m_FrameStats.dirtyPixels.fetch_add(currentDirtyPixels, std::memory_order_relaxed);
+        m_FrameStats.paintBytes.fetch_add(copiedBytes, std::memory_order_relaxed);
+        m_FrameStats.paintCopyNanoseconds.fetch_add(paintCompleted - copyStarted, std::memory_order_relaxed);
+
+        const uint64_t previousPaint = m_FrameStats.lastPaintTimestampNanoseconds.exchange(paintCompleted, std::memory_order_relaxed);
+        if (previousPaint > 0)
+        {
+            const uint64_t interval = paintCompleted - previousPaint;
+            m_FrameStats.paintIntervalNanoseconds.fetch_add(interval, std::memory_order_relaxed);
+            m_FrameStats.paintIntervalSamples.fetch_add(1, std::memory_order_relaxed);
+            UpdateAtomicMaximum(m_FrameStats.maxPaintIntervalNanoseconds, interval);
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////
+//                                                                //
+// Implementation: CefRenderHandler::OnAcceleratedPaint           //
+//                                                                //
+////////////////////////////////////////////////////////////////////
+void CWebView::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType paintType, const CefRenderHandler::RectList& dirtyRects,
+                                  const CefAcceleratedPaintInfo& info)
+{
+    if (m_bBeingDestroyed || !info.shared_texture_handle) [[unlikely]]
+        return;
+
+    auto&           backend = *m_pAcceleratedPaintBackend;
+    std::lock_guard backendLock{backend.mutex};
+
+    const uint64_t submitStarted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+    const auto     RecordFailure = [&]()
+    {
+        if (m_bFrameStatsEnabled)
+            m_FrameStats.acceleratedFailures.fetch_add(1, std::memory_order_relaxed);
+
+        if (!backend.failureLogged)
+        {
+            backend.failureLogged = true;
+            WriteDebugEvent(
+                SString("[CEF ACCEL] Shared-texture readback failed (HRESULT=0x%08X); restart with browser_shared_texture=0 to use "
+                        "software OnPaint",
+                        static_cast<unsigned int>(backend.lastFailure)));
+        }
+    };
+
+    if (!backend.EnsureDevice()) [[unlikely]]
+    {
+        RecordFailure();
+        return;
+    }
+
+    ID3D11Texture2D* sourceTexture = nullptr;
+    backend.lastFailure = backend.device->OpenSharedResource1(info.shared_texture_handle, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&sourceTexture));
+    if (FAILED(backend.lastFailure) || !sourceTexture) [[unlikely]]
+    {
+        RecordFailure();
+        return;
+    }
+
+    D3D11_TEXTURE2D_DESC sourceDescription{};
+    sourceTexture->GetDesc(&sourceDescription);
+
+    const bool supportedFormat = sourceDescription.Format == DXGI_FORMAT_B8G8R8A8_UNORM || sourceDescription.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+                                 sourceDescription.Format == DXGI_FORMAT_R8G8B8A8_UNORM || sourceDescription.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    const bool supportedLayout = sourceDescription.MipLevels == 1 && sourceDescription.ArraySize == 1 && sourceDescription.SampleDesc.Count == 1;
+    auto&      pipeline = paintType == PET_POPUP ? backend.popupPipeline : backend.viewPipeline;
+    if (!supportedFormat || !supportedLayout || !backend.EnsurePipeline(pipeline, sourceDescription)) [[unlikely]]
+    {
+        if (SUCCEEDED(backend.lastFailure))
+            backend.lastFailure = E_NOTIMPL;
+        sourceTexture->Release();
+        RecordFailure();
+        return;
+    }
+
+    bool  droppedCompletedFrame = false;
+    auto* slot = backend.AcquireSubmissionSlot(pipeline, droppedCompletedFrame);
+    if (!slot) [[unlikely]]
+    {
+        sourceTexture->Release();
+        if (m_bFrameStatsEnabled)
+            m_FrameStats.acceleratedDroppedFrames.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    const auto& visibleRect = info.extra.visible_rect;
+    const int   width = visibleRect.width;
+    const int   height = visibleRect.height;
+    const bool  visibleRectValid = visibleRect.x >= 0 && visibleRect.y >= 0 && width > 0 && height > 0 &&
+                                  static_cast<uint64_t>(visibleRect.x) + static_cast<uint64_t>(width) <= sourceDescription.Width &&
+                                  static_cast<uint64_t>(visibleRect.y) + static_cast<uint64_t>(height) <= sourceDescription.Height;
+    const bool sizeValid =
+        visibleRectValid && width <= INT_MAX / CEF_PIXEL_STRIDE && static_cast<size_t>(width) <= SIZE_MAX / (static_cast<size_t>(height) * CEF_PIXEL_STRIDE);
+    if (!sizeValid) [[unlikely]]
+    {
+        sourceTexture->Release();
+        backend.lastFailure = E_INVALIDARG;
+        RecordFailure();
+        return;
+    }
+
+    // Submit the cross-device copy and return to CEF without waiting for a CPU
+    // Map. The event query lets the game thread consume only completed copies,
+    // so the expensive readback no longer throttles Chromium's UI thread.
+    backend.deviceContext->CopyResource(slot->stagingTexture, sourceTexture);
+    sourceTexture->Release();
+    backend.deviceContext->End(slot->completionQuery);
+    backend.deviceContext->Flush();
+
+    slot->dirtyRects.assign(dirtyRects.begin(), dirtyRects.end());
+    slot->visibleRect = visibleRect;
+    slot->format = info.format;
+    slot->sequence = pipeline.nextSequence++;
+    slot->pending = true;
+    m_bHasPendingAcceleratedPaint.store(true, std::memory_order_release);
+
+    if (m_bFrameStatsEnabled)
+    {
+        m_FrameStats.acceleratedPaints.fetch_add(1, std::memory_order_relaxed);
+        if (droppedCompletedFrame)
+            m_FrameStats.acceleratedDroppedFrames.fetch_add(1, std::memory_order_relaxed);
+        m_FrameStats.acceleratedSubmitNanoseconds.fetch_add(GetSteadyClockNanoseconds() - submitStarted, std::memory_order_relaxed);
+    }
+}
+
+void CWebView::ConsumeAcceleratedPaint()
+{
+    if (!m_bHasPendingAcceleratedPaint.load(std::memory_order_acquire))
+        return;
+
+    auto&           backend = *m_pAcceleratedPaintBackend;
+    std::lock_guard backendLock{backend.mutex};
+
+    const auto ConsumePipeline = [&](FAcceleratedPaintBackend::FReadbackPipeline& pipeline, CefRenderHandler::PaintElementType paintType)
+    {
+        auto* slot = backend.FindNewestCompleted(pipeline);
+        if (!slot)
+            return;
+
+        const uint64_t           readbackStarted = m_bFrameStatsEnabled ? GetSteadyClockNanoseconds() : 0;
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        backend.lastFailure = backend.deviceContext->Map(slot->stagingTexture, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+        if (FAILED(backend.lastFailure) || !mapped.pData) [[unlikely]]
+        {
+            if (backend.lastFailure != DXGI_ERROR_WAS_STILL_DRAWING)
+            {
+                if (m_bFrameStatsEnabled)
+                    m_FrameStats.acceleratedFailures.fetch_add(1, std::memory_order_relaxed);
+                if (!backend.failureLogged)
+                {
+                    backend.failureLogged = true;
+                    WriteDebugEvent(SString("[CEF ACCEL] Asynchronous readback failed (HRESULT=0x%08X)", static_cast<unsigned int>(backend.lastFailure)));
+                }
+                slot->pending = false;
+            }
+            return;
+        }
+
+        const int    width = slot->visibleRect.width;
+        const int    height = slot->visibleRect.height;
+        const size_t tightPitch = static_cast<size_t>(width) * CEF_PIXEL_STRIDE;
+        const size_t requiredSize = tightPitch * static_cast<size_t>(height);
+        backend.tightPixels.resize(requiredSize);
+
+        const auto* sourceBytes = static_cast<const byte*>(mapped.pData) + static_cast<size_t>(slot->visibleRect.y) * mapped.RowPitch +
+                                  static_cast<size_t>(slot->visibleRect.x) * CEF_PIXEL_STRIDE;
+        for (int y = 0; y < height; ++y)
+        {
+            std::memcpy(backend.tightPixels.data() + static_cast<size_t>(y) * tightPitch, sourceBytes + static_cast<size_t>(y) * mapped.RowPitch, tightPitch);
+        }
+        backend.deviceContext->Unmap(slot->stagingTexture, 0);
+
+        if (slot->format == CEF_COLOR_TYPE_RGBA_8888)
+        {
+            for (size_t offset = 0; offset < requiredSize; offset += CEF_PIXEL_STRIDE)
+                std::swap(backend.tightPixels[offset], backend.tightPixels[offset + 2]);
+        }
+
+        slot->pending = false;
+        if (m_bFrameStatsEnabled)
+        {
+            m_FrameStats.acceleratedReadbacks.fetch_add(1, std::memory_order_relaxed);
+            m_FrameStats.acceleratedReadbackNanoseconds.fetch_add(GetSteadyClockNanoseconds() - readbackStarted, std::memory_order_relaxed);
+        }
+
+        OnPaint(m_pWebView, paintType, slot->dirtyRects, backend.tightPixels.data(), width, height);
+    };
+
+    ConsumePipeline(backend.viewPipeline, PET_VIEW);
+    ConsumePipeline(backend.popupPipeline, PET_POPUP);
+    m_bHasPendingAcceleratedPaint.store(backend.HasPendingFrames(), std::memory_order_release);
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -1458,6 +2081,10 @@ bool CWebView::OnTooltip(CefRefPtr<CefBrowser> browser, CefString& title)
 ////////////////////////////////////////////////////////////////////
 bool CWebView::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source, int line)
 {
+    const SString messageText = UTF16ToMbUTF8(message);
+    if (m_bFrameStatsEnabled && messageText.BeginsWith("[SETTINGS PERF]"))
+        WriteDebugEvent(messageText);
+
     // Note: cef_log_severity_t parameter is deprecated in CEF3 but required for virtual override
     // Redirect console message to debug window (if development mode is enabled)
     if (g_pCore->GetWebCore()->IsTestModeEnabled())
