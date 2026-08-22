@@ -438,6 +438,7 @@ jobs:
             # Framework does not expose Path.GetRelativePath.
             $relativePath = $file.FullName.Substring($filesRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
             $intentionallyExcluded =
+              $file.Name -eq '.gitignore' -or
               $relativePath -like 'server/*' -or
               $relativePath -like 'tests/*' -or
               $relativePath -like 'redist/*' -or
