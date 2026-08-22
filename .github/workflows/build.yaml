@@ -283,6 +283,11 @@ jobs:
             'MTA\bootstrap.exe',
             'MTA\bootstrapc.exe',
             'MTA\sa.dat',
+            'MTA\data\SALodLights.dat',
+            'MTA\data\Project2DFX-LICENSE.txt',
+            'MTA\data\extended-world\bullworth\native-world.json',
+            'MTA\radar-definitive\texture.rar',
+            'MTA\radar-definitive\THIRD_PARTY_NOTICE.txt',
             'MTA\cgui\unifont.ttf',
             'MTA\cgui\images\loadscreens\loadsc1.jpg',
             'MTA\cgui\images\loadscreens\loadsc14.jpg',
@@ -298,6 +303,26 @@ jobs:
             $inputPath = Join-Path $filesRoot $relativePath
             if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
               throw "Installer input is missing: $relativePath"
+            }
+          }
+
+          $expectedNeonDataFiles = @{
+            'MTA\data\SALodLights.dat' = @{ Size = 74428; Sha256 = 'C857D1F100C7F0C440F65BD6C9FC21A69DAACFC29DECD7E2D299151FF51B4D65' }
+            'MTA\data\Project2DFX-LICENSE.txt' = @{ Size = 1067; Sha256 = '609D6CB19A22A8CB928CAF0CB8C60D2E4023F8CF6824CBE696A5F118D6A196A0' }
+            'MTA\data\extended-world\bullworth\native-world.json' = @{ Size = 363; Sha256 = '770DE0F3B1F43BE1ED133F4A79E5D809060B98E5AA41EDB8160A83EE5D48E7EB' }
+            'MTA\radar-definitive\texture.rar' = @{ Size = 16847646; Sha256 = 'D6F44A3483D89CF89555096EE355CFBA0D8DB50480EA7BB84A3F2D2CD7E6893F' }
+            'MTA\radar-definitive\THIRD_PARTY_NOTICE.txt' = @{ Size = 1786; Sha256 = 'CAFE1E87DFEB81C357948F6A1EF20D08EA6283EAEE0BC32AA216DA2984E512B6' }
+          }
+          foreach ($relativePath in $expectedNeonDataFiles.Keys) {
+            $expected = $expectedNeonDataFiles[$relativePath]
+            $dataPath = Join-Path $filesRoot $relativePath
+            $dataFile = Get-Item -LiteralPath $dataPath
+            if ($dataFile.Length -ne $expected.Size) {
+              throw "Neon data file size mismatch: $relativePath ($($dataFile.Length))"
+            }
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dataPath).Hash
+            if ($actualHash -ne $expected.Sha256) {
+              throw "Neon data file SHA-256 mismatch: $relativePath ($actualHash)"
             }
           }
 
@@ -381,6 +406,11 @@ jobs:
             'Path = MTA/bootstrap.exe',
             'Path = MTA/bootstrapc.exe',
             'Path = MTA/sa.dat',
+            'Path = MTA/data/SALodLights.dat',
+            'Path = MTA/data/Project2DFX-LICENSE.txt',
+            'Path = MTA/data/extended-world/bullworth/native-world.json',
+            'Path = MTA/radar-definitive/texture.rar',
+            'Path = MTA/radar-definitive/THIRD_PARTY_NOTICE.txt',
             'Path = MTA/cgui/unifont.ttf',
             'Path = MTA/cef/serverbrowser/index.html',
             'Path = mods/deathmatch/client.dll',
@@ -392,6 +422,36 @@ jobs:
             if ($archiveListing -notcontains $expectedEntry) {
               throw "Built installer is missing: $expectedEntry"
             }
+          }
+
+          # Keep the explicit exclusions small and reviewable. Every other staged client file
+          # must be present in the finished installer, so adding a runtime asset cannot silently
+          # repeat the radar and Project2DFX packaging omissions.
+          $installerEntries = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+          foreach ($line in $archiveListing) {
+            if ($line -match '^Path = (.+)$') {
+              $normalizedEntry = [Regex]::Replace($Matches[1].Replace('\', '/'), '/+', '/')
+              [void]$installerEntries.Add($normalizedEntry)
+            }
+          }
+          $missingStagedFiles = @()
+          foreach ($file in Get-ChildItem -LiteralPath $filesRoot -File -Recurse) {
+            # GitHub's `powershell` shell is Windows PowerShell 5.1, whose .NET
+            # Framework does not expose Path.GetRelativePath.
+            $relativePath = $file.FullName.Substring($filesRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+            $intentionallyExcluded =
+              $relativePath -like 'server/*' -or
+              $relativePath -like 'tests/*' -or
+              $relativePath -like 'redist/*' -or
+              $relativePath -eq 'MTA/netc_d.dll' -or
+              $relativePath -eq 'MTA/d3dcompiler_47.maetro.dll' -or
+              ($relativePath -like 'MTA/CEF/locales/*' -and $relativePath -ne 'MTA/CEF/locales/en-US.pak')
+            if (-not $intentionallyExcluded -and -not $installerEntries.Contains($relativePath)) {
+              $missingStagedFiles += $relativePath
+            }
+          }
+          if ($missingStagedFiles.Count -ne 0) {
+            throw "Installer omitted staged client files:`n$($missingStagedFiles -join "`n")"
           }
 
           $requiredInstallerPatterns = @{

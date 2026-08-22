@@ -850,6 +850,12 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
         File "${FILES_ROOT}\mta\bootstrapc.exe"
 
         !ifdef MTA_NEON
+            ; The Definitive radar falls back to GTA's renderer when these assets are absent.
+            ; Keep them outside LIGHTBUILD so every Neon client installer can repair an incomplete installation.
+            SetOutPath "$INSTDIR\MTA\radar-definitive"
+            File "${FILES_ROOT}\mta\radar-definitive\texture.rar"
+            File "${FILES_ROOT}\mta\radar-definitive\THIRD_PARTY_NOTICE.txt"
+
             ; Vehicle audio uses the pinned x86 FMOD 2.02.26 runtime. Banks remain server-owned resource files.
             SetOutPath "$INSTDIR\MTA\vehicle-sounds\runtime"
             File "${FILES_ROOT}\mta\vehicle-sounds\runtime\fmod.dll"
@@ -948,7 +954,9 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
             !endif
 
             SetOutPath "$INSTDIR\MTA\data"
-            File "${FILES_ROOT}\mta\data\gta_sa_diff.dat"
+            ; Install the complete staged data tree. Neon features add runtime-owned data here,
+            ; and selecting individual files previously omitted Project2DFX and native-world assets.
+            File /r "${FILES_ROOT}\mta\data\*.*"
 
             SetOutPath "$INSTDIR\MTA\config"
             File "${FILES_ROOT}\mta\config\chatboxpresets.xml"

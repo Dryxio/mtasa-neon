@@ -2,6 +2,35 @@
   "schema": 1,
   "releases": [
     {
+      "build": 181,
+      "date": "2026-08-22",
+      "title": "Missing client assets restored",
+      "summary": "Build 181 repairs Definitive radar and Project2DFX data omitted from build 180 installations and strengthens installer validation.",
+      "highlights": [
+        "Definitive radar and distant-light assets restored",
+        "Automatic repair for build 180 installations",
+        "Complete staged-client packaging validation"
+      ],
+      "sections": [
+        {
+          "label": "Players and fixes",
+          "tone": "players",
+          "items": [
+            "Updating from build 180 now installs the missing Definitive Edition radar textures.",
+            "Selecting the Definitive Edition radar no longer silently falls back to GTA's original renderer because of missing packaged assets.",
+            "Project2DFX distant lights now load their complete definition set instead of falling back to GTA's embedded effects."
+          ]
+        },
+        {
+          "label": "Release infrastructure",
+          "tone": "servers",
+          "items": [
+            "The release workflow now verifies critical data hashes and refuses any staged client file omitted from the final installer."
+          ]
+        }
+      ]
+    },
+    {
       "build": 180,
       "date": "2026-08-21",
       "title": "New menus, faster downloads and new Lua tools",

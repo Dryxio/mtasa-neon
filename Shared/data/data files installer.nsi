@@ -152,6 +152,19 @@ Section "Data files" SEC01
 	File "${FILES_ROOT}\MTA San Andreas\mta\libEGL.dll"
 	File "${FILES_ROOT}\MTA San Andreas\mta\libGLESv2.dll"
 
+	; The Definitive renderer requires both the licensed texture archive and its notice.
+	SetOutPath "$INSTDIR\MTA\radar-definitive"
+	File "${FILES_ROOT}\MTA San Andreas\mta\radar-definitive\texture.rar"
+	File "${FILES_ROOT}\MTA San Andreas\mta\radar-definitive\THIRD_PARTY_NOTICE.txt"
+
+	SetOutPath "$INSTDIR\MTA\data"
+	File "${FILES_ROOT}\MTA San Andreas\mta\data\gta_sa_diff.dat"
+	File "${FILES_ROOT}\MTA San Andreas\mta\data\SALodLights.dat"
+	File "${FILES_ROOT}\MTA San Andreas\mta\data\Project2DFX-LICENSE.txt"
+
+	SetOutPath "$INSTDIR\MTA\data\extended-world\bullworth"
+	File "${FILES_ROOT}\MTA San Andreas\mta\data\extended-world\bullworth\native-world.json"
+
 	SetOutPath "$INSTDIR\MTA\config"
 	File "${FILES_ROOT}\MTA San Andreas\mta\config\chatboxpresets.xml"
 
