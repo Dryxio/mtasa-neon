@@ -46,7 +46,7 @@ Neon also ships its own GTA:SA-inspired menu and server browser, with an optiona
 
 ![Neon main menu in the GTA:SA visual style, with browse servers, quick connect, map editor, settings, about and quit entries, and a Discord connected badge](docs/media/neon-main-menu.jpg)
 
-![Neon server browser showing community servers with flags, ping and player counts, and a details panel for the selected server](docs/media/neon-server-browser.jpg)
+![Neon server browser listing populated community servers with flags, ping and player counts, and a details panel with a copyable mtaneon:// server link](docs/media/neon-server-browser.jpg)
 
 ## GTA systems, now scriptable
 
