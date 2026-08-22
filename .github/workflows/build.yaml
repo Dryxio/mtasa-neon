@@ -306,15 +306,13 @@ jobs:
             }
           }
 
-          $expectedNeonDataFiles = @{
+          # Text assets are checked out with CRLF on Windows, so pin exact bytes only for binaries.
+          $expectedNeonBinaryFiles = @{
             'MTA\data\SALodLights.dat' = @{ Size = 74428; Sha256 = 'C857D1F100C7F0C440F65BD6C9FC21A69DAACFC29DECD7E2D299151FF51B4D65' }
-            'MTA\data\Project2DFX-LICENSE.txt' = @{ Size = 1067; Sha256 = '609D6CB19A22A8CB928CAF0CB8C60D2E4023F8CF6824CBE696A5F118D6A196A0' }
-            'MTA\data\extended-world\bullworth\native-world.json' = @{ Size = 363; Sha256 = '770DE0F3B1F43BE1ED133F4A79E5D809060B98E5AA41EDB8160A83EE5D48E7EB' }
             'MTA\radar-definitive\texture.rar' = @{ Size = 16847646; Sha256 = 'D6F44A3483D89CF89555096EE355CFBA0D8DB50480EA7BB84A3F2D2CD7E6893F' }
-            'MTA\radar-definitive\THIRD_PARTY_NOTICE.txt' = @{ Size = 1786; Sha256 = 'CAFE1E87DFEB81C357948F6A1EF20D08EA6283EAEE0BC32AA216DA2984E512B6' }
           }
-          foreach ($relativePath in $expectedNeonDataFiles.Keys) {
-            $expected = $expectedNeonDataFiles[$relativePath]
+          foreach ($relativePath in $expectedNeonBinaryFiles.Keys) {
+            $expected = $expectedNeonBinaryFiles[$relativePath]
             $dataPath = Join-Path $filesRoot $relativePath
             $dataFile = Get-Item -LiteralPath $dataPath
             if ($dataFile.Length -ne $expected.Size) {
