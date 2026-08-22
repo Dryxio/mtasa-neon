@@ -24,9 +24,25 @@ local nativeDamageTraceTimes = {}
 local nativeDamageReplayReceipts = {}
 local nativePlayerDamageReceipts = {}
 local nativeBikeJackReceipts = {}
+local coupleForwardSocialProbe = false
 local spawnFades = {}
 local residencyTest = false
 local nextNativePlayerDamageNonce = 0
+
+local function cleanupCoupleForwardSocialProbe(probe)
+    if type(probe) ~= "table" then return end
+    if probe.attackerCreated and isElement(probe.attacker) then
+        destroyElement(probe.attacker)
+    elseif probe.attacker == localPlayer and type(probe.playerState) == "table" then
+        if type(setPedStandStill) == "function" then setPedStandStill(localPlayer, 1) end
+        setElementInterior(localPlayer, probe.playerState.interior)
+        setElementDimension(localPlayer, probe.playerState.dimension)
+        setElementPosition(localPlayer, probe.playerState.x, probe.playerState.y, probe.playerState.z)
+        if type(setPedRotation) == "function" then setPedRotation(localPlayer, probe.playerState.rotation) end
+        if type(setPedWeaponSlot) == "function" then setPedWeaponSlot(localPlayer, probe.playerState.weaponSlot) end
+    end
+    if coupleForwardSocialProbe == probe then coupleForwardSocialProbe = false end
+end
 local nextNativeBikeJackNonce = 0
 local nextObservedDamageNonce = 0
 local stats = {
@@ -564,15 +580,37 @@ local function captureCoupleDiagnostic(task)
             leaderRoleMatches = member.leaderRoleMatches == true,
             primaryTaskType = tonumber(member.primaryTaskType) or -1,
             subTaskType = tonumber(member.subTaskType) or -1,
+            currentEventType = tonumber(member.currentEventType) or -1,
+            previousSide = tonumber(member.previousSide) or 0,
+            damageEventPresent = member.damageEventPresent == true,
+            shotFiredEventPresent = member.shotFiredEventPresent == true,
+            gunAimedAtEventPresent = member.gunAimedAtEventPresent == true,
+            forwardedDamageEventCount = tonumber(member.forwardedDamageEventCount) or 0,
+            forwardedShotFiredEventCount = tonumber(member.forwardedShotFiredEventCount) or 0,
+            forwardedGunAimedAtEventCount = tonumber(member.forwardedGunAimedAtEventCount) or 0,
             walkSpeed = tonumber(member.walkSpeed) or -1,
         }
     end
     return compact
 end
 
+local function reportCoupleArmState(task, diagnostic)
+    if task.presentation or type(diagnostic) ~= "table" or type(diagnostic.members) ~= "table" then return end
+    local sideA = tonumber(diagnostic.members[1] and diagnostic.members[1].previousSide)
+    local sideB = tonumber(diagnostic.members[2] and diagnostic.members[2].previousSide)
+    if (sideA ~= 1 and sideA ~= 2) or (sideB ~= 1 and sideB ~= 2) then return end
+    if task.reportedSideA == sideA and task.reportedSideB == sideB then return end
+    task.reportedSideA = sideA
+    task.reportedSideB = sideB
+    triggerServerEvent("pedTraffic:coupleArmState", resourceRoot, task.id, task.epoch, sideA, sideB)
+end
+
 local function releaseCoupleAssignment(task, releaseNative)
     clearTimer(task, "retryTimer")
     clearTimer(task, "monitorTimer")
+    if type(coupleForwardSocialProbe) == "table" and coupleForwardSocialProbe.relationId == task.id then
+        cleanupCoupleForwardSocialProbe(coupleForwardSocialProbe)
+    end
     if releaseNative and task.token then
         if task.presentation and type(releasePedNativeCouplePresentation) == "function" then
             releasePedNativeCouplePresentation(task.token)
@@ -608,10 +646,69 @@ local function beginCoupleAssignment(task)
         return
     end
     if task.presentation then
-        -- Observer-side PointArm cannot safely create its secondary IK task on
-        -- CPlayerPed wrappers. Keep this assignment as presentation metadata
-        -- only until a task-free observer implementation exists.
+        if type(acquireElementStreamingLease) ~= "function" or type(releaseElementStreamingLease) ~= "function" or
+            type(acquirePedNativeCouplePresentation) ~= "function" or
+            type(releasePedNativeCouplePresentation) ~= "function" or
+            type(updatePedNativeCouplePresentation) ~= "function" or
+            type(isPedNativeCouplePresentationActive) ~= "function" then
+            return failCoupleAssignment(task, "couple-presentation-api-missing")
+        end
+        for _, ped in ipairs(task.peds) do
+            if not isElement(ped) or isElementSyncer(ped) then
+                if getTickCount() - task.requestedAt >= 5000 then
+                    return failCoupleAssignment(task, "couple-presentation-not-ready")
+                end
+                clearTimer(task, "retryTimer")
+                -- MTA copies table arguments passed to setTimer. Capture the
+                -- authoritative assignment instead so the identity fence at
+                -- beginCoupleAssignment accepts this retry.
+                task.retryTimer = setTimer(function() beginCoupleAssignment(task) end, 100, 1)
+                return
+            end
+            -- Observer presentation still needs a materialized GTA ped. Keep
+            -- both actors resident without installing any owner-side AI.
+            if not task.leases[ped] then
+                task.leases[ped] = acquireElementStreamingLease(ped)
+            end
+            if not task.leases[ped] then
+                return failCoupleAssignment(task, "couple-presentation-streaming-lease-refused")
+            end
+        end
+        task.presentationStage = "acquiring"
+        if not task.token then task.token = acquirePedNativeCouplePresentation(task.peds[1], task.peds[2]) end
+        if not task.token then
+            task.presentationStage = "acquire-refused"
+            if getTickCount() - task.requestedAt >= 5000 then
+                return failCoupleAssignment(task, "couple-presentation-refused")
+            end
+            clearTimer(task, "retryTimer")
+            task.retryTimer = setTimer(function() beginCoupleAssignment(task) end, 100, 1)
+            return
+        end
+        task.presentationStage = "acquired"
+        -- A background second client can have onClientPreRender throttled for
+        -- several seconds. Prime the retail IK presentation immediately so
+        -- its observer state is ready before the harness samples it.
+        task.presentationStage = "updating"
+        -- Mark the resource lease accepted before entering the native task.
+        -- If the game aborts this Lua call internally, the harness can still
+        -- query the native-active predicate and report that exact boundary.
         task.accepted = true
+        local updated = updatePedNativeCouplePresentation(task.token, task.sideA or 0, task.sideB or 0)
+        task.presentationStage = updated and "updated" or "update-refused"
+        if not updated then
+            task.accepted = false
+            releasePedNativeCouplePresentation(task.token)
+            task.token = nil
+            if getTickCount() - task.requestedAt >= 5000 then
+                return failCoupleAssignment(task, "couple-presentation-update-refused")
+            end
+            clearTimer(task, "retryTimer")
+            task.retryTimer = setTimer(function() beginCoupleAssignment(task) end, 100, 1)
+            return
+        end
+        task.accepted = true
+        task.presentationRetryStartedAt = nil
         return
     end
     if type(acquireElementStreamingLease) ~= "function" or type(releaseElementStreamingLease) ~= "function" or
@@ -674,6 +771,7 @@ local function beginCoupleAssignment(task)
         return failCoupleAssignment(task, "couple-diagnostic-inactive")
     end
     task.accepted = true
+    reportCoupleArmState(task, diagnostic)
     reportCouple(task, "accepted", {
         leaderIndex = task.leaderIndex,
         walkSpeeds = task.walkSpeeds,
@@ -693,6 +791,7 @@ local function beginCoupleAssignment(task)
             end
         end
         if not isPedNativeCoupleActive(task.token) then
+            if task.forwardingProbe then return end
             local ended = captureCoupleDiagnostic(task)
             reportCouple(task, "dissolved", {nativeDiagnostic = ended or nil})
             releaseCoupleAssignment(task, true)
@@ -701,6 +800,8 @@ local function beginCoupleAssignment(task)
                     setPedWander(ped, "walk", math.random(0, 7), true)
                 end
             end
+        else
+            reportCoupleArmState(task, captureCoupleDiagnostic(task))
         end
     end, 100, 0)
 end
@@ -1115,6 +1216,7 @@ addEventHandler("pedTraffic:setEnabled", resourceRoot, function(value, debugValu
     observedAimTargets = {}
     log("enabled=" .. tostring(enabled))
     if not enabled then
+        cleanupCoupleForwardSocialProbe(coupleForwardSocialProbe)
         stopResidencyObservation()
         populationWorldReady = false
         latestPopulationProfile = false
@@ -1143,12 +1245,14 @@ addEventHandler("pedTraffic:setDebug", resourceRoot, function(value)
 end)
 
 addEvent("pedTraffic:candidateRequest", true)
-addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId, worldRevision, populationClass, gang, maximumGroupMembers)
+addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId, worldRevision, populationClass, gang, maximumGroupMembers,
+                                                                      coupleAttempt)
     local startedAt = getTickCount()
     if not enabled or not populationWorldReady or worldRevision ~= populationWorldRevision or getElementDimension(localPlayer) ~= 0 or
         getElementInterior(localPlayer) ~= 0 or isPedDead(localPlayer) or
         (populationClass == "gang" and type(getAmbientPedGangGroupCandidate) ~= "function" or
-            populationClass ~= "gang" and type(getAmbientPedSpawnCandidate) ~= "function") then
+            coupleAttempt == true and type(getAmbientPedCivilianCoupleCandidate) ~= "function" or
+            populationClass ~= "gang" and coupleAttempt ~= true and type(getAmbientPedSpawnCandidate) ~= "function") then
         stats.candidateMisses = stats.candidateMisses + 1
         triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt, "world-not-ready")
         return
@@ -1163,6 +1267,13 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         return
     end
 
+    if coupleAttempt ~= true and coupleAttempt ~= false or coupleAttempt == true and populationClass ~= "civilian" then
+        stats.candidateMisses = stats.candidateMisses + 1
+        triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt,
+                           "invalid-couple-hint")
+        return
+    end
+
     if populationClass == "gang" and not isIntegerInRange(maximumGroupMembers, 2, 4) then
         stats.candidateMisses = stats.candidateMisses + 1
         triggerServerEvent("pedTraffic:candidate", resourceRoot, requestId, worldRevision, false, getTickCount() - startedAt,
@@ -1172,7 +1283,9 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
 
     local x, y, z = getElementPosition(localPlayer)
     local candidate, missReason
-    if populationClass == "gang" then
+    if coupleAttempt == true then
+        candidate, missReason = getAmbientPedCivilianCoupleCandidate(x, y, z)
+    elseif populationClass == "gang" then
         candidate, missReason = getAmbientPedGangGroupCandidate(x, y, z, gang, maximumGroupMembers)
         if type(candidate) == "table" then
             for _, member in ipairs(candidate.members or candidate) do
@@ -1194,7 +1307,8 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         countReason(stats.missReasons, missReason)
     end
     if debugEnabled then
-        local memberCount = populationClass == "gang" and (type(candidate) == "table" and #(candidate.members or candidate) or 0) or 1
+        local memberCount = (populationClass == "gang" or coupleAttempt == true) and
+            (type(candidate) == "table" and #(candidate.members or candidate) or 0) or 1
         log(("candidate request=%d class=%s gang=%s result=%s model=%s members=%d elapsed=%d reason=%s"):format(
                 requestId, populationClass, tostring(gang), tostring(candidate ~= false and candidate ~= nil),
                 tostring(candidate and candidate.model), memberCount, getTickCount() - startedAt, tostring(missReason)))
@@ -1604,7 +1718,7 @@ addEventHandler("pedTraffic:assignCouple", resourceRoot, function(relationId, re
 end)
 
 addEvent("pedTraffic:assignCouplePresentation", true)
-addEventHandler("pedTraffic:assignCouplePresentation", resourceRoot, function(relationId, relationEpoch, pedA, pedB, reason)
+addEventHandler("pedTraffic:assignCouplePresentation", resourceRoot, function(relationId, relationEpoch, pedA, pedB, reason, sideA, sideB)
     if not enabled or not isIntegerInRange(relationId, 1, 2147483647) or
         not isIntegerInRange(relationEpoch, 1, 2147483647) or not isElement(pedA) or not isElement(pedB) or pedA == pedB then
         return
@@ -1612,6 +1726,9 @@ addEventHandler("pedTraffic:assignCouplePresentation", resourceRoot, function(re
     local old = coupleAssignments[relationId]
     if old then
         if old.epoch == relationEpoch and old.presentation then
+            if (sideA == 1 or sideA == 2) and (sideB == 1 or sideB == 2) then
+                old.sideA, old.sideB = sideA, sideB
+            end
             if not old.accepted then beginCoupleAssignment(old) end
             return
         end
@@ -1625,12 +1742,24 @@ addEventHandler("pedTraffic:assignCouplePresentation", resourceRoot, function(re
         requestedAt = getTickCount(),
         accepted = false,
         presentation = true,
+        sideA = (sideA == 1 or sideA == 2) and sideA or 0,
+        sideB = (sideB == 1 or sideB == 2) and sideB or 0,
         leases = {},
     }
     coupleAssignments[relationId] = task
     coupleByPed[pedA] = task
     coupleByPed[pedB] = task
     beginCoupleAssignment(task)
+end)
+
+addEvent("pedTraffic:updateCouplePresentationSides", true)
+addEventHandler("pedTraffic:updateCouplePresentationSides", resourceRoot, function(relationId, relationEpoch, sideA, sideB)
+    local task = coupleAssignments[relationId]
+    if not task or not task.presentation or task.epoch ~= relationEpoch or
+        (sideA ~= 1 and sideA ~= 2) or (sideB ~= 1 and sideB ~= 2) then
+        return
+    end
+    task.sideA, task.sideB = sideA, sideB
 end)
 
 addEvent("pedTraffic:revokeCouple", true)
@@ -1668,6 +1797,7 @@ end
 
 addEvent("pedTraffic:coupleTestSample", true)
 addEventHandler("pedTraffic:coupleTestSample", resourceRoot, function(testId, sampleId, relationId, relationEpoch, pedA, pedB, phase)
+    local function reportSample()
     local task = coupleAssignments[relationId]
     local diagnostic = task and task.epoch == relationEpoch and captureCoupleDiagnostic(task) or false
     local members = {}
@@ -1712,6 +1842,11 @@ addEventHandler("pedTraffic:coupleTestSample", resourceRoot, function(testId, sa
         assignment = task ~= nil and task.epoch == relationEpoch and not task.presentation,
         assignmentAccepted = task ~= nil and task.epoch == relationEpoch and not task.presentation and task.accepted == true,
         presentation = task ~= nil and task.epoch == relationEpoch and task.presentation == true,
+        presentationAccepted = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.accepted == true,
+        presentationToken = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.token ~= nil and task.token ~= false,
+        presentationStage = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.presentationStage or false,
+        presentationSideA = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.sideA or false,
+        presentationSideB = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.sideB or false,
         presentationActive = task ~= nil and task.epoch == relationEpoch and task.presentation == true and task.accepted == true and
             task.token ~= nil and isPedNativeCouplePresentationActive(task.token) == true or false,
         leaderIndex = task and not task.presentation and task.leaderIndex or false,
@@ -1720,6 +1855,121 @@ addEventHandler("pedTraffic:coupleTestSample", resourceRoot, function(testId, sa
         pairDistance = pairDistance,
         members = members,
     })
+    end
+
+    if isElement(pedA) and isElement(pedB) then
+        local ax, ay, az = getElementPosition(pedA)
+        local bx, by, bz = getElementPosition(pedB)
+        local midX, midY, midZ = (ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5
+        -- The pair travels during both soaks. Keep it inside the observer's
+        -- render set, then allow GTA one frame to materialize bone data before
+        -- asking whether the retail PointArm presentation is active.
+        setCameraMatrix(midX, midY - 8, midZ + 5, midX, midY, midZ + 0.8)
+        setTimer(reportSample, 100, 1)
+    else
+        reportSample()
+    end
+end)
+
+addEvent("pedTraffic:coupleTestForwardSocialEvent", true)
+addEventHandler("pedTraffic:coupleTestForwardSocialEvent", resourceRoot, function(testId, relationId, relationEpoch, pedA)
+    local function beginProbe()
+        local task = coupleAssignments[relationId]
+        local profileToken = isElement(pedA) and nativeEventProfiles[pedA] or false
+        if not task or task.epoch ~= relationEpoch or task.presentation or not task.accepted or not task.token or
+            not isElement(pedA) or not isElementSyncer(pedA) or not profileToken or
+            not isPedNativeEventProfileActive(pedA, profileToken) or
+            type(addPedNativeGunAimedAtEvent) ~= "function" then
+            triggerServerEvent("pedTraffic:coupleTestForwardSocialEventResult", resourceRoot, testId, relationId, relationEpoch,
+                               false, {reason = "couple-probe-not-ready"})
+            return
+        end
+
+        local before = captureCoupleDiagnostic(task)
+        local forwardedEventBefore = before and before.members and before.members[2] and
+                                         before.members[2].forwardedGunAimedAtEventCount or 0
+        task.forwardingProbe = true
+        local playerX, playerY, playerZ = getElementPosition(localPlayer)
+        local _, _, playerRotation = getElementRotation(localPlayer)
+        local playerState = {
+            x = playerX,
+            y = playerY,
+            z = playerZ,
+            rotation = playerRotation,
+            interior = getElementInterior(localPlayer),
+            dimension = getElementDimension(localPlayer),
+            weaponSlot = getPedWeaponSlot(localPlayer),
+        }
+        setElementInterior(localPlayer, getElementInterior(pedA))
+        setElementDimension(localPlayer, getElementDimension(pedA))
+        local probeOffsets = {{0, -1.0}, {1.0, 0}, {0, 1.0}, {-1.0, 0}}
+        local function positionProbeSource(attempt)
+            if not isElement(pedA) then return false end
+            local x, y, z = getElementPosition(pedA)
+            local offset = probeOffsets[(attempt - 1) % #probeOffsets + 1]
+            return setElementPosition(localPlayer, x + offset[1], y + offset[2], z, false) == true
+        end
+        positionProbeSource(1)
+
+        local probe = {
+            testId = testId,
+            relationId = relationId,
+            relationEpoch = relationEpoch,
+            ped = pedA,
+            attacker = localPlayer,
+            playerState = playerState,
+            forwardedEventBefore = forwardedEventBefore,
+            sourceObserved = false,
+            forwardedObserved = false,
+            forwardedDiagnostic = false,
+            eventType = 31,
+        }
+        coupleForwardSocialProbe = probe
+        -- CEventGunAimedAt::AffectsPed requires its source to be inside the
+        -- target's seeing range. The harness players normally stay remote to
+        -- avoid perturbing locomotion, so bring the current owner beside the
+        -- pair only for this post-soak event and restore it after the probe.
+        local accepted = addPedNativeGunAimedAtEvent(pedA, localPlayer, profileToken) == true
+        probe.sourceObserved = accepted
+        log(("couple-forward-probe relation=%d epoch=%d accepted=%s stimulus=gun-aimed-at"):format(
+                relationId, relationEpoch, tostring(accepted)))
+        local attempts = 0
+        local injectionAttempts = 1
+        local function sampleForwarding()
+            attempts = attempts + 1
+            if not accepted and attempts % 4 == 0 and isElement(pedA) then
+                injectionAttempts = injectionAttempts + 1
+                positionProbeSource(injectionAttempts)
+                accepted = addPedNativeGunAimedAtEvent(pedA, localPlayer, profileToken) == true
+                probe.sourceObserved = accepted
+            end
+            local diagnostic = captureCoupleDiagnostic(task)
+            local partner = diagnostic and diagnostic.members and diagnostic.members[2] or false
+            local forwarded = probe.forwardedObserved or
+                                  (partner and partner.forwardedGunAimedAtEventCount > forwardedEventBefore or false) or
+                                  (partner and (partner.gunAimedAtEventPresent == true or partner.currentEventType == 31) or false)
+            if forwarded or attempts >= 120 then
+                cleanupCoupleForwardSocialProbe(probe)
+                task.forwardingProbe = nil
+                triggerServerEvent("pedTraffic:coupleTestForwardSocialEventResult", resourceRoot, testId, relationId,
+                                   relationEpoch, forwarded, {
+                                       accepted = accepted,
+                                       injectionAttempts = injectionAttempts,
+                                       sourceObserved = accepted,
+                                       forwardedObserved = forwarded,
+                                       eventType = probe.eventType,
+                                       before = before or false,
+                                       partner = partner or false,
+                                       forwardedDiagnostic = probe.forwardedDiagnostic or false,
+                                       diagnostic = diagnostic or false,
+                })
+                return
+            end
+            setTimer(sampleForwarding, 25, 1)
+        end
+        setTimer(sampleForwarding, 25, 1)
+    end
+    beginProbe()
 end)
 
 addEvent("pedTraffic:coupleTestSeparate", true)
@@ -1741,10 +1991,16 @@ addEventHandler("pedTraffic:coupleTestCleanup", resourceRoot, function(testId, r
         local assignmentPresent = coupleAssignments[relationId] ~= nil
         local elementPresent = false
         local profilePresent = false
+        for _, ped in ipairs(getElementsByType("ped")) do
+            local trafficId = tonumber(getElementData(ped, "neon:ambientPedTrafficId"))
+            if trafficId and (trafficId == trafficIds[1] or trafficId == trafficIds[2]) then
+                elementPresent = true
+                break
+            end
+        end
         for ped in pairs(nativeEventProfiles) do
             local trafficId = isElement(ped) and tonumber(getElementData(ped, "neon:ambientPedTrafficId")) or false
             if trafficId and (trafficId == trafficIds[1] or trafficId == trafficIds[2]) then
-                elementPresent = true
                 profilePresent = true
             end
         end
@@ -2077,6 +2333,24 @@ addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
         return
     end
 
+    local probe = coupleForwardSocialProbe
+    if probe and probe.eventType == 9 and source == probe.ped and attacker == probe.attacker then
+        probe.damageObserved = true
+        probe.weapon = weapon
+        probe.bodypart = bodypart
+        local task = coupleAssignments[probe.relationId]
+        local diagnostic = task and task.epoch == probe.relationEpoch and captureCoupleDiagnostic(task) or false
+        local partner = diagnostic and diagnostic.members and diagnostic.members[2] or false
+        local baseline = probe.forwardedDamageBefore or 0
+        probe.forwardedObserved = partner and
+                                      (partner.forwardedDamageEventCount > baseline or partner.damageEventPresent == true or
+                                          partner.currentEventType == 9) or false
+        probe.forwardedDiagnostic = diagnostic or false
+        log(("couple-forward-damage relation=%d epoch=%d weapon=%s bodypart=%s forwarded=%s"):format(
+                probe.relationId, probe.relationEpoch, tostring(weapon), tostring(bodypart),
+                tostring(probe.forwardedObserved)))
+    end
+
     local token = nativeEventProfiles[source]
     if token and isPedNativeEventProfileActive(source, token) then
         rememberNativeDamage(source, attacker, weapon, bodypart)
@@ -2242,7 +2516,19 @@ addEventHandler("onClientPreRender", root, function()
     local now = getTickCount()
     for _, task in pairs(coupleAssignments) do
         if task.presentation and task.accepted and task.token and type(updatePedNativeCouplePresentation) == "function" then
-            if not updatePedNativeCouplePresentation(task.token) then releaseCoupleAssignment(task, true) end
+            if not updatePedNativeCouplePresentation(task.token, task.sideA or 0, task.sideB or 0) then
+                -- Streaming and ownership can invalidate a presentation task
+                -- for one frame. Reacquire locally within a bounded window;
+                -- dropping the assignment here would make the loss permanent.
+                releasePedNativeCouplePresentation(task.token)
+                task.token = nil
+                task.accepted = false
+                task.presentationStage = "update-retry"
+                task.presentationRetryStartedAt = task.presentationRetryStartedAt or now
+                task.requestedAt = task.presentationRetryStartedAt
+                clearTimer(task, "retryTimer")
+                task.retryTimer = setTimer(function() beginCoupleAssignment(task) end, 100, 1)
+            end
         end
     end
     for ped, fade in pairs(spawnFades) do
@@ -2314,6 +2600,7 @@ addEventHandler("onClientElementDataChange", root, function(dataName)
 end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
+    cleanupCoupleForwardSocialProbe(coupleForwardSocialProbe)
     stopResidencyObservation()
     airTestSessions = {}
     climbTestSessions = {}

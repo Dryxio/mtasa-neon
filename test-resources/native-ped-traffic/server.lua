@@ -233,6 +233,7 @@ local populationWorldConvergenceTraceRevision = false
 local populationWorldRevisions = {}
 local trafficPeds = {}
 local trafficGroups = {}
+local coupleRuntime = {relations = {}, rngState = 0x13579BDF}
 local nextGroupDamageId = 0
 local testVehicles = {}
 local pendingNativeBikeJacks = {}
@@ -269,7 +270,19 @@ local stats = {
     groupHandoffs = 0,
     groupRemovals = 0,
     groupPromotions = 0,
+    coupleAttempts = 0,
+    coupleSpawns = 0,
+    coupleRollbacks = 0,
 }
+
+function coupleRuntime.roll()
+    -- Distributed ownership cannot share GTA's process-global CRT state. The
+    -- server therefore owns the same 32-bit LCG and exact 15-bit threshold
+    -- used by AddToPopulation's strict `random > 0.9f` branch.
+    coupleRuntime.rngState = (coupleRuntime.rngState * 0x343FD + 0x269EC3) % 4294967296
+    local sample15 = math.floor(coupleRuntime.rngState / 65536) % 32768
+    return sample15, sample15 >= 29491
+end
 
 local function log(message, force)
     if debugEnabled or force then
@@ -870,7 +883,7 @@ local function findFurthestPopulationPed(x, y, z, radius, predicate)
     local furthestDistanceSquared = -1
     local radiusSquared = radius * radius
     for ped, record in pairs(trafficPeds) do
-        if isElement(ped) and not record.group and not record.removing and record.state == "active" and not isPedDead(ped) and not record.airTest and
+        if isElement(ped) and not record.group and not record.couple and not record.removing and record.state == "active" and not isPedDead(ped) and not record.airTest and
             not record.climbTest and getTickCount() - (record.lastInteractionAt or 0) >= 10000 and predicate(record) and
             isPopulationPedSurplusForAllResidents(record) then
             local px, py, pz = getElementPosition(ped)
@@ -1062,6 +1075,7 @@ local function stopClimbTest(record, reason)
 end
 
 local removeGroup
+local assignOwner
 
 local function removeRecord(record, reason)
     if not record or record.removing then
@@ -1069,6 +1083,9 @@ local function removeRecord(record, reason)
     end
     if record.group then
         return removeGroup(record.group, reason)
+    end
+    if record.couple then
+        return coupleRuntime.remove(record.couple, reason)
     end
     record.removing = true
     if record.visibilityCheckId then
@@ -1274,7 +1291,7 @@ local function restoreDealerCombatContext(record)
     return false
 end
 
-local function assignOwner(record, owner, reason)
+assignOwner = function(record, owner, reason)
     if not record or record.removing or not isElement(record.ped) or not isEligiblePlayer(owner) then
         return false
     end
@@ -1912,6 +1929,7 @@ setTimer(function()
     if not enabled then
         return
     end
+    local now = getTickCount()
 
     local groups = {}
     for _, group in pairs(trafficGroups) do groups[#groups + 1] = group end
@@ -1935,10 +1953,93 @@ setTimer(function()
         end
     end
 
+    local couples = {}
+    for _, relation in pairs(coupleRuntime.relations) do couples[#couples + 1] = relation end
+    for _, relation in ipairs(couples) do
+        if not relation.removing and relation.state == "active" then
+            local x, y, z = coupleRuntime.getCentre(relation)
+            local closest = x and findClosestPopulationResident(x, y, z, "civilian") or false
+            if not closest then
+                relation.outsideResidencySince = relation.outsideResidencySince or getTickCount()
+            elseif closest == relation.owner then
+                relation.outsideResidencySince = nil
+            else
+                local radius = isEligiblePlayer(relation.owner) and
+                    getPopulationRadiusForClass(populationProfiles[relation.owner], "civilian") or false
+                local ownerX, ownerY
+                if isElement(relation.owner) then ownerX, ownerY = getElementPosition(relation.owner) end
+                if not radius or not ownerX or squaredDistance2D(x, y, ownerX, ownerY) > radius * radius then
+                    coupleRuntime.beginHandoff(relation, closest, "couple-owner-left-residency")
+                end
+            end
+        end
+    end
+
+    local couples = {}
+    for _, relation in pairs(coupleRuntime.relations) do couples[#couples + 1] = relation end
+    for _, relation in ipairs(couples) do
+        if not relation.removing then
+            if relation.state == "assigning" then
+                if now - (relation.assignmentStartedAt or now) >= 10000 then
+                    coupleRuntime.remove(relation, "couple-assignment-timeout")
+                elseif now - (relation.assignmentLastSent or 0) >= 1000 then
+                    relation.assignmentLastSent = now
+                    coupleRuntime.sendAssignments(relation, "couple-assignment-retry")
+                end
+            elseif relation.state == "revoking" then
+                if now >= (relation.handoffDeadline or 0) then
+                    local nextOwner = relation.pendingOwner
+                    if nextOwner and isEligiblePlayer(nextOwner) then
+                        coupleRuntime.assignOwner(relation, nextOwner, "couple-release-timeout")
+                    else
+                        coupleRuntime.remove(relation, "couple-handoff-timeout")
+                    end
+                end
+            elseif relation.state == "active" then
+                -- Idempotently cover observers that joined, streamed in or
+                -- recovered their local presentation after the owner commit.
+                if now - (relation.presentationLastSent or 0) >= 2000 then
+                    coupleRuntime.sendPresentations(relation, "couple-presentation-refresh")
+                end
+                local x, y, z = coupleRuntime.getCentre(relation)
+                local closest, closestDistanceSquared = x and findClosestPopulationResident(x, y, z, "civilian") or false
+                if not closest then
+                    relation.outsideResidencySince = relation.outsideResidencySince or now
+                    if now - relation.outsideResidencySince >= config.handoffHold + config.despawnGrace then
+                        coupleRuntime.remove(relation, "couple-outside-residency")
+                    end
+                else
+                    relation.outsideResidencySince = nil
+                    if not isEligiblePlayer(relation.owner) then
+                        coupleRuntime.beginHandoff(relation, closest, "couple-owner-ineligible")
+                    elseif closest ~= relation.owner then
+                        local ownerX, ownerY = getElementPosition(relation.owner)
+                        local ownerDistance = getDistanceBetweenPoints2D(x, y, ownerX, ownerY)
+                        local closestDistance = math.sqrt(closestDistanceSquared)
+                        if closestDistance + config.handoffMargin < ownerDistance then
+                            if relation.handoffCandidate ~= closest then
+                                relation.handoffCandidate = closest
+                                relation.handoffCandidateSince = now
+                            elseif now - relation.handoffCandidateSince >= config.handoffHold then
+                                coupleRuntime.beginHandoff(relation, closest, "couple-closer-owner")
+                            end
+                        else
+                            relation.handoffCandidate = nil
+                            relation.handoffCandidateSince = nil
+                        end
+                    else
+                        relation.handoffCandidate = nil
+                        relation.handoffCandidateSince = nil
+                    end
+                end
+            end
+        end
+    end
+
     local records = {}
     for _, record in pairs(trafficPeds) do records[#records + 1] = record end
     for _, record in ipairs(records) do
-        if not record.group and not record.removing and record.state == "active" and isElement(record.ped) then
+        if not record.group and not record.couple and not record.removing and record.state == "active" and isElement(record.ped) then
             local x, y, z = getElementPosition(record.ped)
             local closest = findClosestPopulationResident(x, y, z, record.populationClass)
             if not closest then
@@ -2074,6 +2175,301 @@ local function validateGroupCandidate(player, candidate, selection)
         }
     end
     return true, validated
+end
+
+coupleRuntime.nativePedTypeIds = {
+    CIVMALE = 4, CIVFEMALE = 5, COP = 6,
+    GANG1 = 7, GANG2 = 8, GANG3 = 9, GANG4 = 10, GANG5 = 11,
+    GANG6 = 12, GANG7 = 13, GANG8 = 14, GANG9 = 15, GANG10 = 16,
+    DEALER = 17, PROSTITUTE = 18, CRIMINAL = 20, BUM = 21,
+}
+
+function coupleRuntime.validateCandidate(player, candidate, selection)
+    local members = type(candidate) == "table" and candidate.members or false
+    if type(selection) ~= "table" or selection.populationClass ~= "civilian" or selection.coupleAttempt ~= true or
+        type(members) ~= "table" or #members ~= 2 then
+        return false, "couple-shape"
+    end
+    if getTrafficPedCount() + 2 > config.globalCap or #getElementsByType("ped") + 2 > config.pedPoolSoftLimit then
+        return false, "couple-capacity-changed"
+    end
+
+    local profile = populationProfiles[player]
+    if not profile then return false, "population-profile-missing" end
+    local playerX, playerY, playerZ = getElementPosition(player)
+    local visibleMaximum = profile.creationDistanceMultiplier * profile.generationDistanceMultiplier * 50.5
+    local hiddenMinimum = math.max(0, profile.creationDistanceMultiplier * 25 - 10)
+    local hiddenMaximum = profile.creationDistanceMultiplier * 25
+    local maximum = math.max(visibleMaximum, hiddenMaximum) + config.maximumGangGroupSpan
+    local plannedCells = {}
+    local validated = {}
+    for index, member in ipairs(members) do
+        if type(member) ~= "table" or not isFiniteNumber(member.x) or not isFiniteNumber(member.y) or
+            not isFiniteNumber(member.z) or not isFiniteNumber(member.model) or not isFiniteNumber(member.pedType) or
+            not isFiniteNumber(member.direction) then
+            return false, "couple-member-" .. tostring(index) .. ":shape"
+        end
+        if not isIntegerInRange(member.model, 7, 288) or not isIntegerInRange(member.pedType, 4, 21) or
+            not isIntegerInRange(member.direction, 0, 7) or member.populationClass ~= "civilian" or
+            member.gang ~= false and member.gang ~= -1 then
+            return false, "couple-member-" .. tostring(index) .. ":contract"
+        end
+        local catalog = populationCatalog.models[member.model]
+        if not catalog or coupleRuntime.nativePedTypeIds[catalog.nativePedType] ~= member.pedType then
+            return false, "couple-member-" .. tostring(index) .. ":catalog"
+        end
+        local distanceSquared = squaredDistance2D(member.x, member.y, playerX, playerY)
+        if distanceSquared < math.max(0, hiddenMinimum - config.maximumGangGroupSpan) ^ 2 or
+            distanceSquared > maximum * maximum or math.abs(member.z - playerZ) > 35 then
+            return false, "couple-member-" .. tostring(index) .. ":distance"
+        end
+        if hasNearbyTrafficPed(member.x, member.y, member.z) then
+            return false, "couple-member-" .. tostring(index) .. ":separation"
+        end
+        local cellX, cellY = cellForPosition(member.x, member.y)
+        local cellKey = tostring(cellX) .. ":" .. tostring(cellY)
+        plannedCells[cellKey] = (plannedCells[cellKey] or 0) + 1
+        if countPedsInCell(cellX, cellY) + plannedCells[cellKey] > config.maxPerCell then
+            return false, "couple-cell-full"
+        end
+        validated[index] = {candidate = member, model = member.model, direction = member.direction, declaredPedType = member.pedType}
+    end
+    if members[1].model == members[2].model then return false, "couple-models-not-distinct" end
+    local pairDistance = math.sqrt(squaredDistance(members[1].x, members[1].y, members[1].z, members[2].x, members[2].y, members[2].z))
+    if pairDistance < 0.5 or pairDistance > 2.0 then return false, "couple-placement-span" end
+    return true, validated
+end
+
+function coupleRuntime.getCentre(couple)
+    local x, y, z, count = 0, 0, 0, 0
+    for _, record in ipairs(couple.members or {}) do
+        if isElement(record.ped) then
+            local px, py, pz = getElementPosition(record.ped)
+            x, y, z, count = x + px, y + py, z + pz, count + 1
+        end
+    end
+    if count == 0 then return false end
+    return x / count, y / count, z / count
+end
+
+function coupleRuntime.sendPresentations(couple, reason)
+    if not couple or couple.removing or not isElement(couple.owner) then return false end
+    local pedA, pedB = couple.members[1].ped, couple.members[2].ped
+    local sideA = couple.armSides and couple.armSides[1] or false
+    local sideB = couple.armSides and couple.armSides[2] or false
+    for _, observer in ipairs(getEligiblePlayers()) do
+        if observer ~= couple.owner then
+            triggerClientEvent(observer, "pedTraffic:assignCouplePresentation", resourceRoot, couple.id, couple.epoch,
+                               pedA, pedB, reason, sideA, sideB)
+        end
+    end
+    couple.presentationLastSent = getTickCount()
+    return true
+end
+
+function coupleRuntime.sendAssignments(couple, reason)
+    if not couple or couple.removing or not isElement(couple.owner) then return false end
+    couple.assignmentLastSent = getTickCount()
+    local pedA, pedB = couple.members[1].ped, couple.members[2].ped
+    triggerClientEvent(couple.owner, "pedTraffic:assignCouple", resourceRoot, couple.id, couple.epoch, pedA, pedB,
+                       couple.leaderIndex or false, reason)
+    coupleRuntime.sendPresentations(couple, reason)
+    return true
+end
+
+function coupleRuntime.assignOwner(couple, owner, reason)
+    if not couple or couple.removing or not isEligiblePlayer(owner) or #couple.members ~= 2 then return false end
+    couple.owner = owner
+    couple.pendingOwner = nil
+    couple.epoch = couple.epoch + 1
+    couple.armSides = nil
+    couple.state = "assigning"
+    couple.handoffDeadline = nil
+    couple.assignmentStartedAt = getTickCount()
+    for index, record in ipairs(couple.members) do
+        if not isElement(record.ped) then return false end
+        record.owner = owner
+        record.epoch = couple.epoch
+        record.state = "assigning"
+        setElementFrozen(record.ped, true)
+        if not setElementSyncer(record.ped, owner, true) then return false end
+        setElementData(record.ped, "neon:ambientPedTrafficEpoch", couple.epoch)
+        setElementData(record.ped, "neon:ambientPedRelationEpoch", couple.epoch)
+        setElementData(record.ped, "neon:ambientPedRelationLeader", couple.leaderIndex == index)
+    end
+    writePopulationTrace("couple_owner_assigned", {
+        relation_id = couple.id,
+        relation_epoch = couple.epoch,
+        owner_id = getPopulationClientId(owner),
+        member_ids = {couple.members[1].id, couple.members[2].id},
+        leader_index = couple.leaderIndex or false,
+        reason = tostring(reason),
+    })
+    return coupleRuntime.sendAssignments(couple, reason)
+end
+
+function coupleRuntime.remove(couple, reason)
+    if not couple or couple.removing then return end
+    couple.removing = true
+    coupleRuntime.relations[couple.id] = nil
+    triggerClientEvent(root, "pedTraffic:revokeCouple", resourceRoot, couple.id, couple.epoch, reason)
+    local removed = 0
+    for _, record in ipairs(couple.members or {}) do
+        record.couple = nil
+        record.removing = true
+        trafficPeds[record.ped] = nil
+        if isElement(record.ped) then destroyElement(record.ped) end
+        removed = removed + 1
+    end
+    stats.despawned = stats.despawned + removed
+    writePopulationTrace("couple_removed", {
+        relation_id = couple.id,
+        relation_epoch = couple.epoch,
+        member_count = removed,
+        reason = tostring(reason),
+    })
+end
+
+function coupleRuntime.dissolve(couple, reason)
+    if not couple or couple.removing then return end
+    coupleRuntime.relations[couple.id] = nil
+    local owner = couple.owner
+    triggerClientEvent(root, "pedTraffic:revokeCouple", resourceRoot, couple.id, couple.epoch, reason)
+    for _, record in ipairs(couple.members) do
+        record.couple = nil
+        if isElement(record.ped) then
+            setElementData(record.ped, "neon:ambientPedRelationId", false)
+            setElementData(record.ped, "neon:ambientPedRelationEpoch", false)
+            setElementData(record.ped, "neon:ambientPedRelationRole", false)
+            setElementData(record.ped, "neon:ambientPedRelationLeader", false)
+            if not isPedDead(record.ped) then
+                local x, y, z = getElementPosition(record.ped)
+                local nextOwner = isEligiblePlayer(owner) and owner or findClosestPopulationResident(x, y, z, "civilian")
+                if nextOwner then assignOwner(record, nextOwner, "couple-dissolved") end
+            else
+                record.state = "active"
+            end
+        end
+    end
+    writePopulationTrace("couple_dissolved", {
+        relation_id = couple.id,
+        relation_epoch = couple.epoch,
+        reason = tostring(reason),
+    })
+end
+
+function coupleRuntime.beginHandoff(couple, newOwner, reason)
+    if not couple or couple.removing or couple.state ~= "active" or newOwner == couple.owner or not isEligiblePlayer(newOwner) then return false end
+    couple.pendingOwner = newOwner
+    couple.state = "revoking"
+    couple.handoffDeadline = getTickCount() + config.handoffTimeout
+    for _, record in ipairs(couple.members) do
+        if isElement(record.ped) then setElementFrozen(record.ped, true) end
+    end
+    if isElement(couple.owner) then
+        -- The epoch is ending for every participant, including presentation-
+        -- only observers. The owner ACK remains the handoff fence.
+        triggerClientEvent(root, "pedTraffic:revokeCouple", resourceRoot, couple.id, couple.epoch, reason)
+    else
+        return coupleRuntime.assignOwner(couple, newOwner, "couple-owner-departed")
+    end
+    writePopulationTrace("couple_handoff_started", {
+        relation_id = couple.id,
+        relation_epoch = couple.epoch,
+        old_owner_id = getPopulationClientId(couple.owner),
+        new_owner_id = getPopulationClientId(newOwner),
+        reason = tostring(reason),
+    })
+    return true
+end
+
+function coupleRuntime.spawn(player, candidate, selection)
+    if not enabled or not isEligiblePlayer(player) then return false, "runtime-unavailable" end
+    local valid, validatedOrReason = coupleRuntime.validateCandidate(player, candidate, selection)
+    if not valid then return false, validatedOrReason end
+    local needed, staleReason = isSelectionStillNeeded(player, selection)
+    if not needed then return false, staleReason end
+
+    nextCoupleRelationId = nextCoupleRelationId + 1
+    local couple = {
+        id = nextCoupleRelationId,
+        epoch = 0,
+        members = {},
+        owner = nil,
+        state = "created",
+        createdAt = getTickCount(),
+        rngSample = selection.coupleSample,
+    }
+    coupleRuntime.relations[couple.id] = couple
+    for index, member in ipairs(validatedOrReason) do
+        local source = member.candidate
+        local ped = createPed(member.model, source.x, source.y, source.z, tonumber(source.heading) or 0)
+        if not ped then
+            stats.coupleRollbacks = stats.coupleRollbacks + 1
+            coupleRuntime.remove(couple, "couple-create-refused-" .. tostring(index))
+            return false, "couple-create-ped"
+        end
+        nextPedId = nextPedId + 1
+        local record = {
+            id = nextPedId,
+            ped = ped,
+            owner = nil,
+            epoch = 0,
+            direction = member.direction,
+            populationClass = "civilian",
+            logicalPedType = index == 1 and 4 or 5,
+            declaredPedType = member.declaredPedType,
+            gang = false,
+            state = "created",
+            createdAt = couple.createdAt,
+            catalogRevision = populationCatalog.revision,
+            couple = couple,
+            coupleIndex = index,
+        }
+        couple.members[index] = record
+        trafficPeds[ped] = record
+        setElementDimension(ped, 0)
+        setElementInterior(ped, 0)
+        setElementData(ped, "neon:ambientPedTraffic", true)
+        setElementData(ped, "neon:ambientPedTrafficId", record.id)
+        setElementData(ped, "neon:ambientPedPopulationClass", "civilian")
+        setElementData(ped, "neon:ambientPedLogicalType", record.logicalPedType)
+        setElementData(ped, "neon:ambientPedDeclaredType", record.declaredPedType)
+        setElementData(ped, "neon:ambientPedCatalogRevision", populationCatalog.revision)
+        setElementData(ped, "neon:ambientPedRelationId", couple.id)
+        setElementData(ped, "neon:ambientPedRelationRole", index == 1 and "a" or "b")
+        if not setPedFightingStyle(ped, 4) or not setPedUseNativeWalkingStyle(ped, true) then
+            stats.coupleRollbacks = stats.coupleRollbacks + 1
+            coupleRuntime.remove(couple, "couple-initialization-refused")
+            return false, "couple-initialization-refused"
+        end
+    end
+
+    beginSpawnFade({couple.members[1].ped, couple.members[2].ped})
+    local centreX, centreY, centreZ = coupleRuntime.getCentre(couple)
+    local owner = centreX and findClosestPopulationResident(centreX, centreY, centreZ, "civilian") or false
+    if not owner or not coupleRuntime.assignOwner(couple, owner, "couple-spawn") then
+        stats.coupleRollbacks = stats.coupleRollbacks + 1
+        coupleRuntime.remove(couple, "couple-no-owner")
+        return false, "couple-no-owner"
+    end
+    stats.spawned = stats.spawned + 2
+    stats.coupleSpawns = stats.coupleSpawns + 1
+    for _, member in ipairs(validatedOrReason) do
+        stats.spawnedModels[member.model] = (stats.spawnedModels[member.model] or 0) + 1
+    end
+    writePopulationTrace("couple_spawn", {
+        request_id = selection.requestId,
+        relation_id = couple.id,
+        relation_epoch = couple.epoch,
+        member_ids = {couple.members[1].id, couple.members[2].id},
+        models = {validatedOrReason[1].model, validatedOrReason[2].model},
+        declared_types = {validatedOrReason[1].declaredPedType, validatedOrReason[2].declaredPedType},
+        rng_sample15 = selection.coupleSample,
+        owner_id = getPopulationClientId(owner),
+        position = {x = centreX, y = centreY, z = centreZ},
+    })
+    return true
 end
 
 local function spawnGangGroup(player, candidate, selection)
@@ -2363,7 +2759,7 @@ local function spawnCandidate(player, candidate, selection)
 end
 
 local function getCandidateVisibilityProbes(candidate, populationClass)
-    local source = populationClass == "gang" and type(candidate) == "table" and (candidate.members or candidate) or {candidate}
+    local source = type(candidate) == "table" and type(candidate.members) == "table" and candidate.members or {candidate}
     local probes = {}
     for _, member in ipairs(source) do
         if type(member) == "table" and isFiniteNumber(member.x) and isFiniteNumber(member.y) and isFiniteNumber(member.z) then
@@ -2409,7 +2805,9 @@ local function finishCandidateVisibilityCheck(check, reason)
     end
 
     local created, spawnReason
-    if check.request.selection.populationClass == "gang" then
+    if check.request.selection.coupleAttempt == true then
+        created, spawnReason = coupleRuntime.spawn(check.player, check.candidate, check.request.selection)
+    elseif check.request.selection.populationClass == "gang" then
         created, spawnReason = spawnGangGroup(check.player, check.candidate, check.request.selection)
     else
         created, spawnReason = spawnCandidate(check.player, check.candidate, check.request.selection)
@@ -2430,7 +2828,9 @@ end
 
 local function beginCandidateVisibilityCheck(player, candidate, request)
     local valid, reason
-    if request.selection.populationClass == "gang" then
+    if request.selection.coupleAttempt == true then
+        valid, reason = coupleRuntime.validateCandidate(player, candidate, request.selection)
+    elseif request.selection.populationClass == "gang" then
         valid, reason = validateGroupCandidate(player, candidate, request.selection)
     else
         valid, reason = validateCandidate(player, candidate)
@@ -4536,6 +4936,9 @@ addEventHandler("onPedWasted", root, function(_, killer, weapon, bodypart)
     if not record then
         return
     end
+    if record.couple then
+        coupleRuntime.dissolve(record.couple, "partner-wasted")
+    end
     if record.populationClass == "dealer" and not record.dealerDeathApplied and isElement(killer) and
         getElementType(killer) == "player" then
         record.dealerDeathApplied = true
@@ -4603,6 +5006,10 @@ addEventHandler("onElementDestroy", root, function()
         stopBikeJackTest("FAIL", "test-vehicle-destroyed")
     end
     local record = trafficPeds[source]
+    if record and record.couple and not record.couple.removing then
+        coupleRuntime.remove(record.couple, "couple-member-destroyed")
+        return
+    end
     if record and record.group and not record.group.removing then
         removeGroup(record.group, "group-member-destroyed")
         return
@@ -4663,8 +5070,22 @@ addEventHandler("onPlayerQuit", root, function()
             end
         end
     end
+    local couples = {}
+    for _, relation in pairs(coupleRuntime.relations) do couples[#couples + 1] = relation end
+    for _, relation in ipairs(couples) do
+        if relation.owner == source and not relation.removing then
+            local x, y, z = coupleRuntime.getCentre(relation)
+            local newOwner = x and findClosestPopulationResident(x, y, z, "civilian", source) or false
+            if newOwner then
+                relation.owner = nil
+                coupleRuntime.assignOwner(relation, newOwner, "couple-owner-quit")
+            else
+                coupleRuntime.remove(relation, "couple-owner-quit-no-resident")
+            end
+        end
+    end
     for _, record in pairs(trafficPeds) do
-        if not record.group and record.owner == source and not record.removing then
+        if not record.group and not record.couple and record.owner == source and not record.removing then
             local x, y, z = getElementPosition(record.ped)
             local newOwner = findClosestPopulationResident(x, y, z, record.populationClass, source)
             if newOwner then
@@ -4817,6 +5238,31 @@ setTimer(function()
         end
 
         local selection = nativeTarget and selectPopulationForPlayer(player)
+        if selection and selection.populationClass == "civilian" and not request and not next(pendingRequests) and
+            not next(pendingVisibilityChecks) then
+            local sample15, taken = coupleRuntime.roll()
+            selection.coupleSample = sample15
+            selection.coupleAttempt = taken
+            stats.coupleAttempts = stats.coupleAttempts + 1
+            writePopulationTrace("couple_rng", {
+                player_id = getPopulationClientId(player),
+                sample15 = sample15,
+                threshold = 29491,
+                branch = taken and "taken" or "singleton",
+            })
+            if taken and (getTrafficPedCount() + 2 > config.globalCap or
+                #getElementsByType("ped") + 2 > config.pedPoolSoftLimit) then
+                stats.coupleRollbacks = stats.coupleRollbacks + 1
+                writePopulationTrace("couple_rollback", {
+                    player_id = getPopulationClientId(player),
+                    sample15 = sample15,
+                    reason = "couple-capacity",
+                })
+                selection = false
+            end
+        elseif selection then
+            selection.coupleAttempt = false
+        end
         if selection and selection.populationClass == "gang" and
             countNativeGroupsForOwner(player) >= config.maximumNativeGangGroups then
             selection = false
@@ -4857,6 +5303,8 @@ setTimer(function()
                 population_class = selection.populationClass,
                 gang = selection.gang,
                 maximum_group_members = selection.maximumGroupMembers or 1,
+                couple_attempt = selection.coupleAttempt == true,
+                couple_sample15 = selection.coupleSample or false,
                 targets = {total = selection.totalTarget, civilian = selection.civilianTarget, dealer = selection.dealerTarget,
                            cop = selection.copTarget, gang = selection.gangTarget},
                 live = {
@@ -4871,7 +5319,8 @@ setTimer(function()
                             gang = selection.gangDeficit},
             })
             triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision,
-                               selection.populationClass, selection.gang, selection.maximumGroupMembers or 1)
+                               selection.populationClass, selection.gang, selection.maximumGroupMembers or 1,
+                               selection.coupleAttempt == true)
             break
         end
     end
@@ -4966,7 +5415,7 @@ setTimer(function()
         records[#records + 1] = record
     end
     for _, record in ipairs(records) do
-        if not record.group and not record.removing and isElement(record.ped) then
+        if not record.group and not record.couple and not record.removing and isElement(record.ped) then
             if record.state == "suspending" then
                 if now >= (record.handoffDeadline or 0) then
                     finishSuspension(record, "suspension-release-timeout")
@@ -5206,7 +5655,7 @@ local function issueCopTestCandidate(test)
             gang = selection.gangDeficit,
         },
     })
-    triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision, "cop", false, 1)
+    triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision, "cop", false, 1, false)
     return true
 end
 
@@ -5444,6 +5893,8 @@ local function restoreCoupleTestPlayers(test)
 end
 
 local function destroyCoupleTestPeds(test)
+    if isElement(test.damageAttacker) then destroyElement(test.damageAttacker) end
+    test.damageAttacker = nil
     for _, ped in ipairs(test.peds or {}) do
         if isElement(ped) then destroyElement(ped) end
     end
@@ -5454,10 +5905,8 @@ finishCoupleTest = function(result, reason)
     if not test then return end
     coupleTest = false
     if result ~= "PASS" then
-        if isElement(test.owner) then
-            triggerClientEvent(test.owner, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
-                               "couple-test-failed")
-        end
+        triggerClientEvent(root, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
+                           "couple-test-failed")
         destroyCoupleTestPeds(test)
     end
     restoreCoupleTestPlayers(test)
@@ -5482,6 +5931,23 @@ finishCoupleTest = function(result, reason)
         follower_sprint_samples = test.followerSprintSamples or 0,
         observer_fast_gait_samples_initial = test.observerFastGaitSamples and test.observerFastGaitSamples.initial or 0,
         observer_fast_gait_samples_handoff = test.observerFastGaitSamples and test.observerFastGaitSamples.handoff or 0,
+        observer_presentation_active_samples_initial = test.observerPresentationActiveSamples and
+            test.observerPresentationActiveSamples.initial or 0,
+        observer_presentation_active_samples_handoff = test.observerPresentationActiveSamples and
+            test.observerPresentationActiveSamples.handoff or 0,
+        observer_presentation_eligible_samples_initial = test.observerPresentationEligibleSamples and
+            test.observerPresentationEligibleSamples.initial or 0,
+        observer_presentation_eligible_samples_handoff = test.observerPresentationEligibleSamples and
+            test.observerPresentationEligibleSamples.handoff or 0,
+        observer_presentation_eligible_active_samples_initial = test.observerPresentationEligibleActiveSamples and
+            test.observerPresentationEligibleActiveSamples.initial or 0,
+        observer_presentation_eligible_active_samples_handoff = test.observerPresentationEligibleActiveSamples and
+            test.observerPresentationEligibleActiveSamples.handoff or 0,
+        observer_presentation_far_active_samples_initial = test.observerPresentationFarActiveSamples and
+            test.observerPresentationFarActiveSamples.initial or 0,
+        observer_presentation_far_active_samples_handoff = test.observerPresentationFarActiveSamples and
+            test.observerPresentationFarActiveSamples.handoff or 0,
+        social_event_forwarded = test.socialEventForwarded == true,
         dissolved = test.dissolved == true,
     })
     local message = ("Couple test %s: %s (scenario %d)"):format(result, tostring(reason), test.id)
@@ -5514,8 +5980,95 @@ local function scheduleCoupleTestSamples(test, phase, delay)
     end, delay or 250, 1)
 end
 
+addEvent("pedTraffic:coupleArmState", true)
+addEventHandler("pedTraffic:coupleArmState", resourceRoot, function(relationId, relationEpoch, sideA, sideB)
+    relationId = tonumber(relationId)
+    relationEpoch = tonumber(relationEpoch)
+    sideA = tonumber(sideA)
+    sideB = tonumber(sideB)
+    if not relationId or not relationEpoch or (sideA ~= 1 and sideA ~= 2) or (sideB ~= 1 and sideB ~= 2) then return end
+
+    local peds = false
+    local observers = {}
+    local couple = coupleRuntime.relations[relationId]
+    if couple and couple.epoch == relationEpoch and couple.owner == client then
+        peds = {couple.members[1].ped, couple.members[2].ped}
+        couple.armSides = {sideA, sideB}
+        for _, observer in ipairs(getEligiblePlayers()) do
+            if observer ~= couple.owner then observers[#observers + 1] = observer end
+        end
+    elseif coupleTest and coupleTest.relationId == relationId and coupleTest.relationEpoch == relationEpoch and
+        coupleTest.owner == client then
+        peds = coupleTest.peds
+        coupleTest.armSides = {sideA, sideB}
+        for _, observer in ipairs(coupleTest.players) do
+            if observer ~= coupleTest.owner and isElement(observer) then observers[#observers + 1] = observer end
+        end
+    end
+    if not peds or not isElement(peds[1]) or not isElement(peds[2]) then return end
+
+    -- Publish the pair as one epoch-fenced message. Two element-data writes
+    -- can be observed in different frames and briefly select an exterior arm.
+    for _, observer in ipairs(observers) do
+        triggerClientEvent(observer, "pedTraffic:updateCouplePresentationSides", resourceRoot,
+                           relationId, relationEpoch, sideA, sideB)
+    end
+    setElementData(peds[1], "neon:ambientPedCoupleHandSide", sideA)
+    setElementData(peds[2], "neon:ambientPedCoupleHandSide", sideB)
+    writePopulationTrace("couple_arm_state", {
+        relation_id = relationId,
+        relation_epoch = relationEpoch,
+        owner_id = getPopulationClientId(client),
+        sides = {sideA, sideB},
+    })
+end)
+
 addEvent("pedTraffic:coupleEvidence", true)
 addEventHandler("pedTraffic:coupleEvidence", resourceRoot, function(relationId, relationEpoch, evidence, data)
+    local couple = coupleRuntime.relations[relationId]
+    if couple then
+        if relationEpoch ~= couple.epoch or client ~= couple.owner or type(data) ~= "table" then return end
+        writePopulationTrace("couple_evidence", {
+            relation_id = relationId,
+            relation_epoch = relationEpoch,
+            owner_id = getPopulationClientId(client),
+            state = couple.state,
+            evidence = evidence,
+            leader_index = data.leaderIndex or false,
+            walk_speeds = data.walkSpeeds or false,
+            native_diagnostic = data.nativeDiagnostic or false,
+        })
+        if evidence == "failure" or evidence == "ownership-lost" then
+            coupleRuntime.remove(couple, tostring(data.reason or evidence))
+        elseif evidence == "accepted" and couple.state == "assigning" then
+            local leaderIndex = tonumber(data.leaderIndex)
+            if leaderIndex ~= 1 and leaderIndex ~= 2 then return coupleRuntime.remove(couple, "couple-invalid-leader") end
+            if couple.leaderIndex and couple.leaderIndex ~= leaderIndex then return coupleRuntime.remove(couple, "couple-leader-changed") end
+            couple.leaderIndex = leaderIndex
+            couple.walkSpeeds = data.walkSpeeds
+            couple.state = "active"
+            for index, record in ipairs(couple.members) do
+                record.state = "active"
+                setElementFrozen(record.ped, false)
+                setElementData(record.ped, "neon:ambientPedRelationLeader", index == leaderIndex)
+            end
+            writePopulationTrace("couple_committed", {
+                relation_id = couple.id,
+                relation_epoch = couple.epoch,
+                leader_index = leaderIndex,
+                walk_speeds = data.walkSpeeds,
+            })
+        elseif evidence == "released" and couple.state == "revoking" then
+            local newOwner = couple.pendingOwner
+            if not newOwner or not coupleRuntime.assignOwner(couple, newOwner, "couple-release-ack") then
+                coupleRuntime.remove(couple, "couple-handoff-owner-missing")
+            end
+        elseif evidence == "dissolved" then
+            coupleRuntime.dissolve(couple, data.nativeDiagnostic and data.nativeDiagnostic.reason or "native-task-ended")
+        end
+        return
+    end
+
     local test = coupleTest
     if not test or relationId ~= test.relationId or relationEpoch ~= test.relationEpoch or client ~= test.owner or
         type(data) ~= "table" then
@@ -5549,15 +6102,22 @@ addEventHandler("pedTraffic:coupleEvidence", resourceRoot, function(relationId, 
         test.walkSpeeds = {tonumber(speeds[1]), tonumber(speeds[2])}
         if test.phase == "await-owner-a" then
             test.phase = "soak-initial"
+            triggerClientEvent(test.ownerB, "pedTraffic:assignCouplePresentation", resourceRoot, test.relationId,
+                               test.relationEpoch, test.peds[1], test.peds[2], "couple-test-owner-ready",
+                               test.armSides and test.armSides[1] or false, test.armSides and test.armSides[2] or false)
             scheduleCoupleTestSamples(test, "soak-initial", 500)
         elseif test.phase == "await-owner-b" then
             test.phase = "soak-handoff"
+            triggerClientEvent(test.ownerA, "pedTraffic:assignCouplePresentation", resourceRoot, test.relationId,
+                               test.relationEpoch, test.peds[1], test.peds[2], "couple-test-owner-ready",
+                               test.armSides and test.armSides[1] or false, test.armSides and test.armSides[2] or false)
             scheduleCoupleTestSamples(test, "soak-handoff", 500)
         end
     elseif evidence == "released" and test.phase == "revoke-owner-a" and client == test.ownerA then
         test.ownerAReleased = true
         test.owner = test.ownerB
         test.relationEpoch = test.relationEpoch + 1
+        test.armSides = nil
         for _, ped in ipairs(test.peds) do
             setElementData(ped, "neon:ambientPedRelationEpoch", test.relationEpoch)
             if not setElementSyncer(ped, test.ownerB, true) then
@@ -5568,8 +6128,8 @@ addEventHandler("pedTraffic:coupleEvidence", resourceRoot, function(relationId, 
         triggerClientEvent(test.ownerB, "pedTraffic:assignCouple", resourceRoot, test.relationId, test.relationEpoch,
                            test.peds[1], test.peds[2], test.leaderIndex, "couple-test-handoff")
         triggerClientEvent(test.ownerA, "pedTraffic:assignCouplePresentation", resourceRoot, test.relationId,
-                           test.relationEpoch, test.peds[1], test.peds[2], "couple-test-handoff-observer")
-    elseif evidence == "dissolved" and test.phase == "await-dissolution" then
+                           test.relationEpoch, test.peds[1], test.peds[2], "couple-test-handoff-observer", false, false)
+    elseif evidence == "dissolved" and (test.phase == "await-dissolution" or test.phase == "await-forward-dissolution") then
         test.dissolved = true
         writePopulationTrace("couple_test_dissolved", {
             scenario_id = test.id,
@@ -5578,9 +6138,14 @@ addEventHandler("pedTraffic:coupleEvidence", resourceRoot, function(relationId, 
             owner_id = getPopulationClientId(client),
             reason = data.nativeDiagnostic and data.nativeDiagnostic.reason or "native-task-ended",
         })
+        -- Exercise the production dissolution broadcast before the fixture
+        -- peds disappear, so the observer releases its surviving IK lease for
+        -- the lifecycle reason rather than only as a side effect of streaming.
+        triggerClientEvent(root, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
+                           "couple-test-dissolved")
         setTimer(function()
             if coupleTest == test then beginCoupleTestCleanup(test) end
-        end, 250, 1)
+        end, 500, 1)
     end
 end)
 
@@ -5615,7 +6180,15 @@ local function validateCoupleTestSample(test, player, data, owner)
         if data.assignment or data.assignmentAccepted or data.active then
             return false, "observer-native-ai-active"
         end
-        if not data.presentation or data.presentationActive then return false, "observer-presentation-unsafe" end
+        if not data.presentation then return false, "observer-presentation-missing" end
+        -- The presentation lease can legitimately have no active PointArm on
+        -- a sample where the retail side/orientation gate rejects either arm.
+        -- A valid token plus a successful update proves the observer lease;
+        -- requiring both arms continuously would reject vanilla-compatible
+        -- turns even though no observer AI or lifecycle mismatch exists.
+        if not data.presentationAccepted or not data.presentationToken or data.presentationStage ~= "updated" then
+            return false, "observer-presentation-not-ready"
+        end
         for index = 1, 2 do
             if data.members[index].syncer or data.members[index].hasCouple or data.members[index].hasWalkAlongside or
                 data.members[index].hasWander then
@@ -5643,6 +6216,18 @@ local function recordCoupleSoakSample(test, phase, data, observerData)
     local observerMoveState = observerFollower and tostring(observerFollower.moveState) or "unavailable"
     if observerMoveState == "run" or observerMoveState == "sprint" then
         test.observerFastGaitSamples[key] = test.observerFastGaitSamples[key] + 1
+    end
+    if type(observerData) == "table" and observerData.presentationActive == true then
+        test.observerPresentationActiveSamples[key] = test.observerPresentationActiveSamples[key] + 1
+    end
+    local observerPairDistance = type(observerData) == "table" and tonumber(observerData.pairDistance) or false
+    if observerPairDistance and observerPairDistance < 1.5 then
+        test.observerPresentationEligibleSamples[key] = test.observerPresentationEligibleSamples[key] + 1
+        if observerData.presentationActive == true then
+            test.observerPresentationEligibleActiveSamples[key] = test.observerPresentationEligibleActiveSamples[key] + 1
+        end
+    elseif observerPairDistance and observerData.presentationActive == true then
+        test.observerPresentationFarActiveSamples[key] = test.observerPresentationFarActiveSamples[key] + 1
     end
 
     local x, y = tonumber(leader.x), tonumber(leader.y)
@@ -5708,7 +6293,8 @@ addEventHandler("pedTraffic:coupleTestSampleResult", resourceRoot, function(test
     end
     if not allValid then
         test.sampleRetries = (test.sampleRetries or 0) + 1
-        if firstReason == "native-subtasks-not-ready" and test.sampleRetries <= 20 then
+        if (firstReason == "native-subtasks-not-ready" or firstReason == "observer-presentation-missing" or
+            firstReason == "observer-presentation-not-ready") and test.sampleRetries <= 20 then
             scheduleCoupleTestSamples(test, phase, 250)
             return
         end
@@ -5718,26 +6304,76 @@ addEventHandler("pedTraffic:coupleTestSampleResult", resourceRoot, function(test
 
     if phase == "soak-initial" or phase == "soak-handoff" then
         local observer = test.owner == test.players[1] and test.players[2] or test.players[1]
-        local recorded, recordReason = recordCoupleSoakSample(test, phase, pending.samples[test.owner], pending.samples[observer])
-        if not recorded then return finishCoupleTest("FAIL", recordReason) end
         local key = phase == "soak-initial" and "initial" or "handoff"
+        local observerData = pending.samples[observer]
+        if test.soakCounts[key] == 0 and observerData.presentationActive ~= true then
+            test.presentationWarmupRetries[key] = test.presentationWarmupRetries[key] + 1
+            if test.presentationWarmupRetries[key] <= 40 then
+                scheduleCoupleTestSamples(test, phase, 250)
+                return
+            end
+            return finishCoupleTest("FAIL", "couple-observer-presentation-convergence-" .. key)
+        end
+        local recorded, recordReason = recordCoupleSoakSample(test, phase, pending.samples[test.owner], observerData)
+        if not recorded then return finishCoupleTest("FAIL", recordReason) end
         if test.soakCounts[key] < 8 then
             scheduleCoupleTestSamples(test, phase, 1000)
         elseif test.observerFastGaitSamples[key] > 1 then
             return finishCoupleTest("FAIL", "couple-follower-fast-gait-" .. key)
+        elseif test.observerPresentationEligibleSamples[key] < 3 then
+            return finishCoupleTest("FAIL", "couple-observer-presentation-insufficient-eligible-" .. key)
+        elseif test.observerPresentationEligibleActiveSamples[key] ~= test.observerPresentationEligibleSamples[key] then
+            return finishCoupleTest("FAIL", "couple-observer-presentation-inactive-eligible-" .. key)
+        elseif test.observerPresentationFarActiveSamples[key] > 0 then
+            return finishCoupleTest("FAIL", "couple-observer-presentation-active-far-" .. key)
+        elseif test.soakDistanceTravelled[key] < 3 then
+            return finishCoupleTest("FAIL", "couple-locomotion-distance-" .. key)
+        elseif test.followerSprintSamples > 1 then
+            return finishCoupleTest("FAIL", "couple-owner-follower-sprint")
         elseif phase == "soak-initial" then
             test.initialActive = true
             test.phase = "revoke-owner-a"
-            triggerClientEvent(test.ownerA, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
+            triggerClientEvent(root, "pedTraffic:revokeCouple", resourceRoot, test.relationId, test.relationEpoch,
                                "couple-test-handoff")
         else
             test.handoffActive = true
-            test.phase = "separating"
-            triggerClientEvent(test.ownerB, "pedTraffic:coupleTestSeparate", resourceRoot, test.id, test.relationId,
-                               test.relationEpoch, test.peds[1], test.peds[2])
+            test.phase = "forwarding-social-event"
+            triggerClientEvent(test.ownerB, "pedTraffic:coupleTestForwardSocialEvent", resourceRoot, test.id,
+                               test.relationId, test.relationEpoch, test.peds[1])
         end
     end
 end)
+
+addEvent("pedTraffic:coupleTestForwardSocialEventResult", true)
+addEventHandler("pedTraffic:coupleTestForwardSocialEventResult", resourceRoot,
+    function(testId, relationId, relationEpoch, forwarded, data)
+        local test = coupleTest
+        if not test or test.id ~= testId or relationId ~= test.relationId or relationEpoch ~= test.relationEpoch or
+            client ~= test.ownerB or test.phase ~= "forwarding-social-event" or type(data) ~= "table" then
+            return
+        end
+        writePopulationTrace("couple_test_forwarding", {
+            scenario_id = test.id,
+            relation_id = relationId,
+            relation_epoch = relationEpoch,
+            owner_id = getPopulationClientId(client),
+            event_type = tonumber(data.eventType) or -1,
+            forwarded = forwarded == true,
+            data = data,
+        })
+        if isElement(test.damageAttacker) then destroyElement(test.damageAttacker) end
+        test.damageAttacker = nil
+        if forwarded ~= true then return finishCoupleTest("FAIL", "couple-social-event-not-forwarded") end
+        test.socialEventForwarded = true
+        test.phase = "await-forward-dissolution"
+        setTimer(function()
+            if coupleTest == test and test.phase == "await-forward-dissolution" then
+                test.phase = "separating"
+                triggerClientEvent(test.ownerB, "pedTraffic:coupleTestSeparate", resourceRoot, test.id, test.relationId,
+                                   test.relationEpoch, test.peds[1], test.peds[2])
+            end
+        end, 500, 1)
+    end)
 
 addEvent("pedTraffic:coupleTestSeparated", true)
 addEventHandler("pedTraffic:coupleTestSeparated", resourceRoot, function(testId, relationId, relationEpoch, moved)
@@ -5774,7 +6410,9 @@ addEventHandler("pedTraffic:coupleTestCleanupResult", resourceRoot, function(tes
         player_id = getPopulationClientId(client),
         accepted = true,
     })
-    if test.cleanupAckCount == 2 then finishCoupleTest("PASS", "couple-presentation-soak-handoff-dissolution-cleanup") end
+    if test.cleanupAckCount == 2 then
+        finishCoupleTest("PASS", "couple-presentation-soak-handoff-social-dissolution-cleanup")
+    end
 end)
 
 local function startCoupleTest(player)
@@ -5822,6 +6460,11 @@ local function startCoupleTest(player)
         maxPairDistance = 0,
         followerSprintSamples = 0,
         observerFastGaitSamples = {initial = 0, handoff = 0},
+        observerPresentationActiveSamples = {initial = 0, handoff = 0},
+        observerPresentationEligibleSamples = {initial = 0, handoff = 0},
+        observerPresentationEligibleActiveSamples = {initial = 0, handoff = 0},
+        observerPresentationFarActiveSamples = {initial = 0, handoff = 0},
+        presentationWarmupRetries = {initial = 0, handoff = 0},
     }
     coupleTest = test
     setTime(12, 0)
@@ -5837,7 +6480,7 @@ local function startCoupleTest(player)
         -- AvoidOtherPedWhileWandering and abort the retail relation before the
         -- locomotion soak had even started. Keep the actors physically remote
         -- and give both clients a non-physical camera view of the fixture.
-        setElementPosition(candidate, COUPLE_TEST_POSITION.x - 45 + (index - 1) * 2, COUPLE_TEST_POSITION.y - 45,
+        setElementPosition(candidate, COUPLE_TEST_POSITION.x - 20 + (index - 1) * 2, COUPLE_TEST_POSITION.y - 20,
                            COUPLE_TEST_POSITION.z)
         setElementFrozen(candidate, true)
         setCameraMatrix(candidate, COUPLE_TEST_POSITION.x, COUPLE_TEST_POSITION.y - 8, COUPLE_TEST_POSITION.z + 5,
@@ -5888,7 +6531,7 @@ local function startCoupleTest(player)
     triggerClientEvent(test.ownerA, "pedTraffic:assignCouple", resourceRoot, test.relationId, test.relationEpoch,
                        test.peds[1], test.peds[2], false, "couple-test-initial")
     triggerClientEvent(test.ownerB, "pedTraffic:assignCouplePresentation", resourceRoot, test.relationId,
-                       test.relationEpoch, test.peds[1], test.peds[2], "couple-test-initial-observer")
+                       test.relationEpoch, test.peds[1], test.peds[2], "couple-test-initial-observer", false, false)
     outputChatBox("Couple test started: two walking soak phases, handoff and strict 10m dissolution", root, 120, 220, 255)
 end
 
@@ -6095,7 +6738,7 @@ local function issueDealerTestCandidate(test)
             gang = selection.gangDeficit,
         },
     })
-    triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision, "dealer", false, 1)
+    triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision, "dealer", false, 1, false)
     return true
 end
 
@@ -6612,8 +7255,17 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         startDealerTest(player)
     elseif action == "coptest" and isElement(player) then
         startCopTest(player)
-    elseif action == "coupletest" and isElement(player) then
-        startCoupleTest(player)
+    elseif action == "coupletest" then
+        -- Keep the long-running harness operable from a headless server console.
+        -- Interactive players still select themselves exactly as before.
+        if not isElement(player) then
+            player = getElementsByType("player")[1]
+        end
+        if isElement(player) then
+            startCoupleTest(player)
+        else
+            outputServerLog("[ped-traffic] coupletest requires at least one connected player")
+        end
     else
         local activeCount = 0
         for ped in pairs(trafficPeds) do

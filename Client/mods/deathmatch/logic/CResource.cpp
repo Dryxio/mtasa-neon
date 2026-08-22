@@ -25,6 +25,33 @@ using namespace std;
 
 extern CClientGame* g_pClientGame;
 
+namespace
+{
+    constexpr const char* AMBIENT_COUPLE_PRESENTATION_ABI =
+        "v2:Acquire(CPed*,CPed*,uint&);Update(uint,CPed*,CPed*);Release(uint,CPed*,CPed*);IsActive(uint,CPed*,CPed*)const;"
+        "UpdateWithSides(uint,CPed*,CPed*,uchar,uchar)";
+
+    void LogAmbientCouplePresentationResourceAbiOnce()
+    {
+        static bool logged = false;
+        if (logged)
+            return;
+
+        logged = true;
+        g_pCore->GetConsole()->Printf("[couple-presentation][abi] module=client_deathmatch revision=2 signature=%s", AMBIENT_COUPLE_PRESENTATION_ABI);
+    }
+
+    void LogAmbientCouplePresentationResourceReject(const char* reason)
+    {
+        static const char* lastReason = nullptr;
+        if (lastReason == reason)
+            return;
+
+        lastReason = reason;
+        g_pCore->GetConsole()->Printf("[couple-presentation][acquire-refused] module=client_deathmatch reason=%s", reason);
+    }
+}
+
 int CResource::m_iShowingCursor = 0;
 int CResource::m_iToggleControls = 0;
 
@@ -666,15 +693,59 @@ void CResource::ReleaseAllPedNativeCouples()
 
 unsigned int CResource::AcquirePedNativeCouplePresentation(CClientPed* pPedA, CClientPed* pPedB)
 {
-    if (!pPedA || !pPedB || pPedA == pPedB || pPedA->GetType() != CCLIENTPED || pPedB->GetType() != CCLIENTPED || pPedA->IsSyncing() || pPedB->IsSyncing() ||
-        !pPedA->GetGamePlayer() || !pPedB->GetGamePlayer())
+    LogAmbientCouplePresentationResourceAbiOnce();
+    if (!pPedA)
     {
+        LogAmbientCouplePresentationResourceReject("null-a");
+        return 0;
+    }
+    if (!pPedB)
+    {
+        LogAmbientCouplePresentationResourceReject("null-b");
+        return 0;
+    }
+    if (pPedA == pPedB)
+    {
+        LogAmbientCouplePresentationResourceReject("same-ped");
+        return 0;
+    }
+    if (pPedA->GetType() != CCLIENTPED)
+    {
+        LogAmbientCouplePresentationResourceReject("type-a");
+        return 0;
+    }
+    if (pPedB->GetType() != CCLIENTPED)
+    {
+        LogAmbientCouplePresentationResourceReject("type-b");
+        return 0;
+    }
+    if (pPedA->IsSyncing())
+    {
+        LogAmbientCouplePresentationResourceReject("syncing-a");
+        return 0;
+    }
+    if (pPedB->IsSyncing())
+    {
+        LogAmbientCouplePresentationResourceReject("syncing-b");
+        return 0;
+    }
+    if (!pPedA->GetGamePlayer())
+    {
+        LogAmbientCouplePresentationResourceReject("no-game-ped-a");
+        return 0;
+    }
+    if (!pPedB->GetGamePlayer())
+    {
+        LogAmbientCouplePresentationResourceReject("no-game-ped-b");
         return 0;
     }
 
     unsigned int nativePresentationId = 0;
     if (!g_pGame->AcquireAmbientPedCivilianCouplePresentation(pPedA->GetGamePlayer(), pPedB->GetGamePlayer(), nativePresentationId))
+    {
+        LogAmbientCouplePresentationResourceReject("game-sa-refused");
         return 0;
+    }
 
     unsigned int uiToken = 0;
     do
@@ -690,7 +761,7 @@ unsigned int CResource::AcquirePedNativeCouplePresentation(CClientPed* pPedA, CC
     return uiToken;
 }
 
-bool CResource::UpdatePedNativeCouplePresentation(unsigned int uiToken)
+bool CResource::UpdatePedNativeCouplePresentation(unsigned int uiToken, unsigned char sideA, unsigned char sideB)
 {
     const auto iter = m_pedNativeCouplePresentationLeases.find(uiToken);
     if (iter == m_pedNativeCouplePresentationLeases.end())
@@ -704,7 +775,8 @@ bool CResource::UpdatePedNativeCouplePresentation(unsigned int uiToken)
         if (!peds[index] || peds[index]->IsSyncing() || !peds[index]->GetGamePlayer())
             return false;
     }
-    return g_pGame->UpdateAmbientPedCivilianCouplePresentation(iter->second->nativePresentationId, peds[0]->GetGamePlayer(), peds[1]->GetGamePlayer());
+    return g_pGame->UpdateAmbientPedCivilianCouplePresentationWithSides(iter->second->nativePresentationId, peds[0]->GetGamePlayer(), peds[1]->GetGamePlayer(),
+                                                                        sideA, sideB);
 }
 
 bool CResource::ReleasePedNativeCouplePresentation(unsigned int uiToken)
@@ -720,7 +792,17 @@ bool CResource::ReleasePedNativeCouplePresentation(unsigned int uiToken)
         auto* ped = entity && entity->GetType() == CCLIENTPED ? static_cast<CClientPed*>(entity) : nullptr;
         gamePeds[index] = ped ? ped->GetGamePlayer() : nullptr;
     }
-    const bool released = g_pGame->ReleaseAmbientPedCivilianCouplePresentation(iter->second->nativePresentationId, gamePeds[0], gamePeds[1]);
+    bool released = g_pGame->ReleaseAmbientPedCivilianCouplePresentation(iter->second->nativePresentationId, gamePeds[0], gamePeds[1]);
+    if (!released)
+    {
+        // The native ID is resource-scoped and remains authoritative even if
+        // an MTA wrapper was replaced during stream-out. Releasing by ID keeps
+        // Game SA from retaining a lease after the CResource token disappears.
+        g_pCore->GetConsole()->Printf("[couple-presentation][release-retry] nativeLease=%u reason=member-mismatch", iter->second->nativePresentationId);
+        released = g_pGame->ReleaseAmbientPedCivilianCouplePresentation(iter->second->nativePresentationId, nullptr, nullptr);
+        g_pCore->GetConsole()->Printf("[couple-presentation][release-retry-result] nativeLease=%u released=%d", iter->second->nativePresentationId,
+                                      released ? 1 : 0);
+    }
     m_pedNativeCouplePresentationLeases.erase(iter);
     return released;
 }

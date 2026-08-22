@@ -82,6 +82,80 @@ unsigned int OBJECTDYNAMICINFO_MAX = *(uint32_t*)0x59FB4C != 0x90909090 ? *(uint
 
 namespace
 {
+    constexpr std::uintptr_t BE_IN_COUPLE_FORWARD_EVENT_CALL = 0x684819;
+    constexpr std::uintptr_t EVENT_GROUP_ADD = 0x4AB420;
+
+    void* __fastcall HookBeInCoupleForwardEvent(void* eventGroup, void*, void* event, bool valid)
+    {
+        using GetEventType = int(__thiscall*)(void*);
+        using AddEvent = void*(__thiscall*)(void*, void*, bool);
+
+        auto**    eventVtable = event ? *reinterpret_cast<void***>(event) : nullptr;
+        const int eventType = eventVtable ? reinterpret_cast<GetEventType>(eventVtable[1])(event) : -1;
+        // BeInCouple ignores CEventGroup::Add's return value. The retail fact
+        // being observed is this exact forwarding call, independently of the
+        // partner decision maker retaining the cloned event.
+        if (pGame)
+            pGame->RecordAmbientPedCivilianCoupleForwardedEvent(eventGroup, eventType);
+        return reinterpret_cast<AddEvent>(EVENT_GROUP_ADD)(eventGroup, event, valid);
+    }
+
+    bool IsExpectedBeInCoupleForwardEventCall()
+    {
+        const auto* call = reinterpret_cast<const unsigned char*>(BE_IN_COUPLE_FORWARD_EVENT_CALL);
+        if (call[0] != 0xE8)
+            return false;
+        const auto relativeTarget = *reinterpret_cast<const std::int32_t*>(call + 1);
+        return BE_IN_COUPLE_FORWARD_EVENT_CALL + 5 + relativeTarget == EVENT_GROUP_ADD;
+    }
+
+    void RemoveAmbientCoupleArmIK(CTaskManagerSA* taskManager)
+    {
+        if (!taskManager)
+            return;
+
+        CTask* ikTask = taskManager->GetTaskSecondary(TASK_SECONDARY_IK);
+        if (!ikTask || ikTask->GetTaskType() != TASK_SIMPLE_IK_MANAGER)
+            return;
+
+        // Retail's BeInCouple abort only starts a blend-out. Once this ped
+        // becomes a remote observer the secondary manager may stop processing,
+        // leaving its two PointArm chains resident and blocking presentation.
+        // Remove exactly the right/left arm children owned by BeInCouple while
+        // the native owner lease still identifies this task tree.
+        using RemoveIKChainTask = void(__thiscall*)(void*, int);
+        auto* const managerInterface = ikTask->GetInterface();
+        reinterpret_cast<RemoveIKChainTask>(0x633970)(managerInterface, 1);
+        reinterpret_cast<RemoveIKChainTask>(0x633970)(managerInterface, 2);
+    }
+
+    constexpr const char* AMBIENT_COUPLE_PRESENTATION_ABI =
+        "v2:Acquire(CPed*,CPed*,uint&);Update(uint,CPed*,CPed*);Release(uint,CPed*,CPed*);IsActive(uint,CPed*,CPed*)const;"
+        "UpdateWithSides(uint,CPed*,CPed*,uchar,uchar)";
+
+    void LogAmbientCouplePresentationAbiOnce()
+    {
+        static bool logged = false;
+        if (logged || !g_pCore)
+            return;
+
+        logged = true;
+        g_pCore->GetConsole()->Printf("[couple-presentation][abi] module=game_sa revision=2 signature=%s", AMBIENT_COUPLE_PRESENTATION_ABI);
+    }
+
+    void LogAmbientCouplePresentationAcquireReject(const char* reason, std::size_t nativeLeaseCount, std::size_t presentationLeaseCount,
+                                                   unsigned int conflictLeaseId = 0, int conflictMember = -1)
+    {
+        static const char* lastReason = nullptr;
+        if (!g_pCore || lastReason == reason)
+            return;
+
+        lastReason = reason;
+        g_pCore->GetConsole()->Printf(
+            "[couple-presentation][acquire-refused] module=game_sa reason=%s nativeLeases=%u presentationLeases=%u conflictLease=%u conflictMember=%d", reason,
+            static_cast<unsigned int>(nativeLeaseCount), static_cast<unsigned int>(presentationLeaseCount), conflictLeaseId, conflictMember);
+    }
+
     constexpr std::uintptr_t VEHICLE_RECORDING_PATHS = 0x97D880;
     constexpr std::uintptr_t VEHICLE_RECORDING_COUNT = 0x97F630;
     constexpr std::uintptr_t VEHICLE_PLAYBACK_ACTIVE = 0x97D6F0;
@@ -229,6 +303,53 @@ namespace
             return -1;
         }
         return reinterpret_cast<int(__thiscall*)(CTaskSAInterface*)>(task->VTBL->GetTaskType)(task);
+    }
+
+    void DestroyAmbientCouplePointArm(void*& task)
+    {
+        if (!task)
+            return;
+        auto* taskInterface = static_cast<CTaskSAInterface*>(task);
+        reinterpret_cast<void(__thiscall*)(void*, unsigned int)>(taskInterface->VTBL->DeletingDestructor)(task, 1);
+        task = nullptr;
+    }
+
+    bool UpdateAmbientCouplePointArm(void*& pointArmTask, CPedSAInterface* ped, int arm, const CVector& target)
+    {
+        if (!ped || arm < 0 || arm > 1)
+            return false;
+
+        using UpdatePointArmInfo = void(__thiscall*)(void*, const char*, CEntitySAInterface*, int, CVector, float, int);
+        using GameNew = void*(__cdecl*)(std::size_t);
+        using ConstructPointArm = void*(__thiscall*)(void*, const char*, int, CEntitySAInterface*, int, CVector, float, int);
+        using ProcessPointArm = bool(__thiscall*)(void*, CPedSAInterface*);
+
+        static const char purpose[] = "CoupleObserver";
+
+        if (pointArmTask)
+        {
+            reinterpret_cast<UpdatePointArmInfo>(0x634370)(pointArmTask, purpose, nullptr, -1, target, 0.5f, 250);
+        }
+        else
+        {
+            pointArmTask = reinterpret_cast<GameNew>(0x61A5A0)(0x5C);
+            if (!pointArmTask)
+                return false;
+            pointArmTask = reinterpret_cast<ConstructPointArm>(0x634150)(pointArmTask, purpose, arm, nullptr, -1, target, 0.5f, 250);
+        }
+
+        // A synced observer must not own a primary AI task, and its
+        // CPlayerPed task manager rejects the retail secondary IK manager.
+        // Keep only the retail point-arm presentation task in this local
+        // resource lease and process it at the same per-frame boundary. Its
+        // destructor still owns the native IK-chain cleanup.
+        const auto processPed = reinterpret_cast<TaskSimpleVTBL*>(static_cast<CTaskSAInterface*>(pointArmTask)->VTBL)->ProcessPed;
+        if (reinterpret_cast<ProcessPointArm>(processPed)(pointArmTask, ped))
+        {
+            DestroyAmbientCouplePointArm(pointArmTask);
+            return false;
+        }
+        return true;
     }
 
     struct SAmbientPedPopulationZoneInfoSA
@@ -731,6 +852,13 @@ CGameSA::CGameSA()
         // finishes only this client's copy. Intercept that single call site so
         // a resource-owned cutscene can synchronize the decision at server.
         HookInstallCall(HOOKPOS_FileCutsceneSkipInput, reinterpret_cast<DWORD>(&FileCutsceneSkipInputHook));
+
+        // Count only invocations of the single retail BeInCouple partner-
+        // forwarding callsite. A global CEventGroup::Add hook would conflate
+        // unrelated AI events and make the social propagation probe meaningless.
+        const bool installBeInCoupleForwardHook = m_eGameVersion == VERSION_US_10 && IsExpectedBeInCoupleForwardEventCall();
+        if (installBeInCoupleForwardHook)
+            HookInstallCall(BE_IN_COUPLE_FORWARD_EVENT_CALL, reinterpret_cast<DWORD>(&HookBeInCoupleForwardEvent));
 
         // Set the model ids for all the CModelInfoSA instances
         for (unsigned int i = 0; i < modelInfoMax; i++)
@@ -2203,6 +2331,62 @@ EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedGangGroupCandidate(const C
     return candidate.count >= 2 ? EAmbientPedSpawnCandidateResult::Success : EAmbientPedSpawnCandidateResult::Blocked;
 }
 
+EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedCivilianCoupleCandidate(const CVector& origin, SAmbientPedCivilianCoupleSpawnCandidate& candidate)
+{
+    candidate = {};
+    if (m_eGameVersion != VERSION_US_10 || !std::isfinite(origin.fX) || !std::isfinite(origin.fY) || !std::isfinite(origin.fZ))
+        return EAmbientPedSpawnCandidateResult::InvalidOrigin;
+
+    int modelA = -1;
+    int modelB = -1;
+    reinterpret_cast<void(__cdecl*)(int&, int&)>(0x613180)(modelA, modelB);
+    if (modelA < 0 || modelB < 0 || modelA == modelB)
+        return EAmbientPedSpawnCandidateResult::NoModel;
+
+    auto* modelInfoA = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(modelA));
+    auto* modelInfoB = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(modelB));
+    if (!modelInfoA || !modelInfoB || !modelInfoA->pRwObject || !modelInfoB->pRwObject)
+        return EAmbientPedSpawnCandidateResult::UnsupportedModel;
+
+    // Reuse the audited native path/visibility producer, then replace only its
+    // throwaway singleton occupation with the two occupations selected above.
+    // The extra singleton selection is deliberately not authoritative and is
+    // never exposed to the server.
+    SAmbientPedSpawnCandidate anchor;
+    const auto                result = GetAmbientPedSpawnCandidateForPopulation(origin, EAmbientPedPopulationSelection::Civilian, 0xFF, anchor);
+    if (result != EAmbientPedSpawnCandidateResult::Success)
+        return result;
+
+    candidate.members[0] = anchor;
+    candidate.members[0].modelId = static_cast<unsigned int>(modelA);
+    candidate.members[0].pedType = static_cast<unsigned char>(modelInfoA->pedType);
+    candidate.members[0].populationClass = EAmbientPedPopulationClass::Civilian;
+    candidate.members[0].gangId = 0xFF;
+    candidate.members[0].headingDegrees = 0.0f;
+
+    candidate.members[1] = anchor;
+    candidate.members[1].modelId = static_cast<unsigned int>(modelB);
+    candidate.members[1].pedType = static_cast<unsigned char>(modelInfoB->pedType);
+    candidate.members[1].populationClass = EAmbientPedPopulationClass::Civilian;
+    candidate.members[1].gangId = 0xFF;
+    candidate.members[1].position.fX += 1.0f;
+    candidate.members[1].wanderDirection = static_cast<unsigned char>(rand() & 7);
+    candidate.members[1].headingDegrees = 0.0f;
+
+    for (const auto& member : candidate.members)
+    {
+        auto*       modelInfo = reinterpret_cast<CPedModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(member.modelId));
+        const float boundRadius = modelInfo && modelInfo->pColModel ? modelInfo->pColModel->m_sphere.m_radius : -1.0f;
+        if (!reinterpret_cast<bool(__cdecl*)(const CVector&, float, int, void*, bool, bool, bool)>(FUNC_IsPositionClearForPed)(member.position, boundRadius, -1,
+                                                                                                                               nullptr, true, true, true))
+        {
+            candidate = {};
+            return EAmbientPedSpawnCandidateResult::Blocked;
+        }
+    }
+    return EAmbientPedSpawnCandidateResult::Success;
+}
+
 bool CGameSA::AcquireAmbientPedNativeGroup(CPed* const* members, unsigned char count, unsigned int& nativeGroupId)
 {
     nativeGroupId = std::numeric_limits<unsigned int>::max();
@@ -2498,7 +2682,10 @@ bool CGameSA::ReleaseAmbientPedCivilianCouple(unsigned int nativeCoupleId, CPed*
             continue;
         CTask* primaryTask = taskManager->GetTask(TASK_PRIORITY_PRIMARY);
         if (primaryTask && primaryTask->GetInterface() == leaseIter->second.primaryTasks[index])
+        {
             taskManager->SetTask(nullptr, TASK_PRIORITY_PRIMARY, true);
+            RemoveAmbientCoupleArmIK(taskManager);
+        }
     }
     m_ambientPedNativeCoupleLeases.erase(leaseIter);
     return true;
@@ -2509,6 +2696,39 @@ bool CGameSA::IsAmbientPedCivilianCoupleActive(unsigned int nativeCoupleId, CPed
     SAmbientPedNativeCoupleDiagnostic diagnostic;
     GetAmbientPedCivilianCoupleDiagnostic(nativeCoupleId, a, b, diagnostic);
     return diagnostic.active;
+}
+
+void CGameSA::RecordAmbientPedCivilianCoupleForwardedEvent(void* eventGroup, int eventType)
+{
+    std::size_t eventIndex;
+    switch (eventType)
+    {
+        case 9:
+            eventIndex = 0;
+            break;
+        case 15:
+            eventIndex = 1;
+            break;
+        case 31:
+            eventIndex = 2;
+            break;
+        default:
+            return;
+    }
+
+    for (auto& [id, lease] : m_ambientPedNativeCoupleLeases)
+    {
+        for (std::size_t memberIndex = 0; memberIndex < lease.members.size(); ++memberIndex)
+        {
+            auto* ped = dynamic_cast<CPedSA*>(lease.members[memberIndex]);
+            auto* intelligence = ped && ped->GetPedInterface() ? ped->GetPedInterface()->pPedIntelligence : nullptr;
+            if (intelligence && intelligence->eventGroup == eventGroup)
+            {
+                ++lease.forwardedEventCounts[memberIndex][eventIndex];
+                return;
+            }
+        }
+    }
 }
 
 void CGameSA::GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId, CPed* a, CPed* b, SAmbientPedNativeCoupleDiagnostic& diagnostic) const
@@ -2528,6 +2748,9 @@ void CGameSA::GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId,
     for (std::size_t index = 0; index < members.size(); ++index)
     {
         auto& member = diagnostic.members[index];
+        member.forwardedDamageEventCount = leaseIter->second.forwardedEventCounts[index][0];
+        member.forwardedShotFiredEventCount = leaseIter->second.forwardedEventCounts[index][1];
+        member.forwardedGunAimedAtEventCount = leaseIter->second.forwardedEventCounts[index][2];
         auto* ped = dynamic_cast<CPedSA*>(members[index]);
         auto* partnerPed = dynamic_cast<CPedSA*>(members[index == 0 ? 1 : 0]);
         auto* expectedPartnerPed = dynamic_cast<CPedSA*>(leaseIter->second.members[index == 0 ? 1 : 0]);
@@ -2546,6 +2769,15 @@ void CGameSA::GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId,
         }
 
         member.gamePedAddress = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(ped));
+        member.currentEventType = ped->GetNativeCurrentEventType();
+        if (auto* intelligence = ped->GetPedInterface()->pPedIntelligence)
+        {
+            using GetEventOfType = void*(__thiscall*)(void*, int);
+            auto* eventGroup = intelligence->eventGroup;
+            member.damageEventPresent = reinterpret_cast<GetEventOfType>(0x4AB650)(eventGroup, 9) != nullptr;
+            member.shotFiredEventPresent = reinterpret_cast<GetEventOfType>(0x4AB650)(eventGroup, 15) != nullptr;
+            member.gunAimedAtEventPresent = reinterpret_cast<GetEventOfType>(0x4AB650)(eventGroup, 31) != nullptr;
+        }
         using GetWalkAnimSpeed = float(__thiscall*)(CPedSAInterface*);
         member.walkSpeed = reinterpret_cast<GetWalkAnimSpeed>(0x5E04B0)(ped->GetPedInterface());
         auto* taskManager = static_cast<CTaskManagerSA*>(ped->GetPedIntelligence()->GetTaskManager());
@@ -2567,6 +2799,7 @@ void CGameSA::GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId,
         member.reciprocalPartner = partnerPed && coupleTask->m_partner == partnerPed->GetPedInterface();
         member.leaderRoleMatches = coupleTask->m_isLeader == (index == 0 ? leaseIter->second.aLeader : !leaseIter->second.aLeader);
         member.subTaskType = GetPedTaskType(reinterpret_cast<CTaskSAInterface*>(coupleTask->m_pSubTask));
+        member.previousSide = coupleTask->m_previousSide;
         allPartnersMatch = allPartnersMatch && member.reciprocalPartner;
         allRolesMatch = allRolesMatch && member.leaderRoleMatches;
     }
@@ -2590,24 +2823,81 @@ void CGameSA::GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId,
 
 bool CGameSA::AcquireAmbientPedCivilianCouplePresentation(CPed* a, CPed* b, unsigned int& nativePresentationId)
 {
+    LogAmbientCouplePresentationAbiOnce();
     nativePresentationId = 0;
-    if (m_eGameVersion != VERSION_US_10 || !a || !b || a == b)
+    if (m_eGameVersion != VERSION_US_10)
+    {
+        LogAmbientCouplePresentationAcquireReject("wrong-version", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
         return false;
+    }
+    if (!a)
+    {
+        LogAmbientCouplePresentationAcquireReject("null-a", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
+        return false;
+    }
+    if (!b)
+    {
+        LogAmbientCouplePresentationAcquireReject("null-b", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
+        return false;
+    }
+    if (a == b)
+    {
+        LogAmbientCouplePresentationAcquireReject("same-ped", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
+        return false;
+    }
 
     auto* pedA = dynamic_cast<CPedSA*>(a);
     auto* pedB = dynamic_cast<CPedSA*>(b);
-    if (!pedA || !pedB || !pedA->GetPedInterface() || !pedB->GetPedInterface())
+    if (!pedA)
+    {
+        LogAmbientCouplePresentationAcquireReject("cast-a", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
         return false;
+    }
+    if (!pedB)
+    {
+        LogAmbientCouplePresentationAcquireReject("cast-b", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
+        return false;
+    }
+    if (!pedA->GetPedInterface())
+    {
+        LogAmbientCouplePresentationAcquireReject("no-interface-a", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
+        return false;
+    }
+    if (!pedB->GetPedInterface())
+    {
+        LogAmbientCouplePresentationAcquireReject("no-interface-b", m_ambientPedNativeCoupleLeases.size(), m_ambientPedNativeCouplePresentationLeases.size());
+        return false;
+    }
 
     for (const auto& [id, lease] : m_ambientPedNativeCoupleLeases)
     {
-        if (lease.members[0] == a || lease.members[1] == a || lease.members[0] == b || lease.members[1] == b)
+        if (lease.members[0] == a || lease.members[1] == a)
+        {
+            LogAmbientCouplePresentationAcquireReject("native-lease-conflict-a", m_ambientPedNativeCoupleLeases.size(),
+                                                      m_ambientPedNativeCouplePresentationLeases.size(), id, lease.members[0] == a ? 0 : 1);
             return false;
+        }
+        if (lease.members[0] == b || lease.members[1] == b)
+        {
+            LogAmbientCouplePresentationAcquireReject("native-lease-conflict-b", m_ambientPedNativeCoupleLeases.size(),
+                                                      m_ambientPedNativeCouplePresentationLeases.size(), id, lease.members[0] == b ? 0 : 1);
+            return false;
+        }
     }
     for (const auto& [id, lease] : m_ambientPedNativeCouplePresentationLeases)
     {
-        if (lease.members[0] == a || lease.members[1] == a || lease.members[0] == b || lease.members[1] == b)
+        if (lease.members[0] == a || lease.members[1] == a)
+        {
+            LogAmbientCouplePresentationAcquireReject("presentation-lease-conflict-a", m_ambientPedNativeCoupleLeases.size(),
+                                                      m_ambientPedNativeCouplePresentationLeases.size(), id, lease.members[0] == a ? 0 : 1);
             return false;
+        }
+        if (lease.members[0] == b || lease.members[1] == b)
+        {
+            LogAmbientCouplePresentationAcquireReject("presentation-lease-conflict-b", m_ambientPedNativeCoupleLeases.size(),
+                                                      m_ambientPedNativeCouplePresentationLeases.size(), id, lease.members[0] == b ? 0 : 1);
+            return false;
+        }
     }
 
     unsigned int leaseId = 0;
@@ -2619,24 +2909,92 @@ bool CGameSA::AcquireAmbientPedCivilianCouplePresentation(CPed* a, CPed* b, unsi
     SAmbientPedNativeCouplePresentationLease lease;
     lease.members = {a, b};
     if (!m_ambientPedNativeCouplePresentationLeases.emplace(leaseId, lease).second)
+    {
+        LogAmbientCouplePresentationAcquireReject("lease-insert-failed", m_ambientPedNativeCoupleLeases.size(),
+                                                  m_ambientPedNativeCouplePresentationLeases.size());
         return false;
+    }
 
     nativePresentationId = leaseId;
+    if (g_pCore)
+    {
+        g_pCore->GetConsole()->Printf("[couple-presentation][acquired] module=game_sa nativeLease=%u nativeLeases=%u presentationLeases=%u", leaseId,
+                                      static_cast<unsigned int>(m_ambientPedNativeCoupleLeases.size()),
+                                      static_cast<unsigned int>(m_ambientPedNativeCouplePresentationLeases.size()));
+    }
     return true;
 }
 
 bool CGameSA::UpdateAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b)
 {
+    return UpdateAmbientPedCivilianCouplePresentationWithSides(nativePresentationId, a, b, 0, 0);
+}
+
+bool CGameSA::UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int nativePresentationId, CPed* a, CPed* b, unsigned char sideA, unsigned char sideB)
+{
     const auto leaseIter = m_ambientPedNativeCouplePresentationLeases.find(nativePresentationId);
     if (leaseIter == m_ambientPedNativeCouplePresentationLeases.end() || a != leaseIter->second.members[0] || b != leaseIter->second.members[1])
         return false;
 
-    // PointArm assumes its secondary IK task was accepted by the ped task
-    // manager. Observer CPlayerPed wrappers reject that task, after which the
-    // retail function dereferences a null IK task at 0x6339B4. Never enter that
-    // unsafe retail path; observer couple presentation remains deferred until
-    // it has a task-free implementation.
-    return false;
+    auto* pedA = dynamic_cast<CPedSA*>(a);
+    auto* pedB = dynamic_cast<CPedSA*>(b);
+    if (!pedA || !pedB || !pedA->GetPedInterface() || !pedB->GetPedInterface())
+        return false;
+
+    const CVector* positionA = pedA->GetPosition();
+    const CVector* positionB = pedB->GetPosition();
+    if (!positionA || !positionB)
+        return true;
+
+    const float dx = positionB->fX - positionA->fX;
+    const float dy = positionB->fY - positionA->fY;
+    const float horizontalDistanceSquared = dx * dx + dy * dy;
+    // Retail CTaskComplexBeInCouple only creates the hand IK while the two
+    // actors are strictly less than 1.5 metres apart in XY.
+    if (!std::isfinite(horizontalDistanceSquared) || horizontalDistanceSquared >= 2.25f)
+    {
+        DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[0]);
+        DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[1]);
+        leaseIter->second.activeArms = {};
+        return true;
+    }
+
+    // Retail aims each arm at the shared XY midpoint while retaining the
+    // owning ped's Z. A shared midpoint Z bends one observer arm differently
+    // whenever the synced actors are even slightly vertically offset.
+    const float                           midpointX = positionA->fX + dx * 0.5f;
+    const float                           midpointY = positionA->fY + dy * 0.5f;
+    const std::array<CVector, 2>          targets = {CVector(midpointX, midpointY, positionA->fZ), CVector(midpointX, midpointY, positionB->fZ)};
+    const std::array<CPedSAInterface*, 2> peds = {pedA->GetPedInterface(), pedB->GetPedInterface()};
+    const std::array<unsigned char, 2>    ownerSides = {sideA, sideB};
+
+    for (std::size_t index = 0; index < peds.size(); ++index)
+    {
+        // previousSide is remembered by the retail task even when its IK is
+        // inactive. Wait for the authoritative owner value instead of calling
+        // GTA's side picker on an observer ped whose partner matrix may not yet
+        // exist after streaming or handoff.
+        const int arm = ownerSides[index] == 2 ? 0 : ownerSides[index] == 1 ? 1 : -1;
+        if (arm < 0)
+        {
+            DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[index]);
+            leaseIter->second.activeArms[index] = 0;
+            continue;
+        }
+
+        const unsigned char encodedArm = static_cast<unsigned char>(arm + 1);
+        if (leaseIter->second.activeArms[index] != 0 && leaseIter->second.activeArms[index] != encodedArm)
+        {
+            // GTA removes the old arm and creates the replacement in the same
+            // frame; PointArm itself owns the native 250 ms blend.
+            DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[index]);
+            leaseIter->second.activeArms[index] = 0;
+        }
+
+        leaseIter->second.activeArms[index] =
+            UpdateAmbientCouplePointArm(leaseIter->second.pointArmTasks[index], peds[index], arm, targets[index]) ? encodedArm : 0;
+    }
+    return true;
 }
 
 bool CGameSA::ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b)
@@ -2647,16 +3005,8 @@ bool CGameSA::ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePre
         return false;
     }
 
-    using AbortPointArm = void(__stdcall*)(int, CPedSAInterface*, int);
-    const std::array<CPed*, 2> members = {a, b};
-    for (std::size_t index = 0; index < members.size(); ++index)
-    {
-        auto* ped = dynamic_cast<CPedSA*>(members[index]);
-        if (!ped || !ped->GetPedInterface() || leaseIter->second.activeArms[index] == 0)
-            continue;
-        reinterpret_cast<AbortPointArm>(0x6182F0)(0, ped->GetPedInterface(), 250);
-        reinterpret_cast<AbortPointArm>(0x6182F0)(1, ped->GetPedInterface(), 250);
-    }
+    DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[0]);
+    DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[1]);
     m_ambientPedNativeCouplePresentationLeases.erase(leaseIter);
     return true;
 }
@@ -2664,7 +3014,8 @@ bool CGameSA::ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePre
 bool CGameSA::IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const
 {
     const auto leaseIter = m_ambientPedNativeCouplePresentationLeases.find(nativePresentationId);
-    return leaseIter != m_ambientPedNativeCouplePresentationLeases.end() && a == leaseIter->second.members[0] && b == leaseIter->second.members[1];
+    return leaseIter != m_ambientPedNativeCouplePresentationLeases.end() && a == leaseIter->second.members[0] && b == leaseIter->second.members[1] &&
+           leaseIter->second.activeArms[0] != 0 && leaseIter->second.activeArms[1] != 0;
 }
 
 eGameVersion CGameSA::FindGameVersion()

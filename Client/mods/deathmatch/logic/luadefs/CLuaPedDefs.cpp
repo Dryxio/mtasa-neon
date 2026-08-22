@@ -3964,12 +3964,11 @@ int CLuaPedDefs::GetPedNativeCoupleDiagnostic(lua_State* luaVM)
     setBoolean("resourceLeasePresent", diagnostic.resourceLeasePresent);
     setBoolean("gameLeasePresent", diagnostic.gameLeasePresent);
     setBoolean("aLeader", diagnostic.aLeader);
-
     lua_createtable(luaVM, 2, 0);
     for (unsigned int index = 0; index < 2; ++index)
     {
         const auto& member = diagnostic.members[index];
-        lua_createtable(luaVM, 0, 13);
+        lua_createtable(luaVM, 0, 16);
         setBoolean("resourceElementPresent", member.resourceElementPresent);
         setBoolean("resourceElementIsPed", member.resourceElementIsPed);
         setBoolean("resourcePedSyncing", member.resourcePedSyncing);
@@ -3980,6 +3979,14 @@ int CLuaPedDefs::GetPedNativeCoupleDiagnostic(lua_State* luaVM)
         setBoolean("leaderRoleMatches", member.leaderRoleMatches);
         setNumber("primaryTaskType", member.primaryTaskType);
         setNumber("subTaskType", member.subTaskType);
+        setNumber("currentEventType", member.currentEventType);
+        setBoolean("damageEventPresent", member.damageEventPresent);
+        setBoolean("shotFiredEventPresent", member.shotFiredEventPresent);
+        setBoolean("gunAimedAtEventPresent", member.gunAimedAtEventPresent);
+        setNumber("forwardedDamageEventCount", member.forwardedDamageEventCount);
+        setNumber("forwardedShotFiredEventCount", member.forwardedShotFiredEventCount);
+        setNumber("forwardedGunAimedAtEventCount", member.forwardedGunAimedAtEventCount);
+        setNumber("previousSide", member.previousSide);
         setNumber("walkSpeed", member.walkSpeed);
         lua_rawseti(luaVM, -2, index + 1);
     }
@@ -4007,11 +4014,16 @@ int CLuaPedDefs::AcquirePedNativeCouplePresentation(lua_State* luaVM)
 int CLuaPedDefs::UpdatePedNativeCouplePresentation(lua_State* luaVM)
 {
     unsigned int     token = 0;
+    unsigned int     sideA = 0;
+    unsigned int     sideB = 0;
     CScriptArgReader argStream(luaVM);
     argStream.ReadNumber(token);
+    argStream.ReadNumber(sideA, 0);
+    argStream.ReadNumber(sideB, 0);
     CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
     CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
-    lua_pushboolean(luaVM, pResource && pResource->UpdatePedNativeCouplePresentation(token));
+    lua_pushboolean(luaVM, pResource && sideA <= 2 && sideB <= 2 &&
+                               pResource->UpdatePedNativeCouplePresentation(token, static_cast<unsigned char>(sideA), static_cast<unsigned char>(sideB)));
     return 1;
 }
 

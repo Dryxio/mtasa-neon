@@ -385,8 +385,12 @@ public:
     void GetAmbientPedCivilianCoupleDiagnostic(unsigned int nativeCoupleId, CPed* a, CPed* b, SAmbientPedNativeCoupleDiagnostic& diagnostic) const override;
     bool AcquireAmbientPedCivilianCouplePresentation(CPed* a, CPed* b, unsigned int& nativePresentationId) override;
     bool UpdateAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) override;
+    bool UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int nativePresentationId, CPed* a, CPed* b, unsigned char sideA,
+                                                             unsigned char sideB) override;
     bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) override;
     bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const override;
+    EAmbientPedSpawnCandidateResult GetAmbientPedCivilianCoupleCandidate(const CVector& origin, SAmbientPedCivilianCoupleSpawnCandidate& candidate) override;
+    void                            RecordAmbientPedCivilianCoupleForwardedEvent(void* eventGroup, int eventType);
 
 private:
     struct SAmbientPedNativeGroupLease
@@ -401,9 +405,10 @@ private:
 
     struct SAmbientPedNativeCoupleLease
     {
-        std::array<CPed*, 2> members{};
-        std::array<void*, 2> primaryTasks{};
-        bool                 aLeader{};
+        std::array<CPed*, 2>                       members{};
+        std::array<void*, 2>                       primaryTasks{};
+        std::array<std::array<unsigned int, 3>, 2> forwardedEventCounts{};
+        bool                                       aLeader{};
     };
 
     unsigned int                                                   m_nextAmbientPedNativeCoupleId{1};
@@ -412,6 +417,7 @@ private:
     struct SAmbientPedNativeCouplePresentationLease
     {
         std::array<CPed*, 2>         members{};
+        std::array<void*, 2>         pointArmTasks{};
         std::array<unsigned char, 2> activeArms{};
     };
 

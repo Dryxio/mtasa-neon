@@ -67,6 +67,7 @@ void CLuaWorldDefs::LoadFunctions()
         {"isAmbientPedSphereVisible", ArgumentParser<IsAmbientPedSphereVisible>},
         {"getAmbientPedSpawnCandidate", GetAmbientPedSpawnCandidate},
         {"getAmbientPedGangGroupCandidate", GetAmbientPedGangGroupCandidate},
+        {"getAmbientPedCivilianCoupleCandidate", GetAmbientPedCivilianCoupleCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
         {"getWorldProperty", ArgumentParser<GetWorldProperty>},
 
@@ -240,9 +241,9 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     }
 
     SAmbientPedSpawnCandidate candidate;
-    const auto                result = selection == EAmbientPedPopulationSelection::Automatic
-                                           ? g_pGame->GetAmbientPedSpawnCandidate(origin, candidate)
-                                           : g_pGame->GetAmbientPedSpawnCandidateForPopulation(origin, selection, static_cast<unsigned char>(gangId), candidate);
+    const auto result = selection == EAmbientPedPopulationSelection::Automatic
+                            ? g_pGame->GetAmbientPedSpawnCandidate(origin, candidate)
+                            : g_pGame->GetAmbientPedSpawnCandidateForPopulation(origin, selection, static_cast<unsigned char>(gangId), candidate);
     if (result != EAmbientPedSpawnCandidateResult::Success)
     {
         const char* reason = "unknown";
@@ -370,6 +371,68 @@ int CLuaWorldDefs::GetAmbientPedGangGroupCandidate(lua_State* luaVM)
         lua_setfield(luaVM, -2, "populationClass");
         lua_rawseti(luaVM, -2, index + 1);
     }
+    return 1;
+}
+
+int CLuaWorldDefs::GetAmbientPedCivilianCoupleCandidate(lua_State* luaVM)
+{
+    CVector          origin;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadVector3D(origin);
+    if (argStream.HasErrors())
+    {
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SAmbientPedCivilianCoupleSpawnCandidate candidate;
+    const auto                              result = g_pGame->GetAmbientPedCivilianCoupleCandidate(origin, candidate);
+    if (result != EAmbientPedSpawnCandidateResult::Success)
+    {
+        const char* reason = result == EAmbientPedSpawnCandidateResult::NoModel           ? "no-model"
+                             : result == EAmbientPedSpawnCandidateResult::NoPath          ? "no-path"
+                             : result == EAmbientPedSpawnCandidateResult::PathDensity     ? "path-density"
+                             : result == EAmbientPedSpawnCandidateResult::VisibleTooClose ? "visible-too-close"
+                             : result == EAmbientPedSpawnCandidateResult::Blocked         ? "blocked"
+                             : result == EAmbientPedSpawnCandidateResult::InvalidOrigin   ? "invalid-origin"
+                                                                                          : "unsupported-model";
+        lua_pushboolean(luaVM, false);
+        lua_pushstring(luaVM, reason);
+        return 2;
+    }
+
+    lua_createtable(luaVM, 0, 2);
+    lua_pushboolean(luaVM, true);
+    lua_setfield(luaVM, -2, "couple");
+    lua_createtable(luaVM, 2, 0);
+    for (unsigned int index = 0; index < 2; ++index)
+    {
+        const auto& member = candidate.members[index];
+        lua_createtable(luaVM, 0, 10);
+        lua_pushinteger(luaVM, member.modelId);
+        lua_setfield(luaVM, -2, "model");
+        lua_pushinteger(luaVM, member.pedType);
+        lua_setfield(luaVM, -2, "pedType");
+        lua_pushnumber(luaVM, member.position.fX);
+        lua_setfield(luaVM, -2, "x");
+        lua_pushnumber(luaVM, member.position.fY);
+        lua_setfield(luaVM, -2, "y");
+        lua_pushnumber(luaVM, member.position.fZ);
+        lua_setfield(luaVM, -2, "z");
+        lua_pushinteger(luaVM, member.wanderDirection);
+        lua_setfield(luaVM, -2, "direction");
+        lua_pushnumber(luaVM, member.pathLerp);
+        lua_setfield(luaVM, -2, "pathLerp");
+        lua_pushnumber(luaVM, member.headingDegrees);
+        lua_setfield(luaVM, -2, "heading");
+        lua_pushstring(luaVM, "civilian");
+        lua_setfield(luaVM, -2, "populationClass");
+        lua_pushboolean(luaVM, false);
+        lua_setfield(luaVM, -2, "gang");
+        lua_rawseti(luaVM, -2, index + 1);
+    }
+    lua_setfield(luaVM, -2, "members");
     return 1;
 }
 

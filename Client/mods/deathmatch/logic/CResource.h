@@ -81,7 +81,7 @@ public:
     SAmbientPedNativeCoupleDiagnostic GetPedNativeCoupleDiagnostic(unsigned int uiToken) const;
     void                              ReleaseAllPedNativeCouples();
     unsigned int                      AcquirePedNativeCouplePresentation(class CClientPed* pPedA, class CClientPed* pPedB);
-    bool                              UpdatePedNativeCouplePresentation(unsigned int uiToken);
+    bool                              UpdatePedNativeCouplePresentation(unsigned int uiToken, unsigned char sideA = 0, unsigned char sideB = 0);
     bool                              ReleasePedNativeCouplePresentation(unsigned int uiToken);
     bool                              IsPedNativeCouplePresentationActive(unsigned int uiToken) const;
     void                              ReleaseAllPedNativeCouplePresentations();

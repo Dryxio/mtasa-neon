@@ -114,6 +114,7 @@ public:
     static bool IsAmbientPedSphereVisible(CVector position, float radius);
     LUA_DECLARE(GetAmbientPedSpawnCandidate);
     LUA_DECLARE(GetAmbientPedGangGroupCandidate);
+    LUA_DECLARE(GetAmbientPedCivilianCoupleCandidate);
     LUA_DECLARE(SetPedTargetingMarkerEnabled);
     LUA_DECLARE(IsPedTargetingMarkerEnabled);
     LUA_DECLARE(SetMoonSize);

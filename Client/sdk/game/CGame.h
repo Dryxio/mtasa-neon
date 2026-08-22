@@ -361,6 +361,14 @@ struct SAmbientPedNativeCoupleMemberDiagnostic
     std::uint32_t expectedPrimaryTaskAddress{};
     int           primaryTaskType{-1};
     int           subTaskType{-1};
+    int           currentEventType{-1};
+    bool          damageEventPresent{};
+    bool          shotFiredEventPresent{};
+    bool          gunAimedAtEventPresent{};
+    unsigned int  forwardedDamageEventCount{};
+    unsigned int  forwardedShotFiredEventCount{};
+    unsigned int  forwardedGunAimedAtEventCount{};
+    unsigned char previousSide{};
     float         walkSpeed{};
 };
 
@@ -376,6 +384,14 @@ struct SAmbientPedNativeCoupleDiagnostic
     bool                                    aLeader{};
     unsigned int                            nativeCoupleId{};
     SAmbientPedNativeCoupleMemberDiagnostic members[2]{};
+};
+
+// The native population helper selects both occupations from GTA's currently
+// resident model set. Neon only transports the proposal; network elements and
+// the pair transaction remain server-owned.
+struct SAmbientPedCivilianCoupleSpawnCandidate
+{
+    SAmbientPedSpawnCandidate members[2]{};
 };
 
 // PlaceRandomGroup normally creates local CPeds. Neon only asks GTA for the
@@ -739,8 +755,18 @@ public:
     virtual bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) = 0;
     virtual bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const = 0;
 
-    // Custom foliage calls GTA plant natives through Game SA. Keep the
-    // process-local implementation behind the module boundary so client.dll
-    // does not link directly against symbols owned by game_sa.dll.
+    // Custom foliage calls GTA plant natives through Game SA. Preserve this
+    // established virtual slot before appending new APIs so client.dll and
+    // game_sa.dll keep the same CGame ABI.
     virtual CPlantManager* GetPlantManager() = 0;
+
+    // Append-only automatic-couple producer.
+    virtual EAmbientPedSpawnCandidateResult GetAmbientPedCivilianCoupleCandidate(const CVector& origin, SAmbientPedCivilianCoupleSpawnCandidate& candidate) = 0;
+
+    // Observer transforms can briefly contain a position/heading mix from two
+    // sync frames during turns. The owner transports the scalar side retained
+    // by the retail BeInCouple task so presentation never guesses the opposite
+    // hand from that transient state.
+    virtual bool UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int nativePresentationId, CPed* a, CPed* b, unsigned char sideA,
+                                                                     unsigned char sideB) = 0;
 };
