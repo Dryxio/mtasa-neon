@@ -2,6 +2,7 @@ local units = {}
 local pendingCandidates = {}
 local candidateReservations = {}
 local populationProfiles = {}
+local readyClients = {}
 local takeoverVehicles = {}
 local nextUnitId = 0
 local nextSession = 0
@@ -108,7 +109,7 @@ end
 local function players()
     local result = {}
     for _, player in ipairs(getElementsByType("player")) do
-        if getElementHealth(player) > 0 and getElementDimension(player) == 0 and getElementInterior(player) == 0 then
+        if readyClients[player] and getElementHealth(player) > 0 and getElementDimension(player) == 0 and getElementInterior(player) == 0 then
             result[#result + 1] = player
         end
     end
@@ -1479,6 +1480,7 @@ addEventHandler("onPlayerQuit", root, function()
         setVehicleTrafficDemo(false)
         pcall(function() exports["native-ped-traffic"]:pedTrafficSetDemo(false, false, true) end)
     end
+    readyClients[source] = nil
     populationProfiles[source] = nil
     for vehicle, takeover in pairs(takeoverVehicles) do
         if takeover.player == source then
@@ -1551,18 +1553,23 @@ addEventHandler("onPlayerQuit", root, function()
     end
 end)
 
-addEventHandler("onPlayerJoin", root, function()
-    local joined = source
-    setTimer(function()
-        if not isElement(joined) or getElementDimension(joined) ~= 0 or getElementInterior(joined) ~= 0 then return end
-        for _, unit in pairs(units) do
-            if not unit.removing and isElement(unit.ped) and isElement(unit.vehicle) and distanceToUnit(joined, unit) <= RESIDENCY_DISTANCE then
-                unit.participants[joined] = true
-                unit.attached[joined] = true
-                triggerClientEvent(joined, "carTraffic:observe", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, passengerPayload(unit))
-            end
+-- A connected player is not eligible for ownership until its client script has
+-- registered every traffic event. This explicit handshake avoids guessing how
+-- long the initial resource download and client startup will take.
+addEvent("carTraffic:clientReady", true)
+addEventHandler("carTraffic:clientReady", resourceRoot, function()
+    local player = client
+    if not isElement(player) or getElementType(player) ~= "player" then return end
+    readyClients[player] = true
+    trace("client-ready", {client = getPlayerName(player)})
+    if getElementDimension(player) ~= 0 or getElementInterior(player) ~= 0 then return end
+    for _, unit in pairs(units) do
+        if not unit.removing and isElement(unit.ped) and isElement(unit.vehicle) and distanceToUnit(player, unit) <= RESIDENCY_DISTANCE then
+            unit.participants[player] = true
+            unit.attached[player] = true
+            triggerClientEvent(player, "carTraffic:observe", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, passengerPayload(unit))
         end
-    end, 1500, 1)
+    end
 end)
 
 addEventHandler("onVehicleStartEnter", root, function(player, seat)

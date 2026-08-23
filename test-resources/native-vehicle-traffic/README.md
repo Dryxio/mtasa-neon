@@ -43,6 +43,8 @@ Vehicle creation also preserves four emergency scripted-ped slots and drops
 optional passengers before it can cross that fence. Staff may use
 `cartraffic start [target-per-player] [global-cap]` to change the live profile.
 Traffic control and test commands reject players without server-staff rights.
+New players enter the traffic owner/observer pool only after their client has
+confirmed that every synchronized-traffic event handler is ready.
 
 With `native-ped-traffic` running, `/trafficdemo on` is the coordinated visual
 demo preset: with exactly two clients it targets 16 road vehicles while the ped

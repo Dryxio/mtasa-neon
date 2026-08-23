@@ -737,6 +737,13 @@ local function publishPopulationProfile()
     triggerServerEvent("carTraffic:populationProfile", resourceRoot, profile)
 end
 
+addEventHandler("onClientResourceStart", resourceRoot, function()
+    -- Admit this player only after the complete client script, including every
+    -- remotely triggered event handler above, has finished loading.
+    triggerServerEvent("carTraffic:clientReady", resourceRoot)
+    publishPopulationProfile()
+end)
+
 setTimer(publishPopulationProfile, 1000, 0)
 setTimer(publishPopulationProfile, 250, 1)
 
