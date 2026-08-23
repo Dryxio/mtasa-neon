@@ -68,6 +68,7 @@ void CLuaWorldDefs::LoadFunctions()
         {"getAmbientPedSpawnCandidate", GetAmbientPedSpawnCandidate},
         {"getAmbientPedGangGroupCandidate", GetAmbientPedGangGroupCandidate},
         {"getAmbientPedCivilianCoupleCandidate", GetAmbientPedCivilianCoupleCandidate},
+        {"getAmbientVehicleSpawnCandidate", GetAmbientVehicleSpawnCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
         {"getWorldProperty", ArgumentParser<GetWorldProperty>},
 
@@ -241,9 +242,9 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     }
 
     SAmbientPedSpawnCandidate candidate;
-    const auto result = selection == EAmbientPedPopulationSelection::Automatic
-                            ? g_pGame->GetAmbientPedSpawnCandidate(origin, candidate)
-                            : g_pGame->GetAmbientPedSpawnCandidateForPopulation(origin, selection, static_cast<unsigned char>(gangId), candidate);
+    const auto                result = selection == EAmbientPedPopulationSelection::Automatic
+                                           ? g_pGame->GetAmbientPedSpawnCandidate(origin, candidate)
+                                           : g_pGame->GetAmbientPedSpawnCandidateForPopulation(origin, selection, static_cast<unsigned char>(gangId), candidate);
     if (result != EAmbientPedSpawnCandidateResult::Success)
     {
         const char* reason = "unknown";
@@ -306,6 +307,54 @@ int CLuaWorldDefs::GetAmbientPedSpawnCandidate(lua_State* luaVM)
     lua_setfield(luaVM, -2, "gang");
     lua_pushinteger(luaVM, candidate.worldLevel);
     lua_setfield(luaVM, -2, "worldLevel");
+    return 1;
+}
+
+int CLuaWorldDefs::GetAmbientVehicleSpawnCandidate(lua_State* luaVM)
+{
+    CVector          origin;
+    unsigned int     modelId{};
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadVector3D(origin);
+    argStream.ReadNumber(modelId);
+    if (argStream.HasErrors())
+    {
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SAmbientVehicleSpawnCandidate candidate;
+    const auto                    result = g_pGame->GetAmbientVehicleSpawnCandidate(origin, modelId, candidate);
+    if (result != EAmbientVehicleSpawnCandidateResult::Success)
+    {
+        const char* reason = result == EAmbientVehicleSpawnCandidateResult::InvalidOrigin      ? "invalid-origin"
+                             : result == EAmbientVehicleSpawnCandidateResult::UnsupportedModel ? "unsupported-model"
+                             : result == EAmbientVehicleSpawnCandidateResult::WaterPath        ? "water-path"
+                             : result == EAmbientVehicleSpawnCandidateResult::InvalidOutput    ? "invalid-output"
+                             : result == EAmbientVehicleSpawnCandidateResult::InvalidPathNode  ? "invalid-path-node"
+                             : result == EAmbientVehicleSpawnCandidateResult::GroundMissing    ? "ground-missing"
+                                                                                               : "no-path";
+        lua_pushboolean(luaVM, false);
+        lua_pushstring(luaVM, reason);
+        return 2;
+    }
+
+    lua_createtable(luaVM, 0, 7);
+    lua_pushinteger(luaVM, candidate.modelId);
+    lua_setfield(luaVM, -2, "model");
+    lua_pushnumber(luaVM, candidate.position.fX);
+    lua_setfield(luaVM, -2, "x");
+    lua_pushnumber(luaVM, candidate.position.fY);
+    lua_setfield(luaVM, -2, "y");
+    lua_pushnumber(luaVM, candidate.position.fZ);
+    lua_setfield(luaVM, -2, "z");
+    lua_pushnumber(luaVM, candidate.rotationDegrees);
+    lua_setfield(luaVM, -2, "rotation");
+    lua_pushnumber(luaVM, candidate.cruiseSpeed);
+    lua_setfield(luaVM, -2, "cruiseSpeed");
+    lua_pushinteger(luaVM, candidate.drivingStyle);
+    lua_setfield(luaVM, -2, "drivingStyle");
     return 1;
 }
 

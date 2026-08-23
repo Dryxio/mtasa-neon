@@ -1787,10 +1787,15 @@ bool CStaticFunctionDefinitions::GetPedTask(CClientPed& Ped, bool bPrimary, unsi
         else
             pTask = pTaskManager->GetTaskSecondary(uiTaskType);
 
-        while (pTask)
+        // Native task chains are engine-owned and may be transient or damaged.
+        // Never let a diagnostic Lua query loop indefinitely on their links.
+        for (unsigned int depth = 0; pTask && depth < 64; ++depth)
         {
             outTaskHierarchy.push_back(pTask->GetTaskName());
-            pTask = pTask->GetSubTask();
+            CTask* const subTask = pTask->GetSubTask();
+            if (subTask == pTask)
+                break;
+            pTask = subTask;
         }
 
         return !outTaskHierarchy.empty();
@@ -1992,8 +1997,10 @@ const char* CStaticFunctionDefinitions::GetPedSimplestTask(CClientPed& Ped)
         if (pTask)
         {
             CTask* pTempTask = pTask->GetSubTask();
-            while (pTempTask)
+            for (unsigned int depth = 0; pTempTask && depth < 64; ++depth)
             {
+                if (pTempTask == pTask)
+                    break;
                 pTask = pTempTask;
                 pTempTask = pTempTask->GetSubTask();
             }
@@ -2020,27 +2027,33 @@ bool CStaticFunctionDefinitions::IsPedDoingTask(CClientPed& Ped, const char* szT
         for (int i = 0; i < TASK_PRIORITY_MAX; i++)
         {
             pTask = pTaskManager->GetTask(i);
-            while (pTask)
+            for (unsigned int depth = 0; pTask && depth < 64; ++depth)
             {
                 if (stricmp(pTask->GetTaskName(), szTaskName) == 0)
                 {
                     bIsDoingTask = true;
                     return true;
                 }
-                pTask = pTask->GetSubTask();
+                CTask* const subTask = pTask->GetSubTask();
+                if (subTask == pTask)
+                    break;
+                pTask = subTask;
             }
         }
         for (int i = 0; i < TASK_SECONDARY_MAX; i++)
         {
             pTask = pTaskManager->GetTaskSecondary(i);
-            while (pTask)
+            for (unsigned int depth = 0; pTask && depth < 64; ++depth)
             {
                 if (stricmp(pTask->GetTaskName(), szTaskName) == 0)
                 {
                     bIsDoingTask = true;
                     return true;
                 }
-                pTask = pTask->GetSubTask();
+                CTask* const subTask = pTask->GetSubTask();
+                if (subTask == pTask)
+                    break;
+                pTask = subTask;
             }
         }
         return true;

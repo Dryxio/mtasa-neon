@@ -390,7 +390,9 @@ public:
     bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) override;
     bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const override;
     EAmbientPedSpawnCandidateResult GetAmbientPedCivilianCoupleCandidate(const CVector& origin, SAmbientPedCivilianCoupleSpawnCandidate& candidate) override;
-    void                            RecordAmbientPedCivilianCoupleForwardedEvent(void* eventGroup, int eventType);
+    EAmbientVehicleSpawnCandidateResult GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
+                                                                        SAmbientVehicleSpawnCandidate& candidate) override;
+    void                                RecordAmbientPedCivilianCoupleForwardedEvent(void* eventGroup, int eventType);
 
 private:
     struct SAmbientPedNativeGroupLease

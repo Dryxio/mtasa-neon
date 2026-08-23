@@ -115,6 +115,7 @@ public:
     LUA_DECLARE(GetAmbientPedSpawnCandidate);
     LUA_DECLARE(GetAmbientPedGangGroupCandidate);
     LUA_DECLARE(GetAmbientPedCivilianCoupleCandidate);
+    LUA_DECLARE(GetAmbientVehicleSpawnCandidate);
     LUA_DECLARE(SetPedTargetingMarkerEnabled);
     LUA_DECLARE(IsPedTargetingMarkerEnabled);
     LUA_DECLARE(SetMoonSize);

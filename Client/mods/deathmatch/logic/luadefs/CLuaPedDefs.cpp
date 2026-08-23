@@ -177,7 +177,11 @@ namespace
     bool OwnsDrivenVehicle(CClientPed* ped, CClientVehicle* vehicle)
     {
         auto* deathmatchVehicle = dynamic_cast<CDeathmatchVehicle*>(vehicle);
-        return vehicle && (vehicle->IsLocalEntity() || vehicle->GetOccupant(0) == ped || (deathmatchVehicle && deathmatchVehicle->IsSyncing()));
+        // Native drive tasks mutate the vehicle autopilot as well as the ped
+        // task tree. Sitting in the driver seat does not confer network
+        // ownership: accepting that shortcut lets a ped syncer race the real
+        // unoccupied-vehicle syncer and the next packet overwrites the AI.
+        return vehicle && (vehicle->IsLocalEntity() || (deathmatchVehicle && deathmatchVehicle->IsSyncing()));
     }
 
     bool ReadSequenceNumber(lua_State* luaVM, int tableIndex, const char* name, double& value, double defaultValue, bool required, SString& error)

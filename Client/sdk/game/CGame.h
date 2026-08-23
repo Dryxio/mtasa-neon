@@ -403,6 +403,31 @@ struct SAmbientPedGroupSpawnCandidate
 };
 static_assert(sizeof(SAmbientPedGroupSpawnCandidate) == 164, "Ambient population group candidate ABI changed");
 
+enum class EAmbientVehicleSpawnCandidateResult : unsigned char
+{
+    Success,
+    InvalidOrigin,
+    UnsupportedModel,
+    NoPath,
+    WaterPath,
+    InvalidOutput,
+    InvalidPathNode,
+    GroundMissing,
+};
+
+// GenerateCarCreationCoors2 owns only GTA's local path/camera query. The
+// returned scalars are safe to transport; path-node addresses deliberately
+// stay inside the proposing process because streamed path areas can differ
+// between clients and across an ownership epoch.
+struct SAmbientVehicleSpawnCandidate
+{
+    CVector       position{};
+    float         rotationDegrees{};
+    unsigned int  modelId{};
+    float         cruiseSpeed{};
+    unsigned char drivingStyle{};
+};
+
 enum class EAmbientPedSpawnCandidateResult : unsigned char
 {
     Success,
@@ -769,4 +794,9 @@ public:
     // hand from that transient state.
     virtual bool UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int nativePresentationId, CPed* a, CPed* b, unsigned char sideA,
                                                                      unsigned char sideB) = 0;
+
+    // Append-only vehicle-traffic road oracle. Entity creation, model policy,
+    // ownership and cleanup remain server transactions.
+    virtual EAmbientVehicleSpawnCandidateResult GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
+                                                                                SAmbientVehicleSpawnCandidate& candidate) = 0;
 };

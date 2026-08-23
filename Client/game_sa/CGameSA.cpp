@@ -177,6 +177,7 @@ namespace
     constexpr std::uintptr_t FUNC_SetModelIsDeletable = 0x409C10;
     constexpr std::uintptr_t FUNC_SetModelTxdIsDeletable = 0x409C70;
     constexpr std::uintptr_t FUNC_GeneratePedCreationCoors = 0x44E790;
+    constexpr std::uintptr_t FUNC_GenerateCarCreationCoors2 = 0x424210;
     constexpr std::uintptr_t FUNC_TakePathWidthIntoAccount = 0x44DA30;
     constexpr std::uintptr_t FUNC_PedCreationDistMultiplier = 0x6116C0;
     constexpr std::uintptr_t FUNC_CullZonesFewerPeds = 0x72DD90;
@@ -184,10 +185,45 @@ namespace
     constexpr std::uintptr_t FUNC_ChooseCivilianOccupation = 0x612F90;
     constexpr std::uintptr_t FUNC_IsPositionClearForPed = 0x616860;
     constexpr std::uintptr_t GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER = 0xB6F11C;
+    constexpr std::uintptr_t GTA_CAMERA_FORWARD_X = 0xB6F104;
+    constexpr std::uintptr_t GTA_CAMERA_FORWARD_Y = 0xB6F108;
     constexpr std::uintptr_t GTA_PED_DENSITY_MULTIPLIER = 0x8D2530;
     constexpr std::uintptr_t GTA_MAX_PEDS_IN_USE = 0x8D2538;
     constexpr std::uintptr_t GTA_CURRENT_STREAMING_ZONE_TYPE = 0x8E4C20;
     constexpr std::uintptr_t GTA_LOADED_PED_MODELS = 0x8E4C00;
+
+    struct SAmbientVehicleNodeAddressSA
+    {
+        unsigned short area;
+        unsigned short node;
+    };
+    static_assert(sizeof(SAmbientVehicleNodeAddressSA) == 4, "Invalid vehicle path-node address size");
+
+    bool GetAmbientVehiclePathNodePosition(const SAmbientVehicleNodeAddressSA& address, CVector& position, bool& waterPath)
+    {
+        constexpr unsigned int PATH_AREA_COUNT = 64;
+        constexpr unsigned int PATH_NODE_ARRAY_OFFSET = 0x804;
+        constexpr unsigned int PATH_VEHICLE_NODE_COUNT_OFFSET = 0x10C4;
+        constexpr unsigned int PATH_NODE_SIZE = 0x1C;
+        constexpr unsigned int PATH_NODE_POSITION_OFFSET = 0x08;
+        constexpr unsigned int PATH_NODE_FLAGS_OFFSET = 0x18;
+
+        if (address.area >= PATH_AREA_COUNT || address.node == 0xFFFF)
+            return false;
+
+        auto* const* nodeAreas = reinterpret_cast<unsigned char* const*>(GTA_PATH_FIND + PATH_NODE_ARRAY_OFFSET);
+        const auto*  vehicleNodeCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_VEHICLE_NODE_COUNT_OFFSET);
+        const auto*  nodeArray = nodeAreas[address.area];
+        if (!nodeArray || address.node >= vehicleNodeCounts[address.area])
+            return false;
+
+        const auto* node = nodeArray + address.node * PATH_NODE_SIZE;
+        const auto* compressedPosition = reinterpret_cast<const short*>(node + PATH_NODE_POSITION_OFFSET);
+        position = CVector(static_cast<float>(compressedPosition[0]) / 8.0f, static_cast<float>(compressedPosition[1]) / 8.0f,
+                           static_cast<float>(compressedPosition[2]) / 8.0f);
+        waterPath = (node[PATH_NODE_FLAGS_OFFSET] & 0x80) != 0;
+        return true;
+    }
     constexpr std::uintptr_t GTA_NAVIGATION_ZONE_ARRAY = 0xBA3798;
     constexpr std::uintptr_t GTA_ZONE_INFO_ARRAY = 0xBA1DF0;
     constexpr std::uintptr_t GTA_CURRENT_POPCYCLE_ZONE = 0xC0BC64;
@@ -2004,6 +2040,107 @@ bool CGameSA::IsAmbientPedSphereVisible(const CVector& position, float radius)
     }
     CVector mutablePosition = position;
     return m_pCamera->IsSphereVisible(&mutablePosition, radius);
+}
+
+EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
+                                                                             SAmbientVehicleSpawnCandidate& candidate)
+{
+    candidate = {};
+    if (!std::isfinite(origin.fX) || !std::isfinite(origin.fY) || !std::isfinite(origin.fZ))
+        return EAmbientVehicleSpawnCandidateResult::InvalidOrigin;
+
+    CModelInfo* const modelInfo = GetModelInfo(modelId);
+    if (!modelInfo || !modelInfo->IsVehicle() || modelInfo->GetVehicleType() != 0)
+        return EAmbientVehicleSpawnCandidateResult::UnsupportedModel;
+
+    float       directionX = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_X);
+    float       directionY = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_Y);
+    const float directionLength = std::sqrt(directionX * directionX + directionY * directionY);
+    if (!std::isfinite(directionLength) || directionLength < 0.001f)
+    {
+        directionX = 0.0f;
+        directionY = 1.0f;
+    }
+    else
+    {
+        directionX /= directionLength;
+        directionY /= directionLength;
+    }
+
+    const float generationMultiplier = *reinterpret_cast<const float*>(GTA_CAMERA_GENERATION_DISTANCE_MULTIPLIER);
+    const float generationBaseDistance = *reinterpret_cast<const float*>(0x858970);
+    if (!std::isfinite(generationMultiplier) || !std::isfinite(generationBaseDistance) || generationMultiplier <= 0.0f || generationBaseDistance <= 0.0f)
+    {
+        return EAmbientVehicleSpawnCandidateResult::InvalidOrigin;
+    }
+
+    CVector                      position{};
+    SAmbientVehicleNodeAddressSA nodeA{};
+    SAmbientVehicleNodeAddressSA nodeB{};
+    float                        pathLerp{};
+    using GenerateCarCreationCoors2 = bool(__cdecl*)(CVector, float, float, float, bool, float, float, CVector*, SAmbientVehicleNodeAddressSA*,
+                                                     SAmbientVehicleNodeAddressSA*, float*, bool, bool);
+    const bool generated = reinterpret_cast<GenerateCarCreationCoors2>(FUNC_GenerateCarCreationCoors2)(
+        origin, directionX, directionY, -1.0f, true, generationMultiplier * generationBaseDistance, 38.0f, &position, &nodeA, &nodeB, &pathLerp, true, false);
+    if (!generated)
+    {
+        // GenerateCarCreationCoors2 keeps two low-traffic and two ordinary
+        // cached starting nodes. Distinguish an empty streamed path area from
+        // a valid graph where no point satisfied the retail visibility gates.
+        constexpr std::uintptr_t CACHED_NODE_ADDRESSES[] = {0x969104, 0x969100, 0x9690FC, 0x9690F8};
+        for (const auto address : CACHED_NODE_ADDRESSES)
+        {
+            CVector cachedPosition{};
+            bool    cachedIsWater{};
+            if (GetAmbientVehiclePathNodePosition(*reinterpret_cast<const SAmbientVehicleNodeAddressSA*>(address), cachedPosition, cachedIsWater))
+                return EAmbientVehicleSpawnCandidateResult::NoPath;
+        }
+        return EAmbientVehicleSpawnCandidateResult::InvalidPathNode;
+    }
+    if (!std::isfinite(position.fX) || !std::isfinite(position.fY) || !std::isfinite(position.fZ) || !std::isfinite(pathLerp) || pathLerp < -0.01f ||
+        pathLerp > 1.01f)
+    {
+        return EAmbientVehicleSpawnCandidateResult::InvalidOutput;
+    }
+
+    CVector pathStart{};
+    CVector pathEnd{};
+    bool    startIsWater{};
+    bool    endIsWater{};
+    if (!GetAmbientVehiclePathNodePosition(nodeA, pathStart, startIsWater) || !GetAmbientVehiclePathNodePosition(nodeB, pathEnd, endIsWater))
+        return EAmbientVehicleSpawnCandidateResult::InvalidPathNode;
+    if (startIsWater || endIsWater)
+        return EAmbientVehicleSpawnCandidateResult::WaterPath;
+
+    const float deltaX = pathEnd.fX - pathStart.fX;
+    const float deltaY = pathEnd.fY - pathStart.fY;
+    if (!std::isfinite(deltaX) || !std::isfinite(deltaY) || deltaX * deltaX + deltaY * deltaY < 0.01f)
+        return EAmbientVehicleSpawnCandidateResult::InvalidPathNode;
+
+    const float pathHeight = pathStart.fZ + (pathEnd.fZ - pathStart.fZ) * pathLerp;
+    bool        hasGround = false;
+    const float groundZ = reinterpret_cast<float(__cdecl*)(float, float, float, bool*, void**)>(FUNC_FindAmbientGroupGroundZ)(
+        position.fX, position.fY, pathHeight + 4.0f, &hasGround, nullptr);
+    const float centreToBase = modelInfo->GetDistanceFromCentreOfMassToBaseOfModel();
+    if (!hasGround || !std::isfinite(pathHeight) || !std::isfinite(groundZ) || !std::isfinite(centreToBase) || centreToBase < 0.0f || centreToBase > 10.0f)
+    {
+        return EAmbientVehicleSpawnCandidateResult::GroundMissing;
+    }
+
+    constexpr float RADIANS_TO_DEGREES = 57.29577951308232f;
+    float           rotation = std::atan2(-deltaX, deltaY) * RADIANS_TO_DEGREES;
+    if (rotation < 0.0f)
+        rotation += 360.0f;
+
+    // Retail resolves the road candidate back to collision ground before
+    // adding the selected model's centre-to-base offset. A fixed lift makes
+    // different cars float or intersect sloped roads and bridge decks.
+    candidate.position = CVector(position.fX, position.fY, groundZ + centreToBase);
+    candidate.rotationDegrees = rotation;
+    candidate.modelId = modelId;
+    candidate.cruiseSpeed = static_cast<float>(13 + rand() % 9);
+    candidate.drivingStyle = 0;
+    return EAmbientVehicleSpawnCandidateResult::Success;
 }
 
 EAmbientPedSpawnCandidateResult CGameSA::GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate)
