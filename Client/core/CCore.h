@@ -144,6 +144,9 @@ public:
     void MarkNativeWorldStartupRefused() override;
     void FailNativeWorldStartupBeforeActive(const std::string& reason) override;
     void TerminateNativeWorldStartup(const std::string& reason) override;
+    bool HasActiveNativeWorldSession() const;
+    bool PrepareNativeWorldContentForUnload(const char* reason, std::string& error);
+    bool PrepareNativeWorldHotSwitchRestart(const in_addr& targetAddress, unsigned short targetPort, std::string& error);
     bool TryReleaseDetachedNativeWorldSessionAfterModUnload();
 
     void SaveConfig(bool bWaitUntilFinished = false);
@@ -478,8 +481,11 @@ private:
     SNativeWorldStartupAuthorization      m_nativeWorldRuntimeAuthorization{};
     SNativeWorldAuthorizationPublication  m_nativeWorldRuntimePublication{};
     SNativeWorldAuthorizationRecordResult m_nativeWorldRuntimeTerminalResult{};
+    bool                                  m_nativeWorldRestartFallbackArmed{};
+    bool                                  m_nativeWorldHarnessRefuseNextDrain{};
 
     bool RevalidateNativeWorldRuntimeCandidate(std::string& error);
+    bool ArmVerifiedNativeWorldRestart(const SString& endpoint, std::string& error);
 
     SNativeWorldAuthorizationRecordResult DescribeNativeWorldStartupProcess() const;
 

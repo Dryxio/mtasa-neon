@@ -17,17 +17,21 @@
 #include "CFileIDRuntimeSA.h"
 #include "CBuildingSA.h"
 #include "CColModelSA.h"
+#include "CCoverManagerSA.h"
 #include "CIplSA.h"
 #include "CModelInfoSA.h"
 #include "CNativeModelStoreSA.h"
 #include "CNativeWorldCacheSA.h"
 #include "CNativeWorldPayloadValidatorSA.h"
 #include "CObjectSA.h"
+#include "CPtrNodeDoubleListSA.h"
+#include "CPtrNodeSingleListSA.h"
 #include "CPtrNodeSingleLinkPoolSA.h"
 #include "CPoolSAInterface.h"
 #include "CQuadTreeNodeSA.h"
 #include "CStreamingSA.h"
 #include "CTextureDictonarySA.h"
+#include "CWorldSectorLimits.h"
 #include "gamesa_renderware.h"
 #include "SharedUtil.File.h"
 #include "SharedUtil.Hash.h"
@@ -73,13 +77,18 @@ namespace
     constexpr DWORD        REMOVE_COL = 0x410730;
     constexpr DWORD        REMOVE_COL_SLOT = 0x411330;
     constexpr DWORD        LOAD_IPL_BUFFER = 0x406080;
+    constexpr DWORD        SET_IPL_DEF = 0x5B2ED0;
+    constexpr DWORD        COL_ACCEL_IPL_CACHE = 0xBC4094;
+    constexpr int          COL_ACCEL_IPL_CACHE_CAPACITY = 256;
     constexpr DWORD        REMOVE_IPL = 0x404B20;
     constexpr DWORD        REMOVE_IPL_SLOT = 0x405B60;
     constexpr DWORD        REMOVE_TXD_SLOT = 0x731CD0;
     constexpr DWORD        LOAD_COL_BUFFER_CALL = 0x40C989;
     constexpr DWORD        LOAD_IPL_BUFFER_CALL = 0x40C9DA;
+    constexpr DWORD        SET_IPL_DEF_CALL = 0x406162;
     constexpr BYTE         LOAD_COL_BUFFER_CALL_BYTES[] = {0xE8, 0x42, 0x3D, 0x00, 0x00};
     constexpr BYTE         LOAD_IPL_BUFFER_CALL_BYTES[] = {0xE8, 0xA1, 0x96, 0xFF, 0xFF};
+    constexpr BYTE         SET_IPL_DEF_CALL_BYTES[] = {0xE8, 0x69, 0xCD, 0x1A, 0x00};
     constexpr DWORD        DELETE_COLLISION_MODEL = 0x4C4C40;
     constexpr DWORD        FATAL_EXIT_CODE = 0x4E425746;  // "NBWF"
     constexpr DWORD        ATOMIC_MODEL_VTABLE = 0x85BBF0;
@@ -460,7 +469,7 @@ namespace
         unsigned int                        atomicUsed{};
         unsigned int                        damageUsed{};
         unsigned int                        timedUsed{};
-        std::array<SNativePoolTelemetry, 6> pools{};
+        std::array<SNativePoolTelemetry, 7> pools{};
         SStreamingLifecycleTelemetrySA      streaming{};
         SNativeWorldCacheLeaseTelemetrySA   cache{};
         const void*                         modelInfoArray{};
@@ -495,10 +504,13 @@ namespace
         // the stock-only fallback at CGameSA::Initialize captures later.
         // Only same-process comparisons against the captured phase are valid.
         bool                                      captured{};
+        std::string                               capturePhase;
+        unsigned int                              capturedGeneration{};
+        std::uint64_t                             capturedAtMs{};
         unsigned int                              atomicUsed{};
         unsigned int                              damageUsed{};
         unsigned int                              timedUsed{};
-        std::array<SNativePoolTelemetry, 6>       pools{};
+        std::array<SNativePoolTelemetry, 7>       pools{};
         std::array<std::vector<unsigned char>, 3> poolFlagSnapshots;
         const void*                               modelInfoArray{};
         const void*                               streamingInfoArray{};
@@ -513,8 +525,10 @@ namespace
     };
 
     SNativeWorldNeutralBaseline g_nativeWorldNeutralBaseline;
+    unsigned int                g_runtimeAdmissionMismatchGeneration = std::numeric_limits<unsigned int>::max();
+    bool                        g_runtimeAdmissionFencePending{};
 
-    constexpr const char* NATIVE_POOL_NAMES[] = {"txd", "col", "ipl", "building", "colModel", "quadTreeNode"};
+    constexpr const char* NATIVE_POOL_NAMES[] = {"txd", "col", "ipl", "building", "colModel", "quadTreeNode", "ptrNodeSingleLink"};
     constexpr DWORD       NATIVE_POOL_POINTERS[] = {0x00C8800C, 0x00965560, 0x008E3FB0, 0x00B74498, 0x00B744A4, 0x00B745BC};
 
     struct SNativePoolHeader
@@ -525,7 +539,20 @@ namespace
         int            firstFree;
     };
 
-    static_assert(std::size(NATIVE_POOL_NAMES) == std::size(NATIVE_POOL_POINTERS), "Native pool telemetry tables differ");
+    static_assert(std::size(NATIVE_POOL_NAMES) == std::size(NATIVE_POOL_POINTERS) + 1, "Native pool telemetry tables differ");
+
+    std::uint64_t HashBaselineBytes(const unsigned char* bytes, size_t size)
+    {
+        constexpr std::uint64_t FNV_OFFSET = 14695981039346656037ULL;
+        constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
+        std::uint64_t           result = FNV_OFFSET;
+        for (size_t index = 0; index < size; ++index)
+        {
+            result ^= bytes[index];
+            result *= FNV_PRIME;
+        }
+        return result;
+    }
 
     const char* StateName(EState state)
     {
@@ -657,8 +684,16 @@ namespace
         if (result.modelStoresInstalled)
             CNativeModelStoreSA::GetUsage(result.atomicUsed, result.damageUsed, result.timedUsed);
 
-        for (size_t index = 0; index < result.pools.size(); ++index)
+        for (size_t index = 0; index < std::size(NATIVE_POOL_POINTERS); ++index)
             result.pools[index] = ReadNativePoolTelemetry(NATIVE_POOL_POINTERS[index]);
+        if (const auto* ptrNodePool = CPtrNodeSingleLinkPoolSA::GetPoolInstance())
+        {
+            SNativePoolTelemetry& ptrNodes = result.pools.back();
+            ptrNodes.valid = true;
+            ptrNodes.objects = ptrNodePool;
+            ptrNodes.capacity = static_cast<int>(ptrNodePool->GetCapacity());
+            ptrNodes.occupied = static_cast<int>(ptrNodePool->GetUsedSize());
+        }
         if (g_streaming)
             result.streaming = g_streaming->GetLifecycleTelemetry();
         result.cache = GetNativeWorldCacheLeaseTelemetry();
@@ -731,18 +766,17 @@ namespace
                                 result.requestedList.nativeArenaNodes == 0;
         if (g_nativeWorldNeutralBaseline.captured && result.modelStoresInstalled)
         {
-            result.admissionBaselineMatches = result.contentNeutral && result.atomicUsed == g_nativeWorldNeutralBaseline.atomicUsed &&
-                                              result.damageUsed == g_nativeWorldNeutralBaseline.damageUsed &&
-                                              result.timedUsed == g_nativeWorldNeutralBaseline.timedUsed &&
-                                              result.modelInfoArray == g_nativeWorldNeutralBaseline.modelInfoArray &&
-                                              result.streamingInfoArray == g_nativeWorldNeutralBaseline.streamingInfoArray &&
-                                              memcmp(&result.fileIdLayout, &g_nativeWorldNeutralBaseline.fileIdLayout, sizeof(result.fileIdLayout)) == 0 &&
-                                              result.txdFindCache == g_nativeWorldNeutralBaseline.txdFindCache &&
-                                              result.streaming.boundArchives == g_nativeWorldNeutralBaseline.boundArchives &&
-                                              result.streaming.openStreamHandles == g_nativeWorldNeutralBaseline.openStreamHandles &&
-                                              result.streaming.archiveStateHash == g_nativeWorldNeutralBaseline.archiveStateHash &&
-                                              result.streaming.streamHandleStateHash == g_nativeWorldNeutralBaseline.streamHandleStateHash &&
-                                              result.modelPointers == g_nativeWorldNeutralBaseline.modelPointers;
+            result.admissionBaselineMatches =
+                result.contentNeutral && result.atomicUsed == g_nativeWorldNeutralBaseline.atomicUsed &&
+                result.damageUsed == g_nativeWorldNeutralBaseline.damageUsed && result.timedUsed == g_nativeWorldNeutralBaseline.timedUsed &&
+                result.modelInfoArray == g_nativeWorldNeutralBaseline.modelInfoArray &&
+                result.streamingInfoArray == g_nativeWorldNeutralBaseline.streamingInfoArray &&
+                memcmp(&result.fileIdLayout, &g_nativeWorldNeutralBaseline.fileIdLayout, sizeof(result.fileIdLayout)) == 0 && result.txdFindCache >= -1 &&
+                result.txdFindCache < result.pools[0].capacity && result.streaming.boundArchives == g_nativeWorldNeutralBaseline.boundArchives &&
+                result.streaming.openStreamHandles == g_nativeWorldNeutralBaseline.openStreamHandles &&
+                result.streaming.archiveStateHash == g_nativeWorldNeutralBaseline.archiveStateHash &&
+                result.streaming.streamHandleStateHash == g_nativeWorldNeutralBaseline.streamHandleStateHash &&
+                result.modelPointers == g_nativeWorldNeutralBaseline.modelPointers;
             for (size_t index = 0; index < 3; ++index)
             {
                 const SNativePoolTelemetry& current = result.pools[index];
@@ -769,6 +803,117 @@ namespace
         for (const SStreamingLifecycleTelemetrySA::SChannel& channel : result.streaming.channels)
             result.ioQuiescent = result.ioQuiescent && channel.state == 0 && channel.modelCount == 0;
         return result;
+    }
+
+    void LogNativeWorldBaselineField(const char* phase, const char* field, const SString& expected, const SString& actual, bool matches)
+    {
+        const unsigned int generation = g_staticWorldV3Generation.load(std::memory_order_acquire);
+        SharedUtil::WriteDebugEvent(
+            SString("[NativeWorldBaseline] phase=%s lifecycle=%s generation=%u timestampMs=%llu capturedPhase=%s capturedGeneration=%u capturedAtMs=%llu "
+                    "field=%s expected=%s actual=%s match=%s",
+                    phase, StateName(g_state), generation, static_cast<unsigned long long>(GetTickCount64_()),
+                    g_nativeWorldNeutralBaseline.capturePhase.empty() ? "unspecified" : g_nativeWorldNeutralBaseline.capturePhase.c_str(),
+                    g_nativeWorldNeutralBaseline.capturedGeneration, static_cast<unsigned long long>(g_nativeWorldNeutralBaseline.capturedAtMs), field,
+                    expected.c_str(), actual.c_str(), matches ? "yes" : "no"));
+    }
+
+    void LogNativeWorldAdmissionBaselineFields(const char* phase, const SNativeWorldLifecycleTelemetry& sample)
+    {
+        if (!g_nativeWorldNeutralBaseline.captured)
+            return;
+
+        const auto logBool = [phase](const char* field, bool expected, bool actual)
+        { LogNativeWorldBaselineField(phase, field, expected ? "yes" : "no", actual ? "yes" : "no", expected == actual); };
+        const auto logUnsigned = [phase](const char* field, unsigned int expected, unsigned int actual)
+        { LogNativeWorldBaselineField(phase, field, SString("%u", expected), SString("%u", actual), expected == actual); };
+        const auto logSize = [phase](const char* field, size_t expected, size_t actual)
+        {
+            LogNativeWorldBaselineField(phase, field, SString("%llu", static_cast<unsigned long long>(expected)),
+                                        SString("%llu", static_cast<unsigned long long>(actual)), expected == actual);
+        };
+        const auto logInt = [phase](const char* field, int expected, int actual)
+        { LogNativeWorldBaselineField(phase, field, SString("%d", expected), SString("%d", actual), expected == actual); };
+        const auto logPointer = [phase](const char* field, const void* expected, const void* actual)
+        { LogNativeWorldBaselineField(phase, field, SString("%p", expected), SString("%p", actual), expected == actual); };
+        const auto logHash = [phase](const char* field, std::uint64_t expected, std::uint64_t actual)
+        {
+            LogNativeWorldBaselineField(phase, field, SString("%016llx", static_cast<unsigned long long>(expected)),
+                                        SString("%016llx", static_cast<unsigned long long>(actual)), expected == actual);
+        };
+
+        logBool("captured", true, g_nativeWorldNeutralBaseline.captured);
+        logBool("contentNeutral", true, sample.contentNeutral);
+        logUnsigned("atomicUsed", g_nativeWorldNeutralBaseline.atomicUsed, sample.atomicUsed);
+        logUnsigned("damageUsed", g_nativeWorldNeutralBaseline.damageUsed, sample.damageUsed);
+        logUnsigned("timedUsed", g_nativeWorldNeutralBaseline.timedUsed, sample.timedUsed);
+        logPointer("modelInfoArray", g_nativeWorldNeutralBaseline.modelInfoArray, sample.modelInfoArray);
+        logPointer("streamingInfoArray", g_nativeWorldNeutralBaseline.streamingInfoArray, sample.streamingInfoArray);
+
+        const SFileIDLayout& expectedLayout = g_nativeWorldNeutralBaseline.fileIdLayout;
+        const SFileIDLayout& actualLayout = sample.fileIdLayout;
+        logUnsigned("fileIdLayout.dff", expectedLayout.dff, actualLayout.dff);
+        logUnsigned("fileIdLayout.txd", expectedLayout.txd, actualLayout.txd);
+        logUnsigned("fileIdLayout.col", expectedLayout.col, actualLayout.col);
+        logUnsigned("fileIdLayout.ipl", expectedLayout.ipl, actualLayout.ipl);
+        logUnsigned("fileIdLayout.dat", expectedLayout.dat, actualLayout.dat);
+        logUnsigned("fileIdLayout.ifp", expectedLayout.ifp, actualLayout.ifp);
+        logUnsigned("fileIdLayout.rrr", expectedLayout.rrr, actualLayout.rrr);
+        logUnsigned("fileIdLayout.scm", expectedLayout.scm, actualLayout.scm);
+        logUnsigned("fileIdLayout.loadedList", expectedLayout.loadedList, actualLayout.loadedList);
+        logUnsigned("fileIdLayout.requestedList", expectedLayout.requestedList, actualLayout.requestedList);
+        logUnsigned("fileIdLayout.total", expectedLayout.total, actualLayout.total);
+        // FindTxdSlot writes its successful result to this address. Preserve
+        // both values for causality, but classify the cursor by range instead
+        // of pretending that a harmless lookup transfers pool ownership.
+        LogNativeWorldBaselineField(phase, "txdFindCache.mutableCursor",
+                                    SString("captured=%d,range=-1..%d", g_nativeWorldNeutralBaseline.txdFindCache, std::max(-1, sample.pools[0].capacity - 1)),
+                                    SString("actual=%d", sample.txdFindCache), sample.txdFindCache >= -1 && sample.txdFindCache < sample.pools[0].capacity);
+        logSize("boundArchives", g_nativeWorldNeutralBaseline.boundArchives, sample.streaming.boundArchives);
+        logSize("openStreamHandles", g_nativeWorldNeutralBaseline.openStreamHandles, sample.streaming.openStreamHandles);
+        logHash("archiveStateHash", g_nativeWorldNeutralBaseline.archiveStateHash, sample.streaming.archiveStateHash);
+        logHash("streamHandleStateHash", g_nativeWorldNeutralBaseline.streamHandleStateHash, sample.streaming.streamHandleStateHash);
+        logUnsigned("modelPointers", g_nativeWorldNeutralBaseline.modelPointers, sample.modelPointers);
+        logUnsigned("streamingEntries", g_nativeWorldNeutralBaseline.streamingEntries, sample.streamingEntries);
+
+        for (size_t index = 0; index < g_nativeWorldNeutralBaseline.pools.size(); ++index)
+        {
+            const SNativePoolTelemetry& expected = g_nativeWorldNeutralBaseline.pools[index];
+            const SNativePoolTelemetry& actual = sample.pools[index];
+            const SString               prefix = SString("pool.%s", NATIVE_POOL_NAMES[index]);
+            logBool(SString("%s.valid", prefix.c_str()), expected.valid, actual.valid);
+            logPointer(SString("%s.objects", prefix.c_str()), expected.objects, actual.objects);
+            logPointer(SString("%s.flags", prefix.c_str()), expected.flags, actual.flags);
+            logInt(SString("%s.capacity", prefix.c_str()), expected.capacity, actual.capacity);
+            logInt(SString("%s.firstFree", prefix.c_str()), expected.firstFree, actual.firstFree);
+            logInt(SString("%s.occupied", prefix.c_str()), expected.occupied, actual.occupied);
+            logInt(SString("%s.highestOccupied", prefix.c_str()), expected.highestOccupied, actual.highestOccupied);
+
+            if (index >= g_nativeWorldNeutralBaseline.poolFlagSnapshots.size())
+                continue;
+            const std::vector<unsigned char>& snapshot = g_nativeWorldNeutralBaseline.poolFlagSnapshots[index];
+            const size_t                      actualSize = actual.valid && actual.capacity > 0 ? static_cast<size_t>(actual.capacity) : 0;
+            const bool                        comparable = actual.flags && snapshot.size() == actualSize;
+            const bool                        flagsMatch = comparable && memcmp(snapshot.data(), actual.flags, actualSize) == 0;
+            size_t                            firstDifference = 0;
+            if (comparable && !flagsMatch)
+            {
+                while (firstDifference < actualSize && snapshot[firstDifference] == actual.flags[firstDifference])
+                    ++firstDifference;
+            }
+            const std::uint64_t expectedHash = HashBaselineBytes(snapshot.data(), snapshot.size());
+            const std::uint64_t actualHash = actual.flags ? HashBaselineBytes(actual.flags, actualSize) : 0;
+            LogNativeWorldBaselineField(
+                phase, SString("%s.flagSnapshot", prefix.c_str()),
+                SString("size=%llu,hash=%016llx", static_cast<unsigned long long>(snapshot.size()), static_cast<unsigned long long>(expectedHash)),
+                SString("size=%llu,hash=%016llx", static_cast<unsigned long long>(actualSize), static_cast<unsigned long long>(actualHash)), flagsMatch);
+            if (comparable && !flagsMatch)
+            {
+                LogNativeWorldBaselineField(phase, SString("%s.firstFlagDifference", prefix.c_str()),
+                                            SString("slot=%llu,value=%u", static_cast<unsigned long long>(firstDifference), snapshot[firstDifference]),
+                                            SString("slot=%llu,value=%u", static_cast<unsigned long long>(firstDifference), actual.flags[firstDifference]),
+                                            false);
+            }
+        }
     }
 
     void LogNativeWorldLifecycleTelemetry(const char* context, const SNativeWorldLifecycleTelemetry& sample)
@@ -824,6 +969,9 @@ namespace
             sample.streaming.memoryUsedBytes, sample.streaming.halfBufferBlocks, sample.streaming.channels[0].state, sample.streaming.channels[0].modelCount,
             sample.streaming.channels[0].sectorCount, sample.streaming.channels[0].cdStreamStatus, sample.streaming.channels[1].state,
             sample.streaming.channels[1].modelCount, sample.streaming.channels[1].sectorCount, sample.streaming.channels[1].cdStreamStatus));
+
+        if (g_nativeWorldNeutralBaseline.captured && !sample.admissionBaselineMatches)
+            LogNativeWorldAdmissionBaselineFields(safeContext, sample);
     }
 
     void CaptureNativeWorldNeutralBaseline(const char* context)
@@ -832,6 +980,9 @@ namespace
         if (!g_nativeWorldNeutralBaseline.captured)
         {
             g_nativeWorldNeutralBaseline.captured = true;
+            g_nativeWorldNeutralBaseline.capturePhase = context && context[0] ? context : "unspecified";
+            g_nativeWorldNeutralBaseline.capturedGeneration = g_staticWorldV3Generation.load(std::memory_order_acquire);
+            g_nativeWorldNeutralBaseline.capturedAtMs = GetTickCount64_();
             g_nativeWorldNeutralBaseline.atomicUsed = sample.atomicUsed;
             g_nativeWorldNeutralBaseline.damageUsed = sample.damageUsed;
             g_nativeWorldNeutralBaseline.timedUsed = sample.timedUsed;
@@ -863,6 +1014,63 @@ namespace
         // evaluates the just-captured state instead of reporting the default
         // not-yet-evaluated result from the first read.
         LogNativeWorldLifecycleTelemetry(context, ReadNativeWorldLifecycleTelemetry());
+    }
+
+    bool NativeWorldAdmissionFoundationMatches(const SNativeWorldLifecycleTelemetry& sample, std::string& error)
+    {
+        if (!g_nativeWorldNeutralBaseline.captured || !sample.modelStoresInstalled || sample.atomicCapacity != 32000 || sample.damageCapacity != 512 ||
+            sample.timedCapacity != 1024)
+        {
+            error = "native-world runtime admission foundation has no valid relocated model stores";
+            return false;
+        }
+        if (sample.modelInfoArray != g_nativeWorldNeutralBaseline.modelInfoArray ||
+            sample.streamingInfoArray != g_nativeWorldNeutralBaseline.streamingInfoArray ||
+            memcmp(&sample.fileIdLayout, &g_nativeWorldNeutralBaseline.fileIdLayout, sizeof(sample.fileIdLayout)) != 0)
+        {
+            error = "native-world runtime admission changed the relocated array or FileID foundation";
+            return false;
+        }
+
+        constexpr int EXPECTED_POOL_CAPACITIES[] = {8000, 512, 1024};
+        for (size_t index = 0; index < std::size(EXPECTED_POOL_CAPACITIES); ++index)
+        {
+            const SNativePoolTelemetry& expected = g_nativeWorldNeutralBaseline.pools[index];
+            const SNativePoolTelemetry& actual = sample.pools[index];
+            if (!expected.valid || !actual.valid || actual.objects != expected.objects || actual.flags != expected.flags ||
+                actual.capacity != expected.capacity || actual.capacity != EXPECTED_POOL_CAPACITIES[index])
+            {
+                error = SString("native-world runtime admission changed the %s pool foundation", NATIVE_POOL_NAMES[index]);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void ReplaceNativeWorldAdmissionBaseline(const SNativeWorldLifecycleTelemetry& sample, const char* context)
+    {
+        SNativeWorldNeutralBaseline nextBaseline;
+        nextBaseline.captured = true;
+        nextBaseline.capturePhase = context && context[0] ? context : "unspecified";
+        nextBaseline.capturedGeneration = g_staticWorldV3Generation.load(std::memory_order_acquire);
+        nextBaseline.capturedAtMs = GetTickCount64_();
+        nextBaseline.atomicUsed = sample.atomicUsed;
+        nextBaseline.damageUsed = sample.damageUsed;
+        nextBaseline.timedUsed = sample.timedUsed;
+        nextBaseline.pools = sample.pools;
+        for (size_t index = 0; index < nextBaseline.poolFlagSnapshots.size(); ++index)
+            nextBaseline.poolFlagSnapshots[index].assign(sample.pools[index].flags, sample.pools[index].flags + sample.pools[index].capacity);
+        nextBaseline.modelInfoArray = sample.modelInfoArray;
+        nextBaseline.streamingInfoArray = sample.streamingInfoArray;
+        nextBaseline.fileIdLayout = sample.fileIdLayout;
+        nextBaseline.txdFindCache = sample.txdFindCache;
+        nextBaseline.boundArchives = sample.streaming.boundArchives;
+        nextBaseline.openStreamHandles = sample.streaming.openStreamHandles;
+        nextBaseline.archiveStateHash = sample.streaming.archiveStateHash;
+        nextBaseline.streamHandleStateHash = sample.streaming.streamHandleStateHash;
+        nextBaseline.modelPointers = sample.modelPointers;
+        nextBaseline.streamingEntries = sample.streamingEntries;
+        g_nativeWorldNeutralBaseline = std::move(nextBaseline);
     }
 
     const SNativeWorldPackDescriptorSA& Pack()
@@ -3638,6 +3846,15 @@ namespace
 
     struct SStaticWorldV3CommittedGeneration
     {
+        struct SForeignColSpatialOwnership
+        {
+            unsigned int slot{};
+            CRect        originalRect;
+            CRect        installedRect;
+            unsigned int originalTreeOccurrences{};
+            unsigned int installedTreeOccurrences{};
+        };
+
         unsigned int                                           generation{};
         SNativeModelStoreTailSnapshotSA                        modelStoreTail;
         int                                                    txdFirstFreeBefore{};
@@ -3650,6 +3867,7 @@ namespace
         std::vector<SStreamingArchiveOwnershipSA>              archives;
         std::vector<SStaticWorldV3StreamingBinding>            bindings;
         std::vector<SStaticWorldV3ModelOwnership>              models;
+        std::vector<SForeignColSpatialOwnership>               foreignColSpatial;
         std::vector<CNativeWorldCacheCommittedLeaseSA>         cacheLeases;
         std::vector<RwTexDictionary*>                          loadedTxdDictionaries;
     };
@@ -3664,6 +3882,7 @@ namespace
     void __cdecl              LoadCdDirectoryHook();
     bool __cdecl              LoadStaticWorldV3ColBuffer(int slot, BYTE* data, int size);
     bool __cdecl              LoadStaticWorldV3IplBuffer(int slot, char* data, int size);
+    void __cdecl              CacheStaticWorldV3IplDef(int slot, CIplSAInterface definition);
     void __cdecl              CompleteStaticWorldV3BoundingBootstrap();
     bool                      NormalizeStaticWorldV3RenderWareTxdGlobals(std::string& error);
 
@@ -3706,13 +3925,15 @@ namespace
             const char*               name;
         };
 
-        std::array<SHook, 4> hooks = {
+        std::array<SHook, 5> hooks = {
             {{LOAD_CD_DIRECTORY_CALL, LOAD_CD_DIRECTORY_CALL_BYTES, sizeof(LOAD_CD_DIRECTORY_CALL_BYTES), 0xE8, reinterpret_cast<DWORD>(&LoadCdDirectoryHook),
               installLoadCd, true, ENativeWorldHookSealState::Foreign, "LoadCdDirectory"},
              {LOAD_COL_BUFFER_CALL, LOAD_COL_BUFFER_CALL_BYTES, sizeof(LOAD_COL_BUFFER_CALL_BYTES), 0xE8, reinterpret_cast<DWORD>(&LoadStaticWorldV3ColBuffer),
               installStreamingHooks, true, ENativeWorldHookSealState::Foreign, "LoadColBuffer"},
              {LOAD_IPL_BUFFER_CALL, LOAD_IPL_BUFFER_CALL_BYTES, sizeof(LOAD_IPL_BUFFER_CALL_BYTES), 0xE8, reinterpret_cast<DWORD>(&LoadStaticWorldV3IplBuffer),
               installStreamingHooks, true, ENativeWorldHookSealState::Foreign, "LoadIplBuffer"},
+             {SET_IPL_DEF_CALL, SET_IPL_DEF_CALL_BYTES, sizeof(SET_IPL_DEF_CALL_BYTES), 0xE8, reinterpret_cast<DWORD>(&CacheStaticWorldV3IplDef),
+              installStreamingHooks, true, ENativeWorldHookSealState::Foreign, "CacheIplDef"},
              {REMOVE_ALL_COLLISION_TAIL, REMOVE_ALL_COLLISION_TAIL_BYTES, sizeof(REMOVE_ALL_COLLISION_TAIL_BYTES), 0xE9,
               reinterpret_cast<DWORD>(&CompleteStaticWorldV3BoundingBootstrap), installStreamingHooks, false, ENativeWorldHookSealState::Foreign,
               "LoadLevelBoundingTail"}}};
@@ -4188,6 +4409,26 @@ namespace
             g_staticWorldV3Generation.load(std::memory_order_acquire), activePack.identity.packId.c_str(), activePack.activeBank,
             activePack.inventory.lodAnchorCount, activePack.inventory.lodLinkCount, activePack.inventory.lodAnchorCount + activePack.inventory.lodLinkCount,
             IPL_ENTITY_SCRATCH_CAPACITY, missingAnchorColTransfers);
+    }
+
+    void __cdecl CacheStaticWorldV3IplDef(int slot, CIplSAInterface definition)
+    {
+        // CColAccel::endCache releases GTA's fixed 256-entry CINFO IPL array
+        // after startup, and its ABI has exactly 256 entries even when the IPL
+        // pool has been enlarged. Never delegate an absent or out-of-range
+        // cache write to retail, regardless of lifecycle timing. The owner map
+        // is published before the irreversible registrar barrier, so it also
+        // protects relocated generation slots during startup and teardown
+        // edges where the broader route predicate may already have changed.
+        const bool cacheAvailable = *reinterpret_cast<void**>(COL_ACCEL_IPL_CACHE) != nullptr;
+        const bool owned = slot >= 0 && g_staticWorldV3IplOwners.find(static_cast<unsigned int>(slot)) != g_staticWorldV3IplOwners.end();
+        if (!cacheAvailable || slot < 0 || slot >= COL_ACCEL_IPL_CACHE_CAPACITY || owned)
+            return;
+
+        // Stock slots inside the live startup cache retain the exact retail
+        // snapshot path. LoadIpl has already updated the live IplDef in every
+        // skipped branch above; this call only writes CINFO's disk-cache copy.
+        reinterpret_cast<void(__cdecl*)(int, CIplSAInterface)>(SET_IPL_DEF)(slot, definition);
     }
 
     bool __cdecl LoadStaticWorldV3ColBuffer(int slot, BYTE* data, int size)
@@ -4790,6 +5031,16 @@ namespace
                     error = SString("static-world-v3 COL allocation drifted name=%s expected=%d actual=%d", col.c_str(), predicted, slot);
                     return false;
                 }
+                // GTA's pool free operation deliberately leaves object bytes
+                // intact. On a later generation AddColSlot can therefore
+                // inherit the retired owner's model range, causing LoadCol to
+                // classify the new slot as an incremental reload and skip the
+                // first-load bounding-box pass. Establish the retail
+                // uninitialized range while this transaction owns the slot;
+                // the native parser replaces it with the admitted COL range.
+                SColDef* const definition = colPool->GetObject(slot);
+                definition->firstModel = std::numeric_limits<short>::max();
+                definition->lastModel = std::numeric_limits<short>::min();
                 journal.cols.back().installedFlag = reinterpret_cast<unsigned char*>(colPool->m_byteMap)[slot];
                 pack.colSlots.emplace(col, static_cast<unsigned int>(slot));
                 g_staticWorldV3ColOwners.emplace(static_cast<unsigned int>(slot), &pack - g_staticWorldV3Packs.data());
@@ -5330,6 +5581,13 @@ namespace
 
     void DeactivateStaticWorldV3Pack()
     {
+        // CCover retains raw Building pointers independently of the IPL and
+        // pool ownership tables. Aggregate bounding can leave no city bank
+        // active while those pointers still refer to temporary native-model
+        // entities, so this fence must not be hidden behind activePack >= 0.
+        // Purge while every ModelInfo is still valid: CCover::Update calls
+        // GetBoundRect before it has any opportunity to validate the pointer.
+        pGame->GetCoverManager()->RemoveAllCovers();
         if (g_staticWorldV3ActivePack < 0)
             return;
         std::string txdError;
@@ -5343,12 +5601,6 @@ namespace
 
         for (const auto& [name, slot] : pack.iplSlots)
             enableDynamicStreaming(slot, false);
-
-        // Retail CCover keeps raw building pointers in its processed list.
-        // Purge that cache while the outgoing entities and their bank-owned
-        // ModelInfos are still valid; otherwise the next CCover::Update can
-        // dereference a destroyed IPL entity after the bank has been cleared.
-        reinterpret_cast<void(__cdecl*)()>(COVER_INIT)();
 
         for (const auto& [name, slot] : pack.iplSlots)
         {
@@ -5954,9 +6206,78 @@ namespace
         return -1;
     }
 
-    void __cdecl CompleteStaticWorldV3BoundingBootstrap()
+    unsigned int PurgeReleasedStaticWorldV3SectorEntries()
     {
-        reinterpret_cast<void(__cdecl*)()>(REMOVE_ALL_COLLISION)();
+        auto*     buildingPool = *reinterpret_cast<CPoolSAInterface<CBuildingSAInterface>**>(0xB74498);
+        auto*     dummyPool = *reinterpret_cast<CPoolSAInterface<CEntitySAInterface>**>(0xB744A0);
+        auto*     sectorDwords = reinterpret_cast<DWORD*>(GetActiveWorldSectorArray());
+        const int sectorCount = GetActiveWorldSectorCount();
+        if (!buildingPool || !buildingPool->m_pObjects || !buildingPool->m_byteMap || !dummyPool || !dummyPool->m_pObjects || !dummyPool->m_byteMap ||
+            !sectorDwords || sectorCount <= 0)
+            Fatal("static-world-v3 bounding cleanup has no world-sector or entity-pool foundation");
+
+        const auto classify = [](const auto* pool, const CEntitySAInterface* entity, int& slot)
+        {
+            using TPool = std::remove_pointer_t<decltype(pool)>;
+            using TObject = std::remove_pointer_t<decltype(pool->m_pObjects)>;
+            const auto begin = reinterpret_cast<std::uintptr_t>(pool->m_pObjects);
+            const auto address = reinterpret_cast<std::uintptr_t>(entity);
+            const auto stride = static_cast<std::uintptr_t>(PoolAllocStride<TObject>::value);
+            const auto bytes = static_cast<std::uintptr_t>(pool->m_nSize) * stride;
+            if (address < begin || address >= begin + bytes || (address - begin) % stride != 0)
+                return false;
+            slot = static_cast<int>((address - begin) / stride);
+            return true;
+        };
+        const auto isNativeModel = [](const CEntitySAInterface* entity)
+        { return entity->m_nModelIndex >= STATIC_WORLD_V3_FIRST_CUSTOM_MODEL && entity->m_nModelIndex <= STATIC_WORLD_V3_LAST_MODEL; };
+
+        unsigned int purged = 0;
+        for (int sector = 0; sector < sectorCount; ++sector)
+        {
+            auto* buildingList = reinterpret_cast<CPtrNodeSingleListSAInterface<CEntitySAInterface>*>(&sectorDwords[sector * 2]);
+            auto* buildingNode = *reinterpret_cast<CPtrNodeSingleLink<CEntitySAInterface>**>(&sectorDwords[sector * 2]);
+            while (buildingNode)
+            {
+                CPtrNodeSingleLink<CEntitySAInterface>* next = buildingNode->pNext;
+                CEntitySAInterface*                     entity = buildingNode->pItem;
+                int                                     slot = -1;
+                if (entity && classify(buildingPool, entity, slot) && isNativeModel(entity))
+                {
+                    if (buildingPool->IsContains(slot))
+                        Fatal("static-world-v3 bounding cleanup found a live native building after IPL removal");
+                    Log("boundingBootstrap=stale-sector-first pool=building sector=%d slot=%d model=%u action=purge", sector, slot, entity->m_nModelIndex);
+                    buildingList->RemoveItem(entity);
+                    ++purged;
+                }
+                buildingNode = next;
+            }
+
+            auto* dummyList = reinterpret_cast<CPtrNodeDoubleListSAInterface<CEntitySAInterface>*>(&sectorDwords[sector * 2 + 1]);
+            CPtrNodeDoubleLink<CEntitySAInterface>* dummyNode = dummyList->m_pNode;
+            while (dummyNode)
+            {
+                CPtrNodeDoubleLink<CEntitySAInterface>* next = dummyNode->pNext;
+                CEntitySAInterface*                     entity = dummyNode->pItem;
+                int                                     slot = -1;
+                if (entity && classify(dummyPool, entity, slot) && isNativeModel(entity))
+                {
+                    if (dummyPool->IsContains(slot))
+                        Fatal("static-world-v3 bounding cleanup found a live native dummy after IPL removal");
+                    Log("boundingBootstrap=stale-sector-first pool=dummy sector=%d slot=%d model=%u action=purge", sector, slot, entity->m_nModelIndex);
+                    dummyList->RemoveItem(entity);
+                    ++purged;
+                }
+                dummyNode = next;
+            }
+        }
+        return purged;
+    }
+
+    void CompleteStaticWorldV3BoundingBootstrapInternal(bool removeAllCollision)
+    {
+        if (removeAllCollision)
+            reinterpret_cast<void(__cdecl*)()>(REMOVE_ALL_COLLISION)();
         // This hook is a process foundation. Once a generation is detached it
         // must behave exactly like stock even though the monotonic generation
         // epoch intentionally remains non-zero for stale-work detection.
@@ -5964,6 +6285,22 @@ namespace
             return;
         if (g_staticWorldV3BootstrapBoundsComplete)
             Fatal("static-world-v3 aggregate bounding bootstrap ran more than once");
+
+        // CWorld::Remove derives the sector rectangle from the entity's
+        // ColModel. The one-shot bounding pass deliberately unloads collision
+        // before removing its temporary IPL entities, so retail can free a
+        // pool slot while leaving its sector-list node behind. Purge only
+        // released native-model slots while their canonical ModelInfos still
+        // exist; clearing those pointers first turns the stale node into an
+        // unavoidable GetBoundRect crash on a later gameplay frame. Startup
+        // has no dynamic covers yet, so retail Init is the only safe way to
+        // flush pointers whose entities have already been destroyed. Runtime
+        // performs reference-aware cleanup before every IPL removal below.
+        if (removeAllCollision)
+            reinterpret_cast<void(__cdecl*)()>(COVER_INIT)();
+        else if (*reinterpret_cast<void**>(0xC1A2B8) != nullptr)
+            Fatal("static-world-v3 runtime bounding cleanup retained a CCover building pointer");
+        const unsigned int purgedSectorEntries = PurgeReleasedStaticWorldV3SectorEntries();
 
         unsigned int cleared = 0;
         for (SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
@@ -5980,9 +6317,16 @@ namespace
             pack.spatialReady = true;
         }
         g_staticWorldV3BootstrapBoundsComplete = true;
-        Log("bootstrap=spatial-ready generation=%u catalogModels=%u canonicalPointersCleared=%u banks=2x4096 active=none "
+        Log("bootstrap=spatial-ready generation=%u catalogModels=%u canonicalPointersCleared=%u staleSectorEntriesPurged=%u banks=2x4096 active=none "
             "clothesNamespaceOverlap=cleared-before-gameplay",
-            g_staticWorldV3Generation.load(std::memory_order_acquire), cleared, cleared);
+            g_staticWorldV3Generation.load(std::memory_order_acquire), cleared, cleared, purgedSectorEntries);
+    }
+
+    void __cdecl CompleteStaticWorldV3BoundingBootstrap()
+    {
+        // This wrapper is the retained tail of GTA's startup LoadLevel path,
+        // where the preceding global COL pass must keep its retail cleanup.
+        CompleteStaticWorldV3BoundingBootstrapInternal(true);
     }
 
     void BootstrapStaticWorldV3SpatialBoundsAtRuntime()
@@ -5997,9 +6341,17 @@ namespace
         if (!colPool || !iplPool || !colTree || !iplTree)
             Fatal("static-world-v3 runtime spatial bootstrap has no native pool or quadtree foundation");
 
+        // The reconnecting stock session can release a Building after CCover
+        // cached its raw address. Clear that non-owning cache immediately
+        // before the IPL bounding replay can reuse the same pool slot for a
+        // native logical model. A second fence at bootstrap completion covers
+        // any future loader path that might publish cover work synchronously.
+        pGame->GetCoverManager()->RemoveAllCovers();
+
         // Startup obtains these bounds from the one-shot LoadLevel sequence.
-        // A later admission must replay only generation-owned records: the
-        // retail global post-process would insert every stock ColDef twice.
+        // Reproduce its request/load/remove lifecycle only for the committed
+        // generation: the retail LoadAllCollision helper scans every occupied
+        // slot and would mutate unrelated stock/resource streaming state.
         for (const auto& record : g_staticWorldV3CommittedGeneration->cols)
         {
             SColDef* def = colPool->GetObject(record.slot);
@@ -6008,14 +6360,51 @@ namespace
             const unsigned int fileId = pGame->GetBaseIDforCOL() + record.slot;
             g_streaming->RequestModel(fileId, 0);
             g_streaming->LoadAllRequestedModels(false, "NativeWorldRuntimeColBounds");
-            if (def->rect.left > def->rect.right)
-                Fatal("static-world-v3 runtime COL bounding replay left a flipped rectangle");
             g_streaming->RemoveModel(fileId);
             const CStreamingInfo* info = g_streaming->GetStreamingInfo(fileId);
             if (!info || info->flg != 0 || info->loadState != eModelLoadState::LOADSTATE_NOT_LOADED || info->prevId != 0xFFFF || info->nextId != 0xFFFF)
                 Fatal("static-world-v3 runtime COL bounding replay left non-retail lifecycle flags");
         }
 
+        // Binary IPL parsing also restricts the ColDef rectangle of stock
+        // models referenced by a native-world placement. Remove just those
+        // candidates from their old leaves before the synchronous parser,
+        // then journal and reindex every rectangle it actually changes.
+        struct SForeignColRectSnapshot
+        {
+            unsigned int slot{};
+            CRect        rect;
+            unsigned int treeOccurrences{};
+        };
+        std::set<unsigned int> foreignColCandidates;
+        for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
+            for (const auto& instances : pack.inventory.iplInstances)
+                for (const SBinaryIplInstance& instance : instances)
+                {
+                    if (instance.modelId < 0 || static_cast<unsigned int>(instance.modelId) > STATIC_WORLD_V3_LAST_STOCK_MODEL)
+                        continue;
+                    CBaseModelInfoSAInterface* model = CModelInfoSAInterface::ms_modelInfoPtrs[instance.modelId];
+                    const int                  colSlot = model && model->pColModel ? CFileIDRuntimeSA::GetColModelSlot(model->pColModel) : -1;
+                    if (colSlot > 0 && colPool->IsContains(colSlot) &&
+                        g_staticWorldV3ColOwners.find(static_cast<unsigned int>(colSlot)) == g_staticWorldV3ColOwners.end())
+                        foreignColCandidates.emplace(static_cast<unsigned int>(colSlot));
+                }
+        const auto                           deleteTreeItem = reinterpret_cast<void(__thiscall*)(CQuadTreeNodesSAInterface<SColDef>*, SColDef*)>(0x552A40);
+        std::vector<SForeignColRectSnapshot> foreignColRects;
+        foreignColRects.reserve(foreignColCandidates.size());
+        for (unsigned int slot : foreignColCandidates)
+        {
+            SColDef*           def = colPool->GetObject(slot);
+            const unsigned int occurrences = colTree->CountItemOccurrences(def);
+            foreignColRects.push_back({slot, def->rect, occurrences});
+            if (occurrences)
+            {
+                deleteTreeItem(colTree, def);
+                if (colTree->CountItemOccurrences(def) != 0)
+                    Fatal("static-world-v3 foreign COL retained duplicate quadtree ownership before bounding replay");
+            }
+        }
+        bool loggedForeignColMutation = false;
         for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
             for (const auto& [name, slot] : pack.iplSlots)
             {
@@ -6025,17 +6414,99 @@ namespace
                 const unsigned int fileId = pGame->GetBaseIDforIPL() + slot;
                 g_streaming->RequestModel(fileId, 0x18);
                 g_streaming->LoadAllRequestedModels(true, "NativeWorldRuntimeIplBounds");
-                if (def->rect.left > def->rect.right || iplTree->CountItemOccurrences(def) != 1)
-                    Fatal("static-world-v3 runtime IPL bounding replay failed its exact quadtree postcondition");
+                if (!loggedForeignColMutation)
+                    for (const SForeignColRectSnapshot& foreign : foreignColRects)
+                    {
+                        const SColDef* actual = colPool->GetObject(foreign.slot);
+                        if (actual && memcmp(&actual->rect, &foreign.rect, sizeof(foreign.rect)) != 0)
+                        {
+                            Log("runtimeBootstrap=foreign-col-first-mutation ipl=%s iplSlot=%u colSlot=%u "
+                                "expectedRectBits=%08X,%08X,%08X,%08X actualRectBits=%08X,%08X,%08X,%08X reindex=pending",
+                                name.c_str(), slot, foreign.slot, reinterpret_cast<const DWORD*>(&foreign.rect)[0],
+                                reinterpret_cast<const DWORD*>(&foreign.rect)[1], reinterpret_cast<const DWORD*>(&foreign.rect)[2],
+                                reinterpret_cast<const DWORD*>(&foreign.rect)[3], reinterpret_cast<const DWORD*>(&actual->rect)[0],
+                                reinterpret_cast<const DWORD*>(&actual->rect)[1], reinterpret_cast<const DWORD*>(&actual->rect)[2],
+                                reinterpret_cast<const DWORD*>(&actual->rect)[3]);
+                            loggedForeignColMutation = true;
+                            break;
+                        }
+                    }
+                // CCover registers raw Building pointers and CReference nodes.
+                // Remove both while this IPL's temporary entities and their
+                // ModelInfos are still alive; retail Init only flushes the raw
+                // list and would leak the registered references over cycles.
+                pGame->GetCoverManager()->RemoveAllCovers();
+                // A rectangle spanning quadrants is intentionally present in
+                // several quadtree leaves; ownership requires non-zero reach,
+                // not a single physical list node.
+                const unsigned int treeOccurrences = iplTree->CountItemOccurrences(def);
+                if (def->rect.left > def->rect.right || treeOccurrences == 0)
+                    Fatal(SString("static-world-v3 runtime IPL bounding replay failed slot=%u name=%s rectBits=%08X,%08X,%08X,%08X treeOccurrences=%u "
+                                  "expectedRect=non-flipped expectedTreeOccurrences=>0",
+                                  slot, name.c_str(), reinterpret_cast<const DWORD*>(&def->rect)[0], reinterpret_cast<const DWORD*>(&def->rect)[1],
+                                  reinterpret_cast<const DWORD*>(&def->rect)[2], reinterpret_cast<const DWORD*>(&def->rect)[3], treeOccurrences)
+                              .c_str());
                 g_streaming->RemoveModel(fileId);
                 const CStreamingInfo* info = g_streaming->GetStreamingInfo(fileId);
                 if (!info || info->flg != 0x08 || info->loadState != eModelLoadState::LOADSTATE_NOT_LOADED || info->prevId != 0xFFFF || info->nextId != 0xFFFF)
                     Fatal("static-world-v3 runtime IPL bounding replay left non-retail lifecycle flags");
             }
 
+        if (!g_staticWorldV3CommittedGeneration->foreignColSpatial.empty())
+            Fatal("static-world-v3 runtime admission reused a foreign COL spatial journal");
+        for (const SForeignColRectSnapshot& foreign : foreignColRects)
+        {
+            SColDef* actual = colPool->GetObject(foreign.slot);
+            if (!actual)
+                Fatal("static-world-v3 foreign COL candidate disappeared during bounding replay");
+            if (memcmp(&actual->rect, &foreign.rect, sizeof(foreign.rect)) != 0)
+            {
+                // The stock rectangle already includes retail's 120-unit
+                // streaming margin. Only pad an edge that the native IPL
+                // replay extended beyond that original margin; padding every
+                // edge again would grow the rectangle on every hot switch.
+                if (actual->rect.left < foreign.rect.left)
+                    actual->rect.left -= 120.0f;
+                if (actual->rect.right > foreign.rect.right)
+                    actual->rect.right += 120.0f;
+                if (actual->rect.top < foreign.rect.top)
+                    actual->rect.top -= 120.0f;
+                if (actual->rect.bottom > foreign.rect.bottom)
+                    actual->rect.bottom += 120.0f;
+                colTree->AddItem(actual, &actual->rect);
+                const unsigned int installedOccurrences = colTree->CountItemOccurrences(actual);
+                if (actual->rect.left > actual->rect.right || installedOccurrences == 0)
+                    Fatal("static-world-v3 mutated foreign COL failed generation-owned reindex");
+                g_staticWorldV3CommittedGeneration->foreignColSpatial.push_back(
+                    {foreign.slot, foreign.rect, actual->rect, foreign.treeOccurrences, installedOccurrences});
+            }
+            else if (foreign.treeOccurrences)
+            {
+                colTree->AddItem(actual, &actual->rect);
+                if (colTree->CountItemOccurrences(actual) != foreign.treeOccurrences)
+                    Fatal("static-world-v3 unchanged foreign COL failed exact quadtree restore after bounding replay");
+            }
+        }
+        if (!g_staticWorldV3CommittedGeneration->foreignColSpatial.empty())
+            Log("runtimeBootstrap=foreign-col-journaled count=%u quadtreeMembership=generation-expanded",
+                static_cast<unsigned int>(g_staticWorldV3CommittedGeneration->foreignColSpatial.size()));
+
         for (const auto& record : g_staticWorldV3CommittedGeneration->cols)
         {
             SColDef* def = colPool->GetObject(record.slot);
+            // The COL first-load pass establishes model ranges and temporary
+            // ColModels. GTA derives each ColDef's 2D area later while IPL
+            // instances are parsed, so validate it only after the complete
+            // generation-owned IPL replay, matching retail LoadLevel order.
+            if (def->rect.left > def->rect.right)
+            {
+                // Retail leaves COL definitions unindexed when none of their
+                // models contributed a placed entity. Preserve that flipped
+                // rectangle instead of inventing a world-wide spatial owner.
+                if (colTree->CountItemOccurrences(def) != 0)
+                    Fatal("static-world-v3 unreferenced COL unexpectedly reached the quadtree");
+                continue;
+            }
             // Retail CColStore expands loaded bounds by 120 units before
             // indexing them. MTA's CRect intentionally has no Resize helper,
             // so spell out the same min/max operation here.
@@ -6044,11 +6515,15 @@ namespace
             def->rect.top -= 120.0f;
             def->rect.bottom += 120.0f;
             colTree->AddItem(def, &def->rect);
-            if (colTree->CountItemOccurrences(def) != 1)
-                Fatal("static-world-v3 runtime COL bounding replay failed its exact quadtree postcondition");
+            // GTA's quadtree stores one pointer in every covered leaf, so a
+            // wide rectangle legitimately has multiple occurrences.
+            if (colTree->CountItemOccurrences(def) == 0)
+                Fatal("static-world-v3 runtime COL bounding replay has no quadtree ownership");
         }
 
-        CompleteStaticWorldV3BoundingBootstrap();
+        // Runtime replay already used an owned-only COL lifecycle. A global
+        // RemoveAllCollision here would unload unrelated stock/resource slots.
+        CompleteStaticWorldV3BoundingBootstrapInternal(false);
         if (!g_staticWorldV3BootstrapBoundsComplete)
             Fatal("static-world-v3 runtime spatial bootstrap did not collapse the canonical catalog mapping");
         for (const SStaticWorldV3RuntimePack& pack : g_staticWorldV3Packs)
@@ -7610,9 +8085,6 @@ bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
                             reinterpret_cast<const unsigned char*>(colPool->m_byteMap) + colPool->m_nSize);
     livePoolFlags[2].assign(reinterpret_cast<const unsigned char*>(iplPool->m_byteMap),
                             reinterpret_cast<const unsigned char*>(iplPool->m_byteMap) + iplPool->m_nSize);
-    const int                            liveTxdFirstFree = txdPool->m_nFirstFree;
-    const int                            liveColFirstFree = colPool->m_nFirstFree;
-    const int                            liveIplFirstFree = iplPool->m_nFirstFree;
     const int                            liveTxdFindCache = *reinterpret_cast<const int*>(TXD_FIND_CACHE);
     const SStreamingLifecycleTelemetrySA liveStreaming = g_streaming->GetLifecycleTelemetry();
     const size_t                         ownedArchiveCount = g_staticWorldV3CommittedGeneration->archives.size();
@@ -7632,6 +8104,17 @@ bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
         ownedColSlots.emplace(record.slot);
     for (const auto& record : g_staticWorldV3CommittedGeneration->ipls)
         ownedIplSlots.emplace(record.slot);
+
+    for (const auto& record : g_staticWorldV3CommittedGeneration->foreignColSpatial)
+    {
+        const SColDef* object = colPool->GetObject(record.slot);
+        if (!object || memcmp(&object->rect, &record.installedRect, sizeof(record.installedRect)) != 0 ||
+            colTree->CountItemOccurrences(object) != record.installedTreeOccurrences)
+        {
+            Log("teardown=refused reason=foreign-col-spatial-ownership-drift slot=%u", record.slot);
+            return false;
+        }
+    }
 
     if (!RestoreStaticWorldV3StreamingBindings(error))
     {
@@ -7656,6 +8139,21 @@ bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
         removeIplSlot(static_cast<int>(record->slot));
         if (iplPool->IsContains(record->slot) || iplTree->CountItemOccurrences(object) != 0)
             Fatal("static-world-v3 IPL slot or quadtree item survived destructive teardown");
+    }
+
+    const auto deleteColTreeItem = reinterpret_cast<void(__thiscall*)(CQuadTreeNodesSAInterface<SColDef>*, SColDef*)>(0x552A40);
+    for (const auto& record : g_staticWorldV3CommittedGeneration->foreignColSpatial)
+    {
+        SColDef* object = colPool->GetObject(record.slot);
+        deleteColTreeItem(colTree, object);
+        if (colTree->CountItemOccurrences(object) != 0)
+            Fatal("static-world-v3 foreign COL retained duplicate quadtree ownership during teardown");
+        object->rect = record.originalRect;
+        if (record.originalTreeOccurrences)
+            colTree->AddItem(object, &object->rect);
+        const unsigned int restoredOccurrences = colTree->CountItemOccurrences(object);
+        if (memcmp(&object->rect, &record.originalRect, sizeof(record.originalRect)) != 0 || restoredOccurrences != record.originalTreeOccurrences)
+            Fatal("static-world-v3 foreign COL spatial ownership failed exact teardown restore");
     }
 
     if (!CNativeModelStoreSA::ShutdownAndRewindOwnedTail(g_staticWorldV3CommittedGeneration->modelStoreTail, error))
@@ -7708,9 +8206,13 @@ bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
         *iplPool->GetObject(record.slot) = record.object;
         reinterpret_cast<unsigned char*>(iplPool->m_byteMap)[record.slot] = record.flag;
     }
-    txdPool->m_nFirstFree = liveTxdFirstFree;
-    colPool->m_nFirstFree = liveColFirstFree;
-    iplPool->m_nFirstFree = liveIplFirstFree;
+    // GetFreeSlot advances this scan cursor for every generation-owned
+    // allocation. It is allocator state, not an ownership high-water mark:
+    // restore the exact admission value instead of promoting a native drift
+    // into the next baseline on every hot switch.
+    txdPool->m_nFirstFree = g_staticWorldV3CommittedGeneration->txdFirstFreeBefore;
+    colPool->m_nFirstFree = g_staticWorldV3CommittedGeneration->colFirstFreeBefore;
+    iplPool->m_nFirstFree = g_staticWorldV3CommittedGeneration->iplFirstFreeBefore;
     *reinterpret_cast<int*>(TXD_FIND_CACHE) =
         ownedTxdSlots.count(static_cast<unsigned int>(liveTxdFindCache)) ? g_staticWorldV3CommittedGeneration->txdFindCacheBefore : liveTxdFindCache;
 
@@ -7786,6 +8288,9 @@ bool CNativeWorldPackManagerSA::TeardownRuntimeContent()
     // the next admission fence. Session-neutral recapture is a later gate.
     g_nativeWorldNeutralBaseline.modelPointers = detached.modelPointers;
     g_nativeWorldNeutralBaseline.streamingEntries = detached.streamingEntries;
+    g_nativeWorldNeutralBaseline.capturePhase = "teardown-detached-foundation";
+    g_nativeWorldNeutralBaseline.capturedGeneration = g_staticWorldV3Generation.load(std::memory_order_acquire);
+    g_nativeWorldNeutralBaseline.capturedAtMs = GetTickCount64_();
     for (size_t index = 0; index < 3; ++index)
     {
         g_nativeWorldNeutralBaseline.pools[index] = detached.pools[index];
@@ -7816,10 +8321,53 @@ ENativeWorldRuntimeAdmissionReadiness CNativeWorldPackManagerSA::GetRuntimeAdmis
     std::string lodError;
     if (!ValidateRetainedStaticWorldV3LodFoundation(lodError))
         return ENativeWorldRuntimeAdmissionReadiness::Ineligible;
-    const SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
-    if (!sample.contentNeutral || !sample.sessionNeutral || !sample.admissionBaselineMatches || !sample.modelStoresInstalled)
+    SNativeWorldLifecycleTelemetry sample = ReadNativeWorldLifecycleTelemetry();
+    if (!sample.contentNeutral || !sample.sessionNeutral || !sample.modelStoresInstalled)
+    {
+        const unsigned int generation = g_staticWorldV3Generation.load(std::memory_order_acquire);
+        if (g_runtimeAdmissionMismatchGeneration != generation)
+        {
+            g_runtimeAdmissionMismatchGeneration = generation;
+            LogNativeWorldLifecycleTelemetry("runtime-admission-first-ineligible", sample);
+        }
         return ENativeWorldRuntimeAdmissionReadiness::Ineligible;
-    return sample.ioQuiescent ? ENativeWorldRuntimeAdmissionReadiness::Ready : ENativeWorldRuntimeAdmissionReadiness::WaitingForIo;
+    }
+    if (!sample.ioQuiescent)
+        return ENativeWorldRuntimeAdmissionReadiness::WaitingForIo;
+
+    if (g_runtimeAdmissionFencePending)
+    {
+        std::string foundationError;
+        if (!NativeWorldAdmissionFoundationMatches(sample, foundationError))
+        {
+            Log("runtime-admission-fence=refused generation=%u reason=%s", g_staticWorldV3Generation.load(std::memory_order_acquire), foundationError.c_str());
+            return ENativeWorldRuntimeAdmissionReadiness::Ineligible;
+        }
+
+        // The previous session's generation has been removed and Core has
+        // released its endpoint. Resources from the newly authenticated
+        // server may now legitimately own ordinary GTA slots before their
+        // coordinator publishes. Freeze that state exactly once; retries may
+        // compare it but can never keep rebasing around a causal mutation.
+        LogNativeWorldAdmissionBaselineFields("runtime-admission-fence-before", sample);
+        ReplaceNativeWorldAdmissionBaseline(sample, "runtime-admission-fence");
+        g_runtimeAdmissionFencePending = false;
+        sample = ReadNativeWorldLifecycleTelemetry();
+        LogNativeWorldLifecycleTelemetry("runtime-admission-fence-after", sample);
+    }
+
+    if (!sample.admissionBaselineMatches)
+    {
+        const unsigned int generation = g_staticWorldV3Generation.load(std::memory_order_acquire);
+        if (g_runtimeAdmissionMismatchGeneration != generation)
+        {
+            g_runtimeAdmissionMismatchGeneration = generation;
+            LogNativeWorldLifecycleTelemetry("runtime-admission-post-fence-mismatch", sample);
+        }
+        return ENativeWorldRuntimeAdmissionReadiness::Ineligible;
+    }
+    g_runtimeAdmissionMismatchGeneration = std::numeric_limits<unsigned int>::max();
+    return ENativeWorldRuntimeAdmissionReadiness::Ready;
 }
 
 bool CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error)
@@ -7860,26 +8408,9 @@ bool CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(const SNativeWorld
     }
 
     // Resource teardown is allowed to restore stock or server-owned slots
-    // after generation teardown. Capture that final state as a replacement
-    // admission fence before crossing the endpoint-release boundary.
-    SNativeWorldNeutralBaseline nextBaseline;
-    nextBaseline.captured = true;
-    nextBaseline.atomicUsed = detached.atomicUsed;
-    nextBaseline.damageUsed = detached.damageUsed;
-    nextBaseline.timedUsed = detached.timedUsed;
-    nextBaseline.pools = detached.pools;
-    for (size_t index = 0; index < nextBaseline.poolFlagSnapshots.size(); ++index)
-        nextBaseline.poolFlagSnapshots[index].assign(detached.pools[index].flags, detached.pools[index].flags + detached.pools[index].capacity);
-    nextBaseline.modelInfoArray = detached.modelInfoArray;
-    nextBaseline.streamingInfoArray = detached.streamingInfoArray;
-    nextBaseline.fileIdLayout = detached.fileIdLayout;
-    nextBaseline.txdFindCache = detached.txdFindCache;
-    nextBaseline.boundArchives = detached.streaming.boundArchives;
-    nextBaseline.openStreamHandles = detached.streaming.openStreamHandles;
-    nextBaseline.archiveStateHash = detached.streaming.archiveStateHash;
-    nextBaseline.streamHandleStateHash = detached.streaming.streamHandleStateHash;
-    nextBaseline.modelPointers = detached.modelPointers;
-    nextBaseline.streamingEntries = detached.streamingEntries;
+    // after generation teardown. Capture the session-release postcondition,
+    // then arm one later fence for possessions loaded by the next server.
+    ReplaceNativeWorldAdmissionBaseline(detached, "session-release-neutral");
 
     const std::string ticket = g_authorizedSelection.ticketId.substr(0, 8);
     g_authorizedRoute = false;
@@ -7896,13 +8427,13 @@ bool CNativeWorldPackManagerSA::ReleaseDetachedRuntimeSession(const SNativeWorld
     g_staticWorldV3Packs.clear();
     g_staticWorldV3ChildLeases.clear();
     g_staticWorldV3ModelBindings.clear();
-    g_nativeWorldNeutralBaseline = std::move(nextBaseline);
     g_state = EState::Neutral;
 
     const SNativeWorldLifecycleTelemetry finalState = ReadNativeWorldLifecycleTelemetry();
     LogNativeWorldLifecycleTelemetry("session-release-neutral-postcondition", finalState);
     if (!finalState.contentNeutral || !finalState.sessionNeutral || !finalState.admissionBaselineMatches || !finalState.ioQuiescent)
         Fatal("native-world session release failed its final Neutral postcondition");
+    g_runtimeAdmissionFencePending = true;
     Log("session-release=neutral ticket=%s content-neutral=yes session-neutral=yes admission-baseline-match=yes io-quiescent=yes "
         "endpoint-ownership=pending-core-release",
         ticket.c_str());

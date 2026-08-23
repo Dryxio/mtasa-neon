@@ -317,30 +317,16 @@ void CCommandFuncs::Connect(const char* szParameters)
         szPass = &emptyPass;
     }
 
-    // A native world has process lifetime. Check its server pin before the
-    // console command unloads the currently valid session.
-    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(szHost, usPort))
-        return;
-
-    // Unload any mod before connecting to a server
-    CModManager::GetSingleton().Unload();
-
-    // Only connect if there is no mod loaded
-    if (!CModManager::GetSingleton().IsLoaded())
+    // CConnectManager owns the native-world transition. Keeping the request
+    // intact until it reaches Neutral prevents this command from unloading a
+    // valid session before the drain fence accepts the next connection.
+    if (CCore::GetSingleton().GetConnectManager()->Connect(szHost, usPort, strNick.c_str(), szPass))
     {
-        // Start the connect
-        if (CCore::GetSingleton().GetConnectManager()->Connect(szHost, usPort, strNick.c_str(), szPass))
-        {
-            CCore::GetSingleton().GetConsole()->Printf(_("connect: Connecting to %s:%u..."), szHost, usPort);
-        }
-        else
-        {
-            CCore::GetSingleton().GetConsole()->Printf(_("connect: could not connect to %s:%u!"), szHost, usPort);
-        }
+        CCore::GetSingleton().GetConsole()->Printf(_("connect: Connecting to %s:%u..."), szHost, usPort);
     }
     else
     {
-        CCore::GetSingleton().GetConsole()->Print(_("connect: Failed to unload current mod"));
+        CCore::GetSingleton().GetConsole()->Printf(_("connect: could not connect to %s:%u!"), szHost, usPort);
     }
 }
 
@@ -370,41 +356,28 @@ void CCommandFuncs::Reconnect(const char* szParameters)
     CVARS_GET("host", strHost);
     CVARS_GET("port", uiPort);
 
-    // Validate the complete target before changing the current session.
     if (uiPort <= 0 || uiPort > 0xFFFF)
     {
         CCore::GetSingleton().GetConsole()->Print(_("reconnect: Bad port number"));
         return;
     }
     const unsigned short usPort = static_cast<unsigned short>(uiPort);
-    if (!CCore::GetSingleton().GetConnectManager()->ValidateConnectionTarget(strHost.c_str(), usPort))
-        return;
     if (!CCore::GetSingleton().IsNativeWorldStartupCredentialSuppressed())
         CVARS_GET("password", strPassword);
 
-    // Restart the connection.
-    CModManager::GetSingleton().Unload();
-
-    // Any mod loaded?
-    if (!CModManager::GetSingleton().IsLoaded())
+    // Reconnect defers to Connect on the next pulse; that single owner keeps
+    // the request queued until any Active native generation reaches Neutral.
+    if (CCore::GetSingleton().GetConnectManager()->Reconnect(strHost.c_str(), usPort, strPassword.c_str(), false))
     {
-        // Start the connect
-        if (CCore::GetSingleton().GetConnectManager()->Reconnect(strHost.c_str(), usPort, strPassword.c_str(), false))
+        if (CCore::GetSingleton().GetConnectManager()->WasQuickConnect())
         {
-            if (CCore::GetSingleton().GetConnectManager()->WasQuickConnect())
-            {
-                CCore::GetSingleton().GetConnectManager()->SetQuickConnect(false);
-            }
-            CCore::GetSingleton().GetConsole()->Printf(_("reconnect: Reconnecting to %s:%u..."), strHost.c_str(), usPort);
+            CCore::GetSingleton().GetConnectManager()->SetQuickConnect(false);
         }
-        else
-        {
-            CCore::GetSingleton().GetConsole()->Printf(_("reconnect: could not connect to %s:%u!"), strHost.c_str(), usPort);
-        }
+        CCore::GetSingleton().GetConsole()->Printf(_("reconnect: Reconnecting to %s:%u..."), strHost.c_str(), usPort);
     }
     else
     {
-        CCore::GetSingleton().GetConsole()->Print("reconnect: Failed to unload current mod");
+        CCore::GetSingleton().GetConsole()->Printf(_("reconnect: could not connect to %s:%u!"), strHost.c_str(), usPort);
     }
 }
 

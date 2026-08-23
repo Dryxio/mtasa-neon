@@ -101,9 +101,77 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
         return false;
     }
 
-    // A native startup pack cannot be unloaded safely. Reject another server
-    // before the current mod, network generation, or credentials are touched.
     in_addr targetAddress{};
+    if (!CServerListItem::Parse(szHost, targetAddress))
+    {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("startup target is not a resolvable IPv4 endpoint");
+        if (!UsesWebConnectionUi())
+            CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC21"), _("Connecting failed. Invalid host provided!"), MB_BUTTON_OK | MB_ICON_ERROR);
+        m_bUseWebConnectionUi = false;
+        return false;
+    }
+
+    // Reject local input before a reusable native-world session crosses its
+    // destructive drain boundary. A bad nick or a full disk must leave the
+    // current city and endpoint completely untouched.
+    if (!CheckNickProvided((char*)szNick))
+    {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("nickname validation failed before the pinned connection");
+        if (!UsesWebConnectionUi())
+            CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC20"), _("Connecting failed. Invalid nick provided!"), MB_BUTTON_OK | MB_ICON_ERROR);
+        m_bUseWebConnectionUi = false;
+        return false;
+    }
+    if (!CCore::GetSingleton().CheckDiskSpace())
+    {
+        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("disk-space validation failed before the pinned connection");
+        m_bUseWebConnectionUi = false;
+        return false;
+    }
+
+    // Hold the complete request in this stack frame while the current native
+    // generation crosses its ordered drain, detach and session-release gates.
+    // No target, credential, network generation or UI state is committed
+    // before the old endpoint has reached Neutral.
+    if (CCore::GetSingleton().HasActiveNativeWorldSession())
+    {
+        std::string nativeWorldError;
+        WriteDebugEvent(SString("[NativeWorldHotSwitch] state=connection-queued target=%s:%u", szHost, usPort));
+        if (!CCore::GetSingleton().PrepareNativeWorldContentForUnload("next-connection", nativeWorldError))
+        {
+            std::string restartError;
+            if (CCore::GetSingleton().PrepareNativeWorldHotSwitchRestart(targetAddress, usPort, restartError))
+            {
+                WriteDebugEvent(SString("[NativeWorldHotSwitch] state=connection-restart target=%s:%u reason=%s", szHost, usPort, nativeWorldError.c_str()));
+                m_bUseWebConnectionUi = false;
+                CCore::GetSingleton().Quit();
+                return false;
+            }
+            WriteDebugEvent(SString("[NativeWorldHotSwitch] state=connection-refused target=%s:%u reason=%s restart=%s", szHost, usPort,
+                                    nativeWorldError.c_str(), restartError.c_str()));
+            m_bUseWebConnectionUi = false;
+            return false;
+        }
+        CModManager::GetSingleton().Unload();
+        if (CCore::GetSingleton().HasActiveNativeWorldSession())
+        {
+            std::string restartError;
+            if (CCore::GetSingleton().PrepareNativeWorldHotSwitchRestart(targetAddress, usPort, restartError))
+            {
+                WriteDebugEvent(
+                    SString("[NativeWorldHotSwitch] state=connection-restart target=%s:%u reason=session-release-did-not-reach-neutral", szHost, usPort));
+                m_bUseWebConnectionUi = false;
+                CCore::GetSingleton().Quit();
+                return false;
+            }
+            WriteDebugEvent(SString("[NativeWorldHotSwitch] state=connection-refused target=%s:%u reason=session-release-did-not-reach-neutral restart=%s",
+                                    szHost, usPort, restartError.c_str()));
+            m_bUseWebConnectionUi = false;
+            return false;
+        }
+        WriteDebugEvent(SString("[NativeWorldHotSwitch] state=connection-released target=%s:%u endpoint-owner=neutral", szHost, usPort));
+    }
+
     if (!ValidateConnectionTarget(szHost, usPort, &targetAddress))
     {
         m_bUseWebConnectionUi = false;
@@ -129,17 +197,6 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     if (m_bIsConnecting || pNet->IsConnected())
     {
         CModManager::GetSingleton().Unload();
-    }
-
-    // Is the nick valid?
-    if (!CheckNickProvided((char*)szNick))
-    {
-        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("nickname validation failed before the pinned connection");
-        SString strBuffer = _("Connecting failed. Invalid nick provided!");
-        if (!UsesWebConnectionUi())
-            CCore::GetSingleton().ShowMessageBox(_("Error") + _E("CC20"), strBuffer, MB_BUTTON_OK | MB_ICON_ERROR);  // Invalid nick provided
-        m_bUseWebConnectionUi = false;
-        return false;
     }
 
     // Save the nick too
@@ -179,14 +236,6 @@ bool CConnectManager::Connect(const char* szHost, unsigned short usPort, const c
     if (!CCore::GetSingleton().ValidateNativeWorldStartupEndpoint(m_strHost, endpointIpv4, m_usPort, pinError))
     {
         CCore::GetSingleton().TerminateNativeWorldStartup(pinError);
-        return false;
-    }
-
-    // No connect if disk space is low
-    if (!CCore::GetSingleton().CheckDiskSpace())
-    {
-        CCore::GetSingleton().FailNativeWorldStartupBeforeActive("disk-space validation failed before the pinned connection");
-        m_bUseWebConnectionUi = false;
         return false;
     }
 
@@ -257,7 +306,8 @@ bool CConnectManager::Reconnect(const char* szHost, unsigned short usPort, const
     if (usPort)
         targetPort = usPort;
 
-    if (!ValidateConnectionTarget(targetHost.c_str(), targetPort))
+    in_addr targetAddress{};
+    if (!CServerListItem::Parse(targetHost.c_str(), targetAddress))
         return false;
 
     std::string targetPassword;

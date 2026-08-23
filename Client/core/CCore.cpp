@@ -25,6 +25,8 @@
 #include <cerrno>
 #include <cstdlib>
 #include <limits>
+#include <sstream>
+#include <TlHelp32.h>
 #include "Userenv.h"  // This will enable SharedUtil::ExpandEnvString
 #define ALLOC_STATS_MODULE_NAME "core"
 #include "SharedUtil.hpp"
@@ -158,6 +160,138 @@ namespace
     {
         const char* endpoint = GetConnectUriEndpoint(uri);
         return endpoint ? SString("%s%s", kMtaConnectScheme, endpoint) : SString();
+    }
+
+    bool NativeWorldHarnessIsEnabled()
+    {
+        char value[2]{};
+        return GetEnvironmentVariableA("MTA_NATIVE_WORLD_HARNESS", value, sizeof(value)) == 1 && value[0] == '1';
+    }
+
+    bool ParseNativeWorldHarnessCommand(const std::string& line, SString& command)
+    {
+        if (line == "status")
+        {
+            command = "nativeworlddrain status";
+            return true;
+        }
+        if (line == "begin")
+        {
+            command = "nativeworlddrain begin";
+            return true;
+        }
+        if (line == "teardown")
+        {
+            command = "nativeworlddrain teardown";
+            return true;
+        }
+        if (line == "disconnect")
+        {
+            command = "disconnect";
+            return true;
+        }
+        if (line == "auth-restart")
+        {
+            command = "nativeworldauth restart";
+            return true;
+        }
+        if (line == "refuse-next-drain")
+        {
+            command = "__nativeworld_harness_refuse_next_drain";
+            return true;
+        }
+        if (line == "disarm-drain-refusal")
+        {
+            command = "__nativeworld_harness_disarm_drain_refusal";
+            return true;
+        }
+
+        std::istringstream stream(line);
+        std::string        verb;
+        std::string        host;
+        unsigned int       port = 0;
+        std::string        trailing;
+        if (!(stream >> verb >> host >> port) || verb != "connect" || (stream >> trailing) || port == 0 || port > 65535)
+            return false;
+
+        unsigned int octets[4]{};
+        int          consumed = 0;
+        if (sscanf(host.c_str(), "%u.%u.%u.%u%n", &octets[0], &octets[1], &octets[2], &octets[3], &consumed) != 4 ||
+            consumed != static_cast<int>(host.size()) || std::any_of(std::begin(octets), std::end(octets), [](unsigned int value) { return value > 255; }))
+            return false;
+
+        command = SString("connect %s %u", host.c_str(), port);
+        return true;
+    }
+
+    bool PollNativeWorldHarnessCommand(SString& command)
+    {
+        static bool      enabled = NativeWorldHarnessIsEnabled();
+        static long long nextPollMs = 0;
+        if (!enabled)
+            return false;
+
+        const long long now = GetTickCount64_();
+        if (now < nextPollMs)
+            return false;
+        nextPollMs = now + 100;
+
+        const SString commandPath = CalcMTASAPath(PathJoin("mta", "logs", "native-world-hot-switch.command"));
+        const SString runningPath = CalcMTASAPath(PathJoin("mta", "logs", "native-world-hot-switch.running"));
+        if (!SharedUtil::FileExists(commandPath) || !SharedUtil::FileRename(commandPath, runningPath))
+            return false;
+
+        std::ifstream input(FromUTF8(runningPath), std::ios::binary);
+        if (!input)
+        {
+            SharedUtil::FileDelete(runningPath);
+            return false;
+        }
+
+        std::string line;
+        std::getline(input, line);
+        input.close();
+        SharedUtil::FileDelete(runningPath);
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.size() > 128 || !ParseNativeWorldHarnessCommand(line, command))
+        {
+            WriteDebugEvent(SString("[NativeWorldHarness] state=refused timestampMs=%llu", static_cast<unsigned long long>(now)));
+            return false;
+        }
+
+        WriteDebugEvent(SString("[NativeWorldHarness] state=accepted timestampMs=%llu command=%s", static_cast<unsigned long long>(now), command.c_str()));
+        return true;
+    }
+
+    bool NativeWorldRestartProcessIsExclusive(std::string& error)
+    {
+        const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == INVALID_HANDLE_VALUE)
+        {
+            error = "native-world restart could not audit competing client processes";
+            return false;
+        }
+
+        unsigned int    launcherCount = 0;
+        unsigned int    gameCount = 0;
+        PROCESSENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snapshot, &entry))
+        {
+            do
+            {
+                launcherCount += wcsicmp(entry.szExeFile, L"Multi Theft Auto.exe") == 0;
+                gameCount += wcsicmp(entry.szExeFile, L"gta_sa.exe") == 0;
+            } while (Process32NextW(snapshot, &entry));
+        }
+        CloseHandle(snapshot);
+        if (launcherCount != 1 || gameCount != 1)
+        {
+            error = SString("native-world restart requires one exclusive client launcher/game pair (launchers=%u games=%u)", launcherCount, gameCount);
+            return false;
+        }
+        return true;
     }
 
     void ApplyDistantLightPreferences(CGame* game, bool resetRuntimeState = false)
@@ -729,6 +863,46 @@ SNativeWorldAuthorizationRecordResult CCore::ClearNativeWorldStartupAuthorizatio
     return NativeWorldAuthorizationStore::Clear();
 }
 
+bool CCore::ArmVerifiedNativeWorldRestart(const SString& endpoint, std::string& error)
+{
+    const SString existing = GetRegistryValue("", "OnQuitCommand");
+    if (!existing.empty() && existing != "\t\t\t\t")
+    {
+        error = "another post-exit action is already scheduled";
+        return false;
+    }
+
+    const SString uri("mtasa://%s", endpoint.c_str());
+    const SString expected("restart\t\t%s\t\t", uri.c_str());
+
+    // The loader resolves `restart` to the already trusted MTA executable.
+    // Use one flushed write and read back the exact five-field command before
+    // ending this process; a partial or competing write must not silently arm
+    // an unrelated later exit.
+    SaveConfig(true);
+    SetRegistryValue("", "OnQuitCommand", expected, true);
+    const SString observed = GetRegistryValue("", "OnQuitCommand");
+    if (observed == expected)
+        return true;
+
+    const bool writeAppearsUnchanged = observed == existing;
+    const bool writeAppearsPartial = !observed.empty() && observed.length() < expected.length() && expected.substr(0, observed.length()) == observed;
+    if (writeAppearsUnchanged || writeAppearsPartial)
+    {
+        SetRegistryValue("", "OnQuitCommand", existing, true);
+        if (GetRegistryValue("", "OnQuitCommand") == existing)
+        {
+            error = "native-world restart scheduling could not be verified and was disarmed";
+            return false;
+        }
+    }
+
+    // An unrelated value may have won a concurrent write. Preserve it and
+    // expose the ambiguity instead of overwriting another loader action.
+    error = "native-world restart scheduling left an ambiguous post-exit action";
+    return false;
+}
+
 SNativeWorldAuthorizationRecordResult CCore::PrepareNativeWorldStartupRestart()
 {
     if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Off)
@@ -745,47 +919,12 @@ SNativeWorldAuthorizationRecordResult CCore::PrepareNativeWorldStartupRestart()
     if (!result.success)
         return result;
 
-    const SString existing = GetRegistryValue("", "OnQuitCommand");
-    if (!existing.empty() && existing != "\t\t\t\t")
-    {
-        result.success = false;
-        result.diagnostic.clear();
-        result.error = "another post-exit action is already scheduled";
-        return result;
-    }
-
     const SString endpoint("%u.%u.%u.%u:%u", target.serverIpv4[0], target.serverIpv4[1], target.serverIpv4[2], target.serverIpv4[3], target.serverPort);
-    const SString uri("mtasa://%s", endpoint.c_str());
-    const SString expected("restart\t\t%s\t\t", uri.c_str());
-
-    // The loader resolves `restart` to the already trusted MTA executable.
-    // Use one flushed write and read back the exact five-field command before
-    // ending this process; a partial or competing write leaves the ticket
-    // pending and must not silently arm a later exit.
-    SaveConfig(true);
-    SetRegistryValue("", "OnQuitCommand", expected, true);
-    const SString observed = GetRegistryValue("", "OnQuitCommand");
-    if (observed != expected)
+    if (!ArmVerifiedNativeWorldRestart(endpoint, result.error))
     {
         result.success = false;
-        const bool writeAppearsUnchanged = observed == existing;
-        const bool writeAppearsPartial = !observed.empty() && observed.length() < expected.length() && expected.substr(0, observed.length()) == observed;
-        if (writeAppearsUnchanged || writeAppearsPartial)
-        {
-            SetRegistryValue("", "OnQuitCommand", existing, true);
-            if (GetRegistryValue("", "OnQuitCommand") == existing)
-            {
-                result.diagnostic.clear();
-                result.error = "native-world restart scheduling could not be verified and was disarmed";
-                return result;
-            }
-        }
-
-        // An unrelated value may have won a concurrent write. Preserve it,
-        // but make the unresolved loader state explicit instead of claiming
-        // that no post-exit action exists.
-        result.diagnostic = "state=restart-scheduling-ambiguous activation=no lease=no action=inspect-onquit";
-        result.error = "native-world restart scheduling left an ambiguous post-exit action";
+        result.diagnostic =
+            result.error.find("ambiguous") != std::string::npos ? "state=restart-scheduling-ambiguous activation=no lease=no action=inspect-onquit" : "";
         return result;
     }
 
@@ -1108,6 +1247,82 @@ void CCore::FailNativeWorldStartupBeforeActive(const std::string& reason)
 {
     if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Prepared || m_nativeWorldStartupPhase == ENativeWorldStartupPhase::SessionValidated)
         TerminateNativeWorldStartup(reason);
+}
+
+bool CCore::HasActiveNativeWorldSession() const
+{
+    return m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Active;
+}
+
+bool CCore::PrepareNativeWorldContentForUnload(const char* reason, std::string& error)
+{
+    if (m_nativeWorldStartupPhase == ENativeWorldStartupPhase::Off)
+        return true;
+    if (m_nativeWorldRestartFallbackArmed)
+    {
+        error = "verified native-world restart fallback already owns process exit";
+        return false;
+    }
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Active || !m_pGame)
+    {
+        error = "native-world unload was requested outside an Active reusable session";
+        return false;
+    }
+    if (m_pGame->IsNativeWorldContentDetached())
+        return true;
+
+    const char* safeReason = reason && reason[0] ? reason : "unspecified";
+    WriteDebugEvent(SString("[NativeWorldHotSwitch] state=queued reason=%s endpoint-owner=pinned network-mutation=no", safeReason));
+
+    if (m_nativeWorldHarnessRefuseNextDrain)
+    {
+        m_nativeWorldHarnessRefuseNextDrain = false;
+        error = "native-world harness forced the next drain preflight refusal";
+        WriteDebugEvent(
+            SString("[NativeWorldHotSwitch] state=restart-fallback-required reason=%s detail=%s session=active-preserved", safeReason, error.c_str()));
+        return false;
+    }
+    if (!m_pGame->IsNativeWorldDrainQuiescent() && !m_pGame->BeginNativeWorldDrain())
+    {
+        error = "native-world drain preflight refused before the reusable session boundary";
+        WriteDebugEvent(
+            SString("[NativeWorldHotSwitch] state=restart-fallback-required reason=%s detail=%s session=active-preserved", safeReason, error.c_str()));
+        return false;
+    }
+    if (!m_pGame->IsNativeWorldDrainQuiescent())
+    {
+        error = "native-world drain did not publish quiescence";
+        WriteDebugEvent(SString("[NativeWorldHotSwitch] state=restart-fallback-required reason=%s detail=%s session=reuse-unsafe", safeReason, error.c_str()));
+        return false;
+    }
+    if (!m_pGame->TeardownNativeWorldContent() || !m_pGame->IsNativeWorldContentDetached())
+    {
+        error = "native-world teardown did not publish Detached";
+        WriteDebugEvent(SString("[NativeWorldHotSwitch] state=restart-fallback-required reason=%s detail=%s session=reuse-unsafe", safeReason, error.c_str()));
+        return false;
+    }
+
+    WriteDebugEvent(SString("[NativeWorldHotSwitch] state=detached reason=%s endpoint-owner=pinned network-mutation=no", safeReason));
+    return true;
+}
+
+bool CCore::PrepareNativeWorldHotSwitchRestart(const in_addr& targetAddress, unsigned short targetPort, std::string& error)
+{
+    if (m_nativeWorldStartupPhase != ENativeWorldStartupPhase::Active || m_nativeWorldRestartFallbackArmed || targetPort == 0)
+    {
+        error = "native-world hot-switch restart is unavailable outside one unarmed Active session";
+        return false;
+    }
+
+    std::array<unsigned char, 4> ipv4{};
+    memcpy(ipv4.data(), &targetAddress.s_addr, ipv4.size());
+    const SString endpoint("%u.%u.%u.%u:%u", ipv4[0], ipv4[1], ipv4[2], ipv4[3], targetPort);
+    if (!NativeWorldRestartProcessIsExclusive(error) || !ArmVerifiedNativeWorldRestart(endpoint, error))
+        return false;
+
+    m_nativeWorldRestartFallbackArmed = true;
+    WriteDebugEvent(SString("[NativeWorldHotSwitch] state=restart-fallback-scheduled endpoint=%s credential=suppressed readback=exact", endpoint.c_str()));
+    return true;
 }
 
 bool CCore::TryReleaseDetachedNativeWorldSessionAfterModUnload()
@@ -2639,6 +2854,29 @@ void CCore::DoPostFramePulse()
     GetGraphStats()->Draw();
     m_pNeonIdentityManager->DoPulse();
     m_pConnectManager->DoPulse();
+
+    // This opt-in file driver lets automated lifecycle tests exercise the
+    // exact main-thread console handlers without depending on GUI input. It
+    // remains inert unless the launcher explicitly exports the guard.
+    SString nativeWorldHarnessCommand;
+    if (PollNativeWorldHarnessCommand(nativeWorldHarnessCommand))
+    {
+        const bool isDrainRefusal = nativeWorldHarnessCommand == "__nativeworld_harness_refuse_next_drain";
+        const bool isDrainRefusalDisarm = nativeWorldHarnessCommand == "__nativeworld_harness_disarm_drain_refusal";
+        if (isDrainRefusal)
+        {
+            m_nativeWorldHarnessRefuseNextDrain = true;
+            WriteDebugEvent("[NativeWorldHarness] state=armed action=refuse-next-drain scope=one-shot");
+        }
+        else if (isDrainRefusalDisarm)
+        {
+            m_nativeWorldHarnessRefuseNextDrain = false;
+            WriteDebugEvent("[NativeWorldHarness] state=disarmed action=refuse-next-drain scope=one-shot");
+        }
+        const bool executed = isDrainRefusal || isDrainRefusalDisarm || m_pCommands->Execute(nativeWorldHarnessCommand);
+        WriteDebugEvent(SString("[NativeWorldHarness] state=%s timestampMs=%llu command=%s", executed ? "executed" : "failed",
+                                static_cast<unsigned long long>(GetTickCount64_()), nativeWorldHarnessCommand.c_str()));
+    }
 
     // Update Discord Rich Presence status
     if (const long long ticks = GetTickCount64_(); ticks > m_timeDiscordAppLastUpdate + TIME_DISCORD_UPDATE_RICH_PRESENCE_RATE)

@@ -26,6 +26,15 @@ CModManager* CSingleton<CModManager>::m_pSingleton = NULL;
 
 void CModManager::RequestLoad(const char* arguments)
 {
+    if (IsLoaded() && CCore::GetSingleton().HasActiveNativeWorldSession())
+    {
+        std::string nativeWorldError;
+        if (!CCore::GetSingleton().PrepareNativeWorldContentForUnload("client-deathmatch-replacement", nativeWorldError))
+        {
+            WriteDebugEvent(SString("[NativeWorldHotSwitch] state=load-refused reason=%s existing-session=not-released", nativeWorldError.c_str()));
+            return;
+        }
+    }
     m_state = State::PendingStart;
     m_arguments = arguments ? arguments : "";
 }
@@ -35,6 +44,14 @@ void CModManager::RequestUnload()
     CCore::GetSingleton().FailNativeWorldStartupBeforeActive("Client Deathmatch requested unload before native-world activation");
     if (!IsLoaded())
         return;
+
+    std::string nativeWorldError;
+    if (CCore::GetSingleton().HasActiveNativeWorldSession() &&
+        !CCore::GetSingleton().PrepareNativeWorldContentForUnload("client-deathmatch-request", nativeWorldError))
+    {
+        WriteDebugEvent(SString("[NativeWorldHotSwitch] state=unload-refused reason=%s existing-session=not-released", nativeWorldError.c_str()));
+        return;
+    }
 
     if (m_state == State::Idle)
     {
@@ -111,6 +128,8 @@ void CModManager::DoPulsePostFrame()
 bool CModManager::Load(const char* arguments)
 {
     RequestLoad(arguments);
+    if (m_state != State::PendingStart)
+        return false;
     return Start();
 }
 
@@ -118,6 +137,13 @@ void CModManager::Unload()
 {
     if (IsLoaded())
     {
+        std::string nativeWorldError;
+        if (CCore::GetSingleton().HasActiveNativeWorldSession() &&
+            !CCore::GetSingleton().PrepareNativeWorldContentForUnload("core-synchronous-unload", nativeWorldError))
+        {
+            WriteDebugEvent(SString("[NativeWorldHotSwitch] state=unload-refused reason=%s existing-session=not-released", nativeWorldError.c_str()));
+            return;
+        }
         m_state = State::PendingStop;
         Stop();
     }
@@ -126,11 +152,22 @@ void CModManager::Unload()
 bool CModManager::Start()
 {
     dassert(m_state == State::PendingStart);
-    dassert(m_library == nullptr);
-    dassert(m_client == nullptr);
+    dassert((m_library == nullptr) == (m_client == nullptr));
 
     if (IsLoaded())
+    {
+        std::string nativeWorldError;
+        if (CCore::GetSingleton().HasActiveNativeWorldSession() &&
+            !CCore::GetSingleton().PrepareNativeWorldContentForUnload("client-deathmatch-start-replacement", nativeWorldError))
+        {
+            WriteDebugEvent(SString("[NativeWorldHotSwitch] state=load-refused reason=%s existing-session=not-released", nativeWorldError.c_str()));
+            m_state = State::Idle;
+            return false;
+        }
         Stop();
+    }
+    dassert(m_library == nullptr);
+    dassert(m_client == nullptr);
 
     bool success = false;
 

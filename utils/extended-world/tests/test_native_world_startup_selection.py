@@ -183,14 +183,17 @@ class StartupTransactionTests(unittest.TestCase):
         connect_start = connect.index("bool CConnectManager::Connect")
         reconnect_start = connect.index("bool CConnectManager::Reconnect", connect_start)
         connect_body = connect[connect_start:reconnect_start]
-        self.assertLess(connect_body.index("ValidateConnectionTarget"), connect_body.index("CModManager::GetSingleton().Unload"))
+        self.assertLess(connect_body.index("CServerListItem::Parse"), connect_body.index("CModManager::GetSingleton().Unload"))
+        self.assertLess(connect_body.index("CheckNickProvided"), connect_body.index("CModManager::GetSingleton().Unload"))
+        self.assertLess(connect_body.index("CheckDiskSpace"), connect_body.index("CModManager::GetSingleton().Unload"))
         self.assertLess(connect_body.index("ValidateConnectionTarget"), connect_body.index("AdvanceNetworkConnectionGeneration"))
         self.assertLess(connect_body.index("ValidateConnectionTarget"), connect_body.index("pNet->Reset"))
         self.assertGreaterEqual(connect_body.count("ValidateNativeWorldStartupEndpoint"), 1)
         command_start = commands.index("void CCommandFuncs::Connect")
         command_end = commands.index("void CCommandFuncs::ReloadNews", command_start)
         command_body = commands[command_start:command_end]
-        self.assertLess(command_body.index("ValidateConnectionTarget"), command_body.index("CModManager::GetSingleton().Unload"))
+        self.assertIn("GetConnectManager()->Connect", command_body)
+        self.assertNotIn("CModManager::GetSingleton().Unload", command_body)
         endpoint_start = core.index("bool CCore::ValidateNativeWorldStartupEndpoint")
         endpoint_end = core.index("void CCore::HandleNativeWorldConnectionTargetRefusal", endpoint_start)
         self.assertNotIn("ENativeWorldStartupPhase::Candidate", core[endpoint_start:endpoint_end])
@@ -214,16 +217,17 @@ class StartupTransactionTests(unittest.TestCase):
         reconnect_start = connect.index("bool CConnectManager::Reconnect")
         reconnect_end = connect.index("bool CConnectManager::Event_OnCancelClick", reconnect_start)
         reconnect = connect[reconnect_start:reconnect_end]
-        self.assertLess(reconnect.index("ValidateConnectionTarget"), reconnect.index("m_strHost ="))
-        self.assertLess(reconnect.index("ValidateConnectionTarget"), reconnect.index("m_bReconnect = true"))
-        self.assertLess(reconnect.index("ValidateConnectionTarget"), reconnect.index('CVARS_GET("password"'))
+        self.assertLess(reconnect.index("CServerListItem::Parse"), reconnect.index("m_strHost ="))
+        self.assertLess(reconnect.index("CServerListItem::Parse"), reconnect.index("m_bReconnect = true"))
+        self.assertLess(reconnect.index("CServerListItem::Parse"), reconnect.index('CVARS_GET("password"'))
         self.assertLess(reconnect.index("IsNativeWorldStartupCredentialSuppressed"), reconnect.index("m_strPassword ="))
 
         commands = (REPOSITORY / "Client/core/CCommandFuncs.cpp").read_text(encoding="utf-8")
         command_start = commands.index("void CCommandFuncs::Reconnect")
         command_end = commands.index("void CCommandFuncs::Bind", command_start)
         command = commands[command_start:command_end]
-        self.assertLess(command.index("ValidateConnectionTarget"), command.index('CVARS_GET("password"'))
+        self.assertLess(command.index("IsNativeWorldStartupCredentialSuppressed"), command.index('CVARS_GET("password"'))
+        self.assertIn("GetConnectManager()->Reconnect", command)
 
     def test_active_native_world_guards_browser_and_local_server_before_credentials_or_start(self) -> None:
         browser = (REPOSITORY / "Client/core/ServerBrowser/CServerBrowser.cpp").read_text(encoding="utf-8")
@@ -268,14 +272,17 @@ class StartupTransactionTests(unittest.TestCase):
         start = core.index("SNativeWorldAuthorizationRecordResult CCore::PrepareNativeWorldStartupRestart")
         end = core.index("bool CCore::IsNativeWorldStartupCredentialSuppressed", start)
         body = core[start:end]
+        helper_start = core.index("bool CCore::ArmVerifiedNativeWorldRestart")
+        helper = core[helper_start:start]
         self.assertIn("InspectFreshRestartTarget", body)
-        self.assertIn('SetRegistryValue("", "OnQuitCommand", expected, true)', body)
+        self.assertIn("ArmVerifiedNativeWorldRestart", body)
+        self.assertIn('SetRegistryValue("", "OnQuitCommand", expected, true)', helper)
         self.assertNotIn('SetOnQuitCommand("restart", "", uri)', body)
-        self.assertIn("const SString observed", body)
-        self.assertIn("writeAppearsUnchanged", body)
-        self.assertIn("writeAppearsPartial", body)
+        self.assertIn("const SString observed", helper)
+        self.assertIn("writeAppearsUnchanged", helper)
+        self.assertIn("writeAppearsPartial", helper)
         self.assertIn("restart-scheduling-ambiguous", body)
-        self.assertIn('SetRegistryValue("", "OnQuitCommand", existing, true)', body)
+        self.assertIn('SetRegistryValue("", "OnQuitCommand", existing, true)', helper)
         self.assertIn("credential=suppressed", body)
         for forbidden in ("contentId", "resourceName", "serverIdDigest", "savedPassword"):
             with self.subTest(forbidden=forbidden):

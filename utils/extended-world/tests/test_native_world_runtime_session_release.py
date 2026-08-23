@@ -97,7 +97,7 @@ class NativeWorldRuntimeSessionReleaseTests(unittest.TestCase):
         boundary = release.index("g_authorizedRoute = false")
         final_sample = release.index("finalState")
         self.assertLess(boundary, final_sample)
-        self.assertLess(release.index("g_nativeWorldNeutralBaseline", boundary), final_sample)
+        self.assertLess(release.index("ReplaceNativeWorldAdmissionBaseline"), boundary)
         for proof in ("contentNeutral", "sessionNeutral", "admissionBaselineMatches", "ioQuiescent"):
             self.assertIn(proof, release[final_sample:])
         self.assertIn("EState::Neutral", release[boundary:final_sample])

@@ -25,6 +25,9 @@ namespace
     constexpr DWORD       OVERFLOW_EXIT_CODE = 0x4D54414E;  // "MTAN"
     constexpr DWORD       TEARDOWN_EXIT_CODE = 0x4D544154;  // "MTAT"
     constexpr DWORD       MODEL_INFO_SHUTDOWN = 0x004C4D50;
+    constexpr DWORD       MODEL_STORE_FILE_ID_COMPOSED_SITE = 0x004C687B;
+    constexpr size_t      MODEL_STORE_FILE_ID_OPERAND_OFFSET = 2;
+    constexpr DWORD       MODEL_STORE_FILE_ID_MODEL_OFFSET = 0x000005D8;
 
     struct SExecutableIdentity
     {
@@ -615,6 +618,16 @@ namespace
             {
                 const DWORD relocated = reinterpret_cast<DWORD>(GetState(site.kind).store) + site.storeDisplacement;
                 memcpy(expected + site.operandOffset, &relocated, sizeof(relocated));
+            }
+            if (site.instructionAddress == MODEL_STORE_FILE_ID_COMPOSED_SITE)
+            {
+                // This instruction contains two independent operands. The
+                // native model-store installer owns the source pointer while
+                // CFileIDRuntimeSA relocates its ModelInfo destination. Both
+                // manifests validate the stock bytes before either write;
+                // re-entry must validate their composed, fully-derived form.
+                const DWORD relocatedModelSlot = reinterpret_cast<DWORD>(CModelInfoSAInterface::ms_modelInfoPtrs) + MODEL_STORE_FILE_ID_MODEL_OFFSET;
+                memcpy(expected + MODEL_STORE_FILE_ID_OPERAND_OFFSET, &relocatedModelSlot, sizeof(relocatedModelSlot));
             }
             if (!ValidateBytes(site.instructionAddress, expected, site.instructionSize, imageSize, "installed model-store pointer"))
                 return false;

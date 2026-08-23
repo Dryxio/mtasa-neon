@@ -150,9 +150,12 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("startupMapping=canonical-until-bounds", register)
         self.assertIn("AdvanceStaticWorldV3Generation()", register)
         collapse = source[source.index("void __cdecl CompleteStaticWorldV3BoundingBootstrap") : source.index("void RegisterPack()")]
-        self.assertIn("REMOVE_ALL_COLLISION", collapse)
-        self.assertIn("canonicalPointersCleared", collapse)
-        self.assertIn("clothesNamespaceOverlap=cleared-before-gameplay", collapse)
+        internal = source[source.index("void CompleteStaticWorldV3BoundingBootstrapInternal") : source.index("void BootstrapStaticWorldV3SpatialBoundsAtRuntime")]
+        self.assertIn("REMOVE_ALL_COLLISION", internal)
+        self.assertIn("CompleteStaticWorldV3BoundingBootstrapInternal(true)", collapse)
+        self.assertIn("CompleteStaticWorldV3BoundingBootstrapInternal(false)", collapse)
+        self.assertIn("canonicalPointersCleared", internal)
+        self.assertIn("clothesNamespaceOverlap=cleared-before-gameplay", internal)
 
     def test_v3_lod_bootstrap_uses_generic_reusable_banks_and_child_first_teardown(self) -> None:
         source = (REPOSITORY / "Client/game_sa/CNativeWorldPackSA.cpp").read_text(encoding="utf-8")
@@ -207,8 +210,15 @@ class NativeWorldV3RuntimeContractTest(unittest.TestCase):
         self.assertIn("COVER_INIT = 0x698710", source)
         retirement = source[source.index("void DeactivateStaticWorldV3Pack()") : source.index("void ActivateStaticWorldV3Pack(")]
         self.assertLess(
-            retirement.index("reinterpret_cast<void(__cdecl*)()>(COVER_INIT)()"),
+            retirement.index("pGame->GetCoverManager()->RemoveAllCovers()"),
             retirement.index("g_streaming->RemoveModel(pGame->GetBaseIDforIPL() + slot)"),
+        )
+        runtime_bootstrap = source[
+            source.index("void BootstrapStaticWorldV3SpatialBoundsAtRuntime()") : source.index("void RegisterPack()")
+        ]
+        self.assertLess(
+            runtime_bootstrap.index("pGame->GetCoverManager()->RemoveAllCovers()"),
+            runtime_bootstrap.index("g_streaming->RemoveModel(fileId)"),
         )
         self.assertIn("fence=cover-ipl-anchors-channels-col-dff", source)
         self.assertIn("transition=retired", source)

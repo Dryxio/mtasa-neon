@@ -1,0 +1,23 @@
+{
+  "format": 3,
+  "policy": "static-world-v3-set",
+  "set_id": "04547ff361e98e97b42badfde3a85c58f6c7a8cbb1eb83e2dbcdec69247b3afb",
+  "packs": [
+    {
+      "pack_id": "bullworth",
+      "content_id": "21f85e75a4d79320ee0cad8805ddcd020077acc22ec05f61683e3246f194af45"
+    },
+    {
+      "pack_id": "vice-city",
+      "content_id": "4fe10579bd027cedc09f9d4df084217d748a860b4d77ebd9eb974bdc0d362524"
+    },
+    {
+      "pack_id": "liberty-city",
+      "content_id": "feec907eb985881df209bb774870adec8488f14a139aebf316b47bbbf128027b"
+    },
+    {
+      "pack_id": "carcer-city",
+      "content_id": "d846bcc7a3afe26236b57adce5eca18771a9c08e32708052d7412c3894a864fe"
+    }
+  ]
+}
