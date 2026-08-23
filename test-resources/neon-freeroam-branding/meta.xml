@@ -1,0 +1,4 @@
+<meta>
+    <info author="Neon" name="Neon Freeroam browser metadata" type="script" version="1.0.0" />
+    <script src="server.lua" type="server" />
+</meta>
