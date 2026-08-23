@@ -32,7 +32,7 @@ l'URL — permet de développer/tester sans le client).
 | `menu:disconnect` | — | Déconnecte du serveur courant, avec la confirmation native configurée par l'utilisateur. |
 | `menu:quickConnect` | — | Déclenche le Quick Connect natif. |
 | `menu:mapEditor` | — | Lance l'éditeur de cartes natif. |
-| `menu:settings` | — | Ouvre la preview Settings web si `neon-web-settings-preview=1`; sinon conserve le panneau CEGUI public. |
+| `menu:settings` | — | Ouvre le panneau Settings web. |
 | `menu:about` | — | Ouvre About/Credits en CEGUI au-dessus du shell. |
 | `menu:identity` | — | Lance/annule la connexion Discord ou déconnecte Neon Identity. |
 | `menu:sound` | `highlight`/`select`/`back`/`error` | Joue l'événement frontend GTA SA résident correspondant (IDs 3/1/2/4). |
@@ -122,13 +122,10 @@ Les connexions issues de Quick Connect ou de l'ancien navigateur conservent le
 flux CEGUI historique. Cette séparation empêche le shell web de capturer une
 tentative qu'il n'a pas initiée.
 
-## Settings — checkpoint 1
+## Settings
 
-La route `#/settings` est volontairement derrière le réglage d'application
-`neon-web-settings-preview=1` dans le client. Sans ce flag, le bouton Settings
-continue d'ouvrir CEGUI : le checkpoint peut donc être testé sans remplacer le
-fallback fonctionnel avant la parité complète. Le serveur de développement
-Vite ouvre directement la route et utilise des valeurs simulées.
+La route `#/settings` remplace le panneau CEGUI dans le client. Le serveur de
+développement Vite ouvre directement la route et utilise des valeurs simulées.
 
 | Commande | Arguments | Effet |
 |---|---|---|

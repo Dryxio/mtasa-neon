@@ -4041,17 +4041,9 @@ void CServerBrowserWeb::HandleMenuEvent(const SString& eventName, const std::vec
         m_mainMenu.OnEditorButtonClick();
     else if (eventName == "menu:settings")
     {
-        if (GetApplicationSettingInt("neon-web-settings-preview") != 0)
-        {
-            JsonPtr event = MakeObject();
-            AddString(event.get(), "type", "open-settings");
-            QueueEvent("menu", ToJson(event.get()));
-        }
-        else
-        {
-            SetNativeDialogVisible(true);
-            m_mainMenu.OnSettingsButtonClick(nullptr);
-        }
+        JsonPtr event = MakeObject();
+        AddString(event.get(), "type", "open-settings");
+        QueueEvent("menu", ToJson(event.get()));
     }
     else if (eventName == "menu:about")
     {
@@ -4091,8 +4083,6 @@ void CServerBrowserWeb::HandleSettingsEvent(const SString& eventName, const std:
 {
     if (eventName == "settings:ready")
     {
-        if (GetApplicationSettingInt("neon-web-settings-preview") == 0)
-            return;
         m_settingsReady = true;
         m_settings->Begin();
         m_lastSettingsState.clear();

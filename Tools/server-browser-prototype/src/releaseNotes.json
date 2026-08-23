@@ -2,6 +2,26 @@
   "schema": 1,
   "releases": [
     {
+      "build": 182,
+      "date": "2026-08-23",
+      "title": "Fix settings menu",
+      "summary": "Build 182 fixes the settings menu.",
+      "highlights": [
+        "Fix settings menu",
+        "Remove the obsolete preview gate",
+        "No registry workaround required"
+      ],
+      "sections": [
+        {
+          "label": "Fix",
+          "tone": "players",
+          "items": [
+            "Fix the new settings menu on clean installations."
+          ]
+        }
+      ]
+    },
+    {
       "build": 181,
       "date": "2026-08-22",
       "title": "Missing client assets restored",

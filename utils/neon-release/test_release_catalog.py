@@ -19,10 +19,10 @@ CATALOG_PATH = (
 
 
 class ReleaseCatalogTests(unittest.TestCase):
-    def test_repository_catalog_is_valid_and_prepares_build_181(self) -> None:
+    def test_repository_catalog_is_valid_and_prepares_build_182(self) -> None:
         releases = release_catalog.load_catalog(CATALOG_PATH)
-        self.assertEqual(releases[0].build, 181)
-        self.assertEqual(releases[0].display_version, "2026.08.22.181")
+        self.assertEqual(releases[0].build, 182)
+        self.assertEqual(releases[0].display_version, "2026.08.23.182")
 
     def test_next_build_ignores_ci_and_legacy_tags(self) -> None:
         tags = [
@@ -39,7 +39,7 @@ class ReleaseCatalogTests(unittest.TestCase):
 
     def test_rejects_duplicate_or_unsorted_builds(self) -> None:
         document = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-        document["releases"][1]["build"] = 181
+        document["releases"][1]["build"] = document["releases"][0]["build"]
         with tempfile.TemporaryDirectory(prefix="neon-release-catalog-") as temporary_directory:
             path = Path(temporary_directory) / "releases.json"
             path.write_text(json.dumps(document), encoding="utf-8")
