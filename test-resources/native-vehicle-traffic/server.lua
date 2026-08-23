@@ -7,7 +7,20 @@ local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
 local activeTest = false
-local population = {enabled = false, targetPerPlayer = 2, cap = 12}
+-- Four units keep a solo player's roads populated without letting many
+-- disjoint player bubbles grow without bound. Twelve units consume at most a
+-- small, bounded share of the common scripted-ped pool under normal passenger
+-- density, while the on-foot population keeps its own total-pool fence.
+local PRODUCTION_TARGET_PER_PLAYER = 4
+local PRODUCTION_GLOBAL_CAP = 12
+local PRODUCTION_PED_POOL_SOFT_LIMIT = 106
+local population = {
+    enabled = false,
+    targetPerPlayer = PRODUCTION_TARGET_PER_PLAYER,
+    cap = PRODUCTION_GLOBAL_CAP,
+    demo = false,
+}
+local demoPopulationSnapshot = false
 
 local MONITOR_INTERVAL = 500
 -- Eight seconds is shorter than an ordinary red-light wait. Keep deliberate
@@ -743,6 +756,10 @@ local function startMonitor(unit)
 end
 
 local function createUnit(candidate, owner, observers, mode)
+    if mode == "production" and #getElementsByType("ped") >= PRODUCTION_PED_POOL_SOFT_LIMIT then
+        return false, "ped-pool-reserve"
+    end
+
     local vehicle = createVehicle(candidate.model, candidate.x, candidate.y, candidate.z, 0, 0, candidate.rotation)
     local driverModel = tonumber(candidate.occupantModels and candidate.occupantModels[1])
     local ped = vehicle and createPed(driverModel, candidate.x, candidate.y, candidate.z + 1.0, candidate.rotation) or nil
@@ -764,7 +781,7 @@ local function createUnit(candidate, owner, observers, mode)
     if tonumber(candidate.vehicleClass) == 0 and maximumPassengers > 0 then
         if mode == "passengers" or (mode == "soak" and activeTest and activeTest.scenario == "passengers") then
             requestedSeats[1] = 1
-        elseif mode == "production" or mode == "density" then
+        elseif (mode == "production" or mode == "density") and not population.demo then
             -- Retail performs one independent 1/8 trial for every available
             -- passenger seat. This deterministic hash preserves that density
             -- without coupling server correctness to Lua's global RNG.
@@ -774,6 +791,10 @@ local function createUnit(candidate, owner, observers, mode)
             end
             for seat = 1, passengerCount do requestedSeats[#requestedSeats + 1] = seat end
         end
+    end
+    if mode == "production" then
+        local availablePassengerSlots = math.max(0, PRODUCTION_PED_POOL_SOFT_LIMIT - #getElementsByType("ped"))
+        while #requestedSeats > availablePassengerSlots do table.remove(requestedSeats) end
     end
     for _, seat in ipairs(requestedSeats) do
         local passengerModel = tonumber(candidate.occupantModels[math.min(#candidate.occupantModels, #passengers + 2)])
@@ -1161,6 +1182,7 @@ local function populationTick()
     if not population.enabled then return end
     local ps = players()
     if #ps == 0 then return end
+    if #getElementsByType("ped") >= PRODUCTION_PED_POOL_SOFT_LIMIT and not population.testDensity then return end
 
     for session, pending in pairs(pendingCandidates) do
         if getTickCount() - pending.requestedAt > 15000 then
@@ -1240,18 +1262,22 @@ local function populationTick()
     if owner and not ownerHasPendingCandidate(owner) then requestCandidate(owner, mode, 1) end
 end
 
-local function startPopulation(targetPerPlayer, cap, testDensity)
+local function startPopulation(targetPerPlayer, cap, testDensity, targetPerPlayerLimit, demoMode)
     trafficGeneration = trafficGeneration + 1
     pendingCandidates = {}
     candidateReservations = {}
-    population.targetPerPlayer = math.max(1, math.min(4, tonumber(targetPerPlayer) or 2))
-    population.cap = math.max(1, math.min(24, tonumber(cap) or 12))
+    population.targetPerPlayer = math.max(
+        1, math.min(tonumber(targetPerPlayerLimit) or 4, tonumber(targetPerPlayer) or PRODUCTION_TARGET_PER_PLAYER))
+    population.cap = math.max(1, math.min(24, tonumber(cap) or PRODUCTION_GLOBAL_CAP))
     population.testDensity = type(testDensity) == "string" and testDensity or false
+    population.demo = demoMode == true
     population.enabled = true
     if isTimer(population.timer) then killTimer(population.timer) end
     population.timer = setTimer(populationTick, 1000, 0)
     populationTick()
-    trace("population-start", {targetPerPlayer = population.targetPerPlayer, cap = population.cap, testDensity = population.testDensity})
+    trace("population-start", {
+        targetPerPlayer = population.targetPerPlayer, cap = population.cap, testDensity = population.testDensity, demo = population.demo,
+    })
 end
 
 local function stopPopulation(reason, destroyOwned)
@@ -1260,12 +1286,52 @@ local function stopPopulation(reason, destroyOwned)
     candidateReservations = {}
     population.enabled = false
     population.testDensity = false
+    population.demo = false
     if isTimer(population.timer) then killTimer(population.timer) end
     population.timer = nil
     if destroyOwned then
         destroyUnitsWhere(reason or "population-stop", function(unit) return unit.mode == "production" or unit.mode == "density" end)
     end
     trace("population-stop", {reason = reason, remaining = unitCount()})
+end
+
+local function setVehicleTrafficDemo(requested)
+    requested = requested == true
+    if requested then
+        if activeTest then
+            trace("demo-refused", {reason = "test-active"})
+            return false, "test-active"
+        end
+        if #players() ~= 2 then
+            trace("demo-refused", {reason = "exactly-two-clients-required", players = #players()})
+            return false, "exactly-two-clients-required"
+        end
+        if not demoPopulationSnapshot then
+            demoPopulationSnapshot = {
+                enabled = population.enabled,
+                targetPerPlayer = population.targetPerPlayer,
+                cap = population.cap,
+            }
+        end
+        -- Existing production units may contain passengers. Recreate the
+        -- visual preset from zero so its 16 vehicles reserve exactly 16 ped
+        -- slots for drivers and leave the promised 50 slots for foot traffic.
+        destroyUnitsWhere("demo-reset", function(unit) return unit.mode == "production" or unit.mode == "density" end)
+        startPopulation(8, 16, false, 8, true)
+        trace("demo-start", {targetPerPlayer = 8, cap = 16, players = 2})
+        return true
+    end
+
+    if not demoPopulationSnapshot then
+        trace("demo-stop", {restored = false, alreadyStopped = true})
+        return true
+    end
+    local snapshot = demoPopulationSnapshot
+    demoPopulationSnapshot = false
+    stopPopulation("demo-stop", true)
+    if snapshot and snapshot.enabled then startPopulation(snapshot.targetPerPlayer, snapshot.cap, false) end
+    trace("demo-stop", {restored = snapshot and snapshot.enabled == true or false})
+    return true
 end
 
 local function handleTrafficCommand(player, action, mode, value)
@@ -1319,26 +1385,78 @@ local function handleTrafficCommand(player, action, mode, value)
         setTimer(requestCandidate, 1500, 1, owner, mode, 1)
     elseif action == "start" then
         if activeTest then return trace("population-refused", {reason = "test-active"}) end
+        if demoPopulationSnapshot then return trace("population-refused", {reason = "demo-active"}) end
         startPopulation(mode, value, false)
+    elseif action == "demo" then
+        local requested = tostring(mode or "on"):lower()
+        if requested == "on" or requested == "off" then
+            setVehicleTrafficDemo(requested == "on")
+        else
+            trace("usage", {command = "cartraffic demo on|off"})
+        end
     elseif action == "stop" then
+        demoPopulationSnapshot = false
         stopPopulation("command-stop", true)
     elseif action == "status" then
         trace("status", {enabled = population.enabled, units = unitCount(), pending = pendingCount(), cap = population.cap,
-            targetPerPlayer = population.targetPerPlayer, test = activeTest and activeTest.mode or false})
+            targetPerPlayer = population.targetPerPlayer, demo = population.demo, test = activeTest and activeTest.mode or false})
     elseif action == "cleanup" then
+        demoPopulationSnapshot = false
         stopPopulation("command-cleanup", false)
         if activeTest and isTimer(activeTest.watchdogTimer) then killTimer(activeTest.watchdogTimer) end
         activeTest = false
         destroyUnitsWhere("command-cleanup")
         clearTakeovers(false, "command-cleanup")
     else
-        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|soak [cycles] | cartraffic start [perPlayer] [cap] | stop | status | cleanup"})
+        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|soak [cycles] | cartraffic start [perPlayer] [cap] | demo on|off | stop | status | cleanup"})
     end
 end
 
 addCommandHandler("cartraffic", function(player, _, action, mode, value)
+    if isElement(player) and not hasObjectPermissionTo(player, "function.kickPlayer", false) then
+        outputChatBox("Vehicle traffic controls are restricted to server staff", player, 255, 100, 80)
+        return
+    end
     handleTrafficCommand(player, action, mode, value)
 end)
+
+addCommandHandler("trafficdemo", function(player, _, action)
+    if isElement(player) and not hasObjectPermissionTo(player, "function.kickPlayer", false) then
+        outputChatBox("Traffic demo controls are restricted to server staff", player, 255, 100, 80)
+        return
+    end
+    action = tostring(action or "on"):lower()
+    if action == "on" or action == "off" then
+        local requested = action == "on"
+        if requested then
+            local pedCallOk, pedAccepted, pedReason = pcall(function()
+                return exports["native-ped-traffic"]:pedTrafficSetDemo(true, player, true)
+            end)
+            if not pedCallOk or pedAccepted ~= true then
+                return trace("demo-refused", {reason = pedReason or "ped-resource-unavailable"})
+            end
+            local vehicleAccepted, vehicleReason = setVehicleTrafficDemo(true)
+            if not vehicleAccepted then
+                pcall(function() exports["native-ped-traffic"]:pedTrafficSetDemo(false, player, true) end)
+                return trace("demo-refused", {reason = vehicleReason or "vehicle-preflight"})
+            end
+        else
+            setVehicleTrafficDemo(false)
+            pcall(function() exports["native-ped-traffic"]:pedTrafficSetDemo(false, player, true) end)
+        end
+    else
+        trace("usage", {command = "trafficdemo on|off"})
+    end
+end)
+
+setTimer(function()
+    if not demoPopulationSnapshot then return end
+    local pedResource = getResourceFromName("native-ped-traffic")
+    if not pedResource or getResourceState(pedResource) ~= "running" then
+        trace("demo-stop", {reason = "ped-resource-unavailable"})
+        setVehicleTrafficDemo(false)
+    end
+end, 1000, 0)
 
 -- A file-backed queue keeps the integration harness entirely headless. The
 -- deployed test resource consumes one command atomically, while ordinary
@@ -1357,6 +1475,10 @@ setTimer(function()
 end, 250, 0)
 
 addEventHandler("onPlayerQuit", root, function()
+    if demoPopulationSnapshot then
+        setVehicleTrafficDemo(false)
+        pcall(function() exports["native-ped-traffic"]:pedTrafficSetDemo(false, false, true) end)
+    end
     populationProfiles[source] = nil
     for vehicle, takeover in pairs(takeoverVehicles) do
         if takeover.player == source then
@@ -1528,6 +1650,9 @@ addEventHandler("onElementDestroy", root, function()
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
+    if demoPopulationSnapshot then
+        pcall(function() exports["native-ped-traffic"]:pedTrafficSetDemo(false, false, true) end)
+    end
     trafficGeneration = trafficGeneration + 1
     pendingCandidates = {}
     candidateReservations = {}
@@ -1535,4 +1660,14 @@ addEventHandler("onResourceStop", resourceRoot, function()
     clearTakeovers(false, "resource-stop")
 end)
 
-trace("ready", {models = ALLOWED_MODEL_COUNT, contextualGroups = 20})
+addEventHandler("onResourceStart", resourceRoot, function()
+    startPopulation(PRODUCTION_TARGET_PER_PLAYER, PRODUCTION_GLOBAL_CAP, false)
+    trace("ready", {
+        models = ALLOWED_MODEL_COUNT,
+        contextualGroups = 20,
+        autoStart = true,
+        targetPerPlayer = PRODUCTION_TARGET_PER_PLAYER,
+        cap = PRODUCTION_GLOBAL_CAP,
+        pedPoolSoftLimit = PRODUCTION_PED_POOL_SOFT_LIMIT,
+    })
+end)

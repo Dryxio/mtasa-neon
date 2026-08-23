@@ -1,7 +1,9 @@
 # Native ped traffic V1
 
-This test resource creates a small shared ambient pedestrian population without
-reenabling GTA's unmanaged `CPopulation::AddToPopulation` loop.
+This resource creates a shared ambient pedestrian population without
+reenabling GTA's unmanaged `CPopulation::AddToPopulation` loop. Production
+population starts automatically with the resource and adapts to every eligible
+player in dimension/interior 0.
 
 The server first selects one versioned vanilla campaign population state. The
 default `post_home_coming` preset starts from the stock 336-zone main.scm
@@ -121,6 +123,8 @@ creation and camera-generation multipliers. Civilian/dealer residency ends at
 the stock 54.5 multiplier; gangs retain GTA's extra 30 m. Overlapping players share
 the same peds and counts, while disjoint players can fill separate bubbles.
 A group remains resident when any member is inside any player's gang radius.
+Suspended actors must cross back inside GTA's 50.5 multiplier before resuming;
+this stock spatial hysteresis prevents repeated task teardown at the outer edge.
 Peds beyond every matching radius receive the stock four-second grace, then
 the server asks every eligible client whether the element is on screen. A
 missing answer or any visible vote defers removal. Family rebalancing uses the
@@ -136,9 +140,10 @@ updates. The intermediate vanilla 25 m-to-removal-radius camera-mode retention
 exceptions are not modeled yet; removal is deliberately more conservative and
 waits for every client to report the ped off screen.
 
-Ownership changes only after another player stays at least 20 m closer for
-three seconds. The old owner kills its native task and releases its streaming
-lease before the new epoch is assigned.
+Ownership remains sticky while the current owner is a collision resident.
+Leaving that residency radius must be continuous for three seconds before a
+resident peer takes over. The old owner kills its native task and releases its
+streaming lease before the revalidated new epoch is assigned.
 
 With debug enabled, the server also writes bounded structured records to the
 deployed resource's private `@population-server.jsonl`. Its
@@ -153,6 +158,9 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
 - `/pedtraffic on` starts population generation.
 - `/pedtraffic off` destroys only resource-owned traffic peds.
 - `/pedtraffic status` prints counters and the current cap.
+- `/pedtraffic demo on|off` controls the 32-ped visual-demo target for this
+  resource. When `native-vehicle-traffic` is running, `/trafficdemo on|off`
+  controls both resources with one command and pairs it with 16 road vehicles.
 - `/pedtraffic debug on|off` enables bounded client/server telemetry.
 - `/pedtraffic preset post_intro|post_cleaning_the_hood|post_green_sabre|post_home_coming`
   changes the authoritative campaign population state. Existing traffic is
@@ -216,9 +224,10 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
   takes the branch at `sample15 >= 29491`, requests GTA's two native
   occupations and commits two civilians or zero with a common owner/epoch.
 
-The resource starts disabled. V1 is outdoor-only (`dimension=0`, `interior=0`)
-and now admits GTA's civilian, dealer, regional city-cop and resident-gang
-population classes.
+The resource starts enabled. Server staff can stop it with `/pedtraffic off`
+before running an isolated harness. V1 is outdoor-only (`dimension=0`,
+`interior=0`) and admits GTA's civilian, dealer, regional city-cop and
+resident-gang population classes.
 Dealers are solo, use the exact retail `DEALERS` group `{28,29,30,254}`, carry
 logical `PED_TYPE_DEALER` even when `peds.ide` says criminal/civilian, receive
 no initial weapon, and start in WanderStandard. On the first real fight-control

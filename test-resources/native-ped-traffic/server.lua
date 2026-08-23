@@ -1,6 +1,11 @@
 local config = {
-    -- Preserve twenty logical ped slots for players, missions and unrelated
-    -- resources while allowing two disjoint native population bubbles to fill.
+    -- Start the public population with the resource. Tests can still disable
+    -- it explicitly before exercising an isolated harness.
+    autoStart = true,
+    -- Cap all scripted peds at ninety, including vehicle occupants created by
+    -- other resources. This leaves twenty logical slots for players, missions
+    -- and short-lived gameplay actors while disjoint population bubbles share
+    -- the remaining capacity.
     globalCap = 90,
     pedPoolSoftLimit = 90,
     despawnGrace = 4000,
@@ -10,7 +15,6 @@ local config = {
     requestInterval = 100,
     requestTimeout = 3500,
     visibilityTimeout = 1000,
-    handoffMargin = 20,
     handoffHold = 3000,
     handoffTimeout = 2000,
     corpseLifetime = 30000,
@@ -227,6 +231,14 @@ local pendingRequests = {}
 local pendingVisibilityChecks = {}
 local populationProfiles = {}
 local populationWorld = PedTrafficPopulationWorld.create("post_home_coming")
+pedTrafficDemoDensity = {
+    enabled = false,
+    target = 32,
+    epoch = 0,
+    anchor = false,
+    previousEnabled = false,
+    fallbackCursor = 0,
+}
 local lastDealerStrengthMinute = math.floor(getTickCount() / config.dealerStrengthGrowthInterval)
 local populationWorldPublishedAt = getTickCount()
 local populationWorldConvergenceTraceRevision = false
@@ -234,6 +246,15 @@ local populationWorldRevisions = {}
 local trafficPeds = {}
 local trafficGroups = {}
 local coupleRuntime = {relations = {}, rngState = 0x13579BDF}
+
+local function getTrafficPedCount()
+    local count = 0
+    for ped in pairs(trafficPeds) do
+        if isElement(ped) then count = count + 1 end
+    end
+    return count
+end
+
 local nextGroupDamageId = 0
 local testVehicles = {}
 local pendingNativeBikeJacks = {}
@@ -505,7 +526,7 @@ local function validatePopulationProfile(profile)
     }
 end
 
-local function calculateNativeTargets(profile)
+local function calculateNativeTargets(profile, applyDemoDensity)
     -- Retail gates AddToPopulation with ms_nTotalPeds, which deliberately
     -- excludes dealers, and only then compares each family's own deficit.
     -- Preserve those two notions instead of charging dealers against the
@@ -514,18 +535,31 @@ local function calculateNativeTargets(profile)
     local dealerNativeTarget = profile.dealerTarget * populationWorld.densityMultiplier
     local gangNativeTarget = populationWorld.randomGangMembers and profile.gangTarget * populationWorld.densityMultiplier or 0
     local copNativeTarget = profile.effectiveCopTarget * populationWorld.densityMultiplier
-    local fullPopulationTarget = civilianNativeTarget + dealerNativeTarget + gangNativeTarget + copNativeTarget
     local supportedGangWeight = 0
     for index = 1, 8 do supportedGangWeight = supportedGangWeight + profile.gangWeights[index] end
     if profile.totalGangWeight > 0 and supportedGangWeight < profile.totalGangWeight then
         gangNativeTarget = gangNativeTarget * supportedGangWeight / profile.totalGangWeight
     end
+    local fullPopulationTarget = civilianNativeTarget + dealerNativeTarget + gangNativeTarget + copNativeTarget
     if fullPopulationTarget <= 0 then
         return 0, 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     end
 
-    local fullPopulationGate = profile.pedDensityMultiplier * profile.fewerPedsMultiplier *
-        math.min(profile.maximumPedsInUse, fullPopulationTarget)
+    -- The demo deliberately preserves the current zone's civilian/gang/cop/
+    -- dealer mix while scaling its combined target. It remains bounded by the
+    -- ordinary global and per-cell admission fences, so disabling the demo can
+    -- return to retail density without leaving a second population lifecycle.
+    if applyDemoDensity then
+        local scale = pedTrafficDemoDensity.target / fullPopulationTarget
+        civilianNativeTarget = civilianNativeTarget * scale
+        dealerNativeTarget = dealerNativeTarget * scale
+        gangNativeTarget = gangNativeTarget * scale
+        copNativeTarget = copNativeTarget * scale
+        fullPopulationTarget = pedTrafficDemoDensity.target
+    end
+
+    local fullPopulationGate = applyDemoDensity and pedTrafficDemoDensity.target or
+        profile.pedDensityMultiplier * profile.fewerPedsMultiplier * math.min(profile.maximumPedsInUse, fullPopulationTarget)
     local total = math.max(0, math.ceil(fullPopulationGate - 0.0001))
     local gangTargets = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     if gangNativeTarget > 0 and supportedGangWeight > 0 then
@@ -536,12 +570,15 @@ local function calculateNativeTargets(profile)
     return total, civilianNativeTarget, dealerNativeTarget, copNativeTarget, gangNativeTarget, gangTargets
 end
 
-local function getPopulationRadii(profile)
+local function getPopulationRadii(profile, resume)
     if not profile then
         return false
     end
     local scaledDistance = profile.creationDistanceMultiplier * profile.generationDistanceMultiplier
-    local civilian = scaledDistance * 54.5
+    -- Retail ManagePed uses 54.5 as its outer lifecycle boundary, but a ped
+    -- returning from that boundary must cross back inside 50.5. Preserve that
+    -- spatial hysteresis so a frozen edge pose cannot suspend/resume forever.
+    local civilian = scaledDistance * (resume and 50.5 or 54.5)
     return {
         civilian = civilian,
         gang = civilian + 30,
@@ -554,7 +591,7 @@ local function getNativeTargetsNearPlayer(player)
     if not profile or profile.worldRevision ~= populationWorld.revision or getTickCount() - profile.receivedAt > 2500 then
         return false
     end
-    return calculateNativeTargets(profile)
+    return calculateNativeTargets(profile, pedTrafficDemoDensity.enabled and player == pedTrafficDemoDensity.anchor)
 end
 
 local function isEligiblePlayer(player)
@@ -601,13 +638,13 @@ local function getPopulationRadiusForClass(profile, populationClass)
     return radii and (populationClass == "gang" and radii.gang or radii.civilian) or false
 end
 
-local function findClosestPopulationResident(x, y, z, populationClass, excludedPlayer)
+local function findClosestPopulationResident(x, y, z, populationClass, excludedPlayer, resume)
     local closest, closestDistanceSquared
     for _, player in ipairs(getEligiblePlayers()) do
         if player ~= excludedPlayer then
             local profile = populationProfiles[player]
-            local radius = profile and profile.worldRevision == populationWorld.revision and
-                               getPopulationRadiusForClass(profile, populationClass) or false
+            local radii = profile and profile.worldRevision == populationWorld.revision and getPopulationRadii(profile, resume) or false
+            local radius = radii and (populationClass == "gang" and radii.gang or radii.civilian) or false
             if radius then
                 local px, py, pz = getElementPosition(player)
                 local distanceSquared = squaredDistance2D(x, y, px, py)
@@ -716,6 +753,10 @@ local function selectPopulationForPlayer(player)
     end
 
     local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
+    if pedTrafficDemoDensity.enabled and player == pedTrafficDemoDensity.anchor and
+        (physicalLive >= pedTrafficDemoDensity.target or getTrafficPedCount() >= pedTrafficDemoDensity.target) then
+        return false
+    end
     if stockCountedLive >= totalTarget then
         return false
     end
@@ -732,12 +773,35 @@ local function selectPopulationForPlayer(player)
     local dealerChance = dealerDeficit
     local gangChance = gangDeficit
     local copChance = copDeficit
+    local demoFallback = false
     -- This small independent randomization is part of FindNewPedType itself;
     -- it prevents low remaining deficits from producing a rigid cadence.
     if civilianChance < 2 then civilianChance = civilianChance * math.random() end
     if dealerChance < 2 then dealerChance = dealerChance * math.random() end
     if gangChance < 2 then gangChance = gangChance * math.random() end
     if copChance < 2 then copChance = copChance * math.random() end
+
+    if pedTrafficDemoDensity.enabled and player == pedTrafficDemoDensity.anchor then
+        local nativeGroupCount = 0
+        for _, group in pairs(trafficGroups) do
+            if not group.removing and (group.owner == player or group.pendingOwner == player) then nativeGroupCount = nativeGroupCount + 1 end
+        end
+        if nativeGroupCount >= config.maximumNativeGangGroups then gangChance = -math.huge end
+        if math.max(civilianChance, dealerChance, gangChance, copChance) <= 0 and
+            physicalLive < pedTrafficDemoDensity.target and getTrafficPedCount() < pedTrafficDemoDensity.target then
+            -- GTA exposes only five safe ambient group slots per owner. Once a
+            -- gang-heavy zone consumes them, alternate already resident dealer
+            -- and cop models to complete the visual target. A civilian-only
+            -- fallback can return no model indefinitely in gang-only zones.
+            pedTrafficDemoDensity.fallbackCursor = pedTrafficDemoDensity.fallbackCursor % 2 + 1
+            if pedTrafficDemoDensity.fallbackCursor == 1 then
+                dealerChance = pedTrafficDemoDensity.target - physicalLive
+            else
+                copChance = pedTrafficDemoDensity.target - physicalLive
+            end
+            demoFallback = true
+        end
+    end
 
     if math.max(civilianChance, dealerChance, gangChance, copChance) <= 0 then
         return false
@@ -766,6 +830,9 @@ local function selectPopulationForPlayer(player)
         dealerChance = dealerChance,
         gangChance = gangChance,
         copChance = copChance,
+        demoEpoch = pedTrafficDemoDensity.enabled and player == pedTrafficDemoDensity.anchor and pedTrafficDemoDensity.epoch or false,
+        demoPhysicalCeiling = pedTrafficDemoDensity.enabled and player == pedTrafficDemoDensity.anchor and pedTrafficDemoDensity.target or false,
+        demoFallback = demoFallback,
     }
     -- FindNewPedType's strict tie order is dealer, gang, cop, civilian.
     if dealerChance >= gangChance and dealerChance >= copChance and dealerChance >= civilianChance then
@@ -798,6 +865,13 @@ local function isSelectionStillNeeded(player, selection)
     end
 
     local stockCountedLive, physicalLive, civilianCount, dealerCount, copCount, gangCounts = getPopulationCountsNearPlayer(player)
+    if selection.demoEpoch then
+        if not pedTrafficDemoDensity.enabled or player ~= pedTrafficDemoDensity.anchor or
+            selection.demoEpoch ~= pedTrafficDemoDensity.epoch or physicalLive >= selection.demoPhysicalCeiling or
+            getTrafficPedCount() >= selection.demoPhysicalCeiling then
+            return false, "demo-density-stale-or-full"
+        end
+    end
     if stockCountedLive ~= selection.totalCount or physicalLive ~= selection.physicalCount or civilianCount ~= selection.civilianCount or
         dealerCount ~= selection.dealerCount or copCount ~= selection.copCount then
         return false, "population-selection-stale"
@@ -810,6 +884,7 @@ local function isSelectionStillNeeded(player, selection)
     if stockCountedLive >= totalTarget then
         return false, "population-total-target"
     end
+    if selection.demoFallback then return true end
     if selection.populationClass == "civilian" then
         if civilianTarget - civilianCount <= 0 then
             return false, "population-selection-stale"
@@ -983,14 +1058,6 @@ local function findFurthestSurplusPopulationGroup(x, y, z, radius, gang, require
         end
     end
     return furthestGroup
-end
-
-local function getTrafficPedCount()
-    local count = 0
-    for ped in pairs(trafficPeds) do
-        if isElement(ped) then count = count + 1 end
-    end
-    return count
 end
 
 local function getTrafficGroupCount()
@@ -1497,11 +1564,11 @@ local function finishHandoff(record, reason)
     if not record or record.removing then
         return
     end
-    local owner = record.pendingOwner
-    if not isEligiblePlayer(owner) then
-        local x, y, z = getElementPosition(record.ped)
-        owner = findClosestPopulationResident(x, y, z, record.populationClass)
-    end
+    -- The release handshake can take up to two seconds. Re-resolve residency
+    -- at commit time instead of installing a now-stale pending owner and
+    -- immediately revoking the freshly recreated Wander task.
+    local x, y, z = getElementPosition(record.ped)
+    local owner = findClosestPopulationResident(x, y, z, record.populationClass)
     if not owner then
         finishSuspension(record, reason)
         return
@@ -1604,13 +1671,13 @@ local function countNativeGroupsForOwner(owner, excludedGroup)
     return count
 end
 
-local function findClosestGroupResident(group, excludedPlayer, requireCapacity)
+local function findClosestGroupResident(group, excludedPlayer, requireCapacity, resume)
     local closest, closestDistanceSquared
     for _, player in ipairs(getEligiblePlayers()) do
         if player ~= excludedPlayer and
             (not requireCapacity or countNativeGroupsForOwner(player, group) < config.maximumNativeGangGroups) then
             local profile = populationProfiles[player]
-            local radii = profile and profile.worldRevision == populationWorld.revision and getPopulationRadii(profile) or false
+            local radii = profile and profile.worldRevision == populationWorld.revision and getPopulationRadii(profile, resume) or false
             local distanceSquared = radii and getGroupDistanceSquaredToPlayer(group, player)
             if distanceSquared and distanceSquared <= radii.gang * radii.gang and
                 (not closestDistanceSquared or distanceSquared < closestDistanceSquared) then
@@ -1761,10 +1828,9 @@ local function finishGroupHandoff(group, reason)
     if not group or group.removing then
         return
     end
-    local owner = group.pendingOwner
-    if not isEligiblePlayer(owner) then
-        owner = findClosestGroupResident(group, nil, true)
-    end
+    -- Group release is asynchronous too; only commit an owner that is still a
+    -- collision resident when the old native task has actually been released.
+    local owner = findClosestGroupResident(group, nil, true)
     if not owner then
         finishGroupSuspension(group, reason)
         return
@@ -1875,7 +1941,10 @@ local function updateGroupZeroResidentHold(group, reason, now)
         hold_age_ms = now - group.outsideResidencySince,
         reason = tostring(reason),
     })
-    beginGroupSuspension(group, reason)
+    -- Spatial departure alone must not tear down a healthy native group.
+    -- Retail removes distant peds only once they are no longer visible; a
+    -- suspend/resume cycle here destroys and recreates the whole group task
+    -- whenever its wander crosses the population boundary.
     return true
 end
 
@@ -1916,64 +1985,14 @@ local function beginGroupHandoff(group, newOwner, reason)
     })
 end
 
--- The ordinary three-second hysteresis prevents ownership ping-pong while two
--- players remain inside the same population bubble. It is not safe once the
--- current owner has left that bubble: GTA can unload the old collision sector
--- before the delayed handoff, allowing an authoritative ped to fall and export
--- that invalid transform. Check this narrow safety condition frequently and
--- transfer immediately to an already-resident peer. With no resident, keep
--- the same owner/epoch/native group for the bounded three-second collision
--- hold; only a continuous absence may suspend without a syncer. The slower lifecycle loop below owns resumption,
--- ordinary closer-owner arbitration and despawn decisions.
+-- Couple assignment and presentation need a short watchdog cadence. Spatial
+-- ownership itself remains sticky and uses the continuous-residency hold below;
+-- a single boundary sample must never tear down the native locomotion task.
 setTimer(function()
     if not enabled then
         return
     end
     local now = getTickCount()
-
-    local groups = {}
-    for _, group in pairs(trafficGroups) do groups[#groups + 1] = group end
-    for _, group in ipairs(groups) do
-        if not group.removing and group.state == "active" then
-            local closest = findClosestGroupResident(group, nil, true)
-            if not closest then
-                if not isCurrentGroupOwnerSpatiallyResident(group) then
-                    updateGroupZeroResidentHold(group, "group-no-collision-resident")
-                end
-            elseif closest ~= group.owner then
-                clearGroupZeroResidentHold(group, "resident-returned")
-                local ownerRadii = isEligiblePlayer(group.owner) and getPopulationRadii(populationProfiles[group.owner]) or false
-                local ownerDistanceSquared = ownerRadii and getGroupDistanceSquaredToPlayer(group, group.owner) or false
-                if not ownerDistanceSquared or ownerDistanceSquared > ownerRadii.gang * ownerRadii.gang then
-                    beginGroupHandoff(group, closest, "group-owner-left-residency")
-                end
-            else
-                clearGroupZeroResidentHold(group, "owner-resident")
-            end
-        end
-    end
-
-    local couples = {}
-    for _, relation in pairs(coupleRuntime.relations) do couples[#couples + 1] = relation end
-    for _, relation in ipairs(couples) do
-        if not relation.removing and relation.state == "active" then
-            local x, y, z = coupleRuntime.getCentre(relation)
-            local closest = x and findClosestPopulationResident(x, y, z, "civilian") or false
-            if not closest then
-                relation.outsideResidencySince = relation.outsideResidencySince or getTickCount()
-            elseif closest == relation.owner then
-                relation.outsideResidencySince = nil
-            else
-                local radius = isEligiblePlayer(relation.owner) and
-                    getPopulationRadiusForClass(populationProfiles[relation.owner], "civilian") or false
-                local ownerX, ownerY
-                if isElement(relation.owner) then ownerX, ownerY = getElementPosition(relation.owner) end
-                if not radius or not ownerX or squaredDistance2D(x, y, ownerX, ownerY) > radius * radius then
-                    coupleRuntime.beginHandoff(relation, closest, "couple-owner-left-residency")
-                end
-            end
-        end
-    end
 
     local couples = {}
     for _, relation in pairs(coupleRuntime.relations) do couples[#couples + 1] = relation end
@@ -1988,8 +2007,9 @@ setTimer(function()
                 end
             elseif relation.state == "revoking" then
                 if now >= (relation.handoffDeadline or 0) then
-                    local nextOwner = relation.pendingOwner
-                    if nextOwner and isEligiblePlayer(nextOwner) then
+                    local x, y, z = coupleRuntime.getCentre(relation)
+                    local nextOwner = x and findClosestPopulationResident(x, y, z, "civilian") or false
+                    if nextOwner then
                         coupleRuntime.assignOwner(relation, nextOwner, "couple-release-timeout")
                     else
                         coupleRuntime.remove(relation, "couple-handoff-timeout")
@@ -2002,7 +2022,7 @@ setTimer(function()
                     coupleRuntime.sendPresentations(relation, "couple-presentation-refresh")
                 end
                 local x, y, z = coupleRuntime.getCentre(relation)
-                local closest, closestDistanceSquared = x and findClosestPopulationResident(x, y, z, "civilian") or false
+                local closest = x and findClosestPopulationResident(x, y, z, "civilian") or false
                 if not closest then
                     relation.outsideResidencySince = relation.outsideResidencySince or now
                     if now - relation.outsideResidencySince >= config.handoffHold + config.despawnGrace then
@@ -2012,54 +2032,27 @@ setTimer(function()
                     relation.outsideResidencySince = nil
                     if not isEligiblePlayer(relation.owner) then
                         coupleRuntime.beginHandoff(relation, closest, "couple-owner-ineligible")
-                    elseif closest ~= relation.owner then
+                    else
+                        local ownerRadius = getPopulationRadiusForClass(populationProfiles[relation.owner], "civilian")
                         local ownerX, ownerY = getElementPosition(relation.owner)
-                        local ownerDistance = getDistanceBetweenPoints2D(x, y, ownerX, ownerY)
-                        local closestDistance = math.sqrt(closestDistanceSquared)
-                        if closestDistance + config.handoffMargin < ownerDistance then
+                        local ownerResident = ownerRadius and squaredDistance2D(x, y, ownerX, ownerY) <= ownerRadius * ownerRadius
+                        if not ownerResident and closest ~= relation.owner then
                             if relation.handoffCandidate ~= closest then
                                 relation.handoffCandidate = closest
                                 relation.handoffCandidateSince = now
                             elseif now - relation.handoffCandidateSince >= config.handoffHold then
-                                coupleRuntime.beginHandoff(relation, closest, "couple-closer-owner")
+                                coupleRuntime.beginHandoff(relation, closest, "couple-owner-left-residency")
                             end
                         else
                             relation.handoffCandidate = nil
                             relation.handoffCandidateSince = nil
                         end
-                    else
-                        relation.handoffCandidate = nil
-                        relation.handoffCandidateSince = nil
                     end
                 end
             end
         end
     end
 
-    local records = {}
-    for _, record in pairs(trafficPeds) do records[#records + 1] = record end
-    for _, record in ipairs(records) do
-        if not record.group and not record.couple and not record.removing and record.state == "active" and isElement(record.ped) then
-            local x, y, z = getElementPosition(record.ped)
-            local closest = findClosestPopulationResident(x, y, z, record.populationClass)
-            if not closest then
-                if not isCurrentPopulationOwnerSpatiallyResident(record) then
-                    beginSuspension(record, "no-collision-resident")
-                end
-            elseif closest ~= record.owner then
-                local ownerRadius = isEligiblePlayer(record.owner) and
-                                        getPopulationRadiusForClass(populationProfiles[record.owner], record.populationClass) or false
-                local ownerX, ownerY
-                if isElement(record.owner) then
-                    ownerX, ownerY = getElementPosition(record.owner)
-                end
-                local ownerDistanceSquared = ownerRadius and ownerX and squaredDistance2D(x, y, ownerX, ownerY) or false
-                if not ownerDistanceSquared or ownerDistanceSquared > ownerRadius * ownerRadius then
-                    beginHandoff(record, closest, "owner-left-residency")
-                end
-            end
-        end
-    end
 end, 100, 0)
 
 local function validateCandidate(player, candidate)
@@ -2121,7 +2114,11 @@ local function validateCandidate(player, candidate)
     end
 
     local cellX, cellY = cellForPosition(candidate.x, candidate.y)
-    if countPedsInCell(cellX, cellY) >= config.maxPerCell then
+    -- The coordinated showcase intentionally trades density cost for a busy
+    -- street. Production keeps the conservative spatial cap unchanged, and
+    -- the ordinary separation check still prevents overlapping actors.
+    local maximumPedsPerCell = pedTrafficDemoDensity.enabled and pedTrafficDemoDensity.target or config.maxPerCell
+    if countPedsInCell(cellX, cellY) >= maximumPedsPerCell then
         return false, "cell-full"
     end
     if hasNearbyTrafficPed(candidate.x, candidate.y, candidate.z) then
@@ -2165,7 +2162,8 @@ local function validateGroupCandidate(player, candidate, selection)
         local cellX, cellY = cellForPosition(candidateMember.x, candidateMember.y)
         local cellKey = tostring(cellX) .. ":" .. tostring(cellY)
         plannedCells[cellKey] = (plannedCells[cellKey] or 0) + 1
-        if countPedsInCell(cellX, cellY) + plannedCells[cellKey] > config.maxPerCell then
+        local maximumPedsPerCell = pedTrafficDemoDensity.enabled and pedTrafficDemoDensity.target or config.maxPerCell
+        if countPedsInCell(cellX, cellY) + plannedCells[cellKey] > maximumPedsPerCell then
             return false, "group-cell-full"
         end
         validated[index] = {
@@ -2229,7 +2227,8 @@ function coupleRuntime.validateCandidate(player, candidate, selection)
         local cellX, cellY = cellForPosition(member.x, member.y)
         local cellKey = tostring(cellX) .. ":" .. tostring(cellY)
         plannedCells[cellKey] = (plannedCells[cellKey] or 0) + 1
-        if countPedsInCell(cellX, cellY) + plannedCells[cellKey] > config.maxPerCell then
+        local maximumPedsPerCell = pedTrafficDemoDensity.enabled and pedTrafficDemoDensity.target or config.maxPerCell
+        if countPedsInCell(cellX, cellY) + plannedCells[cellKey] > maximumPedsPerCell then
             return false, "couple-cell-full"
         end
         validated[index] = {candidate = member, model = member.model, direction = member.direction, declaredPedType = member.pedType}
@@ -2759,7 +2758,18 @@ local function spawnCandidate(player, candidate, selection)
 end
 
 local function getCandidateVisibilityProbes(candidate, populationClass)
-    local source = type(candidate) == "table" and type(candidate.members) == "table" and candidate.members or {candidate}
+    local source
+    if type(candidate) == "table" and type(candidate.members) == "table" then
+        source = candidate.members
+    elseif populationClass == "gang" and type(candidate) == "table" then
+        -- The gang oracle returns its members as the top-level Lua array,
+        -- while the couple oracle uses a keyed `members` array and singleton
+        -- candidates use scalar fields. Normalize those three wire shapes
+        -- before asking every resident camera to veto an on-screen spawn.
+        source = candidate
+    else
+        source = {candidate}
+    end
     local probes = {}
     for _, member in ipairs(source) do
         if type(member) == "table" and isFiniteNumber(member.x) and isFiniteNumber(member.y) and isFiniteNumber(member.z) then
@@ -4023,7 +4033,8 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
         return
     end
 
-    local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets = calculateNativeTargets(validated)
+    local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets =
+        calculateNativeTargets(validated, pedTrafficDemoDensity.enabled and client == pedTrafficDemoDensity.anchor)
     local targetSignature = {}
     for index = 1, 10 do targetSignature[index] = ("%.3f"):format(gangTargets[index]) end
     validated.signature = ("%d:%.3f:%.3f:%.3f:%.3f:%s:%s:%d:%d:%s:%d:%.3f:%.3f:%s:%d:%d:%.3f:%.3f:%d:%.3f:%.3f"):format(
@@ -5026,6 +5037,9 @@ addEventHandler("onElementDestroy", root, function()
 end)
 
 addEventHandler("onPlayerQuit", root, function()
+    if pedTrafficDemoDensity.enabled and pedTrafficDemoDensity.anchor == source then
+        pedTrafficSetDemo(false, false)
+    end
     if coupleTest and (source == coupleTest.players[1] or source == coupleTest.players[2]) then
         finishCoupleTest("FAIL", "client-left")
     end
@@ -5150,6 +5164,28 @@ setTimer(function()
         return
     end
 
+    if pedTrafficDemoDensity.enabled then
+        local anchorReady = false
+        for _, resident in ipairs(players) do
+            if resident == pedTrafficDemoDensity.anchor then
+                anchorReady = true
+                break
+            end
+        end
+        if not anchorReady then
+            -- A world revision briefly removes otherwise eligible players from
+            -- the ready set while their population profiles reconverge. Keep
+            -- the demo transaction alive during that bounded handshake; real
+            -- departures are handled by the eligibility and quit paths.
+            if isEligiblePlayer(pedTrafficDemoDensity.anchor) then return end
+            pedTrafficSetDemo(false, false)
+            return
+        end
+        -- Only the selected camera bubble admits demo peds. Every other
+        -- eligible player remains a resident, observer and visibility voter.
+        players = {pedTrafficDemoDensity.anchor}
+    end
+
     requestCursor = requestCursor % #players + 1
     for offset = 0, #players - 1 do
         local player = players[(requestCursor + offset - 1) % #players + 1]
@@ -5183,7 +5219,9 @@ setTimer(function()
         -- seconds, then let the normal native candidate lane refill it.
         local profile = populationProfiles[player]
         local now = getTickCount()
-        if nativeTarget and profile and now >= (profile.nextRebalanceAt or 0) and
+        local demoAtPhysicalCeiling = pedTrafficDemoDensity.enabled and player == pedTrafficDemoDensity.anchor and
+            physicalLive >= pedTrafficDemoDensity.target
+        if not demoAtPhysicalCeiling and nativeTarget and profile and now >= (profile.nextRebalanceAt or 0) and
             (stockCountedLive > nativeTarget or (stockCountedLive >= nativeTarget and classDeficit) or dealerCount - dealerTarget >= 1 or
                 copCount - copTarget >= 1) then
             local surplus = false
@@ -5241,6 +5279,9 @@ setTimer(function()
         if selection and selection.populationClass == "civilian" and not request and not next(pendingRequests) and
             not next(pendingVisibilityChecks) then
             local sample15, taken = coupleRuntime.roll()
+            local demoRemaining = selection.demoPhysicalCeiling and
+                math.min(selection.demoPhysicalCeiling - selection.physicalCount,
+                         selection.demoPhysicalCeiling - getTrafficPedCount()) or math.huge
             selection.coupleSample = sample15
             selection.coupleAttempt = taken
             stats.coupleAttempts = stats.coupleAttempts + 1
@@ -5250,7 +5291,7 @@ setTimer(function()
                 threshold = 29491,
                 branch = taken and "taken" or "singleton",
             })
-            if taken and (getTrafficPedCount() + 2 > config.globalCap or
+            if taken and (demoRemaining < 2 or getTrafficPedCount() + 2 > config.globalCap or
                 #getElementsByType("ped") + 2 > config.pedPoolSoftLimit) then
                 stats.coupleRollbacks = stats.coupleRollbacks + 1
                 writePopulationTrace("couple_rollback", {
@@ -5268,8 +5309,12 @@ setTimer(function()
             selection = false
         end
         if selection and selection.populationClass == "gang" then
+            local demoRemaining = selection.demoPhysicalCeiling and
+                math.min(selection.demoPhysicalCeiling - selection.physicalCount,
+                         selection.demoPhysicalCeiling - getTrafficPedCount()) or config.maximumGangGroupSize
             selection.maximumGroupMembers = math.min(
                 config.maximumGangGroupSize,
+                demoRemaining,
                 config.globalCap - getTrafficPedCount(),
                 config.pedPoolSoftLimit - #getElementsByType("ped"))
             if selection.maximumGroupMembers < config.minimumGangGroupSize then
@@ -5277,6 +5322,7 @@ setTimer(function()
             end
         end
         if selection and not request and not next(pendingRequests) and not next(pendingVisibilityChecks) and
+            (not selection.demoPhysicalCeiling or getTrafficPedCount() < selection.demoPhysicalCeiling) and
             getTrafficPedCount() < config.globalCap and
             #getElementsByType("ped") < config.pedPoolSoftLimit then
             nextRequestId = nextRequestId + 1
@@ -5332,6 +5378,8 @@ setTimer(function()
     end
 
     local now = getTickCount()
+    local worldConverging = getPopulationWorldConvergencePlayerCount() > 0 and
+        now - populationWorldPublishedAt <= config.populationWorldConvergenceGrace
     local groups = {}
     for _, group in pairs(trafficGroups) do groups[#groups + 1] = group end
     for _, group in ipairs(groups) do
@@ -5341,7 +5389,7 @@ setTimer(function()
                     finishGroupSuspension(group, "group-suspension-release-timeout")
                 end
             elseif group.state == "suspended" then
-                local resident = findClosestGroupResident(group, nil, true)
+                local resident = findClosestGroupResident(group, nil, true, true)
                 if resident then
                     if group.visibilityCheckId then
                         finishRemovalVisibilityCheck(pendingVisibilityChecks[group.visibilityCheckId], true, "resident-returned")
@@ -5372,35 +5420,35 @@ setTimer(function()
                 else
                     local resident = findClosestGroupResident(group)
                     if not resident then
-                        if not isCurrentGroupOwnerSpatiallyResident(group) then
-                            updateGroupZeroResidentHold(group, "group-no-collision-resident", now)
+                        if worldConverging then
+                            clearGroupZeroResidentHold(group, "world-convergence")
+                        elseif not isCurrentGroupOwnerSpatiallyResident(group) and
+                            updateGroupZeroResidentHold(group, "group-no-collision-resident", now) then
+                            beginRemovalVisibilityCheck(group, "group-outside-residency")
                         end
                     else
                         if group.visibilityCheckId then
                             finishRemovalVisibilityCheck(pendingVisibilityChecks[group.visibilityCheckId], true, "resident-returned")
                         end
                         clearGroupZeroResidentHold(group, "resident-returned")
-                        local closest, closestDistanceSquared = findClosestGroupResident(group, nil, true)
+                        local closest = findClosestGroupResident(group, nil, true)
                         if not closest then
                             group.handoffCandidate = nil
                             group.handoffCandidateSince = nil
                         elseif not isEligiblePlayer(group.owner) then
                             beginGroupHandoff(group, closest, "group-owner-ineligible")
-                        elseif closest ~= group.owner then
-                            local ownerDistance = math.sqrt(getGroupDistanceSquaredToPlayer(group, group.owner))
-                            local closestDistance = math.sqrt(closestDistanceSquared)
-                            if closestDistance + config.handoffMargin < ownerDistance then
-                                if group.handoffCandidate ~= closest then
-                                    group.handoffCandidate = closest
-                                    group.handoffCandidateSince = now
-                                elseif now - group.handoffCandidateSince >= config.handoffHold then
-                                    beginGroupHandoff(group, closest, "group-closer-owner")
-                                end
-                            else
-                                group.handoffCandidate = nil
-                                group.handoffCandidateSince = nil
+                        elseif not isCurrentGroupOwnerSpatiallyResident(group) and closest ~= group.owner then
+                            if group.handoffCandidate ~= closest then
+                                group.handoffCandidate = closest
+                                group.handoffCandidateSince = now
+                            elseif now - group.handoffCandidateSince >= config.handoffHold then
+                                beginGroupHandoff(group, closest, "group-owner-left-residency")
                             end
                         else
+                            -- Being marginally closer is not an authority
+                            -- change: revoking a healthy resident owner
+                            -- restarts the whole native group task. A real
+                            -- departure still transfers after the hold above.
                             group.handoffCandidate = nil
                             group.handoffCandidateSince = nil
                         end
@@ -5422,7 +5470,7 @@ setTimer(function()
                 end
             elseif record.state == "suspended" then
                 local x, y, z = getElementPosition(record.ped)
-                local resident = findClosestPopulationResident(x, y, z, record.populationClass)
+                local resident = findClosestPopulationResident(x, y, z, record.populationClass, nil, true)
                 if resident then
                     if record.visibilityCheckId then
                         finishRemovalVisibilityCheck(pendingVisibilityChecks[record.visibilityCheckId], true, "resident-returned")
@@ -5459,10 +5507,27 @@ setTimer(function()
                 stopClimbTest(record, "timeout")
             elseif not isPedDead(record.ped) then
                 local x, y, z = getElementPosition(record.ped)
-                local closest, closestDistanceSquared = findClosestPopulationResident(x, y, z, record.populationClass)
+                local closest = findClosestPopulationResident(x, y, z, record.populationClass)
                 if not closest then
-                    if not isCurrentPopulationOwnerSpatiallyResident(record) then
-                        beginSuspension(record, "no-collision-resident")
+                    if not isEligiblePlayer(record.owner) then
+                        beginSuspension(record, "owner-ineligible")
+                    elseif worldConverging then
+                        record.outsideResidencySince = nil
+                    elseif not record.outsideResidencySince then
+                        record.outsideResidencySince = now
+                        writePopulationTrace("collision_residency_hold_started", {
+                            traffic_id = record.id,
+                            epoch = record.epoch,
+                            owner_id = getPopulationClientId(record.owner),
+                            hold_ms = config.handoffHold,
+                            reason = "no-collision-resident",
+                        })
+                    elseif now - record.outsideResidencySince >= config.handoffHold then
+                        -- Keep the existing owner/task alive while any camera
+                        -- can still see the ped. The visibility transaction
+                        -- removes it atomically once it is safely off-screen,
+                        -- matching retail lifecycle without walk/stop churn.
+                        beginRemovalVisibilityCheck(record, "outside-residency")
                     end
                 else
                     if record.visibilityCheckId then
@@ -5477,22 +5542,18 @@ setTimer(function()
                         -- reports the requested physical phase above.
                         record.handoffCandidate = nil
                         record.handoffCandidateSince = nil
-                    elseif closest ~= record.owner then
-                        local ownerX, ownerY, ownerZ = getElementPosition(record.owner)
-                        local ownerDistance = math.sqrt(squaredDistance2D(x, y, ownerX, ownerY))
-                        local closestDistance = math.sqrt(closestDistanceSquared)
-                        if closestDistance + config.handoffMargin < ownerDistance then
-                            if record.handoffCandidate ~= closest then
-                                record.handoffCandidate = closest
-                                record.handoffCandidateSince = now
-                            elseif now - record.handoffCandidateSince >= config.handoffHold then
-                                beginHandoff(record, closest, "closer-owner")
-                            end
-                        else
-                            record.handoffCandidate = nil
-                            record.handoffCandidateSince = nil
+                    elseif not isCurrentPopulationOwnerSpatiallyResident(record) and closest ~= record.owner then
+                        if record.handoffCandidate ~= closest then
+                            record.handoffCandidate = closest
+                            record.handoffCandidateSince = now
+                        elseif now - record.handoffCandidateSince >= config.handoffHold then
+                            beginHandoff(record, closest, "owner-left-residency")
                         end
                     else
+                        -- Keep a healthy resident owner sticky. The native
+                        -- Wander task is more valuable than a small distance
+                        -- improvement to another client, and the collision
+                        -- fence still handles a real residency departure.
                         record.handoffCandidate = nil
                         record.handoffCandidateSince = nil
                     end
@@ -6059,7 +6120,8 @@ addEventHandler("pedTraffic:coupleEvidence", resourceRoot, function(relationId, 
                 walk_speeds = data.walkSpeeds,
             })
         elseif evidence == "released" and couple.state == "revoking" then
-            local newOwner = couple.pendingOwner
+            local x, y, z = coupleRuntime.getCentre(couple)
+            local newOwner = x and findClosestPopulationResident(x, y, z, "civilian") or false
             if not newOwner or not coupleRuntime.assignOwner(couple, newOwner, "couple-release-ack") then
                 coupleRuntime.remove(couple, "couple-handoff-owner-missing")
             end
@@ -6555,6 +6617,11 @@ setTimer(function()
             local radii = getPopulationRadii(profile)
             writePopulationTrace("population_snapshot", {
                 player_id = getPopulationClientId(player),
+                demo = {
+                    enabled = pedTrafficDemoDensity.enabled,
+                    target = pedTrafficDemoDensity.target,
+                    anchor = isElement(pedTrafficDemoDensity.anchor) and getPopulationClientId(pedTrafficDemoDensity.anchor) or false,
+                },
                 targets = {total = totalTarget, civilian = civilianTarget, dealer = dealerTarget, cop = copTarget, gang = gangTarget},
                 live = {
                     total = stockCountedLive,
@@ -7194,12 +7261,83 @@ setTimer(function()
     end
 end, 1000, 0)
 
+function pedTrafficSetDemo(requested, actor, coordinated)
+    requested = requested == true
+    if requested == pedTrafficDemoDensity.enabled then
+        if requested and coordinated then return false, "ped-demo-already-active" end
+        log(("demo-density enabled=%s target=%d anchor=%s"):format(
+                tostring(pedTrafficDemoDensity.enabled), pedTrafficDemoDensity.target,
+                isElement(pedTrafficDemoDensity.anchor) and getPlayerName(pedTrafficDemoDensity.anchor) or "none"), true)
+        return true
+    end
+
+    if requested then
+        if residencyTest or bikeJackTest or dealerTest or copTest or coupleTest then
+            log("demo-density refused reason=population-harness-active", true)
+            return false, "population-harness-active"
+        end
+        local eligiblePlayers = getEligiblePlayers()
+        if coordinated and #eligiblePlayers ~= 2 then
+            log(("demo-density refused reason=exactly-two-ready-clients-required players=%d"):format(#eligiblePlayers), true)
+            return false, "exactly-two-ready-clients-required"
+        end
+        local anchor = isEligiblePlayer(actor) and actor or getEligiblePlayers()[1]
+        if not isElement(anchor) then
+            log("demo-density refused reason=no-eligible-anchor", true)
+            return false, "no-eligible-anchor"
+        end
+        local availablePedSlots = config.pedPoolSoftLimit - (#getElementsByType("ped") - getTrafficPedCount())
+        local requiredPedSlots = pedTrafficDemoDensity.target + (coordinated and 16 or 0)
+        if config.globalCap < pedTrafficDemoDensity.target or availablePedSlots < requiredPedSlots then
+            log(("demo-density refused reason=insufficient-capacity global=%d available-ped-slots=%d required=%d target=%d"):format(
+                    config.globalCap, availablePedSlots, requiredPedSlots, pedTrafficDemoDensity.target), true)
+            return false, "insufficient-capacity"
+        end
+        pedTrafficDemoDensity.previousEnabled = enabled
+        pedTrafficDemoDensity.enabled = true
+        pedTrafficDemoDensity.epoch = pedTrafficDemoDensity.epoch + 1
+        pedTrafficDemoDensity.anchor = anchor
+        pedTrafficDemoDensity.fallbackCursor = 0
+        clearTraffic("demo-density-start")
+        if not enabled then setEnabled(true, actor) end
+    else
+        local previousEnabled = pedTrafficDemoDensity.previousEnabled
+        pedTrafficDemoDensity.enabled = false
+        pedTrafficDemoDensity.epoch = pedTrafficDemoDensity.epoch + 1
+        pedTrafficDemoDensity.anchor = false
+        pedTrafficDemoDensity.previousEnabled = false
+        clearTraffic("demo-density-stop")
+        if not previousEnabled then setEnabled(false, actor) end
+    end
+
+    outputChatBox(("Traffic demo pedestrians: %s (target=%d)"):format(requested and "ON" or "OFF",
+                                                                       pedTrafficDemoDensity.target), root, 120, 220, 255)
+    log(("demo-density enabled=%s target=%d anchor=%s actor=%s"):format(
+            tostring(pedTrafficDemoDensity.enabled), pedTrafficDemoDensity.target,
+            isElement(pedTrafficDemoDensity.anchor) and getPlayerName(pedTrafficDemoDensity.anchor) or "none",
+            isElement(actor) and getPlayerName(actor) or "console"), true)
+    return true
+end
+
 addCommandHandler("pedtraffic", function(player, _, action, value)
+    if isElement(player) and not hasObjectPermissionTo(player, "function.kickPlayer", false) then
+        outputChatBox("Ped traffic controls are restricted to server staff", player, 255, 100, 80)
+        return
+    end
+
     action = tostring(action or "status"):lower()
     if action == "on" then
         setEnabled(true, player)
     elseif action == "off" then
+        if pedTrafficDemoDensity.enabled then pedTrafficSetDemo(false, player) end
         setEnabled(false, player)
+    elseif action == "demo" then
+        local requested = tostring(value or "on"):lower()
+        if requested == "on" or requested == "off" then
+            pedTrafficSetDemo(requested == "on", player)
+        else
+            outputChatBox("Usage: /pedtraffic demo on|off", player, 255, 160, 80)
+        end
     elseif action == "debug" then
         local requested = tostring(value or "on"):lower() ~= "off"
         if requested and not debugEnabled then
@@ -7231,6 +7369,10 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         log(("population-world preset=%s revision=%d actor=%s"):format(
                 populationWorld.preset, populationWorld.revision, isElement(player) and getPlayerName(player) or "console"), true)
     elseif action == "cap" then
+        if pedTrafficDemoDensity.enabled then
+            outputChatBox("Disable /trafficdemo before changing the ped cap", player, 255, 160, 80)
+            return
+        end
         local cap = math.floor(tonumber(value) or 0)
         if cap >= 1 and cap <= 110 then
             config.globalCap = cap
@@ -7271,16 +7413,20 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         for ped in pairs(trafficPeds) do
             if isElement(ped) then activeCount = activeCount + 1 end
         end
-        outputChatBox(("Ped traffic: enabled=%s active=%d cap=%d preset=%s revision=%d requests=%d misses=%d rejected=%d handoffs=%d"):format(
-                          tostring(enabled), activeCount, config.globalCap, populationWorld.preset, populationWorld.revision, stats.requests,
-                          stats.candidateMisses, stats.rejected, stats.handoffs),
+        outputChatBox(("Ped traffic: enabled=%s active=%d cap=%d demo=%s target=%d anchor=%s preset=%s revision=%d requests=%d misses=%d rejected=%d handoffs=%d"):format(
+                          tostring(enabled), activeCount, config.globalCap, tostring(pedTrafficDemoDensity.enabled),
+                          pedTrafficDemoDensity.target,
+                          isElement(pedTrafficDemoDensity.anchor) and getPlayerName(pedTrafficDemoDensity.anchor) or "none",
+                          populationWorld.preset, populationWorld.revision, stats.requests, stats.candidateMisses, stats.rejected,
+                          stats.handoffs),
                       player, 120, 220, 255)
     end
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    outputServerLog(("[ped-traffic] V1 loaded disabled; population preset=%s revision=%d; use /pedtraffic on, /pedtraffic debug on"):format(
-        populationWorld.preset, populationWorld.revision))
+    if config.autoStart then setEnabled(true, false) end
+    outputServerLog(("[ped-traffic] V1 loaded enabled=%s cap=%d population preset=%s revision=%d"):format(
+        tostring(enabled), config.globalCap, populationWorld.preset, populationWorld.revision))
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()

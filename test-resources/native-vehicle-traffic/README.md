@@ -30,10 +30,26 @@ Runtime controls:
 
 ```text
 cartraffic start [target-per-player] [global-cap]
+cartraffic demo on|off
 cartraffic status
 cartraffic stop
 cartraffic cleanup
 ```
+
+Production traffic starts automatically at four vehicles per eligible player,
+with a global cap of twelve vehicles. The cap keeps population and bandwidth
+bounded for disjoint player bubbles; overlapping players share nearby units.
+Vehicle creation also preserves four emergency scripted-ped slots and drops
+optional passengers before it can cross that fence. Staff may use
+`cartraffic start [target-per-player] [global-cap]` to change the live profile.
+Traffic control and test commands reject players without server-staff rights.
+
+With `native-ped-traffic` running, `/trafficdemo on` is the coordinated visual
+demo preset: with exactly two clients it targets 16 road vehicles while the ped
+resource targets 32 on-foot NPCs. Demo vehicles keep their drivers but omit
+optional passengers so the combined ped-pool budget is deterministic.
+`/trafficdemo off` destroys the demo units and restores the population settings
+that were active beforehand.
 
 With exactly two clients in world 0, the checkpoint harness is:
 
