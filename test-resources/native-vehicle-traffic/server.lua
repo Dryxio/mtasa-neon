@@ -8,16 +8,16 @@ local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
 local activeTest = false
--- Four units keep a solo player's roads populated without letting many
--- disjoint player bubbles grow without bound. Twelve units consume at most a
--- small, bounded share of the common scripted-ped pool under normal passenger
--- density, while the on-foot population keeps its own total-pool fence.
-local PRODUCTION_TARGET_PER_PLAYER = 4
-local PRODUCTION_GLOBAL_CAP = 12
+-- Nearby players see the same road population, so production budgets four
+-- units per spatial bubble rather than four duplicate units per player. Forty
+-- units can give ten isolated players the full target or twenty isolated
+-- players two each while remaining inside the shared scripted-ped budget.
+local PRODUCTION_TARGET_PER_BUBBLE = 4
+local PRODUCTION_GLOBAL_CAP = 40
 local PRODUCTION_PED_POOL_SOFT_LIMIT = 106
 local population = {
     enabled = false,
-    targetPerPlayer = PRODUCTION_TARGET_PER_PLAYER,
+    targetPerPlayer = PRODUCTION_TARGET_PER_BUBBLE,
     cap = PRODUCTION_GLOBAL_CAP,
     demo = false,
 }
@@ -31,6 +31,9 @@ local TEST_STUCK_TIMEOUT = 20000
 local PRODUCTION_STUCK_TIMEOUT = 30000
 local RESIDENCY_DISTANCE = 280
 local OWNER_DISTANCE = 220
+-- Players this close can reliably observe traffic created around the same
+-- anchor while still respecting the wider residency boundary above.
+local POPULATION_BUBBLE_DISTANCE = 180
 local MAX_CANDIDATE_ATTEMPTS = 25
 
 -- These pools are the road-safe subset of GTA's cargrp.dat categories. MTA
@@ -117,6 +120,32 @@ local function players()
     return result
 end
 
+local function populationBubbles(ps)
+    local bubbles = {}
+    for _, player in ipairs(ps) do
+        local px, py, pz = getElementPosition(player)
+        local selected, selectedDistance
+        for index, bubble in ipairs(bubbles) do
+            local x, y, z = getElementPosition(bubble.anchor)
+            local distance = getDistanceBetweenPoints3D(px, py, pz, x, y, z)
+            if distance <= POPULATION_BUBBLE_DISTANCE and (not selectedDistance or distance < selectedDistance) then
+                selected, selectedDistance = index, distance
+            end
+        end
+        if selected then
+            bubbles[selected].members[#bubbles[selected].members + 1] = player
+        else
+            bubbles[#bubbles + 1] = {anchor = player, members = {player}}
+        end
+    end
+    return bubbles
+end
+
+local function populationDesired(ps, mode)
+    local demandUnits = mode == "production" and not population.demo and #populationBubbles(ps) or #ps
+    return math.min(population.cap, demandUnits * population.targetPerPlayer)
+end
+
 local function clearTimer(unit, name)
     if isTimer(unit[name]) then killTimer(unit[name]) end
     unit[name] = nil
@@ -156,6 +185,90 @@ local function distanceToUnit(player, unit)
     local px, py, pz = getElementPosition(player)
     local x, y, z = getElementPosition(unit.vehicle)
     return getDistanceBetweenPoints3D(px, py, pz, x, y, z)
+end
+
+local function bubbleIndexForPlayer(bubbles, player)
+    for index, bubble in ipairs(bubbles) do
+        for _, member in ipairs(bubble.members) do
+            if member == player then return index end
+        end
+    end
+    return false
+end
+
+local function nearestBubbleIndex(bubbles, unit)
+    local selected, selectedDistance
+    for index, bubble in ipairs(bubbles) do
+        local distance = distanceToUnit(bubble.anchor, unit)
+        if not selectedDistance or distance < selectedDistance then
+            selected, selectedDistance = index, distance
+        end
+    end
+    return selected
+end
+
+local function ownerHasPendingCandidate(owner)
+    if candidateReservations[owner] == trafficGeneration then return true end
+    for _, pending in pairs(pendingCandidates) do
+        if pending.owner == owner then return true end
+    end
+    return false
+end
+
+local function productionBubbleLoads(ps, includePending)
+    local bubbles = populationBubbles(ps)
+    local loads = {}
+    local bubbleUnits = {}
+    for index = 1, #bubbles do
+        loads[index] = 0
+        bubbleUnits[index] = {}
+    end
+    for _, unit in pairs(units) do
+        if unit.mode == "production" then
+            local index = nearestBubbleIndex(bubbles, unit)
+            if index then
+                loads[index] = loads[index] + 1
+                bubbleUnits[index][#bubbleUnits[index] + 1] = unit
+            end
+        end
+    end
+    if includePending then
+        for _, pending in pairs(pendingCandidates) do
+            if pending.mode == "production" then
+                local index = bubbleIndexForPlayer(bubbles, pending.owner)
+                if index then loads[index] = loads[index] + 1 end
+            end
+        end
+    end
+    return bubbles, loads, bubbleUnits
+end
+
+local function chooseProductionOwner(ps)
+    local bubbles, loads = productionBubbleLoads(ps, true)
+    local selected = false
+    for index, bubble in ipairs(bubbles) do
+        if not ownerHasPendingCandidate(bubble.anchor) and (not selected or loads[index] < loads[selected]) then
+            selected = index
+        end
+    end
+    return selected and bubbles[selected].anchor or false
+end
+
+local function productionRebalanceUnit(ps, desired)
+    local bubbles, loads, bubbleUnits = productionBubbleLoads(ps, false)
+    if #bubbles == 0 then return false end
+    local base = math.floor(desired / #bubbles)
+    local remainder = desired % #bubbles
+    for index, bubble in ipairs(bubbles) do
+        local allocation = base + (index <= remainder and 1 or 0)
+        if loads[index] > allocation then
+            table.sort(bubbleUnits[index], function(a, b)
+                return distanceToUnit(bubble.anchor, a) > distanceToUnit(bubble.anchor, b)
+            end)
+            return bubbleUnits[index][1]
+        end
+    end
+    return false
 end
 
 local function ownerLoad(player)
@@ -794,7 +907,12 @@ local function createUnit(candidate, owner, observers, mode)
         end
     end
     if mode == "production" then
-        local availablePassengerSlots = math.max(0, PRODUCTION_PED_POOL_SOFT_LIMIT - #getElementsByType("ped"))
+        -- Reserve one ped slot for every driver still required by the current
+        -- spatial demand. Optional passengers may consume only true surplus.
+        local remainingDrivers = math.max(0, populationDesired(players(), "production") -
+            unitCount(function(unit) return unit.mode == "production" end) - 1)
+        local availablePassengerSlots = math.max(0,
+            PRODUCTION_PED_POOL_SOFT_LIMIT - #getElementsByType("ped") - remainingDrivers)
         while #requestedSeats > availablePassengerSlots do table.remove(requestedSeats) end
     end
     for _, seat in ipairs(requestedSeats) do
@@ -968,7 +1086,7 @@ addEventHandler("carTraffic:visibility", resourceRoot, function(session, visible
     pendingCandidates[session] = nil
     candidateReservations[pending.owner] = nil
     if pending.mode == "production" or pending.mode == "density" or pending.mode == "spatial" then
-        local desired = math.min(population.cap, #players() * population.targetPerPlayer)
+        local desired = populationDesired(players(), pending.mode)
         local relevant = unitCount(function(unit) return unit.mode == pending.mode end)
         if relevant >= desired then
             return trace("candidate-aborted", {session = session, mode = pending.mode, reason = "cap-commit-fence", units = relevant, desired = desired})
@@ -1171,14 +1289,6 @@ addEventHandler("carTraffic:cleanupAck", resourceRoot, function(id, epoch, proof
     finishTestCleanupIfReady()
 end)
 
-local function ownerHasPendingCandidate(owner)
-    if candidateReservations[owner] == trafficGeneration then return true end
-    for _, pending in pairs(pendingCandidates) do
-        if pending.owner == owner then return true end
-    end
-    return false
-end
-
 local function populationTick()
     if not population.enabled then return end
     local ps = players()
@@ -1194,7 +1304,7 @@ local function populationTick()
     end
 
     local mode = type(population.testDensity) == "string" and population.testDensity or "production"
-    local desired = math.min(population.cap, #ps * population.targetPerPlayer)
+    local desired = populationDesired(ps, mode)
     local relevant = unitCount(function(unit) return unit.mode == mode end)
     if relevant > desired then
         local excess = {}
@@ -1217,6 +1327,14 @@ local function populationTick()
             destroyUnit(excessUnit, "density-reconcile")
         end
         relevant = desired
+    end
+
+    if mode == "production" and not population.demo and relevant >= desired then
+        local excessUnit = productionRebalanceUnit(ps, desired)
+        if excessUnit then
+            destroyUnit(excessUnit, "bubble-rebalance")
+            relevant = relevant - 1
+        end
     end
 
     if activeTest and activeTest.mode == "spatial" and mode == "spatial" then
@@ -1254,8 +1372,9 @@ local function populationTick()
     end
     if relevant + pendingCount() >= desired then return end
 
-    local owner = chooseOwner()
-    if not owner or ownerHasPendingCandidate(owner) then
+    local useProductionBubbles = mode == "production" and not population.demo
+    local owner = useProductionBubbles and chooseProductionOwner(ps) or chooseOwner()
+    if not useProductionBubbles and (not owner or ownerHasPendingCandidate(owner)) then
         for _, candidateOwner in ipairs(ps) do
             if not ownerHasPendingCandidate(candidateOwner) then owner = candidateOwner break end
         end
@@ -1268,8 +1387,8 @@ local function startPopulation(targetPerPlayer, cap, testDensity, targetPerPlaye
     pendingCandidates = {}
     candidateReservations = {}
     population.targetPerPlayer = math.max(
-        1, math.min(tonumber(targetPerPlayerLimit) or 4, tonumber(targetPerPlayer) or PRODUCTION_TARGET_PER_PLAYER))
-    population.cap = math.max(1, math.min(24, tonumber(cap) or PRODUCTION_GLOBAL_CAP))
+        1, math.min(tonumber(targetPerPlayerLimit) or 4, tonumber(targetPerPlayer) or PRODUCTION_TARGET_PER_BUBBLE))
+    population.cap = math.max(1, math.min(PRODUCTION_GLOBAL_CAP, tonumber(cap) or PRODUCTION_GLOBAL_CAP))
     population.testDensity = type(testDensity) == "string" and testDensity or false
     population.demo = demoMode == true
     population.enabled = true
@@ -1399,8 +1518,10 @@ local function handleTrafficCommand(player, action, mode, value)
         demoPopulationSnapshot = false
         stopPopulation("command-stop", true)
     elseif action == "status" then
+        local ps = players()
         trace("status", {enabled = population.enabled, units = unitCount(), pending = pendingCount(), cap = population.cap,
-            targetPerPlayer = population.targetPerPlayer, demo = population.demo, test = activeTest and activeTest.mode or false})
+            targetPerBubble = population.targetPerPlayer, bubbles = #populationBubbles(ps), desired = populationDesired(ps, "production"),
+            demo = population.demo, test = activeTest and activeTest.mode or false})
     elseif action == "cleanup" then
         demoPopulationSnapshot = false
         stopPopulation("command-cleanup", false)
@@ -1409,7 +1530,7 @@ local function handleTrafficCommand(player, action, mode, value)
         destroyUnitsWhere("command-cleanup")
         clearTakeovers(false, "command-cleanup")
     else
-        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|soak [cycles] | cartraffic start [perPlayer] [cap] | demo on|off | stop | status | cleanup"})
+        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|soak [cycles] | cartraffic start [perBubble] [cap] | demo on|off | stop | status | cleanup"})
     end
 end
 
@@ -1668,12 +1789,12 @@ addEventHandler("onResourceStop", resourceRoot, function()
 end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
-    startPopulation(PRODUCTION_TARGET_PER_PLAYER, PRODUCTION_GLOBAL_CAP, false)
+    startPopulation(PRODUCTION_TARGET_PER_BUBBLE, PRODUCTION_GLOBAL_CAP, false)
     trace("ready", {
         models = ALLOWED_MODEL_COUNT,
         contextualGroups = 20,
         autoStart = true,
-        targetPerPlayer = PRODUCTION_TARGET_PER_PLAYER,
+        targetPerBubble = PRODUCTION_TARGET_PER_BUBBLE,
         cap = PRODUCTION_GLOBAL_CAP,
         pedPoolSoftLimit = PRODUCTION_PED_POOL_SOFT_LIMIT,
     })

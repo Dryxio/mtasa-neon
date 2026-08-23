@@ -36,12 +36,14 @@ cartraffic stop
 cartraffic cleanup
 ```
 
-Production traffic starts automatically at four vehicles per eligible player,
-with a global cap of twelve vehicles. The cap keeps population and bandwidth
-bounded for disjoint player bubbles; overlapping players share nearby units.
-Vehicle creation also preserves four emergency scripted-ped slots and drops
-optional passengers before it can cross that fence. Staff may use
-`cartraffic start [target-per-player] [global-cap]` to change the live profile.
+Production traffic starts automatically at four vehicles per spatial player
+bubble, with a global cap of forty vehicles. Players within 180 world units
+share one bubble; isolated groups receive separate budgets. When the global cap
+is reached, units are distributed fairly between bubbles instead of being
+concentrated around the largest group. Vehicle creation preserves four
+emergency scripted-ped slots and reserves every required driver before it
+admits optional passengers. Staff may use
+`cartraffic start [target-per-bubble] [global-cap]` to change the live profile.
 Traffic control and test commands reject players without server-staff rights.
 New players enter the traffic owner/observer pool only after their client has
 confirmed that every synchronized-traffic event handler is ready.

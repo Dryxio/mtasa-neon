@@ -2,12 +2,12 @@ local config = {
     -- Start the public population with the resource. Tests can still disable
     -- it explicitly before exercising an isolated harness.
     autoStart = true,
-    -- Cap all scripted peds at ninety, including vehicle occupants created by
-    -- other resources. This leaves twenty logical slots for players, missions
-    -- and short-lived gameplay actors while disjoint population bubbles share
-    -- the remaining capacity.
-    globalCap = 90,
-    pedPoolSoftLimit = 90,
+    -- Reserve enough of the common 110-ped engine budget for forty synchronized
+    -- traffic drivers. Nearby players share the 64 on-foot slots; isolated
+    -- players receive them through the round-robin spatial arbiter. The higher
+    -- physical fence counts both those walkers and vehicle occupants.
+    globalCap = 64,
+    pedPoolSoftLimit = 104,
     despawnGrace = 4000,
     cellSize = 64,
     maxPerCell = 12,

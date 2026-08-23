@@ -99,13 +99,16 @@ at the transferred animation phase; if the anchor is no longer valid, it falls
 back through GTA's native in-air/land lifecycle rather than leaving the ped
 latched to stale geometry.
 
-The density checkpoint leaves a 20-slot reserve below MTA's 110-ped logical
-limit and issues at most one global candidate request every 100 ms. Civilians
-and dealers are created singly; resident gangs use GTA's native
+The public density profile reserves 46 slots below MTA's 110-ped logical limit
+for synchronized traffic drivers and short-lived gameplay actors. Nearby
+players share the same on-foot population; isolated players are served by the
+round-robin spatial arbiter up to the 64-ped cap. The resource issues at most
+one global candidate request every 100 ms. Civilians and dealers are created
+singly; resident gangs use GTA's native
 two-to-four-member batch.
 The server keeps the native float class deficits and the stock gate as separate
 values. Retail omits dealers from `ms_nTotalPeds`, so dealers reduce only their
-own deficit while still counting against Neon's physical 90-ped cap. The stock
+own deficit while still counting against Neon's physical 104-ped cap. The stock
 gate is rounded only at its final integer comparison; families are never
 redistributed merely because cops or gang slots 8/9 remain unsupported. A 64 m
 cell guard of 12 and a 2 m
