@@ -1,6 +1,8 @@
 local units = {}
 local pendingCandidates = {}
 local candidateReservations = {}
+local populationProfiles = {}
+local takeoverVehicles = {}
 local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
@@ -8,20 +10,86 @@ local activeTest = false
 local population = {enabled = false, targetPerPlayer = 2, cap = 12}
 
 local MONITOR_INTERVAL = 500
-local TEST_STUCK_TIMEOUT = 8000
+-- Eight seconds is shorter than an ordinary red-light wait. Keep deliberate
+-- lifecycle stalls immediate by backdating lastMovingAt in that scenario,
+-- while normal fixtures get a realistic traffic timeout.
+local TEST_STUCK_TIMEOUT = 20000
 local PRODUCTION_STUCK_TIMEOUT = 30000
 local RESIDENCY_DISTANCE = 280
 local OWNER_DISTANCE = 220
 local MAX_CANDIDATE_ATTEMPTS = 25
 
-local VEHICLE_MODELS = {401, 404, 405, 410, 418, 419, 421, 426, 436, 439, 445, 466, 467, 474, 475, 479, 491, 492, 496, 507, 516, 517, 518, 526, 527, 529, 540, 542, 546, 547, 549, 550, 551, 555, 560, 561, 562, 566, 580, 585, 589, 600, 602}
-local DRIVER_MODELS = {7, 14, 15, 17, 18, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60}
+-- These pools are the road-safe subset of GTA's cargrp.dat categories. MTA
+-- disables the retail ambient vehicle streamer, so reproducing that ecology
+-- explicitly is more reliable than calling ChooseModel against empty native
+-- loaded-car groups.
+local VEHICLE_GROUPS = {
+    business = {401, 405, 409, 420, 421, 426, 428, 433, 445, 507, 526, 533, 551, 579, 580, 602},
+    rich = {402, 405, 409, 411, 415, 426, 429, 451, 477, 480, 506, 507, 533, 541, 555, 558, 559, 560, 562, 579, 580, 587, 602, 603},
+    average = {400, 401, 405, 410, 421, 422, 426, 436, 445, 458, 466, 467, 491, 496, 516, 526, 527, 540, 546, 547, 550, 551, 554, 561, 566, 580, 585, 600},
+    poor = {401, 404, 410, 412, 418, 419, 422, 436, 439, 466, 467, 474, 475, 478, 479, 491, 492, 517, 518, 529, 542, 543, 545, 546, 547, 549, 566, 567, 575, 576, 582, 600},
+    workers = {403, 408, 413, 414, 431, 437, 440, 443, 455, 456, 459, 482, 498, 499, 514, 515, 524, 525, 552, 578, 582, 588},
+    rural = {403, 463, 468, 478, 483, 489, 508, 514, 515, 531, 543, 554, 581, 586, 600},
+    beach = {400, 401, 404, 424, 436, 462, 466, 467, 480, 481, 489, 491, 496, 500, 509, 510, 521, 550, 554, 581, 600},
+    gang = {410, 412, 466, 467, 474, 475, 517, 518, 536, 542, 549, 566, 567, 575, 576},
+    entertainment = {402, 409, 411, 415, 420, 426, 429, 437, 451, 477, 506, 541, 559, 560, 562, 565, 580, 587, 589, 602},
+    airport = {401, 405, 421, 426, 428, 431, 437, 443, 455, 456, 458, 482, 498, 499, 507, 578, 580, 582},
+}
+
+local ZONE_VEHICLE_GROUPS = {
+    [0] = {"business", "average"}, [1] = {"rural", "workers"}, [2] = {"entertainment", "rich"},
+    [3] = {"rural", "poor"}, [4] = {"rich"}, [5] = {"average"}, [6] = {"poor"}, [7] = {"gang", "poor"},
+    [8] = {"beach", "average"}, [9] = {"average", "business"}, [10] = {"beach", "average"},
+    [11] = {"workers"}, [12] = {"entertainment", "rich"}, [13] = {"average", "rich"}, [14] = {"rich"},
+    [15] = {"rich", "business"}, [16] = {"airport", "business"}, [17] = {"rich"}, [18] = {"workers"}, [19] = {"airport"},
+}
+
+local MODEL_CLASS = {
+    [471] = 2,
+    [448] = 9, [461] = 9, [462] = 9, [463] = 9, [468] = 9, [521] = 9, [522] = 9, [581] = 9, [586] = 9,
+    [481] = 10, [509] = 10, [510] = 10,
+}
+local CLASS_TEST_MODELS = {401, 413, 403, 461, 481, 471}
+local SOAK_SCENARIOS = {"smooth", "lifecycle", "passengers", "fixture"}
+local ALLOWED_MODELS = {}
+local ALLOWED_MODEL_COUNT = 0
+for _, group in pairs(VEHICLE_GROUPS) do
+    for _, model in ipairs(group) do
+        if not ALLOWED_MODELS[model] then
+            ALLOWED_MODELS[model] = true
+            ALLOWED_MODEL_COUNT = ALLOWED_MODEL_COUNT + 1
+        end
+    end
+end
+for _, model in ipairs(CLASS_TEST_MODELS) do ALLOWED_MODELS[model] = true end
+local function selectVehicleModel(owner, session, mode)
+    if mode == "passengers" or mode == "interaction" or mode == "smooth" or mode == "soak" then return 401 end
+    if mode == "classes" and activeTest and activeTest.mode == "classes" then
+        return CLASS_TEST_MODELS[activeTest.classIndex]
+    end
+    local profile = populationProfiles[owner]
+    local zoneType = profile and profile.zoneType or 5
+    local names = ZONE_VEHICLE_GROUPS[zoneType] or ZONE_VEHICLE_GROUPS[5]
+    local groupName = names[((session * 1103515245 + zoneType * 12345) % #names) + 1]
+    local group = VEHICLE_GROUPS[groupName]
+    return group[((session * 214013 + zoneType * 2531011) % #group) + 1]
+end
 
 local function trace(event, fields)
     fields = fields or {}
     fields.event = event
     fields.tick = getTickCount()
     outputServerLog("[car-traffic] " .. toJSON(fields, true))
+end
+
+local function finiteNumber(value, limit)
+    value = tonumber(value)
+    return value and value == value and math.abs(value) <= (limit or 100000) and value or nil
+end
+
+local function angleDelta(a, b)
+    local delta = math.abs((a - b) % 360)
+    return delta > 180 and 360 - delta or delta
 end
 
 local function players()
@@ -38,6 +106,19 @@ end
 local function clearTimer(unit, name)
     if isTimer(unit[name]) then killTimer(unit[name]) end
     unit[name] = nil
+end
+
+local function forEachOccupant(unit, callback)
+    callback(unit.ped, 0)
+    for _, passenger in ipairs(unit.passengers or {}) do callback(passenger.ped, passenger.seat) end
+end
+
+local function passengerPayload(unit)
+    local result = {}
+    for _, passenger in ipairs(unit.passengers or {}) do
+        result[#result + 1] = {ped = passenger.ped, seat = passenger.seat}
+    end
+    return result
 end
 
 local function unitCount(predicate)
@@ -90,9 +171,10 @@ end
 local function registerTestCleanup(unit)
     if not activeTest then return end
     activeTest.cleanupExpected = activeTest.cleanupExpected or {}
+    if activeTest.cleanupExpected[unit.id] then return end
     local participants = {}
     local count = 0
-    for _, player in ipairs(unit.observers or players()) do
+    for player in pairs(unit.participants or {}) do
         if isElement(player) and not participants[player] then
             participants[player] = true
             count = count + 1
@@ -115,7 +197,9 @@ local function destroyUnit(unit, reason)
     clearTimer(unit, "dispatchTimer")
     clearTimer(unit, "assignmentTimer")
     triggerClientEvent(root, "carTraffic:stop", resourceRoot, unit.id, unit.epoch)
-    if isElement(unit.ped) then destroyElement(unit.ped) end
+    forEachOccupant(unit, function(ped)
+        if isElement(ped) then destroyElement(ped) end
+    end)
     if isElement(unit.vehicle) then destroyElement(unit.vehicle) end
     units[unit.id] = nil
     trace("despawn", {id = unit.id, epoch = unit.epoch, reason = reason})
@@ -129,6 +213,19 @@ local function destroyUnitsWhere(reason, predicate)
     for _, unit in ipairs(snapshot) do destroyUnit(unit, reason) end
 end
 
+local function clearTakeovers(test, reason)
+    local snapshot = {}
+    for vehicle, takeover in pairs(takeoverVehicles) do
+        if not test or takeover.test == test then snapshot[#snapshot + 1] = {vehicle = vehicle, takeover = takeover} end
+    end
+    for _, entry in ipairs(snapshot) do
+        if isTimer(entry.takeover.timer) then killTimer(entry.takeover.timer) end
+        takeoverVehicles[entry.vehicle] = nil
+        if isElement(entry.vehicle) then destroyElement(entry.vehicle) end
+        trace("takeover-cleanup", {reason = reason, player = isElement(entry.takeover.player) and getPlayerName(entry.takeover.player) or false})
+    end
+end
+
 local function terminalTestFailure(reason, unit)
     if not activeTest then
         trace("unit-failure", {id = unit and unit.id, epoch = unit and unit.epoch, reason = reason})
@@ -139,6 +236,8 @@ local function terminalTestFailure(reason, unit)
     local failed = activeTest
     activeTest = false
     if isTimer(failed.watchdogTimer) then killTimer(failed.watchdogTimer) end
+    if isTimer(failed.interactionBrakeTimer) then killTimer(failed.interactionBrakeTimer) end
+    if isTimer(failed.ownerQuitFollowTimer) then killTimer(failed.ownerQuitFollowTimer) end
     population.enabled = false
     population.testDensity = false
     if isTimer(population.timer) then killTimer(population.timer) end
@@ -147,6 +246,7 @@ local function terminalTestFailure(reason, unit)
     pendingCandidates = {}
     candidateReservations = {}
     trace("FAIL", {id = unit and unit.id, epoch = unit and unit.epoch, mode = failed.mode, reason = reason})
+    clearTakeovers(failed, "test-failed:" .. tostring(reason))
     destroyUnitsWhere("test-failed:" .. tostring(reason), function(candidate)
         return candidate == unit or candidate.mode == failed.mode or (failed.units and failed.units[candidate.id] ~= nil)
     end)
@@ -172,31 +272,93 @@ local requestCandidate
 
 local function finishTestCleanupIfReady()
     if not activeTest or not activeTest.cleanupExpected then return end
+    if activeTest.cleanupFinalizing ~= true then return end
+    if activeTest.waitForTakeoverEnter then return end
     local total = 0
     for _, expected in pairs(activeTest.cleanupExpected) do
         if expected.complete ~= true then return end
         total = total + expected.count
     end
     trace("PASS-cleanup", {mode = activeTest.mode, acknowledgements = total})
-    if activeTest.mode == "soak" and activeTest.cycle < activeTest.cycles then
-        activeTest.cycle = activeTest.cycle + 1
+    if activeTest.mode == "classes" and activeTest.classIndex < #CLASS_TEST_MODELS then
+        activeTest.classIndex = activeTest.classIndex + 1
         activeTest.cleanupExpected = nil
+        activeTest.cleanupFinalizing = false
         activeTest.unit = nil
         activeTest.routeRetries = 0
+        return setTimer(function()
+            local owner = chooseOwner()
+            if owner and activeTest and activeTest.mode == "classes" then requestCandidate(owner, "classes", 1) end
+        end, 500, 1)
+    end
+    if activeTest.mode == "classes" then trace("PASS-classes", {models = #CLASS_TEST_MODELS}) end
+    if activeTest.mode == "soak" and activeTest.cycle < activeTest.cycles then
+        activeTest.cycle = activeTest.cycle + 1
+        activeTest.scenario = SOAK_SCENARIOS[((activeTest.cycle - 1) % #SOAK_SCENARIOS) + 1]
+        activeTest.cleanupExpected = nil
+        activeTest.cleanupFinalizing = false
+        activeTest.unit = nil
+        activeTest.routeRetries = 0
+        activeTest.smoothHandoffs = 0
         return setTimer(function()
             local owner = chooseOwner()
             if owner and activeTest and activeTest.mode == "soak" then requestCandidate(owner, "soak", 1) end
         end, 500, 1)
     end
     if activeTest.mode == "soak" then
-        trace("PASS-soak", {cycles = activeTest.cycles})
+        -- This soak deliberately churns the core unit lifecycle. Classes,
+        -- spatial caps, player interaction and a real process quit keep their
+        -- own terminal tests and must also pass before a V2 freeze.
+        trace("PASS-soak-core", {cycles = activeTest.cycles})
     end
     if isTimer(activeTest.watchdogTimer) then killTimer(activeTest.watchdogTimer) end
     activeTest = false
 end
 
+local function finalizePlayerTakeover(unit, player)
+    if not unit or unit.removing or not isElement(player) or not isElement(unit.vehicle) then return fail(unit, "takeover-invalid") end
+    if activeTest and activeTest.unit == unit and activeTest.mode == "interaction" then
+        activeTest.cleanupFinalizing = true
+        registerTestCleanup(unit)
+        activeTest.waitForTakeoverEnter = true
+    end
+    unit.removing = true
+    clearTimer(unit, "monitorTimer")
+    clearTimer(unit, "handoffTimer")
+    clearTimer(unit, "dispatchTimer")
+    clearTimer(unit, "assignmentTimer")
+    triggerClientEvent(root, "carTraffic:stop", resourceRoot, unit.id, unit.epoch)
+    units[unit.id] = nil
+    forEachOccupant(unit, function(ped)
+        if isElement(ped) then destroyElement(ped) end
+    end)
+    setElementSyncer(unit.vehicle, false)
+    removeElementData(unit.vehicle, "neon:ambientVehicleTraffic")
+    removeElementData(unit.vehicle, "neon:ambientVehicleTrafficId")
+    removeElementData(unit.vehicle, "neon:ambientVehicleTrafficEpoch")
+    local takeover = {player = player, test = activeTest and activeTest.mode == "interaction" and activeTest or false}
+    takeoverVehicles[unit.vehicle] = takeover
+    takeover.timer = setTimer(function(vehicle, expected)
+        if takeoverVehicles[vehicle] ~= expected then return end
+        takeoverVehicles[vehicle] = nil
+        if isElement(vehicle) then destroyElement(vehicle) end
+        if expected.test and activeTest == expected.test then
+            terminalTestFailure("takeover-enter-timeout")
+        else
+            trace("takeover-timeout", {player = isElement(expected.player) and getPlayerName(expected.player) or false})
+        end
+    end, 15000, 1, unit.vehicle, takeover)
+    trace("takeover-ready", {id = unit.id, epoch = unit.epoch, player = getPlayerName(player)})
+    triggerClientEvent(player, takeover.test and "carTraffic:testEnterVehicle" or "carTraffic:takeoverReady", resourceRoot, unit.vehicle, 0)
+end
+
 local function assign(unit, owner, reason)
     if not isElement(owner) or not isElement(unit.ped) or not isElement(unit.vehicle) then return fail(unit, "assign-invalid") end
+    local occupantInvalid = false
+    forEachOccupant(unit, function(ped)
+        if not isElement(ped) then occupantInvalid = true end
+    end)
+    if occupantInvalid then return fail(unit, "occupant-invalid") end
     clearTimer(unit, "dispatchTimer")
     clearTimer(unit, "assignmentTimer")
     unit.owner = owner
@@ -206,28 +368,55 @@ local function assign(unit, owner, reason)
     unit.ownerTaskSamples = 0
     unit.movingSamples = 0
     unit.observerSamples = 0
+    unit.ownerLastSeq = 0
+    unit.observerEvidence = {}
     unit.currentEpochStable = false
     unit.lastMovingAt = getTickCount()
     unit.history = {}
-    setElementFrozen(unit.ped, true)
-    setElementFrozen(unit.vehicle, true)
-    if not setElementSyncer(unit.ped, owner, true, true) or not setElementSyncer(unit.vehicle, owner, true, true) then
+    local initialAssignment = not unit.dispatchedOnce
+    unit.assignmentStartedAt = getTickCount()
+    unit.requiresResume = not initialAssignment
+    unit.maxEpochStep = 0
+    unit.maxResumeSpeed = 0
+    unit.epochStartX, unit.epochStartY, unit.epochStartZ = getElementPosition(unit.vehicle)
+    unit.lastX, unit.lastY, unit.lastZ = unit.epochStartX, unit.epochStartY, unit.epochStartZ
+    local freezeForDispatch = initialAssignment or unit.forceTransferFreeze == true
+    unit.forceTransferFreeze = nil
+    if freezeForDispatch then
+        forEachOccupant(unit, function(ped) setElementFrozen(ped, true) end)
+        setElementFrozen(unit.vehicle, true)
+    end
+    local syncersAccepted = setElementSyncer(unit.vehicle, owner, true, true)
+    forEachOccupant(unit, function(ped)
+        syncersAccepted = setElementSyncer(ped, owner, true, true) and syncersAccepted
+    end)
+    if not syncersAccepted then
         return fail(unit, "double-syncer-refused")
     end
     setElementData(unit.vehicle, "neon:ambientVehicleTrafficEpoch", unit.epoch)
-    setElementData(unit.ped, "neon:ambientVehicleTrafficEpoch", unit.epoch)
+    forEachOccupant(unit, function(ped) setElementData(ped, "neon:ambientVehicleTrafficEpoch", unit.epoch) end)
     local dispatchDelay = unit.dispatchedOnce and 150 or 1200
     local expectedEpoch = unit.epoch
     unit.dispatchTimer = setTimer(function()
         unit.dispatchTimer = nil
         if units[unit.id] == unit and unit.state == "assigning" and unit.epoch == expectedEpoch and unit.owner == owner and
             expectedEpoch == getElementData(unit.vehicle, "neon:ambientVehicleTrafficEpoch") then
-            triggerClientEvent(root, "carTraffic:observe", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle)
+            local passengers = passengerPayload(unit)
+            for _, participant in ipairs(players()) do
+                if participant == owner or distanceToUnit(participant, unit) <= RESIDENCY_DISTANCE then
+                    unit.participants[participant] = true
+                    unit.attached[participant] = true
+                    triggerClientEvent(participant, "carTraffic:observe", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, passengers)
+                end
+            end
             -- Commit the synchronized pose before GTA consumes the script
             -- command. A frozen vehicle cannot advance its native autopilot.
-            setElementFrozen(unit.ped, false)
-            setElementFrozen(unit.vehicle, false)
-            triggerClientEvent(owner, "carTraffic:assign", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, unit.cruiseSpeed)
+            if freezeForDispatch then
+                forEachOccupant(unit, function(ped) setElementFrozen(ped, false) end)
+                setElementFrozen(unit.vehicle, false)
+            end
+            triggerClientEvent(owner, "carTraffic:assign", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, unit.cruiseSpeed, passengers,
+                unit.drivingStyle, unit.resumeKinematics)
             unit.dispatchedOnce = true
             trace("assignment-dispatched", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(owner), delay = dispatchDelay})
         end
@@ -258,14 +447,26 @@ end
 
 local function nearestServerHistory(unit, x, y, z)
     local best = math.huge
+    local bestSample
     local now = getTickCount()
     for index = #unit.history, 1, -1 do
         local sample = unit.history[index]
         if now - sample.tick > 2000 then break end
         local distance = getDistanceBetweenPoints3D(x, y, z, sample.x, sample.y, sample.z)
-        if distance < best then best = distance end
+        if distance < best then
+            best = distance
+            bestSample = sample
+        end
     end
-    return best
+    return best, bestSample
+end
+
+local function qualifiedObserverCount(unit)
+    local count = 0
+    for player, evidence in pairs(unit.observerEvidence or {}) do
+        if isElement(player) and player ~= unit.owner and evidence.uniqueSamples >= 4 and (evidence.distance or 0) >= 5 then count = count + 1 end
+    end
+    return count
 end
 
 local function allUnitsOutsideResidency(unit)
@@ -283,8 +484,11 @@ local function startMonitor(unit)
         if units[unit.id] ~= unit or unit.state ~= "active" then return end
         if not isElement(unit.ped) or not isElement(unit.vehicle) then return fail(unit, "element-missing") end
         if isVehicleBlown(unit.vehicle) or isPedDead(unit.ped) then
-            if activeTest and activeTest.unit == unit and activeTest.mode == "lifecycle" and unit.expectDestruction then
-                trace("PASS-lifecycle", {id = unit.id, epoch = unit.epoch, recovery = true, destruction = true})
+            if activeTest and activeTest.unit == unit and (activeTest.mode == "lifecycle" or
+                (activeTest.mode == "soak" and activeTest.scenario == "lifecycle")) and unit.expectDestruction then
+                trace(activeTest.mode == "soak" and "PASS-soak-lifecycle" or "PASS-lifecycle",
+                    {id = unit.id, epoch = unit.epoch, recovery = true, destruction = true, cycle = activeTest.cycle})
+                activeTest.cleanupFinalizing = true
                 registerTestCleanup(unit)
                 return destroyUnit(unit, "expected-lifecycle-destruction")
             end
@@ -292,26 +496,59 @@ local function startMonitor(unit)
             return destroyUnit(unit, "unit-destroyed")
         end
         if getElementSyncer(unit.ped) ~= unit.owner or getElementSyncer(unit.vehicle) ~= unit.owner then return fail(unit, "split-ownership") end
+        for _, passenger in ipairs(unit.passengers or {}) do
+            if not isElement(passenger.ped) or isPedDead(passenger.ped) then return fail(unit, "passenger-lost") end
+            if getElementSyncer(passenger.ped) ~= unit.owner then return fail(unit, "passenger-ownership-split") end
+            if getPedOccupiedVehicle(passenger.ped) ~= unit.vehicle or getPedOccupiedVehicleSeat(passenger.ped) ~= passenger.seat then
+                return fail(unit, "passenger-seat-lost")
+            end
+        end
         if getPedOccupiedVehicle(unit.ped) ~= unit.vehicle or getPedOccupiedVehicleSeat(unit.ped) ~= 0 then return fail(unit, "driver-seat-lost") end
         local x, y, z = getElementPosition(unit.vehicle)
+        local vx, vy, vz = getElementVelocity(unit.vehicle)
+        local speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        if unit.acceptedAt and getTickCount() - unit.acceptedAt <= 1500 then unit.maxResumeSpeed = math.max(unit.maxResumeSpeed or 0, speed) end
         if allUnitsOutsideResidency(unit) then
             if activeTest and activeTest.unit == unit then return fail(unit, "test-left-residency") end
+            if activeTest and activeTest.mode == "spatial" and activeTest.units and activeTest.units[unit.id] then registerTestCleanup(unit) end
             return destroyUnit(unit, "outside-residency")
+        end
+        for _, participant in ipairs(players()) do
+            if distanceToUnit(participant, unit) <= RESIDENCY_DISTANCE and not unit.attached[participant] then
+                unit.attached[participant] = true
+                unit.participants[participant] = true
+                triggerClientEvent(participant, "carTraffic:observe", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, passengerPayload(unit))
+            end
+        end
+        for participant in pairs(unit.attached) do
+            if participant ~= unit.owner and (not isElement(participant) or distanceToUnit(participant, unit) > RESIDENCY_DISTANCE + 40) then
+                if isElement(participant) then triggerClientEvent(participant, "carTraffic:detach", resourceRoot, unit.id, unit.epoch) end
+                unit.attached[participant] = nil
+            end
         end
         local distance = getDistanceBetweenPoints2D(unit.startX, unit.startY, x, y)
         if unit.lastX then
             local step = getDistanceBetweenPoints2D(unit.lastX, unit.lastY, x, y)
+            unit.maxEpochStep = math.max(unit.maxEpochStep or 0, step)
+            if activeTest and activeTest.unit == unit and step > 18 then return fail(unit, "teleport-step") end
             if step >= 0.25 then
                 unit.movingSamples = unit.movingSamples + 1
                 unit.lastMovingAt = getTickCount()
             end
         end
         unit.lastX, unit.lastY, unit.lastZ = x, y, z
-        unit.history[#unit.history + 1] = {tick = getTickCount(), x = x, y = y, z = z}
+        unit.serverHistorySeq = (unit.serverHistorySeq or 0) + 1
+        unit.history[#unit.history + 1] = {seq = unit.serverHistorySeq, tick = getTickCount(), x = x, y = y, z = z}
         while #unit.history > 8 do table.remove(unit.history, 1) end
 
         local stuckTimeout = unit.mode == "production" and PRODUCTION_STUCK_TIMEOUT or TEST_STUCK_TIMEOUT
+        local awaitingOwnerQuit = activeTest and activeTest.unit == unit and activeTest.mode == "ownerquit" and
+            activeTest.phase == "await-owner-quit"
         if getTickCount() - unit.lastMovingAt >= stuckTimeout then
+            if awaitingOwnerQuit then
+                unit.lastMovingAt = getTickCount()
+                return
+            end
             if activeTest and activeTest.unit == unit and not unit.fixturePassed then
                 activeTest.routeRetries = (activeTest.routeRetries or 0) + 1
                 local mode = activeTest.mode
@@ -333,41 +570,99 @@ local function startMonitor(unit)
             local nextOwner = chooseOwner(unit, unit.owner) or unit.owner
             if not isElement(nextOwner) then return destroyUnit(unit, "stuck-no-owner") end
             unit.stuckRestarts = (unit.stuckRestarts or 0) + 1
-            setElementFrozen(unit.ped, false)
+            forEachOccupant(unit, function(ped) setElementFrozen(ped, false) end)
             setElementFrozen(unit.vehicle, false)
             unit.recoveryX, unit.recoveryY, unit.recoveryZ = x, y, z
             unit.recoveryPending = true
             return beginRevoke(unit, nextOwner, "stuck-restart")
         end
 
-        if distanceToUnit(unit.owner, unit) > OWNER_DISTANCE then
+        if not awaitingOwnerQuit and distanceToUnit(unit.owner, unit) > OWNER_DISTANCE then
             local nextOwner = chooseOwner(unit, unit.owner)
             if nextOwner then return beginRevoke(unit, nextOwner, "owner-residency") end
         end
 
-        if unit.ownerTaskSamples >= 4 and (unit.observerSamples or 0) >= 4 and unit.movingSamples >= 6 and distance >= 20 and not unit.currentEpochStable then
+        -- The owner-quit epoch necessarily has no independent observer once
+        -- the two-client fixture loses its original owner. The initial epoch
+        -- already proved observer correlation; recovery is instead gated by
+        -- the new owner's real task samples and sustained server movement.
+        local ownerQuitRecovery = activeTest and activeTest.unit == unit and activeTest.mode == "ownerquit" and
+            activeTest.phase == "recovering-owner-quit" and unit.ownerQuitEpoch == unit.epoch
+        local observerQualified = qualifiedObserverCount(unit) >= 1 or unit.mode == "spatial" or ownerQuitRecovery
+        if unit.ownerTaskSamples >= 4 and observerQualified and unit.movingSamples >= 6 and distance >= 20 and not unit.currentEpochStable then
             local firstStableEpoch = not unit.fixturePassed
             unit.fixturePassed = true
             unit.currentEpochStable = true
             unit.stableEpoch = unit.epoch
             trace(unit.mode == "production" and "unit-stable" or (firstStableEpoch and "PASS-fixture" or "epoch-stable"),
                 {id = unit.id, epoch = unit.epoch, distance = distance, ownerSamples = unit.ownerTaskSamples})
-            if firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "all" then
+            if unit.ownerQuitEpoch == unit.epoch then
+                trace("PASS-owner-quit", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner), resumed = true})
+                unit.ownerQuitEpoch = nil
+                if activeTest and activeTest.unit == unit and activeTest.mode == "ownerquit" and activeTest.phase == "recovering-owner-quit" then
+                    activeTest.cleanupFinalizing = true
+                    registerTestCleanup(unit)
+                    destroyUnit(unit, "owner-quit-test-complete")
+                    return
+                end
+            end
+            if firstStableEpoch and activeTest and activeTest.unit == unit and
+                (activeTest.mode == "all" or activeTest.mode == "passengers" or activeTest.mode == "smooth" or
+                    (activeTest.mode == "soak" and (activeTest.scenario == "smooth" or activeTest.scenario == "passengers"))) then
                 local ps = players()
                 if #ps >= 2 then
+                    activeTest.initialOwner = unit.owner
                     beginRevoke(unit, ps[1] == unit.owner and ps[2] or ps[1], "test-handoff")
                 end
             elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "fixture" then
+                activeTest.cleanupFinalizing = true
                 registerTestCleanup(unit)
                 destroyUnit(unit, "fixture-test-complete")
-            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "lifecycle" then
+            elseif firstStableEpoch and activeTest and activeTest.unit == unit and
+                (activeTest.mode == "lifecycle" or (activeTest.mode == "soak" and activeTest.scenario == "lifecycle")) then
                 activeTest.phase = "forced-stuck"
                 setElementFrozen(unit.vehicle, true)
                 unit.lastMovingAt = getTickCount() - TEST_STUCK_TIMEOUT
                 trace("lifecycle-forced-stuck", {id = unit.id, epoch = unit.epoch})
-            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "soak" then
+            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "soak" and activeTest.scenario == "fixture" then
+                trace("PASS-soak-fixture", {id = unit.id, epoch = unit.epoch, cycle = activeTest.cycle})
+                activeTest.cleanupFinalizing = true
                 registerTestCleanup(unit)
                 destroyUnit(unit, "soak-cycle-complete")
+            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "classes" then
+                trace("PASS-class", {id = unit.id, model = unit.model, vehicleClass = unit.vehicleClass, classIndex = activeTest.classIndex})
+                activeTest.cleanupFinalizing = true
+                registerTestCleanup(unit)
+                destroyUnit(unit, "class-test-complete")
+            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "interaction" then
+                local target
+                for _, player in ipairs(players()) do if player ~= unit.owner then target = player break end end
+                if not target then return fail(unit, "interaction-player-missing") end
+                activeTest.phase = "passenger-request"
+                activeTest.interactionPlayer = target
+                -- Hold the vehicle at the door while the remote player runs
+                -- GTA's real enter task. DriveWander remains installed and is
+                -- resumed immediately after the network entry is confirmed.
+                setElementFrozen(unit.vehicle, true)
+                setElementVelocity(unit.vehicle, 0, 0, 0)
+                setElementPosition(target, x + 1.5, y, z + 0.5)
+                setCameraTarget(target, target)
+                triggerClientEvent(target, "carTraffic:testEnterVehicle", resourceRoot, unit.vehicle, 1)
+                trace("interaction-request", {id = unit.id, epoch = unit.epoch, player = getPlayerName(target), seat = 1})
+            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "ownerquit" then
+                local follower = chooseOwner(unit, unit.owner)
+                if not follower then return fail(unit, "owner-quit-follower-missing") end
+                activeTest.phase = "await-owner-quit"
+                activeTest.expectedQuit = unit.owner
+                activeTest.ownerQuitFollower = follower
+                local ownerQuitTest = activeTest
+                activeTest.ownerQuitFollowTimer = setTimer(function(expected, vehicle, player)
+                    if activeTest ~= expected or expected.phase ~= "await-owner-quit" or not isElement(vehicle) or not isElement(player) then return end
+                    local followX, followY, followZ = getElementPosition(vehicle)
+                    setElementPosition(player, followX + 5, followY, followZ + 1)
+                    setCameraTarget(player, player)
+                end, 500, 0, ownerQuitTest, unit.vehicle, follower)
+                trace("owner-quit-ready", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner)})
             end
             if activeTest and activeTest.mode == "density" then
                 local ready = 0
@@ -380,6 +675,7 @@ local function startMonitor(unit)
                     if isTimer(population.timer) then killTimer(population.timer) end
                     population.timer = nil
                     trace("PASS-density", {units = ready, cap = population.cap, targetPerPlayer = population.targetPerPlayer})
+                    activeTest.cleanupFinalizing = true
                     for _, testUnit in pairs(activeTest.units) do
                         if units[testUnit.id] == testUnit then registerTestCleanup(testUnit) end
                     end
@@ -389,20 +685,56 @@ local function startMonitor(unit)
                 end
             end
         end
-        if unit.handoffEpoch == unit.epoch and unit.ownerTaskSamples >= 4 and (unit.observerSamples or 0) >= 4 and unit.movingSamples >= 6 and
+        if activeTest and activeTest.unit == unit and activeTest.mode == "interaction" and activeTest.phase == "passenger-ride" and
+            activeTest.passengerRideX and getDistanceBetweenPoints2D(activeTest.passengerRideX, activeTest.passengerRideY, x, y) >= 15 then
+            if activeTest.interactionEpoch ~= unit.epoch then return fail(unit, "passenger-ride-epoch-changed") end
+            activeTest.phase = "passenger-exit-request"
+            setElementFrozen(unit.vehicle, true)
+            setElementVelocity(unit.vehicle, 0, 0, 0)
+            triggerClientEvent(activeTest.interactionPlayer, "carTraffic:testExitVehicle", resourceRoot, unit.vehicle)
+        end
+        if unit.handoffEpoch == unit.epoch and unit.ownerTaskSamples >= 4 and qualifiedObserverCount(unit) >= 1 and unit.movingSamples >= 6 and
             unit.handoffX and getDistanceBetweenPoints2D(unit.handoffX, unit.handoffY, x, y) >= 20 and not unit.handoffPassed then
+            if unit.handoffMetrics and unit.handoffMetrics.preSpeed >= 0.02 and (unit.maxResumeSpeed or 0) < unit.handoffMetrics.preSpeed * 0.5 then
+                return fail(unit, "handoff-speed-not-recovered")
+            end
             unit.handoffPassed = true
-            trace("PASS-handoff", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner)})
-            if activeTest and activeTest.unit == unit and activeTest.mode == "all" then
+            trace("PASS-handoff", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner), maxStep = unit.maxEpochStep,
+                acceptDelay = unit.handoffMetrics and unit.handoffMetrics.acceptDelay, speedRatio = unit.handoffMetrics and unit.handoffMetrics.preSpeed > 0 and
+                    (unit.maxResumeSpeed or 0) / unit.handoffMetrics.preSpeed or false})
+            if activeTest and activeTest.unit == unit and activeTest.mode == "smooth" then
+                activeTest.smoothHandoffs = (activeTest.smoothHandoffs or 0) + 1
+                if activeTest.smoothHandoffs < 2 then
+                    local nextOwner = activeTest.initialOwner
+                    if not isElement(nextOwner) or nextOwner == unit.owner then return fail(unit, "smooth-return-owner-missing") end
+                    return beginRevoke(unit, nextOwner, "test-handoff")
+                end
+                trace("PASS-smooth", {id = unit.id, epoch = unit.epoch, handoffs = activeTest.smoothHandoffs})
+                activeTest.cleanupFinalizing = true
+                registerTestCleanup(unit)
+                destroyUnit(unit, "smooth-test-complete")
+            elseif activeTest and activeTest.unit == unit and activeTest.mode == "soak" and
+                (activeTest.scenario == "smooth" or activeTest.scenario == "passengers") then
+                trace("PASS-soak-handoff", {id = unit.id, epoch = unit.epoch, cycle = activeTest.cycle, scenario = activeTest.scenario,
+                    passengers = #(unit.passengers or {})})
+                activeTest.cleanupFinalizing = true
+                registerTestCleanup(unit)
+                destroyUnit(unit, "soak-cycle-complete")
+            elseif activeTest and activeTest.unit == unit and (activeTest.mode == "all" or activeTest.mode == "passengers") then
+                if activeTest.mode == "passengers" then
+                    trace("PASS-passengers", {id = unit.id, epoch = unit.epoch, passengers = #(unit.passengers or {})})
+                end
+                activeTest.cleanupFinalizing = true
                 registerTestCleanup(unit)
                 destroyUnit(unit, "test-complete")
             end
         end
-        if unit.recoveryEpoch == unit.epoch and unit.recoveryX and unit.ownerTaskSamples >= 4 and (unit.observerSamples or 0) >= 4 and unit.movingSamples >= 6 and
+        if unit.recoveryEpoch == unit.epoch and unit.recoveryX and unit.ownerTaskSamples >= 4 and qualifiedObserverCount(unit) >= 1 and unit.movingSamples >= 6 and
             getDistanceBetweenPoints2D(unit.recoveryX, unit.recoveryY, x, y) >= 15 and not unit.lifecyclePassed then
             unit.lifecyclePassed = true
             trace("PASS-recovery", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner), restarts = unit.stuckRestarts})
-            if activeTest and activeTest.unit == unit and activeTest.mode == "lifecycle" then
+            if activeTest and activeTest.unit == unit and
+                (activeTest.mode == "lifecycle" or (activeTest.mode == "soak" and activeTest.scenario == "lifecycle")) then
                 unit.expectDestruction = true
                 blowVehicle(unit.vehicle)
             end
@@ -412,7 +744,7 @@ end
 
 local function createUnit(candidate, owner, observers, mode)
     local vehicle = createVehicle(candidate.model, candidate.x, candidate.y, candidate.z, 0, 0, candidate.rotation)
-    local driverModel = DRIVER_MODELS[(nextUnitId % #DRIVER_MODELS) + 1]
+    local driverModel = tonumber(candidate.occupantModels and candidate.occupantModels[1])
     local ped = vehicle and createPed(driverModel, candidate.x, candidate.y, candidate.z + 1.0, candidate.rotation) or nil
     if not isElement(vehicle) or not isElement(ped) then
         if isElement(vehicle) then destroyElement(vehicle) end
@@ -420,25 +752,66 @@ local function createUnit(candidate, owner, observers, mode)
         return false, "atomic-create-refused"
     end
     warpPedIntoVehicle(ped, vehicle, 0)
+    if getPedOccupiedVehicle(ped) ~= vehicle or getPedOccupiedVehicleSeat(ped) ~= 0 then
+        destroyElement(ped)
+        destroyElement(vehicle)
+        return false, "driver-warp-refused"
+    end
+
+    local passengers = {}
+    local maximumPassengers = math.min(3, tonumber(getVehicleMaxPassengers(vehicle)) or 0)
+    local requestedSeats = {}
+    if tonumber(candidate.vehicleClass) == 0 and maximumPassengers > 0 then
+        if mode == "passengers" or (mode == "soak" and activeTest and activeTest.scenario == "passengers") then
+            requestedSeats[1] = 1
+        elseif mode == "production" or mode == "density" then
+            -- Retail performs one independent 1/8 trial for every available
+            -- passenger seat. This deterministic hash preserves that density
+            -- without coupling server correctness to Lua's global RNG.
+            local passengerCount = 0
+            for trial = 1, maximumPassengers do
+                if ((nextUnitId + 1) * 1103515245 + trial * 12345) % 8 == 0 then passengerCount = passengerCount + 1 end
+            end
+            for seat = 1, passengerCount do requestedSeats[#requestedSeats + 1] = seat end
+        end
+    end
+    for _, seat in ipairs(requestedSeats) do
+        local passengerModel = tonumber(candidate.occupantModels[math.min(#candidate.occupantModels, #passengers + 2)])
+        local passengerPed = createPed(passengerModel, candidate.x, candidate.y, candidate.z + 1.0, candidate.rotation)
+        if isElement(passengerPed) then warpPedIntoVehicle(passengerPed, vehicle, seat) end
+        if not isElement(passengerPed) or getPedOccupiedVehicle(passengerPed) ~= vehicle or getPedOccupiedVehicleSeat(passengerPed) ~= seat then
+            if isElement(passengerPed) then destroyElement(passengerPed) end
+            for _, passenger in ipairs(passengers) do if isElement(passenger.ped) then destroyElement(passenger.ped) end end
+            destroyElement(ped)
+            destroyElement(vehicle)
+            return false, "passenger-warp-refused"
+        end
+        passengers[#passengers + 1] = {ped = passengerPed, seat = seat}
+    end
     setVehicleEngineState(vehicle, true)
     setElementFrozen(vehicle, true)
     setElementFrozen(ped, true)
+    for _, passenger in ipairs(passengers) do setElementFrozen(passenger.ped, true) end
     nextUnitId = nextUnitId + 1
     local unit = {
-        id = nextUnitId, epoch = 0, ped = ped, vehicle = vehicle, owner = owner, observers = observers,
+        id = nextUnitId, epoch = 0, ped = ped, vehicle = vehicle, owner = owner, observers = observers, participants = {}, attached = {},
         state = "created", startX = candidate.x, startY = candidate.y, startZ = candidate.z,
-        cruiseSpeed = candidate.cruiseSpeed or 16.0, model = candidate.model, mode = mode,
+        cruiseSpeed = candidate.cruiseSpeed or 16.0, drivingStyle = tonumber(candidate.drivingStyle) or 0,
+        model = candidate.model, vehicleClass = tonumber(candidate.vehicleClass) or 0, mode = mode, passengers = passengers, anchorPlayer = owner,
     }
     units[unit.id] = unit
     -- Vehicle occupants are governed by the car task and seat attachment, not
     -- by the on-foot native-ped collision-residency fence. Marking the driver
     -- as ambientPedTraffic would make that fence compare its seated root to
     -- the ground and freeze it forever.
-    setElementData(ped, "neon:ambientPedPopulationClass", "civilian")
-    setElementData(ped, "neon:ambientVehicleTrafficId", unit.id)
+    forEachOccupant(unit, function(occupant)
+        setElementData(occupant, "neon:ambientPedPopulationClass", "civilian")
+        setElementData(occupant, "neon:ambientVehicleTrafficId", unit.id)
+    end)
     setElementData(vehicle, "neon:ambientVehicleTraffic", true)
     setElementData(vehicle, "neon:ambientVehicleTrafficId", unit.id)
-    trace("spawn", {id = unit.id, model = unit.model, x = candidate.x, y = candidate.y, z = candidate.z})
+    trace("spawn", {id = unit.id, model = unit.model, vehicleClass = unit.vehicleClass, passengers = #passengers,
+        x = candidate.x, y = candidate.y, z = candidate.z})
     assign(unit, owner, "spawn")
     return unit
 end
@@ -451,7 +824,7 @@ requestCandidate = function(owner, mode, attempt, generation)
         if owner ~= nil then candidateReservations[owner] = nil end
         return trace("candidate-aborted", {reason = "owner-missing", mode = mode})
     end
-    if mode ~= "production" and mode ~= "density" and #ps < 2 then return terminalTestFailure("two-clients-required") end
+    if mode ~= "production" and mode ~= "density" and mode ~= "spatial" and #ps < 2 then return terminalTestFailure("two-clients-required") end
     if #ps < 1 then return trace("candidate-aborted", {reason = "no-clients", mode = mode}) end
     attempt = tonumber(attempt) or 1
     if attempt == 1 then
@@ -460,35 +833,59 @@ requestCandidate = function(owner, mode, attempt, generation)
     end
     if attempt > MAX_CANDIDATE_ATTEMPTS then
         candidateReservations[owner] = nil
-        if mode ~= "production" and mode ~= "density" then return terminalTestFailure("candidate-attempt-limit") end
+        if mode ~= "production" and mode ~= "density" and mode ~= "spatial" then return terminalTestFailure("candidate-attempt-limit") end
         return trace("candidate-aborted", {reason = "candidate-attempt-limit", attempts = attempt - 1, mode = mode})
     end
     nextSession = nextSession + 1
     local x, y, z = getElementPosition(owner)
-    local model = VEHICLE_MODELS[(nextSession % #VEHICLE_MODELS) + 1]
+    local model = (mode == "production" or mode == "density" or mode == "spatial") and false or selectVehicleModel(owner, nextSession, mode)
     pendingCandidates[nextSession] = {
-        session = nextSession, owner = owner, players = ps, mode = mode, model = model,
+        session = nextSession, owner = owner, players = ps, mode = mode, model = model or nil,
         attempt = attempt, requestedAt = getTickCount(), generation = generation,
     }
     triggerClientEvent(owner, "carTraffic:requestCandidate", resourceRoot, nextSession, model, x, y, z)
-    trace("candidate-request", {session = nextSession, owner = getPlayerName(owner), model = model, attempt = attempt, x = x, y = y, z = z})
+    trace("candidate-request", {session = nextSession, owner = getPlayerName(owner), model = model or "native", attempt = attempt, x = x, y = y, z = z})
 end
 
 addEvent("carTraffic:candidate", true)
 addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidate, reason)
     local pending = pendingCandidates[tonumber(session)]
     if not pending or pending.generation ~= trafficGeneration or client ~= pending.owner then return end
-    if type(candidate) ~= "table" or tonumber(candidate.model) ~= pending.model then
+    local proposedModel = type(candidate) == "table" and tonumber(candidate.model) or nil
+    if type(candidate) ~= "table" or not proposedModel or (pending.model and proposedModel ~= pending.model) or not ALLOWED_MODELS[proposedModel] then
         pendingCandidates[session] = nil
         trace("candidate-retry", {session = session, reason = tostring(reason)})
         return setTimer(requestCandidate, 250, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation)
     end
+    pending.model = proposedModel
     local x, y, z = tonumber(candidate.x), tonumber(candidate.y), tonumber(candidate.z)
+    local vehicleClass = tonumber(candidate.vehicleClass)
+    local drivingStyle = tonumber(candidate.drivingStyle)
+    local occupantModels = candidate.occupantModels
+    if type(occupantModels) ~= "table" then
+        occupantModels = {}
+        local occupantCount = math.floor(tonumber(candidate.occupantCount) or 0)
+        for index = 1, math.min(4, occupantCount) do
+            occupantModels[index] = candidate["occupantModel" .. index]
+        end
+        candidate.occupantModels = occupantModels
+    end
+    local occupantsValid = type(occupantModels) == "table" and #occupantModels >= 1 and #occupantModels <= 4
+    if occupantsValid then
+        for _, occupantModel in ipairs(occupantModels) do
+            occupantModel = tonumber(occupantModel)
+            if not occupantModel or occupantModel % 1 ~= 0 or occupantModel < 7 or occupantModel > 288 then occupantsValid = false break end
+        end
+    end
     local ox, oy, oz = getElementPosition(pending.owner)
     local finite = x and y and z and x == x and y == y and z == z and math.abs(x) < 10000 and math.abs(y) < 10000 and math.abs(z) < 2000
-    if not finite or getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) > 240 then
+    if not finite or not occupantsValid or vehicleClass ~= (MODEL_CLASS[pending.model] or 0) or (drivingStyle ~= 0 and drivingStyle ~= 6) or
+        getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) > 240 then
         pendingCandidates[session] = nil
-        trace("candidate-retry", {session = session, reason = "server-validation"})
+        trace("candidate-retry", {session = session, reason = "server-validation", finite = finite == true,
+            occupantsValid = occupantsValid, occupantCount = type(occupantModels) == "table" and #occupantModels or -1,
+            vehicleClass = vehicleClass, expectedVehicleClass = MODEL_CLASS[pending.model] or 0, drivingStyle = drivingStyle,
+            distance = x and y and z and getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) or false})
         return setTimer(requestCandidate, 250, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation)
     end
     for _, unit in pairs(units) do
@@ -507,6 +904,26 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
     for _, player in ipairs(pending.players) do
         triggerClientEvent(player, "carTraffic:visibilityProbe", resourceRoot, session, candidate.x, candidate.y, candidate.z)
     end
+end)
+
+addEvent("carTraffic:populationProfile", true)
+addEventHandler("carTraffic:populationProfile", resourceRoot, function(profile)
+    if type(profile) ~= "table" then
+        populationProfiles[client] = nil
+        return
+    end
+    local zoneType = tonumber(profile.zoneType)
+    local timeIndex = tonumber(profile.timeIndex)
+    if not zoneType or zoneType < 0 or zoneType > 19 or zoneType % 1 ~= 0 or not timeIndex or timeIndex < 0 or timeIndex > 11 or timeIndex % 1 ~= 0 then
+        return
+    end
+    populationProfiles[client] = {
+        zoneType = zoneType,
+        timeIndex = timeIndex,
+        weekend = profile.weekend == true,
+        zoneLabel = tostring(profile.zoneLabel or ""),
+        capturedAt = getTickCount(),
+    }
 end)
 
 addEvent("carTraffic:visibility", true)
@@ -528,7 +945,7 @@ addEventHandler("carTraffic:visibility", resourceRoot, function(session, visible
     end
     pendingCandidates[session] = nil
     candidateReservations[pending.owner] = nil
-    if pending.mode == "production" or pending.mode == "density" then
+    if pending.mode == "production" or pending.mode == "density" or pending.mode == "spatial" then
         local desired = math.min(population.cap, #players() * population.targetPerPlayer)
         local relevant = unitCount(function(unit) return unit.mode == pending.mode end)
         if relevant >= desired then
@@ -541,8 +958,8 @@ addEventHandler("carTraffic:visibility", resourceRoot, function(session, visible
         return trace("unit-failure", {reason = reason, mode = pending.mode})
     end
     if pending.mode == "production" then return end
-    if pending.mode == "density" then
-        if activeTest and activeTest.mode == "density" then activeTest.units[unit.id] = unit end
+    if pending.mode == "density" or pending.mode == "spatial" then
+        if activeTest and activeTest.mode == pending.mode then activeTest.units[unit.id] = unit end
         return
     end
     if activeTest and activeTest.mode == pending.mode then
@@ -557,11 +974,13 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
     local unit = units[tonumber(id)]
     if not unit or tonumber(epoch) ~= unit.epoch or type(evidence) ~= "string" then return end
     data = type(data) == "table" and data or {}
-    if unit.expectDestruction and activeTest and activeTest.unit == unit and activeTest.mode == "lifecycle" and
+    local lifecycleTest = activeTest and activeTest.unit == unit and
+        (activeTest.mode == "lifecycle" or (activeTest.mode == "soak" and activeTest.scenario == "lifecycle"))
+    if unit.expectDestruction and lifecycleTest and
         (evidence == "failure" or evidence == "owner-sample") then
         return
     end
-    if activeTest and activeTest.unit == unit and activeTest.mode == "lifecycle" and activeTest.phase == "forced-stuck" and evidence == "owner-sample" then
+    if lifecycleTest and activeTest.phase == "forced-stuck" and evidence == "owner-sample" then
         return
     end
     if evidence == "failure" then
@@ -572,48 +991,127 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
     end
     if evidence == "accepted" then
         if client ~= unit.owner or unit.state ~= "assigning" or data.task ~= true or tonumber(data.seat) ~= 0 then return end
+        if unit.requiresResume and data.resumeApplied ~= true then
+            if activeTest and activeTest.unit == unit then return fail(unit, "handoff-resume-not-applied") end
+            trace("handoff-resume-unavailable", {id = unit.id, epoch = unit.epoch})
+        end
         clearTimer(unit, "assignmentTimer")
         unit.state = "active"
         unit.acceptedAt = getTickCount()
+        if unit.handoffMetrics then
+            local x, y, z = getElementPosition(unit.vehicle)
+            local _, _, rz = getElementRotation(unit.vehicle)
+            unit.handoffMetrics.acceptDelay = unit.acceptedAt - unit.handoffMetrics.startedAt
+            unit.handoffMetrics.acceptJump = getDistanceBetweenPoints3D(x, y, z, unit.handoffMetrics.preX, unit.handoffMetrics.preY, unit.handoffMetrics.preZ)
+            unit.handoffMetrics.acceptHeadingDelta = angleDelta(rz, unit.handoffMetrics.preHeading)
+            if activeTest and activeTest.unit == unit and (unit.handoffMetrics.acceptDelay > 3000 or unit.handoffMetrics.acceptJump > 8 or
+                unit.handoffMetrics.acceptHeadingDelta > 35) then
+                return fail(unit, "handoff-continuity-invalid")
+            end
+        end
         unit.observerSamples = 0
         startMonitor(unit)
-        if unit.assignmentReason == "owner-quit" then
-            trace("PASS-owner-quit", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner)})
+        if unit.assignmentReason == "passenger-seat-release" and unit.pendingPassengerEntry then
+            local entry = unit.pendingPassengerEntry
+            unit.pendingPassengerEntry = nil
+            if isElement(entry.player) then triggerClientEvent(entry.player, "carTraffic:takeoverReady", resourceRoot, unit.vehicle, entry.seat) end
         end
         return trace("active", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner)})
     end
     if evidence == "owner-sample" and client == unit.owner and unit.state == "active" then
         local pedVehicleDelta = tonumber(data.pedVehicleDelta)
+        local seq = tonumber(data.seq)
+        if not seq or seq % 1 ~= 0 or seq <= unit.ownerLastSeq then return fail(unit, "owner-sequence-invalid") end
         if data.task ~= true or data.pedSyncer ~= true or data.vehicleSyncer ~= true or tonumber(data.seat) ~= 0 or not pedVehicleDelta or pedVehicleDelta > 5 then
             return fail(unit, "owner-native-state-lost")
         end
+        if type(data.passengers) ~= "table" or #data.passengers ~= #(unit.passengers or {}) then return fail(unit, "owner-passenger-evidence-invalid") end
+        for index, passenger in ipairs(unit.passengers or {}) do
+            local sample = data.passengers[index]
+            if type(sample) ~= "table" or sample.ped ~= passenger.ped or tonumber(sample.expectedSeat) ~= passenger.seat or
+                tonumber(sample.seat) ~= passenger.seat or sample.occupied ~= true or sample.syncer ~= true then
+                return fail(unit, "owner-passenger-state-lost")
+            end
+        end
+        unit.ownerLastSeq = seq
         unit.ownerTaskSamples = unit.ownerTaskSamples + 1
         return
     end
     if evidence == "observer-sample" and client ~= unit.owner and unit.state == "active" then
         if data.pedSyncer == true or data.vehicleSyncer == true or tonumber(data.seat) ~= 0 then return fail(unit, "observer-authority-invalid") end
+        if not unit.participants[client] then return end
+        if type(data.passengers) ~= "table" or #data.passengers ~= #(unit.passengers or {}) then return fail(unit, "observer-passenger-evidence-invalid") end
+        for index, passenger in ipairs(unit.passengers or {}) do
+            local sample = data.passengers[index]
+            if type(sample) ~= "table" or sample.ped ~= passenger.ped or tonumber(sample.expectedSeat) ~= passenger.seat or
+                tonumber(sample.seat) ~= passenger.seat or sample.occupied ~= true or sample.syncer == true then
+                return fail(unit, "observer-passenger-state-lost")
+            end
+        end
         local x, y, z = tonumber(data.x), tonumber(data.y), tonumber(data.z)
-        if not x or not y or not z or nearestServerHistory(unit, x, y, z) > 15 then return end
+        local seq = tonumber(data.seq)
+        local observer = unit.observerEvidence[client] or {lastSeq = 0, uniqueSamples = 0, distance = 0}
+        if not seq or seq % 1 ~= 0 or seq <= observer.lastSeq then return fail(unit, "observer-sequence-invalid") end
+        observer.lastSeq = seq
+        unit.observerEvidence[client] = observer
+        if not x or not y or not z then return end
+        local errorDistance, history = nearestServerHistory(unit, x, y, z)
+        if not history or errorDistance > 15 or observer.lastHistorySeq == history.seq then return end
+        observer.lastHistorySeq = history.seq
+        observer.uniqueSamples = observer.uniqueSamples + 1
+        observer.maximumError = math.max(observer.maximumError or 0, errorDistance)
+        if observer.lastX then observer.distance = observer.distance + getDistanceBetweenPoints2D(observer.lastX, observer.lastY, x, y) end
+        observer.lastX, observer.lastY, observer.lastZ = x, y, z
         unit.observerSamples = (unit.observerSamples or 0) + 1
         return
     end
     if evidence == "released" and client == unit.owner and unit.state == "revoking" then
         clearTimer(unit, "handoffTimer")
         local nextOwner = unit.pendingOwner
-        setElementSyncer(unit.ped, false)
+        local x, y, z = finiteNumber(data.x, 10000), finiteNumber(data.y, 10000), finiteNumber(data.z, 2000)
+        local rx, ry, rz = finiteNumber(data.rx, 3600), finiteNumber(data.ry, 3600), finiteNumber(data.rz, 3600)
+        local vx, vy, vz = finiteNumber(data.vx, 3), finiteNumber(data.vy, 3), finiteNumber(data.vz, 3)
+        local avx, avy, avz = finiteNumber(data.avx, 1), finiteNumber(data.avy, 1), finiteNumber(data.avz, 1)
+        local serverX, serverY, serverZ = getElementPosition(unit.vehicle)
+        if not x or not y or not z or not rx or not ry or not rz or not vx or not vy or not vz or not avx or not avy or not avz or
+            getDistanceBetweenPoints3D(x, y, z, serverX, serverY, serverZ) > 15 or math.sqrt(vx * vx + vy * vy + vz * vz) > 3 or
+            math.sqrt(avx * avx + avy * avy + avz * avz) > 1 then
+            return fail(unit, "release-snapshot-invalid")
+        end
+        unit.resumeKinematics = {
+            x = x, y = y, z = z, rx = rx, ry = ry, rz = rz,
+            vx = vx, vy = vy, vz = vz, avx = avx, avy = avy, avz = avz,
+            capturedAt = getTickCount(),
+        }
+        unit.handoffMetrics = {
+            startedAt = getTickCount(), preX = x, preY = y, preZ = z, preHeading = rz,
+            preSpeed = math.sqrt(vx * vx + vy * vy + vz * vz), release = data,
+        }
+        forEachOccupant(unit, function(ped)
+            if isElement(ped) then setElementSyncer(ped, false) end
+        end)
         setElementSyncer(unit.vehicle, false)
         unit.owner = nil
         unit.pendingOwner = nil
         local reason = unit.pendingHandoffReason or "handoff"
         unit.pendingHandoffReason = nil
+        if unit.pendingTakeover then
+            local player = unit.pendingTakeover
+            unit.pendingTakeover = nil
+            return finalizePlayerTakeover(unit, player)
+        end
         assign(unit, nextOwner, reason)
         if reason == "test-handoff" then
             unit.handoffEpoch = unit.epoch
             unit.handoffX, unit.handoffY, unit.handoffZ = getElementPosition(unit.vehicle)
+            unit.handoffPassed = false
         elseif reason == "stuck-restart" then
             unit.recoveryEpoch = unit.epoch
             unit.recoveryPending = nil
-            if activeTest and activeTest.unit == unit and activeTest.mode == "lifecycle" then activeTest.phase = "recovering" end
+            if activeTest and activeTest.unit == unit and
+                (activeTest.mode == "lifecycle" or (activeTest.mode == "soak" and activeTest.scenario == "lifecycle")) then
+                activeTest.phase = "recovering"
+            end
         end
         return
     end
@@ -625,14 +1123,25 @@ addEventHandler("carTraffic:clientDiagnostic", resourceRoot, function(id, epoch,
         id = tonumber(id), epoch = tonumber(epoch), client = isElement(client) and getPlayerName(client) or "invalid",
         stage = tostring(stage), data = type(data) == "table" and data or {},
     })
+    if activeTest and activeTest.mode == "interaction" and client == activeTest.interactionPlayer and
+        tostring(stage):find("^interaction%-.*%-timeout$") then
+        terminalTestFailure(tostring(stage), activeTest.unit)
+    end
 end)
 
 addEvent("carTraffic:cleanupAck", true)
-addEventHandler("carTraffic:cleanupAck", resourceRoot, function(id, epoch)
+addEventHandler("carTraffic:cleanupAck", resourceRoot, function(id, epoch, proof)
     if not activeTest or not activeTest.cleanupExpected then return end
     local expected = activeTest.cleanupExpected[tonumber(id)]
     if not expected or tonumber(epoch) ~= expected.epoch then return end
     if not expected.participants[client] then return end
+    if type(proof) ~= "table" or proof.registryEmpty ~= true or proof.leasesReleased ~= true or proof.taskStopped ~= true or
+        proof.missionActorRestored ~= true or proof.passengerLeaseRegistryEmpty ~= true or
+        (proof.hadUnit ~= true and proof.hadTombstone ~= true) then
+        return terminalTestFailure("cleanup-proof-invalid")
+    end
+    expected.proofs = expected.proofs or {}
+    expected.proofs[client] = proof
     expected.acknowledgements[client] = true
     local count = 0
     for player in pairs(expected.acknowledgements) do if isElement(player) then count = count + 1 end end
@@ -661,10 +1170,10 @@ local function populationTick()
         end
     end
 
-    local mode = population.testDensity and "density" or "production"
+    local mode = type(population.testDensity) == "string" and population.testDensity or "production"
     local desired = math.min(population.cap, #ps * population.targetPerPlayer)
     local relevant = unitCount(function(unit) return unit.mode == mode end)
-    if mode == "production" and relevant > desired then
+    if relevant > desired then
         local excess = {}
         for _, unit in pairs(units) do
             if unit.mode == mode then
@@ -677,8 +1186,48 @@ local function populationTick()
             if a.distance == b.distance then return a.unit.id > b.unit.id end
             return a.distance > b.distance
         end)
-        for index = 1, relevant - desired do destroyUnit(excess[index].unit, "density-reconcile") end
+        for index = 1, relevant - desired do
+            local excessUnit = excess[index].unit
+            if activeTest and activeTest.mode == "spatial" and activeTest.units and activeTest.units[excessUnit.id] then
+                registerTestCleanup(excessUnit)
+            end
+            destroyUnit(excessUnit, "density-reconcile")
+        end
         relevant = desired
+    end
+
+    if activeTest and activeTest.mode == "spatial" and mode == "spatial" then
+        local stable = {}
+        for _, unit in pairs(activeTest.units) do
+            if units[unit.id] == unit and unit.state == "active" and unit.stableEpoch == unit.epoch then stable[#stable + 1] = unit end
+        end
+        if activeTest.phase == "bubbles" and #stable >= 2 then
+            local distinctAnchors = stable[1].anchorPlayer ~= stable[2].anchorPlayer
+            local separation = distanceToUnit(stable[1].anchorPlayer, stable[2])
+            if not distinctAnchors or separation < 500 then return terminalTestFailure("spatial-bubbles-invalid") end
+            trace("PASS-spatial-bubbles", {units = #stable, separation = separation, owners = 2})
+            local participants = players()
+            for index, participant in ipairs(participants) do setElementPosition(participant, 1540 + index * 2, -1675, 13.55) end
+            population.cap = 1
+            activeTest.phase = "cap-down"
+        elseif activeTest.phase == "cap-down" and relevant <= 1 then
+            trace("PASS-spatial-cap-down", {units = relevant, cap = 1})
+            population.cap = 2
+            activeTest.phase = "cap-up"
+        elseif activeTest.phase == "cap-up" and #stable >= 2 then
+            local observable = 0
+            for _, unit in ipairs(stable) do if qualifiedObserverCount(unit) >= 1 then observable = observable + 1 end end
+            if observable >= 2 then
+                population.enabled = false
+                if isTimer(population.timer) then killTimer(population.timer) end
+                population.timer = nil
+                trace("PASS-spatial", {units = #stable, cap = population.cap, observable = observable})
+                activeTest.cleanupFinalizing = true
+                for _, unit in ipairs(stable) do registerTestCleanup(unit) end
+                for _, unit in ipairs(stable) do destroyUnit(unit, "spatial-test-complete") end
+                return
+            end
+        end
     end
     if relevant + pendingCount() >= desired then return end
 
@@ -697,7 +1246,7 @@ local function startPopulation(targetPerPlayer, cap, testDensity)
     candidateReservations = {}
     population.targetPerPlayer = math.max(1, math.min(4, tonumber(targetPerPlayer) or 2))
     population.cap = math.max(1, math.min(24, tonumber(cap) or 12))
-    population.testDensity = testDensity == true
+    population.testDensity = type(testDensity) == "string" and testDensity or false
     population.enabled = true
     if isTimer(population.timer) then killTimer(population.timer) end
     population.timer = setTimer(populationTick, 1000, 0)
@@ -719,7 +1268,7 @@ local function stopPopulation(reason, destroyOwned)
     trace("population-stop", {reason = reason, remaining = unitCount()})
 end
 
-addCommandHandler("cartraffic", function(player, _, action, mode, value)
+local function handleTrafficCommand(player, action, mode, value)
     if action == "test" then
         mode = mode or "fixture"
         if activeTest then return trace("test-refused", {reason = "test-already-active", mode = activeTest.mode}) end
@@ -736,7 +1285,11 @@ addCommandHandler("cartraffic", function(player, _, action, mode, value)
         for index, participant in ipairs(ps) do
             setElementInterior(participant, 0)
             setElementDimension(participant, 0)
-            setElementPosition(participant, 1540 + index * 2, -1675, 13.55)
+            if mode == "spatial" and index == 2 then
+                setElementPosition(participant, -1985, 138, 27.7)
+            else
+                setElementPosition(participant, 1540 + index * 2, -1675, 13.55)
+            end
             setElementRotation(participant, 0, 0, 90)
             setCameraTarget(participant, participant)
         end
@@ -744,13 +1297,25 @@ addCommandHandler("cartraffic", function(player, _, action, mode, value)
             local expected = math.min(4, #ps * 2)
             activeTest = {mode = "density", units = {}, expectedUnits = expected, startedAt = getTickCount()}
             armTestWatchdog(240000)
-            return setTimer(function() startPopulation(2, expected, true) end, 1500, 1)
+            return setTimer(function() startPopulation(2, expected, "density") end, 1500, 1)
         end
-        if mode ~= "fixture" and mode ~= "all" and mode ~= "lifecycle" and mode ~= "soak" then
+        if mode == "spatial" then
+            if #ps < 2 then return trace("test-refused", {reason = "two-clients-required", mode = mode}) end
+            activeTest = {mode = "spatial", units = {}, expectedUnits = 2, phase = "bubbles", startedAt = getTickCount()}
+            armTestWatchdog(300000)
+            return setTimer(function() startPopulation(1, 2, "spatial") end, 1500, 1)
+        end
+        if mode ~= "fixture" and mode ~= "all" and mode ~= "lifecycle" and mode ~= "soak" and mode ~= "passengers" and mode ~= "classes" and
+            mode ~= "interaction" and mode ~= "smooth" and mode ~= "spatial" and mode ~= "ownerquit" then
             return trace("test-refused", {reason = "unknown-test-mode", mode = mode})
         end
-        activeTest = {mode = mode, startedAt = getTickCount(), cycle = 1, cycles = mode == "soak" and math.max(2, math.min(10, tonumber(value) or 3)) or 1}
-        armTestWatchdog(mode == "soak" and 300000 or 180000)
+        activeTest = {
+            mode = mode, startedAt = getTickCount(), cycle = 1,
+            cycles = mode == "soak" and math.max(4, math.min(10, tonumber(value) or 6)) or 1,
+            scenario = mode == "soak" and SOAK_SCENARIOS[1] or nil,
+            classIndex = mode == "classes" and 1 or nil,
+        }
+        armTestWatchdog(mode == "soak" and 600000 or 180000)
         setTimer(requestCandidate, 1500, 1, owner, mode, 1)
     elseif action == "start" then
         if activeTest then return trace("population-refused", {reason = "test-active"}) end
@@ -765,12 +1330,42 @@ addCommandHandler("cartraffic", function(player, _, action, mode, value)
         if activeTest and isTimer(activeTest.watchdogTimer) then killTimer(activeTest.watchdogTimer) end
         activeTest = false
         destroyUnitsWhere("command-cleanup")
+        clearTakeovers(false, "command-cleanup")
     else
-        trace("usage", {command = "cartraffic test fixture|all|lifecycle|density|soak [cycles] | cartraffic start [perPlayer] [cap] | stop | status | cleanup"})
+        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|soak [cycles] | cartraffic start [perPlayer] [cap] | stop | status | cleanup"})
     end
+end
+
+addCommandHandler("cartraffic", function(player, _, action, mode, value)
+    handleTrafficCommand(player, action, mode, value)
 end)
 
+-- A file-backed queue keeps the integration harness entirely headless. The
+-- deployed test resource consumes one command atomically, while ordinary
+-- gameplay continues to use /cartraffic through the same implementation.
+setTimer(function()
+    local path = "automation-command.txt"
+    if not fileExists(path) then return end
+    local file = fileOpen(path, true)
+    if not file then return end
+    local contents = fileRead(file, fileGetSize(file)) or ""
+    fileClose(file)
+    fileDelete(path)
+    local action, mode, value = contents:match("^%s*(%S+)%s*(%S*)%s*(%S*)")
+    if not action then return end
+    handleTrafficCommand(false, action, mode ~= "" and mode or nil, value ~= "" and value or nil)
+end, 250, 0)
+
 addEventHandler("onPlayerQuit", root, function()
+    populationProfiles[source] = nil
+    for vehicle, takeover in pairs(takeoverVehicles) do
+        if takeover.player == source then
+            if isTimer(takeover.timer) then killTimer(takeover.timer) end
+            takeoverVehicles[vehicle] = nil
+            if isElement(vehicle) then destroyElement(vehicle) end
+            trace("takeover-cleanup", {reason = "player-quit", player = getPlayerName(source)})
+        end
+    end
     if activeTest and activeTest.cleanupExpected then
         for _, expected in pairs(activeTest.cleanupExpected) do
             if expected.participants[source] then
@@ -783,6 +1378,11 @@ addEventHandler("onPlayerQuit", root, function()
             end
         end
         finishTestCleanupIfReady()
+    elseif activeTest and activeTest.mode == "ownerquit" and activeTest.phase == "await-owner-quit" and activeTest.expectedQuit == source then
+        if isTimer(activeTest.ownerQuitFollowTimer) then killTimer(activeTest.ownerQuitFollowTimer) end
+        activeTest.ownerQuitFollowTimer = nil
+        activeTest.phase = "recovering-owner-quit"
+        activeTest.expectedQuit = nil
     elseif activeTest then
         return terminalTestFailure("client-left")
     end
@@ -805,13 +1405,23 @@ addEventHandler("onPlayerQuit", root, function()
             end
         end
         if not unit.removing and unit.owner == source then
-            local nextOwner
-            for _, player in ipairs(players()) do if player ~= source then nextOwner = player break end end
+            local nextOwner = chooseOwner(unit, source)
             if nextOwner then
                 clearTimer(unit, "handoffTimer")
-                setElementSyncer(unit.ped, false)
+                local vx, vy, vz = getElementVelocity(unit.vehicle)
+                local avx, avy, avz = getElementAngularVelocity(unit.vehicle)
+                unit.resumeKinematics = {vx = vx, vy = vy, vz = vz, avx = avx, avy = avy, avz = avz, capturedAt = getTickCount()}
+                -- A timed-out owner cannot provide the normal revoke snapshot.
+                -- Fence the last authoritative server pose until the new
+                -- owner has received it, then let the assignment restore the
+                -- validated linear and angular velocity.
+                unit.forceTransferFreeze = true
+                forEachOccupant(unit, function(ped)
+                    if isElement(ped) then setElementSyncer(ped, false) end
+                end)
                 setElementSyncer(unit.vehicle, false)
                 assign(unit, nextOwner, "owner-quit")
+                unit.ownerQuitEpoch = unit.epoch
             else
                 destroyUnit(unit, "owner-quit-no-fallback")
             end
@@ -819,24 +1429,99 @@ addEventHandler("onPlayerQuit", root, function()
     end
 end)
 
+addEventHandler("onPlayerJoin", root, function()
+    local joined = source
+    setTimer(function()
+        if not isElement(joined) or getElementDimension(joined) ~= 0 or getElementInterior(joined) ~= 0 then return end
+        for _, unit in pairs(units) do
+            if not unit.removing and isElement(unit.ped) and isElement(unit.vehicle) and distanceToUnit(joined, unit) <= RESIDENCY_DISTANCE then
+                unit.participants[joined] = true
+                unit.attached[joined] = true
+                triggerClientEvent(joined, "carTraffic:observe", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, passengerPayload(unit))
+            end
+        end
+    end, 1500, 1)
+end)
+
 addEventHandler("onVehicleStartEnter", root, function(player, seat)
-    if seat ~= 0 then return end
     for _, unit in pairs(units) do
         if source == unit.vehicle then
-            cancelEvent()
-            if activeTest and (activeTest.unit == unit or (activeTest.units and activeTest.units[unit.id])) then
-                fail(unit, "player-driver-intervention")
-            else
-                destroyUnit(unit, "player-driver-intervention")
+            if seat ~= 0 then
+                for index, passenger in ipairs(unit.passengers or {}) do
+                    if passenger.seat == seat then
+                        cancelEvent()
+                        table.remove(unit.passengers, index)
+                        if isElement(passenger.ped) then destroyElement(passenger.ped) end
+                        unit.pendingPassengerEntry = {player = player, seat = seat}
+                        if not beginRevoke(unit, unit.owner, "passenger-seat-release") then return fail(unit, "passenger-release-refused") end
+                        trace("passenger-seat-release", {id = unit.id, epoch = unit.epoch, seat = seat, player = getPlayerName(player)})
+                        return
+                    end
+                end
+                return
             end
+            cancelEvent()
+            if unit.state ~= "active" or not beginRevoke(unit, player, "player-takeover") then return fail(unit, "takeover-revoke-refused") end
+            unit.pendingTakeover = player
             return
         end
     end
 end)
 
+addEventHandler("onVehicleEnter", root, function(player, seat)
+    for _, unit in pairs(units) do
+        if source == unit.vehicle and activeTest and activeTest.unit == unit and activeTest.mode == "interaction" and
+            activeTest.phase == "passenger-request" and player == activeTest.interactionPlayer and seat == 1 then
+            activeTest.phase = "passenger-ride"
+            activeTest.interactionEpoch = unit.epoch
+            setElementFrozen(unit.vehicle, false)
+            triggerClientEvent(unit.owner, "carTraffic:testResumeDrive", resourceRoot, unit.id, unit.epoch)
+            unit.lastMovingAt = getTickCount()
+            activeTest.passengerRideX, activeTest.passengerRideY, activeTest.passengerRideZ = getElementPosition(unit.vehicle)
+            trace("PASS-player-passenger-enter", {id = unit.id, epoch = unit.epoch, player = getPlayerName(player), seat = seat})
+            return
+        end
+    end
+    local takeover = takeoverVehicles[source]
+    if not takeover or takeover.player ~= player or seat ~= 0 then return end
+    if getVehicleOccupant(source, 0) ~= player or getElementData(source, "neon:ambientVehicleTraffic") ~= false or
+        getElementData(source, "neon:ambientVehicleTrafficId") ~= false or getElementData(source, "neon:ambientVehicleTrafficEpoch") ~= false then
+        if takeover.test and activeTest == takeover.test then return terminalTestFailure("takeover-postcondition-invalid") end
+        return
+    end
+    if isTimer(takeover.timer) then killTimer(takeover.timer) end
+    takeoverVehicles[source] = nil
+    trace("PASS-takeover", {player = getPlayerName(player), vehiclePreserved = true, occupant = true})
+    if takeover.test and activeTest == takeover.test then
+        activeTest.waitForTakeoverEnter = false
+        if isElement(source) then destroyElement(source) end
+        finishTestCleanupIfReady()
+    end
+end)
+
+addEventHandler("onVehicleExit", root, function(player, seat)
+    if not activeTest or activeTest.mode ~= "interaction" or activeTest.phase ~= "passenger-exit-request" or
+        player ~= activeTest.interactionPlayer or seat ~= 1 then
+        return
+    end
+    local unit = activeTest.unit
+    if not unit or source ~= unit.vehicle or units[unit.id] ~= unit then return terminalTestFailure("passenger-exit-unit-lost", unit) end
+    if isTimer(activeTest.interactionBrakeTimer) then killTimer(activeTest.interactionBrakeTimer) end
+    activeTest.interactionBrakeTimer = nil
+    trace("PASS-player-passenger-exit", {id = unit.id, epoch = unit.epoch, player = getPlayerName(player), distance = 15})
+    activeTest.phase = "takeover-request"
+    local x, y, z = getElementPosition(unit.vehicle)
+    setElementPosition(player, x + 3, y, z + 1)
+    triggerClientEvent(player, "carTraffic:testEnterVehicle", resourceRoot, unit.vehicle, 0)
+end)
+
 addEventHandler("onElementDestroy", root, function()
     for _, unit in pairs(units) do
-        if not unit.removing and (source == unit.ped or source == unit.vehicle) then
+        local member = source == unit.ped or source == unit.vehicle
+        for _, passenger in ipairs(unit.passengers or {}) do
+            if source == passenger.ped then member = true break end
+        end
+        if not unit.removing and member then
             return fail(unit, "member-destroyed")
         end
     end
@@ -847,6 +1532,7 @@ addEventHandler("onResourceStop", resourceRoot, function()
     pendingCandidates = {}
     candidateReservations = {}
     destroyUnitsWhere("resource-stop")
+    clearTakeovers(false, "resource-stop")
 end)
 
-trace("ready", {models = #VEHICLE_MODELS})
+trace("ready", {models = ALLOWED_MODEL_COUNT, contextualGroups = 20})

@@ -392,6 +392,9 @@ public:
     EAmbientPedSpawnCandidateResult GetAmbientPedCivilianCoupleCandidate(const CVector& origin, SAmbientPedCivilianCoupleSpawnCandidate& candidate) override;
     EAmbientVehicleSpawnCandidateResult GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
                                                                         SAmbientVehicleSpawnCandidate& candidate) override;
+    EAmbientVehicleModelCandidateResult GetAmbientVehicleModelCandidate(SAmbientVehicleModelCandidate& candidate) override;
+    bool                                GetAmbientVehicleOccupantModelCandidate(unsigned int vehicleModelId, unsigned int maximumOccupants,
+                                                                                SAmbientVehicleOccupantModelCandidate& candidate) override;
     void                                RecordAmbientPedCivilianCoupleForwardedEvent(void* eventGroup, int eventType);
 
 private:

@@ -69,6 +69,8 @@ void CLuaWorldDefs::LoadFunctions()
         {"getAmbientPedGangGroupCandidate", GetAmbientPedGangGroupCandidate},
         {"getAmbientPedCivilianCoupleCandidate", GetAmbientPedCivilianCoupleCandidate},
         {"getAmbientVehicleSpawnCandidate", GetAmbientVehicleSpawnCandidate},
+        {"getAmbientVehicleModelCandidate", GetAmbientVehicleModelCandidate},
+        {"getAmbientVehicleOccupantModelCandidate", GetAmbientVehicleOccupantModelCandidate},
         {"getCoronaReflectionsEnabled", ArgumentParser<GetCoronaReflectionsEnabled>},
         {"getWorldProperty", ArgumentParser<GetWorldProperty>},
 
@@ -340,7 +342,7 @@ int CLuaWorldDefs::GetAmbientVehicleSpawnCandidate(lua_State* luaVM)
         return 2;
     }
 
-    lua_createtable(luaVM, 0, 7);
+    lua_createtable(luaVM, 0, 8);
     lua_pushinteger(luaVM, candidate.modelId);
     lua_setfield(luaVM, -2, "model");
     lua_pushnumber(luaVM, candidate.position.fX);
@@ -353,8 +355,65 @@ int CLuaWorldDefs::GetAmbientVehicleSpawnCandidate(lua_State* luaVM)
     lua_setfield(luaVM, -2, "rotation");
     lua_pushnumber(luaVM, candidate.cruiseSpeed);
     lua_setfield(luaVM, -2, "cruiseSpeed");
+    lua_pushinteger(luaVM, candidate.vehicleClass);
+    lua_setfield(luaVM, -2, "vehicleClass");
     lua_pushinteger(luaVM, candidate.drivingStyle);
     lua_setfield(luaVM, -2, "drivingStyle");
+    return 1;
+}
+
+int CLuaWorldDefs::GetAmbientVehicleModelCandidate(lua_State* luaVM)
+{
+    SAmbientVehicleModelCandidate candidate;
+    const auto                    result = g_pGame->GetAmbientVehicleModelCandidate(candidate);
+    if (result != EAmbientVehicleModelCandidateResult::Success)
+    {
+        const char* reason = result == EAmbientVehicleModelCandidateResult::PopulationUnavailable ? "population-unavailable"
+                             : result == EAmbientVehicleModelCandidateResult::InvalidGroup        ? "invalid-group"
+                                                                                                  : "no-road-model";
+        lua_pushboolean(luaVM, false);
+        lua_pushstring(luaVM, reason);
+        return 2;
+    }
+
+    lua_createtable(luaVM, 0, 3);
+    lua_pushinteger(luaVM, candidate.modelId);
+    lua_setfield(luaVM, -2, "model");
+    lua_pushinteger(luaVM, candidate.carGroup);
+    lua_setfield(luaVM, -2, "carGroup");
+    lua_pushinteger(luaVM, candidate.vehicleClass);
+    lua_setfield(luaVM, -2, "vehicleClass");
+    return 1;
+}
+
+int CLuaWorldDefs::GetAmbientVehicleOccupantModelCandidate(lua_State* luaVM)
+{
+    unsigned int     vehicleModelId{};
+    unsigned int     maximumOccupants{};
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(vehicleModelId);
+    argStream.ReadNumber(maximumOccupants, AMBIENT_VEHICLE_MAX_OCCUPANTS);
+    if (argStream.HasErrors() || maximumOccupants == 0 || maximumOccupants > AMBIENT_VEHICLE_MAX_OCCUPANTS)
+    {
+        if (argStream.HasErrors())
+            m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    SAmbientVehicleOccupantModelCandidate candidate;
+    if (!g_pGame->GetAmbientVehicleOccupantModelCandidate(vehicleModelId, maximumOccupants, candidate))
+    {
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    lua_createtable(luaVM, candidate.count, 0);
+    for (unsigned int index = 0; index < candidate.count; ++index)
+    {
+        lua_pushinteger(luaVM, candidate.modelIds[index]);
+        lua_rawseti(luaVM, -2, index + 1);
+    }
     return 1;
 }
 

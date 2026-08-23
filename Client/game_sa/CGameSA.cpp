@@ -178,6 +178,8 @@ namespace
     constexpr std::uintptr_t FUNC_SetModelTxdIsDeletable = 0x409C70;
     constexpr std::uintptr_t FUNC_GeneratePedCreationCoors = 0x44E790;
     constexpr std::uintptr_t FUNC_GenerateCarCreationCoors2 = 0x424210;
+    constexpr std::uintptr_t FUNC_PickARandomGroupOfOtherPeds = 0x610420;
+    constexpr std::uintptr_t FUNC_PedIsAcceptableInCurrentZone = 0x610720;
     constexpr std::uintptr_t FUNC_TakePathWidthIntoAccount = 0x44DA30;
     constexpr std::uintptr_t FUNC_PedCreationDistMultiplier = 0x6116C0;
     constexpr std::uintptr_t FUNC_CullZonesFewerPeds = 0x72DD90;
@@ -224,10 +226,87 @@ namespace
         waterPath = (node[PATH_NODE_FLAGS_OFFSET] & 0x80) != 0;
         return true;
     }
+
+    bool GetAmbientVehicleLaneOffset(const SAmbientVehicleNodeAddressSA& from, const SAmbientVehicleNodeAddressSA& to, unsigned int modelId,
+                                     VehicleClass vehicleClass, float& offsetMeters)
+    {
+        constexpr unsigned int PATH_AREA_COUNT = 64;
+        constexpr unsigned int PATH_NODE_ARRAY_OFFSET = 0x804;
+        constexpr unsigned int PATH_CAR_LINK_ARRAY_OFFSET = 0x924;
+        constexpr unsigned int PATH_NODE_LINK_ARRAY_OFFSET = 0xA44;
+        constexpr unsigned int PATH_NAVI_LINK_ARRAY_OFFSET = 0xDA4;
+        constexpr unsigned int PATH_VEHICLE_NODE_COUNT_OFFSET = 0x10C4;
+        constexpr unsigned int PATH_CAR_LINK_COUNT_OFFSET = 0x1304;
+        constexpr unsigned int PATH_ADDRESS_COUNT_OFFSET = 0x1424;
+        constexpr unsigned int PATH_NODE_SIZE = 0x1C;
+        constexpr unsigned int PATH_CAR_LINK_SIZE = 0x0E;
+
+        if (from.area >= PATH_AREA_COUNT || to.area >= PATH_AREA_COUNT)
+            return false;
+        auto* const* pathNodes = reinterpret_cast<unsigned char* const*>(GTA_PATH_FIND + PATH_NODE_ARRAY_OFFSET);
+        const auto*  vehicleNodeCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_VEHICLE_NODE_COUNT_OFFSET);
+        const auto*  addressCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_ADDRESS_COUNT_OFFSET);
+        if (!pathNodes[from.area] || from.node >= vehicleNodeCounts[from.area])
+            return false;
+
+        const unsigned char* node = pathNodes[from.area] + from.node * PATH_NODE_SIZE;
+        const int            baseLink = *reinterpret_cast<const short*>(node + 0x10);
+        const unsigned int   linkCount = node[0x18] & 0x0F;
+        if (baseLink < 0 || linkCount == 0 || static_cast<unsigned int>(baseLink) + linkCount > addressCounts[from.area])
+            return false;
+
+        auto* const* nodeLinks = reinterpret_cast<SAmbientVehicleNodeAddressSA* const*>(GTA_PATH_FIND + PATH_NODE_LINK_ARRAY_OFFSET);
+        auto* const* naviLinks = reinterpret_cast<unsigned short* const*>(GTA_PATH_FIND + PATH_NAVI_LINK_ARRAY_OFFSET);
+        if (!nodeLinks[from.area] || !naviLinks[from.area])
+            return false;
+
+        unsigned short packedNaviLink = 0xFFFF;
+        for (unsigned int index = 0; index < linkCount; ++index)
+        {
+            const auto& linked = nodeLinks[from.area][baseLink + index];
+            if (linked.area == to.area && linked.node == to.node)
+            {
+                packedNaviLink = naviLinks[from.area][baseLink + index];
+                break;
+            }
+        }
+        if (packedNaviLink == 0xFFFF)
+            return false;
+
+        const unsigned int carLinkArea = packedNaviLink >> 10;
+        const unsigned int carLinkId = packedNaviLink & 0x03FF;
+        auto* const*       carLinks = reinterpret_cast<unsigned char* const*>(GTA_PATH_FIND + PATH_CAR_LINK_ARRAY_OFFSET);
+        const auto*        carLinkCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_CAR_LINK_COUNT_OFFSET);
+        if (carLinkArea >= PATH_AREA_COUNT || !carLinks[carLinkArea] || carLinkId >= carLinkCounts[carLinkArea])
+            return false;
+
+        const unsigned char* carLink = carLinks[carLinkArea] + carLinkId * PATH_CAR_LINK_SIZE;
+        const auto&          attachedTo = *reinterpret_cast<const SAmbientVehicleNodeAddressSA*>(carLink + 0x04);
+        const bool           attachedToFrom = attachedTo.area == from.area && attachedTo.node == from.node;
+        const bool           attachedToTo = attachedTo.area == to.area && attachedTo.node == to.node;
+        if (!attachedToFrom && !attachedToTo)
+            return false;
+        const unsigned char laneFlags = carLink[0x0B];
+        const unsigned int  oppositeLanes = laneFlags & 0x07;
+        const unsigned int  sameDirectionLanes = (laneFlags >> 3) & 0x07;
+        const unsigned int  laneCount = attachedToTo ? sameDirectionLanes : oppositeLanes;
+        if (laneCount == 0 || ((modelId == 431 || modelId == 437) && laneCount < 2) || (vehicleClass == VehicleClass::BMX && laneCount >= 2))
+            return false;
+
+        const float oneWayOffset = oppositeLanes == 0        ? 0.5f - 0.5f * sameDirectionLanes
+                                   : sameDirectionLanes == 0 ? 0.5f - 0.5f * oppositeLanes
+                                                             : static_cast<float>(carLink[0x0A]) * (1.0f / 86.4f) + 0.5f;
+        offsetMeters = (oneWayOffset + rand() % laneCount) * 5.4f;
+        if (vehicleClass == VehicleClass::BMX)
+            offsetMeters += 1.458f;
+        return std::isfinite(offsetMeters) && std::abs(offsetMeters) <= 50.0f;
+    }
     constexpr std::uintptr_t GTA_NAVIGATION_ZONE_ARRAY = 0xBA3798;
     constexpr std::uintptr_t GTA_ZONE_INFO_ARRAY = 0xBA1DF0;
     constexpr std::uintptr_t GTA_CURRENT_POPCYCLE_ZONE = 0xC0BC64;
     constexpr std::uintptr_t GTA_CURRENT_POPCYCLE_ZONE_INFO = 0xC0BC68;
+    constexpr std::uintptr_t GTA_CAR_GROUP_COUNTS = 0xC0EC78;
+    constexpr std::uintptr_t GTA_CAR_GROUP_MODELS = 0xC0ED38;
     constexpr std::uintptr_t GTA_POPCYCLE_ZONE_TYPE = 0xC0BC6C;
     constexpr std::uintptr_t GTA_POPCYCLE_WEEKEND = 0xC0BC70;
     constexpr std::uintptr_t GTA_POPCYCLE_TIME_INDEX = 0xC0BC74;
@@ -2042,6 +2121,129 @@ bool CGameSA::IsAmbientPedSphereVisible(const CVector& position, float radius)
     return m_pCamera->IsSphereVisible(&mutablePosition, radius);
 }
 
+EAmbientVehicleModelCandidateResult CGameSA::GetAmbientVehicleModelCandidate(SAmbientVehicleModelCandidate& candidate)
+{
+    candidate = {};
+    if (!*reinterpret_cast<void**>(GTA_CURRENT_POPCYCLE_ZONE_INFO))
+        return EAmbientVehicleModelCandidateResult::PopulationUnavailable;
+
+    // GTA uses this exact popcycle-weighted selector before reading cargrp.dat.
+    // The later retail loaded-car chooser is intentionally not used: MTA
+    // disables the ambient vehicle streaming loop which maintains that pool.
+    const int     carGroup = reinterpret_cast<int(__cdecl*)()>(FUNC_PickARandomGroupOfOtherPeds)();
+    constexpr int CAR_GROUP_COUNT = 18;
+    constexpr int CAR_GROUP_CAPACITY = 23;
+    if (carGroup < 0 || carGroup >= CAR_GROUP_COUNT)
+        return EAmbientVehicleModelCandidateResult::InvalidGroup;
+
+    const auto* counts = reinterpret_cast<const short*>(GTA_CAR_GROUP_COUNTS);
+    const auto* models = reinterpret_cast<const short*>(GTA_CAR_GROUP_MODELS);
+    const int   count = counts[carGroup];
+    if (count <= 0 || count > CAR_GROUP_CAPACITY)
+        return EAmbientVehicleModelCandidateResult::InvalidGroup;
+
+    const int start = rand() % count;
+    for (int offset = 0; offset < count; ++offset)
+    {
+        const int modelId = models[carGroup * CAR_GROUP_CAPACITY + (start + offset) % count];
+        if (modelId < 400 || modelId > 611)
+            continue;
+        CModelInfo* const modelInfo = GetModelInfo(modelId);
+        if (!modelInfo || !modelInfo->IsVehicle())
+            continue;
+        const auto vehicleClass = static_cast<VehicleClass>(modelInfo->GetVehicleType());
+        if (vehicleClass != VehicleClass::AUTOMOBILE && vehicleClass != VehicleClass::MONSTER_TRUCK && vehicleClass != VehicleClass::QUAD &&
+            vehicleClass != VehicleClass::BIKE && vehicleClass != VehicleClass::BMX)
+            continue;
+
+        candidate.modelId = modelId;
+        candidate.carGroup = static_cast<unsigned char>(carGroup);
+        candidate.vehicleClass = static_cast<unsigned char>(vehicleClass);
+        return EAmbientVehicleModelCandidateResult::Success;
+    }
+    return EAmbientVehicleModelCandidateResult::NoRoadModel;
+}
+
+bool CGameSA::GetAmbientVehicleOccupantModelCandidate(unsigned int vehicleModelId, unsigned int maximumOccupants,
+                                                      SAmbientVehicleOccupantModelCandidate& candidate)
+{
+    candidate = {};
+    if (vehicleModelId < 400 || vehicleModelId > 611 || maximumOccupants == 0 || maximumOccupants > AMBIENT_VEHICLE_MAX_OCCUPANTS)
+        return false;
+
+    const auto* vehicleModelInfo = reinterpret_cast<const unsigned char*>(CModelInfoSAInterface::GetModelInfo(vehicleModelId));
+    if (!vehicleModelInfo)
+        return false;
+    const int vehicleClass = *reinterpret_cast<const signed char*>(vehicleModelInfo + 0x4D);
+    if (vehicleClass < 0 || vehicleClass > 11)
+        return false;
+
+    const auto isCompatible =
+        [this, vehicleClass](int modelId, int referenceType, bool requireUnique, const SAmbientVehicleOccupantModelCandidate& output, bool requireLoaded)
+    {
+        CModelInfo* const modelInfo = modelId >= 7 && modelId <= 288 ? GetModelInfo(modelId) : nullptr;
+        const auto*       streamingInfo = modelInfo ? m_pStreaming->GetStreamingInfo(modelId) : nullptr;
+        if (!modelInfo || modelInfo->GetModelType() != eModelInfoType::PED ||
+            (requireLoaded && (!streamingInfo || streamingInfo->loadState != eModelLoadState::LOADSTATE_LOADED)))
+            return -1;
+        const auto* pedModelInfo = reinterpret_cast<const unsigned char*>(CModelInfoSAInterface::GetModelInfo(modelId));
+        if (!pedModelInfo || (referenceType < 4 && *reinterpret_cast<const short*>(pedModelInfo + 0x08) != referenceType) ||
+            (*reinterpret_cast<const unsigned short*>(pedModelInfo + 0x30) & (1u << vehicleClass)) == 0 ||
+            !reinterpret_cast<bool(__cdecl*)(int)>(FUNC_PedIsAcceptableInCurrentZone)(modelId))
+            return -1;
+        if (requireUnique)
+        {
+            for (unsigned int index = 0; index < output.count; ++index)
+            {
+                if (output.modelIds[index] == static_cast<unsigned int>(modelId))
+                    return -1;
+            }
+        }
+        return modelId;
+    };
+
+    // The fifth reference pass is the catch-all used by the exact executable;
+    // gta-reversed incorrectly stops the loop before it.
+    const auto* loadedPedModels = reinterpret_cast<const int*>(GTA_LOADED_PED_MODELS);
+    for (bool requireUnique : {true, false})
+    {
+        for (int referenceType = 0; referenceType <= 4 && candidate.count < maximumOccupants; ++referenceType)
+        {
+            for (int slot = 0; slot < 8 && candidate.count < maximumOccupants; ++slot)
+            {
+                const int modelId = isCompatible(loadedPedModels[slot], referenceType, requireUnique, candidate, true);
+                if (modelId >= 0)
+                    candidate.modelIds[candidate.count++] = static_cast<unsigned int>(modelId);
+            }
+        }
+        if (candidate.count >= maximumOccupants)
+            break;
+    }
+
+    // MTA disables the retail ambient vehicle streamer, so the eight ped
+    // slots can legitimately contain no model compatible with a van or bike.
+    // The network creation transaction explicitly leases its chosen models;
+    // scan stock ped definitions only after exhausting the exact loaded-slot
+    // selector so every road class still has an atomic occupant proposal.
+    const int stockPedStart = 7 + rand() % (289 - 7);
+    for (bool requireUnique : {true, false})
+    {
+        for (int referenceType = 0; referenceType <= 4 && candidate.count < maximumOccupants; ++referenceType)
+        {
+            for (int offset = 0; offset < 289 - 7 && candidate.count < maximumOccupants; ++offset)
+            {
+                const int modelId = 7 + (stockPedStart - 7 + offset) % (289 - 7);
+                const int compatibleModelId = isCompatible(modelId, referenceType, requireUnique, candidate, false);
+                if (compatibleModelId >= 0)
+                    candidate.modelIds[candidate.count++] = static_cast<unsigned int>(compatibleModelId);
+            }
+        }
+        if (candidate.count >= maximumOccupants)
+            break;
+    }
+    return candidate.count > 0;
+}
+
 EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
                                                                              SAmbientVehicleSpawnCandidate& candidate)
 {
@@ -2050,7 +2252,11 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
         return EAmbientVehicleSpawnCandidateResult::InvalidOrigin;
 
     CModelInfo* const modelInfo = GetModelInfo(modelId);
-    if (!modelInfo || !modelInfo->IsVehicle() || modelInfo->GetVehicleType() != 0)
+    if (!modelInfo || !modelInfo->IsVehicle())
+        return EAmbientVehicleSpawnCandidateResult::UnsupportedModel;
+    const auto vehicleClass = static_cast<VehicleClass>(modelInfo->GetVehicleType());
+    if (vehicleClass != VehicleClass::AUTOMOBILE && vehicleClass != VehicleClass::MONSTER_TRUCK && vehicleClass != VehicleClass::QUAD &&
+        vehicleClass != VehicleClass::BIKE && vehicleClass != VehicleClass::BMX)
         return EAmbientVehicleSpawnCandidateResult::UnsupportedModel;
 
     float       directionX = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_X);
@@ -2080,8 +2286,25 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
     float                        pathLerp{};
     using GenerateCarCreationCoors2 = bool(__cdecl*)(CVector, float, float, float, bool, float, float, CVector*, SAmbientVehicleNodeAddressSA*,
                                                      SAmbientVehicleNodeAddressSA*, float*, bool, bool);
-    const bool generated = reinterpret_cast<GenerateCarCreationCoors2>(FUNC_GenerateCarCreationCoors2)(
-        origin, directionX, directionY, -1.0f, true, generationMultiplier * generationBaseDistance, 38.0f, &position, &nodeA, &nodeB, &pathLerp, true, false);
+    const auto generate = reinterpret_cast<GenerateCarCreationCoors2>(FUNC_GenerateCarCreationCoors2);
+    bool generated = generate(origin, directionX, directionY, -1.0f, true, generationMultiplier * generationBaseDistance, 38.0f, &position, &nodeA, &nodeB,
+                              &pathLerp, true, false);
+    if (!generated)
+    {
+        // Retail calls this probabilistic oracle twice per frame indefinitely.
+        // Neon has a bounded server request, so probe three additional camera
+        // sectors with a wider inner ring before reporting a normal miss.
+        constexpr float FALLBACK_ANGLES[] = {1.0471975512f, -1.0471975512f, 3.1415926536f};
+        for (float angle : FALLBACK_ANGLES)
+        {
+            const float rotatedX = directionX * std::cos(angle) - directionY * std::sin(angle);
+            const float rotatedY = directionX * std::sin(angle) + directionY * std::cos(angle);
+            generated = generate(origin, rotatedX, rotatedY, -1.0f, true, generationMultiplier * generationBaseDistance, 70.0f, &position, &nodeA, &nodeB,
+                                 &pathLerp, true, false);
+            if (generated)
+                break;
+        }
+    }
     if (!generated)
     {
         // GenerateCarCreationCoors2 keeps two low-traffic and two ordinary
@@ -2114,8 +2337,17 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
 
     const float deltaX = pathEnd.fX - pathStart.fX;
     const float deltaY = pathEnd.fY - pathStart.fY;
-    if (!std::isfinite(deltaX) || !std::isfinite(deltaY) || deltaX * deltaX + deltaY * deltaY < 0.01f)
+    const float pathLength = std::sqrt(deltaX * deltaX + deltaY * deltaY);
+    if (!std::isfinite(deltaX) || !std::isfinite(deltaY) || !std::isfinite(pathLength) || pathLength < 0.1f)
         return EAmbientVehicleSpawnCandidateResult::InvalidPathNode;
+
+    float laneOffset = 0.0f;
+    if (!GetAmbientVehicleLaneOffset(nodeA, nodeB, modelId, vehicleClass, laneOffset))
+        return EAmbientVehicleSpawnCandidateResult::NoPath;
+    const float directionXOnRoad = deltaX / pathLength;
+    const float directionYOnRoad = deltaY / pathLength;
+    position.fX += laneOffset * directionYOnRoad;
+    position.fY -= laneOffset * directionXOnRoad;
 
     const float pathHeight = pathStart.fZ + (pathEnd.fZ - pathStart.fZ) * pathLerp;
     bool        hasGround = false;
@@ -2138,8 +2370,31 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
     candidate.position = CVector(position.fX, position.fY, groundZ + centreToBase);
     candidate.rotationDegrees = rotation;
     candidate.modelId = modelId;
-    candidate.cruiseSpeed = static_cast<float>(13 + rand() % 9);
-    candidate.drivingStyle = 0;
+
+    // GenerateOneRandomCar stores an integer cruise speed. Preserve its
+    // vehicle-list ranges and reductions before transporting the scalar to the
+    // owner-local Wander task.
+    constexpr unsigned char VEHICLE_LIST_POOR_FAMILY = 1;
+    constexpr unsigned char VEHICLE_LIST_EXECUTIVE = 3;
+    constexpr unsigned char VEHICLE_LIST_BIG = 5;
+    constexpr unsigned int  MODEL_TRACTOR = 531;
+    constexpr unsigned int  MODEL_COMBINE = 532;
+    const auto*             vehicleModelInfo = reinterpret_cast<const CVehicleModelInfoSAInterface*>(CModelInfoSAInterface::GetModelInfo(modelId));
+    const unsigned char     vehicleList = vehicleModelInfo ? vehicleModelInfo->vehicleClass : 0xFF;
+
+    unsigned int        cruiseSpeed = vehicleList == VEHICLE_LIST_EXECUTIVE     ? 18 + rand() % 9
+                                      : vehicleList == VEHICLE_LIST_POOR_FAMILY ? 10 + rand() % 5
+                                                                                : 13 + rand() % 8;
+    const CBoundingBox* boundingBox = modelInfo->GetBoundingBox();
+    const float         vehicleLength = boundingBox ? boundingBox->vecBoundMax.fY - boundingBox->vecBoundMin.fY : 0.0f;
+    if ((std::isfinite(vehicleLength) && vehicleLength > 10.0f) || vehicleList == VEHICLE_LIST_BIG)
+        cruiseSpeed = cruiseSpeed * 3 / 4;
+    if (modelId == MODEL_TRACTOR || modelId == MODEL_COMBINE || vehicleClass == VehicleClass::BMX)
+        cruiseSpeed /= 3;
+
+    candidate.cruiseSpeed = static_cast<float>(cruiseSpeed);
+    candidate.vehicleClass = static_cast<unsigned char>(vehicleClass);
+    candidate.drivingStyle = vehicleClass == VehicleClass::BIKE ? 6 : 0;
     return EAmbientVehicleSpawnCandidateResult::Success;
 }
 

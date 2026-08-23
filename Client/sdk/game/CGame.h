@@ -415,6 +415,29 @@ enum class EAmbientVehicleSpawnCandidateResult : unsigned char
     GroundMissing,
 };
 
+enum class EAmbientVehicleModelCandidateResult : unsigned char
+{
+    Success,
+    PopulationUnavailable,
+    InvalidGroup,
+    NoRoadModel,
+};
+
+struct SAmbientVehicleModelCandidate
+{
+    unsigned int  modelId{};
+    unsigned char carGroup{};
+    unsigned char vehicleClass{};
+};
+
+constexpr unsigned int AMBIENT_VEHICLE_MAX_OCCUPANTS = 4;
+
+struct SAmbientVehicleOccupantModelCandidate
+{
+    unsigned int  modelIds[AMBIENT_VEHICLE_MAX_OCCUPANTS]{};
+    unsigned char count{};
+};
+
 // GenerateCarCreationCoors2 owns only GTA's local path/camera query. The
 // returned scalars are safe to transport; path-node addresses deliberately
 // stay inside the proposing process because streamed path areas can differ
@@ -425,6 +448,7 @@ struct SAmbientVehicleSpawnCandidate
     float         rotationDegrees{};
     unsigned int  modelId{};
     float         cruiseSpeed{};
+    unsigned char vehicleClass{};
     unsigned char drivingStyle{};
 };
 
@@ -799,4 +823,7 @@ public:
     // ownership and cleanup remain server transactions.
     virtual EAmbientVehicleSpawnCandidateResult GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
                                                                                 SAmbientVehicleSpawnCandidate& candidate) = 0;
+    virtual EAmbientVehicleModelCandidateResult GetAmbientVehicleModelCandidate(SAmbientVehicleModelCandidate& candidate) = 0;
+    virtual bool                                GetAmbientVehicleOccupantModelCandidate(unsigned int vehicleModelId, unsigned int maximumOccupants,
+                                                                                        SAmbientVehicleOccupantModelCandidate& candidate) = 0;
 };
