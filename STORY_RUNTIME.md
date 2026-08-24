@@ -608,6 +608,43 @@ mix, animation nuance, and moment-to-moment visual parity still require human
 review; the resource remains an SCM-derived Lua conformance implementation, not
 evidence that the generic SCM bytecode interpreter is complete.
 
+## Current implementation slice: OG Loc / SMOKE1
+
+The `og-loc` resource reconstructs the exterior multiplayer-visible mission
+graph from `SMOKE1A` through the Burger Shot return. It retains the Grove drive,
+`SMOKE1B`, Freddy's house and doorbell, PCJ-600 chase recordings `30..40`, the
+ten obstacle recordings `50..58` and `60`, the basketball-court attackers,
+failure labels and five-respect completion. Every connected player receives an
+active chase bike; the server owns the stage graph, objective predicates,
+failure decisions and cleanup. The presentation path consumes the installed
+`SMOKE1` text block and mission-audio family `35000..35075` in the SCM-authored
+travel, house, chase, combat, death-scene and Burger Shot order.
+
+The mission introduced no mission-local playback loop. The generic
+`native-task-runtime` now owns recorded-vehicle handles and lets exactly one
+client execute `05EB` and `06FD` while all observers consume synchronized
+transforms. It validates the existing vehicle syncer rather than competing with
+the actor cohort that owns Freddy and his PCJ-600. Its optional two-dimensional
+catch-up profile reproduces `tw7_sorting_speed`: distance at or below `20`
+interpolates from `2.0` to `1.0`; greater distance subtracts
+`(distance - 20) / 90`; the result is clamped to `0.5..2.0`. Completion releases
+the vehicle index before notifying the caller, so adjacent recordings can be
+chained from the terminal event. The cohort surface also gained reusable
+`kill_on_foot` members for the final native combat.
+
+Two consecutive two-client headless runs completed all eleven chase recordings,
+all ten simultaneous obstacle recordings, the native combat cohort and the
+Burger Shot return with terminal `PASS`. Recording `30` exercised the live
+distance formula and completed in `7130 ms` and `7066 ms`; later headless-only
+segments ran at `2.0x` to keep the harness bounded while the natural path keeps
+the formula on every segment. A separate two-client presentation run loaded
+`SMOKE1A`, synchronized its skip, entered the Grove drive and remained stable
+after its delayed `SMOKE1` travel-audio request. No new client script warning
+or error was recorded. Camera composition, dialogue timing,
+combat difficulty and continuous human-driven chase parity remain visual/manual
+review items; the headless result proves lifecycle, ownership, native-slot and
+mission-graph behavior rather than pixel-identical presentation.
+
 ## Delivery plan
 
 ### Phase 0: establish the oracle and traces

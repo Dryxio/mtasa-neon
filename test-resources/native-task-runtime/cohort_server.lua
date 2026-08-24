@@ -83,6 +83,13 @@ local function copyTask(task)
             reissue = task.reissue ~= false,
         }
     end
+    if task.type == "kill_on_foot" then
+        local targetType = isElement(task.target) and getElementType(task.target)
+        if targetType ~= "ped" and targetType ~= "player" then
+            return false, "cible de combat a pied invalide"
+        end
+        return {type = "kill_on_foot", target = task.target, reissue = task.reissue ~= false}
+    end
     return false, "type de tache inconnu: " .. tostring(task.type)
 end
 
@@ -150,6 +157,8 @@ local function copyDescriptor(descriptor)
         if member.task.type == "drive_mission" then
             addDependency(member.task.targetVehicle)
         elseif member.task.type == "drive_by" then
+            addDependency(member.task.target)
+        elseif member.task.type == "kill_on_foot" then
             addDependency(member.task.target)
         end
     end

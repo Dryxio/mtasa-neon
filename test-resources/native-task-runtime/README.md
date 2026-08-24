@@ -15,10 +15,19 @@ explicit failure after ten seconds instead of leaving the task pending.
 
 The second checkpoint adds a generic `native-task-cohort` handle. A cohort can
 atomically own several peds and vehicles, retain read-only target dependencies,
-and run `drive_route`, `drive_mission`, `drive_by`, or `none` member tasks. This
+and run `drive_route`, `drive_mission`, `drive_by`, `kill_on_foot`, or `none`
+member tasks. This
 keeps one GTA process responsible for the native AI while observers receive the
 normal synchronized result. Ped mission/proof policy and vehicle straight-line
 distance are captured and restored at revocation.
+
+The recorded-vehicle checkpoint adds a stable server handle above GTA's direct
+recording player. The caller supplies a vehicle whose syncer is already owned
+by the selected client; the runtime deliberately does not compete with a task
+cohort for that ownership. The one owner acquires streaming leases, requests
+the recording, invokes `05EB`, optionally updates `06FD` from a synchronized
+target-distance profile, and reports natural completion. Observers execute no
+recording and receive the ordinary synchronized vehicle result.
 
 ## Server exports
 
@@ -33,6 +42,13 @@ distance are captured and restored at revocation.
   old member before publishing the next immutable epoch.
 - `cancelNativeTaskCohort(cohort)` restores policy and automatic sync selection.
 - `getNativeTaskCohortState(cohort)` returns its authoritative state snapshot.
+- `createNativeRecordedVehiclePlayback(vehicle, recordingId, owner, options)`
+  starts one authoritative native recording. Optional `target`,
+  `distanceMode`, `pivotDistance`, speed bounds and slope parameters describe a
+  reusable catch-up profile.
+- `cancelNativeRecordedVehiclePlayback(playback)` releases its native slot and
+  streaming leases.
+- `getNativeRecordedVehiclePlaybackState(playback)` returns its server state.
 - `setSynchronizedVehicleTyresCanBurst(vehicle, canBurst)` publishes an explicit
   vehicle policy which every client applies when the vehicle streams in. The
   caller must own the vehicle lifecycle or explicitly replace the policy.
@@ -54,6 +70,12 @@ It emits `onNativeTaskCohortStateChange` from a cohort handle with the lifecycle
 `assigning -> dispatched -> active`, or an explicit `failed`, `orphaned`,
 `cancelled`, `revoking`, or `awaiting_streamout` state. Client evidence is
 accepted only from the current owner with the exact epoch and nonce.
+
+It emits `onNativeRecordedVehiclePlaybackStateChange` from the playback handle
+with `dispatched`, `active`, `completed`, `failed`, or `cancelled`. The vehicle
+index is released before the terminal completion event, allowing callers to
+chain adjacent SCM recordings synchronously without a one-frame ownership
+race.
 
 ## Boundary of this checkpoint
 

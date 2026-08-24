@@ -140,6 +140,9 @@ local function startTask(member)
     if task.type == "drive_by" then
         return setPedDriveBy(member.ped, task.target, task.radius, task.style, task.rightHandSide, task.frequency)
     end
+    if task.type == "kill_on_foot" then
+        return setPedKillOnFoot(member.ped, task.target)
+    end
     if task.type == "drive_route" then
         local sequence = {}
         for _, point in ipairs(task.route) do
@@ -165,6 +168,7 @@ local function beginCohort(cohort)
     end
     if type(acquireElementStreamingLease) ~= "function" or type(setPedMissionActor) ~= "function" or
         type(setPedDriveMission) ~= "function" or type(setPedDriveBy) ~= "function" or
+        type(setPedKillOnFoot) ~= "function" or type(isPedDoingTask) ~= "function" or
         type(setPedPhysicalProofs) ~= "function" or type(getPedPhysicalProofs) ~= "function" or
         type(setVehicleStraightLineDistance) ~= "function" or type(getVehicleStraightLineDistance) ~= "function" then
         return fail(cohort, "API Neon de cohorte absente")
@@ -205,6 +209,9 @@ local function beginCohort(cohort)
         local tasks = {}
         for index, member in ipairs(cohort.descriptor.members) do
             if member.task.type == "drive_by" and member.task.reissue and not isPedDoingGangDriveby(member.ped) then
+                startTask(member)
+            elseif member.task.type == "kill_on_foot" and member.task.reissue and
+                not isPedDoingTask(member.ped, "TASK_COMPLEX_KILL_PED_ON_FOOT") then
                 startTask(member)
             end
             tasks[index] = getPedSimplestTask(member.ped) or ""
