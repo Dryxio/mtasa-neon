@@ -439,6 +439,13 @@ CTaskComplexCarDriveToPoint* CTasksSA::CreateTaskComplexCarDriveToPoint(CVehicle
     return pTask;
 }
 
+CTaskComplex* CTasksSA::CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed)
+{
+    auto* pTask = NewTask<CTaskComplexCarDriveMissionSA>(pVehicle, pTarget, iMission, iDrivingStyle, fSpeed);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
 CTaskComplex* CTasksSA::CreateTaskComplexSmartFleeEntity(CPed* pTarget, bool bScream, float fSafeDistance, int iDuration, int iPositionCheckPeriod,
                                                          float fPositionChangeTolerance)
 {

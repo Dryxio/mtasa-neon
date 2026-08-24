@@ -89,6 +89,7 @@ public:
     static bool GetPedSuffersCriticalHits(CClientPed* ped);
     static bool GetPedStayInSamePlace(CClientPed* ped);
     static bool IsPedNeverTargeted(CClientPed* ped);
+    static CLuaMultiReturn<bool, bool, bool, bool, bool> GetPedPhysicalProofs(CClientPed* ped);
 
     LUA_DECLARE(SetPedRotation);
     LUA_DECLARE(SetPedCanBeKnockedOffBike);
@@ -146,6 +147,8 @@ public:
     static bool SetPedDriveWander(CClientPed* ped, CClientVehicle* vehicle, float speed, std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedDriveTo(CClientPed* ped, CClientVehicle* vehicle, CVector target, float speed, std::optional<std::variant<std::string, int>> driveMode,
                               std::optional<std::variant<std::string, int>> drivingStyle);
+    static bool SetPedDriveMission(CClientPed* ped, CClientVehicle* vehicle, CClientVehicle* targetVehicle, std::variant<std::string, int> mission,
+                                   float speed, std::optional<std::variant<std::string, int>> drivingStyle);
     static bool SetPedDriveBy(CClientPed* ped, std::variant<CClientPed*, CClientVehicle*, CVector> target, float abortRange,
                               std::optional<std::variant<std::string, int>> driveByStyle, std::optional<bool> seatRHS, std::optional<int> frequencyPercentage);
     static bool SetPedMissionActor(CClientPed* ped, bool enabled);
@@ -173,6 +176,7 @@ public:
     static bool SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits);
     static bool SetPedStayInSamePlace(CClientPed* ped, bool stayInSamePlace);
     static bool SetPedNeverTargeted(CClientPed* ped, bool neverTargeted);
+    static bool SetPedPhysicalProofs(CClientPed* ped, bool bullet, bool fire, bool explosion, bool collision, bool melee);
     static bool IsPedBleeding(CClientPed* ped);
     static bool SetPedBleeding(CClientPed* ped, bool bleeding);
 

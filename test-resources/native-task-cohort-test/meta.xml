@@ -1,0 +1,6 @@
+<meta>
+    <info author="Neon story runtime" name="Native task cohort headless harness" version="0.1.0" type="script" />
+    <include resource="native-task-runtime" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+</meta>

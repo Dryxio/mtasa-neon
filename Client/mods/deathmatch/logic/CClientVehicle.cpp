@@ -850,6 +850,24 @@ bool CClientVehicle::SetLoadCollisionFlag(bool bLoadCollision)
     return true;
 }
 
+bool CClientVehicle::SetStraightLineDistance(unsigned char distance)
+{
+    // This is authored autopilot policy, not transient native instance state.
+    // Persist it so stream-in and model recreation cannot silently restore
+    // GTA's constructor default while the server-owned task epoch is active.
+    m_scriptStraightLineDistance = distance;
+    if (m_pVehicle)
+        m_pVehicle->SetStraightLineDistance(distance);
+    return true;
+}
+
+std::optional<unsigned char> CClientVehicle::GetStraightLineDistance() const
+{
+    if (m_pVehicle)
+        return m_pVehicle->GetStraightLineDistance();
+    return m_scriptStraightLineDistance;
+}
+
 bool CClientVehicle::AreDoorsUndamageable()
 {
     return m_pVehicle ? m_pVehicle->AreDoorsUndamageable() : m_bDoorsUndamageable;
@@ -2697,6 +2715,8 @@ void CClientVehicle::Create()
             m_pVehicle->SetPhysicalProofs(*m_scriptPhysicalProofs);
         if (m_scriptLoadCollisionFlag)
             m_pVehicle->SetLoadCollisionFlag(*m_scriptLoadCollisionFlag);
+        if (m_scriptStraightLineDistance)
+            m_pVehicle->SetStraightLineDistance(*m_scriptStraightLineDistance);
         m_pVehicle->SetDoorsUndamageable(m_bDoorsUndamageable);
         m_pVehicle->SetCanShootPetrolTank(m_bCanShootPetrolTank);
         m_pVehicle->SetTaxiLightOn(m_bTaxiLightOn);

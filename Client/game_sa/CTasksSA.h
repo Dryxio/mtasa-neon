@@ -142,6 +142,7 @@ public:
     CTaskSimpleBikeJacked*       CreateTaskSimpleBikeJacked(CVehicle* pVehicle, int iDoor, int iDraggedPedDownTime, CPed* pJacker, bool bVictimIsDriver);
     CTaskComplexWander*          CreateTaskComplexWanderCopAmbient(const int iMoveState, const char iDir);
     bool                         IsTaskComplexWanderCopAmbient(const CTask* pTask) const;
+    CTaskComplex*                CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed);
 
     static void StaticSetHooks();
 };

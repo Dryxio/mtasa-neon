@@ -13,6 +13,15 @@
 
 #include "CEntity.h"
 
+struct SPhysicalProofs
+{
+    bool bullet{};
+    bool fire{};
+    bool explosion{};
+    bool collision{};
+    bool melee{};
+};
+
 class CPhysical : public virtual CEntity
 {
 public:
@@ -56,4 +65,9 @@ public:
     virtual void  SetLighting(float fLighting) = 0;
 
     virtual void SetFrozen(bool bFrozen) = 0;
+
+    // Append only: CPhysical crosses module boundaries. SCM proof opcodes use
+    // these five independent flags for peds, vehicles and physical objects.
+    virtual SPhysicalProofs GetPhysicalProofs() const = 0;
+    virtual void            SetPhysicalProofs(const SPhysicalProofs& proofs) = 0;
 };

@@ -394,3 +394,28 @@ void CPhysicalSA::SetFrozen(bool bFrozen)
     // Don't enable friction for static objects
     pInterface->bDisableFriction = (bFrozen || pInterface->m_fMass >= PHYSICAL_MAXMASS);
 }
+
+SPhysicalProofs CPhysicalSA::GetPhysicalProofs() const
+{
+    const auto* physical = reinterpret_cast<const CPhysicalSAInterface*>(GetInterface());
+    if (!physical)
+        return {};
+
+    return {physical->bBulletProof != 0, physical->bFireProof != 0, physical->bExplosionProof != 0, physical->bCollisionProof != 0,
+            physical->bMeeleProof != 0};
+}
+
+void CPhysicalSA::SetPhysicalProofs(const SPhysicalProofs& proofs)
+{
+    auto* physical = reinterpret_cast<CPhysicalSAInterface*>(GetInterface());
+    if (!physical)
+        return;
+
+    // GTA:SA 1.0 opcode handlers 02AB/02AC at 0x47F88F and 0x47F908
+    // independently update these exact five CPhysical+0x40 bits.
+    physical->bBulletProof = proofs.bullet;
+    physical->bFireProof = proofs.fire;
+    physical->bExplosionProof = proofs.explosion;
+    physical->bCollisionProof = proofs.collision;
+    physical->bMeeleProof = proofs.melee;
+}

@@ -13,9 +13,12 @@ native task acceptance. Duplicate assignments are idempotent and ignored by a
 client which already owns that epoch; a missing acknowledgement becomes an
 explicit failure after ten seconds instead of leaving the task pending.
 
-Only `drive_to` route children are accepted by this first checkpoint. This is
-intentional: their task construction and progress semantics were independently
-validated before the ownership layer was introduced.
+The second checkpoint adds a generic `native-task-cohort` handle. A cohort can
+atomically own several peds and vehicles, retain read-only target dependencies,
+and run `drive_route`, `drive_mission`, `drive_by`, or `none` member tasks. This
+keeps one GTA process responsible for the native AI while observers receive the
+normal synchronized result. Ped mission/proof policy and vehicle straight-line
+distance are captured and restored at revocation.
 
 ## Server exports
 
@@ -24,6 +27,12 @@ validated before the ownership layer was introduced.
 - `handoffNativeDriveRoute(task, newOwner, requireStreamOut)` changes ownership.
 - `cancelNativeDriveRoute(task)` revokes and destroys the task handle.
 - `getNativeDriveRouteState(task)` returns the authoritative state snapshot.
+- `createNativeTaskCohort(owner, descriptor, options)` creates an atomic actor
+  and vehicle simulation unit.
+- `handoffNativeTaskCohort(cohort, newOwner, requireStreamOut)` revokes every
+  old member before publishing the next immutable epoch.
+- `cancelNativeTaskCohort(cohort)` restores policy and automatic sync selection.
+- `getNativeTaskCohortState(cohort)` returns its authoritative state snapshot.
 
 The creating resource owns the handle. Other resources cannot inspect, hand
 off, or cancel it. All its tasks are cleaned when that resource stops. Optional
@@ -38,6 +47,11 @@ The resource emits `onNativeDriveRouteStateChange` from the task handle. Its
 second argument is a snapshot containing the epoch, owner, logical route index,
 stream-out evidence and first post-handoff discontinuity.
 
+It emits `onNativeTaskCohortStateChange` from a cohort handle with the lifecycle
+`assigning -> dispatched -> active`, or an explicit `failed`, `orphaned`,
+`cancelled`, `revoking`, or `awaiting_streamout` state. Client evidence is
+accepted only from the current owner with the exact epoch and nonce.
+
 ## Boundary of this checkpoint
 
 This is a native locomotion owner, not a complete headless mission simulator.
@@ -47,7 +61,7 @@ disconnect with no fallback leaves a handle `orphaned`, because no GTA process
 exists to simulate it. A connected but frozen owner still needs the future
 heartbeat checkpoint before automatic timeout reassignment is safe.
 
-Combat and perception also require a later task-group layer: every actor,
-vehicle and target needed by a native interaction must move under one ownership
-epoch and one lease policy. UI, dialogue and cutscene presentation must be able
-to catch up from server state after a handoff rather than drive mission logic.
+UI, dialogue and cutscene presentation remain outside this resource. They must
+catch up from authoritative mission state after a handoff rather than drive
+mission logic. The runtime synchronizes native simulation ownership and its
+result, not arbitrary mission-local presentation state.

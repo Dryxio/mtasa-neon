@@ -319,6 +319,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedTaskSequence", SetPedTaskSequence},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
         {"setPedDriveTo", ArgumentParser<SetPedDriveTo>},
+        {"setPedDriveMission", ArgumentParser<SetPedDriveMission>},
         {"setPedDriveBy", ArgumentParser<SetPedDriveBy>},
         {"setPedMissionActor", ArgumentParser<SetPedMissionActor>},
         {"acquirePedNativeEventProfile", AcquirePedNativeEventProfile},
@@ -345,6 +346,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
         {"setPedStayInSamePlace", ArgumentParser<SetPedStayInSamePlace>},
         {"setPedNeverTargeted", ArgumentParser<SetPedNeverTargeted>},
+        {"setPedPhysicalProofs", ArgumentParser<SetPedPhysicalProofs>},
         {"setPedBleeding", ArgumentParser<SetPedBleeding>},
         {"playPedVoiceLine", ArgumentParser<PlayPedVoiceLine>},
 
@@ -376,6 +378,7 @@ void CLuaPedDefs::LoadFunctions()
         {"getPedSuffersCriticalHits", ArgumentParser<GetPedSuffersCriticalHits>},
         {"getPedStayInSamePlace", ArgumentParser<GetPedStayInSamePlace>},
         {"isPedNeverTargeted", ArgumentParser<IsPedNeverTargeted>},
+        {"getPedPhysicalProofs", ArgumentParser<GetPedPhysicalProofs>},
 
         {"getPedStat", GetPedStat},
         {"getPedOxygenLevel", GetPedOxygenLevel},
@@ -3484,6 +3487,42 @@ bool CLuaPedDefs::SetPedDriveTo(CClientPed* ped, CClientVehicle* vehicle, CVecto
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 
+bool CLuaPedDefs::SetPedDriveMission(CClientPed* ped, CClientVehicle* vehicle, CClientVehicle* targetVehicle, std::variant<std::string, int> mission,
+                                     float speed, std::optional<std::variant<std::string, int>> drivingStyle)
+{
+    if (!ped || !vehicle || !targetVehicle || vehicle == targetVehicle || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() ||
+        (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || !vehicle->IsStreamedIn() || vehicle->IsBlown() ||
+        !vehicle->GetGameVehicle() || !targetVehicle->IsStreamedIn() || targetVehicle->IsBlown() || !targetVehicle->GetGameVehicle() ||
+        ped->GetOccupiedVehicle() != vehicle || vehicle->GetOccupant(0) != ped || !OwnsDrivenVehicle(ped, vehicle) || !std::isfinite(speed) || speed < 0.0f ||
+        speed >= 255.0f)
+    {
+        return false;
+    }
+
+    int missionId = -1;
+    if (const auto* name = std::get_if<std::string>(&mission))
+    {
+        if (stricmp(name->c_str(), "escort_left") == 0)
+            missionId = 29;
+    }
+    else
+    {
+        missionId = std::get<int>(mission);
+    }
+
+    // Each target contract is admitted individually after binary and runtime
+    // validation. INTRO1 currently proves only MISSION_ESCORT_LEFT (29).
+    if (missionId != 29)
+        return false;
+
+    int style = DRIVING_STYLE_STOP_FOR_CARS;
+    if (drivingStyle.has_value() && !ParseDrivingStyle(*drivingStyle, style))
+        return false;
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexCarDriveMission(vehicle->GetGameVehicle(), targetVehicle->GetGameVehicle(), missionId, style, speed);
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
 bool CLuaPedDefs::SetPedDriveBy(CClientPed* ped, std::variant<CClientPed*, CClientVehicle*, CVector> target, float abortRange,
                                 std::optional<std::variant<std::string, int>> driveByStyle, std::optional<bool> seatRHS, std::optional<int> frequencyPercentage)
 {
@@ -3566,6 +3605,12 @@ bool CLuaPedDefs::GetPedStayInSamePlace(CClientPed* ped)
 bool CLuaPedDefs::IsPedNeverTargeted(CClientPed* ped)
 {
     return ped && ped->GetType() == CCLIENTPED && ped->IsNeverTargeted();
+}
+
+CLuaMultiReturn<bool, bool, bool, bool, bool> CLuaPedDefs::GetPedPhysicalProofs(CClientPed* ped)
+{
+    const SPhysicalProofs proofs = ped ? ped->GetScriptPhysicalProofs() : SPhysicalProofs{};
+    return {proofs.bullet, proofs.fire, proofs.explosion, proofs.collision, proofs.melee};
 }
 
 bool CLuaPedDefs::SetPedMissionActor(CClientPed* ped, bool enabled)
@@ -4231,6 +4276,15 @@ bool CLuaPedDefs::SetPedStayInSamePlace(CClientPed* ped, bool stayInSamePlace)
 bool CLuaPedDefs::SetPedNeverTargeted(CClientPed* ped, bool neverTargeted)
 {
     return ped && ped->GetType() == CCLIENTPED && ped->SetNeverTargeted(neverTargeted);
+}
+
+bool CLuaPedDefs::SetPedPhysicalProofs(CClientPed* ped, bool bullet, bool fire, bool explosion, bool collision, bool melee)
+{
+    // Only the current ped syncer may author damage policy. Non-syncers apply
+    // replicated health/death state and must not independently decide hits.
+    if (!ped || ped->GetType() != CCLIENTPED || (!ped->IsLocalEntity() && !ped->IsSyncing()))
+        return false;
+    return ped->SetScriptPhysicalProofs({bullet, fire, explosion, collision, melee});
 }
 
 bool CLuaPedDefs::killPedTask(CClientPed* ped, taskType taskType, std::uint8_t taskNumber, std::optional<bool> gracefully)

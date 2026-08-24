@@ -86,6 +86,7 @@ public:
     LUA_DECLARE(IsVehicleWindowOpen);
     static int  GetVehicleDoorLockMode(CClientVehicle* vehicle);
     static bool GetVehicleTyresCanBurst(CClientVehicle* vehicle);
+    static std::variant<bool, unsigned int> GetVehicleStraightLineDistance(CClientVehicle* vehicle);
 
     LUA_DECLARE(FixVehicle);
     static bool BlowVehicle(CClientEntity* entity, std::optional<bool> withExplosion);
@@ -98,6 +99,7 @@ public:
     static bool SetVehicleTyresCanBurst(CClientVehicle* vehicle, bool canBurst);
     static bool SetVehiclePhysicalProofs(CClientVehicle* vehicle, bool bullet, bool fire, bool explosion, bool collision, bool melee);
     static bool SetVehicleLoadCollisionFlag(CClientVehicle* vehicle, bool loadCollision);
+    static bool SetVehicleStraightLineDistance(CClientVehicle* vehicle, unsigned int distance);
     LUA_DECLARE(SetVehicleModel);
     LUA_DECLARE(SetVehicleDoorsUndamageable);
     LUA_DECLARE(SetVehicleSirensOn);

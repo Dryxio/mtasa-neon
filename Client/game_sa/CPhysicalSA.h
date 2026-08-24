@@ -164,4 +164,7 @@ public:
     void  SetLighting(float fLighting);
 
     void SetFrozen(bool bFrozen);
+
+    SPhysicalProofs GetPhysicalProofs() const override;
+    void            SetPhysicalProofs(const SPhysicalProofs& proofs) override;
 };

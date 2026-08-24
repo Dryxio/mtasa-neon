@@ -515,6 +515,16 @@ public:
         // the route reaches world collision that is not currently loaded.
         GetVehicleInterface()->b0x4000 = !bLoadCollision;
     }
+    unsigned char GetStraightLineDistance() const override
+    {
+        return *(reinterpret_cast<const unsigned char*>(GetVehicleInterface()) + 0x3DD);
+    }
+    void SetStraightLineDistance(unsigned char distance) override
+    {
+        // Opcode 04E0 at 0x48C1B0 writes the second SCM argument directly to
+        // CVehicle+0x3DD (CAutoPilot::m_nStraightLineDistance).
+        *(reinterpret_cast<unsigned char*>(GetVehicleInterface()) + 0x3DD) = distance;
+    }
     bool AreDoorsUndamageable() { return m_doorsUndamageable; }
     void SetDoorsUndamageable(bool bUndamageable) { m_doorsUndamageable = bUndamageable; }
 

@@ -274,3 +274,35 @@ CTaskComplexCarDriveToPointSA::CTaskComplexCarDriveToPointSA(CVehicle* pTargetVe
     }
     // clang-format on
 }
+
+CTaskComplexCarDriveMissionSA::CTaskComplexCarDriveMissionSA(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed)
+{
+    auto* vehicle = dynamic_cast<CVehicleSA*>(pVehicle);
+    if (!vehicle || !pTarget || !pTarget->GetInterface())
+        return;
+
+    CreateTaskInterface(sizeof(CTaskComplexCarDriveMissionSAInterface));
+    if (!IsValid())
+        return;
+
+    const DWORD dwThis = reinterpret_cast<DWORD>(GetInterface());
+    const DWORD dwVehicle = reinterpret_cast<DWORD>(vehicle->GetInterface());
+    const DWORD dwTarget = reinterpret_cast<DWORD>(pTarget->GetInterface());
+    const DWORD dwFunc = FUNC_CTaskComplexCarDriveMission__Constructor;
+
+    // GTA:SA 1.0 at 0x63CC30 consumes five stack arguments and returns with
+    // RET 0x14. Calling the native constructor preserves its safe target
+    // reference and restoration of the vehicle's previous autopilot mission.
+    // clang-format off
+    __asm
+    {
+        mov     ecx, dwThis
+        push    fSpeed
+        push    iDrivingStyle
+        push    iMission
+        push    dwTarget
+        push    dwVehicle
+        call    dwFunc
+    }
+    // clang-format on
+}

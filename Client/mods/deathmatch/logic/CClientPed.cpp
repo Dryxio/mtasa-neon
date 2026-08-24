@@ -5690,6 +5690,7 @@ void CClientPed::_CreateModel()
         ApplySuffersCriticalHitsState();
         ApplyStayInSamePlaceState();
         ApplyNeverTargetedState();
+        ApplyScriptPhysicalProofsState();
 
         g_pMultiplayer->AddRemoteDataStorage(m_pPlayerPed, m_remoteDataStorage);
 
@@ -7235,6 +7236,32 @@ void CClientPed::ApplyNeverTargetedState()
     auto state = m_pPlayerPed->GetStoryProtectionState();
     state.neverTargeted = *m_neverTargeted;
     m_pPlayerPed->SetStoryProtectionState(state);
+}
+
+SPhysicalProofs CClientPed::GetScriptPhysicalProofs() const
+{
+    if (m_pPlayerPed)
+        return m_pPlayerPed->GetPhysicalProofs();
+    return m_scriptPhysicalProofs.value_or(SPhysicalProofs{});
+}
+
+bool CClientPed::SetScriptPhysicalProofs(const SPhysicalProofs& proofs)
+{
+    if (GetType() != CCLIENTPED)
+        return false;
+
+    // Proofs belong to the synchronized ped policy rather than a particular
+    // native CPed instance. Retaining the tuple makes opcode 02AB survive the
+    // same stream and owner lifecycle as the rest of the mission actor.
+    m_scriptPhysicalProofs = proofs;
+    ApplyScriptPhysicalProofsState();
+    return true;
+}
+
+void CClientPed::ApplyScriptPhysicalProofsState()
+{
+    if (m_scriptPhysicalProofs && m_pPlayerPed)
+        m_pPlayerPed->SetPhysicalProofs(*m_scriptPhysicalProofs);
 }
 
 void CClientPed::InternalWarpIntoVehicle(CVehicle* pGameVehicle)

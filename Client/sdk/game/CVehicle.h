@@ -357,4 +357,6 @@ public:
     virtual void      SetDoorLockMode(eDoorLock mode) = 0;
     virtual void      SetPhysicalProofs(const SVehiclePhysicalProofs& proofs) = 0;
     virtual void      SetLoadCollisionFlag(bool bLoadCollision) = 0;
+    virtual unsigned char GetStraightLineDistance() const = 0;
+    virtual void          SetStraightLineDistance(unsigned char distance) = 0;
 };

@@ -487,6 +487,8 @@ public:
     bool SetStayInSamePlace(bool stayInSamePlace);
     bool IsNeverTargeted() const;
     bool SetNeverTargeted(bool neverTargeted);
+    SPhysicalProofs GetScriptPhysicalProofs() const;
+    bool            SetScriptPhysicalProofs(const SPhysicalProofs& proofs);
 
     void                                    AddProjectile(CClientProjectile* pProjectile) { m_Projectiles.push_back(pProjectile); }
     void                                    RemoveProjectile(CClientProjectile* pProjectile) { m_Projectiles.remove(pProjectile); }
@@ -698,6 +700,7 @@ protected:
     void ApplySuffersCriticalHitsState();
     void ApplyStayInSamePlaceState();
     void ApplyNeverTargetedState();
+    void ApplyScriptPhysicalProofsState();
     void ArmRemoteStreamInTransformFence();
     void UpdateRemoteStreamInTransformFence();
     void ClearRemoteStreamInTransformFence(const char* reason, bool commitAuthoritativeTransform = false);
@@ -872,6 +875,7 @@ public:
     std::optional<bool>                     m_suffersCriticalHits;
     std::optional<bool>                     m_stayInSamePlace;
     std::optional<bool>                     m_neverTargeted;
+    std::optional<SPhysicalProofs>          m_scriptPhysicalProofs;
     std::list<CClientProjectile*>           m_Projectiles;
     unsigned char                           m_ucAlpha;
     float                                   m_fTargetRotation;

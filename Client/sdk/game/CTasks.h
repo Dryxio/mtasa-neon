@@ -200,4 +200,8 @@ public:
     // script-command clone, rather than trusting the shared Wander task ID.
     virtual CTaskComplexWander* CreateTaskComplexWanderCopAmbient(const int iMoveState, const char iDir) = 0;
     virtual bool                IsTaskComplexWanderCopAmbient(const CTask* pTask) const = 0;
+
+    // Appended for opcode 06E1. GTA owns the target safe reference, autopilot
+    // setup, mission transitions, clone and destructor lifecycle.
+    virtual CTaskComplex* CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed) = 0;
 };

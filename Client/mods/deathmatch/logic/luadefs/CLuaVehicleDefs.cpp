@@ -143,6 +143,7 @@ void CLuaVehicleDefs::LoadFunctions()
         {"isVehiclePlaybackActive", ArgumentParser<IsVehiclePlaybackActive>},
         {"getVehicleDoorLockMode", ArgumentParser<GetVehicleDoorLockMode>},
         {"getVehicleTyresCanBurst", ArgumentParser<GetVehicleTyresCanBurst>},
+        {"getVehicleStraightLineDistance", ArgumentParser<GetVehicleStraightLineDistance>},
 
         // Vehicle set funcs
         {"createVehicle", CreateVehicle},
@@ -156,6 +157,7 @@ void CLuaVehicleDefs::LoadFunctions()
         {"setVehicleTyresCanBurst", ArgumentParser<SetVehicleTyresCanBurst>},
         {"setVehiclePhysicalProofs", ArgumentParser<SetVehiclePhysicalProofs>},
         {"setVehicleLoadCollisionFlag", ArgumentParser<SetVehicleLoadCollisionFlag>},
+        {"setVehicleStraightLineDistance", ArgumentParser<SetVehicleStraightLineDistance>},
         {"setVehicleDoorsUndamageable", SetVehicleDoorsUndamageable},
         {"setVehicleSirensOn", SetVehicleSirensOn},
         {"addVehicleUpgrade", AddVehicleUpgrade},
@@ -1905,6 +1907,21 @@ bool CLuaVehicleDefs::SetVehiclePhysicalProofs(CClientVehicle* vehicle, bool bul
 bool CLuaVehicleDefs::SetVehicleLoadCollisionFlag(CClientVehicle* vehicle, bool loadCollision)
 {
     return vehicle->SetLoadCollisionFlag(loadCollision);
+}
+
+std::variant<bool, unsigned int> CLuaVehicleDefs::GetVehicleStraightLineDistance(CClientVehicle* vehicle)
+{
+    const auto distance = vehicle ? vehicle->GetStraightLineDistance() : std::nullopt;
+    if (!distance)
+        return false;
+    return static_cast<unsigned int>(*distance);
+}
+
+bool CLuaVehicleDefs::SetVehicleStraightLineDistance(CClientVehicle* vehicle, unsigned int distance)
+{
+    // The autopilot is authoritative only on the vehicle syncer. Observers
+    // receive its movement but must never race the real native road AI.
+    return vehicle && distance <= 255 && IsVehicleLocallyOwned(vehicle) && vehicle->SetStraightLineDistance(static_cast<unsigned char>(distance));
 }
 
 int CLuaVehicleDefs::SetVehicleDoorsUndamageable(lua_State* luaVM)

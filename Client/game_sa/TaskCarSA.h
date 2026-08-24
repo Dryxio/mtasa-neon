@@ -26,6 +26,7 @@ typedef DWORD AnimationId;
 #define FUNC_CTaskComplexLeaveCar__Constructor            0x63B8C0
 #define FUNC_CTaskComplexCarDriveWander__Constructor      0x63CB10
 #define FUNC_CTaskComplexCarDriveToPoint__Constructor     0x63CE00
+#define FUNC_CTaskComplexCarDriveMission__Constructor     0x63CC30
 #define FUNC_CTaskSimpleBikeJacked__Constructor           0x648B90
 
 // ##############################################################################
@@ -287,4 +288,19 @@ public:
     CTaskComplexCarDriveToPointSA() {};
     CTaskComplexCarDriveToPointSA(CVehicle* pTargetVehicle, const CVector& vecTarget, float fSpeed, int iDriveMode, int iDesiredVehicleModel, float fRadius,
                                   int iDrivingStyle);
+};
+
+// GTA's target-relative car mission task. Keeping the opaque native tail is
+// safer than duplicating fields whose ownership is handled by GTA's ctor/dtor.
+class CTaskComplexCarDriveMissionSAInterface : public CTaskComplexSAInterface
+{
+public:
+    unsigned char m_nativeFields[0x20];
+};
+static_assert(sizeof(CTaskComplexCarDriveMissionSAInterface) == 0x2C, "Invalid CTaskComplexCarDriveMissionSAInterface size");
+
+class CTaskComplexCarDriveMissionSA : public virtual CTaskComplexSA
+{
+public:
+    CTaskComplexCarDriveMissionSA(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed);
 };
