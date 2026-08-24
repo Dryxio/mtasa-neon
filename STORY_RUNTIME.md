@@ -224,6 +224,7 @@ acquireElementStreamingLease(element)
 releaseElementStreamingLease(token)
 isVehicleOnAllWheels(vehicle)
 setPedGoTo(ped, Vector3 target [, string movement = "walk", float radius = 0.5, float slowdownRadius = 2.0, int timeout = -2])
+setPedNavigateTo(ped, Vector3 target [, string movement = "walk", float radius = 0.5, float slowdownRadius = 3.0, float heightChangeThreshold = 2.0, bool keepNodesHeadingAwayFromTarget = false, int timeout = -1, bool useBlending = true])
 setPedEnterVehicle(ped [, vehicle, seatOrPassenger])
 setPedExitVehicle(ped)
 setPedDriveWander(ped, vehicle, float speed [, string|int drivingStyle = "stop_for_cars"])
@@ -392,6 +393,32 @@ The compatibility profile for SCM opcode `05D3 TASK_GO_STRAIGHT_TO_COORD` was ve
 The reverse matched the relevant assembly except for a missing NaN guard in the high-level `gta-reversed-dryxio` reconstruction. Neon calls the original GTA constructors and does not copy that reconstructed implementation.
 
 The standalone resource in `test-resources/native-ped-go-to-test` is the conformance harness for this slice. Its initial walk, run, sprint, cancellation, cleanup, and terminal-distance checks allowed `Tagging Up Turf` to adopt the API; it remains the isolated regression test for future task changes.
+
+Issue `#68` adds the distinct low-level `setPedNavigateTo` surface for GTA's
+pedestrian-node pathfinder. The compact GTA SA 1.0 executable at the target
+SHA-256 and exact size `5,189,632` bytes was inspected directly. Constructor
+`0x66EA30` initializes the `0x60` `CTaskComplexFollowNodeRoute`, stores target at
+`+0x0C`, movement at `+0x18`, tolerance/slowdown/vertical threshold at
+`+0x1C/+0x20/+0x24`, timeout at `+0x3C`, and blending flags at `+0x4C`; it
+allocates GTA's native node and point routes before returning task type `906`.
+Its retail callers consistently use `0.5`, `3.0`, `2.0`, false, `-1`, true as
+the generic defaults. The current `gta-reversed-dryxio` constructor, clone,
+route computation and `0x60` layout match the target, so no reverse correction
+was required. Neon only validates the descriptor, calls that constructor and
+dispatches through the already verified scripted-command path. The current
+scope intentionally exposes neither `no_path` nor `blocked`: native task
+activation and terminal distance are observable, but GTA's private route state
+is not promoted to a durable Lua status.
+
+As with the other native task families, only the ped syncer constructs this
+task. Existing element sync carries its transforms, while Neon's generic
+locomotion presentation reads the durable movement command from the new complex
+parent and presents walking/running/sprinting on non-syncers without giving
+them pathfinding authority. `test-resources/native-ped-navigate-harness` closes
+the two-client ownership/result contract with authenticated owner, server and
+passive-observer evidence. `test-resources/native-ped-navigate-test` is the
+manual pet-style visual check: spawn the ped, walk to a destination, then order
+it to navigate to the command position.
 
 Opcode `05D2 TASK_CAR_DRIVE_WANDER` was gated against the same compact executable at handler `0x490762`. It collects ped/sequence, vehicle, float speed, and driving style, allocates exactly `0x24` bytes, calls `CTaskComplexCarDriveWander` constructor `0x63CB10`, and assigns through the ordinary script task helper. The verified layout places vehicle at `+0x0C`, cruise speed at `+0x10`, desired model at `+0x14`, 32-bit style at `+0x18`, driver flag at `+0x1C`, original autopilot bytes at `+0x1D..+0x1F`, and setup flag at `+0x20`. Neon locks this opaque layout and calls GTA's constructor, vtable, and destructor rather than copying the candidate reverse.
 

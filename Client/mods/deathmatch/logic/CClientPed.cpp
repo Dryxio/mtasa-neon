@@ -385,6 +385,15 @@ namespace
 
                 return static_cast<PedMoveState::Enum>(pGoTo->GetMoveState());
             }
+
+            if (pCurrent->GetTaskType() == TASK_COMPLEX_FOLLOW_NODE_ROUTE)
+            {
+                auto* pNavigate = dynamic_cast<CTaskComplexFollowNodeRoute*>(pCurrent);
+                if (!pNavigate)
+                    return std::nullopt;
+
+                return static_cast<PedMoveState::Enum>(pNavigate->GetMoveState());
+            }
         }
         return std::nullopt;
     }

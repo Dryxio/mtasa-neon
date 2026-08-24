@@ -84,6 +84,17 @@ public:
     virtual int GetMoveState() const = 0;
 };
 
+// Follows GTA's pedestrian path-node graph to a world-space destination. The
+// route itself remains private native state; only the durable movement command
+// is exposed so the authoritative syncer can present the result remotely.
+class CTaskComplexFollowNodeRoute : public virtual CTaskComplex
+{
+public:
+    virtual ~CTaskComplexFollowNodeRoute() {};
+
+    virtual int GetMoveState() const = 0;
+};
+
 class CTaskComplexSeekEntityRadiusAngleOffset : public virtual CTaskComplex
 {
 public:

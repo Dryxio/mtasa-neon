@@ -26,6 +26,7 @@ class CTaskComplexLeaveCar;
 class CTaskComplexCarDriveWander;
 class CTaskComplexCarDriveToPoint;
 class CTaskComplexGoToPointAndStandStill;
+class CTaskComplexFollowNodeRoute;
 class CTaskComplexPartnerChat;
 class CTaskComplexSeekEntityRadiusAngleOffset;
 class CTaskComplexSunbathe;
@@ -204,4 +205,11 @@ public:
     // Appended for opcode 06E1. GTA owns the target safe reference, autopilot
     // setup, mission transitions, clone and destructor lifecycle.
     virtual CTaskComplex* CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed) = 0;
+
+    // Appended to preserve every established CTasks vtable index. GTA owns the
+    // pedestrian-node search, route storage, obstacle response and completion.
+    virtual CTaskComplexFollowNodeRoute* CreateTaskComplexFollowNodeRoute(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                          const float fSlowDownDistance, const float fHeightChangeThreshold,
+                                                                          const bool bKeepNodesHeadingAwayFromTarget, const int iTime,
+                                                                          const bool bUseBlending) = 0;
 };

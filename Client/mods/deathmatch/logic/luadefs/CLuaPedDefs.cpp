@@ -304,6 +304,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedWeaponShootingRate", ArgumentParser<SetPedWeaponShootingRate>},
         {"setPedWeaponAccuracy", ArgumentParser<SetPedWeaponAccuracy>},
         {"setPedGoTo", ArgumentParser<SetPedGoTo>},
+        {"setPedNavigateTo", ArgumentParser<SetPedNavigateTo>},
         {"setPedChatWith", ArgumentParser<SetPedChatWith>},
         {"setPedStandStill", ArgumentParser<SetPedStandStill>},
         {"setPedTurnToFace", ArgumentParser<SetPedTurnToFace>},
@@ -514,6 +515,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "setWeaponShootingRate", "setPedWeaponShootingRate");
     lua_classfunction(luaVM, "setWeaponAccuracy", "setPedWeaponAccuracy");
     lua_classfunction(luaVM, "setGoTo", "setPedGoTo");
+    lua_classfunction(luaVM, "setNavigateTo", "setPedNavigateTo");
     lua_classfunction(luaVM, "setChatWith", "setPedChatWith");
     lua_classfunction(luaVM, "setStandStill", "setPedStandStill");
     lua_classfunction(luaVM, "setTurnToFace", "setPedTurnToFace");
@@ -2995,6 +2997,42 @@ bool CLuaPedDefs::SetPedGoTo(CClientPed* ped, CVector target, std::optional<std:
         return false;
 
     auto* task = g_pGame->GetTasks()->CreateTaskComplexGoToPointAndStandStill(moveState, target, taskRadius, taskSlowdownRadius, taskTimeout);
+    return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
+}
+
+bool CLuaPedDefs::SetPedNavigateTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
+                                   std::optional<float> slowdownRadius, std::optional<float> heightChangeThreshold,
+                                   std::optional<bool> keepNodesHeadingAwayFromTarget, std::optional<int> timeout, std::optional<bool> useBlending)
+{
+    if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() || (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()))
+    {
+        return false;
+    }
+
+    const float taskRadius = radius.value_or(0.5f);
+    const float taskSlowdownRadius = slowdownRadius.value_or(3.0f);
+    const float taskHeightChangeThreshold = heightChangeThreshold.value_or(2.0f);
+    const int   taskTimeout = timeout.value_or(-1);
+    if (!std::isfinite(target.fX) || !std::isfinite(target.fY) || !std::isfinite(target.fZ) || !std::isfinite(taskRadius) ||
+        !std::isfinite(taskSlowdownRadius) || !std::isfinite(taskHeightChangeThreshold) || taskRadius <= 0.0f || taskSlowdownRadius < taskRadius ||
+        taskHeightChangeThreshold <= 0.0f || taskTimeout < -1)
+    {
+        return false;
+    }
+
+    int               moveState;
+    const std::string taskMovement = movement.value_or("walk");
+    if (stricmp(taskMovement.c_str(), "walk") == 0)
+        moveState = PedMoveState::PEDMOVE_WALK;
+    else if (stricmp(taskMovement.c_str(), "run") == 0)
+        moveState = PedMoveState::PEDMOVE_RUN;
+    else if (stricmp(taskMovement.c_str(), "sprint") == 0)
+        moveState = PedMoveState::PEDMOVE_SPRINT;
+    else
+        return false;
+
+    auto* task = g_pGame->GetTasks()->CreateTaskComplexFollowNodeRoute(moveState, target, taskRadius, taskSlowdownRadius, taskHeightChangeThreshold,
+                                                                       keepNodesHeadingAwayFromTarget.value_or(false), taskTimeout, useBlending.value_or(true));
     return DispatchPedScriptCommandTask(ped->GetGamePlayer(), task);
 }
 
