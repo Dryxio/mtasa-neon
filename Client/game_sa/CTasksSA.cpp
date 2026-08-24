@@ -148,6 +148,16 @@ CTaskComplexGoToPointAndStandStill* CTasksSA::CreateTaskComplexGoToPointAndStand
     return pTask;
 }
 
+CTaskComplexFollowNodeRoute* CTasksSA::CreateTaskComplexFollowNodeRoute(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                        const float fSlowDownDistance, const float fHeightChangeThreshold,
+                                                                        const bool bKeepNodesHeadingAwayFromTarget, const int iTime, const bool bUseBlending)
+{
+    auto* pTask = NewTask<CTaskComplexFollowNodeRouteSA>(iMoveState, vecTarget, fTargetRadius, fSlowDownDistance, fHeightChangeThreshold,
+                                                         bKeepNodesHeadingAwayFromTarget, iTime, bUseBlending);
+    m_pTaskManagementSystem->AddTask(pTask);
+    return pTask;
+}
+
 CTaskComplexEnterCarAsDriver* CTasksSA::CreateTaskComplexEnterCarAsDriver(CVehicle* pVehicle)
 {
     CTaskComplexEnterCarAsDriverSA* pTask = NewTask<CTaskComplexEnterCarAsDriverSA>(pVehicle);

@@ -330,6 +330,11 @@ CTaskSA* CTaskManagementSystemSA::CreateAppropriateTask(CTaskSAInterface* pTaskI
             // one wrapper is sufficient when GTA creates or clones either one.
             pTaskSA = new CTaskComplexGoToPointAndStandStillSA;
             break;
+        case TASK_COMPLEX_FOLLOW_NODE_ROUTE:
+            // Keep the native parent visible so locomotion sync reads the
+            // durable command while GTA blends between path-node subtasks.
+            pTaskSA = new CTaskComplexFollowNodeRouteSA;
+            break;
 
         // IK
         case TASK_SIMPLE_IK_CHAIN:

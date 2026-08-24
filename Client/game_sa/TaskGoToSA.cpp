@@ -225,6 +225,20 @@ CTaskComplexGoToPointAndStandStillSA::CTaskComplexGoToPointAndStandStillSA(const
     // clang-format on
 }
 
+CTaskComplexFollowNodeRouteSA::CTaskComplexFollowNodeRouteSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                             const float fSlowDownDistance, const float fHeightChangeThreshold,
+                                                             const bool bKeepNodesHeadingAwayFromTarget, const int iTime, const bool bUseBlending)
+{
+    CreateTaskInterface(sizeof(CTaskComplexFollowNodeRouteSAInterface));
+    if (!IsValid())
+        return;
+
+    using Constructor = void(__thiscall*)(CTaskComplexFollowNodeRouteSAInterface*, int, const CVector&, float, float, float, bool, int, bool);
+    reinterpret_cast<Constructor>(FUNC_CTaskComplexFollowNodeRoute__Constructor)(static_cast<CTaskComplexFollowNodeRouteSAInterface*>(GetInterface()),
+                                                                                 iMoveState, vecTarget, fTargetRadius, fSlowDownDistance,
+                                                                                 fHeightChangeThreshold, bKeepNodesHeadingAwayFromTarget, iTime, bUseBlending);
+}
+
 CTaskComplexGoToPointAndStandStillTimedSA::CTaskComplexGoToPointAndStandStillTimedSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
                                                                                      const float fSlowDownDistance, const int iTime)
 {

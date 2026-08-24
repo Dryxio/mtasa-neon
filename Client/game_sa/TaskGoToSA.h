@@ -38,6 +38,7 @@ typedef DWORD CTaskUtilityLineUpPedWithCar;
 
 #define FUNC_CTaskComplexGoToPointAndStandStill__Constructor      0x668120
 #define FUNC_CTaskComplexGoToPointAndStandStillTimed__Constructor 0x6685E0
+#define FUNC_CTaskComplexFollowNodeRoute__Constructor             0x66EA30
 #define FUNC_CTaskComplexSeekEntityRadiusAngleOffset__Constructor 0x493730
 #define FUNC_CTaskComplexTurnToFaceEntityOrCoord__Constructor     0x66B890
 #define FUNC_CTaskComplexSequence__Constructor                    0x632BD0
@@ -217,6 +218,43 @@ public:
     CTaskComplexGoToPointAndStandStillSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance);
 
     int GetMoveState() const override { return static_cast<const CTaskComplexGoToPointAndStandStillSAInterface*>(GetInterface())->m_iMoveState; }
+};
+
+class CTaskComplexFollowNodeRouteSAInterface : public CTaskComplexSAInterface
+{
+public:
+    CVector      m_vecTarget;
+    int          m_iMoveState;
+    float        m_fTargetRadius;
+    float        m_fSlowDownDistance;
+    float        m_fHeightChangeThreshold;
+    CNodeAddress m_StartNode;
+    void*        m_pNodeRoute;
+    void*        m_pPointRoute;
+    CNodeAddress m_CurrentNode;
+    unsigned int m_uiCurrentPoint;
+    int          m_iTime;
+    CTaskTimer   m_Timer;
+    unsigned int m_uiFlags;
+    float        m_fSpeedDecreaseDistance;
+    float        m_fSpeedIncreaseDistance;
+    float        m_fSpeedDecreaseAmount;
+    float        m_fSpeedIncreaseAmount;
+};
+static_assert(offsetof(CTaskComplexFollowNodeRouteSAInterface, m_vecTarget) == 0x0C, "Invalid follow-node target offset");
+static_assert(offsetof(CTaskComplexFollowNodeRouteSAInterface, m_iMoveState) == 0x18, "Invalid follow-node movement offset");
+static_assert(offsetof(CTaskComplexFollowNodeRouteSAInterface, m_Timer) == 0x40, "Invalid follow-node timer offset");
+static_assert(offsetof(CTaskComplexFollowNodeRouteSAInterface, m_uiFlags) == 0x4C, "Invalid follow-node flags offset");
+static_assert(sizeof(CTaskComplexFollowNodeRouteSAInterface) == 0x60, "Invalid follow-node route task size");
+
+class CTaskComplexFollowNodeRouteSA : public virtual CTaskComplexSA, public virtual CTaskComplexFollowNodeRoute
+{
+public:
+    CTaskComplexFollowNodeRouteSA() {};
+    CTaskComplexFollowNodeRouteSA(const int iMoveState, const CVector& vecTarget, const float fTargetRadius, const float fSlowDownDistance,
+                                  const float fHeightChangeThreshold, const bool bKeepNodesHeadingAwayFromTarget, const int iTime, const bool bUseBlending);
+
+    int GetMoveState() const override { return static_cast<const CTaskComplexFollowNodeRouteSAInterface*>(GetInterface())->m_iMoveState; }
 };
 
 class CTaskComplexGoToPointAndStandStillTimedSA : public virtual CTaskComplexSA, public virtual CTaskComplexGoToPointAndStandStill

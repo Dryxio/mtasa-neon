@@ -128,6 +128,9 @@ public:
     static bool SetPedWeaponAccuracy(CClientPed* ped, int accuracy);
     static bool SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
                            std::optional<float> slowdownRadius, std::optional<int> timeout);
+    static bool SetPedNavigateTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
+                                 std::optional<float> slowdownRadius, std::optional<float> heightChangeThreshold,
+                                 std::optional<bool> keepNodesHeadingAwayFromTarget, std::optional<int> timeout, std::optional<bool> useBlending);
     static bool SetPedChatWith(CClientPed* ped, CClientPed* partner, bool leadSpeaker, std::optional<bool> updateDirection,
                                std::optional<bool> conversationEnabled);
     static bool SetPedStandStill(CClientPed* ped, std::optional<int> duration);

@@ -143,6 +143,9 @@ public:
     CTaskComplexWander*          CreateTaskComplexWanderCopAmbient(const int iMoveState, const char iDir);
     bool                         IsTaskComplexWanderCopAmbient(const CTask* pTask) const;
     CTaskComplex*                CreateTaskComplexCarDriveMission(CVehicle* pVehicle, CEntity* pTarget, int iMission, int iDrivingStyle, float fSpeed);
+    CTaskComplexFollowNodeRoute* CreateTaskComplexFollowNodeRoute(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
+                                                                  const float fSlowDownDistance, const float fHeightChangeThreshold,
+                                                                  const bool bKeepNodesHeadingAwayFromTarget, const int iTime, const bool bUseBlending);
 
     static void StaticSetHooks();
 };
