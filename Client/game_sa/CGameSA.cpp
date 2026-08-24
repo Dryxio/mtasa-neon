@@ -169,6 +169,7 @@ namespace
     constexpr std::uintptr_t FUNC_StartVehiclePlayback = 0x45A980;
     constexpr std::uintptr_t FUNC_StopVehiclePlayback = 0x45A280;
     constexpr std::uintptr_t FUNC_IsVehiclePlaybackActive = 0x4594C0;
+    constexpr std::uintptr_t FUNC_SetVehiclePlaybackSpeed = 0x459660;
 
     constexpr std::uintptr_t GTA_PATH_FIND = 0x96F050;
     constexpr std::uintptr_t FUNC_StreamZoneModels = 0x40A560;
@@ -4230,6 +4231,18 @@ bool CGameSA::RemoveVehicleRecording(int recordingId)
 
     reinterpret_cast<void(__cdecl*)(int)>(FUNC_RemoveVehicleRecording)(recordingId);
     return true;
+}
+
+bool CGameSA::SetVehiclePlaybackSpeed(CVehicle* vehicle, float speed)
+{
+    if (!vehicle || !std::isfinite(speed) || speed < 0.0f || !IsVehiclePlaybackActive(vehicle))
+        return false;
+
+    // GTA:SA 1.0 0x459660 finds the active recording slot for this vehicle and
+    // writes the raw float to PlaybackSpeed[slot]. The active-slot guard keeps
+    // a stale resource from configuring a later occupant of the global pool.
+    reinterpret_cast<void(__cdecl*)(CVehicleSAInterface*, float)>(FUNC_SetVehiclePlaybackSpeed)(vehicle->GetVehicleInterface(), speed);
+    return IsVehiclePlaybackActive(vehicle);
 }
 
 bool CGameSA::LoadMissionTextBlock(const char* blockName)

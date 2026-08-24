@@ -223,6 +223,7 @@ void CLuaVehicleDefs::LoadFunctions()
         {"requestVehicleRecording", ArgumentParser<RequestVehicleRecording>},
         {"startVehiclePlayback", ArgumentParser<StartVehiclePlayback>},
         {"stopVehiclePlayback", ArgumentParser<StopVehiclePlayback>},
+        {"setVehiclePlaybackSpeed", ArgumentParser<SetVehiclePlaybackSpeed>},
     };
 
     // Add functions
@@ -5023,6 +5024,26 @@ bool CLuaVehicleDefs::StopVehiclePlayback(lua_State* luaVM, CClientVehicle* vehi
     if (stopped)
         g_vehiclePlaybackOwners.erase(owner);
     return stopped;
+}
+
+bool CLuaVehicleDefs::SetVehiclePlaybackSpeed(lua_State* luaVM, CClientVehicle* vehicle, float speed)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource || !vehicle || !std::isfinite(speed) || speed < 0.0f || speed > 16.0f || !vehicle->IsStreamedIn() || !vehicle->GetGameVehicle() ||
+        !IsVehicleLocallyOwned(vehicle))
+    {
+        return false;
+    }
+
+    ForgetFinishedVehiclePlayback(vehicle);
+    const auto owner = g_vehiclePlaybackOwners.find(vehicle);
+    if (owner == g_vehiclePlaybackOwners.end() || owner->second != resource)
+        return false;
+
+    // 06FD mutates a global native recording slot. Requiring both the Lua
+    // playback lease and current vehicle authority prevents observers or stale
+    // resources from racing the transform producer.
+    return g_pGame->SetVehiclePlaybackSpeed(vehicle->GetGameVehicle(), speed);
 }
 
 bool CLuaVehicleDefs::IsVehiclePlaybackActive(CClientVehicle* vehicle)

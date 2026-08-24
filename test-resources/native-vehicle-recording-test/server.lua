@@ -2,10 +2,11 @@ local sessions = {}
 local nextSessionId = 0
 
 local RECORDING_ID = 207
+local PLAYBACK_SPEED = 2.0
 local RECORDING_START = {2337.86, -1467.21, 22.82, 180}
 local RECORDING_END = {2381.0720, -1528.4404, 23.6556}
-local MINIMUM_ELAPSED = 6500
-local MAXIMUM_ELAPSED = 12000
+local MINIMUM_ELAPSED = 3000
+local MAXIMUM_ELAPSED = 7000
 
 local function snapshotPlayer(player)
     local x, y, z = getElementPosition(player)
@@ -69,7 +70,7 @@ local function requestCleanup(player, restore)
     return true
 end
 
-addCommandHandler("nativecarrec", function(player)
+local function startRecordingTest(player)
     if sessions[player] then
         requestCleanup(player, false)
         outputChatBox("[native carrec] Nettoyage en cours; relancez la commande dans une seconde.", player, 255, 180, 80)
@@ -113,10 +114,25 @@ addCommandHandler("nativecarrec", function(player)
     session.startTimer = setTimer(function(target, expectedId)
         local active = sessions[target]
         if active and active.id == expectedId then
-            triggerClientEvent(target, "nativeVehicleRecording:start", resourceRoot, active.id, active.ped, active.vehicle, RECORDING_ID)
+            triggerClientEvent(target, "nativeVehicleRecording:start", resourceRoot, active.id, active.ped, active.vehicle, RECORDING_ID,
+                               PLAYBACK_SPEED)
         end
     end, 1000, 1, player, session.id)
-end)
+end
+
+addCommandHandler("nativecarrec", startRecordingTest)
+
+setTimer(function()
+    if not fileExists("headless.request") then
+        return
+    end
+    local player = getElementsByType("player")[1]
+    if not isElement(player) then
+        return
+    end
+    fileDelete("headless.request")
+    startRecordingTest(player)
+end, 250, 0)
 
 addEvent("nativeVehicleRecording:result", true)
 addEventHandler("nativeVehicleRecording:result", resourceRoot, function(sessionId, vehicle, result, details, elapsed)
@@ -139,6 +155,8 @@ addEventHandler("nativeVehicleRecording:result", resourceRoot, function(sessionI
         local elapsedMs = tonumber(elapsed) or 0
         local passed = elapsedMs >= MINIMUM_ELAPSED and elapsedMs <= MAXIMUM_ELAPSED and endDistance <= 6 and getElementSyncer(vehicle) == player and
                            getPedOccupiedVehicle(session.ped) == vehicle and getPedOccupiedVehicleSeat(session.ped) == 1
+        outputServerLog(("[native carrec] %s: fin a %.2f m, %d ms, 06FD %.2fx."):format(passed and "PASS" or "FAIL", endDistance,
+                                                                                         elapsedMs, PLAYBACK_SPEED))
         outputChatBox(("[native carrec] %s: fin a %.2f m, %d ms, Sweet passager."):format(passed and "PASS" or "FAIL", endDistance, elapsedMs),
                       player, passed and 100 or 255, passed and 230 or 80, passed and 130 or 80)
     end

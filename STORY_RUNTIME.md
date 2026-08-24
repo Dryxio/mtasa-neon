@@ -579,6 +579,35 @@ World-space `SWEET1` scenes previously used whatever arbitrary MTA skin the miss
 
 MTA already synchronizes `setElementModel`, `getPedClothes`, `addPedClothes`, and `removePedClothes`, so the world-space appearance slice requires no new public C++ primitive or root README entry. On mission success, failure, abort, or resource shutdown, the leader is temporarily rebuilt as model `0` because GTA clothing changes are valid only for CJ; the saved clothing state is restored first, then the original player model is reapplied. Other co-op participants retain their original skins throughout. The complete two-client success path validated this ownership and restoration contract; failure, abort, and resource-shutdown restoration remain covered by deterministic code paths but still need their own runtime checks.
 
+## Current implementation slice: Sweet & Kendl / INTRO1
+
+The `sweet-and-kendl` resource now reconstructs the first San Andreas mission
+as a cooperative conformance mission. It covers `INTRO1A` and `INTRO1B`, the
+Smoke and funeral world scenes, the Ballas drive-by, both BMX routes and the
+split, the return chase, recorded-car finale, save tutorial, original mission
+text/audio order, failure labels, and the three-respect reward. Every connected
+player is an active cyclist and must satisfy the shared objective gates. The
+server alone owns stage progression, pass/fail, cleanup, and co-op policy.
+
+Exactly one selected client executes the gang and Ballas native AI through an
+atomic `native-task-runtime` cohort. Other clients observe synchronized
+transforms, occupants, combat, and presentation without running competing GTA
+decisions. The runtime also exposes synchronized tyre policy for resource-owned
+vehicles. Opcode `06FD SET_PLAYBACK_SPEED` is available as
+`setVehiclePlaybackSpeed`; it is restricted to the resource that owns the
+active playback slot and the client currently owning the vehicle.
+
+The bounded filesystem harness produces JSONL stage evidence without GUI
+input. Two consecutive two-client runs crossed both native cohort phases and
+terminated in `PASS`; a separate natural run loaded `INTRO1A`, synchronized its
+skip, and entered the Smoke scene on both clients. The isolated recording
+harness completed recording `207` at `2.00x` in `4014 ms` with `0.00 m`
+server-observed endpoint error, proving the new playback-speed path. No client
+script error was recorded during those checkpoints. Camera composition, audio
+mix, animation nuance, and moment-to-moment visual parity still require human
+review; the resource remains an SCM-derived Lua conformance implementation, not
+evidence that the generic SCM bytecode interpreter is complete.
+
 ## Delivery plan
 
 ### Phase 0: establish the oracle and traces

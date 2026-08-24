@@ -49,7 +49,8 @@ local function beginPlayback()
         return report("invalid_state", "le conducteur doit rester vide et Sweet passager", true)
     end
     if type(requestVehicleRecording) ~= "function" or type(isVehicleRecordingLoaded) ~= "function" or type(startVehiclePlayback) ~= "function" or
-        type(stopVehiclePlayback) ~= "function" or type(isVehiclePlaybackActive) ~= "function" then
+        type(setVehiclePlaybackSpeed) ~= "function" or type(stopVehiclePlayback) ~= "function" or
+        type(isVehiclePlaybackActive) ~= "function" then
         return report("api_unavailable", "API recorded-car absente du client Neon", true)
     end
 
@@ -87,10 +88,14 @@ local function beginPlayback()
     if not startVehiclePlayback(test.vehicle, test.recordingId) then
         return report("start_refused", "startVehiclePlayback a retourne false", true)
     end
+    if not setVehiclePlaybackSpeed(test.vehicle, test.speed) then
+        stopVehiclePlayback(test.vehicle)
+        return report("speed_refused", "SET_PLAYBACK_SPEED a retourne false", true)
+    end
 
     test.startedAt = getTickCount()
     test.observedActive = isVehiclePlaybackActive(test.vehicle)
-    report("started", "05EB actif sur le syncer du vehicule", false)
+    report("started", ("05EB actif et 06FD a %.2fx sur le syncer du vehicule"):format(test.speed), false)
     test.monitorTimer = setTimer(function()
         local current = activeTest
         if not current then
@@ -120,7 +125,7 @@ local function beginPlayback()
 end
 
 addEvent("nativeVehicleRecording:start", true)
-addEventHandler("nativeVehicleRecording:start", resourceRoot, function(sessionId, ped, vehicle, recordingId)
+addEventHandler("nativeVehicleRecording:start", resourceRoot, function(sessionId, ped, vehicle, recordingId, speed)
     if activeTest then
         stopNativePlayback(activeTest)
         stopTimers(activeTest)
@@ -130,6 +135,7 @@ addEventHandler("nativeVehicleRecording:start", resourceRoot, function(sessionId
         ped = ped,
         vehicle = vehicle,
         recordingId = recordingId,
+        speed = tonumber(speed) or 1.0,
         requestedAt = getTickCount(),
     }
     beginPlayback()

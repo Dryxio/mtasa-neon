@@ -335,6 +335,7 @@ public:
     bool StopVehiclePlayback(CVehicle* vehicle) override;
     bool IsVehiclePlaybackActive(CVehicle* vehicle) override;
     bool RemoveVehicleRecording(int recordingId) override;
+    bool SetVehiclePlaybackSpeed(CVehicle* vehicle, float speed) override;
 
     bool LoadMissionTextBlock(const char* blockName) override;
     bool ShowMissionText(const char* key, unsigned int duration, unsigned short flags) override;

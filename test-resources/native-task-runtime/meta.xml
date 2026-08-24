@@ -2,8 +2,10 @@
     <info author="Neon story runtime" name="Native task runtime" version="0.1.0" type="script" />
     <script src="server.lua" type="server" />
     <script src="cohort_server.lua" type="server" />
+    <script src="vehicle_policy_server.lua" type="server" />
     <script src="client.lua" type="client" cache="false" />
     <script src="cohort_client.lua" type="client" cache="false" />
+    <script src="vehicle_policy_client.lua" type="client" cache="false" />
     <export function="createNativeDriveRoute" type="server" />
     <export function="handoffNativeDriveRoute" type="server" />
     <export function="cancelNativeDriveRoute" type="server" />
@@ -12,4 +14,5 @@
     <export function="handoffNativeTaskCohort" type="server" />
     <export function="cancelNativeTaskCohort" type="server" />
     <export function="getNativeTaskCohortState" type="server" />
+    <export function="setSynchronizedVehicleTyresCanBurst" type="server" />
 </meta>

@@ -33,6 +33,9 @@ distance are captured and restored at revocation.
   old member before publishing the next immutable epoch.
 - `cancelNativeTaskCohort(cohort)` restores policy and automatic sync selection.
 - `getNativeTaskCohortState(cohort)` returns its authoritative state snapshot.
+- `setSynchronizedVehicleTyresCanBurst(vehicle, canBurst)` publishes an explicit
+  vehicle policy which every client applies when the vehicle streams in. The
+  caller must own the vehicle lifecycle or explicitly replace the policy.
 
 The creating resource owns the handle. Other resources cannot inspect, hand
 off, or cancel it. All its tasks are cleaned when that resource stops. Optional

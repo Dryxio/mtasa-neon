@@ -84,8 +84,8 @@ public:
     LUA_DECLARE(GetVehicleNitroLevel);
     LUA_DECLARE(GetHeliBladeCollisionsEnabled);
     LUA_DECLARE(IsVehicleWindowOpen);
-    static int  GetVehicleDoorLockMode(CClientVehicle* vehicle);
-    static bool GetVehicleTyresCanBurst(CClientVehicle* vehicle);
+    static int                              GetVehicleDoorLockMode(CClientVehicle* vehicle);
+    static bool                             GetVehicleTyresCanBurst(CClientVehicle* vehicle);
     static std::variant<bool, unsigned int> GetVehicleStraightLineDistance(CClientVehicle* vehicle);
 
     LUA_DECLARE(FixVehicle);
@@ -215,6 +215,7 @@ public:
     static bool IsVehicleRecordingLoaded(int recordingId);
     static bool StartVehiclePlayback(lua_State* luaVM, CClientVehicle* vehicle, int recordingId);
     static bool StopVehiclePlayback(lua_State* luaVM, CClientVehicle* vehicle);
+    static bool SetVehiclePlaybackSpeed(lua_State* luaVM, CClientVehicle* vehicle, float speed);
     static bool IsVehiclePlaybackActive(CClientVehicle* vehicle);
     static void PulseVehiclePlayback(CClientVehicle* vehicle);
     static void OnVehiclePlaybackDestroy(CClientVehicle* vehicle);

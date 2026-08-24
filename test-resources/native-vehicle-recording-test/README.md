@@ -8,12 +8,15 @@ Greenwood from approximately `(2339.67, -1488.19, 23.61)` to
 ## Protocol
 
 1. Start `native-vehicle-recording-test` and run `/nativecarrec`.
-2. Confirm the Greenwood follows a smooth fixed trajectory while Sweet remains
-   in passenger seat 1 and the driver's seat remains empty.
-3. Wait for `PASS`; it requires a natural native completion in 6.5-12 seconds,
+2. Confirm the Greenwood follows a smooth fixed trajectory at `2.0x` while
+   Sweet remains in passenger seat 1 and the driver's seat remains empty.
+3. Wait for `PASS`; it requires a natural native completion in 3-7 seconds,
    a server-observed endpoint within six metres, the same vehicle syncer, and
    Sweet still seated.
 4. Run `/nativecarreccleanup` to restore the player's previous position.
+
+Creating `headless.request` in the deployed resource invokes the same test on
+the first connected player and is the non-interactive VM entry point.
 
 The client reports request, load, start, natural completion, streaming loss,
 and ownership loss separately. Cleanup stops an active native slot before the
@@ -26,6 +29,7 @@ builds and deploys this resource, then asks the user to run the protocol.
 requestVehicleRecording(recordingId)
 isVehicleRecordingLoaded(recordingId)
 startVehiclePlayback(vehicle, recordingId)
+setVehiclePlaybackSpeed(vehicle, speed)
 stopVehiclePlayback(vehicle)
 isVehiclePlaybackActive(vehicle)
 ```
@@ -57,7 +61,8 @@ PPP sample is four timer updates old, so that factor averages four frame deltas
 rather than slowing playback by four. Timer truncation and Lua polling explain
 the approximately 8.1-second wall-clock result observed by the harness.
 
-Manual validation observed natural completion at `8087 ms` and `8088 ms`.
+Manual validation observed natural completion at `8087 ms` and `8088 ms` at
+the default speed. The `2.0x` harness additionally validates opcode `06FD`.
 Tagging Up Turf then completed the same recording in `8040 ms` with `0.00 m`
 server-observed endpoint error before restoring Sweet as passenger and passing
 the mission.

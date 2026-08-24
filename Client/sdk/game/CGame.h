@@ -698,6 +698,7 @@ public:
     virtual bool StopVehiclePlayback(CVehicle* vehicle) = 0;
     virtual bool IsVehiclePlaybackActive(CVehicle* vehicle) = 0;
     virtual bool RemoveVehicleRecording(int recordingId) = 0;
+    virtual bool SetVehiclePlaybackSpeed(CVehicle* vehicle, float speed) = 0;
 
     // GTA mission text is backed by one global GXT block plus the native
     // CMessages/CHud queues. Keep fixed executable calls behind game_sa so
