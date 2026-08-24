@@ -639,8 +639,9 @@ distance formula and completed in `7130 ms` and `7066 ms`; later headless-only
 segments ran at `2.0x` to keep the harness bounded while the natural path keeps
 the formula on every segment. A separate two-client presentation run loaded
 `SMOKE1A`, synchronized its skip, entered the Grove drive and remained stable
-after its delayed `SMOKE1` travel-audio request. No new client script warning
-or error was recorded. Camera composition, dialogue timing,
+after its delayed `SMOKE1` travel-audio request. The idle smoke run then reached
+the expected participant-death failure guard and the resource restarted
+cleanly; no new client script warning or error was recorded. Camera composition, dialogue timing,
 combat difficulty and continuous human-driven chase parity remain visual/manual
 review items; the headless result proves lifecycle, ownership, native-slot and
 mission-graph behavior rather than pixel-identical presentation.
