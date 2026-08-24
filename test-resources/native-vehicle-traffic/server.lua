@@ -35,6 +35,8 @@ local OWNER_DISTANCE = 220
 -- anchor while still respecting the wider residency boundary above.
 local POPULATION_BUBBLE_DISTANCE = 180
 local MAX_CANDIDATE_ATTEMPTS = 25
+local PRODUCTION_TELEMETRY_INTERVAL = 15000
+local telemetryWindow = VehicleTrafficTelemetry.newCounterWindow()
 
 -- These pools are the road-safe subset of GTA's cargrp.dat categories. MTA
 -- disables the retail ambient vehicle streamer, so reproducing that ecology
@@ -96,6 +98,9 @@ local function trace(event, fields)
     fields = fields or {}
     fields.event = event
     fields.tick = getTickCount()
+    if event ~= "population-snapshot" then
+        VehicleTrafficTelemetry.record(telemetryWindow, event, fields.reason)
+    end
     outputServerLog("[car-traffic] " .. toJSON(fields, true))
 end
 
@@ -243,6 +248,69 @@ local function productionBubbleLoads(ps, includePending)
     return bubbles, loads, bubbleUnits
 end
 
+local function emitProductionTelemetry()
+    if not population.enabled then return end
+    local ps = players()
+    local desired = populationDesired(ps, "production")
+    local bubbles, loads, bubbleUnits = productionBubbleLoads(ps, false)
+    local bubbleSnapshots = {}
+    local base = #bubbles > 0 and math.floor(desired / #bubbles) or 0
+    local remainder = #bubbles > 0 and desired % #bubbles or 0
+    for index, bubble in ipairs(bubbles) do
+        local nearest, furthest
+        local states = {created = 0, assigning = 0, active = 0, revoking = 0}
+        for _, unit in ipairs(bubbleUnits[index]) do
+            states[unit.state] = (states[unit.state] or 0) + 1
+            local distance = distanceToUnit(bubble.anchor, unit)
+            nearest = not nearest and distance or math.min(nearest, distance)
+            furthest = not furthest and distance or math.max(furthest, distance)
+        end
+        local pending = 0
+        for _, candidate in pairs(pendingCandidates) do
+            if candidate.mode == "production" and bubbleIndexForPlayer(bubbles, candidate.owner) == index then pending = pending + 1 end
+        end
+        bubbleSnapshots[#bubbleSnapshots + 1] = {
+            index = index,
+            members = #bubble.members,
+            allocation = base + (index <= remainder and 1 or 0),
+            units = loads[index],
+            pending = pending,
+            states = states,
+            nearest = nearest or false,
+            furthest = furthest or false,
+        }
+    end
+
+    local states = {created = 0, assigning = 0, active = 0, revoking = 0}
+    local motion = {forward = 0, reverse = 0, stationary = 0, lateral = 0, unsampled = 0}
+    local productionUnits = 0
+    for _, unit in pairs(units) do
+        if unit.mode == "production" then
+            productionUnits = productionUnits + 1
+            states[unit.state] = (states[unit.state] or 0) + 1
+            local motionState = unit.motionTelemetry and unit.motionTelemetry.lastState or "unsampled"
+            motion[motionState] = (motion[motionState] or 0) + 1
+        end
+    end
+
+    trace("population-snapshot", {
+        version = 1,
+        players = #ps,
+        bubbles = #bubbles,
+        desired = desired,
+        cap = population.cap,
+        targetPerBubble = population.targetPerPlayer,
+        units = productionUnits,
+        pending = pendingCount(),
+        totalPeds = #getElementsByType("ped"),
+        pedPoolSoftLimit = PRODUCTION_PED_POOL_SOFT_LIMIT,
+        states = states,
+        motion = motion,
+        bubbleDetails = bubbleSnapshots,
+        window = VehicleTrafficTelemetry.drain(telemetryWindow),
+    })
+end
+
 local function chooseProductionOwner(ps)
     local bubbles, loads = productionBubbleLoads(ps, true)
     local selected = false
@@ -327,9 +395,25 @@ local function destroyUnit(unit, reason)
     forEachOccupant(unit, function(ped)
         if isElement(ped) then destroyElement(ped) end
     end)
+    local x, y, z
+    if isElement(unit.vehicle) then x, y, z = getElementPosition(unit.vehicle) end
+    local motion = unit.motionTelemetry or {}
     if isElement(unit.vehicle) then destroyElement(unit.vehicle) end
     units[unit.id] = nil
-    trace("despawn", {id = unit.id, epoch = unit.epoch, reason = reason})
+    trace("despawn", {
+        id = unit.id,
+        epoch = unit.epoch,
+        reason = reason,
+        model = unit.model,
+        lifetimeMs = getTickCount() - (unit.createdAt or getTickCount()),
+        x = x,
+        y = y,
+        z = z,
+        distance = motion.distance or 0,
+        motionSamples = motion.samples or 0,
+        motionCounts = motion.counts or {},
+        maximumReverseSpeed = motion.maximumReverseSpeed or 0,
+    })
 end
 
 local function destroyUnitsWhere(reason, predicate)
@@ -938,6 +1022,7 @@ local function createUnit(candidate, owner, observers, mode)
         state = "created", startX = candidate.x, startY = candidate.y, startZ = candidate.z,
         cruiseSpeed = candidate.cruiseSpeed or 16.0, drivingStyle = tonumber(candidate.drivingStyle) or 0,
         model = candidate.model, vehicleClass = tonumber(candidate.vehicleClass) or 0, mode = mode, passengers = passengers, anchorPlayer = owner,
+        createdAt = getTickCount(), spawnRotation = tonumber(candidate.rotation), carGroup = candidate.carGroup,
     }
     units[unit.id] = unit
     -- Vehicle occupants are governed by the car task and seat attachment, not
@@ -951,7 +1036,8 @@ local function createUnit(candidate, owner, observers, mode)
     setElementData(vehicle, "neon:ambientVehicleTraffic", true)
     setElementData(vehicle, "neon:ambientVehicleTrafficId", unit.id)
     trace("spawn", {id = unit.id, model = unit.model, vehicleClass = unit.vehicleClass, passengers = #passengers,
-        x = candidate.x, y = candidate.y, z = candidate.z})
+        x = candidate.x, y = candidate.y, z = candidate.z, rotation = candidate.rotation, cruiseSpeed = unit.cruiseSpeed,
+        drivingStyle = unit.drivingStyle, carGroup = candidate.carGroup})
     assign(unit, owner, "spawn")
     return unit
 end
@@ -1175,6 +1261,34 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
         end
         unit.ownerLastSeq = seq
         unit.ownerTaskSamples = unit.ownerTaskSamples + 1
+        local sample = {
+            x = finiteNumber(data.x, 10000),
+            y = finiteNumber(data.y, 10000),
+            rz = finiteNumber(data.rz, 3600),
+            vx = finiteNumber(data.vx, 3),
+            vy = finiteNumber(data.vy, 3),
+        }
+        local signal
+        unit.motionTelemetry, signal = VehicleTrafficTelemetry.updateMotion(unit.motionTelemetry, sample, getTickCount())
+        if signal then
+            trace(signal.kind == "reverse-sustained" and "motion-anomaly" or "motion-recovered", {
+                id = unit.id,
+                epoch = unit.epoch,
+                model = unit.model,
+                reason = signal.kind,
+                owner = getPlayerName(unit.owner),
+                x = sample.x,
+                y = sample.y,
+                heading = sample.rz,
+                speed = signal.motion.speed,
+                alignment = signal.motion.alignment,
+                signedForwardSpeed = signal.motion.signedForwardSpeed,
+                reverseDurationMs = signal.duration,
+                spawnRotation = unit.spawnRotation,
+                distance = unit.motionTelemetry.distance or 0,
+                samples = unit.motionTelemetry.samples or 0,
+            })
+        end
         return
     end
     if evidence == "observer-sample" and client ~= unit.owner and unit.state == "active" then
@@ -1579,6 +1693,8 @@ setTimer(function()
         setVehicleTrafficDemo(false)
     end
 end, 1000, 0)
+
+setTimer(emitProductionTelemetry, PRODUCTION_TELEMETRY_INTERVAL, 0)
 
 -- A file-backed queue keeps the integration harness entirely headless. The
 -- deployed test resource consumes one command atomically, while ordinary

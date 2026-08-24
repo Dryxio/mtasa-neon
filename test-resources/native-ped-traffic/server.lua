@@ -295,6 +295,20 @@ local stats = {
     coupleSpawns = 0,
     coupleRollbacks = 0,
 }
+stats.productionTelemetry = {
+    interval = 15000,
+    previous = {
+        requests = 0,
+        candidateMisses = 0,
+        rejected = 0,
+        spawned = 0,
+        handoffs = 0,
+        despawned = 0,
+        missReasons = {},
+        rejectionReasons = {},
+        populationSelections = {},
+    },
+}
 
 function coupleRuntime.roll()
     -- Distributed ownership cannot share GTA's process-global CRT state. The
@@ -4056,7 +4070,7 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
         log(("population-profile player=%s revision=%d target=%.1f effective=%.1f supported=%.1f civilian=%.1f gang=%.1f cops=%.1f rawCops=%.1f dealers=%.1f weights=%s zone=%s/%d time=%d weekend=%s noCops=%s"):format(
                 getPlayerName(client), validated.worldRevision, validated.target, validated.effectiveTarget, validated.supportedTarget, validated.civilianTarget,
                 validated.gangTarget, validated.effectiveCopTarget, validated.rawCopTarget, validated.dealerTarget, table.concat(validated.gangWeights, "/"),
-                validated.zoneLabel, validated.zoneType, validated.timeIndex, tostring(validated.weekend), tostring(validated.noCops)))
+                validated.zoneLabel, validated.zoneType, validated.timeIndex, tostring(validated.weekend), tostring(validated.noCops)), true)
         writePopulationTrace("population_profile", {
             player_id = getPopulationClientId(client),
             target = validated.target,
@@ -5113,6 +5127,127 @@ addEventHandler("onPlayerQuit", root, function()
         end
     end
 end)
+
+-- Keep this function in the resource environment because this long-lived Lua
+-- 5.1 chunk already consumes the 200-local compile-time budget. The state
+-- itself remains scoped under stats and is reset whenever the resource loads.
+function emitPedProductionTelemetry()
+    local now = getTickCount()
+    local allPlayers = getElementsByType("player")
+    local activeTraffic = getTrafficPedCount()
+    local physicalPedCount = #getElementsByType("ped")
+    local anyPendingRequest = next(pendingRequests) ~= nil
+    local anyVisibilityCheck = next(pendingVisibilityChecks) ~= nil
+    local playerSnapshots = {}
+    local readyCount = 0
+    local profileCount = 0
+
+    for _, player in ipairs(allPlayers) do
+        local eligible = isEligiblePlayer(player)
+        local worldReady = isPopulationWorldReady(player)
+        if eligible and worldReady then readyCount = readyCount + 1 end
+        local profile = populationProfiles[player]
+        if profile then profileCount = profileCount + 1 end
+        local profileAge = profile and now - profile.receivedAt or false
+        local revisionOk = profile and profile.worldRevision == populationWorld.revision or false
+        local profileFresh = revisionOk and profileAge <= 2500 or false
+        local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget = getNativeTargetsNearPlayer(player)
+        local stockLive, physicalLive, civilianLive, dealerLive, copLive, gangCounts = getPopulationCountsNearPlayer(player)
+        local gangLive = 0
+        for index = 1, 10 do gangLive = gangLive + gangCounts[index] end
+        local reason = PedTrafficTelemetry.classifyPlayer({
+            enabled = enabled,
+            eligible = eligible,
+            worldReady = worldReady,
+            profilePresent = profile ~= nil,
+            profileRevisionOk = revisionOk,
+            profileFresh = profileFresh,
+            globalLive = activeTraffic,
+            globalCap = config.globalCap,
+            pedPoolLive = physicalPedCount,
+            pedPoolCap = config.pedPoolSoftLimit,
+            live = stockLive,
+            target = totalTarget or 0,
+            pendingRequest = pendingRequests[player] ~= nil,
+            anyPendingRequest = anyPendingRequest,
+            anyVisibilityCheck = anyVisibilityCheck,
+        })
+        playerSnapshots[#playerSnapshots + 1] = {
+            id = getPopulationClientId(player),
+            reason = reason,
+            profileAgeMs = profileAge,
+            profileRevision = profile and profile.worldRevision or false,
+            zone = profile and profile.zoneLabel or false,
+            zoneType = profile and profile.zoneType or false,
+            targets = totalTarget and {
+                total = totalTarget,
+                civilian = civilianTarget,
+                dealer = dealerTarget,
+                cop = copTarget,
+                gang = gangTarget,
+            } or false,
+            live = {
+                stock = stockLive,
+                physical = physicalLive,
+                civilian = civilianLive,
+                dealer = dealerLive,
+                cop = copLive,
+                gang = gangLive,
+            },
+        }
+    end
+
+    local missReasonDelta
+    missReasonDelta, stats.productionTelemetry.previous.missReasons =
+        PedTrafficTelemetry.deltaMap(stats.missReasons, stats.productionTelemetry.previous.missReasons)
+    local rejectionReasonDelta
+    rejectionReasonDelta, stats.productionTelemetry.previous.rejectionReasons =
+        PedTrafficTelemetry.deltaMap(stats.rejectionReasons, stats.productionTelemetry.previous.rejectionReasons)
+    local selectionDelta
+    selectionDelta, stats.productionTelemetry.previous.populationSelections =
+        PedTrafficTelemetry.deltaMap(stats.populationSelections, stats.productionTelemetry.previous.populationSelections)
+    local groupCount = 0
+    for _, group in pairs(trafficGroups) do if not group.removing then groupCount = groupCount + 1 end end
+
+    local counters = {}
+    for _, key in ipairs({"requests", "candidateMisses", "rejected", "spawned", "handoffs", "despawned"}) do
+        counters[key] = stats[key] - stats.productionTelemetry.previous[key]
+        stats.productionTelemetry.previous[key] = stats[key]
+    end
+    counters.missReasons = missReasonDelta
+    counters.rejectionReasons = rejectionReasonDelta
+    counters.selections = selectionDelta
+
+    outputServerLog("[ped-traffic][production] " .. toJSON({
+        event = "population-snapshot",
+        version = 1,
+        tick = now,
+        enabled = enabled,
+        players = #allPlayers,
+        readyPlayers = readyCount,
+        profiles = profileCount,
+        worldRevision = populationWorld.revision,
+        active = activeTraffic,
+        groups = groupCount,
+        pendingRequests = (function()
+            local count = 0
+            for _ in pairs(pendingRequests) do count = count + 1 end
+            return count
+        end)(),
+        pendingVisibilityChecks = (function()
+            local count = 0
+            for _ in pairs(pendingVisibilityChecks) do count = count + 1 end
+            return count
+        end)(),
+        globalCap = config.globalCap,
+        totalPeds = physicalPedCount,
+        pedPoolSoftLimit = config.pedPoolSoftLimit,
+        playerDetails = playerSnapshots,
+        window = counters,
+    }, true))
+end
+
+setTimer(emitPedProductionTelemetry, stats.productionTelemetry.interval, 0)
 
 setTimer(function()
     local now = getTickCount()

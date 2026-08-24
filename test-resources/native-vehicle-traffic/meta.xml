@@ -1,5 +1,6 @@
 <meta>
-    <info author="Neon" name="Native vehicle traffic" type="script" version="2.2.0" />
+    <info author="Neon" name="Native vehicle traffic" type="script" version="2.3.0" />
+    <script src="telemetry.lua" type="server" />
     <script src="server.lua" type="server" />
     <script src="client.lua" type="client" cache="false" />
 </meta>

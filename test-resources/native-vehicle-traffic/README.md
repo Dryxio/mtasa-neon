@@ -93,3 +93,10 @@ Observer samples are monotonic and correlated to unique recent server poses.
 The authoritative trace is the server log's `[car-traffic]` JSON stream. Native
 placement is probabilistic, so individual `candidate-retry` entries are normal;
 only a terminal `PASS-*` or `FAIL` entry is a harness verdict.
+
+Production also emits `population-snapshot` every 15 seconds. It records the
+desired and live population, allocation and distance range for every spatial
+bubble, lifecycle and motion states, ped-pool pressure, and event/reason counts
+since the previous snapshot. `motion-anomaly` means owner samples remained
+aligned against the vehicle heading for at least two seconds; it is rate-limited
+per unit and followed by `motion-recovered` when forward travel resumes.

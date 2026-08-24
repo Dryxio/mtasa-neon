@@ -1,5 +1,6 @@
 <meta>
-    <info author="Neon" name="Synchronized native ped traffic V1" version="1.0.1" type="script" />
+    <info author="Neon" name="Synchronized native ped traffic V1" version="1.1.0" type="script" />
+    <script src="telemetry.lua" type="server" />
     <script src="population_catalog.lua" type="server" />
     <script src="population_world.lua" type="server" />
     <script src="server.lua" type="server" />

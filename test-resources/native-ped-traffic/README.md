@@ -597,6 +597,15 @@ cannot turn the baseline into the separate climb lifecycle.
 5. Run `/pedtraffic off` during a prepared or active climb and confirm that the
    temporary barrier and traffic ped are both removed.
 
+## Production telemetry
+
+The server log emits a `[ped-traffic][production]` population snapshot every
+15 seconds. It includes profile freshness and native targets per player, nearby
+live class counts, global and ped-pool pressure, serialized candidate/visibility
+work, and rejection/miss deltas. The per-player `reason` distinguishes world
+convergence, missing/stale profiles, target completion, capacity pressure and a
+ready or busy candidate lane. Profile changes are also logged immediately.
+
 ## Checkpoint evidence
 
 The V1 was built as `Release|Win32` for the affected client projects and
