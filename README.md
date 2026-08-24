@@ -63,7 +63,7 @@ A selection of systems that used to be locked inside the engine. Each clip is a 
 <p align="center">
   <a href="https://mtasa-neon-wiki.vercel.app/neon/vehicle-audio"><img src="docs/media/vehicle-audio-demo.jpg" alt="A custom-audio car firing backflames from both exhausts during a BUST race" width="360"></a><br>
   <strong><a href="https://mtasa-neon-wiki.vercel.app/neon/vehicle-audio">Custom vehicle audio and backfires</a></strong><br>
-  Convert a vehicle sound set—an Assetto Corsa engine pack, for example—assign it to a car, and Neon makes it follow the RPM, throttle and gears.<br>
+  Copy an existing Assetto Corsa or Soundize <code>.bank</code>, assign it to a car, and Neon makes it follow the RPM, throttle and gears automatically.<br>
   Other players hear configured cars too, and Lua can trigger a backfire pop with matching exhaust flames.<br>
   <a href="https://mtasa-neon-wiki.vercel.app/neon-media/vehicle-audio-showcase.mp4">Watch the in-game recording with sound</a>
 </p>
