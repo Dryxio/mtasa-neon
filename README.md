@@ -50,7 +50,7 @@ Neon also ships its own GTA:SA-inspired menu and server browser, with an optiona
 
 ## GTA systems, now scriptable
 
-Ten systems that used to be locked inside the engine. Each clip is a real in-game recording.
+A selection of systems that used to be locked inside the engine. Each clip is a real in-game recording.
 
 | | |
 | :--: | :--: |
@@ -59,6 +59,14 @@ Ten systems that used to be locked inside the engine. Each clip is a real in-gam
 | [![Managed fire following a car](docs/media/fire-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/fire)<br>**[Managed fire](https://mtasa-neon-wiki.vercel.app/neon/fire)**<br>Synchronized fires that keep their identity and follow a target | [![A retextured SA-MP interior](docs/media/samp-map-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/samp-maps)<br>**[SA-MP maps](https://mtasa-neon-wiki.vercel.app/neon/samp-maps)**<br>Load Pawn exports directly, retextured material slots included |
 | [![A Lua-controlled flock of birds](docs/media/bird-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/birds)<br>**[Scriptable birds](https://mtasa-neon-wiki.vercel.app/neon/birds)**<br>Steerable flocks with their own renderer, past GTA's six slots | [![A runway of GTA lamp posts running a colour wave](docs/media/2dfx-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/model-2dfx)<br>**[Model 2DFX effects](https://mtasa-neon-wiki.vercel.app/neon/model-2dfx)**<br>Drive the lights baked into GTA models, no custom assets |
 | [![Watch runtime destruction in GTA:SA](docs/media/break-demo.png)](https://youtu.be/RCc2HiIRbT4)<br>**[Object fracture](https://mtasa-neon-wiki.vercel.app/neon/break-effects)**<br>Make any object breakable at runtime, no `.dff` editing | [![Basketballs bouncing and rolling under GTA physics](docs/media/object-physics-demo.png)](https://mtasa-neon-wiki.vercel.app/neon/object-physics)<br>**[Object physics](https://mtasa-neon-wiki.vercel.app/neon/object-physics)**<br>Give any object GTA's real rigid-body simulation, synchronized |
+
+<p align="center">
+  <a href="https://mtasa-neon-wiki.vercel.app/neon/vehicle-audio"><img src="docs/media/vehicle-audio-demo.jpg" alt="A custom-audio car firing backflames from both exhausts during a BUST race" width="360"></a><br>
+  <strong><a href="https://mtasa-neon-wiki.vercel.app/neon/vehicle-audio">Custom vehicle audio and backfires</a></strong><br>
+  Convert a vehicle sound set—an Assetto Corsa engine pack, for example—assign it to a car, and Neon makes it follow the RPM, throttle and gears.<br>
+  Other players hear configured cars too, and Lua can trigger a backfire pop with matching exhaust flames.<br>
+  <a href="https://mtasa-neon-wiki.vercel.app/neon-media/vehicle-audio-showcase.mp4">Watch the in-game recording with sound</a>
+</p>
 
 ```lua
 -- Build a wall's collision from a Lua table, then change it live
@@ -99,6 +107,7 @@ Server owners use the separate server package. Both downloads are linked at the 
 | Breakable objects | Only models shipping the breakable plugin | Any streamed object, fractured from its own geometry |
 | Object physics | Static unless scripted frame by frame | Opt-in native rigid-body simulation, with velocities synchronized through syncer changes |
 | Ropes | Only the legacy `createSWATRope` call | All eight native rope types as synchronized elements, with cargo attachment and slot leasing |
+| Vehicle audio | GTA's sound assigned to each model | Import prepared engine banks from other car projects, assign them to models, and let Neon follow RPM, throttle and gears, with scriptable backfire sounds and exhaust flames |
 | Distant lights and draw distance | Not integrated | Built in, 300 to 5,000 units, off by default |
 
 That is the short list. The [full comparison table](https://mtasa-neon-wiki.vercel.app/neon/features) covers every pool, boundary and subsystem.
@@ -119,6 +128,7 @@ setModel2DFXProperty(1226, 0, "color", c)      -- recolour every lamp post of a 
 createObjectBreakEffect(obj, { force = 4 })    -- fracture any object, no breakable DFF
 setObjectDynamicPhysics(ball, true)            -- real GTA physics, synchronized
 createRope(x, y, z, { type = "wreckingBall" }) -- GTA's own cranes and winches
+enginePlayVehicleAudioBackfire(car, 2)           -- a strong pop and flames from the exhaust
 ```
 
 The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the complete reference, with signatures, lifecycle rules, source commits and test evidence for every entry.
