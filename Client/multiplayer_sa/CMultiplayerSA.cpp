@@ -4646,6 +4646,27 @@ static bool IsNativeAmbientGroupLocomotionIsPlayerCallSite(DWORD returnAddress)
     return returnAddress == RETURN_CTaskSimpleGoToPoint_ProcessPed_IsPlayer;
 }
 
+static bool IsNativeFollowNodeRouteBuildingCollisionOwner(CPedSAInterface* pedInterface)
+{
+    CPed* pPed = GetPedFromInterface(pedInterface);
+    if (!pPed)
+        return false;
+
+    CPedIntelligence* pIntelligence = pPed->GetPedIntelligence();
+    CTaskManager*     pTaskManager = pIntelligence ? pIntelligence->GetTaskManager() : nullptr;
+    CTask*            pTask = pTaskManager ? pTaskManager->GetSimplestActiveTask() : nullptr;
+
+    // Script peds use CPlayerPed, so GTA otherwise rejects their building
+    // collision event before FollowNodeRoute can invoke its stock walk-around
+    // recovery. Keep the compatibility lane limited to the executing route.
+    for (; pTask; pTask = pTask->GetParent())
+    {
+        if (pTask->GetTaskType() == TASK_COMPLEX_FOLLOW_NODE_ROUTE)
+            return true;
+    }
+    return false;
+}
+
 void __fastcall HOOK_CTaskComplexGangLeader_ScanForStuff(void* task, void*, CPedSAInterface* ped)
 {
     // The stock scan can recruit any nearby same-type PED_GAME ped and can
@@ -4664,6 +4685,8 @@ bool IsPlayer()
     // MTA's CPlayerPed wrapper. Every other task retains the real runtime
     // identity so movement, vehicle entry and player input remain untouched.
     if (dwIsPlayerReturnAddress == RETURN_CEventVehicleOnFire_AffectsPed_IsPlayer && HasNativeMissionEventProfile(pIsPlayerPed))
+        return false;
+    if (dwIsPlayerReturnAddress == RETURN_CEventBuildingCollision_AffectsPed_IsPlayer && IsNativeFollowNodeRouteBuildingCollisionOwner(pIsPlayerPed))
         return false;
     if (IsNativeAmbientBehaviorIsPlayerCallSite(dwIsPlayerReturnAddress) && IsNativeAmbientWanderEventProfileActive(pIsPlayerPed))
         return false;
