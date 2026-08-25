@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import html
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from .schema import SchemaStore, schema_major
 MAX_XML_BYTES = 4 * 1024 * 1024
 LUA_CALL_RE = re.compile(r"(?<![.:\w])([A-Za-z_]\w*)\s*\(")
 LUA_FUNCTION_RE = re.compile(r"(?:\blocal\s+)?\bfunction\s+([A-Za-z_]\w*)\s*\(|\blocal\s+([A-Za-z_]\w*)\s*=\s*function\b")
+LUA_EVENT_HANDLER_RE = re.compile(r'''(?<![.:\w])addEventHandler\s*\(\s*(["'])((?:\\.|(?!\1).)*)\1''')
 LUA_BUILTINS = {
     "assert", "collectgarbage", "dofile", "error", "getfenv", "getmetatable", "ipairs", "load", "loadfile", "loadstring",
     "module", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "require", "select", "setfenv",
@@ -173,10 +175,78 @@ def strip_lua_noncode(source: str) -> str:
     return "".join(result)
 
 
+def strip_lua_comments(source: str) -> str:
+    """Remove comments while retaining quoted literals and source line offsets."""
+    result = list(source)
+    index = 0
+    quote = ""
+    state = "code"
+    long_close = ""
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if current in ('"', "'"):
+                state, quote = "string", current
+            elif current == "-" and following == "-":
+                cursor = index + 2
+                equals = 0
+                if cursor < len(source) and source[cursor] == "[":
+                    cursor += 1
+                    while cursor < len(source) and source[cursor] == "=":
+                        equals += 1
+                        cursor += 1
+                    if cursor < len(source) and source[cursor] == "[":
+                        long_close = "]" + ("=" * equals) + "]"
+                        state = "long-comment"
+                    else:
+                        state = "line-comment"
+                else:
+                    state = "line-comment"
+                result[index] = result[index + 1] = " "
+                index += 1
+        elif state == "string":
+            if current == "\\":
+                index += 1
+            elif current == quote:
+                state = "code"
+        elif state == "line-comment":
+            if current == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+        elif state == "long-comment":
+            if source.startswith(long_close, index):
+                for offset in range(len(long_close)):
+                    result[index + offset] = " "
+                index += len(long_close) - 1
+                state = "code"
+            elif current != "\n":
+                result[index] = " "
+        index += 1
+    return "".join(result)
+
+
 def _available_by_side(catalogue: dict, profile: str) -> dict[str, set[str]]:
     result = {"client": set(), "server": set()}
     for symbol in catalogue.get("symbols", []):
         if symbol.get("kind") != "function" or symbol.get("state") in ("unavailable", "documented-only"):
+            continue
+        sides = symbol.get("inheritedSides", []) if profile == "mta-upstream" else symbol.get("sides", [])
+        for side in sides:
+            if side in result:
+                result[side].add(symbol["name"])
+    if profile == "neon-server":
+        result["client"].clear()
+    elif profile == "neon-client":
+        result["server"].clear()
+    return result
+
+
+def _available_events_by_side(catalogue: dict, profile: str) -> dict[str, set[str]]:
+    result = {"client": set(), "server": set()}
+    for symbol in catalogue.get("symbols", []):
+        if symbol.get("kind") != "event" or symbol.get("state") in ("unavailable", "documented-only"):
             continue
         sides = symbol.get("inheritedSides", []) if profile == "mta-upstream" else symbol.get("sides", [])
         for side in sides:
@@ -200,6 +270,7 @@ def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile
         state.add("FILE_READ_ERROR", str(exc), path=display_path, side=side)
         return
     code = strip_lua_noncode(source)
+    comment_free = strip_lua_comments(source)
     declared = {name for match in LUA_FUNCTION_RE.finditer(code) for name in match.groups() if name}
     available = _available_by_side(catalogue, profile)
     all_known = available["client"] | available["server"]
@@ -224,6 +295,25 @@ def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile
                 f"{name} is not present in the selected API catalogue",
                 path=display_path,
                 line=_line(code, match.start(1)),
+                side=side,
+                symbol=name,
+            )
+    available_events = _available_events_by_side(catalogue, profile)
+    all_known_events = available_events["client"] | available_events["server"]
+    for match in LUA_EVENT_HANDLER_RE.finditer(comment_free):
+        try:
+            name = ast.literal_eval(match.group(1) + match.group(2) + match.group(1))
+        except (SyntaxError, ValueError):
+            continue
+        if not isinstance(name, str):
+            continue
+        missing_sides = [required for required in required_sides if name not in available_events[required]]
+        if name in all_known_events and missing_sides:
+            state.add(
+                "EVENT_WRONG_SIDE",
+                f"{name} is unavailable on {', '.join(missing_sides)}",
+                path=display_path,
+                line=_line(comment_free, match.start(2)),
                 side=side,
                 symbol=name,
             )

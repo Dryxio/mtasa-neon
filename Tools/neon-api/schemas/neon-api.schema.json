@@ -30,13 +30,15 @@
       "properties": {
         "documented": {"minimum": 0, "type": "integer"},
         "documentedOnly": {"minimum": 0, "type": "integer"},
+        "classes": {"minimum": 0, "type": "integer"},
         "elements": {"minimum": 0, "type": "integer"},
+        "enums": {"minimum": 0, "type": "integer"},
         "events": {"minimum": 0, "type": "integer"},
         "functions": {"minimum": 0, "type": "integer"},
         "runtimeOnly": {"minimum": 0, "type": "integer"},
         "types": {"minimum": 0, "type": "integer"}
       },
-      "required": ["functions", "events", "elements", "types", "documented", "documentedOnly", "runtimeOnly"],
+      "required": ["functions", "events", "elements", "types", "classes", "enums", "documented", "documentedOnly", "runtimeOnly"],
       "type": "object"
     },
     "symbols": {"items": {"$ref": "#/$defs/symbol"}, "type": "array"}
@@ -85,6 +87,64 @@
         "signature": {"minLength": 1, "type": "string"}
       },
       "required": ["name", "parameters"],
+      "type": "object"
+    },
+    "runtimeOopMember": {
+      "additionalProperties": false,
+      "properties": {
+        "bindings": {"items": {"$ref": "#/$defs/runtimeOopBinding"}, "type": "array"},
+        "getters": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "globalFunctions": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "inheritedGetters": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "inheritedGlobalFunctions": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "inheritedSetters": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "inheritedBindings": {"items": {"$ref": "#/$defs/runtimeOopBinding"}, "type": "array"},
+        "inheritedSides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "name": {"minLength": 1, "type": "string"},
+        "setters": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "sides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "sources": {"items": {"$ref": "#/$defs/sourceLocation"}, "type": "array"}
+      },
+      "required": ["name", "sides", "inheritedSides", "sources", "bindings", "inheritedBindings"],
+      "type": "object"
+    },
+    "runtimeOopBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "getter": {"minLength": 1, "type": "string"},
+        "globalFunction": {"minLength": 1, "type": "string"},
+        "nativeFunction": {"minLength": 1, "type": "string"},
+        "nativeGetter": {"minLength": 1, "type": "string"},
+        "nativeSetter": {"minLength": 1, "type": "string"},
+        "setter": {"minLength": 1, "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"},
+        "source": {"$ref": "#/$defs/sourceLocation"}
+      },
+      "required": ["side", "source"],
+      "type": "object"
+    },
+    "runtimeDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "cppType": {"minLength": 1, "type": "string"},
+        "parent": {"minLength": 1, "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"},
+        "source": {"$ref": "#/$defs/sourceLocation"},
+        "static": {"type": "boolean"},
+        "values": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}
+      },
+      "required": ["side", "source"],
+      "type": "object"
+    },
+    "runtimeEventDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "allowRemoteTrigger": {"type": "boolean"},
+        "arguments": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"},
+        "source": {"$ref": "#/$defs/sourceLocation"}
+      },
+      "required": ["side", "arguments", "allowRemoteTrigger", "source"],
       "type": "object"
     },
     "parameter": {
@@ -151,32 +211,53 @@
     "symbol": {
       "additionalProperties": false,
       "properties": {
+        "allowRemoteTrigger": {"type": "boolean"},
         "canceling": {"minLength": 1, "type": "string"},
         "category": {"minLength": 1, "type": "string"},
+        "cppTypes": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
         "contracts": {"items": {"$ref": "#/$defs/contract"}, "type": "array"},
         "description": {"minLength": 1, "type": "string"},
+        "definitions": {"items": {"$ref": "#/$defs/runtimeDefinition"}, "type": "array"},
         "evidence": {
           "items": {"enum": ["documented", "source-inspected", "static-checked", "built", "server-checked", "client-checked", "in-game-checked", "multiplayer-checked", "visual-checked", "native-trace-checked", "performance-checked"], "type": "string"},
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
+        "eventDefinitions": {"items": {"$ref": "#/$defs/runtimeEventDefinition"}, "type": "array"},
         "id": {"format": "stable-id", "type": "string"},
         "inheritedSides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
-        "kind": {"enum": ["function", "event", "element", "type"], "type": "string"},
+        "inheritedParents": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "inheritedDefinitions": {"items": {"$ref": "#/$defs/runtimeDefinition"}, "type": "array"},
+        "inheritedEventDefinitions": {"items": {"$ref": "#/$defs/runtimeEventDefinition"}, "type": "array"},
+        "inheritedStatic": {"type": "boolean"},
+        "inheritedValues": {"items": {"type": "string"}, "type": "array", "uniqueItems": true},
+        "kind": {"enum": ["function", "event", "element", "type", "class", "enum"], "type": "string"},
+        "methods": {"items": {"$ref": "#/$defs/runtimeOopMember"}, "type": "array"},
         "name": {"minLength": 1, "type": "string"},
         "oopOnlyMethods": {"items": {"$ref": "#/$defs/oopMethod"}, "type": "array"},
         "origin": {"enum": ["mta", "neon"], "type": "string"},
         "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
+        "parents": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
         "profiles": {"items": {"enum": ["mta-upstream", "neon-client", "neon-server", "neon-pair", "neon-multiclient"], "type": "string"}, "type": "array", "uniqueItems": true},
         "provenance": {"items": {"$ref": "#/$defs/provenance"}, "minItems": 1, "type": "array"},
+        "properties": {"items": {"$ref": "#/$defs/runtimeOopMember"}, "type": "array"},
+        "registrationArguments": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+        "registrationDifferences": {
+          "items": {"enum": ["parameter-count", "parameter-names"], "type": "string"},
+          "type": "array",
+          "uniqueItems": true
+        },
         "redirect": {"minLength": 1, "type": "string"},
         "restricted": {"type": "boolean"},
         "returns": {"items": {"$ref": "#/$defs/return"}, "type": "array"},
+        "runtimeType": {"minLength": 1, "type": "string"},
         "sides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
         "sourceElement": {"$ref": "#/$defs/sourceElement"},
         "sources": {"items": {"$ref": "#/$defs/sourceLocation"}, "type": "array"},
         "state": {"enum": ["verified", "documented-only", "runtime-only", "opaque", "conflict", "unavailable"], "type": "string"},
+        "static": {"type": "boolean"},
+        "values": {"items": {"type": "string"}, "type": "array", "uniqueItems": true},
         "version": {"$ref": "#/$defs/version"}
       },
       "required": ["id", "kind", "name", "origin", "state", "sides", "inheritedSides", "profiles", "restricted", "parameters", "returns", "evidence", "sources", "provenance"],

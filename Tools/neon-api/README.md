@@ -13,6 +13,8 @@ Run commands from the repository root:
 ./neon check --json
 ./neon api search "draw text" --side client --kind function --json
 ./neon api get createVehicle --profile neon-pair --json
+./neon api get Ped --kind class --profile neon-pair --json
+./neon api get element-type --kind enum --side server --json
 ./neon api stats --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
@@ -25,7 +27,8 @@ Python 3.10 or newer is required; no third-party Python package is needed.
 
 `neon check` validates `neon.project.json`, its selected catalogue, engine
 compatibility, declared API requirements, resource directories, `meta.xml`
-scripts, dependencies, and known wrong-side Lua calls. Set `unknownApis` to
+scripts, dependencies, known wrong-side Lua calls, and literal built-in events
+used on the wrong side. Custom resource events remain valid. Set `unknownApis` to
 `error` only for closed projects where every global callable is expected to be
 catalogued; the default avoids misclassifying resource-local functions as
 missing MTA APIs. When `--project` is omitted, the command uses
@@ -44,6 +47,11 @@ The checked-in catalogue is generated from Git objects, not uncommitted files:
   --wiki-revision 39e80f8108fef8de0dfdf61876daf702d583243e
 ```
 
+Engine provenance records the newest commit at the selected ref that actually
+changed an inventoried C++ path. Tooling-only commits therefore do not create a
+false catalogue revision drift; the archived source content still comes from
+the exact requested ref and remains protected by its registration digest.
+
 `snapshots/api-semantics.json` contains normalized data from the pinned official
 MTA wiki and the pinned Neon wiki. Functions with matching documentation and
 registrations are `verified`; documentation without a source registration is
@@ -51,6 +59,14 @@ registrations are `verified`; documentation without a source registration is
 `runtime-only`; explicit side contradictions remain `conflict`. Evidence and
 provenance are kept on every entry, so these labels do not imply an in-game
 test. Unknown signatures remain `any` in LuaLS rather than being invented.
+
+The same pass inventories literal engine event registrations, OOP classes,
+methods and properties (including exact client/server bindings), enum string
+maps, and the server element-type map. Current Neon definitions and pinned
+upstream definitions stay separate, so additions, removals, side changes,
+parent changes, and binding changes remain machine-visible.
+These additive entity kinds use catalogue schema `1.1.0` and catalogue data
+version `1.2.0`; existing project and result contracts remain on schema `1.0.0`.
 
 Refreshing the snapshot is an explicit maintainer operation. It requires Node
 22 or newer and local checkouts of both documentation repositories:
@@ -77,9 +93,10 @@ globals and with a timeout, normalizes all entities, and records a SHA-256 diges
 are only needed to refresh the snapshot; `check`, API discovery, catalogue
 verification, LuaLS generation, and the Python harness remain dependency-free.
 
-`catalogue verify` compares active client/server entries against source
-registrations and confirms that both wiki revisions and the semantic digest
-match the checked-in snapshot. With `--source-ref HEAD` it is reproducible and
+`catalogue verify` compares active client/server functions, events, OOP
+bindings, classes, properties, and enums against source registrations and
+confirms that both wiki revisions and the semantic digest match the checked-in
+snapshot. With `--source-ref HEAD` it is reproducible and
 ignores unrelated working-tree changes; without that option it deliberately
 audits the working tree.
 
@@ -94,8 +111,9 @@ audits the working tree.
 - `schemas/neon-check-result.schema.json`: stable `check --json` result.
 - `generated/`: deterministic LuaLS/LuaCATS libraries and hashes.
 
-The catalogue includes functions, events, elements, primitive types, side
-contracts, parameters, return values, defaults, OOP metadata, versions,
+The catalogue includes functions, registered events, elements, primitive
+types, runtime OOP classes, enum value maps, side contracts, parameters,
+return values, defaults, OOP metadata, versions,
 descriptions, evidence, and source/license provenance. `api search` supports
 tokenized discovery and deterministic filters; `api get` returns the complete
 machine-readable entry.

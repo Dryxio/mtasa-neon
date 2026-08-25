@@ -21,9 +21,16 @@ from neonlib.catalogue import (  # noqa: E402
     SourceSnapshot,
     build_catalogue,
     catalogue_divergence,
+    catalogue_event_divergence,
+    catalogue_runtime_inventory_issues,
     catalogue_semantic_issues,
     catalogue_source_matches,
+    extract_enum_registrations,
+    extract_event_registrations,
+    extract_oop_registrations,
     extract_registrations,
+    filesystem_snapshot,
+    git_snapshot,
     semantic_snapshot_issues,
 )
 from neonlib.jsonio import canonical_json, load_json, write_json  # noqa: E402
@@ -60,6 +67,8 @@ class ContractSchemaTests(unittest.TestCase):
 
     def test_repository_catalogue_is_global_valid_and_semantically_stable(self) -> None:
         self.assertEqual(SCHEMAS.validate("neon-api", self.catalogue), [])
+        self.assertEqual(self.catalogue["schemaVersion"], "1.1.0")
+        self.assertEqual(self.catalogue["catalogueVersion"], "1.2.0")
         self.assertEqual(catalogue_semantic_issues(self.catalogue), [])
         self.assertGreater(len(self.catalogue["symbols"]), 1500)
         origins = {symbol["origin"] for symbol in self.catalogue["symbols"]}
@@ -71,9 +80,11 @@ class ContractSchemaTests(unittest.TestCase):
         self.assertTrue(self.catalogue["sources"]["upstreamWiki"]["imported"])
         self.assertTrue(self.catalogue["sources"]["neonWiki"]["imported"])
         self.assertEqual(self.catalogue["statistics"]["functions"], 1842)
-        self.assertEqual(self.catalogue["statistics"]["events"], 220)
+        self.assertEqual(self.catalogue["statistics"]["events"], 241)
         self.assertEqual(self.catalogue["statistics"]["elements"], 71)
         self.assertEqual(self.catalogue["statistics"]["types"], 9)
+        self.assertEqual(self.catalogue["statistics"]["classes"], 75)
+        self.assertEqual(self.catalogue["statistics"]["enums"], 97)
 
     def test_semantic_snapshot_is_strict_pinned_and_content_addressed(self) -> None:
         snapshot = load_json(SEMANTIC_SNAPSHOT_PATH)
@@ -111,7 +122,23 @@ class ContractSchemaTests(unittest.TestCase):
         self.assertEqual(rope["contracts"][0]["testResource"], "test-resources/rope-test")
         event = by_key[("event", "onPlayerJoin")]
         self.assertEqual(event["parameters"], [])
-        self.assertIn("documented", event["evidence"])
+        self.assertEqual(event["state"], "verified")
+        self.assertEqual(event["sides"], ["server"])
+        self.assertEqual(event["evidence"], ["documented", "source-inspected"])
+        click = by_key[("event", "onClientClick")]
+        self.assertEqual(click["state"], "verified")
+        self.assertEqual(click["registrationDifferences"], ["parameter-names"])
+        damage = by_key[("event", "onClientPlayerDamage")]
+        self.assertEqual(damage["state"], "conflict")
+        self.assertEqual(damage["registrationDifferences"], ["parameter-count"])
+        ped = by_key[("class", "Ped")]
+        kill = next(item for item in ped["methods"] if item["name"] == "kill")
+        self.assertEqual(kill["globalFunctions"], ["killPed"])
+        armor = next(item for item in ped["properties"] if item["name"] == "armor")
+        self.assertEqual(armor["setters"], ["setPedArmor"])
+        element_type = by_key[("enum", "element-type")]
+        self.assertIn("vehicle", element_type["values"])
+        self.assertIn("player", element_type["values"])
         vector = by_key[("element", "Vector3")]
         self.assertTrue(vector["oopOnlyMethods"])
         licenses = {item["license"] for symbol in (vehicle, rope, event) for item in symbol["provenance"]}
@@ -207,6 +234,15 @@ class ContractSchemaTests(unittest.TestCase):
         self.assertIn("catalogue statistics do not match symbols", issues)
         self.assertTrue(any("duplicate provenance" in issue for issue in issues))
 
+    def test_catalogue_semantics_rejects_incomplete_and_duplicate_runtime_inventory(self) -> None:
+        corrupted = copy.deepcopy(self.catalogue)
+        ped = next(symbol for symbol in corrupted["symbols"] if symbol["kind"] == "class" and symbol["name"] == "Ped")
+        del ped["definitions"]
+        ped["methods"][0]["bindings"].append(copy.deepcopy(ped["methods"][0]["bindings"][0]))
+        issues = catalogue_semantic_issues(corrupted)
+        self.assertIn("symbol Ped kind class is missing definitions", issues)
+        self.assertTrue(any("duplicate bindings" in issue for issue in issues))
+
     def test_check_result_rejects_unknown_severity(self) -> None:
         result = {
             "schemaVersion": "1.0.0",
@@ -219,6 +255,27 @@ class ContractSchemaTests(unittest.TestCase):
 
 
 class RegistrationExtractionTests(unittest.TestCase):
+    def test_git_snapshot_revision_ignores_tooling_only_commits(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="neon-source-revision-") as temporary:
+            repository = Path(temporary)
+            source = repository / "Client/mods/deathmatch/logic/luadefs/Test.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text('AddFunction("alpha", Alpha);\n', encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            subprocess.run(["git", "config", "user.name", "Neon Harness"], cwd=repository, check=True)
+            subprocess.run(["git", "config", "user.email", "harness@example.invalid"], cwd=repository, check=True)
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "source"], cwd=repository, check=True)
+            source_revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True, stdout=subprocess.PIPE, check=True
+            ).stdout.strip()
+            (repository / "README.md").write_text("tooling only\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repository, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "tooling"], cwd=repository, check=True)
+            snapshot = git_snapshot(repository, "HEAD")
+            self.assertEqual(snapshot.revision, source_revision)
+            self.assertIn(source.relative_to(repository).as_posix(), snapshot.files)
+
     def test_extracts_supported_registration_forms_and_ignores_comments(self) -> None:
         source = r'''
             constexpr static const std::pair<const char*, lua_CFunction> functions[]{
@@ -237,6 +294,59 @@ class RegistrationExtractionTests(unittest.TestCase):
         self.assertTrue(next(item for item in registrations if item.name == "charlie").restricted)
         self.assertTrue(all(item.side == "shared" for item in registrations))
 
+    def test_extracts_multiline_events_and_remote_policy_without_comments(self) -> None:
+        source = r'''
+            m_Events.AddEvent("onAlpha", "player, reason", nullptr, false);
+            m_Events.AddEvent(
+                "onBravo", "value", nullptr, true
+            );
+            // m_Events.AddEvent("onHidden", "", nullptr, true);
+        '''
+        snapshot = SourceSnapshot("a" * 40, {"Client/mods/deathmatch/logic/CClientGame.cpp": source})
+        events = extract_event_registrations(snapshot)
+        self.assertEqual([item.name for item in events], ["onAlpha", "onBravo"])
+        self.assertEqual(events[0].arguments, ("player", "reason"))
+        self.assertFalse(events[0].allow_remote_trigger)
+        self.assertTrue(events[1].allow_remote_trigger)
+
+    def test_extracts_oop_classes_methods_properties_and_native_wrappers(self) -> None:
+        source = r'''
+            lua_newclass(luaVM);
+            lua_classfunction(luaVM, "create", "createWidget");
+            lua_classfunction(luaVM, "native", ArgumentParser<CreateNative>);
+            lua_classvariable(luaVM, "enabled", "setWidgetEnabled", "isWidgetEnabled");
+            lua_classvariable(luaVM, "nativeValue", SetNative, GetNative);
+            lua_registerclass(luaVM, "Widget", "Element");
+            // lua_registerclass(luaVM, "Hidden");
+        '''
+        snapshot = SourceSnapshot("a" * 40, {"Client/mods/deathmatch/logic/luadefs/Test.cpp": source})
+        classes, methods, properties = extract_oop_registrations(snapshot)
+        self.assertEqual([(item.name, item.parent) for item in classes], [("Widget", "Element")])
+        self.assertEqual([(item.name, item.global_function) for item in methods], [("create", "createWidget"), ("native", "")])
+        self.assertEqual(next(item for item in methods if item.name == "native").native_function, "ArgumentParser<CreateNative>")
+        self.assertEqual([(item.name, item.setter, item.getter) for item in properties], [
+            ("enabled", "setWidgetEnabled", "isWidgetEnabled"), ("nativeValue", "", ""),
+        ])
+        native_property = next(item for item in properties if item.name == "nativeValue")
+        self.assertEqual((native_property.native_setter, native_property.native_getter), ("SetNative", "GetNative"))
+
+    def test_extracts_plain_class_and_stringified_enums_deterministically(self) -> None:
+        source = r'''
+            IMPLEMENT_ENUM_BEGIN(eMode)
+            ADD_ENUM(MODE_A, "alpha")
+            ADD_ENUM1(MODE_B)
+            // ADD_ENUM(MODE_C, "hidden")
+            IMPLEMENT_ENUM_END_DEFAULTS("mode", MODE_A, "alpha")
+            IMPLEMENT_ENUM_CLASS_BEGIN(StrongMode)
+            ADD_ENUM(StrongMode::A, "alpha")
+            IMPLEMENT_ENUM_CLASS_END("strong-mode")
+        '''
+        snapshot = SourceSnapshot("a" * 40, {"Shared/mods/deathmatch/logic/Enums.cpp": source})
+        enums = extract_enum_registrations(snapshot)
+        self.assertEqual([(item.name, item.values) for item in enums], [
+            ("mode", ("alpha", "MODE_B")), ("strong-mode", ("alpha",)),
+        ])
+
     def test_divergence_reports_both_directions(self) -> None:
         upstream = SourceSnapshot("a" * 40, {"Server/mods/deathmatch/logic/luadefs/Test.cpp": 'CLuaCFunctions::AddFunction("alpha", Alpha);'})
         neon = SourceSnapshot("b" * 40, {"Server/mods/deathmatch/logic/luadefs/Test.cpp": 'CLuaCFunctions::AddFunction("alpha", Alpha);'})
@@ -245,6 +355,50 @@ class RegistrationExtractionTests(unittest.TestCase):
         uncatalogued, missing = catalogue_divergence(catalogue, changed)
         self.assertEqual(uncatalogued, [("bravo", "server")])
         self.assertEqual(missing, [("alpha", "server")])
+
+    def test_event_divergence_reports_both_directions(self) -> None:
+        path = "Server/mods/deathmatch/logic/CGame.cpp"
+        upstream = SourceSnapshot("a" * 40, {path: 'm_Events.AddEvent("onAlpha", "", nullptr, false);'})
+        catalogue = build_catalogue(upstream, upstream, engine_version="1.7.0", wiki_revision="c" * 40)
+        changed = SourceSnapshot("d" * 40, {path: 'm_Events.AddEvent("onBravo", "", nullptr, false);'})
+        uncatalogued, missing = catalogue_event_divergence(catalogue, changed)
+        self.assertEqual(uncatalogued, [("onBravo", "server")])
+        self.assertEqual(missing, [("onAlpha", "server")])
+
+    def test_repository_runtime_inventory_is_complete_and_locked(self) -> None:
+        snapshot = filesystem_snapshot(REPOSITORY_ROOT)
+        events = extract_event_registrations(snapshot)
+        classes, methods, properties = extract_oop_registrations(snapshot)
+        enums = extract_enum_registrations(snapshot)
+        self.assertEqual((len(events), len(classes), len(methods), len(properties), len(enums)), (240, 90, 1541, 516, 111))
+        catalogue = load_json(CATALOGUE_PATH)
+        self.assertEqual(catalogue_runtime_inventory_issues(catalogue, snapshot), [])
+
+    def test_runtime_inventory_detects_missing_oop_binding(self) -> None:
+        snapshot = SourceSnapshot("a" * 40, {
+            "Client/mods/deathmatch/logic/luadefs/Test.cpp": '''
+                lua_newclass(luaVM);
+                lua_classfunction(luaVM, "create", "createWidget");
+                lua_registerclass(luaVM, "Widget", "Element");
+            ''',
+        })
+        catalogue = build_catalogue(snapshot, snapshot, engine_version="1.7.0", wiki_revision="c" * 40)
+        widget = next(symbol for symbol in catalogue["symbols"] if symbol["kind"] == "class")
+        widget["methods"][0]["bindings"] = []
+        self.assertEqual(catalogue_runtime_inventory_issues(catalogue, snapshot), [
+            "1 registered method records are absent from the catalogue",
+        ])
+
+    def test_runtime_inventory_detects_changed_event_signature(self) -> None:
+        path = "Server/mods/deathmatch/logic/CGame.cpp"
+        snapshot = SourceSnapshot("a" * 40, {path: 'm_Events.AddEvent("onAlpha", "player, reason", nullptr, false);'})
+        catalogue = build_catalogue(snapshot, snapshot, engine_version="1.7.0", wiki_revision="c" * 40)
+        event = next(symbol for symbol in catalogue["symbols"] if symbol["kind"] == "event")
+        event["eventDefinitions"][0]["arguments"] = ["player"]
+        self.assertEqual(catalogue_runtime_inventory_issues(catalogue, snapshot), [
+            "1 registered event records are absent from the catalogue",
+            "1 catalogued event records have no source registration",
+        ])
 
     def test_catalogue_build_is_deterministic_for_identical_snapshots(self) -> None:
         snapshot = SourceSnapshot("a" * 40, {"Client/mods/deathmatch/logic/luadefs/Test.cpp": 'CLuaCFunctions::AddFunction("alpha", Alpha);'})
@@ -314,6 +468,24 @@ class ApiDiscoveryTests(unittest.TestCase):
         symbol = json.loads(completed.stdout)["symbols"][0]
         self.assertEqual(symbol["contracts"][0]["signature"], "rope|false createRope(float x, float y, float z [, table options])")
         self.assertEqual(symbol["contracts"][0]["parameters"][0]["type"], "float")
+
+    def test_get_exposes_runtime_oop_and_enum_contracts(self) -> None:
+        completed = self.run_cli("api", "get", "Ped", "--kind", "class", "--profile", "neon-pair")
+        self.assertEqual(completed.returncode, 0)
+        ped = json.loads(completed.stdout)["symbols"][0]
+        self.assertEqual(ped["parents"], ["Element"])
+        self.assertEqual(next(item for item in ped["methods"] if item["name"] == "kill")["globalFunctions"], ["killPed"])
+        completed = self.run_cli("api", "get", "element-type", "--kind", "enum", "--side", "server")
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("vehicle", json.loads(completed.stdout)["symbols"][0]["values"])
+
+    def test_search_indexes_oop_bindings_and_enum_values(self) -> None:
+        completed = self.run_cli("api", "search", "killPed", "--kind", "class", "--limit", "5")
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("Ped", [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"]])
+        completed = self.run_cli("api", "search", "db-connection", "--kind", "enum", "--limit", "5")
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(json.loads(completed.stdout)["symbols"][0]["name"], "element-type")
 
     def test_get_unknown_entity_has_stable_failure(self) -> None:
         completed = self.run_cli("api", "get", "definitelyMissingEntity")
@@ -426,6 +598,22 @@ class ProjectHarnessTests(unittest.TestCase):
         self.assertIn("API_WRONG_SIDE", diagnostic_codes(result))
         diagnostic = next(item for item in result["diagnostics"] if item["code"] == "API_WRONG_SIDE")
         self.assertEqual((diagnostic["side"], diagnostic["symbol"], diagnostic["line"]), ("server", "dxDrawText", 1))
+
+    def test_known_event_on_wrong_side_is_rejected_but_custom_events_are_allowed(self) -> None:
+        project = base_project()
+        self.add_resource(
+            project,
+            meta='<meta><script src="server.lua" type="server"/></meta>',
+            files={"server.lua": '''
+                addEventHandler("onClientRender", root, function() end)
+                addEventHandler("onMyCustomEvent", root, function() end)
+                -- addEventHandler("onClientClick", root, function() end)
+            '''},
+        )
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["EVENT_WRONG_SIDE"])
+        diagnostic = result["diagnostics"][0]
+        self.assertEqual((diagnostic["side"], diagnostic["symbol"], diagnostic["line"]), ("server", "onClientRender", 2))
 
     def test_incompatible_engine_version_is_rejected(self) -> None:
         project = base_project()

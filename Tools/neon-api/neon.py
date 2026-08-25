@@ -18,6 +18,8 @@ sys.path.insert(0, str(TOOL_DIRECTORY))
 from neonlib.catalogue import (  # noqa: E402
     build_catalogue,
     catalogue_divergence,
+    catalogue_event_divergence,
+    catalogue_runtime_inventory_issues,
     catalogue_semantic_issues,
     catalogue_source_matches,
     filesystem_snapshot,
@@ -136,7 +138,21 @@ def command_api_search(args: argparse.Namespace) -> int:
     for symbol in catalogue["symbols"]:
         if not _matches_filters(symbol, args):
             continue
-        haystack = " ".join((symbol.get("name", ""), symbol.get("description", ""), symbol.get("category", ""))).casefold()
+        member_terms = [
+            value
+            for field in ("methods", "properties")
+            for member in symbol.get(field, [])
+            for value in (
+                member.get("name", ""), *member.get("globalFunctions", []), *member.get("inheritedGlobalFunctions", []),
+                *member.get("setters", []), *member.get("getters", []),
+                *member.get("inheritedSetters", []), *member.get("inheritedGetters", []),
+            )
+        ]
+        haystack = " ".join((
+            symbol.get("name", ""), symbol.get("description", ""), symbol.get("category", ""),
+            *symbol.get("parents", []), *symbol.get("inheritedParents", []),
+            *symbol.get("values", []), *symbol.get("inheritedValues", []), *member_terms,
+        )).casefold()
         if all(token in haystack for token in tokens):
             name = symbol["name"].casefold()
             score = 0 if name == query else 1 if name.startswith(query) else 2 if all(token in name for token in tokens) else 3
@@ -363,6 +379,8 @@ def command_catalogue_verify(args: argparse.Namespace) -> int:
         _emit(result, args.json)
         return 1
     unregistered, missing = catalogue_divergence(catalogue, snapshot)
+    unregistered_events, missing_events = catalogue_event_divergence(catalogue, snapshot)
+    runtime_inventory_issues = catalogue_runtime_inventory_issues(catalogue, snapshot)
     diagnostics = []
     semantic_schema_issues = SCHEMA_STORE.validate("neon-semantic-snapshot", semantics)
     for issue in semantic_schema_issues:
@@ -396,6 +414,18 @@ def command_catalogue_verify(args: argparse.Namespace) -> int:
         diagnostics.append(
             {"code": "API_REGISTRATION_MISSING", "severity": "error", "message": f"catalogued {side} function has no source registration", "path": ".", "side": side, "symbol": name}
         )
+    for name, side in unregistered_events:
+        diagnostics.append(
+            {"code": "EVENT_REGISTRATION_UNCATALOGUED", "severity": "error", "message": f"registered {side} event is absent from catalogue", "path": ".", "side": side, "symbol": name}
+        )
+    for name, side in missing_events:
+        diagnostics.append(
+            {"code": "EVENT_REGISTRATION_MISSING", "severity": "error", "message": f"catalogued {side} event has no source registration", "path": ".", "side": side, "symbol": name}
+        )
+    for issue in runtime_inventory_issues:
+        diagnostics.append(
+            {"code": "RUNTIME_INVENTORY_DIVERGENCE", "severity": "error", "message": issue, "path": "."}
+        )
     diagnostics.sort(key=lambda value: (value["code"], value.get("side", ""), value.get("symbol", "")))
     result = {
         "schemaVersion": "1.0.0",
@@ -406,6 +436,9 @@ def command_catalogue_verify(args: argparse.Namespace) -> int:
             "warnings": 0,
             "uncatalogued": len(unregistered),
             "missingRegistrations": len(missing),
+            "uncataloguedEvents": len(unregistered_events),
+            "missingEventRegistrations": len(missing_events),
+            "runtimeInventoryDivergence": len(runtime_inventory_issues),
             "sourceDrift": 0 if catalogue_source_matches(catalogue, snapshot) else 1,
             "semanticDrift": sum(item["code"] in ("SEMANTIC_SNAPSHOT_INVALID", "SEMANTIC_SNAPSHOT_DRIFT") for item in diagnostics),
         },
@@ -495,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_api_filters(command: argparse.ArgumentParser) -> None:
         command.add_argument("--catalogue", default=str(DEFAULT_CATALOGUE))
-        command.add_argument("--kind", choices=("function", "event", "element", "type"))
+        command.add_argument("--kind", choices=("function", "event", "element", "type", "class", "enum"))
         command.add_argument("--origin", choices=("mta", "neon"))
         command.add_argument("--state", choices=("verified", "documented-only", "runtime-only", "opaque", "conflict", "unavailable"))
         command.add_argument("--side", choices=("client", "server"))
