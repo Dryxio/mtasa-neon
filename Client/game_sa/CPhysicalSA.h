@@ -167,4 +167,5 @@ public:
 
     SPhysicalProofs GetPhysicalProofs() const override;
     void            SetPhysicalProofs(const SPhysicalProofs& proofs) override;
+    void            ReleaseRealTimeShadow() override;
 };

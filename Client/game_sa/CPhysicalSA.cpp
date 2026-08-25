@@ -419,3 +419,15 @@ void CPhysicalSA::SetPhysicalProofs(const SPhysicalProofs& proofs)
     physical->bCollisionProof = proofs.collision;
     physical->bMeeleProof = proofs.melee;
 }
+
+void CPhysicalSA::ReleaseRealTimeShadow()
+{
+    auto* physical = reinterpret_cast<CPhysicalSAInterface*>(GetInterface());
+    if (!physical || !physical->m_pShadowData)
+        return;
+
+    // CRealTimeShadowManager owns this allocation. Returning it through GTA's
+    // manager clears both ownership links and avoids the normal intensity fade.
+    using ReturnRealTimeShadow = void(__thiscall*)(void*, CShadowDataSA*);
+    reinterpret_cast<ReturnRealTimeShadow>(0x705B30)(reinterpret_cast<void*>(0xC40350), physical->m_pShadowData);
+}

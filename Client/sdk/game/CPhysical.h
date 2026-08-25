@@ -70,4 +70,8 @@ public:
     // these five independent flags for peds, vehicles and physical objects.
     virtual SPhysicalProofs GetPhysicalProofs() const = 0;
     virtual void            SetPhysicalProofs(const SPhysicalProofs& proofs) = 0;
+
+    // Append only: release GTA's separately owned real-time shadow state when
+    // an entity must stop casting immediately instead of fading out.
+    virtual void ReleaseRealTimeShadow() = 0;
 };

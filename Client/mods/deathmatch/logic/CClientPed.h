@@ -708,6 +708,7 @@ protected:
     void ClearNativeAmbientOwnerCollisionFence(const char* reason, bool restoreSafeTransform = true);
     void UpdateRemoteReplicaPhysicsFence();
     void ApplyPhysicalFreezeState();
+    void UpdateAlphaAndVisibility();
     void RecordNativeAIRotationTelemetryPostProcess() noexcept;
 
     void ModelRequestCallback(CModelInfo* pModelInfo);
