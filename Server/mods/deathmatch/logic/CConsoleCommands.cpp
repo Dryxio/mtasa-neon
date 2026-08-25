@@ -1280,7 +1280,8 @@ bool CConsoleCommands::WhoIs(CConsole* pConsole, const char* szArguments, CClien
 
 bool CConsoleCommands::DebugScript(CConsole* console, const char* arguments, CClient* client, CClient* echoClient)
 {
-    static constexpr const char* syntaxMessage = "debugscript: Syntax is 'debugscript <mode: 0 (None), 1 (Errors), 2 (Errors + Warnings), 3 (All)>'";
+    static constexpr const char* syntaxMessage =
+        "debugscript: Syntax is 'debugscript <mode: 0 (None), 1 (Errors), 2 (Errors + Warnings), 3 (All/legacy), 4 (All/DevTools)>'";
 
     // Validate arguments
     if (!arguments || std::strlen(arguments) != 1 || !std::isdigit(arguments[0]))
@@ -1297,18 +1298,12 @@ bool CConsoleCommands::DebugScript(CConsole* console, const char* arguments, CCl
     }
 
     CPlayer* player = static_cast<CPlayer*>(client);
-    int      debugLevel = arguments[0] - '0';  // Convert the character to an integer (e.g., '2' -> 2)
-    int      debugLevelCurrent = player->GetScriptDebugLevel();
+    int      requestedMode = arguments[0] - '0';
+    int      debugLevel = requestedMode == 4 ? 3 : requestedMode;
 
-    // Check if the level is the same
-    if (debugLevel == debugLevelCurrent)
-    {
-        echoClient->SendEcho(("debugscript: Your debug mode is already set to " + std::to_string(debugLevel)).c_str());
-        return false;
-    }
-
-    // Check if the level is between 0 and 3
-    if (debugLevel < 0 || debugLevel > 3)
+    // Check if the requested mode is supported. Mode 4 maps to level 3 on the
+    // wire and selects the structured UI instead of the legacy overlay.
+    if (requestedMode < 0 || requestedMode > 4)
     {
         echoClient->SendEcho(syntaxMessage);
         return false;
@@ -1316,11 +1311,18 @@ bool CConsoleCommands::DebugScript(CConsole* console, const char* arguments, CCl
 
     // Set the new level
     player->SetScriptDebugLevel(static_cast<uint8_t>(debugLevel));
-    echoClient->SendEcho(("debugscript: Your debug mode was set to " + std::to_string(debugLevel)).c_str());
-    CLogger::LogPrintf("SCRIPT: %s set their script debug mode to %d\n", GetAdminNameForLog(client).c_str(), debugLevel);
+    if (requestedMode == 4)
+        echoClient->SendEcho("debugscript: All diagnostics enabled in Neon DevTools (Ctrl+Shift+I)");
+    else if (debugLevel == 3)
+        echoClient->SendEcho("debugscript: Mode 3 enabled. Neon tip: press Ctrl+Shift+I to open DebugScript 4, a simpler way to inspect script errors.");
+    else
+        echoClient->SendEcho(("debugscript: Your debug mode was set to " + std::to_string(debugLevel)).c_str());
+    CLogger::LogPrintf("SCRIPT: %s set their script debug mode to %d%s\n", GetAdminNameForLog(client).c_str(), debugLevel,
+                       requestedMode == 4 ? " with Neon DevTools" : "");
 
     // Enable or disable the debugger based on the level
-    CStaticFunctionDefinitions::SetPlayerDebuggerVisible(player, debugLevel != 0);
+    CStaticFunctionDefinitions::SetPlayerDebuggerVisible(player, debugLevel != 0 && requestedMode != 4);
+    CStaticFunctionDefinitions::SetPlayerDevToolsVisible(player, requestedMode == 4);
 
     return true;
 }

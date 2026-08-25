@@ -41,6 +41,7 @@
 #include "CDiscordRichPresence.h"
 #include "CNeonIdentityManager.h"
 #include "CSteamClient.h"
+#include "DevTools/CDevTools.h"
 #include "CCrashDumpWriter.h"
 #include "FastFailCrashHandler/WerCrashHandler.h"
 #include "SkyGfx/CSkyGfxManager.h"
@@ -420,6 +421,7 @@ CCore::CCore()
     m_pKeyBinds = new CKeyBinds(this);
 
     m_pMouseControl = new CMouseControl();
+    m_devTools = std::make_unique<CDevTools>();
 
     // Create our hook objects.
     m_pDirect3DHookManager = new CDirect3DHookManager();
@@ -471,6 +473,9 @@ CCore::~CCore()
         m_pDiscordRichPresence.reset();
 
     m_steamClient.reset();
+    // DevTools owns a CEGUI widget and CEF view, so release both while their
+    // managers still exist.
+    m_devTools.reset();
 
     // Destroy tray icon
     delete m_pTrayIcon;
@@ -561,7 +566,7 @@ CCore::~CCore()
 
 eCoreVersion CCore::GetVersion()
 {
-    return MTACORE_21;
+    return MTACORE_22;
 }
 
 CConsoleInterface* CCore::GetConsole()
@@ -1734,6 +1739,23 @@ void CCore::DebugClear()
     }
 }
 
+void CCore::SubmitDebugEvent(const SDebugEvent& event)
+{
+    if (m_devTools)
+        m_devTools->Submit(event);
+}
+
+void CCore::SetDevToolsVisible(bool visible)
+{
+    if (m_devTools)
+        m_devTools->SetVisible(visible);
+}
+
+bool CCore::IsDevToolsVisible() const
+{
+    return m_devTools && m_devTools->IsVisible();
+}
+
 void CCore::ChatEchoColor(const char* szText, unsigned char R, unsigned char G, unsigned char B, bool bColorCoded)
 {
     // Set the color
@@ -2845,6 +2867,8 @@ void CCore::DoPostFramePulse()
 
     if (m_pWebCore)
         m_pWebCore->DoPulse();
+    if (m_devTools)
+        m_devTools->DoPulse();
 
     // Notify the mod manager and the connect manager
     TIMING_CHECKPOINT("-CorePostFrame1");
@@ -2957,6 +2981,7 @@ void CCore::RegisterCommands()
     m_pCommands->Add("saveconfig", _("immediately saves the config"), CCommandFuncs::SaveConfig);
 
     m_pCommands->Add("cleardebug", _("clears the debug view"), CCommandFuncs::DebugClear);
+    m_pCommands->Add("devtools", "opens the structured script diagnostics console", CCommandFuncs::DevTools);
     m_pCommands->Add("chatscrollup", _("scrolls the chatbox upwards"), CCommandFuncs::ChatScrollUp);
     m_pCommands->Add("chatscrolldown", _("scrolls the chatbox downwards"), CCommandFuncs::ChatScrollDown);
     m_pCommands->Add("debugscrollup", _("scrolls the debug view upwards"), CCommandFuncs::DebugScrollUp);

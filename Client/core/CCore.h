@@ -73,6 +73,7 @@ class CDiscordInterface;
 
 class CSteamClient;
 class CNeonIdentityManager;
+class CDevTools;
 
 extern class CCore*         g_pCore;
 extern class CGraphics*     g_pGraphics;
@@ -162,6 +163,9 @@ public:
     void DebugEchoColor(const char* szText, unsigned char R, unsigned char G, unsigned char B);
     void DebugPrintfColor(const char* szFormat, unsigned char R, unsigned char G, unsigned char B, ...);
     void DebugClear();
+    void SubmitDebugEvent(const SDebugEvent& event) override;
+    void SetDevToolsVisible(bool visible) override;
+    bool IsDevToolsVisible() const override;
 
     // Chat
     void ChatEcho(const char* szText, bool bColorCoded = false);
@@ -378,6 +382,7 @@ private:
     CWebCoreInterface*                      m_pWebCore = nullptr;
     CTrayIcon*                              m_pTrayIcon;
     std::unique_ptr<CSteamClient>           m_steamClient;
+    std::unique_ptr<CDevTools>              m_devTools;
     std::shared_ptr<CDiscordRichPresence>   m_pDiscordRichPresence;
     std::unique_ptr<FPSLimiter::FPSLimiter> m_pFPSLimiter;
 

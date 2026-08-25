@@ -56,10 +56,10 @@ void CScriptDebugging::LogPCallError(lua_State* luaVM, const SString& strRes, bo
         if (iLine == 0 && bInitialCall)
         {
             // Location hint for compiled scripts
-            LogError(SLuaDebugInfo(strFile, iLine), "(global scope) %s", *strMsg);
+            LogString(luaVM, "ERROR: ", SLuaDebugInfo(strFile, iLine), SString("(global scope) %s", *strMsg), 1);
         }
         else
-            LogError(SLuaDebugInfo(strFile, iLine), "%s", *strMsg);
+            LogString(luaVM, "ERROR: ", SLuaDebugInfo(strFile, iLine), strMsg, 1);
     }
     else
     {
@@ -98,7 +98,7 @@ void CScriptDebugging::LogCustom(lua_State* luaVM, unsigned char ucRed, unsigned
     VSNPRINTF(szBuffer, MAX_STRING_LENGTH, szFormat, marker);
     va_end(marker);
 
-    LogString("", GetLuaDebugInfo(luaVM), szBuffer, 4, ucRed, ucGreen, ucBlue);
+    LogString(luaVM, "", GetLuaDebugInfo(luaVM), szBuffer, 4, ucRed, ucGreen, ucBlue);
 }
 
 void CScriptDebugging::LogDebug(lua_State* luaVM, unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue, const char* szFormat, ...)
@@ -112,7 +112,7 @@ void CScriptDebugging::LogDebug(lua_State* luaVM, unsigned char ucRed, unsigned 
     VSNPRINTF(szBuffer, MAX_STRING_LENGTH, szFormat, marker);
     va_end(marker);
 
-    LogString("", GetLuaDebugInfo(luaVM), szBuffer, 0, ucRed, ucGreen, ucBlue);
+    LogString(luaVM, "", GetLuaDebugInfo(luaVM), szBuffer, 0, ucRed, ucGreen, ucBlue);
 }
 
 void CScriptDebugging::LogInformationV(lua_State* luaVM, const char* format, va_list vlist)
@@ -120,7 +120,7 @@ void CScriptDebugging::LogInformationV(lua_State* luaVM, const char* format, va_
     assert(format);
     std::array<char, MAX_STRING_LENGTH> buffer{};
     VSNPRINTF(buffer.data(), buffer.size(), format, vlist);
-    LogString("INFO: ", GetLuaDebugInfo(luaVM), buffer.data(), 3);
+    LogString(luaVM, "INFO: ", GetLuaDebugInfo(luaVM), buffer.data(), 3);
 }
 
 void CScriptDebugging::LogInformation(lua_State* luaVM, const char* szFormat, ...)
@@ -143,7 +143,7 @@ void CScriptDebugging::LogWarning(lua_State* luaVM, const char* szFormat, ...)
     va_end(marker);
 
     // Log it
-    LogString("WARNING: ", GetLuaDebugInfo(luaVM), szBuffer, 2);
+    LogString(luaVM, "WARNING: ", GetLuaDebugInfo(luaVM), szBuffer, 2);
 }
 
 void CScriptDebugging::LogError(lua_State* luaVM, const char* szFormat, ...)
@@ -158,7 +158,7 @@ void CScriptDebugging::LogError(lua_State* luaVM, const char* szFormat, ...)
     va_end(marker);
 
     // Log it
-    LogString("ERROR: ", GetLuaDebugInfo(luaVM), szBuffer, 1);
+    LogString(luaVM, "ERROR: ", GetLuaDebugInfo(luaVM), szBuffer, 1);
 }
 
 void CScriptDebugging::LogWarning(const SLuaDebugInfo& luaDebugInfo, const char* szFormat, ...)
@@ -173,7 +173,7 @@ void CScriptDebugging::LogWarning(const SLuaDebugInfo& luaDebugInfo, const char*
     va_end(marker);
 
     // Log it
-    LogString("WARNING: ", luaDebugInfo, szBuffer, 2);
+    LogString(nullptr, "WARNING: ", luaDebugInfo, szBuffer, 2);
 }
 
 void CScriptDebugging::LogError(const SLuaDebugInfo& luaDebugInfo, const char* szFormat, ...)
@@ -188,7 +188,7 @@ void CScriptDebugging::LogError(const SLuaDebugInfo& luaDebugInfo, const char* s
     va_end(marker);
 
     // Log it
-    LogString("ERROR: ", luaDebugInfo, szBuffer, 1);
+    LogString(nullptr, "ERROR: ", luaDebugInfo, szBuffer, 1);
 }
 
 void CScriptDebugging::LogBadPointer(lua_State* luaVM, const char* szArgumentType, unsigned int uiArgument)
@@ -213,8 +213,8 @@ void CScriptDebugging::LogCustom(lua_State* luaVM, const char* szMessage)
     LogWarning(luaVM, "%s", szMessage);
 }
 
-void CScriptDebugging::LogString(const char* szPrePend, const SLuaDebugInfo& luaDebugInfo, const char* szMessage, unsigned int uiMinimumDebugLevel,
-                                 unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue)
+void CScriptDebugging::LogString(lua_State* luaVM, const char* szPrePend, const SLuaDebugInfo& luaDebugInfo, const char* szMessage,
+                                 unsigned int uiMinimumDebugLevel, unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue)
 {
     SString strText = SString("%s%s", szPrePend, szMessage);
 
@@ -277,7 +277,61 @@ void CScriptDebugging::LogString(const char* szPrePend, const SLuaDebugInfo& lua
     }
 
     if (notCancelled)
-        m_DuplicateLineFilter.AddLine({strText, uiMinimumDebugLevel, ucRed, ucGreen, ucBlue});
+    {
+        SDebugEvent event;
+        event.sequence = ++m_uiNextDebugEventSequence;
+        event.timestamp = GetTickCount32();
+#ifdef MTA_CLIENT
+        event.side = EDebugEventSide::CLIENT;
+#else
+        event.side = EDebugEventSide::SERVER;
+#endif
+        switch (uiMinimumDebugLevel)
+        {
+            case 1:
+                event.severity = EDebugEventSeverity::ERROR_MESSAGE;
+                break;
+            case 2:
+                event.severity = EDebugEventSeverity::WARNING_MESSAGE;
+                break;
+            case 3:
+                event.severity = EDebugEventSeverity::INFORMATION;
+                break;
+            case 4:
+                event.severity = EDebugEventSeverity::CUSTOM_MESSAGE;
+                break;
+            default:
+                event.severity = EDebugEventSeverity::DEBUG_MESSAGE;
+                break;
+        }
+        event.red = ucRed;
+        event.green = ucGreen;
+        event.blue = ucBlue;
+        event.category = "script";
+        if (!m_DebugContextStack.empty())
+            event.context = m_DebugContextStack.back();
+        event.message = szMessage;
+        if (luaDebugInfo.infoType == DEBUG_INFO_FILE_AND_LINE)
+        {
+            event.file = luaDebugInfo.strFile;
+            if (luaDebugInfo.iLine != INVALID_LINE_NUMBER && luaDebugInfo.iLine > 0)
+                event.line = static_cast<std::uint32_t>(luaDebugInfo.iLine);
+        }
+        else if (luaDebugInfo.infoType == DEBUG_INFO_SHORT_SRC)
+            event.file = luaDebugInfo.strShortSrc;
+
+        // The shared logger has different Lua manager ownership on each side. Resolve the
+        // originating VM here so DevTools can attribute messages to their resource.
+#ifdef MTA_CLIENT
+        CLuaMain* luaMain = luaVM ? m_pLuaManager->GetVirtualMachine(luaVM) : GetTopLuaMain();
+#else
+        CLuaMain* luaMain = luaVM ? g_pGame->GetLuaManager()->GetVirtualMachine(luaVM) : GetTopLuaMain();
+#endif
+        if (luaMain && luaMain->GetResource())
+            event.resource = luaMain->GetResource()->GetName();
+
+        m_DuplicateLineFilter.AddLine({strText, uiMinimumDebugLevel, ucRed, ucGreen, ucBlue, std::move(event)});
+    }
 
 #ifdef MTA_CLIENT
     if (g_pCore->GetCVars()->GetValue<bool>("filter_duplicate_log_lines") == false)

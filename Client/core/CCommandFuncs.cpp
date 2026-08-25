@@ -456,6 +456,18 @@ void CCommandFuncs::DebugClear(const char* szParameters)
     CCore::GetSingleton().GetLocalGUI()->GetDebugView()->Clear();
 }
 
+void CCommandFuncs::DevTools(const char* szParameters)
+{
+    CCore&        core = CCore::GetSingleton();
+    const SString mode = SStringX(szParameters).ToLower();
+    if (mode == "open" || mode == "1" || mode == "on")
+        core.SetDevToolsVisible(true);
+    else if (mode == "close" || mode == "0" || mode == "off")
+        core.SetDevToolsVisible(false);
+    else
+        core.SetDevToolsVisible(!core.IsDevToolsVisible());
+}
+
 void CCommandFuncs::Test(const char* szParameters)
 {
     if (SStringX(szParameters) == "ca")

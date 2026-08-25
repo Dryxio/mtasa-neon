@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "DevTools/CDevTools.h"
 #include "ServerBrowser/CServerBrowserWeb.h"
 #include <game/CGame.h>
 
@@ -273,6 +274,11 @@ LRESULT CALLBACK CMessageLoopHook::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM w
                 return true;
             }
         }
+
+        // DevTools is a full-screen input surface, so it must get the first
+        // chance to consume Escape before the regular in-game pause-menu path.
+        if (CDevTools::HandleMessage(uMsg, wParam, lParam))
+            return true;
 
         // Pass escape keyup to onClientKey
         if (uMsg == WM_KEYUP && wParam == VK_ESCAPE)

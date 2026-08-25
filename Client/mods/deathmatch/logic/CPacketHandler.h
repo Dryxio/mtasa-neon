@@ -69,6 +69,7 @@ public:
     void Packet_ChatEcho(NetBitStreamInterface& bitStream);
     void Packet_ConsoleEcho(NetBitStreamInterface& bitStream);
     void Packet_DebugEcho(NetBitStreamInterface& bitStream);
+    void Packet_DebugEvent(NetBitStreamInterface& bitStream);
     void Packet_VehicleSpawn(NetBitStreamInterface& bitStream);
     void Packet_VehicleDamageSync(NetBitStreamInterface& bitStream);
     void Packet_Vehicle_InOut(NetBitStreamInterface& bitStream);

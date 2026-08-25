@@ -26,6 +26,7 @@
 #include "CDiscordInterface.h"
 #include "FPSLimiterInterface.h"
 #include "CNativeWorldAuthorization.h"
+#include <net/SDebugEvent.h>
 #include "xml/CXML.h"
 #include <gui/CGUI.h>
 
@@ -41,6 +42,7 @@ enum eCoreVersion
 {
     MTACORE_20 = 1,
     MTACORE_21 = 2,
+    MTACORE_22 = 3,
 };
 
 #ifndef WITH_TIMING_CHECKPOINTS
@@ -243,6 +245,12 @@ public:
     virtual bool GetNeonClientSetting(const SString& name, SString& type, SString& value) = 0;
     virtual bool SetNeonClientSettingOverride(const SString& owner, const SString& name, const SString& type, const SString& value) = 0;
     virtual void ClearNeonClientSettingOverrides(const SString& owner) = 0;
+
+    // Structured diagnostics are appended to the ABI so older modules keep
+    // every established vtable offset. MTACORE_22 requires these methods.
+    virtual void SubmitDebugEvent(const SDebugEvent& event) = 0;
+    virtual void SetDevToolsVisible(bool visible) = 0;
+    virtual bool IsDevToolsVisible() const = 0;
 };
 
 class CClientTime

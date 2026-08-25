@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon DevTools</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="titlebar">
+        <div class="brand"><span class="mark">N</span><div><strong>DevTools</strong><small>Script diagnostics</small></div></div>
+        <div class="title-actions">
+          <span id="connection" class="status live"><i></i> VIEW ACTIVE</span>
+          <button id="close" class="icon" aria-label="Close">×</button>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search message, file, resource…" autocomplete="off" /><kbd>Ctrl F</kbd></label>
+        <select id="side" aria-label="Side"><option value="all">All sides</option><option value="client">Client</option><option value="server">Server</option></select>
+        <select id="resource" aria-label="Resource"><option value="all">All resources</option></select>
+        <select id="density" aria-label="Display density" title="Display density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
+        <div class="zoom" aria-label="Interface zoom">
+          <button id="zoomOut" title="Zoom out (Ctrl -)" aria-label="Zoom out">−</button>
+          <button id="zoomReset" title="Reset zoom (Ctrl 0)">100%</button>
+          <button id="zoomIn" title="Zoom in (Ctrl +)" aria-label="Zoom in">+</button>
+        </div>
+        <button id="pause">Freeze view</button>
+        <button id="clear">Clear</button>
+      </section>
+
+      <section class="severity-bar" id="severityBar">
+        <button data-severity="error" class="active error">Errors <b>0</b></button>
+        <button data-severity="warning" class="active warning">Warnings <b>0</b></button>
+        <button data-severity="info" class="active info">Info <b>0</b></button>
+        <button data-severity="debug" class="active debug">Debug <b>0</b></button>
+        <button data-severity="custom" class="active custom">Custom <b>0</b></button>
+        <span id="resultCount" class="result-count">0 entries · 0 occurrences</span>
+      </section>
+
+      <section class="workspace">
+        <div class="console">
+          <div class="columns"><span>Time</span><span>Side</span><span>Resource / source</span><span>Message</span></div>
+          <div id="empty" class="empty"><span>✓</span><strong id="emptyTitle">No diagnostics yet</strong><p id="emptyMessage">Real script errors, warnings and debug messages will appear here.</p></div>
+          <div id="rows" class="rows" role="list"></div>
+        </div>
+        <aside id="details" class="details">
+          <div class="details-empty"><span>↖</span><p>Select an event to inspect its diagnostic details.</p></div>
+        </aside>
+      </section>
+
+      <footer>
+        <div><button id="capture" class="capture"><i></i> Capture diagnostics</button><span id="captureHint">Includes the previous 30 seconds</span><button id="discardCapture" class="text-button" hidden>Discard capture</button></div>
+        <div><span id="dropped"></span><button id="exportTxt">Export TXT</button><button id="exportJson" class="primary">Export JSON</button></div>
+      </footer>
+      <div id="toast" class="toast"></div>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

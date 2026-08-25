@@ -112,6 +112,10 @@ bool CPacketHandler::ProcessPacket(unsigned char ucPacketID, NetBitStreamInterfa
             Packet_DebugEcho(bitStream);
             return true;
 
+        case PACKET_ID_DEBUG_EVENT:
+            Packet_DebugEvent(bitStream);
+            return true;
+
         case PACKET_ID_VEHICLE_SPAWN:
             Packet_VehicleSpawn(bitStream);
             return true;
@@ -1623,6 +1627,40 @@ void CPacketHandler::Packet_DebugEcho(NetBitStreamInterface& bitStream)
             }
         }
     }
+}
+
+void CPacketHandler::Packet_DebugEvent(NetBitStreamInterface& bitStream)
+{
+    SDebugEvent event;
+    if (!ReadDebugEvent(bitStream, event))
+        return;
+
+    // Server and client tick counters are unrelated on remote machines. Use
+    // receipt time so one timeline can sort and age both sides consistently.
+    event.timestamp = GetTickCount32();
+
+    // Diagnostics are server-controlled text. Preserve Unicode and newlines,
+    // but remove terminal-style control bytes before any native or web sink.
+    const auto sanitize = [](std::string& value)
+    {
+        if (!value.empty())
+            StripControlCodes(value.data(), ' ');
+    };
+    sanitize(event.message);
+    sanitize(event.resource);
+    sanitize(event.file);
+    sanitize(event.category);
+    sanitize(event.context);
+    sanitize(event.correlationId);
+
+    g_pCore->SubmitDebugEvent(event);
+
+    SString legacyText;
+    if (!event.file.empty() && event.line != SDebugEvent::INVALID_SOURCE_LINE)
+        legacyText = SString("%s:%u: %s", event.file.c_str(), event.line, event.message.c_str());
+    else
+        legacyText = event.message;
+    g_pCore->DebugEchoColor(legacyText, event.red, event.green, event.blue);
 }
 
 void CPacketHandler::Packet_VehicleSpawn(NetBitStreamInterface& bitStream)

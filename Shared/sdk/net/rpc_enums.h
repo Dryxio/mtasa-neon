@@ -300,5 +300,7 @@ enum eElementRPCFunctions
 
     SET_OBJECT_DYNAMIC_PHYSICS,
 
+    TOGGLE_DEVTOOLS,
+
     NUM_RPC_FUNCS  // Add above this line
 };

@@ -15,6 +15,7 @@
 void COutputRPCs::LoadFunctions()
 {
     AddHandler(TOGGLE_DEBUGGER, ToggleDebugger, "ToggleDebugger");
+    AddHandler(TOGGLE_DEVTOOLS, ToggleDevTools, "ToggleDevTools");
     AddHandler(SET_TRANSFER_BOX_VISIBILITY, SetTransferBoxVisibility, "SetTransferBoxVisibility");
 }
 
@@ -24,6 +25,13 @@ void COutputRPCs::ToggleDebugger(NetBitStreamInterface& bitStream)
     bitStream.Read(ucEnable);
 
     g_pCore->SetDebugVisible((ucEnable == 1));
+}
+
+void COutputRPCs::ToggleDevTools(NetBitStreamInterface& bitStream)
+{
+    unsigned char enable = 0;
+    if (bitStream.Read(enable))
+        g_pCore->SetDevToolsVisible(enable == 1);
 }
 
 void COutputRPCs::SetTransferBoxVisibility(NetBitStreamInterface& bitStream)

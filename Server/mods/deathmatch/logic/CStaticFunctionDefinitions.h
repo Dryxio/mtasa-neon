@@ -145,6 +145,7 @@ public:
     static bool TakePlayerMoney(CElement* pElement, long lMoney);
     static bool ShowPlayerHudComponent(CElement* pElement, eHudComponent component, bool bShow);
     static bool SetPlayerDebuggerVisible(CElement* pElement, bool bVisible);
+    static bool SetPlayerDevToolsVisible(CElement* pElement, bool visible);
     static bool SetPlayerScriptDebugLevel(CElement* pElement, unsigned int uiLevel);
     static bool SetPlayerWantedLevel(CElement* pElement, unsigned int iLevel);
     static bool ForcePlayerMap(CElement* pElement, bool bVisible);

@@ -13,8 +13,10 @@
 
 #include "lua/CLuaManager.h"
 #include "packets/CPacket.h"
+#include <net/SDebugEvent.h>
 #include <cstdio>
 #include <list>
+#include <vector>
 
 struct SLogLine
 {
@@ -23,11 +25,14 @@ struct SLogLine
     unsigned char ucRed;
     unsigned char ucGreen;
     unsigned char ucBlue;
+    SDebugEvent   debugEvent;
     void          operator+=(const char* szAppend) { strText += szAppend; }
     bool          operator==(const SLogLine& other) const
     {
         return strText == other.strText && uiMinimumDebugLevel == other.uiMinimumDebugLevel && ucRed == other.ucRed && ucGreen == other.ucGreen &&
-               ucBlue == other.ucBlue;
+               ucBlue == other.ucBlue && debugEvent.side == other.debugEvent.side && debugEvent.resource == other.debugEvent.resource &&
+               debugEvent.file == other.debugEvent.file && debugEvent.line == other.debugEvent.line && debugEvent.message == other.debugEvent.message &&
+               debugEvent.context == other.debugEvent.context;
     }
 };
 
@@ -66,11 +71,17 @@ public:
     void      OnLuaMainDestroy(CLuaMain* pLuaMain);
     CLuaMain* GetTopLuaMain();
     void      UpdateLogOutput();
+    void      PushDebugContext(const SString& context) { m_DebugContextStack.push_back(context); }
+    void      PopDebugContext()
+    {
+        if (!m_DebugContextStack.empty())
+            m_DebugContextStack.pop_back();
+    }
 
 private:
     SString ComposeErrorMessage(const char* szPrePend, const SLuaDebugInfo& luaDebugInfo, const char* szMessage);
-    void LogString(const char* szPrePend, const SLuaDebugInfo& luaDebugInfo, const char* szMessage, unsigned int uiMinimumDebugLevel, unsigned char ucRed = 255,
-                   unsigned char ucGreen = 255, unsigned char ucBlue = 255);
+    void    LogString(lua_State* luaVM, const char* szPrePend, const SLuaDebugInfo& luaDebugInfo, const char* szMessage, unsigned int uiMinimumDebugLevel,
+                      unsigned char ucRed = 255, unsigned char ucGreen = 255, unsigned char ucBlue = 255);
 
     void PrintLog(const char* szText);
     bool CheckForSufficientDebugLevel(std::uint8_t playerDebugLevel, std::uint8_t messageDebugLevel) const noexcept;
@@ -83,5 +94,7 @@ private:
     bool                           m_bTriggeringMessageEvent;
     SLuaDebugInfo                  m_SavedLuaDebugInfo;
     std::list<CLuaMain*>           m_LuaMainStack;
+    std::vector<SString>           m_DebugContextStack;
     CDuplicateLineFilter<SLogLine> m_DuplicateLineFilter;
+    std::uint32_t                  m_uiNextDebugEventSequence{};
 };

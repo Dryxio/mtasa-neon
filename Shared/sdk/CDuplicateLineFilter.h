@@ -133,6 +133,15 @@ public:
     //////////////////////////////////////////////////////////
     bool PopOutputLine(T& outLine)
     {
+        uint duplicateCount = 0;
+        return PopOutputLine(outLine, duplicateCount);
+    }
+
+    // Diagnostic consumers need the count as data instead of parsing the
+    // human-readable legacy suffix. Keeping this overload here preserves the
+    // established output while allowing structured sinks to remain lossless.
+    bool PopOutputLine(T& outLine, uint& duplicateCount)
+    {
         if (m_PendingOutput.empty())
         {
             if (time(NULL) - m_tLastOutputTime > m_uiMaxDelaySeconds)
@@ -144,6 +153,7 @@ public:
 
         const SOutputLine& line = m_PendingOutput.front();
         outLine = line;
+        duplicateCount = line.uiDupCount > 1 ? line.uiDupCount : 1;
         if (line.uiDupCount > 1)
             outLine += SString("  [DUP x%u]", line.uiDupCount);
         m_PendingOutput.pop_front();

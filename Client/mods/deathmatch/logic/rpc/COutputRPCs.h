@@ -19,5 +19,6 @@ public:
     static void LoadFunctions();
 
     DECLARE_RPC(ToggleDebugger);
+    DECLARE_RPC(ToggleDevTools);
     DECLARE_RPC(SetTransferBoxVisibility);
 };

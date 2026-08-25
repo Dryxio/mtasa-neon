@@ -3490,6 +3490,20 @@ bool CStaticFunctionDefinitions::SetPlayerDebuggerVisible(CElement* pElement, bo
     return false;
 }
 
+bool CStaticFunctionDefinitions::SetPlayerDevToolsVisible(CElement* pElement, bool visible)
+{
+    assert(pElement);
+    RUN_CHILDREN(SetPlayerDevToolsVisible(*iter, visible))
+
+    if (!IS_PLAYER(pElement))
+        return false;
+
+    CBitStream bitStream;
+    bitStream.pBitStream->Write(static_cast<unsigned char>(visible ? 1 : 0));
+    static_cast<CPlayer*>(pElement)->Send(CLuaPacket(TOGGLE_DEVTOOLS, *bitStream.pBitStream));
+    return true;
+}
+
 bool CStaticFunctionDefinitions::SetPlayerScriptDebugLevel(CElement* pElement, unsigned int uiLevel)
 {
     assert(pElement);

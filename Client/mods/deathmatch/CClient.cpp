@@ -26,7 +26,7 @@ bool                    g_bClientShuttingDown = false;
 int CClient::ClientInitialize(const char* szArguments, CCoreInterface* pCore)
 {
     // Supported core version?
-    if (pCore->GetVersion() != MTACORE_21)
+    if (pCore->GetVersion() != MTACORE_22)
     {
         return 1;
     }

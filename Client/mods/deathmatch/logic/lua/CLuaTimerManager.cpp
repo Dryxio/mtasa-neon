@@ -41,7 +41,10 @@ void CLuaTimerManager::DoPulse(CLuaMain* pLuaMain)
             // Set our debug info
             g_pClientGame->GetScriptDebugging()->SaveLuaDebugInfo(m_pProcessingTimer->GetLuaDebugInfo());
 
+            // Timer callbacks otherwise lose the reason their Lua frame was entered.
+            g_pClientGame->GetScriptDebugging()->PushDebugContext("timer callback");
             m_pProcessingTimer->ExecuteTimer(pLuaMain);
+            g_pClientGame->GetScriptDebugging()->PopDebugContext();
             // Reset
             g_pClientGame->GetScriptDebugging()->SaveLuaDebugInfo(SLuaDebugInfo());
 

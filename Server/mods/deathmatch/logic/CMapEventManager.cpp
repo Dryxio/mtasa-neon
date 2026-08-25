@@ -242,8 +242,11 @@ bool CMapEventManager::Call(const char* szName, const CLuaArguments& Arguments, 
                         lua_setglobal(pState, "client");
                     }
 
-                    // Call it
+                    // Keep the event entry point attached to diagnostics raised deep inside
+                    // handlers, where a file and line alone rarely explain the player action.
+                    g_pGame->GetScriptDebugging()->PushDebugContext(SString("event handler: %s", szName));
                     pMapEvent->Call(Arguments);
+                    g_pGame->GetScriptDebugging()->PopDebugContext();
                     bCalled = true;
 
                     g_pGame->GetDebugHookManager()->OnPostEventFunction(szName, Arguments, pSource, pCaller, pMapEvent);

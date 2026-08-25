@@ -12,7 +12,9 @@ project "Tests_Client"
 
 	includedirs {
 		"../../Shared/sdk",
+		"../../Shared/mods/deathmatch/logic",
 		"../../Client/sdk",
+		"../../Client/mods/deathmatch",
 		"../../vendor/googletest/include",
 		-- Needed so SharedUtil.h -> SharedUtil.Crypto.h can find <cryptopp/*.h> and <zlib/zlib.h>
 		"../../vendor",

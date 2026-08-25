@@ -119,8 +119,10 @@ bool CScriptDebugging::SetLogfile(const char* szFilename, unsigned int uiLevel)
 void CScriptDebugging::UpdateLogOutput()
 {
     SLogLine line;
-    while (m_DuplicateLineFilter.PopOutputLine(line))
+    uint     duplicateCount = 1;
+    while (m_DuplicateLineFilter.PopOutputLine(line, duplicateCount))
     {
+        line.debugEvent.repeatCount = duplicateCount;
         // Log it to the file if enough level
         bool sufficientDebugLevel =
             CheckForSufficientDebugLevel(static_cast<std::uint8_t>(m_uiLogFileLevel), static_cast<std::uint8_t>(line.uiMinimumDebugLevel));
@@ -134,6 +136,8 @@ void CScriptDebugging::UpdateLogOutput()
         if (!g_pCore->IsDebugVisible())
             return;
 #endif
+
+        g_pCore->SubmitDebugEvent(line.debugEvent);
 
         std::uint8_t clientDebugLevel = 0;
         auto*        localPlayer = g_pClientGame->GetPlayerManager()->GetLocalPlayer();

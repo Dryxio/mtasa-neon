@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "CScriptDebugging.h"
 #include "packets/CDebugEchoPacket.h"
+#include "packets/CDebugEventPacket.h"
 
 extern CGame* g_pGame;
 
@@ -117,8 +118,10 @@ bool CScriptDebugging::SetLogfile(const char* szFilename, unsigned int uiLevel)
 void CScriptDebugging::UpdateLogOutput()
 {
     SLogLine line;
-    while (m_DuplicateLineFilter.PopOutputLine(line))
+    uint     duplicateCount = 1;
+    while (m_DuplicateLineFilter.PopOutputLine(line, duplicateCount))
     {
+        line.debugEvent.repeatCount = duplicateCount;
         // Log it to the file if enough level
         if (m_uiLogFileLevel >= line.uiMinimumDebugLevel)
         {
@@ -128,7 +131,7 @@ void CScriptDebugging::UpdateLogOutput()
         CLogger::LogPrintf("%s", line.strText.c_str());
         CLogger::LogPrintNoStamp("\n");
         // Tell the players
-        Broadcast(CDebugEchoPacket(line.strText, line.uiMinimumDebugLevel, line.ucRed, line.ucGreen, line.ucBlue), line.uiMinimumDebugLevel);
+        Broadcast(CDebugEventPacket(line.debugEvent), line.uiMinimumDebugLevel);
     }
 }
 
