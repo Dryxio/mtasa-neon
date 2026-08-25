@@ -1669,6 +1669,27 @@ a:focus-visible {
   color: var(--blue);
 }
 
+.modal--system .modal__btn {
+  min-width: 112px;
+  height: 40px;
+  padding: 0 18px;
+  border: 1px solid rgba(228, 210, 159, 0.46);
+  background: rgba(182, 212, 251, 0.05);
+  color: var(--paper);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 38px;
+}
+
+.modal--system .modal__btn:hover,
+.modal--system .modal__btn:focus-visible,
+.modal--system .modal__btn--primary {
+  border-color: var(--cream);
+  background: rgba(182, 212, 251, 0.12);
+  color: var(--blue);
+}
+
 .modal--connection .modal__btn {
   position: relative;
   min-width: 112px;

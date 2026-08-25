@@ -154,6 +154,7 @@ interface NativeMessageModalProps {
 export function NativeMessageModal({ dialog, onRespond }: NativeMessageModalProps) {
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([])
   const modalRef = useRef<HTMLElement>(null)
+  const { t } = useI18n()
 
   useEffect(() => {
     if (!dialog) return
@@ -223,7 +224,13 @@ export function NativeMessageModal({ dialog, onRespond }: NativeMessageModalProp
                 className={`modal__btn${action.variant === 'primary' ? ' modal__btn--primary' : ''}`}
                 onClick={() => onRespond(dialog.id, action.id)}
               >
-                {action.label}
+                {action.id === 'close'
+                  ? t('common.close')
+                  : action.id === 'cancel'
+                    ? t('common.cancel')
+                    : action.id === 'confirm'
+                      ? t('common.confirm')
+                      : action.label}
               </button>
             ))}
           </div>
