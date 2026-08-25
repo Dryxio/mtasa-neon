@@ -1,0 +1,49 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-project-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "catalogue": {"format": "relative-path", "type": "string"},
+    "engine": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumVersionExclusive": {"format": "semver", "type": "string"},
+        "minimumVersion": {"format": "semver", "type": "string"}
+      },
+      "required": ["minimumVersion", "maximumVersionExclusive"],
+      "type": "object"
+    },
+    "externalDependencies": {"items": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"}, "type": "array", "uniqueItems": true},
+    "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+    "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
+    "requiredApis": {"items": {"$ref": "#/$defs/apiRequirement"}, "type": "array"},
+    "resources": {"items": {"$ref": "#/$defs/resource"}, "type": "array"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "unknownApis": {"enum": ["allow", "error"], "type": "string"}
+  },
+  "required": ["schemaVersion", "name", "profile", "engine", "catalogue", "resources"],
+  "type": "object",
+  "$defs": {
+    "apiRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"}
+      },
+      "required": ["name", "side"],
+      "type": "object"
+    },
+    "resource": {
+      "additionalProperties": false,
+      "properties": {
+        "dependencies": {"items": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"}, "type": "array", "uniqueItems": true},
+        "meta": {"format": "relative-path", "type": "string"},
+        "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+        "path": {"format": "relative-path", "type": "string"},
+        "requiredApis": {"items": {"$ref": "#/$defs/apiRequirement"}, "type": "array"}
+      },
+      "required": ["name", "path"],
+      "type": "object"
+    }
+  }
+}

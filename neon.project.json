@@ -1,0 +1,14 @@
+{
+  "catalogue": "Tools/neon-api/neon-api.json",
+  "engine": {
+    "maximumVersionExclusive": "1.8.0",
+    "minimumVersion": "1.7.0"
+  },
+  "externalDependencies": [],
+  "name": "mtasa-neon",
+  "profile": "neon-pair",
+  "requiredApis": [],
+  "resources": [],
+  "schemaVersion": "1.0.0",
+  "unknownApis": "allow"
+}

@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "id": "neon:artifact:luals-shared",
+      "kind": "luals",
+      "mediaType": "text/x-lua",
+      "path": "mta-shared.lua",
+      "schemaVersion": "1.0.0",
+      "sha256": "1e26e910f14a353a84a7ef5a068ffa92c5716d15c85bf8824a026296ea76f7a6",
+      "size": 81082
+    },
+    {
+      "id": "neon:artifact:luals-client",
+      "kind": "luals",
+      "mediaType": "text/x-lua",
+      "path": "mta-client.lua",
+      "schemaVersion": "1.0.0",
+      "sha256": "e9e21ccbb9e3b69a3bc34fb5cbaa4ea9f2aaa248f4c9bab976b50f5539c0026b",
+      "size": 115884
+    },
+    {
+      "id": "neon:artifact:luals-server",
+      "kind": "luals",
+      "mediaType": "text/x-lua",
+      "path": "mta-server.lua",
+      "schemaVersion": "1.0.0",
+      "sha256": "bad143c7ba509d62f48a3d2f568200e395107ab8fb9f35b65fe68e74f0d57e38",
+      "size": 34821
+    }
+  ],
+  "schemaVersion": "1.0.0"
+}

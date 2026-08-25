@@ -1,0 +1,41 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-check-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"enum": ["check"], "type": "string"},
+    "diagnostics": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {"pattern": "^[A-Z][A-Z0-9_]+$", "type": "string"},
+          "line": {"minimum": 1, "type": "integer"},
+          "message": {"minLength": 1, "type": "string"},
+          "path": {"minLength": 1, "type": "string"},
+          "severity": {"enum": ["error", "warning"], "type": "string"},
+          "side": {"enum": ["client", "server", "shared"], "type": "string"},
+          "symbol": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"}
+        },
+        "required": ["code", "severity", "message", "path"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "apiRequirements": {"minimum": 0, "type": "integer"},
+        "errors": {"minimum": 0, "type": "integer"},
+        "files": {"minimum": 0, "type": "integer"},
+        "resources": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings", "resources", "files", "apiRequirements"],
+      "type": "object"
+    }
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics"],
+  "type": "object"
+}

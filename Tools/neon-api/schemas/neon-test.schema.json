@@ -1,0 +1,28 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-test-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assertions": {"items": {"format": "stable-id", "type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true},
+    "id": {"format": "stable-id", "type": "string"},
+    "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "steps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {"enum": ["check", "build", "resource.start", "resource.stop", "resource.restart", "scenario.execute", "client.launch"], "type": "string"},
+          "id": {"format": "stable-id", "type": "string"},
+          "inputs": {"type": "object"},
+          "timeoutMs": {"maximum": 600000, "minimum": 1, "type": "integer"}
+        },
+        "required": ["id", "action", "timeoutMs", "inputs"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": ["schemaVersion", "id", "profile", "steps", "assertions"],
+  "type": "object"
+}

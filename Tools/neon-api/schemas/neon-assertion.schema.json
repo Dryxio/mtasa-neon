@@ -1,0 +1,15 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-assertion-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "actual": {"minLength": 1, "type": "string"},
+    "expected": {},
+    "id": {"format": "stable-id", "type": "string"},
+    "kind": {"enum": ["equals", "not-equals", "truthy", "falsy", "contains", "file-exists", "diagnostic-absent"], "type": "string"},
+    "message": {"minLength": 1, "type": "string"},
+    "schemaVersion": {"format": "semver", "type": "string"}
+  },
+  "required": ["schemaVersion", "id", "kind", "actual", "message"],
+  "type": "object"
+}

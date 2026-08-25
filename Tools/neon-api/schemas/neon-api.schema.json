@@ -1,0 +1,104 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-api-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "catalogueVersion": {"format": "semver", "type": "string"},
+    "engine": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {"enum": ["mta-neon"], "type": "string"},
+        "version": {"format": "semver", "type": "string"}
+      },
+      "required": ["family", "version"],
+      "type": "object"
+    },
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "sources": {
+      "additionalProperties": false,
+      "properties": {
+        "neon": {"$ref": "#/$defs/source"},
+        "upstream": {"$ref": "#/$defs/source"},
+        "upstreamWiki": {
+          "additionalProperties": false,
+          "properties": {
+            "imported": {"type": "boolean"},
+            "revision": {"pattern": "^[0-9a-f]{40}$", "type": "string"}
+          },
+          "required": ["revision", "imported"],
+          "type": "object"
+        }
+      },
+      "required": ["neon", "upstream", "upstreamWiki"],
+      "type": "object"
+    },
+    "symbols": {
+      "items": {"$ref": "#/$defs/symbol"},
+      "type": "array"
+    }
+  },
+  "required": ["schemaVersion", "catalogueVersion", "engine", "sources", "symbols"],
+  "type": "object",
+  "$defs": {
+    "parameter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"minLength": 1, "type": "string"},
+        "optional": {"type": "boolean"},
+        "type": {"minLength": 1, "type": "string"}
+      },
+      "required": ["name", "type", "optional"],
+      "type": "object"
+    },
+    "return": {
+      "additionalProperties": false,
+      "properties": {"type": {"minLength": 1, "type": "string"}},
+      "required": ["type"],
+      "type": "object"
+    },
+    "source": {
+      "additionalProperties": false,
+      "properties": {
+        "registrationDigest": {"format": "sha256", "type": "string"},
+        "revision": {"pattern": "^[0-9a-f]{40}$", "type": "string"}
+      },
+      "required": ["revision", "registrationDigest"],
+      "type": "object"
+    },
+    "sourceLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {"minimum": 1, "type": "integer"},
+        "path": {"format": "relative-path", "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"}
+      },
+      "required": ["path", "line", "side"],
+      "type": "object"
+    },
+    "symbol": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "items": {"enum": ["documented", "source-inspected", "static-checked", "built", "server-checked", "client-checked", "in-game-checked", "multiplayer-checked", "visual-checked", "native-trace-checked", "performance-checked"], "type": "string"},
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {"format": "stable-id", "type": "string"},
+        "inheritedSides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "kind": {"enum": ["function"], "type": "string"},
+        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"},
+        "origin": {"enum": ["mta", "neon"], "type": "string"},
+        "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
+        "profiles": {"items": {"enum": ["mta-upstream", "neon-client", "neon-server", "neon-pair", "neon-multiclient"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "restricted": {"type": "boolean"},
+        "returns": {"items": {"$ref": "#/$defs/return"}, "type": "array"},
+        "sides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "sources": {"items": {"$ref": "#/$defs/sourceLocation"}, "minItems": 1, "type": "array"},
+        "state": {"enum": ["verified", "documented-only", "runtime-only", "opaque", "conflict", "unavailable"], "type": "string"}
+      },
+      "required": ["id", "kind", "name", "origin", "state", "sides", "inheritedSides", "profiles", "restricted", "parameters", "returns", "evidence", "sources"],
+      "type": "object"
+    }
+  }
+}
