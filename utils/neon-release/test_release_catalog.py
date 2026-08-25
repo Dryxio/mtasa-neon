@@ -19,10 +19,10 @@ CATALOG_PATH = (
 
 
 class ReleaseCatalogTests(unittest.TestCase):
-    def test_repository_catalog_is_valid_and_prepares_build_183(self) -> None:
+    def test_repository_catalog_is_valid_and_prepares_build_182(self) -> None:
         releases = release_catalog.load_catalog(CATALOG_PATH)
-        self.assertEqual(releases[0].build, 183)
-        self.assertEqual(releases[0].display_version, "2026.08.25.183")
+        self.assertEqual(releases[0].build, 182)
+        self.assertEqual(releases[0].display_version, "2026.08.23.182")
 
     def test_next_build_ignores_ci_and_legacy_tags(self) -> None:
         tags = [
