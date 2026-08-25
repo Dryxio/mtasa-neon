@@ -5,12 +5,18 @@ OGL = {
     cutscenes = {intro = "SMOKE1A", police = "SMOKE1B"},
     models = {glendale = 466, pcj600 = 461, manana = 410, smoke = 269, sweet = 270, ogloc = 293,
               freddy = 109, goon = 110},
-    grove = {2072.9, -1690.6, 12.5, 33.0},
-    police = {1532.8, -1672.9, 12.4, 184.0},
+    grove = {2072.9, -1690.6, 13.5, 33.0, scriptZ = 12.5},
+    -- Vehicle positions retain raw SCM base Z. story-world-runtime resolves
+    -- each model's native base-to-centre offset on the authoritative client.
+    police = {1532.8, -1672.9, 12.4, 184.0, scriptZ = 12.4},
     house = {2454.4, -1284.5, 22.7},
     doorbell = {2468.8, -1278.2, 29.1},
     burgerShot = {783.2, -1630.3, 12.2},
-    smokeCar = {2075.0, -1688.5, 12.29, 255.7},
+    smokeCar = {2075.0, -1688.5, 12.29, 359.74, scriptZ = 12.29},
+    -- Ped positions likewise retain CREATE_CHAR's raw script Z; the shared
+    -- runtime applies the opcode-specific +1.0 conversion.
+    smokeStart = {2077.0, -1691.1, 12.5, 255.7, scriptZ = 12.5},
+    sweetStart = {2075.3, -1693.4, 12.5, 0.0, scriptZ = 12.5},
     playerBikes = {
         {2471.0, -1285.1, 28.3, 272.5},
         {2468.2, -1288.0, 27.8, 272.5},

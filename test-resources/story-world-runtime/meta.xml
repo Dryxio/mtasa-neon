@@ -1,0 +1,15 @@
+<meta>
+    <info author="MTA Neon" name="Story world runtime" type="script" version="0.1.0" />
+
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+
+    <export function="createStoryScmVehicle" type="server" />
+    <export function="releaseStoryScmVehicle" type="server" />
+    <export function="getStoryScmVehicleState" type="server" />
+    <export function="createStoryScmPed" type="server" />
+    <export function="destroyStoryWorldElements" type="server" />
+    <export function="releaseStoryWorldTeardown" type="server" />
+
+    <min_mta_version client="1.6.0" server="1.6.0" />
+</meta>

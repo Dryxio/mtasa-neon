@@ -1,5 +1,6 @@
 local mission
 local serial = 0
+local failMission
 
 local function rememberTimer(timer)
     mission.timers[#mission.timers + 1] = timer
@@ -55,6 +56,44 @@ local function track(element)
     return element
 end
 
+local function createScmPed(model, position)
+    local ped, reason = exports["story-world-runtime"]:createStoryScmPed(
+        model, position[1], position[2], position.scriptZ or position[3], position[4] or 0, OGL.dimension)
+    if not ped then return false, reason end
+    return track(ped)
+end
+
+local function createScmVehicle(model, position, syncer)
+    local handle, vehicle, reason = exports["story-world-runtime"]:createStoryScmVehicle(
+        model, position[1], position[2], position.scriptZ or position[3], position[4] or 0, OGL.dimension,
+        syncer or mission.leader, {timeout = 15000})
+    if not handle then return false, false, reason end
+    track(vehicle)
+    mission.vehiclePlacements[handle] = {vehicle = vehicle}
+    return vehicle, handle
+end
+
+local function awaitVehiclePlacements(handles, callback)
+    if #handles == 0 then return callback({}) end
+    local remaining, results = #handles, {}
+    for _, handle in ipairs(handles) do
+        local placement = mission.vehiclePlacements[handle]
+        if not placement then return failMission("placement SCM inconnu") end
+        placement.callback = function(data)
+            results[handle] = data
+            remaining = remaining - 1
+            if remaining == 0 then callback(results) end
+        end
+    end
+end
+
+local function awaitWorldTeardown(elements, fadeOut, callback)
+    local handle, reason = exports["story-world-runtime"]:destroyStoryWorldElements(
+        participants(), elements, {fadeOut = fadeOut, timeout = 15000})
+    if not handle then return failMission("teardown du monde refuse: " .. tostring(reason)) end
+    mission.worldTeardowns[handle] = callback
+end
+
 local function setStage(stage, payload)
     mission.stage = stage
     mission.stageStartedAt = getTickCount()
@@ -65,7 +104,10 @@ end
 local function cancelCohort(name)
     local handle = mission and mission.cohorts[name]
     if isElement(handle) then exports["native-task-runtime"]:cancelNativeTaskCohort(handle) end
-    if mission then mission.cohorts[name] = nil end
+    if mission then
+        mission.cohorts[name] = nil
+        mission.cohortStates[name] = nil
+    end
 end
 
 local function cancelPlayback(handle)
@@ -78,13 +120,19 @@ local function clearMission(restore)
     for _, timer in ipairs(mission.timers) do if isTimer(timer) then killTimer(timer) end end
     for _, handle in pairs(mission.playbacks) do cancelPlayback(handle) end
     for name in pairs(mission.cohorts) do cancelCohort(name) end
+    for handle in pairs(mission.vehiclePlacements) do
+        if isElement(handle) then exports["story-world-runtime"]:releaseStoryScmVehicle(handle) end
+    end
+    for handle in pairs(mission.worldTeardowns) do
+        if isElement(handle) then exports["story-world-runtime"]:releaseStoryWorldTeardown(handle) end
+    end
     triggerClientEvent(participants(), "ogl:cleanup", resourceRoot, mission.id)
     for player, state in pairs(mission.players) do if restore then restorePlayer(player, state) end end
     for _, element in ipairs(mission.entities) do if isElement(element) then destroyElement(element) end end
     mission = nil
 end
 
-local function failMission(reason, textKey)
+failMission = function(reason, textKey)
     if not mission or mission.finishing then return end
     mission.finishing = true
     setStage("failed", {reason = reason, textKey = textKey})
@@ -128,102 +176,211 @@ local function placeVehicle(vehicle, position)
     setElementRotation(vehicle, 0, 0, position[4] or 0)
 end
 
+local function activateVehicle(vehicle)
+    if not isElement(vehicle) then return false end
+    setElementVelocity(vehicle, 0, 0, 0)
+    setElementAngularVelocity(vehicle, 0, 0, 0)
+    setElementCollisionsEnabled(vehicle, true)
+    setElementFrozen(vehicle, false)
+    return true
+end
+
 local function createTravelActors()
     local c = OGL.smokeCar
-    mission.smokeCar = track(createVehicle(OGL.models.glendale, c[1], c[2], c[3], 0, 0, c[4]))
-    mission.smoke = track(createPed(OGL.models.smoke, c[1], c[2], c[3] + 1, c[4]))
-    mission.sweet = track(createPed(OGL.models.sweet, c[1], c[2], c[3] + 1, c[4]))
+    local smoke = OGL.smokeStart
+    local sweet = OGL.sweetStart
+    local placementHandles = {}
+    local primaryHandle
+    mission.smokeCar, primaryHandle = createScmVehicle(OGL.models.glendale, c, mission.leader)
+    if primaryHandle then placementHandles[#placementHandles + 1] = primaryHandle end
+    -- The SCM creates both actors beside the Glendale before assigning their
+    -- entry tasks. Creating them at the vehicle centre made three collision
+    -- bodies overlap and launched the occupied car when physics resumed.
+    mission.smoke = createScmPed(OGL.models.smoke, smoke)
+    mission.sweet = createScmPed(OGL.models.sweet, sweet)
     if not mission.smokeCar or not mission.smoke or not mission.sweet then return false end
     setVehicleColor(mission.smokeCar, 98, 14, 98, 14)
     setElementHealth(mission.smokeCar, 2000)
+    -- Build the occupied car as a frozen simulation island. Automatic syncer
+    -- assignment previously arrived after the warps and made GTA re-admit a
+    -- live, overlapping physics state, launching the whole car into the air.
+    setElementFrozen(mission.smokeCar, true)
+    setElementCollisionsEnabled(mission.smokeCar, false)
+    local syncersAccepted = setElementSyncer(mission.smokeCar, mission.leader, true, true)
+    syncersAccepted = setElementSyncer(mission.smoke, mission.leader, true, true) and syncersAccepted
+    syncersAccepted = setElementSyncer(mission.sweet, mission.leader, true, true) and syncersAccepted
+    if not syncersAccepted then return false end
     warpPedIntoVehicle(mission.leader, mission.smokeCar, 0)
     warpPedIntoVehicle(mission.smoke, mission.smokeCar, 1)
     warpPedIntoVehicle(mission.sweet, mission.smokeCar, 2)
     local seat = 3
+    local supportIndex = 0
     for _, player in ipairs(participants()) do
         if player ~= mission.leader then
             if seat <= 3 then
                 warpPedIntoVehicle(player, mission.smokeCar, seat)
                 seat = seat + 1
             else
-                local offset = #mission.auxVehicles * 4
-                local vehicle = track(createVehicle(OGL.models.glendale, c[1] - offset, c[2] - 4, c[3], 0, 0, c[4]))
+                supportIndex = supportIndex + 1
+                local offset = supportIndex * 4
+                local position = {c[1] - offset, c[2] - 4, c[3], c[4], scriptZ = c.scriptZ}
+                local vehicle, handle = createScmVehicle(OGL.models.glendale, position, player)
+                if not vehicle then return false end
+                placementHandles[#placementHandles + 1] = handle
                 mission.auxVehicles[player] = vehicle
+                mission.auxVehiclePositions[vehicle] = position
                 warpPedIntoVehicle(player, vehicle, 0)
             end
         end
     end
-    return true
+    return placementHandles, primaryHandle
+end
+
+local function detachTravelWorld(includeOgloc)
+    for player in pairs(mission.players) do
+        if isElement(player) and isPedInVehicle(player) then removePedFromVehicle(player) end
+    end
+    local elements = {mission.smoke, mission.sweet, mission.smokeCar}
+    if includeOgloc then elements[#elements + 1] = mission.ogloc end
+    for _, vehicle in pairs(mission.auxVehicles) do
+        elements[#elements + 1] = vehicle
+    end
+    mission.smoke, mission.sweet, mission.smokeCar = nil, nil, nil
+    if includeOgloc then mission.ogloc = nil end
+    mission.auxVehicles, mission.auxVehiclePositions = {}, {}
+    return elements
+end
+
+local function createPoliceTravelActors()
+    local p = OGL.police
+    local placementHandles = {}
+    local primaryHandle
+    mission.smokeCar, primaryHandle = createScmVehicle(OGL.models.glendale, p, mission.leader)
+    if primaryHandle then placementHandles[#placementHandles + 1] = primaryHandle end
+    -- These spawn transforms reproduce the SCM values hidden under the black
+    -- cutscene teardown frame; every actor is warped before the world returns.
+    mission.smoke = createScmPed(OGL.models.smoke, {2072.3, -1697.2, 12.5, 255.7})
+    mission.sweet = createScmPed(OGL.models.sweet, {2072.3, -1696.2, 12.5, 0})
+    mission.ogloc = createScmPed(OGL.models.ogloc, {1543.2, -1687.0, 12.5, 97.2})
+    if not mission.smokeCar or not mission.smoke or not mission.sweet or not mission.ogloc then return false end
+    setVehicleColor(mission.smokeCar, 98, 14, 98, 14)
+    setElementHealth(mission.smokeCar, 2000)
+    setElementHealth(mission.ogloc, 2000)
+    setElementFrozen(mission.smokeCar, true)
+    setElementCollisionsEnabled(mission.smokeCar, false)
+    local syncersAccepted = setElementSyncer(mission.smokeCar, mission.leader, true, true)
+    for _, ped in ipairs({mission.smoke, mission.sweet, mission.ogloc}) do
+        syncersAccepted = setElementSyncer(ped, mission.leader, true, true) and syncersAccepted
+    end
+    if not syncersAccepted then return false end
+    warpPedIntoVehicle(mission.leader, mission.smokeCar, 0)
+    warpPedIntoVehicle(mission.smoke, mission.smokeCar, 1)
+    warpPedIntoVehicle(mission.sweet, mission.smokeCar, 2)
+    warpPedIntoVehicle(mission.ogloc, mission.smokeCar, 3)
+    local supportIndex = 0
+    for _, player in ipairs(participants()) do
+        if player ~= mission.leader then
+            supportIndex = supportIndex + 1
+            local position = {p[1] + supportIndex * 4, p[2], p[3], p[4]}
+            position.scriptZ = p.scriptZ
+            local vehicle, handle = createScmVehicle(OGL.models.glendale, position, player)
+            if not vehicle then return false end
+            placementHandles[#placementHandles + 1] = handle
+            mission.auxVehicles[player] = vehicle
+            mission.auxVehiclePositions[vehicle] = position
+            warpPedIntoVehicle(player, vehicle, 0)
+        end
+    end
+    return placementHandles, primaryHandle
 end
 
 local beginPoliceCutscene, beginHouseScene, setupChase, startNextRecording, beginCombat, beginBurgerReturn, passMission
 
 local function beginDriveToPolice()
-    if not createTravelActors() then return failMission("creation des acteurs Grove refusee") end
-    for player in pairs(mission.players) do
-        setElementFrozen(player, false)
-        setElementCollisionsEnabled(player, true)
-        toggleAllControls(player, true, true, true)
-    end
-    setStage("drive_police", {objective = OGL.police, textKey = "SMK1_02"})
-    if mission.headless then
-        rememberTimer(setTimer(function()
-            if mission and mission.stage == "drive_police" then
-                placeVehicle(mission.smokeCar, OGL.police)
-                for player, vehicle in pairs(mission.auxVehicles) do placeVehicle(vehicle, OGL.police) end
-                beginPoliceCutscene()
-            end
-        end, 250, 1))
-    end
+    local handles, primaryHandle = createTravelActors()
+    if not handles then return failMission("creation des acteurs Grove refusee") end
+    awaitVehiclePlacements(handles, function(results)
+        for _, data in pairs(results) do
+            local auxPosition = mission.auxVehiclePositions[data.vehicle]
+            if auxPosition then auxPosition[3], auxPosition.scriptZ = data.centerZ, data.scriptZ end
+        end
+        local placement = results[primaryHandle]
+        mission.travelPlacement = {OGL.smokeCar[1], OGL.smokeCar[2], placement.centerZ, OGL.smokeCar[4],
+                                   scriptZ = placement.scriptZ, baseOffset = placement.baseOffset}
+        mission.travelReleased = false
+        mission.travelReleasedAt = nil
+        setStage("drive_police", {objective = OGL.police, textKey = "SMK1_02", probeVehicle = mission.smokeCar,
+                                  probeScriptZ = placement.scriptZ,
+                                  probeActors = {smoke = mission.smoke, sweet = mission.sweet}})
+    end)
 end
 
 beginPoliceCutscene = function()
     if mission.stage ~= "drive_police" then return end
-    barrier("cutscene", OGL.cutscenes.police, function()
-        local p = OGL.police
-        placeVehicle(mission.smokeCar, p)
-        mission.ogloc = track(createPed(OGL.models.ogloc, p[1] + 9, p[2] - 14, p[3] + 0.5, 97.2))
-        if not mission.ogloc then return failMission("creation OG Loc refusee") end
-        setElementHealth(mission.ogloc, 2000)
-        warpPedIntoVehicle(mission.ogloc, mission.smokeCar, 3)
-        -- The extra co-op rider drives a support Glendale after OG Loc occupies the retail fourth seat.
-        for _, player in ipairs(participants()) do
-            if player ~= mission.leader and getPedOccupiedVehicle(player) == mission.smokeCar then
-                removePedFromVehicle(player)
-                local vehicle = track(createVehicle(OGL.models.glendale, p[1] + 4, p[2], p[3], 0, 0, p[4]))
-                mission.auxVehicles[player] = vehicle
-                warpPedIntoVehicle(player, vehicle, 0)
-            end
-        end
-        setStage("drive_house", {objective = OGL.house, textKey = "SMK1_10"})
-        if mission.headless then
-            rememberTimer(setTimer(function()
-                if mission and mission.stage == "drive_house" then
-                    placeVehicle(mission.smokeCar, {OGL.house[1], OGL.house[2] - 10, OGL.house[3], 0})
-                    for _, vehicle in pairs(mission.auxVehicles) do
-                        placeVehicle(vehicle, {OGL.house[1] - 5, OGL.house[2] - 10, OGL.house[3], 0})
-                    end
-                    beginHouseScene()
+    setStage("police_cutscene_teardown")
+    -- main.scm fades to black, moves CJ out of the car, then deletes Smoke,
+    -- Sweet and the first Glendale before LOAD_CUTSCENE SMOKE1B. Keeping MTA
+    -- instances alive lets the native cutscene remap the same special/model
+    -- slots underneath synchronized entities. That ownership violation matches
+    -- the observed SMOKE1B frame-loop stall.
+    for player in pairs(mission.players) do
+        setElementFrozen(player, true)
+        toggleAllControls(player, false, true, true)
+        setElementCollisionsEnabled(player, false)
+    end
+    trace("cutscene_world_teardown", {name = OGL.cutscenes.police})
+    local oldWorld = detachTravelWorld(true)
+    awaitWorldTeardown(oldWorld, 2.0, function()
+        for player in pairs(mission.players) do setElementPosition(player, 1496.5, -1672.6, 14.2) end
+        barrier("cutscene", OGL.cutscenes.police, function()
+            local handles, primaryHandle = createPoliceTravelActors()
+            if not handles then return failMission("reconstruction des acteurs au commissariat refusee") end
+            awaitVehiclePlacements(handles, function(results)
+                for _, data in pairs(results) do
+                    local auxPosition = mission.auxVehiclePositions[data.vehicle]
+                    if auxPosition then auxPosition[3], auxPosition.scriptZ = data.centerZ, data.scriptZ end
                 end
-            end, 250, 1))
-        end
+                local placement = results[primaryHandle]
+                mission.travelPlacement = {OGL.police[1], OGL.police[2], placement.centerZ, OGL.police[4],
+                                           scriptZ = placement.scriptZ, baseOffset = placement.baseOffset}
+                mission.travelReleased = false
+                mission.travelReleasedAt = nil
+                setStage("reconstruct_police", {probeVehicle = mission.smokeCar,
+                                                probeScriptZ = placement.scriptZ,
+                                                probeActors = {smoke = mission.smoke, sweet = mission.sweet}})
+            end)
+        end)
     end)
 end
 
 beginHouseScene = function()
     if mission.stage ~= "drive_house" then return end
+    for player in pairs(mission.players) do toggleAllControls(player, false, true, true) end
+    if isElement(mission.smokeCar) then
+        setElementVelocity(mission.smokeCar, 0, 0, 0)
+        setElementAngularVelocity(mission.smokeCar, 0, 0, 0)
+        setElementFrozen(mission.smokeCar, true)
+    end
     barrier("scene", "freddys_house_arrival", function()
+        local index = 0
         for player in pairs(mission.players) do
+            index = index + 1
             if isPedInVehicle(player) then removePedFromVehicle(player) end
-            setElementPosition(player, 2457.4, -1286.1, 23.0)
+            setElementCollisionsEnabled(player, true)
+            setElementFrozen(player, false)
+            toggleAllControls(player, true, true, true)
+            setElementPosition(player, 2457.4 - (index - 1), -1286.1 - (index - 1), 23.0)
+            setElementRotation(player, 0, 0, 230.2)
         end
         if isElement(mission.ogloc) then
             removePedFromVehicle(mission.ogloc)
-            setElementPosition(mission.ogloc, 2463.9, -1278.4, 29.0)
+            setElementPosition(mission.ogloc, 2467.8, -1277.1, 28.9)
+            setElementRotation(mission.ogloc, 0, 0, 230.2)
         end
         setStage("doorbell", {objective = OGL.doorbell, textKey = "SMK1_03"})
         if mission.headless then rememberTimer(setTimer(setupChase, 250, 1)) end
-    end, {actors = {smoke = mission.smoke, sweet = mission.sweet, ogloc = mission.ogloc}})
+    end, {actors = {smoke = mission.smoke, sweet = mission.sweet, ogloc = mission.ogloc},
+           vehicle = mission.smokeCar})
 end
 
 local function createFreddyCohort()
@@ -242,49 +399,89 @@ end
 
 setupChase = function()
     if not mission or mission.stage ~= "doorbell" then return end
-    barrier("scene", "doorbell", function()
+    setStage("doorbell_prepare")
+    for player in pairs(mission.players) do
+        setElementFrozen(player, true)
+        setElementCollisionsEnabled(player, false)
+        toggleAllControls(player, false, true, true)
+    end
+    local oldTravelWorld = detachTravelWorld(false)
+    awaitWorldTeardown(oldTravelWorld, 0.5, function()
         mission.playerBikes = {}
+        local placementHandles = {}
         for index, player in ipairs(participants()) do
             local p = OGL.playerBikes[((index - 1) % #OGL.playerBikes) + 1]
-            local bike = track(createVehicle(OGL.models.pcj600, p[1], p[2], p[3], 0, 0, p[4]))
+            local bike, handle = createScmVehicle(OGL.models.pcj600, p, player)
             if not bike then return failMission("creation PCJ-600 de participant refusee") end
+            placementHandles[#placementHandles + 1] = handle
             setElementHealth(bike, 2000)
             exports["native-task-runtime"]:setSynchronizedVehicleTyresCanBurst(bike, false)
             mission.playerBikes[player] = bike
-            warpPedIntoVehicle(player, bike, 0)
         end
-        if isElement(mission.ogloc) then warpPedIntoVehicle(mission.ogloc, mission.playerBikes[mission.leader], 1) end
         local b, f = OGL.freddyBike, OGL.freddy
-        mission.freddyBike = track(createVehicle(OGL.models.pcj600, b[1], b[2], b[3], 0, 0, b[4]))
-        mission.freddy = track(createPed(OGL.models.freddy, f[1], f[2], f[3], f[4]))
+        local freddyPlacement
+        mission.freddyBike, freddyPlacement = createScmVehicle(OGL.models.pcj600, b, mission.leader)
+        if freddyPlacement then placementHandles[#placementHandles + 1] = freddyPlacement end
+        mission.freddy = createScmPed(OGL.models.freddy, f)
         if not mission.freddyBike or not mission.freddy then return failMission("creation de Freddy refusee") end
         setElementHealth(mission.freddyBike, 1000)
         exports["native-task-runtime"]:setSynchronizedVehicleTyresCanBurst(mission.freddyBike, false)
         giveWeapon(mission.freddy, 32, 30000, true)
         setElementHealth(mission.freddy, 1000)
-        warpPedIntoVehicle(mission.freddy, mission.freddyBike, 0)
-        setStage("chase_wait_authority", {textKey = "SMK1_04", target = mission.freddy})
-        local ok, reason = createFreddyCohort()
-        if not ok then failMission("cohorte Freddy refusee: " .. tostring(reason)) end
-    end, {actors = {ogloc = mission.ogloc}})
+        local participantIndex = 0
+        for player in pairs(mission.players) do
+            participantIndex = participantIndex + 1
+            setElementPosition(player, 2468.0, -1278.5 - (participantIndex - 1), 29.1)
+            setElementRotation(player, 0, 0, 269.4)
+        end
+        if isElement(mission.ogloc) then
+            setElementPosition(mission.ogloc, 2467.4, -1275.8, 28.8)
+            setElementRotation(mission.ogloc, 0, 0, 282.8)
+        end
+        awaitVehiclePlacements(placementHandles, function()
+            barrier("scene", "doorbell", function()
+                for player, bike in pairs(mission.playerBikes) do
+                    activateVehicle(bike)
+                    setElementFrozen(player, false)
+                    toggleAllControls(player, true, true, true)
+                    warpPedIntoVehicle(player, bike, 0)
+                end
+                if isElement(mission.ogloc) then
+                    warpPedIntoVehicle(mission.ogloc, mission.playerBikes[mission.leader], 1)
+                end
+                activateVehicle(mission.freddyBike)
+                warpPedIntoVehicle(mission.freddy, mission.freddyBike, 0)
+                setStage("chase_wait_authority", {textKey = "SMK1_04", target = mission.freddy})
+                local ok, reason = createFreddyCohort()
+                if not ok then failMission("cohorte Freddy refusee: " .. tostring(reason)) end
+            end, {actors = {ogloc = mission.ogloc, freddy = mission.freddy}})
+        end)
+    end)
 end
 
-local function startObstacleRecordings()
-    if mission.obstaclesStarted then return end
+local function startObstacleRecordings(callback)
+    if mission.obstaclesStarted then return callback() end
     mission.obstaclesStarted = true
+    local entries, placementHandles = {}, {}
     for _, config in ipairs(OGL.obstacleRecordings) do
-        local vehicle = track(createVehicle(config[2], config[3], config[4], config[5]))
-        if vehicle then
-            setElementSyncer(vehicle, mission.leader, true)
+        local position = {config[3], config[4], config[5], 0, scriptZ = config[5]}
+        local vehicle, placementHandle = createScmVehicle(config[2], position, mission.leader)
+        if not vehicle then return failMission("creation obstacle refusee") end
+        entries[#entries + 1] = {vehicle = vehicle, config = config}
+        placementHandles[#placementHandles + 1] = placementHandle
+    end
+    awaitVehiclePlacements(placementHandles, function()
+        for _, entry in ipairs(entries) do
+            local vehicle, config = entry.vehicle, entry.config
+            activateVehicle(vehicle)
             local handle, reason = exports["native-task-runtime"]:createNativeRecordedVehiclePlayback(
                 vehicle, config[1], mission.leader, {pivotSpeed = 1, minimumSpeed = 1, maximumSpeed = 1,
                                                     loadTimeout = 15000, playbackTimeout = 120000})
             if handle then mission.playbacks["obstacle:" .. tostring(config[1])] = handle
             else return failMission("recording obstacle " .. tostring(config[1]) .. ": " .. tostring(reason)) end
-        else
-            return failMission("creation obstacle refusee")
         end
-    end
+        callback()
+    end)
 end
 
 startNextRecording = function()
@@ -293,23 +490,28 @@ startNextRecording = function()
     local recordingId = OGL.chaseRecordings[mission.recordingIndex]
     if not recordingId then return beginCombat() end
     if recordingId == 31 then placeVehicle(mission.freddyBike, OGL.chaseStart) end
-    if recordingId == 35 then startObstacleRecordings() end
-    setStage("chase_recording:" .. tostring(recordingId), {recordingId = recordingId, textKey = "SMK1_04"})
-    local options = {}
-    for key, value in pairs(OGL.playback) do options[key] = value end
-    if mission.headless and recordingId ~= 30 then
-        -- Recording 30 exercises the real distance formula. Subsequent headless
-        -- segments run at the native API maximum so the bounded harness does not
-        -- depend on simulated player input fighting the player's own sync stream.
-        options.pivotSpeed, options.minimumSpeed, options.maximumSpeed = 2, 2, 2
-    else
-        options.target = mission.leader
+    local function beginRecording()
+        setStage("chase_recording:" .. tostring(recordingId), {recordingId = recordingId, textKey = "SMK1_04"})
+        local options = {}
+        for key, value in pairs(OGL.playback) do options[key] = value end
+        if mission.headless and recordingId ~= 30 then
+            -- Recording 30 exercises the real distance formula. Subsequent headless
+            -- segments run at the native API maximum so the bounded harness does not
+            -- depend on simulated player input fighting the player's own sync stream.
+            options.pivotSpeed, options.minimumSpeed, options.maximumSpeed = 2, 2, 2
+        else
+            options.target = mission.leader
+        end
+        local handle, reason = exports["native-task-runtime"]:createNativeRecordedVehiclePlayback(
+            mission.freddyBike, recordingId, mission.leader, options)
+        if not handle then
+            return failMission("recording " .. tostring(recordingId) .. " refuse: " .. tostring(reason))
+        end
+        mission.playbacks.main = handle
+        mission.mainRecording = recordingId
     end
-    local handle, reason = exports["native-task-runtime"]:createNativeRecordedVehiclePlayback(
-        mission.freddyBike, recordingId, mission.leader, options)
-    if not handle then return failMission("recording " .. tostring(recordingId) .. " refuse: " .. tostring(reason)) end
-    mission.playbacks.main = handle
-    mission.mainRecording = recordingId
+    if recordingId == 35 then return startObstacleRecordings(beginRecording) end
+    beginRecording()
 end
 
 beginCombat = function()
@@ -318,7 +520,7 @@ beginCombat = function()
     setElementPosition(mission.freddy, 2300.3, -1502.8, 24.3)
     mission.goons = {}
     for _, p in ipairs(OGL.goons) do
-        local ped = track(createPed(OGL.models.goon, p[1], p[2], p[3], p[4]))
+        local ped = createScmPed(OGL.models.goon, p)
         if not ped then return failMission("creation goon refusee") end
         giveWeapon(ped, 32, 30000, true)
         setElementHealth(ped, 500)
@@ -414,14 +616,18 @@ local function startMission(leader, headless)
     if not isElement(leader) or getElementType(leader) ~= "player" then return false, "aucun joueur disponible" end
     serial = serial + 1
     mission = {id = serial, leader = leader, headless = headless == true, stage = "starting", players = {},
-               entities = {}, timers = {}, cohorts = {}, playbacks = {}, auxVehicles = {}, sceneSerial = 0,
+               entities = {}, timers = {}, cohorts = {}, cohortStates = {}, playbacks = {}, auxVehicles = {},
+               auxVehiclePositions = {},
+               vehiclePlacements = {}, worldTeardowns = {}, sceneSerial = 0,
                recordingIndex = 0, lastPlaybackSamples = {}}
     for _, player in ipairs(getElementsByType("player")) do
         mission.players[player] = snapshotPlayer(player)
         if isPedInVehicle(player) then removePedFromVehicle(player) end
         setElementInterior(player, 0)
         setElementDimension(player, OGL.dimension)
-        setElementPosition(player, OGL.grove[1], OGL.grove[2], OGL.grove[3])
+        -- The native file cutscene owns presentation until its release
+        -- barrier. Keep the player's pre-mission transform until then; the
+        -- world reconstruction will place or warp it under the black frame.
         setElementFrozen(player, true)
         setElementCollisionsEnabled(player, false)
         toggleAllControls(player, false, true, true)
@@ -444,6 +650,133 @@ addEventHandler("ogl:barrierDone", resourceRoot, function(id, ok, reason)
     current.callback()
 end)
 
+addEventHandler("onStoryScmVehicleStateChange", root, function(state, data)
+    local placement = mission and mission.vehiclePlacements[source]
+    if not placement then return end
+    if state == "failed" then
+        mission.vehiclePlacements[source] = nil
+        exports["story-world-runtime"]:releaseStoryScmVehicle(source)
+        return failMission("placement SCM du vehicule refuse: " .. tostring(data and data.reason))
+    end
+    if state ~= "ready" then return end
+    local callback = placement.callback
+    mission.vehiclePlacements[source] = nil
+    exports["story-world-runtime"]:releaseStoryScmVehicle(source)
+    trace("scm_vehicle_ready", {model = data.model, scriptZ = data.scriptZ, centerZ = data.centerZ,
+                                baseOffset = data.baseOffset})
+    if callback then callback(data) end
+end)
+
+addEventHandler("onStoryWorldTeardownStateChange", root, function(state, data)
+    local callback = mission and mission.worldTeardowns[source]
+    if not callback then return end
+    if state == "failed" then
+        mission.worldTeardowns[source] = nil
+        exports["story-world-runtime"]:releaseStoryWorldTeardown(source)
+        return failMission("teardown synchronise refuse: " .. tostring(data and data.reason))
+    end
+    if state ~= "ready" then return end
+    mission.worldTeardowns[source] = nil
+    exports["story-world-runtime"]:releaseStoryWorldTeardown(source)
+    trace("world_teardown_ready", {clients = data.clients, elements = data.elements})
+    callback()
+end)
+
+addEvent("ogl:cutsceneProbe", true)
+addEventHandler("ogl:cutsceneProbe", resourceRoot, function(id, name, phase)
+    local current = mission and mission.barrier
+    if source ~= resourceRoot or not current or current.id ~= tonumber(id) or not current.waiting[client] then return end
+    trace("cutscene_probe", {name = tostring(name), phase = tostring(phase), player = getPlayerName(client)})
+end)
+
+addEvent("ogl:vehicleProbe", true)
+addEventHandler("ogl:vehicleProbe", resourceRoot, function(vehicle, sample)
+    local placement = mission and mission.travelPlacement
+    if source ~= resourceRoot or not mission or client ~= mission.leader or
+        (mission.stage ~= "drive_police" and mission.stage ~= "reconstruct_police") or vehicle ~= mission.smokeCar or
+        type(placement) ~= "table" or type(sample) ~= "table" then
+        return
+    end
+    local x, y, z = getElementPosition(vehicle)
+    local syncer = getElementSyncer(vehicle)
+    local baseOffset = tonumber(sample.baseOffset)
+    local configuredPlacementError = baseOffset and (placement[3] - baseOffset - placement.scriptZ) or nil
+    trace("vehicle_probe", {
+        sample = math.floor(tonumber(sample.sample) or -1),
+        clientX = tonumber(sample.x), clientY = tonumber(sample.y), clientZ = tonumber(sample.z),
+        groundZ = tonumber(sample.groundZ), baseOffset = baseOffset,
+        bottomClearance = tonumber(sample.bottomClearance), scriptPlacementError = tonumber(sample.scriptPlacementError),
+        configuredPlacementError = configuredPlacementError,
+        clientHealth = tonumber(sample.health), playerHealth = tonumber(sample.playerHealth),
+        vx = tonumber(sample.vx), vy = tonumber(sample.vy), vz = tonumber(sample.vz),
+        streamed = sample.streamed == true, syncing = sample.syncing == true,
+        onGround = sample.onGround == true, blown = sample.blown == true,
+        collisions = sample.collisions == true, frozen = sample.frozen == true,
+        playerCollisions = sample.playerCollisions == true, playerFrozen = sample.playerFrozen == true,
+        playerSeat = tonumber(sample.playerSeat), smokeSeat = tonumber(sample.smokeSeat),
+        smokeCollisions = sample.smokeCollisions == true, sweetSeat = tonumber(sample.sweetSeat),
+        sweetCollisions = sample.sweetCollisions == true,
+        serverX = x, serverY = y, serverZ = z, serverHealth = getElementHealth(vehicle),
+        serverSyncer = isElement(syncer) and getPlayerName(syncer) or false,
+    })
+    if configuredPlacementError and math.abs(configuredPlacementError) > 0.05 then
+        failMission(("conversion Z SCM du vehicule invalide: ecart %.3f m"):format(configuredPlacementError))
+    elseif mission.travelReleased and mission.travelReleasedAt and getTickCount() - mission.travelReleasedAt <= 1500 and
+        tonumber(sample.z) and tonumber(sample.z) - placement[3] > 2 then
+        failMission(("vehicule reconstruit ejecte a Z %.3f"):format(tonumber(sample.z)))
+    elseif not mission.travelReleased and sample.streamed == true and sample.syncing == true then
+        local releasedStage = mission.stage
+        placeVehicle(mission.smokeCar, placement)
+        setElementVelocity(mission.smokeCar, 0, 0, 0)
+        setElementAngularVelocity(mission.smokeCar, 0, 0, 0)
+        setElementCollisionsEnabled(mission.smokeCar, true)
+        setElementFrozen(mission.smokeCar, false)
+        for player, vehicle in pairs(mission.auxVehicles) do
+            local auxPosition = mission.auxVehiclePositions[vehicle]
+            if auxPosition then placeVehicle(vehicle, auxPosition) end
+            setElementVelocity(vehicle, 0, 0, 0)
+            setElementAngularVelocity(vehicle, 0, 0, 0)
+            setElementCollisionsEnabled(vehicle, true)
+            setElementFrozen(vehicle, false)
+        end
+        for player in pairs(mission.players) do
+            setElementFrozen(player, false)
+            -- Keep the explicit no-collision state while the player is an
+            -- occupant. Re-enabling it after warpPedIntoVehicle overrides
+            -- GTA's occupant suppression and is a material lifecycle difference
+            -- from the stable native drive-by harness. The exit barrier
+            -- restores collisions immediately after removePedFromVehicle.
+            toggleAllControls(player, true, true, true)
+        end
+        mission.travelReleased = true
+        mission.travelReleasedAt = getTickCount()
+        trace("travel_release", {clientSample = math.floor(tonumber(sample.sample) or -1), releaseStage = releasedStage})
+        triggerClientEvent(participants(), "ogl:travelReleased", resourceRoot, releasedStage)
+        if releasedStage == "reconstruct_police" then
+            setStage("drive_house", {objective = OGL.house, textKey = "SMK1_10"})
+            if mission.headless then
+                rememberTimer(setTimer(function()
+                    if mission and mission.stage == "drive_house" then
+                        placeVehicle(mission.smokeCar, {OGL.house[1], OGL.house[2] - 10, OGL.house[3], 0})
+                        for _, auxVehicle in pairs(mission.auxVehicles) do
+                            placeVehicle(auxVehicle, {OGL.house[1] - 5, OGL.house[2] - 10, OGL.house[3], 0})
+                        end
+                        beginHouseScene()
+                    end
+                end, 250, 1))
+            end
+        elseif mission.headless then
+            rememberTimer(setTimer(function()
+                if mission and mission.stage == "drive_police" then
+                    placeVehicle(mission.smokeCar, OGL.police)
+                    for _, auxVehicle in pairs(mission.auxVehicles) do placeVehicle(auxVehicle, OGL.police) end
+                    beginPoliceCutscene()
+                end
+            end, 250, 1))
+        end
+    end
+end)
+
 local function skipCutscene()
     if not mission or not mission.barrier or mission.barrier.kind ~= "cutscene" then return false end
     triggerClientEvent(participants(), "ogl:skipCutscene", resourceRoot, mission.barrier.id)
@@ -462,7 +795,11 @@ addEventHandler("onNativeTaskCohortStateChange", root, function(state, data)
     local name
     for key, handle in pairs(mission.cohorts) do if source == handle then name = key break end end
     if not name then return end
-    if state == "active" and data.sample then return end
+    -- The acceptance event can race the export return that registers the handle.
+    -- Treat the first authoritative sample as reconciliation instead of dropping
+    -- every sample: subsequent samples stay quiet once activation was observed.
+    if state == "active" and data.sample and mission.cohortStates[name] == "active" then return end
+    mission.cohortStates[name] = state
     trace("cohort", {name = name, state = state, reason = data.reason})
     if state == "failed" then return failMission("cohorte " .. name .. ": " .. tostring(data.reason)) end
     if name == "freddy" and state == "active" and mission.stage == "chase_wait_authority" then
@@ -515,11 +852,11 @@ addCommandHandler("oglocabort", function(player) if mission and (not isElement(p
 setTimer(function()
     local players = getElementsByType("player")
     if fileExists("skip.request") then fileDelete("skip.request") skipCutscene() end
-    if #players >= 2 and fileExists("natural.request") then
+    if #players >= 1 and fileExists("natural.request") then
         fileDelete("natural.request")
         local ok, reason = startMission(players[1], false)
         if ok == false then outputServerLog("[og-loc] NATURAL REQUEST REJECTED: " .. tostring(reason)) end
-    elseif #players >= 2 and fileExists("headless.request") then
+    elseif #players >= 1 and fileExists("headless.request") then
         fileDelete("headless.request")
         local ok, reason = startMission(players[1], true)
         if ok == false then outputServerLog("[og-loc] HEADLESS REQUEST REJECTED: " .. tostring(reason)) end
