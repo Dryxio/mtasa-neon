@@ -7,8 +7,8 @@
     "engine": {
       "additionalProperties": false,
       "properties": {
-        "maximumVersionExclusive": {"format": "semver", "type": "string"},
-        "minimumVersion": {"format": "semver", "type": "string"}
+        "maximumVersionExclusive": {"format": "semver", "maxLength": 64, "type": "string"},
+        "minimumVersion": {"format": "semver", "maxLength": 64, "type": "string"}
       },
       "required": ["minimumVersion", "maximumVersionExclusive"],
       "type": "object"

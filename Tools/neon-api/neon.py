@@ -35,6 +35,13 @@ from neonlib.luals import generate_luals  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.scenario import run_scenario, verify_scenario_run  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
+from neonlib.supervisor import (  # noqa: E402
+    request_supervisor,
+    run_supervisor_daemon,
+    runtime_compare_failure,
+    start_supervisor,
+    supervisor_failure,
+)
 
 
 SCHEMA_STORE = SchemaStore(TOOL_DIRECTORY / "schemas")
@@ -304,6 +311,72 @@ def command_scenario_verify(args: argparse.Namespace) -> int:
         result = _failure("scenario.verify", "INTERNAL_RESULT_INVALID", "; ".join(f"{issue.pointer}: {issue.message}" for issue in issues))
     _emit(result, args.json)
     return 0 if result["status"] == "pass" else 1
+
+
+def _emit_validated(result: dict, schema: str, as_json: bool) -> int:
+    issues = SCHEMA_STORE.validate(schema, result)
+    if issues:
+        details = "; ".join(f"{issue.pointer}: {issue.message}" for issue in issues[:16])
+        command = result.get("command", "internal")
+        if schema == "neon-runtime-compare-result":
+            result = runtime_compare_failure("INTERNAL_RESULT_INVALID", details)
+        elif schema == "neon-supervisor-result":
+            if command not in {"supervisor.start", "supervisor.status", "supervisor.stop"}:
+                command = "supervisor.status"
+            result = supervisor_failure(command, "INTERNAL_RESULT_INVALID", details)
+        else:
+            result = _failure(command, "INTERNAL_RESULT_INVALID", details)
+    _emit(result, as_json)
+    return 0 if result["status"] == "pass" else 1
+
+
+def command_supervisor_start(args: argparse.Namespace) -> int:
+    if not 10 <= args.ttl <= 86400:
+        result = supervisor_failure("supervisor.start", "SUPERVISOR_TTL_INVALID", "ttl must be from 10 to 86400 seconds")
+        return _emit_validated(result, "neon-supervisor-result", args.json)
+    try:
+        result = start_supervisor(
+            Path(args.workspace), Path(args.project), Path(args.catalogue) if args.catalogue else None,
+            Path(args.snapshot), Path(args.output), args.ttl, Path(__file__).resolve(), SCHEMA_STORE,
+        )
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = supervisor_failure("supervisor.start", "SUPERVISOR_START_FAILED", str(exc))
+        return _emit_validated(result, "neon-supervisor-result", args.json)
+    return _emit_validated(result, "neon-supervisor-result", args.json)
+
+
+def command_supervisor_status(args: argparse.Namespace) -> int:
+    try:
+        result = request_supervisor(Path(args.workspace), Path(args.session), "status", SCHEMA_STORE)
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = supervisor_failure("supervisor.status", "SUPERVISOR_REQUEST_FAILED", str(exc))
+        return _emit_validated(result, "neon-supervisor-result", args.json)
+    return _emit_validated(result, "neon-supervisor-result", args.json)
+
+
+def command_supervisor_stop(args: argparse.Namespace) -> int:
+    try:
+        result = request_supervisor(Path(args.workspace), Path(args.session), "shutdown", SCHEMA_STORE)
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = supervisor_failure("supervisor.stop", "SUPERVISOR_REQUEST_FAILED", str(exc))
+        return _emit_validated(result, "neon-supervisor-result", args.json)
+    return _emit_validated(result, "neon-supervisor-result", args.json)
+
+
+def command_runtime_compare(args: argparse.Namespace) -> int:
+    try:
+        result = request_supervisor(Path(args.workspace), Path(args.session), "runtime.compare", SCHEMA_STORE)
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = runtime_compare_failure("SUPERVISOR_REQUEST_FAILED", str(exc))
+        return _emit_validated(result, "neon-runtime-compare-result", args.json)
+    return _emit_validated(result, "neon-runtime-compare-result", args.json)
+
+
+def command_supervisor_daemon(args: argparse.Namespace) -> int:
+    return run_supervisor_daemon(
+        Path(args.workspace), Path(args.session_directory), args.session_id, args.project,
+        args.catalogue, args.snapshot, args.ttl, SCHEMA_STORE,
+    )
 
 
 def command_catalogue_build(args: argparse.Namespace) -> int:
@@ -677,7 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)
@@ -697,6 +770,32 @@ def build_parser() -> argparse.ArgumentParser:
     scenario_verify.add_argument("--workspace", default=".", help="approved workspace boundary")
     scenario_verify.add_argument("--json", action="store_true")
     scenario_verify.set_defaults(handler=command_scenario_verify)
+
+    supervisor = subcommands.add_parser("supervisor", help="manage an expiring local read-only runtime observation session")
+    supervisor_subcommands = supervisor.add_subparsers(dest="supervisor_command", required=True)
+    supervisor_start = supervisor_subcommands.add_parser("start", help="start a loopback-only read supervisor")
+    supervisor_start.add_argument("--workspace", default=".")
+    supervisor_start.add_argument("--project", default="neon.project.json")
+    supervisor_start.add_argument("--catalogue")
+    supervisor_start.add_argument("--snapshot", default=".neon-runtime/runtime-snapshot.json")
+    supervisor_start.add_argument("--output", default=".neon-sessions", help="parent directory for a new unique session")
+    supervisor_start.add_argument("--ttl", type=int, default=900, help="session lifetime in seconds (10..86400)")
+    supervisor_start.add_argument("--json", action="store_true")
+    supervisor_start.set_defaults(handler=command_supervisor_start)
+    for name, handler in (("status", command_supervisor_status), ("stop", command_supervisor_stop)):
+        supervisor_command = supervisor_subcommands.add_parser(name)
+        supervisor_command.add_argument("session", help="workspace-relative session.json path")
+        supervisor_command.add_argument("--workspace", default=".")
+        supervisor_command.add_argument("--json", action="store_true")
+        supervisor_command.set_defaults(handler=handler)
+
+    runtime = subcommands.add_parser("runtime", help="compare read-only runtime observations with pinned contracts")
+    runtime_subcommands = runtime.add_subparsers(dest="runtime_command", required=True)
+    runtime_compare = runtime_subcommands.add_parser("compare")
+    runtime_compare.add_argument("session", help="workspace-relative supervisor session.json path")
+    runtime_compare.add_argument("--workspace", default=".")
+    runtime_compare.add_argument("--json", action="store_true")
+    runtime_compare.set_defaults(handler=command_runtime_compare)
 
     catalogue = subcommands.add_parser("catalogue", help="build or verify the effective MTA API")
     catalogue_subcommands = catalogue.add_subparsers(dest="catalogue_command", required=True)
@@ -754,6 +853,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "_supervisor-daemon":
+        daemon = argparse.ArgumentParser(prog="neon internal-supervisor", add_help=False)
+        daemon.add_argument("--workspace", required=True)
+        daemon.add_argument("--session-directory", required=True)
+        daemon.add_argument("--session-id", required=True)
+        daemon.add_argument("--project", required=True)
+        daemon.add_argument("--catalogue", required=True)
+        daemon.add_argument("--snapshot", required=True)
+        daemon.add_argument("--ttl", type=int, required=True)
+        args = daemon.parse_args(sys.argv[2:])
+        return command_supervisor_daemon(args)
     parser = build_parser()
     args = parser.parse_args()
     try:

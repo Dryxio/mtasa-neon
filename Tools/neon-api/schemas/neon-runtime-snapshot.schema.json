@@ -1,0 +1,90 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-runtime-snapshot-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "catalogueSha256": {"format": "sha256", "type": "string"},
+    "observations": {
+      "items": {"$ref": "#/$defs/observation"},
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
+    },
+    "observedAt": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
+    "producer": {"const": "neon-runtime-probe-1", "type": "string"},
+    "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
+    "projectSha256": {"format": "sha256", "type": "string"},
+    "schemaVersion": {"format": "semver", "maxLength": 64, "type": "string"},
+    "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"}
+  },
+  "required": ["schemaVersion", "producer", "sessionId", "profile", "observedAt", "catalogueSha256", "projectSha256", "observations"],
+  "type": "object",
+  "$defs": {
+    "event": {
+      "additionalProperties": false,
+      "properties": {
+        "allowRemoteTrigger": {"type": "boolean"},
+        "name": {"maxLength": 128, "pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$", "type": "string"}
+      },
+      "required": ["name", "allowRemoteTrigger"],
+      "type": "object"
+    },
+    "export": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"maxLength": 128, "pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$", "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"}
+      },
+      "required": ["name", "side"],
+      "type": "object"
+    },
+    "function": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"maxLength": 128, "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"},
+        "restricted": {"type": "boolean"}
+      },
+      "required": ["name", "restricted"],
+      "type": "object"
+    },
+    "module": {
+      "additionalProperties": false,
+      "properties": {
+        "abi": {"anyOf": [{"maxLength": 128, "type": "string"}, {"type": "null"}]},
+        "binarySha256": {"anyOf": [{"format": "sha256", "type": "string"}, {"type": "null"}]},
+        "exports": {"items": {"$ref": "#/$defs/export"}, "maxItems": 4096, "type": "array"},
+        "manifestSha256": {"anyOf": [{"format": "sha256", "type": "string"}, {"type": "null"}]},
+        "name": {"maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+        "version": {"anyOf": [{"maxLength": 128, "pattern": "^[A-Za-z0-9_.:+-]+$", "type": "string"}, {"type": "null"}]}
+      },
+      "required": ["name", "version", "abi", "manifestSha256", "binarySha256", "exports"],
+      "type": "object"
+    },
+    "observation": {
+      "additionalProperties": false,
+      "properties": {
+        "buildId": {"maxLength": 128, "pattern": "^[A-Za-z0-9_.:+-]+$", "type": "string"},
+        "completeness": {"enum": ["complete", "partial"], "type": "string"},
+        "engineVersion": {"format": "semver", "maxLength": 64, "type": "string"},
+        "events": {"items": {"$ref": "#/$defs/event"}, "maxItems": 10000, "type": "array"},
+        "functions": {"items": {"$ref": "#/$defs/function"}, "maxItems": 10000, "type": "array"},
+        "id": {"format": "stable-id", "maxLength": 128, "type": "string"},
+        "modules": {"items": {"$ref": "#/$defs/module"}, "maxItems": 512, "type": "array"},
+        "resources": {"items": {"$ref": "#/$defs/resource"}, "maxItems": 4096, "type": "array"},
+        "side": {"enum": ["client", "server"], "type": "string"}
+      },
+      "required": ["id", "side", "engineVersion", "buildId", "completeness", "functions", "events", "resources", "modules"],
+      "type": "object"
+    },
+    "resource": {
+      "additionalProperties": false,
+      "properties": {
+        "exports": {"items": {"$ref": "#/$defs/export"}, "maxItems": 4096, "type": "array"},
+        "name": {"maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+        "state": {"enum": ["running", "loaded", "stopped", "failed"], "type": "string"}
+      },
+      "required": ["name", "state", "exports"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-runtime-compare-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"const": "runtime.compare", "type": "string"},
+    "comparison": {
+      "additionalProperties": false,
+      "properties": {
+        "catalogueSha256": {"format": "sha256", "type": "string"},
+        "grantedEvidenceLabels": {"maxItems": 0, "type": "array"},
+        "observations": {"minimum": 0, "type": "integer"},
+        "profile": {"type": "string"},
+        "projectSha256": {"format": "sha256", "type": "string"},
+        "runtimes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "buildId": {"maxLength": 128, "minLength": 1, "type": "string"},
+              "completeness": {"enum": ["complete", "partial"], "type": "string"},
+              "engineVersion": {"format": "semver", "maxLength": 64, "type": "string"},
+              "id": {"format": "stable-id", "maxLength": 128, "type": "string"},
+              "side": {"enum": ["client", "server"], "type": "string"}
+            },
+            "required": ["id", "side", "engineVersion", "buildId", "completeness"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "scope": {"const": "observation-only", "type": "string"},
+        "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"},
+        "snapshotSha256": {"format": "sha256", "type": "string"}
+      },
+      "required": ["sessionId", "profile", "scope", "grantedEvidenceLabels", "observations", "catalogueSha256", "projectSha256", "snapshotSha256", "runtimes"],
+      "type": "object"
+    },
+    "diagnostics": {"items": {"$ref": "#/$defs/diagnostic"}, "maxItems": 4097, "type": "array"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "errors": {"minimum": 0, "type": "integer"},
+        "events": {"minimum": 0, "type": "integer"},
+        "functions": {"minimum": 0, "type": "integer"},
+        "modules": {"minimum": 0, "type": "integer"},
+        "observations": {"minimum": 0, "type": "integer"},
+        "resources": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings", "observations", "functions", "events", "resources", "modules"],
+      "type": "object"
+    }
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics", "comparison"],
+  "type": "object",
+  "$defs": {
+    "diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {"pattern": "^[A-Z][A-Z0-9_]+$", "type": "string"},
+        "message": {"maxLength": 1024, "minLength": 1, "type": "string"},
+        "observation": {"format": "stable-id", "maxLength": 128, "type": "string"},
+        "path": {"maxLength": 512, "type": "string"},
+        "severity": {"enum": ["error", "warning"], "type": "string"},
+        "symbol": {"maxLength": 128, "minLength": 1, "type": "string"}
+      },
+      "required": ["code", "severity", "message", "path"],
+      "type": "object"
+    }
+  }
+}

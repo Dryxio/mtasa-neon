@@ -27,6 +27,7 @@
         "module": {"type": "object"},
         "name": {"minLength": 1, "type": "string"},
         "path": {"format": "relative-path", "type": "string"},
+        "sides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
         "state": {"enum": ["verified", "documented-only", "opaque", "conflict"], "type": "string"}
       },
       "required": ["kind", "name", "path", "state", "manifest", "lifecycle", "dependencies", "acl", "capabilities"],

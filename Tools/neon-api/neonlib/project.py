@@ -1249,6 +1249,20 @@ def resolve_project_components(project_path: Path, schema_store: SchemaStore, ca
                 component_record["module"] = manifest["module"]
         if kind == "module":
             component_record["binary"] = binary_record
+        if kind == "resource" and component.root is not None:
+            meta_name = entry.get("meta", "meta.xml")
+            meta_path = _resolve_relative(component.root, meta_name)
+            side_state = CheckState()
+            meta = _parse_meta(meta_path, f"{component.display_root}/{meta_name}", side_state) if meta_path else None
+            sides: set[str] = set()
+            if meta is not None:
+                for script in meta.findall("script", "meta", 1):
+                    side = script.get("type", "server")
+                    if side in ("client", "server"):
+                        sides.add(side)
+                    elif side == "shared":
+                        sides.update(("client", "server"))
+            component_record["sides"] = sorted(sides)
         components.append(component_record)
         symbols.extend(component_symbols)
     symbols.sort(key=lambda item: item["id"])

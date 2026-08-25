@@ -4,10 +4,14 @@ import copy
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -34,13 +38,16 @@ from neonlib.catalogue import (  # noqa: E402
     git_snapshot,
     semantic_snapshot_issues,
 )
-from neonlib.jsonio import canonical_json, load_json, sha256_bytes, write_json  # noqa: E402
+from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, sha256_bytes, sha256_file, write_json  # noqa: E402
 from neonlib.luals import generate_luals, render_luals  # noqa: E402
 from neonlib.components import manifest_semantic_issues  # noqa: E402
 from neonlib.context import ContextGenerationError, build_api_index, generate_project_context, verify_project_context  # noqa: E402
 from neonlib.discovery import discovery_keywords, search_symbols, tokenize  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
+from neonlib.runtime import compare_runtime_snapshot  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
+from neonlib.supervisor import MAX_AUDIT_BYTES, _authorization, _load_session, request_supervisor, start_supervisor  # noqa: E402
+import neonlib.supervisor as supervisor_module  # noqa: E402
 
 
 SCHEMAS = SchemaStore(TOOL_DIRECTORY / "schemas")
@@ -308,6 +315,7 @@ class ContractSchemaTests(unittest.TestCase):
 
 
 class RegistrationExtractionTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("git"), "Git executable is required for repository snapshot tests")
     def test_git_snapshot_revision_ignores_tooling_only_commits(self) -> None:
         with tempfile.TemporaryDirectory(prefix="neon-source-revision-") as temporary:
             repository = Path(temporary)
@@ -1238,6 +1246,19 @@ end)
         self.assertEqual({item["signatureKnown"] for item in resolved["symbols"]}, {False})
         self.assertTrue(all("parameters" not in item and "returns" not in item for item in resolved["symbols"]))
 
+    def test_project_resolution_preserves_resource_sides_without_public_symbols(self) -> None:
+        project = base_project()
+        self.add_resource(
+            project, manifest=base_component(),
+            meta='<meta><script src="client.lua" type="client"/></meta>',
+            files={"client.lua": "local ready = true\n"},
+        )
+        self.write_project(project)
+        resolved = resolve_project_components(self.project_path, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual((resolved["status"], resolved["symbols"]), ("pass", []))
+        self.assertEqual(resolved["components"][0]["sides"], ["client"])
+        self.assertEqual(SCHEMAS.validate("neon-project-api", resolved), [])
+
     def test_project_resolve_cli_emits_schema_valid_byte_stable_json(self) -> None:
         project = base_project()
         manifest = base_component()
@@ -1340,6 +1361,1042 @@ class LuaLsGenerationTests(unittest.TestCase):
         bird_colors = bird_colors[:bird_colors.index("\n\n")]
         self.assertIn("function Bird:getColors(...)", bird_colors)
         self.assertNotIn("unknown", bird_colors)
+
+
+class RuntimeComparisonTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="neon-runtime-compare-")
+        self.root = Path(self.temporary.name)
+        self.project = base_project()
+        self.project["resources"] = [{"name": "inventory", "path": "resources/inventory"}]
+        self.project["modules"] = [{"name": "native", "path": "modules/native"}]
+        self.catalogue = {
+            "symbols": [
+                {
+                    "id": "mta:function:createThing", "kind": "function", "name": "createThing", "state": "verified",
+                    "profiles": ["neon-pair"], "sides": ["client", "server"], "restricted": False,
+                },
+                {
+                    "id": "mta:event:onThing", "kind": "event", "name": "onThing", "state": "verified",
+                    "profiles": ["neon-pair"], "sides": ["server"], "allowRemoteTrigger": False,
+                },
+            ],
+        }
+        self.project_api = {
+            "components": [
+                {"kind": "resource", "name": "inventory", "sides": ["server"]},
+                {
+                    "kind": "module", "name": "native",
+                    "manifest": {"version": "1.0.0", "sha256": "3" * 64},
+                    "module": {"abi": "MTA-1.7-server"}, "binary": {"sha256": "4" * 64},
+                },
+            ],
+            "symbols": [
+                {
+                    "id": "resource:inventory:server-export:takeItem", "kind": "export", "name": "takeItem",
+                    "owner": "inventory", "ownerKind": "resource", "side": "server",
+                },
+                {
+                    "id": "module:native:function:nativePing", "kind": "function", "name": "nativePing",
+                    "owner": "native", "ownerKind": "module", "side": "server",
+                },
+            ],
+        }
+        self.project_sha = "1" * 64
+        self.catalogue_sha = "2" * 64
+        self.session_id = "session:test-runtime"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def snapshot(self, completeness: str = "complete") -> dict:
+        return {
+            "schemaVersion": "1.0.0", "producer": "neon-runtime-probe-1", "sessionId": self.session_id,
+            "profile": "neon-pair", "observedAt": "2026-08-25T12:00:00Z",
+            "catalogueSha256": self.catalogue_sha, "projectSha256": self.project_sha,
+            "observations": [
+                {
+                    "id": "runtime:server-1", "side": "server", "engineVersion": "1.7.0", "buildId": "neon:test",
+                    "completeness": completeness, "functions": [{"name": "createThing", "restricted": False}],
+                    "events": [{"name": "onThing", "allowRemoteTrigger": False}],
+                    "resources": [{"name": "inventory", "state": "running", "exports": [{"name": "takeItem", "side": "server"}]}],
+                    "modules": [{
+                        "name": "native", "version": "1.0.0", "abi": "MTA-1.7-server",
+                        "manifestSha256": "3" * 64, "binarySha256": "4" * 64,
+                        "exports": [{"name": "nativePing", "side": "server"}],
+                    }],
+                },
+                {
+                    "id": "runtime:client-1", "side": "client", "engineVersion": "1.7.0", "buildId": "neon:test",
+                    "completeness": completeness, "functions": [{"name": "createThing", "restricted": False}],
+                    "events": [], "resources": [], "modules": [],
+                },
+            ],
+        }
+
+    def compare(self, snapshot: dict) -> dict:
+        path = self.root / "runtime.json"
+        write_json(path, snapshot)
+        return compare_runtime_snapshot(
+            path, self.project, self.project_sha, self.catalogue, self.catalogue_sha,
+            self.project_api, self.session_id, SCHEMAS,
+        )
+
+    def test_complete_matching_pair_passes_without_evidence_overclaim(self) -> None:
+        result = self.compare(self.snapshot())
+        self.assertEqual((result["status"], result["diagnostics"]), ("pass", []))
+        self.assertEqual(result["comparison"]["scope"], "observation-only")
+        self.assertEqual(result["comparison"]["grantedEvidenceLabels"], [])
+        self.assertEqual(SCHEMAS.validate("neon-runtime-compare-result", result), [])
+
+    def test_partial_inventory_is_visible_uncertainty_not_false_absence(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["functions"] = []
+        snapshot["observations"][1]["functions"] = []
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(diagnostic_codes(result), ["RUNTIME_INVENTORY_PARTIAL", "RUNTIME_INVENTORY_PARTIAL"])
+        self.assertTrue(all(item["severity"] == "warning" for item in result["diagnostics"]))
+
+    def test_complete_component_identity_and_extras_cannot_false_pass(self) -> None:
+        snapshot = self.snapshot()
+        module = snapshot["observations"][0]["modules"][0]
+        module["version"] = "0.0.0"
+        module["abi"] = "wrong-abi"
+        module["manifestSha256"] = "5" * 64
+        module["binarySha256"] = "6" * 64
+        module["exports"] = []
+        snapshot["observations"][0]["modules"].append({
+            "name": "unexpected-module", "version": "999.0.0", "abi": "unknown",
+            "manifestSha256": None, "binarySha256": None, "exports": [],
+        })
+        snapshot["observations"][0]["resources"].append({
+            "name": "unexpected-resource", "state": "failed",
+            "exports": [{"name": "undeclaredExport", "side": "server"}],
+        })
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue({
+            "RUNTIME_MODULE_VERSION_MISMATCH", "RUNTIME_MODULE_ABI_MISMATCH",
+            "RUNTIME_MODULE_MANIFEST_HASH_MISMATCH", "RUNTIME_MODULE_BINARY_HASH_MISMATCH",
+            "RUNTIME_MODULE_EXPORT_MISSING", "RUNTIME_MODULE_UNDECLARED", "RUNTIME_RESOURCE_UNDECLARED",
+        }.issubset(set(diagnostic_codes(result))))
+
+    def test_partial_component_inventory_never_proves_absence(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["modules"] = []
+        snapshot["observations"][0]["resources"] = []
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "pass")
+        self.assertNotIn("RUNTIME_MODULE_MISSING", diagnostic_codes(result))
+        self.assertNotIn("RUNTIME_RESOURCE_MISSING", diagnostic_codes(result))
+
+    def test_partial_inventory_rejects_positively_observed_rogue_components(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["resources"].append({"name": "rogue-resource", "state": "running", "exports": []})
+        snapshot["observations"][0]["modules"].append({
+            "name": "rogue-module", "version": None, "abi": None,
+            "manifestSha256": None, "binarySha256": None, "exports": [],
+        })
+        snapshot["observations"][1]["resources"].append({
+            "name": "rogue-client-resource", "state": "running",
+            "exports": [{"name": "clientBackdoor", "side": "client"}],
+        })
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue({"RUNTIME_RESOURCE_UNDECLARED", "RUNTIME_MODULE_UNDECLARED"}.issubset(diagnostic_codes(result)))
+
+    def test_partial_inventory_rejects_positively_observed_rogue_apis(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["functions"].append({"name": "rogueBackdoor", "restricted": False})
+        snapshot["observations"][0]["events"].append({"name": "onRogueBackdoor", "allowRemoteTrigger": True})
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue({
+            "RUNTIME_FUNCTION_UNCATALOGUED", "RUNTIME_EVENT_UNCATALOGUED",
+        }.issubset(diagnostic_codes(result)))
+
+    def test_complete_resource_exports_are_compared_per_observation_side(self) -> None:
+        self.project_api["symbols"].append({
+            "id": "resource:inventory:client-export:openInventory", "kind": "export",
+            "name": "openInventory", "owner": "inventory", "ownerKind": "resource", "side": "client",
+        })
+        snapshot = self.snapshot()
+        snapshot["observations"][1]["resources"] = [{
+            "name": "inventory", "state": "running",
+            "exports": [{"name": "openInventory", "side": "client"}],
+        }]
+        result = self.compare(snapshot)
+        self.assertEqual((result["status"], result["diagnostics"]), ("pass", []))
+
+    def test_complete_client_inventory_cannot_omit_a_declared_client_resource(self) -> None:
+        self.project_api["components"][0]["sides"].append("client")
+        result = self.compare(self.snapshot())
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("RUNTIME_RESOURCE_MISSING", diagnostic_codes(result))
+
+    def test_observed_resource_on_an_undeclared_side_cannot_pass(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["observations"][1]["resources"] = [{
+            "name": "inventory", "state": "running", "exports": [],
+        }]
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("RUNTIME_RESOURCE_WRONG_SIDE", diagnostic_codes(result))
+
+    def test_conflicted_global_api_is_never_an_active_runtime_expectation(self) -> None:
+        self.catalogue["symbols"].append({
+            "id": "mta:function:unsafeConflict", "kind": "function", "name": "unsafeConflict",
+            "state": "conflict", "profiles": ["neon-pair"], "sides": ["client"], "restricted": False,
+        })
+        snapshot = self.snapshot()
+        snapshot["observations"][1]["functions"].append({"name": "unsafeConflict", "restricted": False})
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("RUNTIME_FUNCTION_UNAVAILABLE", diagnostic_codes(result))
+
+    def test_partial_inventory_rejects_wrong_side_known_module_and_all_identity_mismatches(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["modules"] = []
+        snapshot["observations"][1]["modules"] = [{
+            "name": "native", "version": "9.9.9", "abi": "attacker-abi",
+            "manifestSha256": "5" * 64, "binarySha256": "6" * 64,
+            "exports": [{"name": "clientBackdoor", "side": "client"}],
+        }]
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue({
+            "RUNTIME_MODULE_WRONG_SIDE", "RUNTIME_MODULE_VERSION_MISMATCH", "RUNTIME_MODULE_ABI_MISMATCH",
+            "RUNTIME_MODULE_MANIFEST_HASH_MISMATCH", "RUNTIME_MODULE_BINARY_HASH_MISMATCH",
+            "RUNTIME_MODULE_EXPORT_UNDECLARED",
+        }.issubset(diagnostic_codes(result)))
+
+    def test_pair_rejects_extra_client_and_names_are_bounded(self) -> None:
+        snapshot = self.snapshot()
+        extra = copy.deepcopy(snapshot["observations"][1])
+        extra["id"] = "runtime:client-2"
+        snapshot["observations"].append(extra)
+        result = self.compare(snapshot)
+        self.assertIn("RUNTIME_TOPOLOGY_UNEXPECTED", diagnostic_codes(result))
+        snapshot = self.snapshot()
+        snapshot["observations"][0]["functions"][0]["name"] = "f" * 129
+        result = self.compare(snapshot)
+        self.assertEqual(diagnostic_codes(result), ["RUNTIME_SNAPSHOT_INVALID"])
+
+    def test_large_valid_inventory_produces_a_bounded_schema_valid_result(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["functions"] = [
+            {"name": f"unknownFunction{index:05d}", "restricted": False}
+            for index in range(5000)
+        ]
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("RUNTIME_DIAGNOSTICS_TRUNCATED", diagnostic_codes(result))
+        self.assertLess(len(canonical_json(result).encode("utf-8")), 16 * 1024 * 1024)
+        self.assertEqual(SCHEMAS.validate("neon-runtime-compare-result", result), [])
+
+    def test_observation_ids_and_semvers_cannot_amplify_or_crash_results(self) -> None:
+        snapshot = self.snapshot("partial")
+        snapshot["observations"][0]["id"] = "runtime:" + ("a" * 600)
+        snapshot["observations"][0]["functions"] = [
+            {"name": f"unknownFunction{index:05d}", "restricted": False} for index in range(5000)
+        ]
+        result = self.compare(snapshot)
+        self.assertEqual(diagnostic_codes(result), ["RUNTIME_SNAPSHOT_INVALID"])
+        self.assertEqual(SCHEMAS.validate("neon-runtime-compare-result", result), [])
+        self.assertLess(len(canonical_json(result)), 4096)
+
+        snapshot = self.snapshot()
+        snapshot["observations"][0]["engineVersion"] = ("9" * 5000) + ".0.0"
+        result = self.compare(snapshot)
+        self.assertEqual(diagnostic_codes(result), ["RUNTIME_SNAPSHOT_INVALID"])
+        self.assertEqual(SCHEMAS.validate("neon-runtime-compare-result", result), [])
+
+    def test_runtime_divergence_is_precise_and_blocking(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["observations"][0]["functions"][0]["restricted"] = True
+        snapshot["observations"][0]["events"][0]["allowRemoteTrigger"] = True
+        snapshot["observations"][0]["resources"][0]["state"] = "stopped"
+        snapshot["observations"][0]["resources"][0]["exports"] = []
+        snapshot["observations"][0]["modules"] = []
+        snapshot["observations"][1]["functions"] = []
+        snapshot["observations"][1]["events"] = [{"name": "onThing", "allowRemoteTrigger": False}]
+        snapshot["observations"][1]["engineVersion"] = "1.8.0"
+        snapshot["observations"][1]["buildId"] = "neon:other"
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue({
+            "RUNTIME_RESTRICTION_MISMATCH", "RUNTIME_EVENT_REMOTE_POLICY_MISMATCH", "RUNTIME_RESOURCE_NOT_RUNNING",
+            "RUNTIME_EXPORT_MISSING", "RUNTIME_MODULE_MISSING", "RUNTIME_FUNCTION_MISSING",
+            "RUNTIME_EVENT_UNAVAILABLE", "RUNTIME_ENGINE_VERSION_INCOMPATIBLE", "RUNTIME_BUILD_MISMATCH",
+        }.issubset(set(diagnostic_codes(result))))
+
+    def test_identity_topology_duplicates_and_unknowns_are_bounded(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["sessionId"] = "session:other"
+        snapshot["catalogueSha256"] = "3" * 64
+        snapshot["projectSha256"] = "4" * 64
+        snapshot["observations"].pop()
+        snapshot["observations"][0]["functions"].append({"name": "createThing", "restricted": False})
+        snapshot["observations"][0]["functions"].append({"name": "futureFunction", "restricted": False})
+        result = self.compare(snapshot)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue({
+            "RUNTIME_SESSION_MISMATCH", "RUNTIME_CATALOGUE_MISMATCH", "RUNTIME_PROJECT_MISMATCH",
+            "RUNTIME_TOPOLOGY_INCOMPLETE", "RUNTIME_FUNCTION_DUPLICATE", "RUNTIME_FUNCTION_UNCATALOGUED",
+        }.issubset(set(diagnostic_codes(result))))
+
+    def test_invalid_snapshot_schema_and_timestamp_fail_closed(self) -> None:
+        snapshot = self.snapshot()
+        snapshot["observedAt"] = "2026-02-31T12:00:00Z"
+        result = self.compare(snapshot)
+        self.assertIn("RUNTIME_SNAPSHOT_TIME_INVALID", diagnostic_codes(result))
+        snapshot["typo"] = True
+        result = self.compare(snapshot)
+        self.assertEqual(diagnostic_codes(result), ["RUNTIME_SNAPSHOT_INVALID"])
+
+
+class SupervisorIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="neon-supervisor-")
+        self.root = Path(self.temporary.name)
+        try:
+            os.link(CATALOGUE_PATH, self.root / "api.json")
+        except OSError:
+            shutil.copyfile(CATALOGUE_PATH, self.root / "api.json")
+        write_json(self.root / "neon.project.json", base_project())
+        self.sessions: list[Path] = []
+
+    def tearDown(self) -> None:
+        for session in self.sessions:
+            try:
+                document = load_json(session)
+                if document.get("state") == "active":
+                    request_supervisor(self.root, session, "shutdown", SCHEMAS)
+            except (OSError, ValueError):
+                pass
+        self.temporary.cleanup()
+
+    def start(self, ttl: int = 30, snapshot: str = "runtime.json") -> tuple[dict, Path]:
+        result = start_supervisor(
+            self.root, Path("neon.project.json"), None, Path(snapshot), Path("sessions"),
+            ttl, CLI_PATH, SCHEMAS,
+        )
+        session = self.root / result["session"]["sessionPath"]
+        self.sessions.append(session)
+        return result, session
+
+    def partial_snapshot(self, session: dict) -> dict:
+        return {
+            "schemaVersion": "1.0.0", "producer": "neon-runtime-probe-1", "sessionId": session["sessionId"],
+            "profile": session["profile"], "observedAt": session["createdAt"],
+            "catalogueSha256": session["catalogue"]["sha256"], "projectSha256": session["project"]["sha256"],
+            "observations": [
+                {"id": "runtime:server-1", "side": "server", "engineVersion": "1.7.0", "buildId": "neon:test", "completeness": "partial", "functions": [{"name": "createVehicle", "restricted": False}], "events": [{"name": "onPlayerJoin", "allowRemoteTrigger": False}], "resources": [], "modules": []},
+                {"id": "runtime:client-1", "side": "client", "engineVersion": "1.7.0", "buildId": "neon:test", "completeness": "partial", "functions": [{"name": "createVehicle", "restricted": False}], "events": [], "resources": [], "modules": []},
+            ],
+        }
+
+    def raw_request(self, session: dict, request: dict) -> dict:
+        request = dict(request)
+        token = request.pop("token", None)
+        with socket.create_connection(("127.0.0.1", session["transport"]["port"]), timeout=3) as connection:
+            with connection.makefile("rb") as stream:
+                challenge = json.loads(stream.readline())
+            if token is not None and isinstance(request.get("schemaVersion"), str):
+                request.setdefault("challenge", challenge["challenge"])
+                request.setdefault("nonce", "a" * 64)
+                signed = {
+                    key: request[key] for key in ("schemaVersion", "sessionId", "challenge", "nonce", "command")
+                }
+                request["authorization"] = _authorization(token, signed)
+            payload = canonical_json(request).encode("utf-8")
+            connection.sendall(payload)
+            connection.shutdown(socket.SHUT_WR)
+            response = bytearray()
+            while chunk := connection.recv(65536):
+                response.extend(chunk)
+        document = json.loads(response)
+        return document.get("result", document)
+
+    def test_real_loopback_session_missing_snapshot_compare_and_revocation(self) -> None:
+        started, session_path = self.start()
+        self.assertEqual(started["status"], "pass")
+        self.assertEqual(SCHEMAS.validate("neon-supervisor-result", started), [])
+        self.assertNotIn("token", canonical_json(started))
+        session = load_json(session_path)
+        self.assertEqual(SCHEMAS.validate("neon-supervisor-session", session), [])
+        self.assertEqual((session["transport"]["host"], session["state"]), ("127.0.0.1", "active"))
+        if os.name != "nt":
+            self.assertEqual(session_path.stat().st_mode & 0o777, 0o600)
+        status = request_supervisor(self.root, session_path, "status", SCHEMAS)
+        self.assertFalse(status["session"]["snapshotAvailable"])
+        missing = request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+        self.assertEqual((missing["status"], diagnostic_codes(missing)), ("fail", ["RUNTIME_SNAPSHOT_UNAVAILABLE"]))
+
+        write_json(self.root / "runtime.json", self.partial_snapshot(session))
+        compared = request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+        self.assertEqual(compared["status"], "pass")
+        self.assertEqual(SCHEMAS.validate("neon-runtime-compare-result", compared), [])
+        self.assertEqual(compared["comparison"]["grantedEvidenceLabels"], [])
+        stopped = request_supervisor(self.root, session_path, "shutdown", SCHEMAS)
+        self.assertEqual(stopped["session"]["state"], "closed")
+        closed = load_json(session_path)
+        self.assertNotIn("token", closed)
+        with self.assertRaisesRegex(ValueError, "closed"):
+            request_supervisor(self.root, session_path, "status", SCHEMAS)
+        audit = (session_path.parent / "audit.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn(session["token"], audit)
+        audit_records = [json.loads(line) for line in audit.splitlines()]
+        self.assertEqual(audit_records[0]["command"], "supervisor.start")
+        self.assertEqual(audit_records[-1]["command"], "shutdown")
+        self.assertTrue(all(item["sessionId"] == session["sessionId"] for item in audit_records))
+
+    def test_wrong_token_input_drift_and_expiry_fail_closed(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        tampered = copy.deepcopy(original)
+        tampered["token"] = "0" * 64
+        write_json(session_path, tampered)
+        with self.assertRaisesRegex(ValueError, "authorization|incomplete"):
+            request_supervisor(self.root, session_path, "status", SCHEMAS)
+        self.assertEqual(load_json(session_path)["state"], "closed")
+        time.sleep(0.6)
+
+        _, session_path = self.start()
+        project = load_json(self.root / "neon.project.json")
+        project["name"] = "changed-after-start"
+        write_json(self.root / "neon.project.json", project)
+        drift = request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+        self.assertEqual(diagnostic_codes(drift), ["SUPERVISOR_INPUT_DRIFT"])
+        request_supervisor(self.root, session_path, "shutdown", SCHEMAS)
+
+        write_json(self.root / "neon.project.json", base_project())
+        _, expiring = self.start(ttl=1, snapshot="later.json")
+        time.sleep(1.5)
+        with self.assertRaisesRegex(ValueError, "expired"):
+            request_supervisor(self.root, expiring, "status", SCHEMAS)
+        self.assertEqual(load_json(expiring)["state"], "expired")
+
+    def test_active_session_record_is_an_exact_immutable_contract(self) -> None:
+        _, session_path = self.start()
+        session = load_json(session_path)
+        tampered = copy.deepcopy(session)
+        tampered["project"]["sha256"] = "f" * 64
+        write_json(session_path, tampered)
+        with self.assertRaises((OSError, ValueError)):
+            request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+        revoked = load_json(session_path)
+        self.assertEqual(revoked["state"], "closed")
+        self.assertNotIn("token", revoked)
+        time.sleep(0.6)
+        with self.assertRaises((OSError, ValueError)):
+            self.raw_request(session, {
+                "schemaVersion": "1.0.0", "sessionId": session["sessionId"],
+                "token": session["token"], "command": "status",
+            })
+
+    def test_symlink_traversal_and_ttl_rejections_do_not_touch_outside(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="neon-supervisor-outside-") as external:
+            outside = Path(external)
+            (self.root / "linked-sessions").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                start_supervisor(
+                    self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("linked-sessions"),
+                    30, CLI_PATH, SCHEMAS,
+                )
+            self.assertEqual(list(outside.iterdir()), [])
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "supervisor", "start", "--workspace", str(self.root), "--project", "../outside.json", "--ttl", "1", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(json.loads(completed.stdout)["diagnostics"][0]["code"], "SUPERVISOR_TTL_INVALID")
+
+        traversal = subprocess.run(
+            [sys.executable, str(CLI_PATH), "supervisor", "start", "--workspace", str(self.root), "--project", "../outside.json", "--ttl", "30", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(traversal.returncode, 1)
+        self.assertEqual(json.loads(traversal.stdout)["diagnostics"][0]["code"], "SUPERVISOR_START_FAILED")
+
+    @unittest.skipIf(os.name == "nt", "Windows uses the native handle backend")
+    def test_unknown_non_dirfd_platform_fails_closed_instead_of_reopening_paths(self) -> None:
+        with mock.patch.object(supervisor_module, "_HAS_DIRECTORY_FD", False):
+            with self.assertRaisesRegex(OSError, "no secure handle-relative"):
+                supervisor_module._open_directory(self.root)
+
+    def test_snapshot_parent_swap_session_symlink_and_unknown_command_fail_closed(self) -> None:
+        _, session_path = self.start(snapshot="observations/runtime.json")
+        session = load_json(session_path)
+        with tempfile.TemporaryDirectory(prefix="neon-supervisor-snapshot-outside-") as external:
+            outside = Path(external)
+            write_json(outside / "runtime.json", self.partial_snapshot(session))
+            (self.root / "observations").symlink_to(outside, target_is_directory=True)
+            unsafe = request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+            self.assertEqual(diagnostic_codes(unsafe), ["SUPERVISOR_INPUT_UNSAFE"])
+
+        linked_session = self.root / "linked-session.json"
+        linked_session.symlink_to(session_path)
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            request_supervisor(self.root, linked_session, "status", SCHEMAS)
+        with self.assertRaisesRegex(ValueError, "not allowlisted"):
+            request_supervisor(self.root, session_path, "runtime.compare;shutdown", SCHEMAS)
+        alive = request_supervisor(self.root, session_path, "status", SCHEMAS)
+        self.assertEqual(alive["session"]["state"], "active")
+
+    def test_sessions_are_unique_and_never_adopt_existing_children(self) -> None:
+        first, first_path = self.start()
+        second, second_path = self.start(snapshot="second.json")
+        self.assertNotEqual(first["session"]["sessionId"], second["session"]["sessionId"])
+        self.assertNotEqual(first_path, second_path)
+        self.assertTrue(first_path.is_file() and second_path.is_file())
+
+    @unittest.skipIf(os.name == "nt", "deterministic directory-fd race test is POSIX-specific")
+    def test_session_child_creation_stays_on_anchored_root_during_parent_swap(self) -> None:
+        (self.root / "sessions").mkdir()
+        original_root = self.root / "sessions-original"
+        with tempfile.TemporaryDirectory(prefix="neon-start-root-outside-") as external:
+            outside = Path(external)
+            real_create = supervisor_module._create_directory_at
+
+            def swap_then_create(parent_fd: int, name: str, mode: int = 0o700) -> int:
+                (self.root / "sessions").rename(original_root)
+                (self.root / "sessions").symlink_to(outside, target_is_directory=True)
+                return real_create(parent_fd, name, mode)
+
+            with mock.patch.object(supervisor_module, "_create_directory_at", side_effect=swap_then_create):
+                with self.assertRaises(ValueError):
+                    start_supervisor(
+                        self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                        30, CLI_PATH, SCHEMAS,
+                    )
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertEqual(len([item for item in original_root.iterdir() if item.name.startswith("session-")]), 1)
+
+    @unittest.skipIf(os.name == "nt", "deterministic project symlink injection requires POSIX symlinks")
+    def test_startup_catalogue_selection_uses_anchored_project_payload(self) -> None:
+        shutil.copyfile(self.root / "api.json", self.root / "alternate.json")
+        outside = self.root.parent / f"{self.root.name}-forged-project.json"
+        forged = base_project()
+        forged["catalogue"] = "alternate.json"
+        forged["requiredApis"] = [{"name": "createVehicle", "side": "server"}]
+        write_json(outside, forged)
+        project_path = self.root / "neon.project.json"
+        backup = self.root / "neon.project.original"
+        real_resolve = supervisor_module.resolve_project_components
+        observed_resolutions: list[dict] = []
+
+        def injected_resolve(*args: object, **kwargs: object) -> dict:
+            project_path.rename(backup)
+            project_path.symlink_to(outside)
+            try:
+                result = real_resolve(*args, **kwargs)
+                observed_resolutions.append(result)
+                self.assertNotEqual(Path(args[0]).resolve(), project_path.resolve())
+                return result
+            finally:
+                project_path.unlink()
+                backup.rename(project_path)
+
+        try:
+            with mock.patch.object(supervisor_module, "resolve_project_components", side_effect=injected_resolve):
+                started, session_path = self.start()
+            session = load_json(session_path)
+            self.assertEqual((started["status"], session["catalogue"]["path"]), ("pass", "api.json"))
+            self.assertEqual(len(observed_resolutions), 1)
+            self.assertEqual(observed_resolutions[0]["summary"]["apiRequirements"], 0)
+        finally:
+            outside.unlink(missing_ok=True)
+
+    def test_malformed_unauthorized_requests_cannot_terminate_daemon(self) -> None:
+        _, session_path = self.start()
+        session = load_json(session_path)
+        malformed = {
+            "schemaVersion": 1, "sessionId": session["sessionId"],
+            "token": "0" * 64, "command": "status",
+        }
+        rejected = self.raw_request(session, malformed)
+        self.assertEqual(diagnostic_codes(rejected), ["SUPERVISOR_REQUEST_REJECTED"])
+
+        reset = socket.create_connection(("127.0.0.1", session["transport"]["port"]), timeout=3)
+        with reset.makefile("rb") as stream:
+            stream.readline()
+        reset.sendall(canonical_json({
+            "schemaVersion": "1.0.0", "sessionId": session["sessionId"],
+            "token": "0" * 64, "command": "status",
+        }).encode("utf-8"))
+        reset.close()
+        time.sleep(0.1)
+        alive = request_supervisor(self.root, session_path, "status", SCHEMAS)
+        self.assertEqual(alive["session"]["state"], "active")
+
+    def test_authenticated_request_cannot_be_replayed_on_a_new_challenge(self) -> None:
+        _, session_path = self.start()
+        session = load_json(session_path)
+        with socket.create_connection(("127.0.0.1", session["transport"]["port"]), timeout=3) as first:
+            with first.makefile("rb") as stream:
+                challenge = json.loads(stream.readline())["challenge"]
+            signed = {
+                "schemaVersion": "1.0.0", "sessionId": session["sessionId"], "challenge": challenge,
+                "nonce": "b" * 64, "command": "status",
+            }
+            request = {**signed, "authorization": _authorization(session["token"], signed)}
+            replay = canonical_json(request).encode("utf-8")
+            first.sendall(replay)
+            first.shutdown(socket.SHUT_WR)
+            while first.recv(65536):
+                pass
+        with socket.create_connection(("127.0.0.1", session["transport"]["port"]), timeout=3) as second:
+            with second.makefile("rb") as stream:
+                second_challenge = json.loads(stream.readline())["challenge"]
+            self.assertNotEqual(challenge, second_challenge)
+            second.sendall(replay)
+            second.shutdown(socket.SHUT_WR)
+            response = bytearray()
+            while chunk := second.recv(65536):
+                response.extend(chunk)
+        rejected = json.loads(response)["result"]
+        self.assertEqual(diagnostic_codes(rejected), ["SUPERVISOR_REQUEST_REJECTED"])
+        self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
+
+    @unittest.skipIf(os.name == "nt", "directory-descriptor swap test is POSIX-specific")
+    def test_session_parent_swap_cannot_escape_or_overwrite(self) -> None:
+        _, session_path = self.start()
+        session = load_json(session_path)
+        session_directory_name = session_path.parent.name
+        original_root = self.root / "sessions-original"
+        (self.root / "sessions").rename(original_root)
+        with tempfile.TemporaryDirectory(prefix="neon-supervisor-external-") as external:
+            outside = Path(external)
+            outside_session = outside / session_directory_name
+            outside_session.mkdir()
+            sentinel = outside_session / "session.json"
+            sentinel.write_bytes(b"external-sentinel")
+            (self.root / "sessions").symlink_to(outside, target_is_directory=True)
+            status = self.raw_request(session, {
+                "schemaVersion": "1.0.0", "sessionId": session["sessionId"],
+                "token": session["token"], "command": "status",
+            })
+            self.assertEqual(status["status"], "pass")
+            stopped = self.raw_request(session, {
+                "schemaVersion": "1.0.0", "sessionId": session["sessionId"],
+                "token": session["token"], "command": "shutdown",
+            })
+            self.assertEqual(stopped["session"]["state"], "closed")
+            self.assertEqual(sentinel.read_bytes(), b"external-sentinel")
+            self.assertFalse((outside_session / "audit.jsonl").exists())
+        original_session = original_root / session_directory_name / "session.json"
+        self.assertEqual(load_json(original_session)["state"], "closed")
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle/reparse test")
+    def test_windows_handles_reject_junctions_and_survive_parent_replacement(self) -> None:
+        outside = self.root.parent / f"{self.root.name}-outside"
+        outside.mkdir()
+        linked = self.root / "linked"
+        junction = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(linked), str(outside)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(junction.returncode, 0, junction.stdout + junction.stderr)
+        root_fd = supervisor_module._open_directory(self.root)
+        child_fd = None
+        try:
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                supervisor_module._open_directory_at(root_fd, "linked")
+            original = self.root.parent / f"{self.root.name}-original"
+            self.root.rename(original)
+            replacement = subprocess.run(
+                ["cmd.exe", "/c", "mklink", "/J", str(self.root), str(outside)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(replacement.returncode, 0, replacement.stdout + replacement.stderr)
+            child_fd = supervisor_module._create_directory_at(root_fd, "anchored-session")
+            supervisor_module._atomic_write_at(child_fd, "session.json", b"anchored")
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertEqual((original / "anchored-session" / "session.json").read_bytes(), b"anchored")
+        finally:
+            if child_fd is not None:
+                supervisor_module._close_directory(child_fd)
+            supervisor_module._close_directory(root_fd)
+            if self.root.is_junction():
+                self.root.rmdir()
+            original = self.root.parent / f"{self.root.name}-original"
+            if original.exists():
+                original.rename(self.root)
+            if linked.is_junction():
+                linked.rmdir()
+            outside.rmdir()
+
+    def test_transitive_component_contract_drift_fails_closed(self) -> None:
+        resource = self.root / "resources" / "inventory"
+        resource.mkdir(parents=True)
+        manifest = base_component("inventory", "resource")
+        manifest["exports"] = [{
+            "name": "oldExport", "side": "server", "parameters": [], "returns": [],
+            "description": "Old export.", "http": False, "restricted": False,
+        }]
+        write_json(resource / "component.yaml", manifest)
+        (resource / "meta.xml").write_text('<meta><script src="server.lua"/><export function="oldExport" type="server"/></meta>', encoding="utf-8")
+        (resource / "server.lua").write_text("function oldExport() return true end\n", encoding="utf-8")
+        project = base_project()
+        project["resources"] = [{
+            "name": "inventory", "path": "resources/inventory", "manifest": "component.yaml",
+        }]
+        write_json(self.root / "neon.project.json", project)
+        _, session_path = self.start()
+        session = load_json(session_path)
+        write_json(self.root / "runtime.json", self.partial_snapshot(session))
+
+        manifest["exports"][0]["name"] = "newExport"
+        write_json(resource / "component.yaml", manifest)
+        (resource / "meta.xml").write_text('<meta><script src="server.lua"/><export function="newExport" type="server"/></meta>', encoding="utf-8")
+        (resource / "server.lua").write_text("function newExport() return true end\n", encoding="utf-8")
+        self.assertEqual(check_project(self.root / "neon.project.json", SCHEMAS)["status"], "pass")
+        drift = request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+        self.assertEqual(diagnostic_codes(drift), ["SUPERVISOR_INPUT_DRIFT"])
+
+    @unittest.skipIf(os.name == "nt", "high-frequency symlink race requires POSIX symlinks")
+    def test_snapshot_symlink_race_can_never_read_outside_workspace(self) -> None:
+        _, session_path = self.start(snapshot="race.json")
+        session = load_json(session_path)
+        inside = self.partial_snapshot(session)
+        inside_payload = (canonical_json(inside) + "\n").encode("utf-8")
+        (self.root / "race.json").write_bytes(inside_payload)
+        with tempfile.TemporaryDirectory(prefix="neon-runtime-race-outside-") as external:
+            outside_path = Path(external) / "outside.json"
+            outside = self.partial_snapshot(session)
+            outside["observations"][0]["functions"].append({"name": "outsideOnly", "restricted": False})
+            outside_payload = (canonical_json(outside) + "\n").encode("utf-8")
+            outside_path.write_bytes(outside_payload)
+            outside_sha256 = sha256_bytes(outside_payload)
+            stop = threading.Event()
+
+            def swap() -> None:
+                index = 0
+                target = self.root / "race.json"
+                while not stop.is_set():
+                    temporary = self.root / f".race-{index % 2}.tmp"
+                    temporary.write_bytes(inside_payload)
+                    os.replace(temporary, target)
+                    try:
+                        target.unlink()
+                        target.symlink_to(outside_path)
+                    except FileExistsError:
+                        pass
+                    index += 1
+
+            writer = threading.Thread(target=swap, daemon=True)
+            writer.start()
+            try:
+                for _ in range(20):
+                    result = request_supervisor(self.root, session_path, "runtime.compare", SCHEMAS)
+                    self.assertNotEqual(result["comparison"]["snapshotSha256"], outside_sha256)
+            finally:
+                stop.set()
+                writer.join(timeout=2)
+                target = self.root / "race.json"
+                target.unlink(missing_ok=True)
+                target.write_bytes(inside_payload)
+
+    def test_cli_failure_results_always_validate_advertised_contracts(self) -> None:
+        invalid_ttl = subprocess.run(
+            [sys.executable, str(CLI_PATH), "supervisor", "start", "--workspace", str(self.root), "--ttl", "1", "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        supervisor_result = json.loads(invalid_ttl.stdout)
+        self.assertEqual((invalid_ttl.returncode, SCHEMAS.validate("neon-supervisor-result", supervisor_result)), (1, []))
+        missing = subprocess.run(
+            [sys.executable, str(CLI_PATH), "runtime", "compare", "missing/session.json", "--workspace", str(self.root), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        runtime_result = json.loads(missing.stdout)
+        self.assertEqual((missing.returncode, SCHEMAS.validate("neon-runtime-compare-result", runtime_result)), (1, []))
+        self.assertEqual((runtime_result["comparison"]["scope"], runtime_result["comparison"]["grantedEvidenceLabels"]), ("observation-only", []))
+
+    @unittest.skipIf(os.name == "nt", "symlink race requires POSIX symlinks")
+    def test_session_file_symlink_race_never_reads_outside(self) -> None:
+        _, session_path = self.start()
+        legitimate = session_path.read_bytes()
+        outside = self.root.parent / f"{self.root.name}-outside-session.json"
+        forged_session = json.loads(legitimate)
+        forged_session["sessionId"] = "session:forged"
+        write_json(outside, forged_session)
+        stop = threading.Event()
+
+        def swap() -> None:
+            target = session_path
+            index = 0
+            while not stop.is_set():
+                temporary = target.parent / f".session-race-{index % 2}.tmp"
+                temporary.write_bytes(legitimate)
+                os.replace(temporary, target)
+                try:
+                    target.unlink()
+                    target.symlink_to(outside)
+                except FileExistsError:
+                    pass
+                index += 1
+
+        writer = threading.Thread(target=swap, daemon=True)
+        writer.start()
+        try:
+            for _ in range(2000):
+                try:
+                    observed, _, _ = _load_session(self.root, session_path, SCHEMAS)
+                except (OSError, ValueError):
+                    continue
+                self.assertEqual(observed["sessionId"], json.loads(legitimate)["sessionId"])
+        finally:
+            stop.set()
+            writer.join(timeout=2)
+            session_path.unlink(missing_ok=True)
+            session_path.write_bytes(legitimate)
+            outside.unlink(missing_ok=True)
+
+    def test_forged_loopback_response_is_rejected_and_token_is_not_transmitted(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        captured: list[bytes] = []
+
+        def forge() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": "f" * 64,
+                }).encode("utf-8"))
+                request = bytearray()
+                while chunk := connection.recv(65536):
+                    request.extend(chunk)
+                captured.append(bytes(request))
+                forged = {
+                    "schemaVersion": "1.0.0", "command": "supervisor.status", "status": "pass",
+                    "summary": {"errors": 0, "warnings": 0}, "diagnostics": [],
+                    "session": {
+                        "sessionId": original["sessionId"], "state": "active", "profile": original["profile"],
+                        "createdAt": original["createdAt"], "expiresAt": original["expiresAt"],
+                        "capabilities": original["capabilities"], "sessionPath": session_path.relative_to(self.root).as_posix(),
+                        "snapshotAvailable": False,
+                    },
+                }
+                connection.sendall(canonical_json({"result": forged, "authorization": "0" * 64}).encode("utf-8"))
+
+        thread = threading.Thread(target=forge, daemon=True)
+        thread.start()
+        tampered = copy.deepcopy(original)
+        tampered["transport"]["port"] = listener.getsockname()[1]
+        write_json(session_path, tampered)
+        try:
+            with self.assertRaisesRegex(ValueError, "authorization"):
+                request_supervisor(self.root, session_path, "status", SCHEMAS)
+            thread.join(timeout=2)
+            self.assertTrue(captured)
+            self.assertNotIn(original["token"].encode("ascii"), captured[0])
+            self.assertEqual(load_json(session_path)["state"], "closed")
+            stale_bearer_accepted = False
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    stale = self.raw_request(original, {
+                        "schemaVersion": "1.0.0", "sessionId": original["sessionId"],
+                        "token": original["token"], "command": "status",
+                    })
+                except (ConnectionError, OSError, ValueError, json.JSONDecodeError):
+                    break
+                stale_bearer_accepted = stale.get("status") == "pass"
+                if stale_bearer_accepted:
+                    break
+                time.sleep(0.05)
+            self.assertFalse(stale_bearer_accepted)
+        finally:
+            listener.close()
+
+    def test_graceful_malicious_eof_revokes_record_and_original_daemon(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+
+        def consume_and_close() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": "e" * 64,
+                }).encode("utf-8"))
+                while connection.recv(65536):
+                    pass
+
+        thread = threading.Thread(target=consume_and_close, daemon=True)
+        thread.start()
+        tampered = copy.deepcopy(original)
+        tampered["transport"]["port"] = listener.getsockname()[1]
+        write_json(session_path, tampered)
+        try:
+            with self.assertRaises((JsonDocumentError, ValueError)):
+                request_supervisor(self.root, session_path, "status", SCHEMAS)
+            thread.join(timeout=2)
+            revoked = load_json(session_path)
+            self.assertEqual(revoked["state"], "closed")
+            self.assertNotIn("token", revoked)
+            with self.assertRaises((ConnectionError, OSError, ValueError, json.JSONDecodeError)):
+                self.raw_request(original, {
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"],
+                    "token": original["token"], "command": "status",
+                })
+        finally:
+            listener.close()
+
+    @unittest.skipIf(os.name == "nt", "parent replacement race requires POSIX symlinks")
+    def test_revocation_uses_preopened_session_anchor_after_parent_replacement(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        consumed = threading.Event()
+        release = threading.Event()
+
+        def consume_then_close() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": "9" * 64,
+                }).encode("utf-8"))
+                while connection.recv(65536):
+                    pass
+                consumed.set()
+                release.wait(timeout=3)
+
+        fake = threading.Thread(target=consume_then_close, daemon=True)
+        fake.start()
+        tampered = copy.deepcopy(original)
+        tampered["transport"]["port"] = listener.getsockname()[1]
+        write_json(session_path, tampered)
+        errors: list[BaseException] = []
+
+        def request() -> None:
+            try:
+                request_supervisor(self.root, session_path, "status", SCHEMAS)
+            except BaseException as exc:
+                errors.append(exc)
+
+        requester = threading.Thread(target=request)
+        requester.start()
+        self.assertTrue(consumed.wait(timeout=3))
+        original_root = self.root / "sessions-original"
+        (self.root / "sessions").rename(original_root)
+        with tempfile.TemporaryDirectory(prefix="neon-revoke-parent-outside-") as external:
+            outside = Path(external)
+            (self.root / "sessions").symlink_to(outside, target_is_directory=True)
+            release.set()
+            requester.join(timeout=3)
+            fake.join(timeout=3)
+            self.assertTrue(errors)
+            anchored_session = original_root / session_path.parent.name / "session.json"
+            revoked = load_json(anchored_session)
+            self.assertEqual(revoked["state"], "closed")
+            self.assertNotIn("token", revoked)
+            self.assertEqual(list(outside.iterdir()), [])
+            with self.assertRaises((ConnectionError, OSError, ValueError, json.JSONDecodeError)):
+                self.raw_request(original, {
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"],
+                    "token": original["token"], "command": "status",
+                })
+        listener.close()
+
+    def test_preaccepted_request_cannot_cross_revocation_or_expiry(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        held = socket.create_connection(("127.0.0.1", original["transport"]["port"]), timeout=3)
+        with held.makefile("rb") as stream:
+            challenge = json.loads(stream.readline())["challenge"]
+        signed = {
+            "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": challenge,
+            "nonce": "c" * 64, "command": "status",
+        }
+        payload = canonical_json({**signed, "authorization": _authorization(original["token"], signed)}).encode("utf-8")
+
+        unavailable = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        unavailable.bind(("127.0.0.1", 0))
+        unavailable_port = unavailable.getsockname()[1]
+        unavailable.close()
+        tampered = copy.deepcopy(original)
+        tampered["transport"]["port"] = unavailable_port
+        write_json(session_path, tampered)
+        with self.assertRaises(OSError):
+            request_supervisor(self.root, session_path, "status", SCHEMAS)
+        held.sendall(payload)
+        held.shutdown(socket.SHUT_WR)
+        try:
+            response = held.recv(65536)
+        except ConnectionError:
+            response = b""
+        held.close()
+        self.assertEqual(response, b"")
+        self.assertEqual(load_json(session_path)["state"], "closed")
+
+        _, expiring_path = self.start(ttl=2, snapshot="expiring-race.json")
+        expiring = load_json(expiring_path)
+        held = socket.create_connection(("127.0.0.1", expiring["transport"]["port"]), timeout=3)
+        with held.makefile("rb") as stream:
+            challenge = json.loads(stream.readline())["challenge"]
+        signed = {
+            "schemaVersion": "1.0.0", "sessionId": expiring["sessionId"], "challenge": challenge,
+            "nonce": "d" * 64, "command": "status",
+        }
+        time.sleep(2.2)
+        held.sendall(canonical_json({**signed, "authorization": _authorization(expiring["token"], signed)}).encode("utf-8"))
+        held.shutdown(socket.SHUT_WR)
+        try:
+            response = held.recv(65536)
+        except ConnectionError:
+            response = b""
+        self.assertEqual(response, b"")
+        held.close()
+        expired = load_json(expiring_path)
+        self.assertEqual(expired["state"], "expired")
+        self.assertNotIn("token", expired)
+        supervisor_module._wait_for_session_process(expiring)
+
+    def test_rejected_request_flood_keeps_audit_bounded(self) -> None:
+        _, session_path = self.start()
+        session = load_json(session_path)
+        for _ in range(1500):
+            result = self.raw_request(session, {
+                "schemaVersion": 1, "sessionId": session["sessionId"],
+                "token": "0" * 64, "command": "status",
+            })
+            self.assertEqual(result["status"], "fail")
+        audit = session_path.parent / "audit.jsonl"
+        self.assertLessEqual(audit.stat().st_size, MAX_AUDIT_BYTES)
+        marker = load_json(session_path.parent / "audit-truncated.json")
+        self.assertEqual((marker["status"], marker["maximumBytes"]), ("truncated", MAX_AUDIT_BYTES))
+        self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
+
+    def test_oversized_invalid_session_is_bounded_and_daemon_death_revokes_bearer(self) -> None:
+        oversized = self.root / "oversized-session.json"
+        oversized.write_text('{"padding":"' + ('x' * 300000) + '"}', encoding="utf-8")
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "supervisor", "status", str(oversized), "--workspace", str(self.root), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, SCHEMAS.validate("neon-supervisor-result", result)), (1, []))
+        self.assertLess(len(completed.stdout.encode("utf-8")), 4096)
+
+        _, session_path = self.start(ttl=10)
+        session = load_json(session_path)
+        os.kill(session["pid"], 9)
+        time.sleep(0.2)
+        with self.assertRaises(OSError):
+            request_supervisor(self.root, session_path, "status", SCHEMAS)
+        revoked = load_json(session_path)
+        self.assertEqual(revoked["state"], "closed")
+        self.assertNotIn("token", revoked)
 
 
 class ScenarioRunnerTests(unittest.TestCase):

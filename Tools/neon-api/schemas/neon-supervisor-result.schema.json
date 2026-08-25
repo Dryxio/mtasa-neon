@@ -1,0 +1,51 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-supervisor-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"enum": ["supervisor.start", "supervisor.status", "supervisor.stop"], "type": "string"},
+    "diagnostics": {
+      "maxItems": 64,
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {"pattern": "^[A-Z][A-Z0-9_]+$", "type": "string"},
+          "message": {"maxLength": 1024, "minLength": 1, "type": "string"},
+          "path": {"maxLength": 512, "type": "string"},
+          "severity": {"enum": ["error", "warning"], "type": "string"}
+        },
+        "required": ["code", "severity", "message", "path"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {"format": "semver", "maxLength": 64, "type": "string"},
+    "session": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {"items": {"type": "string"}, "type": "array"},
+        "createdAt": {"type": "string"},
+        "expiresAt": {"type": "string"},
+        "profile": {"type": "string"},
+        "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"},
+        "sessionPath": {"format": "relative-path", "type": "string"},
+        "snapshotAvailable": {"type": "boolean"},
+        "state": {"enum": ["active", "closed", "expired"], "type": "string"}
+      },
+      "required": ["sessionId", "state", "profile", "createdAt", "expiresAt", "capabilities", "sessionPath", "snapshotAvailable"],
+      "type": "object"
+    },
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "errors": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings"],
+      "type": "object"
+    }
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics", "session"],
+  "type": "object"
+}

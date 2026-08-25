@@ -24,6 +24,10 @@ Run commands from the repository root:
   --assertion Tools/neon-api/scenarios/assertions/static-check.json \
   --workspace . --output .neon-runs/static-smoke --json
 ./neon scenario verify .neon-runs/static-smoke --workspace . --json
+./neon supervisor start --workspace . --snapshot .neon-runtime/runtime-snapshot.json --json
+./neon supervisor status .neon-sessions/session-ID/session.json --workspace . --json
+./neon runtime compare .neon-sessions/session-ID/session.json --workspace . --json
+./neon supervisor stop .neon-sessions/session-ID/session.json --workspace . --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
@@ -259,6 +263,71 @@ all contracts, recomputes every size and SHA-256, reproduces the run identity,
 cross-checks result/evidence summaries, and rejects altered, unindexed, escaped,
 or symbolic-link files.
 
+## Read-only runtime supervisor
+
+`neon supervisor start` explicitly opens an expiring local observation session.
+It starts a dependency-free supervisor on an ephemeral `127.0.0.1` port, writes
+its token only to a mode-`0600` local session file, and grants exactly the five
+read capabilities fixed by the architecture. The public command result contains
+the workspace-relative session path but never the token. Each start creates a
+new random child under `.neon-sessions`; it never adopts an existing session.
+The token is never transmitted: a fresh server challenge and client nonce bind
+HMAC-authenticated requests and responses, so a redirected loopback connection
+cannot forge a PASS, recover the bearer, or replay a captured command.
+
+The session pins the project, catalogue, and resolved transitive component
+contract by SHA-256 and fixes one workspace-relative runtime snapshot path.
+`neon runtime compare SESSION` asks the supervisor to reopen that one snapshot
+without following symbolic links and compare its observations with the selected
+MTA/Neon profile and freshly resolved project contracts. It checks:
+
+- topology, side, engine version, and matching build IDs;
+- registered functions, restrictions, events, and remote-trigger policy;
+- running project resources and their declared exports;
+- native module version, ABI, manifest, binary identity, and exports;
+- duplicate, missing, unexpected, wrong-side, and uncatalogued entries; and
+- session, profile, project, catalogue, timestamp, and snapshot identity.
+
+A `complete` observation must use the exact single-server/single-client topology
+for `neon-pair` and may prove that an expected entry is absent. A `partial`
+observation produces visible warnings and never turns an unobserved function,
+event, resource, module, or export into an absence claim. Runtime strings and
+diagnostic counts are bounded contract data, not instructions. Project,
+component, or catalogue drift, symlink replacement and races, traversal,
+malformed or unauthorized requests, stale sessions, and non-loopback transports
+fail closed. Session state and audit writes stay anchored to the directory that
+was approved at startup, even if its parent path is later replaced.
+POSIX uses directory-relative descriptors; Windows uses native handle-relative
+opens and rejects reparse points. Platforms providing neither safe primitive
+reject supervisor startup rather than falling back to pathname check/reopen.
+Transitive validation never reopens live component paths: manifests, meta
+files, scripts, assets, and module binaries are copied from anchored reads into
+a private ephemeral contract tree before the general project resolver runs.
+Positive observations of undeclared resources, modules, or exports remain
+errors even in a partial inventory, as do uncatalogued functions and events;
+partial only weakens claims about absence. Resource and module exports are
+compared against the side represented by each observation. Resource sides come
+from their script declarations, so even a client resource with no public API
+must appear in a complete client inventory.
+
+Checkpoint G does not launch MTA, start resources, execute scenarios, or create
+the runtime snapshot. A developer or later bounded probe supplies it at the
+configured path with the session ID and pinned hashes. Consequently comparison
+results declare `scope: "observation-only"` and always grant zero evidence
+labels; reading a submitted snapshot is not `server-checked`, `client-checked`,
+or `in-game-checked` proof. Checkpoint H will add the explicitly authorized
+operations that can produce real snapshots and test runs.
+
+`neon supervisor stop SESSION` closes the loopback listener, removes the token
+from the retained session record, and makes further requests fail. Expiration
+does the same using a monotonic deadline. If the daemon dies abruptly, the next
+request reconciles the retained record to a token-free closed or expired state.
+`audit.jsonl` records start, reads,
+comparisons, rejected requests, stop, and expiration by session ID and result
+hash without recording the token. It is capped at 256 KiB so unauthenticated
+request floods cannot consume unbounded disk; `audit-truncated.json` makes any
+records omitted after that cap explicit.
+
 ## Contract files
 
 - `schemas/neon-api.schema.json`: canonical API catalogue.
@@ -275,6 +344,10 @@ or symbolic-link files.
 - `schemas/neon-evidence.schema.json`: scoped test evidence and exact assertion outcomes.
 - `schemas/neon-test-result.schema.json`: stable scenario step/assertion result.
 - `schemas/neon-scenario-verify-result.schema.json`: saved-run integrity result.
+- `schemas/neon-runtime-snapshot.schema.json`: bounded multi-runtime observation.
+- `schemas/neon-runtime-compare-result.schema.json`: read-only divergence result.
+- `schemas/neon-supervisor-session.schema.json`: local expiring session record.
+- `schemas/neon-supervisor-result.schema.json`: supervisor lifecycle result.
 - `schemas/neon-check-result.schema.json`: stable `check --json` result.
 - `generated/`: deterministic LuaLS/LuaCATS libraries and hashes.
 
