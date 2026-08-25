@@ -219,6 +219,24 @@ getPlayerDiscordID(player)         -- Discord snowflake string or false
 Equivalent player methods are `player:isNeonAuthenticated()`,
 `player:getNeonID()`, and `player:getDiscordID()`.
 
+Resources that need to apply account or access policy before a player joins can
+read the same verified identifiers from the final `onPlayerConnect` arguments:
+
+```lua
+addEventHandler("onPlayerConnect", root, function(
+    nickname, ip, username, serial, versionNumber, versionString, neonID, discordID
+)
+    if not accountExistsForNeonID(neonID) then
+        cancelEvent(true, "No account is linked to this Neon identity.")
+    end
+end)
+```
+
+`neonID` and `discordID` are strings when their identities were verified and
+`false` when unavailable. They are appended to the existing event signature,
+so existing handlers remain compatible. With `neon_auth=required`, both values
+come from the ticket that was validated before this event runs.
+
 ### Automatic public discovery
 
 Public discovery is enabled by default when ordinary MTA ASE publication is

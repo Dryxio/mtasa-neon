@@ -4733,6 +4733,20 @@ void CGame::PlayerCompleteConnect(CPlayer* pPlayer)
     Arguments.PushString(pPlayer->GetSerial().c_str());
     Arguments.PushNumber(pPlayer->GetMTAVersion());
     Arguments.PushString(pPlayer->GetPlayerVersion());
+
+    // Resources that enforce their own account policy must be able to reject
+    // the connection before onPlayerJoin. Append the already-verified platform
+    // identities without changing the existing onPlayerConnect arguments.
+    const auto pushOptionalIdentity = [&Arguments](const std::string& identity)
+    {
+        if (identity.empty())
+            Arguments.PushBoolean(false);
+        else
+            Arguments.PushString(identity);
+    };
+    pushOptionalIdentity(pPlayer->GetNeonAccountId());
+    pushOptionalIdentity(pPlayer->GetDiscordId());
+
     if (!g_pGame->GetMapManager()->GetRootElement()->CallEvent("onPlayerConnect", Arguments))
     {
         // event cancelled, disconnect the player
