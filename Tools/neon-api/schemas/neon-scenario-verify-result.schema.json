@@ -1,0 +1,36 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-scenario-verify-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"const": "scenario.verify", "type": "string"},
+    "diagnostics": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {"minLength": 1, "type": "string"},
+          "message": {"minLength": 1, "type": "string"},
+          "path": {"type": "string"},
+          "severity": {"enum": ["error", "warning"], "type": "string"}
+        },
+        "required": ["code", "severity", "message", "path"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {"minimum": 0, "type": "integer"},
+        "errors": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings", "artifacts"],
+      "type": "object"
+    }
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics"],
+  "type": "object"
+}

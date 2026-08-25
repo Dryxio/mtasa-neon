@@ -19,6 +19,11 @@ Run commands from the repository root:
 ./neon project resolve --json
 ./neon generate project --json
 ./neon context verify --json
+./neon scenario run Tools/neon-api/scenarios/static-smoke.json \
+  --assertion Tools/neon-api/scenarios/assertions/static-search.json \
+  --assertion Tools/neon-api/scenarios/assertions/static-check.json \
+  --workspace . --output .neon-runs/static-smoke --json
+./neon scenario verify .neon-runs/static-smoke --workspace . --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
@@ -221,6 +226,39 @@ snapshot. With `--source-ref HEAD` it is reproducible and
 ignores unrelated working-tree changes; without that option it deliberately
 audits the working tree.
 
+## Closed scenarios, assertions, and evidence
+
+`neon scenario run` executes a bounded, sequential scenario inside one approved
+workspace. Checkpoint F enables only `check`, `project.resolve`,
+`generate.project`, `context.verify`, and `api.search`. Each action runs without
+a shell in a child process under its declared timeout. Build, client launch,
+resource lifecycle, and runtime scenario actions remain fail-closed until their
+later checkpoints provide a supervisor and dedicated permission model.
+
+A scenario names every assertion document explicitly. Assertions can select a
+step result with `step:id#/json/pointer`, select the last step with a plain JSON
+pointer, or check a workspace-relative regular file. Supported predicates are
+`equals`, `not-equals`, `truthy`, `falsy`, `contains`, `file-exists`, and
+`diagnostic-absent`. `expectedStatus: "fail"` supports deliberate negative
+checks, but infrastructure failures such as timeouts, invalid inputs, profile
+mismatches, unavailable actions, malformed output, or exit/result
+contradictions can never be converted into a passing scenario.
+
+When `--output` names a new or empty directory inside the workspace, the runner
+writes the exact scenario and assertion inputs, canonical per-step JSON,
+deterministic JSONL events, a validated artifact index, `evidence.json`, and
+`result.json`. Payloads are content addressed, repeated static inputs retain the
+same run identity, and the evidence records the actual wall-clock observation
+and duration separately. Output paths cannot traverse or follow symlinks,
+overlap generated project context, or adopt an existing user-owned directory.
+Scenario and assertion documents must also be regular files inside the approved
+workspace. The only evidence label granted here is `static-checked`.
+
+`neon scenario verify` reopens a saved run without executing it. It validates
+all contracts, recomputes every size and SHA-256, reproduces the run identity,
+cross-checks result/evidence summaries, and rejects altered, unindexed, escaped,
+or symbolic-link files.
+
 ## Contract files
 
 - `schemas/neon-api.schema.json`: canonical API catalogue.
@@ -233,6 +271,10 @@ audits the working tree.
 - `schemas/neon-test.schema.json`: bounded scenario definition.
 - `schemas/neon-assertion.schema.json`: assertion contract.
 - `schemas/neon-artifact.schema.json`: content-addressed artefact record.
+- `schemas/neon-artifact-index.schema.json`: closed index of run artefacts.
+- `schemas/neon-evidence.schema.json`: scoped test evidence and exact assertion outcomes.
+- `schemas/neon-test-result.schema.json`: stable scenario step/assertion result.
+- `schemas/neon-scenario-verify-result.schema.json`: saved-run integrity result.
 - `schemas/neon-check-result.schema.json`: stable `check --json` result.
 - `generated/`: deterministic LuaLS/LuaCATS libraries and hashes.
 

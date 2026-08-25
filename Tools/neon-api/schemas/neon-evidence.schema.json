@@ -1,0 +1,53 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-evidence-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {"items": {"$ref": "#/$defs/artifactRef"}, "type": "array"},
+    "assertions": {"items": {"$ref": "#/$defs/assertionRef"}, "minItems": 1, "type": "array"},
+    "durationMs": {"minimum": 0, "type": "integer"},
+    "labels": {
+      "items": {"enum": ["documented", "source-inspected", "static-checked", "built", "server-checked", "client-checked", "in-game-checked", "multiplayer-checked", "visual-checked", "native-trace-checked", "performance-checked"], "type": "string"},
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "observedAt": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
+    "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
+    "runId": {"format": "stable-id", "type": "string"},
+    "scenario": {"$ref": "#/$defs/scenarioRef"},
+    "schemaVersion": {"format": "semver", "type": "string"}
+  },
+  "required": ["schemaVersion", "runId", "profile", "observedAt", "durationMs", "labels", "scenario", "assertions", "artifacts"],
+  "type": "object",
+  "$defs": {
+    "artifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {"format": "stable-id", "type": "string"},
+        "path": {"format": "relative-path", "type": "string"},
+        "sha256": {"format": "sha256", "type": "string"}
+      },
+      "required": ["id", "path", "sha256"],
+      "type": "object"
+    },
+    "assertionRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {"format": "stable-id", "type": "string"},
+        "status": {"enum": ["pass", "fail"], "type": "string"}
+      },
+      "required": ["id", "status"],
+      "type": "object"
+    },
+    "scenarioRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {"format": "stable-id", "type": "string"},
+        "sha256": {"format": "sha256", "type": "string"}
+      },
+      "required": ["id", "sha256"],
+      "type": "object"
+    }
+  }
+}

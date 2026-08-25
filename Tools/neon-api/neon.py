@@ -33,6 +33,7 @@ from neonlib.discovery import search_symbols, tokenize  # noqa: E402
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
+from neonlib.scenario import run_scenario, verify_scenario_run  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 
 
@@ -281,6 +282,28 @@ def command_schema_validate(args: argparse.Namespace) -> int:
     }
     _emit(result, args.json)
     return 0 if not diagnostics else 1
+
+
+def command_scenario_run(args: argparse.Namespace) -> int:
+    try:
+        result = run_scenario(
+            Path(args.scenario), [Path(path) for path in args.assertion],
+            Path(args.workspace), SCHEMA_STORE, Path(__file__).resolve(),
+            Path(args.output) if args.output else None, args.observed_at,
+        )
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = _failure("scenario.run", "SCENARIO_INVALID", str(exc))
+    _emit(result, args.json)
+    return 0 if result["status"] == "pass" else 1
+
+
+def command_scenario_verify(args: argparse.Namespace) -> int:
+    result = verify_scenario_run(Path(args.workspace), Path(args.run), SCHEMA_STORE)
+    issues = SCHEMA_STORE.validate("neon-scenario-verify-result", result)
+    if issues:
+        result = _failure("scenario.verify", "INTERNAL_RESULT_INVALID", "; ".join(f"{issue.pointer}: {issue.message}" for issue in issues))
+    _emit(result, args.json)
+    return 0 if result["status"] == "pass" else 1
 
 
 def command_catalogue_build(args: argparse.Namespace) -> int:
@@ -654,10 +677,26 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)
+
+    scenario = subcommands.add_parser("scenario", help="run bounded local development scenarios and assertions")
+    scenario_subcommands = scenario.add_subparsers(dest="scenario_command", required=True)
+    scenario_run = scenario_subcommands.add_parser("run", help="execute allowlisted static steps and emit evidence")
+    scenario_run.add_argument("scenario")
+    scenario_run.add_argument("--assertion", action="append", required=True, help="assertion document; repeat for every scenario assertion")
+    scenario_run.add_argument("--workspace", default=".", help="approved workspace boundary")
+    scenario_run.add_argument("--output", help="new or empty output directory inside the workspace")
+    scenario_run.add_argument("--observed-at", help="UTC evidence time in YYYY-MM-DDTHH:MM:SSZ form")
+    scenario_run.add_argument("--json", action="store_true")
+    scenario_run.set_defaults(handler=command_scenario_run)
+    scenario_verify = scenario_subcommands.add_parser("verify", help="verify a saved run's contracts, identity, and artifact integrity")
+    scenario_verify.add_argument("run", help="run directory inside the approved workspace")
+    scenario_verify.add_argument("--workspace", default=".", help="approved workspace boundary")
+    scenario_verify.add_argument("--json", action="store_true")
+    scenario_verify.set_defaults(handler=command_scenario_verify)
 
     catalogue = subcommands.add_parser("catalogue", help="build or verify the effective MTA API")
     catalogue_subcommands = catalogue.add_subparsers(dest="catalogue_command", required=True)

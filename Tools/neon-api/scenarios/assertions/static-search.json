@@ -1,0 +1,8 @@
+{
+  "actual": "step:discover#/symbols/0/name",
+  "expected": "dxDrawText",
+  "id": "assertion:static-search",
+  "kind": "equals",
+  "message": "intent discovery must rank dxDrawText first",
+  "schemaVersion": "1.0.0"
+}

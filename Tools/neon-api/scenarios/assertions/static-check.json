@@ -1,0 +1,8 @@
+{
+  "actual": "step:check#/summary/errors",
+  "expected": 0,
+  "id": "assertion:static-check",
+  "kind": "equals",
+  "message": "the repository project must have no static errors",
+  "schemaVersion": "1.0.0"
+}

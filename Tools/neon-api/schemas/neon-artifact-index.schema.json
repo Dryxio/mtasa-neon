@@ -1,0 +1,27 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-artifact-index-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {"format": "stable-id", "type": "string"},
+          "kind": {"enum": ["json", "jsonl", "log", "luals", "screenshot", "video", "trace", "report"], "type": "string"},
+          "mediaType": {"format": "media-type", "type": "string"},
+          "path": {"format": "relative-path", "type": "string"},
+          "schemaVersion": {"format": "semver", "type": "string"},
+          "sha256": {"format": "sha256", "type": "string"},
+          "size": {"minimum": 0, "type": "integer"}
+        },
+        "required": ["schemaVersion", "id", "kind", "path", "mediaType", "size", "sha256"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {"format": "semver", "type": "string"}
+  },
+  "required": ["schemaVersion", "artifacts"],
+  "type": "object"
+}

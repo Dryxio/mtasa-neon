@@ -1342,6 +1342,533 @@ class LuaLsGenerationTests(unittest.TestCase):
         self.assertNotIn("unknown", bird_colors)
 
 
+class ScenarioRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="neon-scenario-runner-")
+        self.root = Path(self.temporary.name)
+        self.catalogue = self.root / "api.json"
+        try:
+            os.link(CATALOGUE_PATH, self.catalogue)
+        except OSError:
+            shutil.copyfile(CATALOGUE_PATH, self.catalogue)
+        self.project_path = self.root / "neon.project.json"
+        project = base_project()
+        write_json(self.project_path, project)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def assertion(self, identifier: str, kind: str, actual: str, message: str, expected: object = ...) -> Path:
+        document = {"schemaVersion": "1.0.0", "id": identifier, "kind": kind, "actual": actual, "message": message}
+        if expected is not ...:
+            document["expected"] = expected
+        path = self.root / f"{identifier.replace(':', '-')}.json"
+        write_json(path, document)
+        return path
+
+    def scenario(self, steps: list[dict], assertions: list[Path], identifier: str = "test:scenario") -> Path:
+        document = {
+            "schemaVersion": "1.0.0", "id": identifier, "profile": "neon-pair", "steps": steps,
+            "assertions": [load_json(path)["id"] for path in assertions],
+        }
+        path = self.root / "scenario.json"
+        write_json(path, document)
+        return path
+
+    def run_cli(self, scenario: Path, assertions: list[Path], *extra: str) -> subprocess.CompletedProcess[str]:
+        command = [
+            sys.executable, str(CLI_PATH), "scenario", "run", str(scenario), "--workspace", str(self.root),
+            "--observed-at", "2026-08-25T12:00:00Z", *extra,
+        ]
+        for assertion in assertions:
+            command.extend(("--assertion", str(assertion)))
+        command.append("--json")
+        return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
+    def verify_cli(self, run: str = "run") -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(CLI_PATH), "scenario", "verify", run, "--workspace", str(self.root), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+
+    def test_static_scenario_emits_valid_evidence_artifacts_and_jsonl(self) -> None:
+        assertions = [
+            self.assertion("assertion:search", "equals", "step:search#/symbols/0/name", "find sparse Neon API", "setPedNavigateTo"),
+            self.assertion("assertion:clean", "equals", "step:check#/summary/errors", "project must pass", 0),
+        ]
+        scenario = self.scenario([
+            {
+                "id": "step:search", "action": "api.search", "timeoutMs": 5000,
+                "inputs": {"query": "npc pathfinding", "catalogue": "api.json", "origin": "neon", "state": "runtime-only", "side": "client", "limit": 5},
+            },
+            {"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {"project": "neon.project.json"}},
+        ], assertions)
+        completed = self.run_cli(scenario, assertions, "--output", "run")
+        self.assertEqual((completed.returncode, completed.stderr), (0, ""))
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(SCHEMAS.validate("neon-test-result", result), [])
+        self.assertEqual(SCHEMAS.validate("neon-evidence", result["evidence"]), [])
+        self.assertEqual(result["evidence"]["labels"], ["static-checked"])
+        artifact_index = load_json(self.root / "run" / "artifacts.json")
+        for artifact in artifact_index["artifacts"]:
+            self.assertEqual(SCHEMAS.validate("neon-artifact", artifact), [])
+            payload = (self.root / "run" / artifact["path"]).read_bytes()
+            self.assertEqual((len(payload), sha256_bytes(payload)), (artifact["size"], artifact["sha256"]))
+        events = [json.loads(line) for line in (self.root / "run" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([event["sequence"] for event in events], list(range(1, len(events) + 1)))
+        verified = self.verify_cli()
+        self.assertEqual((verified.returncode, verified.stderr), (0, ""))
+        verification = json.loads(verified.stdout)
+        self.assertEqual(verification["status"], "pass")
+        self.assertEqual(SCHEMAS.validate("neon-scenario-verify-result", verification), [])
+
+    def test_scenario_verify_rejects_tampering_and_unindexed_files(self) -> None:
+        assertion = self.assertion("assertion:clean", "equals", "/summary/errors", "clean project", 0)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        completed = self.run_cli(scenario, [assertion], "--output", "run")
+        self.assertEqual(completed.returncode, 0)
+        (self.root / "run" / "steps" / "001.json").write_text("{}\n", encoding="utf-8")
+        tampered = json.loads(self.verify_cli().stdout)
+        self.assertIn("SCENARIO_ARTIFACT_TAMPERED", diagnostic_codes(tampered))
+
+        shutil.rmtree(self.root / "run")
+        self.assertEqual(self.run_cli(scenario, [assertion], "--output", "run").returncode, 0)
+        (self.root / "run" / "unindexed.txt").write_text("not evidence\n", encoding="utf-8")
+        unindexed = json.loads(self.verify_cli().stdout)
+        self.assertIn("SCENARIO_FILE_UNINDEXED", diagnostic_codes(unindexed))
+
+    def test_scenario_verify_rejects_control_mismatch_and_symlinks(self) -> None:
+        assertion = self.assertion("assertion:clean", "equals", "/summary/errors", "clean project", 0)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        self.assertEqual(self.run_cli(scenario, [assertion], "--output", "run").returncode, 0)
+        result = load_json(self.root / "run" / "result.json")
+        result["evidence"]["observedAt"] = "2026-08-25T12:00:01Z"
+        write_json(self.root / "run" / "result.json", result)
+        mismatch = json.loads(self.verify_cli().stdout)
+        self.assertIn("SCENARIO_EVIDENCE_MISMATCH", diagnostic_codes(mismatch))
+
+        evidence = load_json(self.root / "run" / "evidence.json")
+        evidence["labels"] = ["built"]
+        result["evidence"] = evidence
+        write_json(self.root / "run" / "evidence.json", evidence)
+        write_json(self.root / "run" / "result.json", result)
+        scope = json.loads(self.verify_cli().stdout)
+        self.assertIn("SCENARIO_EVIDENCE_SCOPE_INVALID", diagnostic_codes(scope))
+
+        evidence["labels"] = ["static-checked"]
+        result["evidence"] = evidence
+        write_json(self.root / "run" / "evidence.json", evidence)
+        write_json(self.root / "run" / "result.json", result)
+        (self.root / "run" / "linked").symlink_to(self.root / "api.json")
+        linked = json.loads(self.verify_cli().stdout)
+        self.assertIn("SCENARIO_RUN_SYMLINK", diagnostic_codes(linked))
+
+    def test_scenario_verify_recomputes_assertions_and_step_artifacts(self) -> None:
+        assertion = self.assertion(
+            "assertion:wrong", "equals", "/symbols/0/name", "deliberately wrong result", "definitelyWrong",
+        )
+        scenario = self.scenario([{
+            "id": "step:search", "action": "api.search", "timeoutMs": 5000,
+            "inputs": {"query": "draw text", "catalogue": "api.json", "side": "client", "limit": 1},
+        }], [assertion])
+        self.assertEqual(self.run_cli(scenario, [assertion], "--output", "forged").returncode, 1)
+        original_result = load_json(self.root / "forged" / "result.json")
+        result = copy.deepcopy(original_result)
+        result["diagnostics"] = []
+        result["summary"]["errors"] = 0
+        result["status"] = "pass"
+        write_json(self.root / "forged" / "result.json", result)
+        rootless = json.loads(self.verify_cli("forged").stdout)
+        self.assertIn("SCENARIO_IDENTITY_INVALID", diagnostic_codes(rootless))
+
+        result = copy.deepcopy(original_result)
+        result["assertions"][0]["status"] = "pass"
+        result["diagnostics"] = []
+        result["summary"]["errors"] = 0
+        result["summary"]["passedAssertions"] = 1
+        result["status"] = "pass"
+        result["evidence"]["assertions"][0]["status"] = "pass"
+        write_json(self.root / "forged" / "evidence.json", result["evidence"])
+        write_json(self.root / "forged" / "result.json", result)
+        forged = json.loads(self.verify_cli("forged").stdout)
+        self.assertIn("SCENARIO_IDENTITY_INVALID", diagnostic_codes(forged))
+
+        valid_assertion = self.assertion("assertion:valid", "equals", "/symbols/0/name", "valid result", "dxDrawText")
+        valid_scenario = self.scenario([{
+            "id": "step:search", "action": "api.search", "timeoutMs": 5000,
+            "inputs": {"query": "draw text", "catalogue": "api.json", "side": "client", "limit": 1},
+        }], [valid_assertion], identifier="test:artifact-contradiction")
+        self.assertEqual(self.run_cli(valid_scenario, [valid_assertion], "--output", "contradictory").returncode, 0)
+        step_path = self.root / "contradictory" / "steps" / "001.json"
+        saved_step = load_json(step_path)
+        saved_step["status"] = "fail"
+        write_json(step_path, saved_step)
+        payload = step_path.read_bytes()
+        index = load_json(self.root / "contradictory" / "artifacts.json")
+        artifact = next(item for item in index["artifacts"] if item["id"] == "artifact:scenario-step-001")
+        artifact["size"] = len(payload)
+        artifact["sha256"] = sha256_bytes(payload)
+        write_json(self.root / "contradictory" / "artifacts.json", index)
+        evidence = load_json(self.root / "contradictory" / "evidence.json")
+        reference = next(item for item in evidence["artifacts"] if item["id"] == artifact["id"])
+        reference["sha256"] = artifact["sha256"]
+        write_json(self.root / "contradictory" / "evidence.json", evidence)
+        result = load_json(self.root / "contradictory" / "result.json")
+        result["evidence"] = evidence
+        write_json(self.root / "contradictory" / "result.json", result)
+        contradictory = json.loads(self.verify_cli("contradictory").stdout)
+        self.assertIn("SCENARIO_IDENTITY_INVALID", diagnostic_codes(contradictory))
+
+    def test_scenario_verify_rechecks_file_exists_against_the_workspace(self) -> None:
+        assertion = self.assertion("assertion:missing", "file-exists", "never-created.txt", "file must exist")
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        self.assertEqual(self.run_cli(scenario, [assertion], "--output", "file-forged").returncode, 1)
+        result = load_json(self.root / "file-forged" / "result.json")
+        result["assertions"][0]["actual"] = True
+        result["assertions"][0]["status"] = "pass"
+        result["diagnostics"] = []
+        result["summary"]["errors"] = 0
+        result["summary"]["passedAssertions"] = 1
+        result["status"] = "pass"
+        result["evidence"]["assertions"][0]["status"] = "pass"
+
+        events_path = self.root / "file-forged" / "events.jsonl"
+        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        events[-1]["status"] = "pass"
+        events_path.write_bytes(b"".join(canonical_json(event).encode("utf-8") for event in events))
+        index = load_json(self.root / "file-forged" / "artifacts.json")
+        event_artifact = next(item for item in index["artifacts"] if item["id"] == "artifact:scenario-events")
+        event_payload = events_path.read_bytes()
+        event_artifact["size"] = len(event_payload)
+        event_artifact["sha256"] = sha256_bytes(event_payload)
+        write_json(self.root / "file-forged" / "artifacts.json", index)
+        event_reference = next(item for item in result["evidence"]["artifacts"] if item["id"] == event_artifact["id"])
+        event_reference["sha256"] = event_artifact["sha256"]
+        write_json(self.root / "file-forged" / "evidence.json", result["evidence"])
+        write_json(self.root / "file-forged" / "result.json", result)
+        forged = json.loads(self.verify_cli("file-forged").stdout)
+        self.assertIn("SCENARIO_IDENTITY_INVALID", diagnostic_codes(forged))
+
+    def test_scenario_verify_rejects_removed_infrastructure_diagnostics(self) -> None:
+        assertion = self.assertion("assertion:failed", "equals", "step:build#/status", "build unavailable", "fail")
+        scenario = self.scenario([{
+            "id": "step:build", "action": "build", "expectedStatus": "fail", "timeoutMs": 1000, "inputs": {},
+        }], [assertion])
+        self.assertEqual(self.run_cli(scenario, [assertion], "--output", "infrastructure").returncode, 1)
+        self.assertEqual(json.loads(self.verify_cli("infrastructure").stdout)["status"], "pass")
+        result = load_json(self.root / "infrastructure" / "result.json")
+        result["diagnostics"] = []
+        result["summary"]["errors"] = 0
+        result["status"] = "pass"
+        write_json(self.root / "infrastructure" / "result.json", result)
+        forged = json.loads(self.verify_cli("infrastructure").stdout)
+        self.assertIn("SCENARIO_STEP_DIAGNOSTIC_MISSING", diagnostic_codes(forged))
+
+        result["steps"][0]["result"]["diagnostics"] = []
+        result["steps"][0]["result"]["summary"]["errors"] = 0
+        step_path = self.root / "infrastructure" / "steps" / "001.json"
+        write_json(step_path, result["steps"][0]["result"])
+        step_payload = step_path.read_bytes()
+        index = load_json(self.root / "infrastructure" / "artifacts.json")
+        step_artifact = next(item for item in index["artifacts"] if item["id"] == "artifact:scenario-step-001")
+        step_artifact["size"] = len(step_payload)
+        step_artifact["sha256"] = sha256_bytes(step_payload)
+        write_json(self.root / "infrastructure" / "artifacts.json", index)
+        evidence = result["evidence"]
+        step_reference = next(item for item in evidence["artifacts"] if item["id"] == step_artifact["id"])
+        step_reference["sha256"] = step_artifact["sha256"]
+        identity_payload = canonical_json({
+            "scenario": load_json(scenario), "assertions": [load_json(assertion)],
+            "steps": [{
+                "id": result["steps"][0]["id"], "status": result["steps"][0]["status"],
+                "result": result["steps"][0]["result"],
+            }],
+        }).encode("utf-8")
+        evidence["runId"] = f"run:{load_json(scenario)['id']}:{sha256_bytes(identity_payload)[:20]}"
+        result["evidence"] = evidence
+        write_json(self.root / "infrastructure" / "evidence.json", evidence)
+        write_json(self.root / "infrastructure" / "result.json", result)
+        coherent_forge = json.loads(self.verify_cli("infrastructure").stdout)
+        self.assertTrue({"SCENARIO_STEP_DIAGNOSTIC_MISSING", "SCENARIO_STEP_RESULT_STATUS_MISMATCH"}.intersection(diagnostic_codes(coherent_forge)))
+
+    def test_genuine_infrastructure_failures_remain_integrity_verifiable(self) -> None:
+        assertion = self.assertion("assertion:failed", "equals", "/status", "action failed", "fail")
+        cases = [
+            ("runtime-failure", {"id": "step:build", "action": "build", "timeoutMs": 1000, "inputs": {}}),
+            ("input-failure", {"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {"project": "../outside.json"}}),
+            ("timeout-failure", {"id": "step:slow", "action": "api.search", "timeoutMs": 1, "inputs": {"query": "vehicle", "catalogue": "api.json"}}),
+        ]
+        for output, step in cases:
+            with self.subTest(output=output):
+                scenario = self.scenario([step], [assertion], identifier=f"test:{output}")
+                self.assertEqual(self.run_cli(scenario, [assertion], "--output", output).returncode, 1)
+                verification = json.loads(self.verify_cli(output).stdout)
+                self.assertEqual((verification["status"], verification["diagnostics"]), ("pass", []))
+
+    def test_scenario_verify_rejects_unsafe_or_missing_run(self) -> None:
+        missing = json.loads(self.verify_cli("missing").stdout)
+        self.assertIn("SCENARIO_RUN_UNSAFE", diagnostic_codes(missing))
+        outside = json.loads(self.verify_cli("../outside").stdout)
+        self.assertIn("SCENARIO_RUN_UNSAFE", diagnostic_codes(outside))
+
+    def test_unknown_scenario_and_assertion_schema_majors_are_rejected(self) -> None:
+        assertion = self.assertion("assertion:clean", "equals", "/summary/errors", "clean project", 0)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        document = load_json(scenario)
+        document["schemaVersion"] = "2.0.0"
+        write_json(scenario, document)
+        invalid_scenario = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertIn("unsupported scenario schema", invalid_scenario["diagnostics"][0]["message"])
+
+        document["schemaVersion"] = "1.0.0"
+        write_json(scenario, document)
+        assertion_document = load_json(assertion)
+        assertion_document["schemaVersion"] = "2.0.0"
+        write_json(assertion, assertion_document)
+        invalid_assertion = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertIn("unsupported assertion schema", invalid_assertion["diagnostics"][0]["message"])
+
+    def test_repeated_runs_have_identical_content_artifacts_and_run_identity(self) -> None:
+        assertions = [self.assertion("assertion:search", "equals", "/symbols/0/name", "find vehicle creation", "createVehicle")]
+        scenario = self.scenario([{
+            "id": "step:search", "action": "api.search", "timeoutMs": 5000,
+            "inputs": {"query": "create car", "catalogue": "api.json", "kind": "function", "limit": 3},
+        }], assertions)
+        first = json.loads(self.run_cli(scenario, assertions, "--output", "run-a").stdout)
+        second = json.loads(self.run_cli(scenario, assertions, "--output", "run-b").stdout)
+        self.assertEqual(first["evidence"]["runId"], second["evidence"]["runId"])
+        first_artifacts = load_json(self.root / "run-a" / "artifacts.json")
+        second_artifacts = load_json(self.root / "run-b" / "artifacts.json")
+        self.assertEqual(first_artifacts, second_artifacts)
+        for artifact in first_artifacts["artifacts"]:
+            self.assertEqual(
+                (self.root / "run-a" / artifact["path"]).read_bytes(),
+                (self.root / "run-b" / artifact["path"]).read_bytes(),
+            )
+
+    def test_saved_results_normalize_workspace_paths(self) -> None:
+        assertion = self.assertion("assertion:context", "file-exists", "generated/agent-context.json", "context exists")
+        scenario = self.scenario([{
+            "id": "step:generate", "action": "generate.project", "timeoutMs": 10000,
+            "inputs": {"project": "neon.project.json", "catalogue": "api.json", "output": "generated"},
+        }], [assertion])
+        completed = self.run_cli(scenario, [assertion], "--output", "run")
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"]), (0, "pass"))
+        self.assertEqual(result["steps"][0]["result"]["output"], "workspace:/generated")
+        self.assertNotIn(str(self.root), canonical_json(result))
+        self.assertEqual(json.loads(self.verify_cli().stdout)["status"], "pass")
+
+    def test_expected_negative_step_can_pass_with_precise_assertion(self) -> None:
+        project = base_project()
+        project["resources"] = [{"name": "missing", "path": "resources/missing"}]
+        write_json(self.project_path, project)
+        assertions = [self.assertion(
+            "assertion:missing", "equals", "step:negative#/diagnostics/0/code", "missing resource must be detected", "MISSING_RESOURCE",
+        )]
+        scenario = self.scenario([{
+            "id": "step:negative", "action": "check", "expectedStatus": "fail", "timeoutMs": 5000,
+            "inputs": {"project": "neon.project.json"},
+        }], assertions)
+        completed = self.run_cli(scenario, assertions)
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"], result["steps"][0]["status"]), (0, "pass", "pass"))
+
+    def test_runtime_action_is_fail_closed_even_when_failure_is_expected(self) -> None:
+        assertions = [self.assertion("assertion:failed", "equals", "step:build#/status", "build is unavailable", "fail")]
+        scenario = self.scenario([{
+            "id": "step:build", "action": "build", "expectedStatus": "fail", "timeoutMs": 1000, "inputs": {},
+        }], assertions)
+        completed = self.run_cli(scenario, assertions)
+        result = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("SCENARIO_ACTION_UNAVAILABLE", diagnostic_codes(result))
+
+    def test_timeout_is_an_infrastructure_failure_not_an_expected_negative(self) -> None:
+        assertions = [self.assertion("assertion:failed", "equals", "step:slow#/status", "search times out", "fail")]
+        scenario = self.scenario([{
+            "id": "step:slow", "action": "api.search", "expectedStatus": "fail", "timeoutMs": 1,
+            "inputs": {"query": "vehicle", "catalogue": "api.json"},
+        }], assertions)
+        result = json.loads(self.run_cli(scenario, assertions).stdout)
+        self.assertIn("SCENARIO_STEP_TIMEOUT", diagnostic_codes(result))
+        self.assertEqual(result["steps"][0]["exitCode"], 124)
+
+    def test_path_traversal_and_output_symlink_are_rejected_without_writes(self) -> None:
+        assertions = [self.assertion("assertion:x", "truthy", "step:x#/status", "unreachable")]
+        scenario = self.scenario([{
+            "id": "step:x", "action": "check", "timeoutMs": 5000, "inputs": {"project": "../outside.json"},
+        }], assertions)
+        result = json.loads(self.run_cli(scenario, assertions).stdout)
+        self.assertIn("SCENARIO_INPUT_INVALID", diagnostic_codes(result))
+        with tempfile.TemporaryDirectory(prefix="neon-scenario-outside-") as external:
+            outside = Path(external)
+            link = self.root / "linked-output"
+            link.symlink_to(outside, target_is_directory=True)
+            completed = self.run_cli(scenario, assertions, "--output", "linked-output")
+            self.assertEqual(completed.returncode, 1)
+            self.assertFalse(any(outside.iterdir()))
+
+    def test_symlinked_control_documents_are_rejected(self) -> None:
+        assertion = self.assertion("assertion:clean", "equals", "/summary/errors", "clean project", 0)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        scenario_link = self.root / "scenario-link.json"
+        assertion_link = self.root / "assertion-link.json"
+        scenario_link.symlink_to(scenario)
+        assertion_link.symlink_to(assertion)
+        linked_scenario = self.run_cli(scenario_link, [assertion])
+        linked_assertion = self.run_cli(scenario, [assertion_link])
+        self.assertEqual((linked_scenario.returncode, linked_assertion.returncode), (1, 1))
+        self.assertEqual(json.loads(linked_scenario.stdout)["diagnostics"][0]["code"], "SCENARIO_INVALID")
+        self.assertEqual(json.loads(linked_assertion.stdout)["diagnostics"][0]["code"], "SCENARIO_INVALID")
+
+    def test_macos_workspace_aliases_preserve_valid_paths_and_symlink_rejection(self) -> None:
+        if not str(self.root).startswith(("/var/", "/tmp/")):
+            self.skipTest("macOS /var or /tmp alias is not active")
+        assertion = self.assertion("assertion:clean", "equals", "/summary/errors", "clean", 0)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        command = [
+            sys.executable, str(CLI_PATH), "scenario", "run", str(scenario), "--assertion", str(assertion),
+            "--workspace", str(self.root.resolve()), "--output", str(self.root / "alias-run"), "--json",
+        ]
+        completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual(completed.returncode, 0)
+        verify = subprocess.run(
+            [sys.executable, str(CLI_PATH), "scenario", "verify", str(self.root / "alias-run"), "--workspace", str(self.root.resolve()), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual((verify.returncode, json.loads(verify.stdout)["status"]), (0, "pass"))
+
+        scenario_link = self.root / "alias-scenario-link.json"
+        scenario_link.symlink_to(scenario)
+        command[4] = str(scenario_link)
+        command[command.index(str(self.root / "alias-run"))] = str(self.root / "alias-link-output")
+        rejected = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual(rejected.returncode, 1)
+
+    def test_profile_mismatch_duplicate_steps_and_assertion_set_mismatch_fail(self) -> None:
+        assertion = self.assertion("assertion:x", "truthy", "step:x#/status", "x")
+        scenario = self.scenario([{"id": "step:x", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        project = base_project()
+        project["profile"] = "mta-upstream"
+        write_json(self.project_path, project)
+        result = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertIn("SCENARIO_PROFILE_MISMATCH", diagnostic_codes(result))
+
+        document = load_json(scenario)
+        document["steps"].append(copy.deepcopy(document["steps"][0]))
+        write_json(scenario, document)
+        duplicate = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertEqual(duplicate["diagnostics"][0]["code"], "SCENARIO_INVALID")
+        document["steps"].pop()
+        write_json(scenario, document)
+        other = self.assertion("assertion:other", "truthy", "/status", "other")
+        mismatch = json.loads(self.run_cli(scenario, [other]).stdout)
+        self.assertEqual(mismatch["diagnostics"][0]["code"], "SCENARIO_INVALID")
+
+    def test_output_directory_is_never_adopted_or_overwritten(self) -> None:
+        assertion = self.assertion("assertion:clean", "equals", "/summary/errors", "clean", 0)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        output = self.root / "occupied"
+        output.mkdir()
+        sentinel = output / "user.txt"
+        sentinel.write_text("owned", encoding="utf-8")
+        completed = self.run_cli(scenario, [assertion], "--output", "occupied")
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "owned")
+
+    def test_output_overlap_and_invalid_clock_fail_before_step_mutation(self) -> None:
+        assertion = self.assertion("assertion:file", "file-exists", "generated/agent-context.json", "context exists")
+        scenario = self.scenario([{
+            "id": "step:generate", "action": "generate.project", "timeoutMs": 10000,
+            "inputs": {"project": "neon.project.json", "output": "run/generated"},
+        }], [assertion])
+        overlap = self.run_cli(scenario, [assertion], "--output", "run")
+        self.assertEqual(overlap.returncode, 1)
+        self.assertFalse((self.root / "run").exists())
+
+        nested = self.root / "nested"
+        nested.mkdir()
+        write_json(nested / "neon.project.json", base_project())
+        nested_scenario = self.scenario([{
+            "id": "step:generate", "action": "generate.project", "timeoutMs": 10000,
+            "inputs": {"project": "nested/neon.project.json", "catalogue": "api.json"},
+        }], [assertion], identifier="test:nested-default-overlap")
+        default_overlap = self.run_cli(nested_scenario, [assertion], "--output", "nested/.neon")
+        self.assertEqual(default_overlap.returncode, 1)
+        self.assertFalse((nested / ".neon").exists())
+
+        clean_scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        command = [
+            sys.executable, str(CLI_PATH), "scenario", "run", str(clean_scenario), "--workspace", str(self.root),
+            "--observed-at", "not-a-time", "--assertion", str(assertion), "--json",
+        ]
+        invalid = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual(invalid.returncode, 1)
+        self.assertEqual(json.loads(invalid.stdout)["diagnostics"][0]["code"], "SCENARIO_INVALID")
+
+    def test_scenario_profile_pins_search_and_timeout_budget_is_bounded(self) -> None:
+        assertion = self.assertion("assertion:profile", "equals", "/symbols/0/name", "profile", "createVehicle")
+        scenario = self.scenario([{
+            "id": "step:search", "action": "api.search", "timeoutMs": 5000,
+            "inputs": {"query": "create car", "catalogue": "api.json", "profile": "mta-upstream"},
+        }], [assertion])
+        mismatch = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertIn("SCENARIO_INPUT_INVALID", diagnostic_codes(mismatch))
+
+        document = load_json(scenario)
+        document["steps"] = [
+            {"id": "step:a", "action": "check", "timeoutMs": 300001, "inputs": {}},
+            {"id": "step:b", "action": "check", "timeoutMs": 300000, "inputs": {}},
+        ]
+        write_json(scenario, document)
+        budget = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertEqual(budget["diagnostics"][0]["code"], "SCENARIO_INVALID")
+
+    def test_all_assertion_kinds_and_invalid_pointer_are_bounded(self) -> None:
+        assertions = [
+            self.assertion("assertion:eq", "equals", "/summary/errors", "equal", 0),
+            self.assertion("assertion:neq", "not-equals", "/status", "not equal", "fail"),
+            self.assertion("assertion:true", "truthy", "/summary", "truthy"),
+            self.assertion("assertion:false", "falsy", "/diagnostics", "falsy"),
+            self.assertion("assertion:contains", "contains", "/summary", "contains", "errors"),
+            self.assertion("assertion:absent", "diagnostic-absent", "/diagnostics", "no internal error", "INTERNAL_ERROR"),
+            self.assertion("assertion:file", "file-exists", "neon.project.json", "project exists"),
+        ]
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], assertions)
+        result = json.loads(self.run_cli(scenario, assertions).stdout)
+        self.assertEqual((result["status"], result["summary"]["passedAssertions"]), ("pass", 7))
+
+        bad = self.assertion("assertion:bad", "equals", "step:missing#/x", "bad pointer", 1)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [bad])
+        failed = json.loads(self.run_cli(scenario, [bad]).stdout)
+        self.assertIn("ASSERTION_EVALUATION_FAILED", diagnostic_codes(failed))
+
+    def test_json_equality_keeps_booleans_distinct_from_numbers(self) -> None:
+        assertion = self.assertion("assertion:typed", "equals", "/summary/errors", "zero is not false", False)
+        scenario = self.scenario([{"id": "step:check", "action": "check", "timeoutMs": 5000, "inputs": {}}], [assertion])
+        result = json.loads(self.run_cli(scenario, [assertion]).stdout)
+        self.assertEqual((result["status"], result["assertions"][0]["status"]), ("fail", "fail"))
+
+    def test_repository_static_smoke_scenario_passes_without_writing(self) -> None:
+        scenario = TOOL_DIRECTORY / "scenarios" / "static-smoke.json"
+        assertions = [
+            TOOL_DIRECTORY / "scenarios" / "assertions" / "static-search.json",
+            TOOL_DIRECTORY / "scenarios" / "assertions" / "static-check.json",
+        ]
+        command = [
+            sys.executable, str(CLI_PATH), "scenario", "run", str(scenario), "--workspace", str(REPOSITORY_ROOT),
+            "--observed-at", "2026-08-25T12:00:00Z",
+        ]
+        for assertion in assertions:
+            command.extend(("--assertion", str(assertion)))
+        command.append("--json")
+        completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((completed.returncode, completed.stderr), (0, ""))
+        self.assertEqual(json.loads(completed.stdout)["status"], "pass")
+
+
 class AgentContextGenerationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="neon-agent-context-")

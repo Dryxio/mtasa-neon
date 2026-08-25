@@ -413,5 +413,6 @@ utils/vswhere.exe
 
 # Local agent context and developer-preview release artefacts
 /.neon/
+/.neon-runs/
 /Neon-CLI-Developer-Preview-*/
 /Neon-CLI-Developer-Preview-*.zip

@@ -1,0 +1,70 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-test-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assertions": {"items": {"$ref": "#/$defs/assertionResult"}, "type": "array"},
+    "command": {"const": "scenario.run", "type": "string"},
+    "diagnostics": {"items": {"$ref": "#/$defs/diagnostic"}, "type": "array"},
+    "evidence": {"type": "object"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "steps": {"items": {"$ref": "#/$defs/stepResult"}, "type": "array"},
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics", "steps", "assertions", "evidence"],
+  "type": "object",
+  "$defs": {
+    "assertionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "actual": {},
+        "expected": {},
+        "id": {"format": "stable-id", "type": "string"},
+        "kind": {"enum": ["equals", "not-equals", "truthy", "falsy", "contains", "file-exists", "diagnostic-absent"], "type": "string"},
+        "message": {"minLength": 1, "type": "string"},
+        "status": {"enum": ["pass", "fail"], "type": "string"}
+      },
+      "required": ["id", "kind", "status", "message", "actual"],
+      "type": "object"
+    },
+    "diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {"minLength": 1, "type": "string"},
+        "message": {"minLength": 1, "type": "string"},
+        "path": {"type": "string"},
+        "severity": {"enum": ["error", "warning"], "type": "string"},
+        "step": {"format": "stable-id", "type": "string"}
+      },
+      "required": ["code", "severity", "message", "path"],
+      "type": "object"
+    },
+    "stepResult": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {"type": "string"},
+        "actualStatus": {"enum": ["pass", "fail"], "type": "string"},
+        "expectedStatus": {"enum": ["pass", "fail"], "type": "string"},
+        "exitCode": {"minimum": 0, "type": "integer"},
+        "id": {"format": "stable-id", "type": "string"},
+        "result": {"type": "object"},
+        "status": {"enum": ["pass", "fail"], "type": "string"}
+      },
+      "required": ["id", "action", "status", "expectedStatus", "actualStatus", "exitCode", "result"],
+      "type": "object"
+    },
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "assertions": {"minimum": 0, "type": "integer"},
+        "errors": {"minimum": 0, "type": "integer"},
+        "passedAssertions": {"minimum": 0, "type": "integer"},
+        "steps": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings", "steps", "assertions", "passedAssertions"],
+      "type": "object"
+    }
+  }
+}

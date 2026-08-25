@@ -1,0 +1,32 @@
+{
+  "assertions": [
+    "assertion:static-search",
+    "assertion:static-check"
+  ],
+  "description": "Discover one client API and statically validate the repository project.",
+  "id": "test:static-smoke",
+  "profile": "neon-pair",
+  "schemaVersion": "1.0.0",
+  "steps": [
+    {
+      "action": "api.search",
+      "id": "step:discover",
+      "inputs": {
+        "catalogue": "Tools/neon-api/neon-api.json",
+        "kind": "function",
+        "limit": 5,
+        "query": "draw text screen",
+        "side": "client"
+      },
+      "timeoutMs": 10000
+    },
+    {
+      "action": "check",
+      "id": "step:check",
+      "inputs": {
+        "project": "neon.project.json"
+      },
+      "timeoutMs": 10000
+    }
+  ]
+}
