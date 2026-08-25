@@ -116,7 +116,16 @@ local function setObjective(objective)
 end
 
 local function reportBarrier(id, ok, reason)
-    triggerServerEvent("ogl:barrierDone", resourceRoot, id, ok == true, reason)
+    return triggerServerEvent("ogl:barrierDone", resourceRoot, id, ok == true, reason)
+end
+
+local function reportBarrierNextFrame(id, ok, reason)
+    -- Native cutscene teardown mutates camera/control ownership while the Lua
+    -- timer callback is still running. Queue the reliable barrier event from a
+    -- fresh frame so it cannot be lost behind that teardown transition.
+    rememberTimer(setTimer(function()
+        if state.active then reportBarrier(id, ok, reason) end
+    end, 50, 1))
 end
 
 local function startVehicleProbe(vehicle, scriptZ, actors, probeStage)
@@ -233,9 +242,7 @@ addEventHandler("ogl:fileCutscene", resourceRoot, function(id, name, leader)
                 -- here stranded skipped cutscenes before the barrier ACK.
                 local released, result = pcall(releaseFileCutscene, token, false)
                 state.cutscene = nil
-                triggerServerEvent("ogl:cutsceneProbe", resourceRoot, id, name,
-                                   released and result == true and "released" or "release_failed")
-                reportBarrier(id, released and result == true, "releaseFileCutscene refuse")
+                reportBarrierNextFrame(id, released and result == true, "releaseFileCutscene refuse")
             elseif getTickCount() - scene.requestedAt > 140000 then
                 killTimer(scene.timer)
                 pcall(releaseFileCutscene, token, false)

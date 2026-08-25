@@ -643,6 +643,7 @@ addEvent("ogl:barrierDone", true)
 addEventHandler("ogl:barrierDone", resourceRoot, function(id, ok, reason)
     local current = mission and mission.barrier
     if source ~= resourceRoot or not current or current.id ~= id or not current.waiting[client] then return end
+    trace("barrier_done", {kind = current.kind, name = current.name, player = getPlayerName(client), ok = ok == true})
     if ok ~= true then return failMission(current.kind .. " " .. current.name .. ": " .. tostring(reason)) end
     current.waiting[client] = nil
     for player in pairs(current.waiting) do if isElement(player) then return end end
