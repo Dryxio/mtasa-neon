@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,9 +34,11 @@ from neonlib.catalogue import (  # noqa: E402
     git_snapshot,
     semantic_snapshot_issues,
 )
-from neonlib.jsonio import canonical_json, load_json, write_json  # noqa: E402
-from neonlib.luals import generate_luals  # noqa: E402
+from neonlib.jsonio import canonical_json, load_json, sha256_bytes, write_json  # noqa: E402
+from neonlib.luals import generate_luals, render_luals  # noqa: E402
 from neonlib.components import manifest_semantic_issues  # noqa: E402
+from neonlib.context import ContextGenerationError, build_api_index, generate_project_context, verify_project_context  # noqa: E402
+from neonlib.discovery import discovery_keywords, search_symbols, tokenize  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 
@@ -512,6 +515,100 @@ class ApiDiscoveryTests(unittest.TestCase):
         repeated = self.run_cli("api", "search", "draw text", "--side", "client", "--kind", "function", "--limit", "5")
         self.assertEqual(repeated.stdout, completed.stdout)
 
+    def test_search_understands_intent_synonyms_sparse_contracts_and_french_terms(self) -> None:
+        cases = (
+            ("make player invisible", "setElementAlpha", ("--kind", "function")),
+            ("create car", "createVehicle", ("--kind", "function")),
+            ("when player joins", "onPlayerJoin", ("--kind", "event", "--side", "server")),
+            ("delay callback", "setTimer", ("--kind", "function")),
+            ("npc pathfinding", "setPedNavigateTo", ("--kind", "function", "--origin", "neon")),
+            ("ocean floor boundary", "setWorldSeaBedOuterBoundary", ("--kind", "function", "--origin", "neon")),
+            ("armure joueur", "getPlayerArmor", ("--kind", "function")),
+        )
+        for query, expected, filters in cases:
+            with self.subTest(query=query):
+                completed = self.run_cli("api", "search", query, *filters, "--limit", "10")
+                self.assertEqual(completed.returncode, 0)
+                names = [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"]]
+                self.assertIn(expected, names[:5])
+                if query in ("make player invisible", "npc pathfinding"):
+                    self.assertEqual(names[0], expected)
+
+    def test_search_is_compact_by_default_and_full_is_explicit(self) -> None:
+        compact = self.run_cli("api", "search", "createVehicle", "--limit", "1")
+        compact_symbol = json.loads(compact.stdout)["symbols"][0]
+        self.assertEqual(compact_symbol["name"], "createVehicle")
+        self.assertNotIn("contracts", compact_symbol)
+        full = self.run_cli("api", "search", "createVehicle", "--limit", "1", "--full")
+        self.assertIn("contracts", json.loads(full.stdout)["symbols"][0])
+        self.assertLess(len(compact.stdout), len(full.stdout) // 4)
+
+    def test_search_handles_camel_case_members_plural_words_and_one_typo(self) -> None:
+        completed = self.run_cli("api", "search", "kill ped", "--kind", "class", "--limit", "5")
+        self.assertIn("Ped", [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"]])
+        completed = self.run_cli("api", "search", "list vehicles", "--kind", "function", "--limit", "10")
+        self.assertIn("getElementsByType", [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"][:5]])
+        completed = self.run_cli("api", "search", "transparncy player", "--kind", "function", "--limit", "10")
+        self.assertIn("setElementAlpha", [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"][:5]])
+
+    def test_search_closes_domain_vocabulary_and_false_positive_regressions(self) -> None:
+        cases = (
+            ("delay callback", (), "setTimer", 1),
+            ("http request", (), "fetchRemote", 3),
+            ("web request", (), "fetchRemote", 3),
+            ("tire burst", ("--origin", "neon"), "setVehicleTyresCanBurst", 5),
+            ("tyre burst", ("--origin", "neon"), "setVehicleTyresCanBurst", 5),
+            ("replay speed", ("--origin", "neon", "--state", "runtime-only"), "setVehiclePlaybackSpeed", 5),
+        )
+        for query, filters, expected, maximum_rank in cases:
+            with self.subTest(query=query):
+                completed = self.run_cli("api", "search", query, "--kind", "function", *filters, "--limit", "10")
+                self.assertEqual(completed.returncode, 0)
+                names = [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"]]
+                self.assertIn(expected, names[:maximum_rank])
+
+        for query in ("ambient traffic", "civilian traffic"):
+            completed = self.run_cli("api", "search", query, "--kind", "function", "--origin", "neon", "--limit", "10")
+            first = json.loads(completed.stdout)["symbols"][0]["name"]
+            self.assertTrue(first.startswith("getAmbientVehicle") and first.endswith("Candidate"), (query, first))
+        destructible = self.run_cli("api", "search", "destructible object", "--kind", "function", "--origin", "neon", "--limit", "5")
+        destructible_names = [symbol["name"] for symbol in json.loads(destructible.stdout)["symbols"]]
+        self.assertTrue({"setObjectBreakProfile", "createObjectBreakEffect"}.intersection(destructible_names[:3]))
+
+        backfire = self.run_cli("api", "search", "backfire", "--limit", "20")
+        backfire_names = [symbol["name"] for symbol in json.loads(backfire.stdout)["symbols"]]
+        self.assertEqual(backfire_names[0], "enginePlayVehicleAudioBackfire")
+        self.assertFalse(any("Browser" in name or "gui" in name for name in backfire_names))
+
+    def test_compound_and_natural_side_queries_are_normalized(self) -> None:
+        for query in ("raycast", "ray cast"):
+            with self.subTest(query=query):
+                completed = self.run_cli("api", "search", query, "--kind", "function", "--side", "client", "--limit", "5")
+                names = [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"]]
+                self.assertIn("processLineOfSight", names)
+                self.assertIn("processLineAgainstMesh", names)
+        completed = self.run_cli("api", "search", "server side player join", "--kind", "event", "--limit", "10")
+        symbols = json.loads(completed.stdout)["symbols"]
+        self.assertEqual(symbols[0]["name"], "onPlayerJoin")
+        self.assertTrue(all("server" in symbol["sides"] for symbol in symbols))
+
+    def test_search_rejects_only_stop_words_and_preserves_filters(self) -> None:
+        completed = self.run_cli("api", "search", "how do i use the api")
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(json.loads(completed.stdout)["diagnostics"][0]["code"], "API_QUERY_EMPTY")
+        completed = self.run_cli("api", "search", "draw text", "--side", "server", "--kind", "function")
+        self.assertNotIn("dxDrawText", [symbol["name"] for symbol in json.loads(completed.stdout)["symbols"]])
+
+    def test_discovery_primitives_are_deterministic_and_bounded(self) -> None:
+        catalogue = load_json(CATALOGUE_PATH)
+        alpha = next(symbol for symbol in catalogue["symbols"] if symbol["name"] == "setElementAlpha")
+        self.assertEqual(tokenize("setWorldSeaBedOuterBoundary"), ("set", "world", "sea", "bed", "outer", "boundary"))
+        self.assertEqual(search_symbols([alpha], "make player invisible"), [alpha])
+        keywords = discovery_keywords(alpha)
+        self.assertEqual(keywords, discovery_keywords(alpha))
+        self.assertLessEqual(len(keywords), 16)
+        self.assertEqual(len(keywords), len(set(keywords)))
+
     def test_get_exposes_typed_neon_contract(self) -> None:
         completed = self.run_cli("api", "get", "createRope", "--kind", "function", "--profile", "neon-pair")
         self.assertEqual(completed.returncode, 0)
@@ -559,7 +656,7 @@ class ApiDiscoveryTests(unittest.TestCase):
             path = Path(temporary) / "neon.project.json"
             write_json(path, project)
             result = check_project(path, SCHEMAS, CATALOGUE_PATH)
-        self.assertEqual(diagnostic_codes(result), ["API_NOT_FOUND"])
+        self.assertEqual(diagnostic_codes(result), ["API_UNAVAILABLE"])
 
 
 class ProjectHarnessTests(unittest.TestCase):
@@ -691,6 +788,99 @@ class ProjectHarnessTests(unittest.TestCase):
         self.assertEqual(diagnostic_codes(result), ["EVENT_WRONG_SIDE"])
         diagnostic = result["diagnostics"][0]
         self.assertEqual((diagnostic["side"], diagnostic["symbol"], diagnostic["line"]), ("server", "onClientRender", 2))
+
+    def test_conflicting_global_function_and_event_are_blocked_from_active_contracts(self) -> None:
+        project = base_project()
+        self.add_resource(
+            project,
+            meta='<meta><script src="server.lua" type="server"/><script src="client.lua" type="client"/></meta>',
+            files={
+                "server.lua": "getPlayerBlurLevel(source)\n",
+                "client.lua": "addEventHandler('onClientBrowserNavigate', root, function() end)\n",
+            },
+        )
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["API_CONFLICT", "EVENT_CONFLICT"])
+        self.assertEqual({item["symbol"] for item in result["diagnostics"]}, {"getPlayerBlurLevel", "onClientBrowserNavigate"})
+
+    def test_conflicting_symbols_cannot_fall_through_as_unknown_on_opposite_side(self) -> None:
+        project = base_project()
+        self.add_resource(
+            project,
+            meta='<meta><script src="server.lua" type="server"/><script src="client.lua" type="client"/></meta>',
+            files={
+                "server.lua": "addEventHandler('onClientBrowserNavigate', root, function() end)\n",
+                "client.lua": "getPlayerBlurLevel(localPlayer)\n",
+            },
+        )
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["API_CONFLICT", "EVENT_CONFLICT"])
+        self.assertEqual({item["symbol"] for item in result["diagnostics"]}, {"getPlayerBlurLevel", "onClientBrowserNavigate"})
+
+    def test_catalogued_but_profile_excluded_symbols_are_not_allowed_unknowns(self) -> None:
+        project = base_project()
+        project["profile"] = "neon-server"
+        self.add_resource(
+            project,
+            meta='<meta><script src="server.lua" type="server"/></meta>',
+            files={"server.lua": "dxDrawText('wrong profile', 0, 0)\naddEventHandler('onClientRender', root, function() end)\n"},
+        )
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["API_UNAVAILABLE", "EVENT_UNAVAILABLE"])
+
+    def test_profile_excluded_oop_static_and_inferred_instance_calls_are_rejected(self) -> None:
+        project = base_project()
+        project["profile"] = "mta-upstream"
+        self.add_resource(
+            project,
+            meta='<meta><oop>true</oop><script src="client.lua" type="client"/></meta>',
+            files={"client.lua": "local bird = Bird.create(0, 0, 3, {})\nbird:setColors(0xFFFFFFFF, 0xFF000000)\n"},
+        )
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["API_UNAVAILABLE", "API_UNAVAILABLE"])
+        self.assertEqual({item["symbol"] for item in result["diagnostics"]}, {"Bird.create", "Bird.setColors"})
+
+    def test_oop_calls_are_checked_by_profile_and_side_without_blocking_valid_neon_calls(self) -> None:
+        client_project = base_project()
+        client_project["profile"] = "neon-client"
+        self.add_resource(
+            client_project,
+            meta='<meta><oop>true</oop><script src="client.lua" type="client"/></meta>',
+            files={"client.lua": "local bird = Bird.create(0, 0, 3, {})\nbird:setColors(0xFFFFFFFF, 0xFF000000)\n"},
+        )
+        self.assertEqual(self.check(client_project)["status"], "pass")
+
+        server_project = base_project()
+        self.add_resource(
+            server_project,
+            name="server-demo",
+            meta='<meta><oop>true</oop><script src="server.lua" type="server"/></meta>',
+            files={"server.lua": "local bird = Bird.create(0, 0, 3, {})\nbird:setColors(0xFFFFFFFF, 0xFF000000)\n"},
+        )
+        result = self.check(server_project)
+        self.assertEqual(diagnostic_codes(result), ["API_WRONG_SIDE", "API_WRONG_SIDE"])
+
+    def test_registered_oop_use_requires_resource_oop_activation(self) -> None:
+        project = base_project()
+        self.add_resource(
+            project,
+            meta='<meta><script src="server.lua" type="server"/></meta>',
+            files={"server.lua": "Ped.create(7, 0, 0, 3)\n"},
+        )
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["RESOURCE_OOP_MISSING"])
+
+    def test_profile_excluded_required_api_is_reported_unavailable(self) -> None:
+        project = base_project()
+        project["profile"] = "mta-upstream"
+        project["requiredApis"] = [{"name": "createBird", "side": "client"}]
+        result = self.check(project)
+        self.assertEqual(diagnostic_codes(result), ["API_UNAVAILABLE"])
+
+    def test_conflicting_required_api_is_rejected_explicitly(self) -> None:
+        project = base_project()
+        project["requiredApis"] = [{"name": "getPlayerBlurLevel", "side": "server"}]
+        self.assertEqual(diagnostic_codes(self.check(project)), ["API_CONFLICT"])
 
     def test_incompatible_engine_version_is_rejected(self) -> None:
         project = base_project()
@@ -1098,7 +1288,462 @@ class LuaLsGenerationTests(unittest.TestCase):
             self.assertIn("---@param model integer", shared)
             self.assertIn("---@return vehicle value", shared)
             self.assertIn("---@class Vector3: element", shared)
-            self.assertIn("---@param ... any", shared)
+            self.assertIn("---@param ... unknown", shared)
+
+    def test_runtime_only_signatures_are_explicitly_unknown_and_checked_in_output_matches(self) -> None:
+        catalogue = load_json(CATALOGUE_PATH)
+        shared = render_luals(catalogue, "shared")
+        opaque = shared[shared.index("--- `mta:function:base64Encode`"):]
+        opaque = opaque[:opaque.index("\n\n", 1)]
+        self.assertIn("---@param ... unknown", opaque)
+        self.assertIn("---@return unknown", opaque)
+        self.assertNotIn("---@return nil", opaque)
+        self.assertNotIn("function getPlayerBlurLevel(...)", shared)
+        with tempfile.TemporaryDirectory(prefix="neon-luals-checked-") as temporary:
+            generate_luals(catalogue, Path(temporary))
+            for filename in ("mta-shared.lua", "mta-client.lua", "mta-server.lua", "artifacts.json"):
+                self.assertEqual((Path(temporary) / filename).read_bytes(), (TOOL_DIRECTORY / "generated" / filename).read_bytes())
+
+    def test_upstream_profile_excludes_neon_only_function(self) -> None:
+        catalogue = load_json(CATALOGUE_PATH)
+        current = "".join(render_luals(catalogue, side, "neon-pair") for side in ("shared", "client", "server"))
+        upstream = "".join(render_luals(catalogue, side, "mta-upstream") for side in ("shared", "client", "server"))
+        self.assertIn("function createRope(...)", current)
+        self.assertNotIn("function createRope(...)", upstream)
+        index = build_api_index(catalogue, "mta-upstream", "0" * 64)
+        ids = {item["id"] for item in index["symbols"]}
+        self.assertNotIn("neon:function:createRope", ids)
+        self.assertNotIn("neon:class:Bird", ids)
+
+    def test_oop_luals_uses_exact_side_bindings_and_safe_semantics(self) -> None:
+        catalogue = load_json(CATALOGUE_PATH)
+        client = render_luals(catalogue, "client")
+        server = render_luals(catalogue, "server")
+        self.assertIn("---@class Ped: Element", server)
+        self.assertIn("---@field armor number", server)
+        self.assertIn("function Ped.create(...)", server)
+        kill = server[server.rindex("--- Global binding: `mta:function:killPed`"):]
+        kill = kill[:kill.index("\n\n")]
+        self.assertNotIn("thePed", kill)
+        self.assertIn("---@param theKiller? ped", kill)
+        self.assertIn("function Ped:kill(...)", kill)
+        self.assertIn("---@class Bird: Element", client)
+        self.assertNotIn("---@class Bird: Element", server)
+        create_bird = client[client.index("--- Global binding: `neon:function:createBird`"):]
+        create_bird = create_bird[:create_bird.index("\n\n")]
+        self.assertIn("---@param x number", create_bird)
+        self.assertIn("---@param options? table", create_bird)
+        self.assertIn("---@return bird|false", create_bird)
+        self.assertIn("function Bird.create(...)", create_bird)
+        self.assertNotIn("function Bird:create(...)", client)
+        bird_colors = client[client.index("--- Global binding: `neon:function:getBirdColors`"):]
+        bird_colors = bird_colors[:bird_colors.index("\n\n")]
+        self.assertIn("function Bird:getColors(...)", bird_colors)
+        self.assertNotIn("unknown", bird_colors)
+
+
+class AgentContextGenerationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="neon-agent-context-")
+        self.root = Path(self.temporary.name)
+        self.project_path = self.root / "neon.project.json"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def create_project(self, profile: str = "neon-pair") -> dict:
+        project = base_project()
+        project["schemaVersion"] = "1.1.0"
+        project["profile"] = profile
+        project["unknownComponents"] = "error"
+
+        inventory = self.root / "resources" / "inventory"
+        inventory.mkdir(parents=True)
+        inventory_manifest = base_component("inventory")
+        inventory_manifest["exports"] = [{
+            "name": "takeItem", "side": "server", "parameters": [{"name": "item", "type": "string", "optional": False, "description": "Item identifier."}],
+            "returns": [{"name": "removed", "type": "boolean", "description": "Whether removal succeeded."}],
+            "description": "Remove an item.", "http": False, "restricted": False,
+        }]
+        inventory_manifest["events"] = [{"name": "inventoryChanged", "side": "server", "directions": ["defines", "emits"], "parameters": [], "allowRemoteTrigger": False, "description": "Inventory mutation."}]
+        write_json(inventory / "component.yaml", inventory_manifest)
+        (inventory / "meta.xml").write_text('<meta><script src="server.lua" type="server"/><export function="takeItem" type="server"/></meta>', encoding="utf-8")
+        (inventory / "server.lua").write_text("function takeItem(item) return true end\naddEvent('inventoryChanged', false)\ncreateVehicle(411, 0, 0, 3)\n", encoding="utf-8")
+        project["resources"].append({"name": "inventory", "path": "resources/inventory", "manifest": "component.yaml"})
+
+        consumer = self.root / "resources" / "consumer"
+        consumer.mkdir(parents=True)
+        consumer_manifest = base_component("consumer")
+        consumer_manifest["dependencies"] = [{"kind": "resource", "name": "inventory", "optional": False, "minimumVersion": "1.0.0"}]
+        write_json(consumer / "component.yaml", consumer_manifest)
+        (consumer / "meta.xml").write_text('<meta><oop>true</oop><include resource="inventory"/><script src="server.lua" type="server"/><script src="client.lua" type="client"/></meta>', encoding="utf-8")
+        (consumer / "server.lua").write_text("exports.inventory:takeItem('medkit')\nnativePing()\nlocal inventoryPed = Ped.create(7, 0, 0, 3)\ninventoryPed:setData('inventory', true)\n", encoding="utf-8")
+        (consumer / "client.lua").write_text("dxDrawText('inventory ready', 0, 0)\n", encoding="utf-8")
+        project["resources"].append({"name": "consumer", "path": "resources/consumer", "manifest": "component.yaml"})
+
+        module = self.root / "modules" / "native"
+        module.mkdir(parents=True)
+        module_manifest = base_component("native", "module")
+        module_manifest["exports"] = [{"name": "nativePing", "side": "server", "parameters": [], "returns": [{"type": "boolean", "description": "Whether the module responded."}], "description": "Ping the native module.", "http": False, "restricted": False}]
+        write_json(module / "component.yaml", module_manifest)
+        (module / "native.dll").write_bytes(b"agent-context-placeholder")
+        project["modules"] = [{"name": "native", "path": "modules/native", "manifest": "component.yaml", "binary": "native.dll"}]
+        write_json(self.project_path, project)
+        return project
+
+    def generate(self, output: str = "generated") -> tuple[dict, dict]:
+        return generate_project_context(self.project_path, SCHEMAS, self.root / output, CATALOGUE_PATH)
+
+    def test_context_pack_is_schema_valid_content_addressed_and_byte_deterministic(self) -> None:
+        self.create_project()
+        first_context, first_artifacts = self.generate("first")
+        second_context, second_artifacts = self.generate("second")
+        self.assertEqual(first_context, second_context)
+        self.assertEqual(first_artifacts, second_artifacts)
+        self.assertEqual(SCHEMAS.validate("neon-agent-context", first_context), [])
+        self.assertEqual(SCHEMAS.validate("neon-api-index", load_json(self.root / "first" / "api-index.json")), [])
+        for artifact in first_artifacts["artifacts"]:
+            self.assertEqual(SCHEMAS.validate("neon-artifact", artifact), [])
+            self.assertEqual((self.root / "first" / artifact["path"]).read_bytes(), (self.root / "second" / artifact["path"]).read_bytes())
+            self.assertEqual(sha256_bytes((self.root / "first" / artifact["path"]).read_bytes()), artifact["sha256"])
+        self.assertEqual([item["path"] for item in first_context["files"]], sorted(item["path"] for item in first_context["files"]))
+        self.assertTrue(all(not Path(item["path"]).is_absolute() for item in first_context["files"]))
+        self.assertNotIn(str(self.root), canonical_json(first_context))
+
+    def test_context_identifies_used_global_apis_and_full_profile_index(self) -> None:
+        self.create_project()
+        context, _ = self.generate()
+        self.assertTrue({"mta:function:addEvent", "mta:function:createVehicle", "mta:function:dxDrawText", "mta:function:createPed", "mta:function:setElementData", "mta:class:Ped"}.issubset(context["usedApiIds"]))
+        index = load_json(self.root / "generated" / "api-index.json")
+        self.assertGreater(len(index["symbols"]), 2000)
+        self.assertEqual([item["id"] for item in index["symbols"]], sorted(item["id"] for item in index["symbols"]))
+        self.assertEqual(len({item["id"] for item in index["symbols"]}), len(index["symbols"]))
+        alpha = next(item for item in index["symbols"] if item["id"] == "mta:function:setElementAlpha")
+        self.assertIn("alpha", alpha["keywords"])
+        self.assertIn("transparency", alpha["keywords"])
+
+    def test_context_and_index_schemas_reject_unknown_fields(self) -> None:
+        self.create_project()
+        context, _ = self.generate()
+        index = load_json(self.root / "generated" / "api-index.json")
+        context["typo"] = True
+        index["symbols"][0]["typo"] = True
+        self.assertIn("/typo", {issue.pointer for issue in SCHEMAS.validate("neon-agent-context", context)})
+        self.assertIn("/symbols/0/typo", {issue.pointer for issue in SCHEMAS.validate("neon-api-index", index)})
+
+    def test_project_luals_separates_sides_and_keeps_module_evidence_visible(self) -> None:
+        self.create_project()
+        self.generate()
+        server = (self.root / "generated" / "server" / "project-server.lua").read_text(encoding="utf-8")
+        client = (self.root / "generated" / "client" / "project-client.lua").read_text(encoding="utf-8")
+        self.assertIn("function nativePing(...)", server)
+        self.assertIn("`module:native:function:nativePing` (documented-only)", server)
+        self.assertIn("function neon_exports_inventory_server:takeItem(...)", server)
+        self.assertNotIn("nativePing", client)
+        self.assertNotIn("takeItem", client)
+        config = load_json(self.root / "generated" / "server" / ".luarc.json")
+        self.assertEqual(config["runtime"]["version"], "Lua 5.1")
+        self.assertEqual(config["workspace"]["library"], ["mta-shared.lua", "mta-server.lua", "project-server.lua"])
+
+    @unittest.skipUnless(shutil.which("luac"), "luac is optional; syntax is also exercised by the final agent harness")
+    def test_generated_luals_files_are_valid_lua_syntax(self) -> None:
+        self.create_project()
+        self.generate()
+        files = sorted((self.root / "generated").glob("*/*.lua"))
+        completed = subprocess.run([shutil.which("luac"), "-p", *map(str, files)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((completed.returncode, completed.stdout, completed.stderr), (0, "", ""))
+
+    def test_opaque_project_luals_never_invents_zero_arity(self) -> None:
+        project = base_project()
+        project["unknownComponents"] = "allow-opaque"
+        resource = self.root / "resources" / "legacy"
+        resource.mkdir(parents=True)
+        (resource / "meta.xml").write_text('<meta><script src="server.lua"/><export function="dynamicLookup" type="server"/></meta>', encoding="utf-8")
+        (resource / "server.lua").write_text("function dynamicLookup(key, fallback) return fallback end\n", encoding="utf-8")
+        project["resources"] = [{"name": "legacy", "path": "resources/legacy"}]
+        write_json(self.project_path, project)
+        self.generate()
+        local = (self.root / "generated" / "server" / "project-server.lua").read_text(encoding="utf-8")
+        project_api = load_json(self.root / "generated" / "project-api.json")
+        symbol = project_api["symbols"][0]
+        context = load_json(self.root / "generated" / "agent-context.json")
+        self.assertFalse(symbol["signatureKnown"])
+        self.assertNotIn("parameters", symbol)
+        self.assertNotIn("returns", symbol)
+        self.assertIn("---@param ... unknown", local)
+        self.assertIn("---@return unknown", local)
+        self.assertEqual(context["validation"]["summary"]["warnings"], 1)
+        self.assertEqual(diagnostic_codes(context["validation"]), ["RESOURCE_EXPORT_OPAQUE"])
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--output", str(self.root / "cli-opaque"), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        cli_result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, cli_result["summary"]["warnings"]), (0, 1))
+        self.assertEqual(diagnostic_codes(cli_result), ["RESOURCE_EXPORT_OPAQUE"])
+
+    def test_failed_static_check_creates_no_output(self) -> None:
+        self.create_project()
+        inventory_manifest = load_json(self.root / "resources" / "inventory" / "component.yaml")
+        inventory_manifest["events"][0]["allowRemoteTrigger"] = True
+        write_json(self.root / "resources" / "inventory" / "component.yaml", inventory_manifest)
+        output = self.root / "blocked"
+        with self.assertRaises(ContextGenerationError) as raised:
+            generate_project_context(self.project_path, SCHEMAS, output, CATALOGUE_PATH)
+        self.assertIn("RESOURCE_EVENT_REMOTE_MISMATCH", diagnostic_codes(raised.exception.result))
+        self.assertFalse(output.exists())
+        cli_output = self.root / "blocked-cli"
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--output", str(cli_output), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["command"]), (1, "generate.project"))
+        self.assertIn("RESOURCE_EVENT_REMOTE_MISMATCH", diagnostic_codes(result))
+        self.assertFalse(cli_output.exists())
+
+    def test_server_profile_excludes_client_only_api_from_index_and_luals(self) -> None:
+        self.create_project("neon-server")
+        consumer_meta = self.root / "resources" / "consumer" / "meta.xml"
+        consumer_meta.write_text('<meta><oop>true</oop><include resource="inventory"/><script src="server.lua" type="server"/></meta>', encoding="utf-8")
+        self.generate()
+        index = load_json(self.root / "generated" / "api-index.json")
+        self.assertNotIn("mta:function:dxDrawText", {item["id"] for item in index["symbols"]})
+        client = (self.root / "generated" / "client" / "mta-client.lua").read_text(encoding="utf-8")
+        self.assertNotIn("function dxDrawText", client)
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks is not reliably available to unprivileged Windows tests")
+    def test_output_symlink_is_rejected_before_writing(self) -> None:
+        self.create_project()
+        target = self.root / "real-output"
+        target.mkdir()
+        link = self.root / "linked-output"
+        link.symlink_to(target, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            generate_project_context(self.project_path, SCHEMAS, link, CATALOGUE_PATH)
+        self.assertEqual(list(target.iterdir()), [])
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks is not reliably available to unprivileged Windows tests")
+    def test_generated_file_symlink_cannot_overwrite_outside_output(self) -> None:
+        self.create_project()
+        output = self.root / "output"
+        (output / "server").mkdir(parents=True)
+        outside = self.root / "outside.lua"
+        outside.write_text("sentinel\n", encoding="utf-8")
+        (output / "server" / "project-server.lua").symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            generate_project_context(self.project_path, SCHEMAS, output, CATALOGUE_PATH)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel\n")
+
+    def test_generate_project_cli_uses_cwd_and_default_dot_neon(self) -> None:
+        self.create_project()
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--catalogue", str(CATALOGUE_PATH), "--json"],
+            cwd=self.root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, completed.stderr, result["status"]), (0, "", "pass"))
+        self.assertEqual(result["summary"]["artifacts"], 11)
+        self.assertTrue((self.root / ".neon" / "agent-context.json").is_file())
+
+    def test_context_verify_passes_then_detects_source_staleness(self) -> None:
+        self.create_project()
+        self.generate()
+        valid = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual((valid["status"], valid["summary"]["artifacts"]), ("pass", 11))
+        server = self.root / "resources" / "consumer" / "server.lua"
+        server.write_text(server.read_text(encoding="utf-8") + "-- source changed\n", encoding="utf-8")
+        stale = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual(stale["status"], "fail")
+        self.assertIn("CONTEXT_STALE", diagnostic_codes(stale))
+
+    def test_declared_resource_asset_is_hashed_and_participates_in_freshness(self) -> None:
+        self.create_project()
+        consumer = self.root / "resources" / "consumer"
+        asset = consumer / "ui" / "status.json"
+        asset.parent.mkdir()
+        asset.write_text('{"ready":true}\n', encoding="utf-8")
+        meta = consumer / "meta.xml"
+        meta.write_text(
+            '<meta><oop>true</oop><include resource="inventory"/><script src="server.lua" type="server"/>'
+            '<script src="client.lua" type="client"/><file src="ui/status.json"/></meta>',
+            encoding="utf-8",
+        )
+        context, _ = self.generate()
+        record = next(item for item in context["files"] if item["path"].endswith("ui/status.json"))
+        self.assertEqual((record["kind"], record["side"], record["size"]), ("asset", "client", asset.stat().st_size))
+        self.assertEqual(record["sha256"], sha256_bytes(asset.read_bytes()))
+        self.assertEqual(verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)["status"], "pass")
+        asset.write_text('{"ready":false}\n', encoding="utf-8")
+        stale = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual((stale["status"], diagnostic_codes(stale)), ("fail", ["CONTEXT_STALE"]))
+
+    def test_missing_declared_resource_asset_blocks_generation(self) -> None:
+        self.create_project()
+        meta = self.root / "resources" / "consumer" / "meta.xml"
+        meta.write_text(
+            '<meta><oop>true</oop><include resource="inventory"/><script src="server.lua" type="server"/>'
+            '<script src="client.lua" type="client"/><file src="ui/missing.json"/></meta>',
+            encoding="utf-8",
+        )
+        with self.assertRaises(ContextGenerationError) as raised:
+            self.generate()
+        self.assertEqual(diagnostic_codes(raised.exception.result), ["MISSING_FILE"])
+        self.assertFalse((self.root / "generated").exists())
+
+    def test_context_verify_detects_payload_tampering_before_regeneration(self) -> None:
+        self.create_project()
+        self.generate()
+        payload = self.root / "generated" / "server" / "project-server.lua"
+        payload.write_text(payload.read_text(encoding="utf-8") + "-- tampered\n", encoding="utf-8")
+        result = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(diagnostic_codes(result), ["CONTEXT_ARTIFACT_HASH_MISMATCH"])
+
+    def test_unindexed_pack_file_is_rejected_without_deletion(self) -> None:
+        self.create_project()
+        self.generate()
+        unexpected = self.root / "generated" / "server" / "stale.lua"
+        unexpected.write_text("return 'user-owned sentinel'\n", encoding="utf-8")
+        result = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", ["CONTEXT_UNINDEXED_PATH"]))
+        with self.assertRaisesRegex(ValueError, "unowned path"):
+            self.generate()
+        self.assertEqual(unexpected.read_text(encoding="utf-8"), "return 'user-owned sentinel'\n")
+
+    def test_context_verify_schema_validates_referenced_api_documents(self) -> None:
+        self.create_project()
+        self.generate()
+        output = self.root / "generated"
+        api_index_path = output / "api-index.json"
+        api_index = load_json(api_index_path)
+        api_index["unexpected"] = True
+        api_index_path.write_text(canonical_json(api_index), encoding="utf-8")
+        context_path = output / "agent-context.json"
+        context = load_json(context_path)
+        context["apiIndex"]["sha256"] = sha256_bytes(api_index_path.read_bytes())
+        context_path.write_text(canonical_json(context), encoding="utf-8")
+        artifacts_path = output / "artifacts.json"
+        artifacts = load_json(artifacts_path)
+        for artifact in artifacts["artifacts"]:
+            payload = output / artifact["path"]
+            artifact["size"] = payload.stat().st_size
+            artifact["sha256"] = sha256_bytes(payload.read_bytes())
+        artifacts_path.write_text(canonical_json(artifacts), encoding="utf-8")
+        result = verify_project_context(self.project_path, SCHEMAS, output, CATALOGUE_PATH)
+        self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", ["CONTEXT_SCHEMA_INVALID"]))
+
+    def test_malformed_control_document_shapes_return_contract_errors_not_internal_errors(self) -> None:
+        self.create_project()
+        self.generate()
+        output = self.root / "generated"
+        context_path = output / "agent-context.json"
+        context = load_json(context_path)
+        context["files"] = 7
+        context_path.write_text(canonical_json(context), encoding="utf-8")
+        command = [
+            sys.executable, str(CLI_PATH), "context", "verify", "--project", str(self.project_path),
+            "--catalogue", str(CATALOGUE_PATH), "--context", str(output), "--json",
+        ]
+        completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, completed.stderr, result["status"]), (1, "", "fail"))
+        self.assertEqual(diagnostic_codes(result), ["CONTEXT_SCHEMA_INVALID"])
+
+        self.generate()
+        artifacts_path = output / "artifacts.json"
+        artifacts = load_json(artifacts_path)
+        artifacts["schemaVersion"] = 7
+        artifacts_path.write_text(canonical_json(artifacts), encoding="utf-8")
+        completed = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, completed.stderr, result["status"]), (1, "", "fail"))
+        self.assertEqual(diagnostic_codes(result), ["CONTEXT_ARTIFACT_INDEX_INVALID"])
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks is not reliably available to unprivileged Windows tests")
+    def test_context_verify_rejects_external_control_file_symlink(self) -> None:
+        self.create_project()
+        self.generate()
+        index = self.root / "generated" / "artifacts.json"
+        outside = self.root / "outside-artifacts.json"
+        index.replace(outside)
+        index.symlink_to(outside)
+        result = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", ["CONTEXT_PATH_OUTSIDE"]))
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks is not reliably available to unprivileged Windows tests")
+    def test_context_verify_rejects_internal_payload_symlink(self) -> None:
+        self.create_project()
+        self.generate()
+        payload = self.root / "generated" / "server" / "project-server.lua"
+        unindexed = payload.with_name("project-server.real.lua")
+        payload.replace(unindexed)
+        payload.symlink_to(unindexed.name)
+        result = verify_project_context(self.project_path, SCHEMAS, self.root / "generated", CATALOGUE_PATH)
+        self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", ["CONTEXT_PATH_OUTSIDE"]))
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks is not reliably available to unprivileged Windows tests")
+    def test_cli_preserves_and_rejects_output_directory_symlink(self) -> None:
+        self.create_project()
+        target = self.root / "real-output"
+        target.mkdir()
+        link = self.root / "linked-output"
+        link.symlink_to(target, target_is_directory=True)
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--output", str(link), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"], diagnostic_codes(result)), (1, "fail", ["GENERATION_OUTPUT_UNSAFE"]))
+        self.assertEqual(list(target.iterdir()), [])
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--output", str(target), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual((completed.returncode, json.loads(completed.stdout)["status"]), (0, "pass"))
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "context", "verify", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--context", str(link), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"], diagnostic_codes(result)), (1, "fail", ["CONTEXT_PATH_OUTSIDE"]))
+
+        ancestor_target = self.root / "ancestor-target"
+        ancestor_target.mkdir()
+        marker = ancestor_target / "sentinel.txt"
+        marker.write_text("unchanged\n", encoding="utf-8")
+        ancestor_link = self.root / "ancestor-link"
+        ancestor_link.symlink_to(ancestor_target, target_is_directory=True)
+        nested_link = ancestor_link / "nested-pack"
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--output", str(nested_link), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"], diagnostic_codes(result)), (1, "fail", ["GENERATION_OUTPUT_UNSAFE"]))
+        self.assertEqual([item.name for item in ancestor_target.iterdir()], ["sentinel.txt"])
+        nested_real = ancestor_target / "nested-pack"
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "generate", "project", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--output", str(nested_real), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual((completed.returncode, json.loads(completed.stdout)["status"]), (0, "pass"))
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "context", "verify", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--context", str(nested_link), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"], diagnostic_codes(result)), (1, "fail", ["CONTEXT_PATH_OUTSIDE"]))
+
+    def test_context_verify_cli_is_byte_stable(self) -> None:
+        self.create_project()
+        self.generate()
+        command = [sys.executable, str(CLI_PATH), "context", "verify", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--context", str(self.root / "generated"), "--json"]
+        first = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        second = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((first.returncode, first.stderr), (0, ""))
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(json.loads(first.stdout)["status"], "pass")
 
 
 if __name__ == "__main__":

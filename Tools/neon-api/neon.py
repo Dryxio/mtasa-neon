@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,8 @@ from neonlib.catalogue import (  # noqa: E402
     semantic_snapshot_issues,
 )
 from neonlib.components import manifest_semantic_issues  # noqa: E402
+from neonlib.context import ContextGenerationError, generate_project_context, verify_project_context  # noqa: E402
+from neonlib.discovery import search_symbols, tokenize  # noqa: E402
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
@@ -37,6 +40,13 @@ SCHEMA_STORE = SchemaStore(TOOL_DIRECTORY / "schemas")
 DEFAULT_CATALOGUE = TOOL_DIRECTORY / "neon-api.json"
 DEFAULT_PROJECT = REPOSITORY_ROOT / "neon.project.json"
 DEFAULT_SEMANTICS = TOOL_DIRECTORY / "snapshots" / "api-semantics.json"
+
+
+def _absolute_without_resolving(path: str) -> Path:
+    # Output paths must retain their final symlink component so the generator
+    # can reject it before writing. Path.resolve() would erase that evidence.
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else Path.cwd() / candidate
 
 
 def _emit(document: dict, as_json: bool) -> None:
@@ -129,40 +139,47 @@ def command_api_search(args: argparse.Namespace) -> int:
     if failure:
         _emit_api(failure, args.json)
         return 1
-    query = args.query.casefold().strip()
+    # Preserve camel-case boundaries for exact API names; tokenization performs
+    # Unicode-aware case folding after it separates those boundaries.
+    query = args.query.strip()
     if not query:
         result = _failure("api.search", "API_QUERY_EMPTY", "search query must contain at least one non-whitespace character")
         _emit_api(result, args.json)
         return 1
-    tokens = query.split()
-    ranked = []
-    for symbol in catalogue["symbols"]:
-        if not _matches_filters(symbol, args):
-            continue
-        member_terms = [
-            value
-            for field in ("methods", "properties")
-            for member in symbol.get(field, [])
-            for value in (
-                member.get("name", ""), *member.get("globalFunctions", []), *member.get("inheritedGlobalFunctions", []),
-                *member.get("setters", []), *member.get("getters", []),
-                *member.get("inheritedSetters", []), *member.get("inheritedGetters", []),
-            )
-        ]
-        haystack = " ".join((
-            symbol.get("name", ""), symbol.get("description", ""), symbol.get("category", ""),
-            *symbol.get("parents", []), *symbol.get("inheritedParents", []),
-            *symbol.get("values", []), *symbol.get("inheritedValues", []), *member_terms,
-        )).casefold()
-        if all(token in haystack for token in tokens):
-            name = symbol["name"].casefold()
-            score = 0 if name == query else 1 if name.startswith(query) else 2 if all(token in name for token in tokens) else 3
-            ranked.append((score, name, symbol["name"], symbol["kind"], symbol))
-    matches = [item[-1] for item in sorted(ranked, key=lambda item: item[:-1])]
+    natural_tokens = tokenize(query)
+    side_phrase = re.search(r"\b(client|server)[\s-]+side\b", query, re.IGNORECASE)
+    if args.side is None and side_phrase:
+        args.side = side_phrase.group(1).casefold()
+        query = " ".join(token for token in natural_tokens if token not in {"client", "server", "side"})
+    if not tokenize(query, drop_stop_words=True):
+        result = _failure("api.search", "API_QUERY_EMPTY", "search query must contain at least one meaningful term")
+        _emit_api(result, args.json)
+        return 1
+    matches = search_symbols((symbol for symbol in catalogue["symbols"] if _matches_filters(symbol, args)), query)
     total = len(matches)
-    result = _api_result("api.search", matches[: args.limit], total)
+    visible = matches[: args.limit]
+    if not args.full:
+        visible = [_search_summary(symbol, args) for symbol in visible]
+    result = _api_result("api.search", visible, total)
     _emit_api(result, args.json)
     return 0
+
+
+def _search_summary(symbol: dict, args: argparse.Namespace) -> dict:
+    sides = symbol.get("inheritedSides", []) if args.profile == "mta-upstream" else symbol.get("sides", [])
+    if args.profile == "neon-client":
+        sides = [side for side in sides if side == "client"]
+    elif args.profile == "neon-server":
+        sides = [side for side in sides if side == "server"]
+    result = {
+        "id": symbol["id"], "kind": symbol["kind"], "name": symbol["name"],
+        "origin": symbol["origin"], "state": symbol["state"], "sides": sorted(set(sides)),
+    }
+    for field in ("category", "description"):
+        if value := symbol.get(field):
+            normalized = " ".join(value.replace("\r", "").splitlines())
+            result[field] = normalized if len(normalized) <= 320 else normalized[:317].rstrip() + "..."
+    return result
 
 
 def command_api_get(args: argparse.Namespace) -> int:
@@ -486,7 +503,7 @@ def command_generate_luals(args: argparse.Namespace) -> int:
         _emit(result, args.json)
         return 1
     output = Path(args.output).resolve()
-    artifacts = generate_luals(catalogue, output)
+    artifacts = generate_luals(catalogue, output, args.profile)
     result = {
         "schemaVersion": "1.0.0",
         "command": "generate.luals",
@@ -497,6 +514,57 @@ def command_generate_luals(args: argparse.Namespace) -> int:
     }
     _emit(result, args.json)
     return 0
+
+
+def command_generate_project(args: argparse.Namespace) -> int:
+    default_project = Path.cwd() / "neon.project.json"
+    project = _absolute_without_resolving(args.project) if args.project else (default_project if default_project.is_file() else DEFAULT_PROJECT)
+    output = _absolute_without_resolving(args.output) if args.output else project.parent / ".neon"
+    catalogue = Path(args.catalogue).resolve() if args.catalogue else None
+    try:
+        context, artifacts = generate_project_context(project, SCHEMA_STORE, output, catalogue)
+    except ContextGenerationError as exc:
+        result = {**exc.result, "command": "generate.project"}
+        _emit(result, args.json)
+        return 1
+    except (OSError, ValueError) as exc:
+        result = _failure("generate.project", "GENERATION_OUTPUT_UNSAFE", str(exc))
+        _emit(result, args.json)
+        return 1
+    issues = SCHEMA_STORE.validate("neon-agent-context", context)
+    issues_text = [f"agent-context{issue.pointer}: {issue.message}" for issue in issues]
+    try:
+        index = load_json(output / "api-index.json")
+    except JsonDocumentError as exc:
+        issues_text.append(f"api-index.json: {exc}")
+    else:
+        issues_text.extend(f"api-index{issue.pointer}: {issue.message}" for issue in SCHEMA_STORE.validate("neon-api-index", index))
+    for artifact in artifacts["artifacts"]:
+        issues_text.extend(f"artifact {artifact['id']}{issue.pointer}: {issue.message}" for issue in SCHEMA_STORE.validate("neon-artifact", artifact))
+    if issues_text:
+        result = _failure("generate.project", "GENERATED_CONTRACT_INVALID", "; ".join(issues_text))
+        _emit(result, args.json)
+        return 1
+    result = {
+        "schemaVersion": "1.0.0",
+        "command": "generate.project",
+        "status": "pass",
+        "summary": {"errors": 0, "warnings": context["validation"]["summary"]["warnings"], "artifacts": len(artifacts["artifacts"]), "files": len(context["files"]), "usedApis": len(context["usedApiIds"])},
+        "diagnostics": context["validation"]["diagnostics"],
+        "output": str(output),
+    }
+    _emit(result, args.json)
+    return 0
+
+
+def command_context_verify(args: argparse.Namespace) -> int:
+    default_project = Path.cwd() / "neon.project.json"
+    project = _absolute_without_resolving(args.project) if args.project else (default_project if default_project.is_file() else DEFAULT_PROJECT)
+    context_directory = _absolute_without_resolving(args.context) if args.context else project.parent / ".neon"
+    catalogue = Path(args.catalogue).resolve() if args.catalogue else None
+    result = verify_project_context(project, SCHEMA_STORE, context_directory, catalogue)
+    _emit(result, args.json)
+    return 0 if result["status"] == "pass" else 1
 
 
 def command_harness(args: argparse.Namespace) -> int:
@@ -566,9 +634,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--profile", choices=("mta-upstream", "neon-client", "neon-server", "neon-pair", "neon-multiclient"))
         command.add_argument("--json", action="store_true")
 
-    api_search = api_subcommands.add_parser("search", help="find API entities by name or description")
+    api_search = api_subcommands.add_parser("search", help="find API entities by name, intent, signature, OOP binding, or description")
     api_search.add_argument("query")
     api_search.add_argument("--limit", type=int, default=20, choices=range(1, 101), metavar="1..100")
+    api_search.add_argument("--full", action="store_true", help="return complete contracts; prefer api get after compact discovery")
     add_api_filters(api_search)
     api_search.set_defaults(handler=command_api_search)
 
@@ -585,7 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)
@@ -624,8 +693,24 @@ def build_parser() -> argparse.ArgumentParser:
     luals = generate_subcommands.add_parser("luals")
     luals.add_argument("--catalogue", default=str(DEFAULT_CATALOGUE))
     luals.add_argument("--output", default=str(TOOL_DIRECTORY / "generated"))
+    luals.add_argument("--profile", default="neon-pair", choices=("mta-upstream", "neon-client", "neon-server", "neon-pair", "neon-multiclient"))
     luals.add_argument("--json", action="store_true")
     luals.set_defaults(handler=command_generate_luals)
+    project_generate = generate_subcommands.add_parser("project", help="generate deterministic agent context and project-aware LuaLS libraries")
+    project_generate.add_argument("--project", help="project file; defaults to ./neon.project.json, then the repository project")
+    project_generate.add_argument("--catalogue")
+    project_generate.add_argument("--output", help="output directory; defaults to ./.neon beside the project")
+    project_generate.add_argument("--json", action="store_true")
+    project_generate.set_defaults(handler=command_generate_project)
+
+    context = subcommands.add_parser("context", help="verify generated agent context freshness and integrity")
+    context_subcommands = context.add_subparsers(dest="context_command", required=True)
+    context_verify = context_subcommands.add_parser("verify")
+    context_verify.add_argument("--project", help="project file; defaults to ./neon.project.json, then the repository project")
+    context_verify.add_argument("--catalogue")
+    context_verify.add_argument("--context", help="context directory; defaults to ./.neon beside the project")
+    context_verify.add_argument("--json", action="store_true")
+    context_verify.set_defaults(handler=command_context_verify)
     return parser
 
 

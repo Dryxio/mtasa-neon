@@ -1,0 +1,31 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-api-index-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "catalogueSha256": {"format": "sha256", "type": "string"},
+    "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "symbols": {"items": {"$ref": "#/$defs/symbol"}, "type": "array"}
+  },
+  "required": ["schemaVersion", "profile", "catalogueSha256", "symbols"],
+  "type": "object",
+  "$defs": {
+    "symbol": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {"minLength": 1, "type": "string"},
+        "description": {"minLength": 1, "type": "string"},
+        "id": {"format": "stable-id", "type": "string"},
+        "kind": {"enum": ["function", "event", "element", "type", "class", "enum"], "type": "string"},
+        "keywords": {"items": {"minLength": 2, "type": "string"}, "maxItems": 16, "type": "array", "uniqueItems": true},
+        "name": {"minLength": 1, "type": "string"},
+        "origin": {"enum": ["mta", "neon"], "type": "string"},
+        "sides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "state": {"enum": ["verified", "documented-only", "runtime-only", "opaque", "conflict", "unavailable"], "type": "string"}
+      },
+      "required": ["id", "kind", "name", "origin", "state", "sides"],
+      "type": "object"
+    }
+  }
+}

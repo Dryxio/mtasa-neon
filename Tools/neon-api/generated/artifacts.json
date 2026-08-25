@@ -6,8 +6,8 @@
       "mediaType": "text/x-lua",
       "path": "mta-shared.lua",
       "schemaVersion": "1.0.0",
-      "sha256": "405a28c80053921b7029a5307d8d731b39298d07567888c5053abd5f0e55cbb7",
-      "size": 318526
+      "sha256": "feb646b297c6240a14674ecf9e72e9b8a3115d3236ccae1385047a8a29d4426c",
+      "size": 321839
     },
     {
       "id": "neon:artifact:luals-client",
@@ -15,8 +15,8 @@
       "mediaType": "text/x-lua",
       "path": "mta-client.lua",
       "schemaVersion": "1.0.0",
-      "sha256": "86b5a27c6c792d3fc79c3829f90eb8fc7e36bfb3b62bc8cc4c2c2b9d9ef59392",
-      "size": 482477
+      "sha256": "467a9f99c7220282fcbf3efbb7b5de6f7c674faa1fda7cb810a534e6eeca0964",
+      "size": 654197
     },
     {
       "id": "neon:artifact:luals-server",
@@ -24,8 +24,8 @@
       "mediaType": "text/x-lua",
       "path": "mta-server.lua",
       "schemaVersion": "1.0.0",
-      "sha256": "616260592fc39a45dac28938d2f302f7038ac42c8ce8781e5b4c9a96cde9ff5c",
-      "size": 149740
+      "sha256": "13603c5414b8bbe7c62d83f90a50a761f85458c140a0dcf6f7f8267857be40fb",
+      "size": 253364
     }
   ],
   "schemaVersion": "1.0.0"

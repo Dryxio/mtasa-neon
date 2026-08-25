@@ -17,6 +17,8 @@ Run commands from the repository root:
 ./neon api get element-type --kind enum --side server --json
 ./neon api stats --json
 ./neon project resolve --json
+./neon generate project --json
+./neon context verify --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
@@ -29,12 +31,21 @@ Python 3.10 or newer is required; no third-party Python package is needed.
 `neon check` validates `neon.project.json`, its selected catalogue, engine
 compatibility, declared API requirements, resource directories, `meta.xml`
 scripts, dependencies, known wrong-side Lua calls, and literal built-in events
-used on the wrong side. Custom resource events remain valid. Set `unknownApis` to
+used on the wrong side. Static `Class.method(...)` calls and instance calls on
+values assigned from a known `Class.create(...)` are checked against the same
+profile, side, inheritance, and conflict contracts. Custom resource events remain valid. Set `unknownApis` to
 `error` only for closed projects where every global callable is expected to be
 catalogued; the default avoids misclassifying resource-local functions as
 missing MTA APIs. When `--project` is omitted, the command uses
 `./neon.project.json` from the current workspace and falls back to the repository
 project only when the current directory has none.
+Catalogue entries in `conflict` are never treated as active typed APIs:
+requirements and literal Lua/event use emit `API_CONFLICT` or
+`EVENT_CONFLICT`, and LuaLS omits the unsafe global signature while the API
+index keeps the conflict discoverable. The conflict remains blocked when it is
+referenced from the opposite side; any other catalogued symbol excluded by the
+selected profile emits `API_UNAVAILABLE` or `EVENT_UNAVAILABLE` instead of
+falling through to the permissive unknown-API policy.
 
 ## Project-local resource and module APIs
 
@@ -72,6 +83,32 @@ without adding a parser dependency or creating loader-dependent meanings.
   "acl": [],
   "capabilities": []
 }
+```
+
+A native module uses the same strict component schema with `kind: "module"`.
+Its callable surface is declared in `exports`; the project separately names
+the manifest and binary so Neon can hash both without claiming the binary was
+loaded:
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "kind": "module",
+  "name": "native-status",
+  "version": "1.0.0",
+  "lifecycle": {"start": "automatic", "stop": "clean", "reloadSafe": false, "persistentState": "none"},
+  "dependencies": [],
+  "exports": [{
+    "name": "getNativeStatus", "side": "server", "parameters": [],
+    "returns": [{"name": "ready", "type": "boolean", "description": "Whether the module is ready."}],
+    "description": "Read native module readiness.", "http": false, "restricted": false
+  }],
+  "events": [], "elements": [], "acl": [], "capabilities": []
+}
+```
+
+```json
+{"name":"native-status","path":"modules/native-status","manifest":"neon.module.yaml","binary":"native-status.dll"}
 ```
 
 Without an approved manifest, public exports and literal `addEvent` definitions
@@ -142,6 +179,41 @@ globals and with a timeout, normalizes all entities, and records a SHA-256 diges
 are only needed to refresh the snapshot; `check`, API discovery, catalogue
 verification, LuaLS generation, and the Python harness remain dependency-free.
 
+## Generated agent context
+
+`neon generate project --json` first runs the complete static project check and
+refuses to generate active contracts on any error. On success it writes `.neon`
+beside the selected project (or `--output`) with:
+
+- `agent-context.json`, containing the profile, engine/catalogue identities,
+  content-addressed project files (including Lua, manifests, module binaries,
+  and `file`/`map`/`config`/`html` payloads declared by `meta.xml`), APIs already
+  used by the code, and safe discovery/validation guidance;
+- `api-index.json`, a compact, deterministic index of the complete effective
+  MTA + Neon surface filtered to the selected profile;
+- `project-api.json`, the exact resolved resource/module contracts;
+- separate client/server LuaLS libraries combining the shared/global API with
+  exact side-specific OOP classes/methods/properties plus project module
+  functions, exports, custom events, and elements;
+- a side-specific `.luarc.json`; and
+- `artifacts.json`, which hashes every generated payload artefact (the index
+  itself is excluded to avoid a recursive hash).
+
+The pack contains no absolute workspace path or timestamp. Repeated generation
+from identical inputs is byte-for-byte stable. Runtime-only global functions
+and opaque project callables use LuaLS `unknown`; they never receive a guessed
+zero-argument or `nil`-return contract. `--profile mta-upstream` and the Neon
+client/server profiles also filter generated global LuaLS definitions rather
+than leaking APIs from the wrong engine overlay or side.
+
+`neon context verify --json` is the read-only freshness gate. It validates the
+schemas, checks every recorded payload hash without following paths outside the
+pack, regenerates in an isolated temporary directory, and compares the complete
+artifact index. A source, manifest, catalogue, generator, or generated-file
+change therefore yields a machine-readable stale/tamper diagnostic. Unindexed
+files are rejected as well; generation never deletes or silently adopts an
+unexpected user-owned file already present in its output directory.
+
 `catalogue verify` compares active client/server functions, events, OOP
 bindings, classes, properties, and enums against source registrations and
 confirms that both wiki revisions and the semantic digest match the checked-in
@@ -156,6 +228,8 @@ audits the working tree.
 - `schemas/neon-project.schema.json`: local project and resource selection.
 - `schemas/neon-component.schema.json`: resource/module semantic manifest.
 - `schemas/neon-project-api.schema.json`: resolved project-local API result.
+- `schemas/neon-agent-context.schema.json`: compact project context pack.
+- `schemas/neon-api-index.schema.json`: profile-filtered discovery index.
 - `schemas/neon-test.schema.json`: bounded scenario definition.
 - `schemas/neon-assertion.schema.json`: assertion contract.
 - `schemas/neon-artifact.schema.json`: content-addressed artefact record.
@@ -166,8 +240,21 @@ The catalogue includes functions, registered events, elements, primitive
 types, runtime OOP classes, enum value maps, side contracts, parameters,
 return values, defaults, OOP metadata, versions,
 descriptions, evidence, and source/license provenance. `api search` supports
-tokenized discovery and deterministic filters; `api get` returns the complete
-machine-readable entry.
+intent-oriented local discovery and deterministic filters; `api get` returns
+the complete machine-readable entry. Search splits camelCase names, indexes
+OOP bindings, categories, descriptions, signatures, parameters, returns,
+examples, enum values, and source categories, and applies a bounded MTA-aware
+synonym vocabulary plus conservative plural, prefix, and single-typo matching.
+This makes sparse runtime-only functions discoverable from tasks such as
+`npc pathfinding` without inventing any API semantics. The generated compact
+index also carries deterministic keywords for agents that inspect the context
+pack without invoking the CLI. Search ranking is a navigation aid only: agents
+must still use `api get` and respect the selected profile, side, state, and
+evidence before calling a result.
+Search returns compact ranked summaries by default to protect the agent context
+window; `--full` is available for tooling that truly needs every matching
+contract, while the recommended workflow is a compact search followed by one
+exact `api get`.
 
 All JSON readers reject duplicate keys, oversized documents, unknown schema
 fields, unsupported schema majors, absolute paths, traversal, and symlink

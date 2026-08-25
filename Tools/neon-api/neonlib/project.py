@@ -21,6 +21,9 @@ LUA_ADD_EVENT_RE = re.compile(r'''(?<![.:\w])addEvent\s*\(\s*(["'])((?:\\.|(?!\1
 LUA_EXPORT_CALL_RE = re.compile(
     r'''\bexports\s*(?:\[\s*(["'])((?:\\.|(?!\1).)*)\1\s*\]|\.\s*([A-Za-z_][A-Za-z0-9_.-]*))\s*:\s*([A-Za-z_]\w*)\s*\('''
 )
+LUA_STATIC_MEMBER_CALL_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)[.:]([A-Za-z_]\w*)\s*\(")
+LUA_OOP_ASSIGN_RE = re.compile(r"\b(?:local\s+)?([A-Za-z_]\w*)\s*=\s*([A-Z][A-Za-z0-9_]*)\.create\s*\(")
+LUA_INSTANCE_MEMBER_CALL_RE = re.compile(r"\b([A-Za-z_]\w*):([A-Za-z_]\w*)\s*\(")
 LUA_GLOBAL_FUNCTION_RE = re.compile(r"(?m)^[ \t]*(?:function\s+([A-Za-z_]\w*)\s*\(|([A-Za-z_]\w*)\s*=\s*function\b)")
 LUA_BUILTINS = {
     "assert", "collectgarbage", "dofile", "error", "getfenv", "getmetatable", "ipairs", "load", "loadfile", "loadstring",
@@ -109,6 +112,9 @@ class LoadedComponent:
     manifest_path: Path | None
     manifest_display: str | None
     manifest: dict[str, Any] | None
+
+
+META_ASSET_TAGS = ("file", "map", "config", "html")
 
 
 def _load_component(workspace: Path, entry: dict[str, Any], kind: str, schema_store: SchemaStore, state: CheckState) -> LoadedComponent:
@@ -298,7 +304,7 @@ def strip_lua_comments(source: str) -> str:
 def _available_by_side(catalogue: dict, profile: str) -> dict[str, set[str]]:
     result = {"client": set(), "server": set()}
     for symbol in catalogue.get("symbols", []):
-        if symbol.get("kind") != "function" or symbol.get("state") in ("unavailable", "documented-only"):
+        if symbol.get("kind") != "function" or symbol.get("state") in ("unavailable", "documented-only", "conflict"):
             continue
         sides = symbol.get("inheritedSides", []) if profile == "mta-upstream" else symbol.get("sides", [])
         for side in sides:
@@ -314,7 +320,7 @@ def _available_by_side(catalogue: dict, profile: str) -> dict[str, set[str]]:
 def _available_events_by_side(catalogue: dict, profile: str) -> dict[str, set[str]]:
     result = {"client": set(), "server": set()}
     for symbol in catalogue.get("symbols", []):
-        if symbol.get("kind") != "event" or symbol.get("state") in ("unavailable", "documented-only"):
+        if symbol.get("kind") != "event" or symbol.get("state") in ("unavailable", "documented-only", "conflict"):
             continue
         sides = symbol.get("inheritedSides", []) if profile == "mta-upstream" else symbol.get("sides", [])
         for side in sides:
@@ -327,8 +333,111 @@ def _available_events_by_side(catalogue: dict, profile: str) -> dict[str, set[st
     return result
 
 
+def _conflicts_by_side(catalogue: dict, profile: str, kind: str) -> dict[str, set[str]]:
+    result = {"client": set(), "server": set()}
+    for symbol in catalogue.get("symbols", []):
+        if symbol.get("kind") != kind or symbol.get("state") != "conflict":
+            continue
+        if profile in symbol.get("profiles", []):
+            # A conflict means no side has a trustworthy active contract. It
+            # must not become an allowed "unknown" merely because code calls
+            # it from the opposite side of the disputed registration.
+            result["client"].add(symbol["name"])
+            result["server"].add(symbol["name"])
+    if profile == "neon-server":
+        result["client"].clear()
+    elif profile == "neon-client":
+        result["server"].clear()
+    return result
+
+
 def _line(source: str, offset: int) -> int:
     return source.count("\n", 0, offset) + 1
+
+
+def _effective_oop_sides(symbol: dict[str, Any], profile: str) -> set[str]:
+    sides = set(symbol.get("inheritedSides", [])) if profile == "mta-upstream" else set(symbol.get("sides", []))
+    if profile == "neon-server":
+        sides.discard("client")
+    elif profile == "neon-client":
+        sides.discard("server")
+    return sides
+
+
+def _find_oop_member(classes: dict[str, dict[str, Any]], class_symbol: dict[str, Any], member_name: str, profile: str) -> dict[str, Any] | None:
+    parents_field = "inheritedParents" if profile == "mta-upstream" else "parents"
+    pending = [class_symbol]
+    visited: set[str] = set()
+    while pending:
+        current = pending.pop(0)
+        if current["name"] in visited:
+            continue
+        visited.add(current["name"])
+        member = next((item for item in current.get("methods", []) if item["name"] == member_name), None)
+        if member is not None:
+            return member
+        pending.extend(classes[parent] for parent in current.get(parents_field, []) if parent in classes)
+    return None
+
+
+def _validate_oop_call(
+    class_name: str,
+    member_name: str,
+    offset: int,
+    code: str,
+    display_path: str,
+    side: str,
+    profile: str,
+    required_sides: tuple[str, ...],
+    classes: dict[str, dict[str, Any]],
+    functions: dict[str, dict[str, Any]],
+    state: CheckState,
+) -> None:
+    class_symbol = classes.get(class_name)
+    if class_symbol is None:
+        return
+    display_symbol = f"{class_name}.{member_name}"
+    if profile not in class_symbol.get("profiles", []):
+        state.add(
+            "API_UNAVAILABLE", f"{display_symbol} is unavailable in profile {profile}", path=display_path,
+            line=_line(code, offset), side=side, symbol=display_symbol,
+        )
+        return
+    class_sides = _effective_oop_sides(class_symbol, profile)
+    missing_class_sides = [candidate for candidate in required_sides if candidate not in class_sides]
+    if missing_class_sides:
+        state.add(
+            "API_WRONG_SIDE" if class_sides else "API_UNAVAILABLE",
+            f"{display_symbol} is unavailable on {', '.join(missing_class_sides)}", path=display_path,
+            line=_line(code, offset), side=side, symbol=display_symbol,
+        )
+        return
+    member = _find_oop_member(classes, class_symbol, member_name, profile)
+    if member is None:
+        state.add(
+            "API_UNKNOWN", f"{display_symbol} is not a registered OOP method", path=display_path,
+            line=_line(code, offset), side=side, symbol=display_symbol,
+        )
+        return
+    member_sides = _effective_oop_sides(member, profile)
+    missing_member_sides = [candidate for candidate in required_sides if candidate not in member_sides]
+    if missing_member_sides:
+        state.add(
+            "API_WRONG_SIDE" if member_sides else "API_UNAVAILABLE",
+            f"{display_symbol} is unavailable on {', '.join(missing_member_sides)}", path=display_path,
+            line=_line(code, offset), side=side, symbol=display_symbol,
+        )
+        return
+    binding_field = "inheritedBindings" if profile == "mta-upstream" else "bindings"
+    bound_names = {
+        binding.get("globalFunction") for binding in member.get(binding_field, [])
+        if binding.get("side") in required_sides and binding.get("globalFunction")
+    }
+    if any(functions.get(name, {}).get("state") == "conflict" for name in bound_names):
+        state.add(
+            "API_CONFLICT", f"{display_symbol} is backed by a conflicting global contract", path=display_path,
+            line=_line(code, offset), side=side, symbol=display_symbol,
+        )
 
 
 def _scan_lua(
@@ -343,12 +452,12 @@ def _scan_lua(
     project_events: dict[str, set[str]] | None = None,
     resource_exports: dict[str, dict[str, set[str]]] | None = None,
     strict_components: bool = False,
-) -> None:
+) -> bool:
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         state.add("FILE_READ_ERROR", str(exc), path=display_path, side=side)
-        return
+        return False
     code = strip_lua_noncode(source)
     comment_free = strip_lua_comments(source)
     declared = {name for match in LUA_FUNCTION_RE.finditer(code) for name in match.groups() if name}
@@ -357,16 +466,38 @@ def _scan_lua(
         if candidate_side in available:
             available[candidate_side].update(names)
     all_known = available["client"] | available["server"]
+    catalogued = {symbol["name"] for symbol in catalogue.get("symbols", []) if symbol.get("kind") == "function"}
+    conflicts = _conflicts_by_side(catalogue, profile, "function")
     required_sides = ("client", "server") if side == "shared" else (side,)
     for match in LUA_CALL_RE.finditer(code):
         name = match.group(1)
         if name in declared or name in LUA_BUILTINS or name in LUA_KEYWORDS:
+            continue
+        conflicting_sides = [required for required in required_sides if name in conflicts[required]]
+        if conflicting_sides:
+            state.add(
+                "API_CONFLICT",
+                f"{name} has an unresolved contract conflict on {', '.join(conflicting_sides)}",
+                path=display_path,
+                line=_line(code, match.start(1)),
+                side=side,
+                symbol=name,
+            )
             continue
         missing_sides = [required for required in required_sides if name not in available[required]]
         if name in all_known and missing_sides:
             state.add(
                 "API_WRONG_SIDE",
                 f"{name} is unavailable on {', '.join(missing_sides)}",
+                path=display_path,
+                line=_line(code, match.start(1)),
+                side=side,
+                symbol=name,
+            )
+        elif name in catalogued and missing_sides:
+            state.add(
+                "API_UNAVAILABLE",
+                f"{name} has no active registration for profile {profile} on {', '.join(missing_sides)}",
                 path=display_path,
                 line=_line(code, match.start(1)),
                 side=side,
@@ -386,12 +517,25 @@ def _scan_lua(
         if candidate_side in available_events:
             available_events[candidate_side].update(names)
     all_known_events = available_events["client"] | available_events["server"]
+    catalogued_events = {symbol["name"] for symbol in catalogue.get("symbols", []) if symbol.get("kind") == "event"}
+    event_conflicts = _conflicts_by_side(catalogue, profile, "event")
     for match in LUA_EVENT_HANDLER_RE.finditer(comment_free):
         try:
             name = ast.literal_eval(match.group(1) + match.group(2) + match.group(1))
         except (SyntaxError, ValueError):
             continue
         if not isinstance(name, str):
+            continue
+        conflicting_sides = [required for required in required_sides if name in event_conflicts[required]]
+        if conflicting_sides:
+            state.add(
+                "EVENT_CONFLICT",
+                f"{name} has an unresolved event contract conflict on {', '.join(conflicting_sides)}",
+                path=display_path,
+                line=_line(comment_free, match.start(2)),
+                side=side,
+                symbol=name,
+            )
             continue
         missing_sides = [required for required in required_sides if name not in available_events[required]]
         if name in all_known_events and missing_sides:
@@ -402,6 +546,33 @@ def _scan_lua(
                 line=_line(comment_free, match.start(2)),
                 side=side,
                 symbol=name,
+            )
+        elif name in catalogued_events and missing_sides:
+            state.add(
+                "EVENT_UNAVAILABLE",
+                f"{name} has no active registration for profile {profile} on {', '.join(missing_sides)}",
+                path=display_path,
+                line=_line(comment_free, match.start(2)),
+                side=side,
+                symbol=name,
+            )
+    classes = {symbol["name"]: symbol for symbol in catalogue.get("symbols", []) if symbol.get("kind") == "class"}
+    functions = {symbol["name"]: symbol for symbol in catalogue.get("symbols", []) if symbol.get("kind") == "function"}
+    oop_used = False
+    for match in LUA_STATIC_MEMBER_CALL_RE.finditer(code):
+        oop_used = oop_used or match.group(1) in classes
+        _validate_oop_call(
+            match.group(1), match.group(2), match.start(1), code, display_path, side, profile,
+            required_sides, classes, functions, state,
+        )
+    inferred_instances = {match.group(1): match.group(2) for match in LUA_OOP_ASSIGN_RE.finditer(code)}
+    for match in LUA_INSTANCE_MEMBER_CALL_RE.finditer(code):
+        class_name = inferred_instances.get(match.group(1))
+        if class_name is not None:
+            oop_used = oop_used or class_name in classes
+            _validate_oop_call(
+                class_name, match.group(2), match.start(1), code, display_path, side, profile,
+                required_sides, classes, functions, state,
             )
     for match in LUA_EXPORT_CALL_RE.finditer(comment_free):
         literal = match.group(1) + match.group(2) + match.group(1) if match.group(2) is not None else None
@@ -450,21 +621,35 @@ def _scan_lua(
                 side=side,
                 symbol=export_name,
             )
+    return oop_used
 
 
 def _validate_requirements(requirements: Iterable[dict], catalogue: dict, profile: str, state: CheckState, path: str) -> None:
     available = _available_by_side(catalogue, profile)
+    conflicts = _conflicts_by_side(catalogue, profile, "function")
+    catalogued = {symbol["name"] for symbol in catalogue.get("symbols", []) if symbol.get("kind") == "function"}
     for requirement in requirements:
         state.api_requirements += 1
         name = requirement["name"]
         side = requirement["side"]
         required_sides = ("client", "server") if side == "shared" else (side,)
+        conflicting_sides = [candidate for candidate in required_sides if name in conflicts[candidate]]
+        if conflicting_sides:
+            state.add(
+                "API_CONFLICT",
+                f"required API {name} has an unresolved contract conflict on {', '.join(conflicting_sides)}",
+                path=path,
+                side=side,
+                symbol=name,
+            )
+            continue
         present = [candidate for candidate in required_sides if name in available[candidate]]
         if not present:
             known = name in (available["client"] | available["server"])
+            code = "API_WRONG_SIDE" if known else "API_UNAVAILABLE" if name in catalogued else "API_NOT_FOUND"
             state.add(
-                "API_WRONG_SIDE" if known else "API_NOT_FOUND",
-                f"required API {name} is unavailable on {side}" if known else f"required API {name} does not exist",
+                code,
+                f"required API {name} is unavailable on {side}" if code != "API_NOT_FOUND" else f"required API {name} does not exist",
                 path=path,
                 side=side,
                 symbol=name,
@@ -904,6 +1089,24 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
             )
         global_functions = {"client": set(), "server": set()}
         defined_events: dict[tuple[str, str], bool] = {}
+        oop_enabled = any(
+            item.tag == "oop" and item.parent == "meta" and item.depth == 1 and item.text.strip().casefold() == "true"
+            for item in root.elements
+        )
+        oop_used = False
+        for tag in META_ASSET_TAGS:
+            for asset in root.findall(tag, "meta", 1):
+                source = asset.get("src")
+                if not source:
+                    state.add("INVALID_META", f"{tag} is missing src", path=meta_display)
+                    continue
+                asset_path = _resolve_relative(resource_path, source)
+                display_path = f"{resource['path'].rstrip('/')}/{source}"
+                state.files.add(display_path)
+                if asset_path is None:
+                    state.add("PATH_OUTSIDE_WORKSPACE", f"{tag} path escapes resource: {source}", path=display_path)
+                elif not asset_path.is_file():
+                    state.add("MISSING_FILE", f"{tag} does not exist: {source}", path=display_path)
         for script in root.findall("script", "meta", 1):
             source = script.get("src")
             side = script.get("type", "server")
@@ -923,10 +1126,10 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
             elif not script_path.is_file():
                 state.add("MISSING_FILE", f"script does not exist: {source}", path=display_path, side=side)
             else:
-                _scan_lua(
+                oop_used = _scan_lua(
                     script_path, display_path, side, catalogue, profile, strict_unknown, state,
                     project_functions, project_events, resource_exports, strict_components,
-                )
+                ) or oop_used
                 functions, events = _lua_contract_facts(script_path, side)
                 for candidate_side in _component_sides(side):
                     global_functions[candidate_side].update(functions)
@@ -935,6 +1138,9 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
                         if key in defined_events and defined_events[key] != remote:
                             state.add("RESOURCE_EVENT_DEFINITION_CONFLICT", f"event {event_name} is defined with conflicting remote flags", path=display_path, side=candidate_side, symbol=event_name)
                         defined_events[key] = remote
+        manifest_requires_oop = component.manifest is not None and component.manifest.get("oopRequired", False)
+        if oop_used and not oop_enabled and not manifest_requires_oop:
+            state.add("RESOURCE_OOP_MISSING", "Lua source uses a registered OOP class but meta.xml has no <oop>true</oop>", path=meta_display)
         _validate_resource_contract(
             component, root, meta_display, global_functions, defined_events,
             declared_dependencies | meta_dependencies, strict_components, state,

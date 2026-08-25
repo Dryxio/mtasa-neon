@@ -410,3 +410,8 @@ utils/DXFiles/
 !*.exe
 utils/vswhere.exe
 *.generated.h
+
+# Local agent context and developer-preview release artefacts
+/.neon/
+/Neon-CLI-Developer-Preview-*/
+/Neon-CLI-Developer-Preview-*.zip
