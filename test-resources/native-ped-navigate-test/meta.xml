@@ -1,5 +1,5 @@
 <meta>
-    <info author="Neon" name="Native ped navigation visual test" type="script" version="0.1.0" />
+    <info author="Neon" name="Native ped and vehicle navigation visual test" type="script" version="0.2.0" />
     <script src="server.lua" type="server" />
     <script src="client.lua" type="client" cache="false" />
 </meta>

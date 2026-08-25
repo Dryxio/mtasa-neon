@@ -1,16 +1,97 @@
 local TASK_NAME = "TASK_COMPLEX_FOLLOW_NODE_ROUTE"
 local active
+local DRIVE_TASK_NAME = "TASK_COMPLEX_CAR_DRIVE_TO_POINT"
+local activeDrive
 
 local function finish(result, details)
     if not active then
         return
     end
 
-    triggerServerEvent("nativePedNavigateVisual:result", resourceRoot, active.ped, result, details)
+    if isElement(active.ped) then
+        triggerServerEvent("nativePedNavigateVisual:result", resourceRoot, active.ped, result, details)
+    end
     if isTimer(active.timer) then
         killTimer(active.timer)
     end
     active = nil
+end
+
+local function finishDrive(result, details)
+    local drive = activeDrive
+    if not drive then
+        return
+    end
+
+    if isElement(drive.ped) and isElement(drive.vehicle) then
+        triggerServerEvent("nativePedDriveVisual:result", resourceRoot, drive.ped, drive.vehicle, result, details)
+    end
+    if isTimer(drive.timer) then
+        killTimer(drive.timer)
+    end
+    if isTimer(drive.retryTimer) then
+        killTimer(drive.retryTimer)
+    end
+    if drive.missionActorApplied and isElement(drive.ped) then
+        setPedMissionActor(drive.ped, drive.wasMissionActor)
+    end
+    activeDrive = nil
+end
+
+local function beginDrive(ped, vehicle, x, y, z, speed, attempt)
+    attempt = attempt or 1
+    if not activeDrive or activeDrive.ped ~= ped or activeDrive.vehicle ~= vehicle then
+        return
+    end
+    if not isElement(ped) or not isElement(vehicle) then
+        return finishDrive("destroyed", "ped ou vehicule detruit avant le dispatch")
+    end
+
+    local ready = isElementStreamedIn(ped) and isElementStreamedIn(vehicle) and isElementSyncer(ped) and isElementSyncer(vehicle) and
+                      getPedOccupiedVehicle(ped) == vehicle and getPedOccupiedVehicleSeat(ped) == 0
+    if not ready then
+        if attempt < 32 then
+            activeDrive.retryTimer = setTimer(beginDrive, 250, 1, ped, vehicle, x, y, z, speed, attempt + 1)
+            return
+        end
+        return finishDrive("refused", "stream, double ownership ou siege conducteur absent apres 8 s")
+    end
+
+    activeDrive.wasMissionActor = isPedMissionActor(ped)
+    if not setPedMissionActor(ped, true) then
+        return finishDrive("refused", "setPedMissionActor a retourne false")
+    end
+    activeDrive.missionActorApplied = true
+
+    if not setPedDriveTo(ped, vehicle, Vector3(x, y, z), speed, "normal", "stop_for_cars") then
+        return finishDrive("refused", "setPedDriveTo a retourne false")
+    end
+
+    activeDrive.acceptedAt = getTickCount()
+    activeDrive.seenTask = false
+    triggerServerEvent("nativePedDriveVisual:result", resourceRoot, ped, vehicle, "accepted", "task native soumise sur le syncer")
+    activeDrive.timer = setTimer(function()
+        local drive = activeDrive
+        if not drive or not isElement(drive.ped) or not isElement(drive.vehicle) then
+            return finishDrive("destroyed", "ped ou vehicule detruit pendant la conduite")
+        end
+
+        local running = isPedDoingTask(drive.ped, DRIVE_TASK_NAME)
+        drive.seenTask = drive.seenTask or running
+        local vx, vy, vz = getElementPosition(drive.vehicle)
+        local distance = getDistanceBetweenPoints3D(vx, vy, vz, drive.x, drive.y, drive.z)
+        local elapsed = getTickCount() - drive.acceptedAt
+
+        if drive.seenTask and not running then
+            return finishDrive(distance <= 15.0 and "arrived" or "ended_outside_radius", ("distance=%.2f m, elapsed=%d ms"):format(distance, elapsed))
+        end
+        if not drive.seenTask and elapsed > 3000 then
+            return finishDrive("refused", "TASK_COMPLEX_CAR_DRIVE_TO_POINT jamais observee")
+        end
+        if elapsed > 120000 then
+            return finishDrive("timeout", ("distance restante=%.2f m"):format(distance))
+        end
+    end, 100, 0)
 end
 
 local function begin(ped, x, y, z, movement, attempt)
@@ -74,9 +155,29 @@ addEventHandler("nativePedNavigateVisual:stop", resourceRoot, function(ped)
     end
 end)
 
+addEvent("nativePedDriveVisual:start", true)
+addEventHandler("nativePedDriveVisual:start", resourceRoot, function(ped, vehicle, x, y, z, speed)
+    if activeDrive then
+        finishDrive("replaced", "ordre remplace")
+    end
+    activeDrive = {ped = ped, vehicle = vehicle, x = x, y = y, z = z}
+    beginDrive(ped, vehicle, x, y, z, speed)
+end)
+
+addEvent("nativePedDriveVisual:stop", true)
+addEventHandler("nativePedDriveVisual:stop", resourceRoot, function(ped, vehicle)
+    if activeDrive and activeDrive.ped == ped and activeDrive.vehicle == vehicle then
+        local killed = killPedTask(ped, "primary", 3, false)
+        finishDrive("cancelled", killed and "slot primaire supprime" or "killPedTask a retourne false")
+    end
+end)
+
 addEventHandler("onClientResourceStop", resourceRoot, function()
     if active and isTimer(active.timer) then
         killTimer(active.timer)
     end
     active = nil
+    if activeDrive then
+        finishDrive("stopped", "resource client arretee")
+    end
 end)
