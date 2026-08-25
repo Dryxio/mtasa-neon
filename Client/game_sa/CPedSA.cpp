@@ -962,6 +962,23 @@ static void __declspec(naked)   HOOK_CPed_PreRenderAfterTest_Mid()
     // clang-format on
 }
 
+namespace
+{
+    constexpr std::uintptr_t FUNC_CVisibilityPlugins_GetClumpAlpha = 0x732B20;
+    constexpr std::uintptr_t FUNC_CShadows_StoreShadowForPedObject = 0x707B40;
+    constexpr std::uintptr_t CALL_CPed_PreRenderAfterTest_StoreShadowForPedObject = 0x5E6900;
+
+    void __cdecl StoreShadowForPedObject(CPedSAInterface* ped, float displacementX, float displacementY, float frontX, float frontY, float sideX, float sideY)
+    {
+        using GetClumpAlpha = int(__cdecl*)(RpClump*);
+        if (reinterpret_cast<GetClumpAlpha>(FUNC_CVisibilityPlugins_GetClumpAlpha)(ped->m_pRwObject) == 0)
+            return;
+
+        using StoreShadow = void(__cdecl*)(CPedSAInterface*, float, float, float, float, float, float);
+        reinterpret_cast<StoreShadow>(FUNC_CShadows_StoreShadowForPedObject)(ped, displacementX, displacementY, frontX, frontY, sideX, sideY);
+    }
+}
+
 ////////////////////////////////////////////////////////////////
 //
 // Setup hooks
@@ -971,6 +988,10 @@ void CPedSA::StaticSetHooks()
 {
     EZHookInstall(CPed_PreRenderAfterTest);
     EZHookInstall(CPed_PreRenderAfterTest_Mid);
+
+    // GTA's player-specific blob-shadow path assumes that the local player is
+    // always opaque. Do not enqueue it when MTA has made the clump invisible.
+    HookInstallCall(CALL_CPed_PreRenderAfterTest_StoreShadowForPedObject, reinterpret_cast<DWORD>(StoreShadowForPedObject));
 
     HookInstallCall(0x68025A, (DWORD)CPedSA::RemoveWeaponWhenEnteringVehicle);  // CTaskSimpleJetPack::ProcessPed
     HookInstallCall(0x64DB4D, (DWORD)CPedSA::RemoveWeaponWhenEnteringVehicle);  // CTaskSimpleCarGetIn::ProcessPed
