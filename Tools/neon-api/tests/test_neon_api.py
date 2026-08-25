@@ -13,6 +13,7 @@ from pathlib import Path
 TOOL_DIRECTORY = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TOOL_DIRECTORY.parents[1]
 CATALOGUE_PATH = TOOL_DIRECTORY / "neon-api.json"
+SEMANTIC_SNAPSHOT_PATH = TOOL_DIRECTORY / "snapshots" / "api-semantics.json"
 CLI_PATH = TOOL_DIRECTORY / "neon.py"
 sys.path.insert(0, str(TOOL_DIRECTORY))
 
@@ -23,6 +24,7 @@ from neonlib.catalogue import (  # noqa: E402
     catalogue_semantic_issues,
     catalogue_source_matches,
     extract_registrations,
+    semantic_snapshot_issues,
 )
 from neonlib.jsonio import canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
@@ -66,7 +68,54 @@ class ContractSchemaTests(unittest.TestCase):
         self.assertIn("createVehicle", names)
         self.assertIn("dxDrawText", names)
         self.assertIn("createRope", names)
-        self.assertFalse(self.catalogue["sources"]["upstreamWiki"]["imported"])
+        self.assertTrue(self.catalogue["sources"]["upstreamWiki"]["imported"])
+        self.assertTrue(self.catalogue["sources"]["neonWiki"]["imported"])
+        self.assertEqual(self.catalogue["statistics"]["functions"], 1842)
+        self.assertEqual(self.catalogue["statistics"]["events"], 220)
+        self.assertEqual(self.catalogue["statistics"]["elements"], 71)
+        self.assertEqual(self.catalogue["statistics"]["types"], 9)
+
+    def test_semantic_snapshot_is_strict_pinned_and_content_addressed(self) -> None:
+        snapshot = load_json(SEMANTIC_SNAPSHOT_PATH)
+        self.assertEqual(SCHEMAS.validate("neon-semantic-snapshot", snapshot), [])
+        self.assertEqual(semantic_snapshot_issues(snapshot), [])
+        self.assertEqual(snapshot["sources"]["upstreamWiki"]["revision"], "39e80f8108fef8de0dfdf61876daf702d583243e")
+        self.assertRegex(snapshot["sources"]["neonWiki"]["revision"], r"^[0-9a-f]{40}$")
+        self.assertEqual(snapshot["sources"]["upstreamWiki"]["license"], "GFDL-1.3-or-later")
+        self.assertEqual(snapshot["sources"]["neonWiki"]["license"], "GFDL-1.3-or-later")
+        self.assertEqual(
+            {key: len(snapshot[key]) for key in ("functions", "events", "elements", "types")},
+            {"functions": 1694, "events": 220, "elements": 71, "types": 9},
+        )
+
+    def test_semantic_snapshot_detects_tampering(self) -> None:
+        snapshot = load_json(SEMANTIC_SNAPSHOT_PATH)
+        snapshot["functions"][0]["name"] = "tampered"
+        issues = semantic_snapshot_issues(snapshot)
+        self.assertTrue(any("digest" in issue for issue in issues))
+        self.assertTrue(any("deterministic name order" in issue for issue in issues))
+
+    def test_representative_global_entities_have_contracts_and_provenance(self) -> None:
+        by_key = {(symbol["kind"], symbol["name"]): symbol for symbol in self.catalogue["symbols"]}
+        vehicle = by_key[("function", "createVehicle")]
+        self.assertEqual(vehicle["state"], "verified")
+        self.assertEqual(vehicle["parameters"][0], {
+            "description": "The vehicle ID of the vehicle being created.",
+            "name": "model", "optional": False, "type": "int",
+        })
+        self.assertEqual(vehicle["returns"][0]["type"], "vehicle")
+        self.assertEqual(vehicle["contracts"][0]["oop"]["constructorClass"], "Vehicle")
+        rope = by_key[("function", "createRope")]
+        self.assertEqual(rope["origin"], "neon")
+        self.assertEqual(rope["contracts"][0]["provider"], "neon")
+        self.assertEqual(rope["contracts"][0]["testResource"], "test-resources/rope-test")
+        event = by_key[("event", "onPlayerJoin")]
+        self.assertEqual(event["parameters"], [])
+        self.assertIn("documented", event["evidence"])
+        vector = by_key[("element", "Vector3")]
+        self.assertTrue(vector["oopOnlyMethods"])
+        licenses = {item["license"] for symbol in (vehicle, rope, event) for item in symbol["provenance"]}
+        self.assertEqual(licenses, {"GFDL-1.3-or-later", "GPL-3.0-or-later"})
 
     def test_valid_contract_samples(self) -> None:
         documents = {
@@ -143,6 +192,21 @@ class ContractSchemaTests(unittest.TestCase):
         issues = SCHEMAS.validate("neon-api", corrupted)
         self.assertIn("/symbols/0/guessedSignature", {issue.pointer for issue in issues})
 
+    def test_api_schema_rejects_unknown_contract_field(self) -> None:
+        corrupted = copy.deepcopy(self.catalogue)
+        symbol = next(item for item in corrupted["symbols"] if item.get("contracts"))
+        symbol["contracts"][0]["hallucinated"] = True
+        issues = SCHEMAS.validate("neon-api", corrupted)
+        self.assertTrue(any(issue.pointer.endswith("/hallucinated") for issue in issues))
+
+    def test_catalogue_semantics_detect_statistics_and_provenance_tampering(self) -> None:
+        corrupted = copy.deepcopy(self.catalogue)
+        corrupted["statistics"]["functions"] += 1
+        corrupted["symbols"][0]["provenance"].append(copy.deepcopy(corrupted["symbols"][0]["provenance"][0]))
+        issues = catalogue_semantic_issues(corrupted)
+        self.assertIn("catalogue statistics do not match symbols", issues)
+        self.assertTrue(any("duplicate provenance" in issue for issue in issues))
+
     def test_check_result_rejects_unknown_severity(self) -> None:
         result = {
             "schemaVersion": "1.0.0",
@@ -196,11 +260,84 @@ class RegistrationExtractionTests(unittest.TestCase):
         neon = SourceSnapshot("b" * 40, {})
         catalogue = build_catalogue(neon, upstream, engine_version="1.7.0", wiki_revision="c" * 40)
         symbol = catalogue["symbols"][0]
-        self.assertEqual(symbol["state"], "opaque")
+        self.assertEqual(symbol["state"], "runtime-only")
         self.assertEqual(symbol["sides"], [])
         self.assertEqual(symbol["inheritedSides"], ["server"])
         self.assertEqual(symbol["profiles"], ["mta-upstream"])
         self.assertEqual(catalogue_semantic_issues(catalogue), [])
+
+    def test_explicit_documented_side_conflict_is_preserved(self) -> None:
+        upstream = SourceSnapshot("a" * 40, {})
+        neon = SourceSnapshot("b" * 40, {"Server/mods/deathmatch/logic/luadefs/Test.cpp": 'AddFunction("alpha", Alpha);'})
+        semantics = {
+            "schemaVersion": "1.0.0",
+            "sources": {
+                "upstreamWiki": {"repository": "https://example.test/mta.git", "revision": "c" * 40, "license": "GFDL-1.3-or-later"},
+                "neonWiki": {"repository": "https://example.test/neon.git", "revision": "d" * 40, "license": "GFDL-1.3-or-later"},
+            },
+            "functions": [{
+                "name": "alpha", "provider": "neon", "contracts": [{
+                    "side": "client", "parameters": [], "returns": [{"type": "bool"}],
+                    "requiresReview": False, "sourcePath": "docs/alpha.ts",
+                }],
+            }],
+            "events": [], "elements": [], "types": [], "digest": "0" * 64,
+        }
+        catalogue = build_catalogue(neon, upstream, engine_version="1.7.0", wiki_revision="c" * 40, semantic_snapshot=semantics)
+        self.assertEqual(catalogue["symbols"][0]["state"], "conflict")
+        self.assertEqual(catalogue["symbols"][0]["sides"], ["server"])
+
+
+class ApiDiscoveryTests(unittest.TestCase):
+    def run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(CLI_PATH), *arguments, "--catalogue", str(CATALOGUE_PATH), "--json"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_search_is_tokenized_ranked_filtered_and_stable(self) -> None:
+        completed = self.run_cli("api", "search", "draw text", "--side", "client", "--kind", "function", "--limit", "5")
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stderr, "")
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["symbols"][0]["name"], "dxDrawText")
+        self.assertLessEqual(len(result["symbols"]), 5)
+        repeated = self.run_cli("api", "search", "draw text", "--side", "client", "--kind", "function", "--limit", "5")
+        self.assertEqual(repeated.stdout, completed.stdout)
+
+    def test_get_exposes_typed_neon_contract(self) -> None:
+        completed = self.run_cli("api", "get", "createRope", "--kind", "function", "--profile", "neon-pair")
+        self.assertEqual(completed.returncode, 0)
+        symbol = json.loads(completed.stdout)["symbols"][0]
+        self.assertEqual(symbol["contracts"][0]["signature"], "rope|false createRope(float x, float y, float z [, table options])")
+        self.assertEqual(symbol["contracts"][0]["parameters"][0]["type"], "float")
+
+    def test_get_unknown_entity_has_stable_failure(self) -> None:
+        completed = self.run_cli("api", "get", "definitelyMissingEntity")
+        self.assertEqual(completed.returncode, 1)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["diagnostics"][0]["code"], "API_NOT_FOUND")
+        self.assertEqual(completed.stderr, "")
+
+    def test_empty_search_is_rejected(self) -> None:
+        completed = self.run_cli("api", "search", "   ")
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(json.loads(completed.stdout)["diagnostics"][0]["code"], "API_QUERY_EMPTY")
+
+    def test_documented_only_function_is_not_claimed_as_runtime_available(self) -> None:
+        catalogue = load_json(CATALOGUE_PATH)
+        symbol = next(item for item in catalogue["symbols"] if item["kind"] == "function" and item["name"] == "inspect")
+        self.assertEqual(symbol["state"], "documented-only")
+        project = base_project()
+        project["requiredApis"] = [{"name": "inspect", "side": "server"}]
+        with tempfile.TemporaryDirectory(prefix="neon-doc-only-") as temporary:
+            path = Path(temporary) / "neon.project.json"
+            write_json(path, project)
+            result = check_project(path, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(diagnostic_codes(result), ["API_NOT_FOUND"])
 
 
 class ProjectHarnessTests(unittest.TestCase):
@@ -266,6 +403,21 @@ class ProjectHarnessTests(unittest.TestCase):
         self.assertEqual(completed.stdout, canonical_json(expected))
         repeat = subprocess.run(completed.args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertEqual(repeat.stdout, completed.stdout)
+
+    def test_cli_uses_project_in_current_working_directory_by_default(self) -> None:
+        project = base_project()
+        self.write_project(project)
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "check", "--catalogue", str(CATALOGUE_PATH), "--json"],
+            cwd=self.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(json.loads(completed.stdout)["status"], "pass")
+        self.assertEqual(completed.stderr, "")
 
     def test_known_api_on_wrong_side_is_rejected(self) -> None:
         project = base_project()
@@ -377,6 +529,18 @@ class ProjectHarnessTests(unittest.TestCase):
         unknown = [item for item in result["diagnostics"] if item["code"] == "API_UNKNOWN"]
         self.assertEqual([(item["symbol"], item["line"]) for item in unknown], [("unknownAgentCall", 3)])
 
+    def test_strict_unknown_api_ignores_anonymous_callbacks_and_parenthesized_keywords(self) -> None:
+        project = base_project()
+        project["unknownApis"] = "error"
+        source = """addEventHandler("onClientRender", root, function()
+    if (true) then
+        dxDrawText("ready", 0, 0)
+    end
+end)
+"""
+        self.add_resource(project, meta='<meta><script src="client.lua" type="client"/></meta>', files={"client.lua": source})
+        self.assertEqual(self.check(project)["status"], "pass")
+
     def test_lua_comments_and_strings_do_not_create_calls(self) -> None:
         project = base_project()
         project["unknownApis"] = "error"
@@ -402,7 +566,10 @@ class LuaLsGenerationTests(unittest.TestCase):
             self.assertIn("function dxDrawText(...)", client)
             self.assertNotIn("function dxDrawText(...)", server)
             self.assertIn("function createVehicle(...)", shared)
-            self.assertIn("---@param ... unknown", shared)
+            self.assertIn("---@param model integer", shared)
+            self.assertIn("---@return vehicle value", shared)
+            self.assertIn("---@class Vector3: element", shared)
+            self.assertIn("---@param ... any", shared)
 
 
 if __name__ == "__main__":

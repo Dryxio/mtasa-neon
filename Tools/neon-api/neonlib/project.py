@@ -19,6 +19,10 @@ LUA_BUILTINS = {
     "module", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "require", "select", "setfenv",
     "setmetatable", "tonumber", "tostring", "type", "unpack", "xpcall",
 }
+LUA_KEYWORDS = {
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local",
+    "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+}
 XML_NAME_RE = re.compile(r"^[A-Za-z_:][A-Za-z0-9_.:-]*$")
 XML_ATTRIBUTE_RE = re.compile(r"\s*([A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
 XML_ENTITY_RE = re.compile(r"&(?:amp|quot|apos|lt|gt|#[0-9]+|#x[0-9A-Fa-f]+);")
@@ -172,7 +176,7 @@ def strip_lua_noncode(source: str) -> str:
 def _available_by_side(catalogue: dict, profile: str) -> dict[str, set[str]]:
     result = {"client": set(), "server": set()}
     for symbol in catalogue.get("symbols", []):
-        if symbol.get("kind") != "function" or symbol.get("state") == "unavailable":
+        if symbol.get("kind") != "function" or symbol.get("state") in ("unavailable", "documented-only"):
             continue
         sides = symbol.get("inheritedSides", []) if profile == "mta-upstream" else symbol.get("sides", [])
         for side in sides:
@@ -202,7 +206,7 @@ def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile
     required_sides = ("client", "server") if side == "shared" else (side,)
     for match in LUA_CALL_RE.finditer(code):
         name = match.group(1)
-        if name in declared or name in LUA_BUILTINS:
+        if name in declared or name in LUA_BUILTINS or name in LUA_KEYWORDS:
             continue
         missing_sides = [required for required in required_sides if name not in available[required]]
         if name in all_known and missing_sides:

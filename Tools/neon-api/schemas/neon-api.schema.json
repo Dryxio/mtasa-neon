@@ -18,31 +18,80 @@
       "additionalProperties": false,
       "properties": {
         "neon": {"$ref": "#/$defs/source"},
+        "neonWiki": {"$ref": "#/$defs/wikiSource"},
         "upstream": {"$ref": "#/$defs/source"},
-        "upstreamWiki": {
-          "additionalProperties": false,
-          "properties": {
-            "imported": {"type": "boolean"},
-            "revision": {"pattern": "^[0-9a-f]{40}$", "type": "string"}
-          },
-          "required": ["revision", "imported"],
-          "type": "object"
-        }
+        "upstreamWiki": {"$ref": "#/$defs/wikiSource"}
       },
-      "required": ["neon", "upstream", "upstreamWiki"],
+      "required": ["neon", "upstream", "upstreamWiki", "neonWiki"],
       "type": "object"
     },
-    "symbols": {
-      "items": {"$ref": "#/$defs/symbol"},
-      "type": "array"
-    }
+    "statistics": {
+      "additionalProperties": false,
+      "properties": {
+        "documented": {"minimum": 0, "type": "integer"},
+        "documentedOnly": {"minimum": 0, "type": "integer"},
+        "elements": {"minimum": 0, "type": "integer"},
+        "events": {"minimum": 0, "type": "integer"},
+        "functions": {"minimum": 0, "type": "integer"},
+        "runtimeOnly": {"minimum": 0, "type": "integer"},
+        "types": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["functions", "events", "elements", "types", "documented", "documentedOnly", "runtimeOnly"],
+      "type": "object"
+    },
+    "symbols": {"items": {"$ref": "#/$defs/symbol"}, "type": "array"}
   },
-  "required": ["schemaVersion", "catalogueVersion", "engine", "sources", "symbols"],
+  "required": ["schemaVersion", "catalogueVersion", "engine", "sources", "statistics", "symbols"],
   "type": "object",
   "$defs": {
+    "contract": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {"minLength": 1, "type": "string"},
+        "example": {"minLength": 1, "type": "string"},
+        "notes": {"items": {"type": "string"}, "type": "array"},
+        "oop": {"$ref": "#/$defs/oop"},
+        "oopMethods": {"items": {"type": "string"}, "type": "array", "uniqueItems": true},
+        "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
+        "provider": {"enum": ["mta", "neon"], "type": "string"},
+        "requiresReview": {"type": "boolean"},
+        "returnDescription": {"minLength": 1, "type": "string"},
+        "returns": {"items": {"$ref": "#/$defs/return"}, "type": "array"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"},
+        "signature": {"minLength": 1, "type": "string"},
+        "sourceCommit": {"minLength": 7, "type": "string"},
+        "sourcePath": {"format": "relative-path", "type": "string"},
+        "testResource": {"format": "relative-path", "type": "string"},
+        "version": {"$ref": "#/$defs/version"}
+      },
+      "required": ["side", "provider", "parameters", "returns", "requiresReview", "sourcePath"],
+      "type": "object"
+    },
+    "oop": {
+      "additionalProperties": false,
+      "properties": {
+        "constructorClass": {"minLength": 1, "type": "string"},
+        "element": {"minLength": 1, "type": "string"},
+        "method": {"minLength": 1, "type": "string"},
+        "staticClass": {"minLength": 1, "type": "string"}
+      },
+      "type": "object"
+    },
+    "oopMethod": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"minLength": 1, "type": "string"},
+        "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
+        "signature": {"minLength": 1, "type": "string"}
+      },
+      "required": ["name", "parameters"],
+      "type": "object"
+    },
     "parameter": {
       "additionalProperties": false,
       "properties": {
+        "default": {"type": "string"},
+        "description": {"minLength": 1, "type": "string"},
         "name": {"minLength": 1, "type": "string"},
         "optional": {"type": "boolean"},
         "type": {"minLength": 1, "type": "string"}
@@ -50,9 +99,24 @@
       "required": ["name", "type", "optional"],
       "type": "object"
     },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "license": {"minLength": 1, "type": "string"},
+        "path": {"format": "relative-path", "type": "string"},
+        "repository": {"pattern": "^https://.*$", "type": "string"},
+        "revision": {"pattern": "^[0-9a-f]{7,40}$", "type": "string"}
+      },
+      "required": ["repository", "revision", "path", "license"],
+      "type": "object"
+    },
     "return": {
       "additionalProperties": false,
-      "properties": {"type": {"minLength": 1, "type": "string"}},
+      "properties": {
+        "description": {"minLength": 1, "type": "string"},
+        "name": {"minLength": 1, "type": "string"},
+        "type": {"minLength": 1, "type": "string"}
+      },
       "required": ["type"],
       "type": "object"
     },
@@ -60,9 +124,18 @@
       "additionalProperties": false,
       "properties": {
         "registrationDigest": {"format": "sha256", "type": "string"},
+        "repository": {"pattern": "^https://.*$", "type": "string"},
         "revision": {"pattern": "^[0-9a-f]{40}$", "type": "string"}
       },
-      "required": ["revision", "registrationDigest"],
+      "required": ["repository", "revision", "registrationDigest"],
+      "type": "object"
+    },
+    "sourceElement": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {"minLength": 1, "type": "string"},
+        "type": {"minLength": 1, "type": "string"}
+      },
       "type": "object"
     },
     "sourceLocation": {
@@ -78,6 +151,10 @@
     "symbol": {
       "additionalProperties": false,
       "properties": {
+        "canceling": {"minLength": 1, "type": "string"},
+        "category": {"minLength": 1, "type": "string"},
+        "contracts": {"items": {"$ref": "#/$defs/contract"}, "type": "array"},
+        "description": {"minLength": 1, "type": "string"},
         "evidence": {
           "items": {"enum": ["documented", "source-inspected", "static-checked", "built", "server-checked", "client-checked", "in-game-checked", "multiplayer-checked", "visual-checked", "native-trace-checked", "performance-checked"], "type": "string"},
           "minItems": 1,
@@ -86,18 +163,46 @@
         },
         "id": {"format": "stable-id", "type": "string"},
         "inheritedSides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
-        "kind": {"enum": ["function"], "type": "string"},
-        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"},
+        "kind": {"enum": ["function", "event", "element", "type"], "type": "string"},
+        "name": {"minLength": 1, "type": "string"},
+        "oopOnlyMethods": {"items": {"$ref": "#/$defs/oopMethod"}, "type": "array"},
         "origin": {"enum": ["mta", "neon"], "type": "string"},
         "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
         "profiles": {"items": {"enum": ["mta-upstream", "neon-client", "neon-server", "neon-pair", "neon-multiclient"], "type": "string"}, "type": "array", "uniqueItems": true},
+        "provenance": {"items": {"$ref": "#/$defs/provenance"}, "minItems": 1, "type": "array"},
+        "redirect": {"minLength": 1, "type": "string"},
         "restricted": {"type": "boolean"},
         "returns": {"items": {"$ref": "#/$defs/return"}, "type": "array"},
         "sides": {"items": {"enum": ["client", "server"], "type": "string"}, "type": "array", "uniqueItems": true},
-        "sources": {"items": {"$ref": "#/$defs/sourceLocation"}, "minItems": 1, "type": "array"},
-        "state": {"enum": ["verified", "documented-only", "runtime-only", "opaque", "conflict", "unavailable"], "type": "string"}
+        "sourceElement": {"$ref": "#/$defs/sourceElement"},
+        "sources": {"items": {"$ref": "#/$defs/sourceLocation"}, "type": "array"},
+        "state": {"enum": ["verified", "documented-only", "runtime-only", "opaque", "conflict", "unavailable"], "type": "string"},
+        "version": {"$ref": "#/$defs/version"}
       },
-      "required": ["id", "kind", "name", "origin", "state", "sides", "inheritedSides", "profiles", "restricted", "parameters", "returns", "evidence", "sources"],
+      "required": ["id", "kind", "name", "origin", "state", "sides", "inheritedSides", "profiles", "restricted", "parameters", "returns", "evidence", "sources", "provenance"],
+      "type": "object"
+    },
+    "version": {
+      "additionalProperties": false,
+      "properties": {
+        "added": {"type": "string"},
+        "deprecated": {"type": "string"},
+        "removed": {"type": "string"},
+        "replacement": {"type": "string"},
+        "updated": {"type": "string"}
+      },
+      "type": "object"
+    },
+    "wikiSource": {
+      "additionalProperties": false,
+      "properties": {
+        "imported": {"type": "boolean"},
+        "license": {"minLength": 1, "type": "string"},
+        "repository": {"pattern": "^https://.*$", "type": "string"},
+        "revision": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+        "snapshotDigest": {"format": "sha256", "type": "string"}
+      },
+      "required": ["repository", "revision", "license", "snapshotDigest", "imported"],
       "type": "object"
     }
   }
