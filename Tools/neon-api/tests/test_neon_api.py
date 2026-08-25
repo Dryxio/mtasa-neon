@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -40,11 +41,13 @@ from neonlib.catalogue import (  # noqa: E402
 )
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, sha256_bytes, sha256_file, write_json  # noqa: E402
 from neonlib.luals import generate_luals, render_luals  # noqa: E402
+from neonlib.mutation import mutation_failure  # noqa: E402
 from neonlib.components import manifest_semantic_issues  # noqa: E402
 from neonlib.context import ContextGenerationError, build_api_index, generate_project_context, verify_project_context  # noqa: E402
 from neonlib.discovery import discovery_keywords, search_symbols, tokenize  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.runtime import compare_runtime_snapshot  # noqa: E402
+from neonlib.scenario import _run_step  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 from neonlib.supervisor import MAX_AUDIT_BYTES, _authorization, _load_session, request_supervisor, start_supervisor  # noqa: E402
 import neonlib.supervisor as supervisor_module  # noqa: E402
@@ -1752,6 +1755,444 @@ class SupervisorIntegrationTests(unittest.TestCase):
         self.assertEqual(audit_records[-1]["command"], "shutdown")
         self.assertTrue(all(item["sessionId"] == session["sessionId"] for item in audit_records))
 
+    @unittest.skipIf(os.name == "nt", "portable fixture executable is POSIX-only; Windows uses the real server binary")
+    def test_explicit_resource_lifecycle_capability_is_bounded_and_honest(self) -> None:
+        resource = self.root / "resources" / "inventory"
+        resource.mkdir(parents=True)
+        (resource / "meta.xml").write_text('<meta><script src="server.lua" type="server"/></meta>', encoding="utf-8")
+        (resource / "server.lua").write_text("local ready = true\n", encoding="utf-8")
+        project = base_project()
+        project["resources"] = [{"name": "inventory", "path": "resources/inventory"}]
+        write_json(self.root / "neon.project.json", project)
+        with tempfile.TemporaryDirectory(prefix="neon-mta-driver-") as driver_temporary:
+            driver_root = Path(driver_temporary)
+            executable = driver_root / "mta-server64"
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys\n"
+                "for line in sys.stdin:\n"
+                "    with pathlib.Path('commands.log').open('a', encoding='utf-8') as stream:\n"
+                "        stream.write(line)\n"
+                "        stream.flush()\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+            started = start_supervisor(
+                self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                30, CLI_PATH, SCHEMAS, ("resource.lifecycle", "scenario.execute"), driver_root,
+            )
+            session_path = self.root / started["session"]["sessionPath"]
+            self.sessions.append(session_path)
+            session = load_json(session_path)
+            self.assertEqual(session["driver"]["kind"], "mta-server-stdio")
+            submitted = request_supervisor(self.root, session_path, "resource.restart/inventory", SCHEMAS)
+            self.assertEqual((submitted["status"], submitted["operation"]["scope"]), ("pass", "command-submitted"))
+            self.assertEqual(submitted["operation"]["grantedEvidenceLabels"], [])
+            self.assertEqual(SCHEMAS.validate("neon-mutation-result", submitted), [])
+            inconsistent = copy.deepcopy(submitted)
+            inconsistent["operation"]["capability"] = "scenario.execute"
+            inconsistent["operation"]["scope"] = "authorization-only"
+            self.assertTrue(SCHEMAS.validate("neon-mutation-result", inconsistent))
+            undeclared = request_supervisor(self.root, session_path, "resource.start/not-declared", SCHEMAS)
+            self.assertEqual((undeclared["status"], diagnostic_codes(undeclared)), ("fail", ["RESOURCE_TARGET_UNDECLARED"]))
+            authorized = request_supervisor(self.root, session_path, "scenario.authorize", SCHEMAS)
+            self.assertEqual(authorized["status"], "pass")
+            self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
+            scenario = {
+                "schemaVersion": "1.0.0", "id": "test:bounded-lifecycle", "profile": "neon-pair",
+                "steps": [{
+                    "id": "step:restart", "action": "resource.restart", "timeoutMs": 5000,
+                    "inputs": {"resource": "inventory"},
+                }],
+                "assertions": ["assertion:bounded-target"],
+            }
+            assertion = {
+                "schemaVersion": "1.0.0", "id": "assertion:bounded-target", "kind": "equals",
+                "actual": "step:restart#/operation/target", "expected": "inventory",
+                "message": "only the declared resource target is submitted",
+            }
+            write_json(self.root / "runtime-scenario.json", scenario)
+            write_json(self.root / "runtime-assertion.json", assertion)
+            completed = subprocess.run(
+                [
+                    sys.executable, str(CLI_PATH), "scenario", "execute",
+                    session_path.relative_to(self.root).as_posix(), "runtime-scenario.json",
+                    "--assertion", "runtime-assertion.json", "--workspace", str(self.root),
+                    "--output", "runtime-run", "--json",
+                ],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            scenario_result = json.loads(completed.stdout)
+            self.assertEqual((completed.returncode, scenario_result["status"]), (0, "pass"))
+            self.assertEqual(scenario_result["command"], "scenario.execute")
+            self.assertEqual(scenario_result["evidence"]["labels"], [])
+            self.assertEqual(SCHEMAS.validate("neon-test-result", scenario_result), [])
+            verified = subprocess.run(
+                [
+                    sys.executable, str(CLI_PATH), "scenario", "verify", "runtime-run",
+                    "--workspace", str(self.root), "--json",
+                ],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual((verified.returncode, json.loads(verified.stdout)["status"]), (0, "pass"))
+            forged_result = load_json(self.root / "runtime-run" / "result.json")
+            forged_result["command"] = "scenario.run"
+            forged_evidence = forged_result["evidence"]
+            forged_identity = canonical_json({
+                "command": "scenario.run", "scenario": scenario, "assertions": [assertion],
+                "steps": [
+                    {"id": item["id"], "status": item["status"], "result": item["result"]}
+                    for item in forged_result["steps"]
+                ],
+            }).encode("utf-8")
+            forged_evidence["runId"] = (
+                f"run:{scenario['id']}:{sha256_bytes(forged_identity)[:20]}"
+            )
+            forged_result["evidence"] = forged_evidence
+            write_json(self.root / "runtime-run" / "evidence.json", forged_evidence)
+            write_json(self.root / "runtime-run" / "result.json", forged_result)
+            forged_verification = subprocess.run(
+                [
+                    sys.executable, str(CLI_PATH), "scenario", "verify", "runtime-run",
+                    "--workspace", str(self.root), "--json",
+                ],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(forged_verification.returncode, 1)
+            self.assertIn(
+                "SCENARIO_RUNTIME_SCOPE_INVALID",
+                diagnostic_codes(json.loads(forged_verification.stdout)),
+            )
+            deadline = time.monotonic() + 2
+            command_log = driver_root / "commands.log"
+            while time.monotonic() < deadline and not command_log.exists():
+                time.sleep(0.02)
+            while time.monotonic() < deadline and command_log.read_text(encoding="utf-8").count("restart inventory\n") < 2:
+                time.sleep(0.02)
+            self.assertEqual(command_log.read_text(encoding="utf-8"), "restart inventory\nrestart inventory\n")
+            scenario["steps"][0]["inputs"]["unexpected"] = "forbidden"
+            write_json(self.root / "runtime-scenario.json", scenario)
+            rejected_scenario = subprocess.run(
+                [
+                    sys.executable, str(CLI_PATH), "scenario", "execute",
+                    session_path.relative_to(self.root).as_posix(), "runtime-scenario.json",
+                    "--assertion", "runtime-assertion.json", "--workspace", str(self.root), "--json",
+                ],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            rejected_result = json.loads(rejected_scenario.stdout)
+            self.assertEqual((rejected_scenario.returncode, rejected_result["status"]), (1, "fail"))
+            self.assertIn("SCENARIO_RUNTIME_REQUEST_FAILED", diagnostic_codes(rejected_result))
+            self.assertEqual(command_log.read_text(encoding="utf-8"), "restart inventory\nrestart inventory\n")
+            with self.assertRaisesRegex(ValueError, "not allowlisted"):
+                request_supervisor(self.root, session_path, "resource.start/inventory\nstop inventory", SCHEMAS)
+            os.kill(session["driver"]["pid"], 15)
+            time.sleep(0.05)
+            unavailable = request_supervisor(self.root, session_path, "resource.stop/inventory", SCHEMAS)
+            self.assertEqual((unavailable["status"], diagnostic_codes(unavailable)), ("fail", ["MTA_SERVER_UNAVAILABLE"]))
+            self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
+            request_supervisor(self.root, session_path, "shutdown", SCHEMAS)
+
+    @unittest.skipIf(os.name == "nt", "portable EOF-surviving fixture is POSIX-only")
+    def test_driver_is_not_orphaned_when_supervisor_or_guardian_dies(self) -> None:
+        resource = self.root / "resources" / "inventory"
+        resource.mkdir(parents=True)
+        (resource / "meta.xml").write_text(
+            '<meta><script src="server.lua" type="server"/></meta>', encoding="utf-8",
+        )
+        (resource / "server.lua").write_text("local ready = true\n", encoding="utf-8")
+        project = base_project()
+        project["resources"] = [{"name": "inventory", "path": "resources/inventory"}]
+        write_json(self.root / "neon.project.json", project)
+
+        def process_exists(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+
+        for killed_owner in ("supervisor", "guardian"):
+            with self.subTest(killed_owner=killed_owner), tempfile.TemporaryDirectory(
+                prefix=f"neon-eof-driver-{killed_owner}-",
+            ) as driver_temporary:
+                driver_root = Path(driver_temporary)
+                executable = driver_root / "mta-server64"
+                executable.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import sys, time\n"
+                    "while True:\n"
+                    "    line = sys.stdin.readline()\n"
+                    "    if not line:\n"
+                    "        time.sleep(0.05)\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o700)
+                started = start_supervisor(
+                    self.root, Path("neon.project.json"), None, Path("runtime.json"),
+                    Path("sessions"), 30, CLI_PATH, SCHEMAS, ("resource.lifecycle",), driver_root,
+                )
+                session_path = self.root / started["session"]["sessionPath"]
+                self.sessions.append(session_path)
+                session = load_json(session_path)
+                driver_pid = session["driver"]["pid"]
+                guardian_pid = session["driver"]["guardianPid"]
+                os.kill(session["pid"] if killed_owner == "supervisor" else guardian_pid, signal.SIGKILL)
+                if killed_owner == "guardian":
+                    stopped = request_supervisor(self.root, session_path, "shutdown", SCHEMAS)
+                    self.assertEqual(stopped["session"]["state"], "closed")
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline and (
+                    process_exists(driver_pid)
+                    or (killed_owner == "supervisor" and process_exists(guardian_pid))
+                ):
+                    time.sleep(0.05)
+                self.assertFalse(process_exists(driver_pid))
+                if killed_owner == "supervisor":
+                    self.assertFalse(process_exists(guardian_pid))
+                    with self.assertRaises((OSError, ValueError)):
+                        request_supervisor(self.root, session_path, "status", SCHEMAS)
+
+    def test_read_only_session_rejects_mutation_without_revoking_reads(self) -> None:
+        _, session_path = self.start()
+        denied = request_supervisor(self.root, session_path, "resource.start/inventory", SCHEMAS)
+        self.assertEqual((denied["status"], diagnostic_codes(denied)), ("fail", ["SUPERVISOR_CAPABILITY_DENIED"]))
+        self.assertEqual(SCHEMAS.validate("neon-mutation-result", denied), [])
+        self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
+
+    @unittest.skipUnless(
+        os.name == "nt" and os.environ.get("NEON_TEST_WINDOWS_DRIVER"),
+        "set NEON_TEST_WINDOWS_DRIVER to the compiled Windows stdio fixture directory",
+    )
+    def test_windows_fixture_executes_bounded_resource_scenario(self) -> None:
+        driver_root = Path(os.environ["NEON_TEST_WINDOWS_DRIVER"])
+        command_log = driver_root / "commands.log"
+        previous = command_log.read_text(encoding="utf-8") if command_log.exists() else ""
+        resource = self.root / "resources" / "inventory"
+        resource.mkdir(parents=True)
+        (resource / "meta.xml").write_text('<meta><script src="server.lua" type="server"/></meta>', encoding="utf-8")
+        (resource / "server.lua").write_text("local ready = true\n", encoding="utf-8")
+        project = base_project()
+        project["resources"] = [{"name": "inventory", "path": "resources/inventory"}]
+        write_json(self.root / "neon.project.json", project)
+        started = start_supervisor(
+            self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+            30, CLI_PATH, SCHEMAS, ("resource.lifecycle", "scenario.execute"), driver_root,
+        )
+        session_path = self.root / started["session"]["sessionPath"]
+        self.sessions.append(session_path)
+        submitted = request_supervisor(self.root, session_path, "resource.restart/inventory", SCHEMAS)
+        self.assertEqual((submitted["status"], submitted["operation"]["scope"]), ("pass", "command-submitted"))
+        scenario = {
+            "schemaVersion": "1.0.0", "id": "test:windows-runtime", "profile": "neon-pair",
+            "steps": [{
+                "id": "step:restart", "action": "resource.restart", "timeoutMs": 5000,
+                "inputs": {"resource": "inventory"},
+            }],
+            "assertions": ["assertion:windows-target"],
+        }
+        assertion = {
+            "schemaVersion": "1.0.0", "id": "assertion:windows-target", "kind": "equals",
+            "actual": "step:restart#/operation/target", "expected": "inventory",
+            "message": "the Windows adapter submits only the declared target",
+        }
+        write_json(self.root / "scenario.json", scenario)
+        write_json(self.root / "assertion.json", assertion)
+        completed = subprocess.run(
+            [
+                sys.executable, str(CLI_PATH), "scenario", "execute",
+                session_path.relative_to(self.root).as_posix(), "scenario.json",
+                "--assertion", "assertion.json", "--workspace", str(self.root), "--json",
+            ],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual((completed.returncode, result["status"], result["evidence"]["labels"]), (0, "pass", []))
+        self.assertEqual(result["command"], "scenario.execute")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            current = command_log.read_text(encoding="utf-8") if command_log.exists() else ""
+            if current.removeprefix(previous) == "restart inventory\nrestart inventory\n":
+                break
+            time.sleep(0.02)
+        self.assertEqual(command_log.read_text(encoding="utf-8").removeprefix(previous), "restart inventory\nrestart inventory\n")
+        request_supervisor(self.root, session_path, "shutdown", SCHEMAS)
+
+    @unittest.skipIf(os.name == "nt", "portable executable rejection fixtures are POSIX-only")
+    def test_mutation_capability_and_driver_boundaries_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not allowlisted"):
+            start_supervisor(
+                self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                30, CLI_PATH, SCHEMAS, ("shell.execute",),
+            )
+        with self.assertRaisesRegex(ValueError, "requires an explicitly approved"):
+            start_supervisor(
+                self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                30, CLI_PATH, SCHEMAS, ("resource.lifecycle",),
+            )
+        with tempfile.TemporaryDirectory(prefix="neon-driver-invalid-") as temporary:
+            driver_root = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "only be supplied"):
+                start_supervisor(
+                    self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                    30, CLI_PATH, SCHEMAS, (), driver_root,
+                )
+            with self.assertRaisesRegex(ValueError, "no approved"):
+                start_supervisor(
+                    self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                    30, CLI_PATH, SCHEMAS, ("resource.lifecycle",), driver_root,
+                )
+            outside = driver_root / "outside"
+            outside.write_text("#!/bin/sh\nwhile read line; do :; done\n", encoding="utf-8")
+            outside.chmod(0o700)
+            (driver_root / "mta-server64").symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "no approved"):
+                start_supervisor(
+                    self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                    30, CLI_PATH, SCHEMAS, ("resource.lifecycle",), driver_root,
+                )
+            (driver_root / "mta-server64").unlink()
+            (driver_root / "mta-server64").write_text("#!/bin/sh\nexit 17\n", encoding="utf-8")
+            (driver_root / "mta-server64").chmod(0o700)
+            with self.assertRaisesRegex(ValueError, "exited during startup"):
+                start_supervisor(
+                    self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+                    30, CLI_PATH, SCHEMAS, ("resource.lifecycle",), driver_root,
+                )
+
+    def test_mutation_transport_timeout_is_ambiguous_revokes_and_never_retries(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        accepted: list[bytes] = []
+
+        def consume_without_reply() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": "8" * 64,
+                }).encode("utf-8"))
+                payload = bytearray()
+                while chunk := connection.recv(65536):
+                    payload.extend(chunk)
+                accepted.append(bytes(payload))
+                time.sleep(0.2)
+
+        peer = threading.Thread(target=consume_without_reply, daemon=True)
+        peer.start()
+        redirected = copy.deepcopy(original)
+        redirected["transport"]["port"] = listener.getsockname()[1]
+        write_json(session_path, redirected)
+        try:
+            with self.assertRaisesRegex(supervisor_module.SupervisorMutationOutcomeUnknown, "must not be retried") as caught:
+                request_supervisor(self.root, session_path, "resource.restart/inventory", SCHEMAS, 50)
+            self.assertEqual(caught.exception.session_id, original["sessionId"])
+            peer.join(timeout=2)
+            self.assertEqual(len(accepted), 1)
+            request = json.loads(accepted[0])
+            self.assertEqual(request["command"], "resource.restart/inventory")
+            revoked = load_json(session_path)
+            self.assertEqual(revoked["state"], "closed")
+            self.assertNotIn("token", revoked)
+        finally:
+            listener.close()
+
+        for invalid_timeout in (0, 600001, True):
+            with self.assertRaisesRegex(ValueError, "timeout"):
+                request_supervisor(self.root, session_path, "status", SCHEMAS, invalid_timeout)
+
+    def test_mutation_timeout_before_first_send_is_definite(self) -> None:
+        _, session_path = self.start()
+        session = load_json(session_path)
+
+        class SlowChallengeConnection:
+            def __init__(self) -> None:
+                self.send_calls = 0
+                self.challenge_sent = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def settimeout(self, _timeout: float) -> None:
+                pass
+
+            def recv(self, _maximum: int) -> bytes:
+                if self.challenge_sent:
+                    return b""
+                self.challenge_sent = True
+                time.sleep(0.08)
+                return canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": session["sessionId"],
+                    "challenge": "6" * 64,
+                }).encode("utf-8")
+
+            def sendall(self, _payload: bytes) -> None:
+                self.send_calls += 1
+
+        peer = SlowChallengeConnection()
+        with mock.patch.object(supervisor_module.socket, "create_connection", return_value=peer):
+            with self.assertRaises(TimeoutError) as caught:
+                request_supervisor(
+                    self.root, session_path, "resource.restart/inventory", SCHEMAS, 50,
+                )
+        self.assertNotIsInstance(caught.exception, supervisor_module.SupervisorMutationOutcomeUnknown)
+        self.assertEqual(peer.send_calls, 0)
+        self.assertEqual(load_json(session_path)["state"], "closed")
+
+    def test_invalid_post_send_mutation_response_is_outcome_unknown(self) -> None:
+        _, session_path = self.start()
+        original = load_json(session_path)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        accepted: list[bytes] = []
+
+        def forge_invalid_response() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": "7" * 64,
+                }).encode("utf-8"))
+                payload = bytearray()
+                while chunk := connection.recv(65536):
+                    payload.extend(chunk)
+                accepted.append(bytes(payload))
+                connection.sendall(canonical_json({"result": {}, "authorization": "0" * 64}).encode("utf-8"))
+
+        peer = threading.Thread(target=forge_invalid_response, daemon=True)
+        peer.start()
+        redirected = copy.deepcopy(original)
+        redirected["transport"]["port"] = listener.getsockname()[1]
+        write_json(session_path, redirected)
+        try:
+            with self.assertRaisesRegex(supervisor_module.SupervisorMutationOutcomeUnknown, "invalid authenticated response") as caught:
+                request_supervisor(self.root, session_path, "resource.restart/inventory", SCHEMAS)
+            self.assertEqual(caught.exception.session_id, original["sessionId"])
+            peer.join(timeout=2)
+            self.assertEqual(len(accepted), 1)
+            self.assertEqual(json.loads(accepted[0])["command"], "resource.restart/inventory")
+            revoked = load_json(session_path)
+            self.assertEqual(revoked["state"], "closed")
+            self.assertNotIn("token", revoked)
+        finally:
+            listener.close()
+
+    def test_server_pipe_submission_is_one_nonblocking_write_without_retry(self) -> None:
+        stream = mock.Mock()
+        stream.fileno.return_value = 42
+        line = b"restart inventory\n"
+        with mock.patch.object(supervisor_module.os, "write", side_effect=BlockingIOError):
+            self.assertEqual(supervisor_module._write_server_input(stream, line), 0)
+            supervisor_module.os.write.assert_called_once_with(42, line)
+        with mock.patch.object(supervisor_module.os, "write", return_value=len(line) - 1):
+            self.assertEqual(supervisor_module._write_server_input(stream, line), len(line) - 1)
+            supervisor_module.os.write.assert_called_once_with(42, line)
+
     def test_wrong_token_input_drift_and_expiry_fail_closed(self) -> None:
         _, session_path = self.start()
         original = load_json(session_path)
@@ -2415,6 +2856,22 @@ class ScenarioRunnerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_runtime_timeout_keeps_exit_124_and_cannot_be_expected_away(self) -> None:
+        step = {
+            "id": "step:runtime-timeout", "action": "resource.restart", "expectedStatus": "fail",
+            "timeoutMs": 1, "inputs": {"resource": "inventory"},
+        }
+
+        def timed_out(_: dict) -> dict:
+            return mutation_failure(
+                "resource.restart", "SCENARIO_STEP_TIMEOUT", "request exceeded 1 millisecond",
+                "inventory", "session:timeout-test",
+            )
+
+        record, diagnostics = _run_step(step, self.root, CLI_PATH, "neon-pair", timed_out)
+        self.assertEqual((record["exitCode"], record["actualStatus"], record["status"]), (124, "fail", "pass"))
+        self.assertIn("SCENARIO_STEP_TIMEOUT", diagnostic_codes({"diagnostics": diagnostics}))
+
     def assertion(self, identifier: str, kind: str, actual: str, message: str, expected: object = ...) -> Path:
         document = {"schemaVersion": "1.0.0", "id": identifier, "kind": kind, "actual": actual, "message": message}
         if expected is not ...:
@@ -2636,6 +3093,7 @@ class ScenarioRunnerTests(unittest.TestCase):
         step_reference = next(item for item in evidence["artifacts"] if item["id"] == step_artifact["id"])
         step_reference["sha256"] = step_artifact["sha256"]
         identity_payload = canonical_json({
+            "command": result["command"],
             "scenario": load_json(scenario), "assertions": [load_json(assertion)],
             "steps": [{
                 "id": result["steps"][0]["id"], "status": result["steps"][0]["status"],

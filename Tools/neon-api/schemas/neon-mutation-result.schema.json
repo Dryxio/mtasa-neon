@@ -1,0 +1,88 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-mutation-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"enum": ["resource.start", "resource.stop", "resource.restart", "scenario.authorize"], "type": "string"},
+    "diagnostics": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {"pattern": "^[A-Z][A-Z0-9_]+$", "type": "string"},
+          "message": {"maxLength": 1024, "minLength": 1, "type": "string"},
+          "path": {"maxLength": 512, "type": "string"},
+          "severity": {"enum": ["error", "warning"], "type": "string"}
+        },
+        "required": ["code", "severity", "message", "path"],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "operation": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {"enum": ["resource.lifecycle", "scenario.execute"], "type": "string"},
+        "completedAt": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
+        "grantedEvidenceLabels": {"maxItems": 0, "type": "array"},
+        "idempotent": {"type": "boolean"},
+        "scope": {"enum": ["command-submitted", "authorization-only"], "type": "string"},
+        "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"},
+        "target": {"maxLength": 512, "minLength": 1, "type": "string"}
+      },
+      "required": ["sessionId", "capability", "target", "scope", "grantedEvidenceLabels", "idempotent", "completedAt"],
+      "type": "object"
+    },
+    "schemaVersion": {"format": "semver", "maxLength": 64, "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "errors": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings"],
+      "type": "object"
+    }
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics", "operation"],
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "command": {"enum": ["resource.start", "resource.stop"]},
+        "operation": {
+          "properties": {
+            "capability": {"const": "resource.lifecycle"},
+            "idempotent": {"const": true},
+            "scope": {"const": "command-submitted"}
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {"const": "resource.restart"},
+        "operation": {
+          "properties": {
+            "capability": {"const": "resource.lifecycle"},
+            "idempotent": {"const": false},
+            "scope": {"const": "command-submitted"}
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {"const": "scenario.authorize"},
+        "operation": {
+          "properties": {
+            "capability": {"const": "scenario.execute"},
+            "idempotent": {"const": true},
+            "scope": {"const": "authorization-only"}
+          }
+        }
+      }
+    }
+  ]
+}

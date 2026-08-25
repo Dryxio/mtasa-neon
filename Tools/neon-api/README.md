@@ -1,9 +1,10 @@
 # MTA Neon agent contracts
 
-This directory implements the runtime-free contract and semantic catalogue for
-the full effective API: upstream MTA plus the Neon overlay. It joins inspected
-Lua registrations with pinned MTA YAML documentation and pinned Neon API data.
-Daily commands are local, deterministic, and do not contact a remote service.
+This directory implements the local agent CLI, contracts, and semantic
+catalogue for the full effective API: upstream MTA plus the Neon overlay. It
+joins inspected Lua registrations with pinned MTA YAML documentation and pinned
+Neon API data. Daily commands do not contact a remote service; mutations require
+an explicit short-lived local supervisor capability.
 
 ## Commands
 
@@ -28,6 +29,12 @@ Run commands from the repository root:
 ./neon supervisor status .neon-sessions/session-ID/session.json --workspace . --json
 ./neon runtime compare .neon-sessions/session-ID/session.json --workspace . --json
 ./neon supervisor stop .neon-sessions/session-ID/session.json --workspace . --json
+./neon supervisor start --workspace . --enable resource.lifecycle \
+  --enable scenario.execute --server-root /approved/mta-server --json
+./neon resource restart .neon-sessions/session-ID/session.json inventory \
+  --workspace . --json
+./neon scenario execute .neon-sessions/session-ID/session.json scenario.json \
+  --assertion assertion.json --workspace . --output .neon-runs/runtime --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
@@ -233,11 +240,12 @@ audits the working tree.
 ## Closed scenarios, assertions, and evidence
 
 `neon scenario run` executes a bounded, sequential scenario inside one approved
-workspace. Checkpoint F enables only `check`, `project.resolve`,
+workspace. The runtime-free command enables only `check`, `project.resolve`,
 `generate.project`, `context.verify`, and `api.search`. Each action runs without
 a shell in a child process under its declared timeout. Build, client launch,
-resource lifecycle, and runtime scenario actions remain fail-closed until their
-later checkpoints provide a supervisor and dedicated permission model.
+and all runtime actions remain fail-closed in this command. Checkpoint H adds
+the separate `scenario execute` command for explicitly authorized resource
+lifecycle steps; it does not silently upgrade `scenario run`.
 
 A scenario names every assertion document explicitly. Assertions can select a
 step result with `step:id#/json/pointer`, select the last step with a plain JSON
@@ -256,16 +264,18 @@ same run identity, and the evidence records the actual wall-clock observation
 and duration separately. Output paths cannot traverse or follow symlinks,
 overlap generated project context, or adopt an existing user-owned directory.
 Scenario and assertion documents must also be regular files inside the approved
-workspace. The only evidence label granted here is `static-checked`.
+workspace. Purely static runs grant only `static-checked`. A run containing a
+runtime action grants no label merely because its bounded command was submitted.
 
 `neon scenario verify` reopens a saved run without executing it. It validates
 all contracts, recomputes every size and SHA-256, reproduces the run identity,
 cross-checks result/evidence summaries, and rejects altered, unindexed, escaped,
 or symbolic-link files.
 
-## Read-only runtime supervisor
+## Local runtime supervisor
 
-`neon supervisor start` explicitly opens an expiring local observation session.
+Without an `--enable` option, `neon supervisor start` explicitly opens an
+expiring read-only local observation session.
 It starts a dependency-free supervisor on an ephemeral `127.0.0.1` port, writes
 its token only to a mode-`0600` local session file, and grants exactly the five
 read capabilities fixed by the architecture. The public command result contains
@@ -310,13 +320,55 @@ compared against the side represented by each observation. Resource sides come
 from their script declarations, so even a client resource with no public API
 must appear in a complete client inventory.
 
-Checkpoint G does not launch MTA, start resources, execute scenarios, or create
-the runtime snapshot. A developer or later bounded probe supplies it at the
-configured path with the session ID and pinned hashes. Consequently comparison
-results declare `scope: "observation-only"` and always grant zero evidence
-labels; reading a submitted snapshot is not `server-checked`, `client-checked`,
-or `in-game-checked` proof. Checkpoint H will add the explicitly authorized
-operations that can produce real snapshots and test runs.
+`neon runtime compare` does not create the runtime snapshot. A developer or
+bounded probe supplies it at the configured path with the session ID and pinned
+hashes. Consequently comparison results declare `scope: "observation-only"`
+and always grant zero evidence labels; reading a submitted snapshot is not
+`server-checked`, `client-checked`, or `in-game-checked` proof.
+
+### Explicitly authorized resource operations
+
+Checkpoint H adds two opt-in capabilities. They must be named at session start;
+they are absent by default and cannot be added to an active session:
+
+- `resource.lifecycle` permits only `start`, `stop`, and `restart` for a resource
+  declared by the pinned `neon.project.json`. It also requires an explicit
+  `--server-root` containing an approved MTA server executable name.
+- `scenario.execute` permits `scenario execute` to dispatch only those same
+  resource operations. It does not enable build, shell, arbitrary console,
+  nested scenario, or client-launch actions. A runtime scenario needs both
+  capabilities to change resource lifecycle.
+
+The supervisor launches exactly that executable with no caller-controlled
+arguments, pins its SHA-256 in the immutable session, and submits strict ASCII
+MTA console lines through a private guardian channel and pipe. The guardian
+terminates MTA if the supervisor disappears abruptly; the supervisor retains
+an identity-bound process handle as the inverse fallback if the guardian dies.
+Normal stop and expiration also terminate the exact child. Resource names are
+both contract-declared and limited to a
+bounded safe character set, so they cannot become console syntax. The approved
+server directory is a local trust boundary: the user selecting it is approving
+the executable and adjacent MTA runtime files in that directory.
+
+The pipe is unbuffered and non-blocking. Neon attempts one write only; it never
+retries a lifecycle command. Backpressure proves that zero bytes were accepted
+and returns a visible failure. A theoretically partial write closes the session
+and reports an unknown outcome because a truncated console line must not be
+continued by a later request.
+
+A successful lifecycle result means only `scope: "command-submitted"`: Neon
+wrote the bounded line to the approved server input. It never claims MTA
+processed it or that the resource reached a requested state, and it grants zero
+evidence labels. Runtime state must be established independently through a
+fresh observation. `scenario execute` preserves the same truth boundary, so a
+successful runtime scenario also has an empty evidence-label list while its
+assertions and content-addressed artifacts remain verifiable offline.
+
+Every runtime step applies its declared timeout to the authenticated request.
+There is no automatic retry. If transport fails after any part of a mutation
+request may have been sent, Neon reports `MUTATION_OUTCOME_UNKNOWN`, revokes the
+session, and tells the caller not to retry automatically. This prevents a lost
+response from turning a non-idempotent restart into an unnoticed duplicate.
 
 `neon supervisor stop SESSION` closes the loopback listener, removes the token
 from the retained session record, and makes further requests fail. Expiration
@@ -348,6 +400,7 @@ records omitted after that cap explicit.
 - `schemas/neon-runtime-compare-result.schema.json`: read-only divergence result.
 - `schemas/neon-supervisor-session.schema.json`: local expiring session record.
 - `schemas/neon-supervisor-result.schema.json`: supervisor lifecycle result.
+- `schemas/neon-mutation-result.schema.json`: bounded operation and authorization result.
 - `schemas/neon-check-result.schema.json`: stable `check --json` result.
 - `generated/`: deterministic LuaLS/LuaCATS libraries and hashes.
 

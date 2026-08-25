@@ -8,7 +8,7 @@
     "durationMs": {"minimum": 0, "type": "integer"},
     "labels": {
       "items": {"enum": ["documented", "source-inspected", "static-checked", "built", "server-checked", "client-checked", "in-game-checked", "multiplayer-checked", "visual-checked", "native-trace-checked", "performance-checked"], "type": "string"},
-      "minItems": 1,
+      "minItems": 0,
       "type": "array",
       "uniqueItems": true
     },

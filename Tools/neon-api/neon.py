@@ -32,11 +32,14 @@ from neonlib.context import ContextGenerationError, generate_project_context, ve
 from neonlib.discovery import search_symbols, tokenize  # noqa: E402
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
+from neonlib.mutation import mutation_failure  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.scenario import run_scenario, verify_scenario_run  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 from neonlib.supervisor import (  # noqa: E402
+    SupervisorMutationOutcomeUnknown,
     request_supervisor,
+    run_driver_guardian,
     run_supervisor_daemon,
     runtime_compare_failure,
     start_supervisor,
@@ -304,6 +307,48 @@ def command_scenario_run(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "pass" else 1
 
 
+def command_scenario_execute(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    session_path = Path(args.session)
+    try:
+        status = request_supervisor(workspace, session_path, "status", SCHEMA_STORE)
+        if "scenario.execute" not in status["session"]["capabilities"]:
+            raise ValueError("scenario.execute is not enabled for this session")
+        authorization = request_supervisor(workspace, session_path, "scenario.authorize", SCHEMA_STORE)
+        if authorization["status"] != "pass":
+            raise ValueError("supervisor rejected scenario execution")
+
+        def execute_runtime(step: dict) -> dict:
+            inputs = step["inputs"]
+            if set(inputs) != {"resource"} or not isinstance(inputs.get("resource"), str):
+                raise ValueError(f"{step['action']} requires exactly one string resource input")
+            command = f"{step['action']}/{inputs['resource']}"
+            try:
+                return request_supervisor(
+                    workspace, session_path, command, SCHEMA_STORE, step["timeoutMs"],
+                )
+            except SupervisorMutationOutcomeUnknown as exc:
+                return mutation_failure(
+                    step["action"], "MUTATION_OUTCOME_UNKNOWN", str(exc), inputs["resource"],
+                    status["session"]["sessionId"],
+                )
+            except TimeoutError as exc:
+                return mutation_failure(
+                    step["action"], "SCENARIO_STEP_TIMEOUT", str(exc), inputs["resource"],
+                    status["session"]["sessionId"],
+                )
+
+        result = run_scenario(
+            Path(args.scenario), [Path(path) for path in args.assertion], workspace,
+            SCHEMA_STORE, Path(__file__).resolve(), Path(args.output) if args.output else None,
+            args.observed_at, execute_runtime, status["session"]["profile"], "scenario.execute",
+        )
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = _failure("scenario.execute", "SCENARIO_EXECUTION_FAILED", str(exc))
+    _emit(result, args.json)
+    return 0 if result["status"] == "pass" else 1
+
+
 def command_scenario_verify(args: argparse.Namespace) -> int:
     result = verify_scenario_run(Path(args.workspace), Path(args.run), SCHEMA_STORE)
     issues = SCHEMA_STORE.validate("neon-scenario-verify-result", result)
@@ -324,6 +369,8 @@ def _emit_validated(result: dict, schema: str, as_json: bool) -> int:
             if command not in {"supervisor.start", "supervisor.status", "supervisor.stop"}:
                 command = "supervisor.status"
             result = supervisor_failure(command, "INTERNAL_RESULT_INVALID", details)
+        elif schema == "neon-mutation-result":
+            result = mutation_failure(command, "INTERNAL_RESULT_INVALID", details)
         else:
             result = _failure(command, "INTERNAL_RESULT_INVALID", details)
     _emit(result, as_json)
@@ -338,6 +385,7 @@ def command_supervisor_start(args: argparse.Namespace) -> int:
         result = start_supervisor(
             Path(args.workspace), Path(args.project), Path(args.catalogue) if args.catalogue else None,
             Path(args.snapshot), Path(args.output), args.ttl, Path(__file__).resolve(), SCHEMA_STORE,
+            tuple(args.enable), Path(args.server_root) if args.server_root else None,
         )
     except (JsonDocumentError, OSError, ValueError) as exc:
         result = supervisor_failure("supervisor.start", "SUPERVISOR_START_FAILED", str(exc))
@@ -375,8 +423,35 @@ def command_runtime_compare(args: argparse.Namespace) -> int:
 def command_supervisor_daemon(args: argparse.Namespace) -> int:
     return run_supervisor_daemon(
         Path(args.workspace), Path(args.session_directory), args.session_id, args.project,
-        args.catalogue, args.snapshot, args.ttl, SCHEMA_STORE,
+        args.catalogue, args.snapshot, args.ttl, SCHEMA_STORE, tuple(args.capability),
+        Path(args.server_root) if args.server_root else None,
     )
+
+
+def command_driver_guardian(args: argparse.Namespace) -> int:
+    return run_driver_guardian(
+        Path(args.server_root), args.expected_sha256, args.host, args.port, args.token,
+    )
+
+
+def command_resource_lifecycle(args: argparse.Namespace) -> int:
+    command = f"resource.{args.resource_command}/{args.resource}"
+    try:
+        result = request_supervisor(
+            Path(args.workspace), Path(args.session), command, SCHEMA_STORE, args.timeout_ms,
+        )
+    except SupervisorMutationOutcomeUnknown as exc:
+        result = mutation_failure(
+            f"resource.{args.resource_command}", "MUTATION_OUTCOME_UNKNOWN", str(exc), args.resource,
+            exc.session_id,
+        )
+    except TimeoutError as exc:
+        result = mutation_failure(
+            f"resource.{args.resource_command}", "SUPERVISOR_REQUEST_TIMEOUT", str(exc), args.resource,
+        )
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = mutation_failure(f"resource.{args.resource_command}", "SUPERVISOR_REQUEST_FAILED", str(exc), args.resource)
+    return _emit_validated(result, "neon-mutation-result", args.json)
 
 
 def command_catalogue_build(args: argparse.Namespace) -> int:
@@ -750,7 +825,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-mutation-result", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)
@@ -765,6 +840,15 @@ def build_parser() -> argparse.ArgumentParser:
     scenario_run.add_argument("--observed-at", help="UTC evidence time in YYYY-MM-DDTHH:MM:SSZ form")
     scenario_run.add_argument("--json", action="store_true")
     scenario_run.set_defaults(handler=command_scenario_run)
+    scenario_execute = scenario_subcommands.add_parser("execute", help="execute explicitly authorized bounded runtime steps")
+    scenario_execute.add_argument("session", help="workspace-relative supervisor session.json path")
+    scenario_execute.add_argument("scenario")
+    scenario_execute.add_argument("--assertion", action="append", required=True)
+    scenario_execute.add_argument("--workspace", default=".")
+    scenario_execute.add_argument("--output")
+    scenario_execute.add_argument("--observed-at")
+    scenario_execute.add_argument("--json", action="store_true")
+    scenario_execute.set_defaults(handler=command_scenario_execute)
     scenario_verify = scenario_subcommands.add_parser("verify", help="verify a saved run's contracts, identity, and artifact integrity")
     scenario_verify.add_argument("run", help="run directory inside the approved workspace")
     scenario_verify.add_argument("--workspace", default=".", help="approved workspace boundary")
@@ -780,6 +864,8 @@ def build_parser() -> argparse.ArgumentParser:
     supervisor_start.add_argument("--snapshot", default=".neon-runtime/runtime-snapshot.json")
     supervisor_start.add_argument("--output", default=".neon-sessions", help="parent directory for a new unique session")
     supervisor_start.add_argument("--ttl", type=int, default=900, help="session lifetime in seconds (10..86400)")
+    supervisor_start.add_argument("--enable", action="append", default=[], choices=("resource.lifecycle", "scenario.execute"), help="explicitly grant one bounded mutation capability")
+    supervisor_start.add_argument("--server-root", help="explicit local MTA server directory required by resource.lifecycle")
     supervisor_start.add_argument("--json", action="store_true")
     supervisor_start.set_defaults(handler=command_supervisor_start)
     for name, handler in (("status", command_supervisor_status), ("stop", command_supervisor_stop)):
@@ -796,6 +882,17 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_compare.add_argument("--workspace", default=".")
     runtime_compare.add_argument("--json", action="store_true")
     runtime_compare.set_defaults(handler=command_runtime_compare)
+
+    resource = subcommands.add_parser("resource", help="submit allowlisted resource lifecycle commands")
+    resource_subcommands = resource.add_subparsers(dest="resource_command", required=True)
+    for name in ("start", "stop", "restart"):
+        lifecycle = resource_subcommands.add_parser(name)
+        lifecycle.add_argument("session", help="workspace-relative supervisor session.json path")
+        lifecycle.add_argument("resource")
+        lifecycle.add_argument("--workspace", default=".")
+        lifecycle.add_argument("--timeout-ms", type=int, default=10000)
+        lifecycle.add_argument("--json", action="store_true")
+        lifecycle.set_defaults(handler=command_resource_lifecycle)
 
     catalogue = subcommands.add_parser("catalogue", help="build or verify the effective MTA API")
     catalogue_subcommands = catalogue.add_subparsers(dest="catalogue_command", required=True)
@@ -853,6 +950,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "_driver-guardian":
+        guardian = argparse.ArgumentParser(prog="neon internal-driver-guardian", add_help=False)
+        guardian.add_argument("--server-root", required=True)
+        guardian.add_argument("--expected-sha256", required=True)
+        guardian.add_argument("--host", required=True)
+        guardian.add_argument("--port", type=int, required=True)
+        guardian.add_argument("--token", required=True)
+        args = guardian.parse_args(sys.argv[2:])
+        return command_driver_guardian(args)
     if len(sys.argv) > 1 and sys.argv[1] == "_supervisor-daemon":
         daemon = argparse.ArgumentParser(prog="neon internal-supervisor", add_help=False)
         daemon.add_argument("--workspace", required=True)
@@ -862,6 +968,8 @@ def main() -> int:
         daemon.add_argument("--catalogue", required=True)
         daemon.add_argument("--snapshot", required=True)
         daemon.add_argument("--ttl", type=int, required=True)
+        daemon.add_argument("--capability", action="append", default=[])
+        daemon.add_argument("--server-root")
         args = daemon.parse_args(sys.argv[2:])
         return command_supervisor_daemon(args)
     parser = build_parser()

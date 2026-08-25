@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "properties": {
     "capabilities": {
-      "items": {"enum": ["knowledge.read", "project.read", "runtime.observe", "diagnostics.read", "artifacts.read"], "type": "string"},
+      "items": {"enum": ["knowledge.read", "project.read", "runtime.observe", "diagnostics.read", "artifacts.read", "resource.lifecycle", "scenario.execute"], "type": "string"},
       "minItems": 1,
       "type": "array",
       "uniqueItems": true
@@ -12,6 +12,19 @@
     "catalogue": {"$ref": "#/$defs/input"},
     "createdAt": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
     "expiresAt": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
+    "driver": {
+      "additionalProperties": false,
+      "properties": {
+        "executable": {"enum": ["MTA Server64.exe", "MTA Server.exe", "mta-server64", "mta-server"], "type": "string"},
+        "executableSha256": {"format": "sha256", "type": "string"},
+        "guardianPid": {"minimum": 1, "type": "integer"},
+        "kind": {"const": "mta-server-stdio", "type": "string"},
+        "pid": {"minimum": 1, "type": "integer"},
+        "root": {"maxLength": 1024, "minLength": 1, "type": "string"}
+      },
+      "required": ["kind", "root", "executable", "executableSha256", "pid", "guardianPid"],
+      "type": "object"
+    },
     "pid": {"minimum": 1, "type": "integer"},
     "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
     "project": {"$ref": "#/$defs/input"},

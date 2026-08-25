@@ -38,6 +38,10 @@ FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
 FILE_RENAME_INFORMATION = 10
 FILE_DISPOSITION_INFORMATION = 13
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+PIPE_NOWAIT = 0x00000001
+PROCESS_TERMINATE = 0x0001
+WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
 
 
 class _UNICODE_STRING(ctypes.Structure):
@@ -96,6 +100,12 @@ _kernel32.DuplicateHandle.argtypes = [
 ]
 _kernel32.DuplicateHandle.restype = wintypes.BOOL
 _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+_kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_kernel32.OpenProcess.restype = wintypes.HANDLE
+_kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+_kernel32.TerminateProcess.restype = wintypes.BOOL
+_kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+_kernel32.WaitForSingleObject.restype = wintypes.DWORD
 _kernel32.GetFileInformationByHandleEx.argtypes = [
     wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
 ]
@@ -110,6 +120,10 @@ _kernel32.WriteFile.argtypes = [
     wintypes.HANDLE, wintypes.LPCVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
 ]
 _kernel32.WriteFile.restype = wintypes.BOOL
+_kernel32.SetNamedPipeHandleState.argtypes = [
+    wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+]
+_kernel32.SetNamedPipeHandleState.restype = wintypes.BOOL
 _kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
 _kernel32.FlushFileBuffers.restype = wintypes.BOOL
 _ntdll.NtCreateFile.argtypes = [
@@ -231,6 +245,40 @@ def duplicate(handle: int) -> int:
 def close(handle: int) -> None:
     if not _kernel32.CloseHandle(handle):
         raise _winerror()
+
+
+def set_pipe_nonblocking(descriptor: int) -> None:
+    # os.set_blocking only gained Windows pipe support in Python 3.12. Use the
+    # native primitive so the documented Python 3.10 minimum remains true.
+    import msvcrt
+
+    handle = msvcrt.get_osfhandle(descriptor)
+    mode = wintypes.DWORD(PIPE_NOWAIT)
+    if not _kernel32.SetNamedPipeHandleState(handle, ctypes.byref(mode), None, None):
+        raise _winerror()
+
+
+def open_process_for_termination(pid: int) -> int:
+    # Retaining this kernel handle binds cleanup to the original process even
+    # if its numeric PID is later reused.
+    handle = _kernel32.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
+    if handle in {None, INVALID_HANDLE_VALUE}:
+        raise _winerror()
+    return int(handle)
+
+
+def terminate_process_handle(handle: int) -> None:
+    state = _kernel32.WaitForSingleObject(handle, 0)
+    if state == WAIT_OBJECT_0:
+        return
+    if state != WAIT_TIMEOUT:
+        raise _winerror()
+    if not _kernel32.TerminateProcess(handle, 1):
+        # A concurrent natural exit is safe; recheck before surfacing a real
+        # inability to clean the exact process retained by this handle.
+        if _kernel32.WaitForSingleObject(handle, 0) != WAIT_OBJECT_0:
+            raise _winerror()
+    _kernel32.WaitForSingleObject(handle, 5000)
 
 
 def read_regular_at(parent: int, name: str, maximum: int) -> bytes:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import os
 import secrets
+import select
+import signal
 import socket
 import stat
 import subprocess
@@ -15,16 +18,28 @@ from typing import Any
 
 from .catalogue import catalogue_semantic_issues
 from .jsonio import JsonDocumentError, canonical_json, sha256_bytes
+from .mutation import mutation_failure, mutation_result, parse_resource_command
 from .project import resolve_project_components
 from .runtime import compare_runtime_snapshot
 from .schema import SchemaStore, schema_major
 
 
 CAPABILITIES = ["artifacts.read", "diagnostics.read", "knowledge.read", "project.read", "runtime.observe"]
+MUTATION_CAPABILITIES = {"resource.lifecycle", "scenario.execute"}
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_SESSION_BYTES = 256 * 1024
 MAX_AUDIT_BYTES = 256 * 1024
+
+
+class SupervisorMutationOutcomeUnknown(ValueError):
+    """The peer may have applied a non-idempotent command before transport failure."""
+
+    def __init__(self, message: str, session_id: str):
+        super().__init__(message)
+        self.session_id = session_id
+
+
 _CHILDREN: dict[int, subprocess.Popen[Any]] = {}
 _DIRECTORY_ANCHORS: dict[int, tuple[Path, int, int]] = {}
 _HAS_DIRECTORY_FD = os.name != "nt" and os.open in os.supports_dir_fd
@@ -52,6 +67,259 @@ def _utc_text(value: datetime) -> str:
 
 def _authorization(token: str, document: dict[str, Any]) -> str:
     return hmac.digest(bytes.fromhex(token), canonical_json(document).encode("utf-8"), "sha256").hex()
+
+
+def _server_executable(root: Path) -> tuple[Path, str]:
+    original_root = root.absolute()
+    if original_root.is_symlink():
+        raise ValueError("MTA server root must be a real directory")
+    root = original_root.resolve()
+    if not root.is_dir():
+        raise ValueError("MTA server root must be a real directory")
+    names = ("MTA Server64.exe", "MTA Server.exe") if os.name == "nt" else ("mta-server64", "mta-server")
+    executable = next((root / name for name in names if (root / name).is_file() and not (root / name).is_symlink()), None)
+    if executable is None:
+        raise ValueError("MTA server root has no approved server executable")
+    digest = hashlib.sha256()
+    size = 0
+    with executable.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            size += len(chunk)
+            if size > 512 * 1024 * 1024:
+                raise ValueError("MTA server executable exceeds 536870912 bytes")
+            digest.update(chunk)
+    return executable, digest.hexdigest()
+
+
+def _write_server_input(stream: Any, line: bytes) -> int:
+    """Attempt exactly one non-blocking pipe write; mutations are never retried."""
+    try:
+        return os.write(stream.fileno(), line)
+    except BlockingIOError:
+        return 0
+
+
+def _submit_guardian_command(
+    connection: socket.socket, sequence: int, action: str, resource: str,
+) -> tuple[str, int]:
+    """Submit one authenticated-channel command and require its exact acknowledgement."""
+    request = {"sequence": sequence, "action": action, "resource": resource}
+    payload = canonical_json(request).encode("utf-8")
+    if len(payload) > 4096:
+        raise ValueError("driver guardian request exceeds 4096 bytes")
+    connection.settimeout(3)
+    connection.sendall(payload)
+    from .scenario import load_json_text
+
+    response = load_json_text(_receive_line(connection, 4096).decode("utf-8"))
+    if (
+        not isinstance(response, dict) or set(response) != {"sequence", "status", "written"}
+        or response.get("sequence") != sequence
+        or response.get("status") not in {"submitted", "backpressure", "partial", "unavailable"}
+        or isinstance(response.get("written"), bool) or not isinstance(response.get("written"), int)
+    ):
+        raise ValueError("driver guardian acknowledgement is invalid")
+    expected = len(f"{action} {resource}\n".encode("ascii"))
+    written = response["written"]
+    if (
+        written < 0 or written > expected
+        or (response["status"] == "submitted" and written != expected)
+        or (response["status"] == "partial" and not 0 < written < expected)
+        or (response["status"] in {"backpressure", "unavailable"} and written != 0)
+    ):
+        raise ValueError("driver guardian acknowledgement is inconsistent")
+    return response["status"], written
+
+
+def _terminate_server_process(process: subprocess.Popen[Any]) -> None:
+    """Stop only the server process tree owned by the private driver guardian."""
+    if process.poll() is not None:
+        process.wait()
+        return
+    if os.name == "nt":
+        process.terminate()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait(timeout=2)
+
+
+def _open_driver_fallback(pid: int) -> tuple[str, Any]:
+    """Retain an identity-bound kill path if the guardian itself disappears."""
+    if os.name == "nt":
+        from . import winfs
+
+        return "windows-handle", winfs.open_process_for_termination(pid)
+    if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+        return "pidfd", os.pidfd_open(pid, 0)
+    if hasattr(select, "kqueue"):
+        queue = select.kqueue()
+        event = select.kevent(
+            pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        queue.control([event], 0, 0)
+        return "kqueue", queue
+    raise OSError("platform cannot retain an identity-bound MTA process fallback")
+
+
+def _terminate_driver_fallback(fallback: tuple[str, Any] | None, pid: int) -> None:
+    if fallback is None:
+        return
+    kind, handle = fallback
+    if kind == "windows-handle":
+        from . import winfs
+
+        winfs.terminate_process_handle(handle)
+        return
+    if kind == "pidfd":
+        if select.select([handle], [], [], 0)[0]:
+            return
+        signal.pidfd_send_signal(handle, signal.SIGTERM)
+        if not select.select([handle], [], [], 3)[0]:
+            signal.pidfd_send_signal(handle, signal.SIGKILL)
+            select.select([handle], [], [], 2)
+        return
+    if kind == "kqueue":
+        if handle.control(None, 1, 0):
+            return
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        if not handle.control(None, 1, 3):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            handle.control(None, 1, 2)
+
+
+def _close_driver_fallback(fallback: tuple[str, Any] | None) -> None:
+    if fallback is None:
+        return
+    kind, handle = fallback
+    if kind == "windows-handle":
+        from . import winfs
+
+        winfs.close(handle)
+    else:
+        handle.close() if kind == "kqueue" else os.close(handle)
+
+
+def run_driver_guardian(
+    server_root: Path, expected_sha256: str, host: str, port: int, token: str,
+) -> int:
+    """Own MTA and stop it when the supervisor-side lifeline disappears."""
+    connection: socket.socket | None = None
+    server_process: subprocess.Popen[bytes] | None = None
+    try:
+        if host != "127.0.0.1" or not 1 <= port <= 65535:
+            raise ValueError("driver guardian transport is not bounded loopback")
+        if len(token) != 64 or any(character not in "0123456789abcdef" for character in token):
+            raise ValueError("driver guardian token is invalid")
+        connection = socket.create_connection((host, port), timeout=3)
+        connection.settimeout(0.5)
+        executable, executable_sha256 = _server_executable(server_root)
+        if not hmac.compare_digest(executable_sha256, expected_sha256):
+            raise ValueError("MTA server executable changed before guardian launch")
+        child_options: dict[str, Any] = {
+            "cwd": server_root, "stdin": subprocess.PIPE, "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL, "close_fds": True, "bufsize": 0,
+        }
+        if os.name == "nt":
+            child_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            child_options["start_new_session"] = True
+        server_process = subprocess.Popen([os.fspath(executable)], **child_options)
+        if server_process.stdin is None:
+            raise ValueError("MTA server input pipe is unavailable")
+        try:
+            if os.name == "nt":
+                from . import winfs
+
+                winfs.set_pipe_nonblocking(server_process.stdin.fileno())
+            else:
+                os.set_blocking(server_process.stdin.fileno(), False)
+        except (AttributeError, OSError) as exc:
+            raise ValueError("platform cannot provide bounded non-blocking MTA server input") from exc
+        stabilization_deadline = time.monotonic() + 1
+        while time.monotonic() < stabilization_deadline:
+            if server_process.poll() is not None:
+                raise ValueError(f"MTA server exited during startup with code {server_process.returncode}")
+            time.sleep(0.02)
+        _, current_sha256 = _server_executable(server_root)
+        if not hmac.compare_digest(current_sha256, expected_sha256):
+            raise ValueError("MTA server executable changed during guardian launch")
+
+        ready = {
+            "type": "ready", "pid": server_process.pid, "executable": executable.name,
+            "executableSha256": executable_sha256,
+        }
+        ready["authorization"] = _authorization(token, ready)
+        connection.sendall(canonical_json(ready).encode("utf-8"))
+        while True:
+            server_exit = server_process.returncode if server_process.poll() is not None else None
+            try:
+                payload = _receive_line(connection, 4096)
+            except socket.timeout:
+                continue
+            if not payload:
+                break
+            from .scenario import load_json_text
+
+            request = load_json_text(payload.decode("utf-8"))
+            if (
+                not isinstance(request, dict) or set(request) != {"sequence", "action", "resource"}
+                or isinstance(request.get("sequence"), bool) or not isinstance(request.get("sequence"), int)
+                or not 1 <= request["sequence"] <= 2147483647
+                or not isinstance(request.get("action"), str)
+                or not isinstance(request.get("resource"), str)
+                or parse_resource_command(f"resource.{request['action']}/{request['resource']}") is None
+            ):
+                raise ValueError("driver guardian request is invalid")
+            response: dict[str, Any] = {"sequence": request["sequence"]}
+            server_exit = server_process.returncode if server_process.poll() is not None else None
+            if server_exit is not None or server_process.stdin is None:
+                response["status"] = "unavailable"
+                response["written"] = 0
+            else:
+                line = f"{request['action']} {request['resource']}\n".encode("ascii")
+                written = _write_server_input(server_process.stdin, line)
+                response["written"] = written
+                response["status"] = (
+                    "backpressure" if written == 0
+                    else "partial" if written != len(line)
+                    else "submitted"
+                )
+            connection.sendall(canonical_json(response).encode("utf-8"))
+    except (JsonDocumentError, OSError, UnicodeError, ValueError) as exc:
+        if connection is not None:
+            try:
+                failure = {"type": "error", "message": str(exc)[:1024] or "driver guardian failed"}
+                failure["authorization"] = _authorization(token, failure)
+                connection.sendall(canonical_json(failure).encode("utf-8"))
+            except OSError:
+                pass
+        return 1
+    finally:
+        if connection is not None:
+            connection.close()
+        if server_process is not None:
+            _terminate_server_process(server_process)
+    return 0
 
 
 def _response_envelope(
@@ -626,6 +894,8 @@ def start_supervisor(
     ttl_seconds: int,
     tool_path: Path,
     schema_store: SchemaStore,
+    enabled_capabilities: tuple[str, ...] = (),
+    server_root: Path | None = None,
 ) -> dict[str, Any]:
     _reap_children()
     workspace_original = workspace.absolute()
@@ -634,6 +904,16 @@ def start_supervisor(
     root_fd: int | None = None
     session_fd: int | None = None
     try:
+        enabled = set(enabled_capabilities)
+        if not enabled.issubset(MUTATION_CAPABILITIES):
+            raise ValueError("requested supervisor capability is not allowlisted")
+        if "resource.lifecycle" in enabled and server_root is None:
+            raise ValueError("resource.lifecycle requires an explicitly approved MTA server root")
+        if server_root is not None and "resource.lifecycle" not in enabled:
+            raise ValueError("an MTA server root may only be supplied with resource.lifecycle")
+        approved_server_root = server_root.resolve() if server_root is not None else None
+        if approved_server_root is not None:
+            _server_executable(approved_server_root)
         project_file, project_relative = _inside(workspace_original, project_path)
         _, snapshot_relative = _inside(workspace_original, snapshot_path, allow_missing=True)
         _, root_relative = _inside(workspace_original, session_root, allow_missing=True)
@@ -679,6 +959,10 @@ def start_supervisor(
             "--session-id", session_id, "--project", project_relative, "--catalogue", catalogue_relative,
             "--snapshot", snapshot_relative, "--ttl", str(ttl_seconds),
         ]
+        for capability in sorted(enabled):
+            command.extend(("--capability", capability))
+        if approved_server_root is not None:
+            command.extend(("--server-root", os.fspath(approved_server_root)))
         kwargs: dict[str, Any] = {
             "cwd": workspace, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
             "close_fds": True,
@@ -726,15 +1010,18 @@ def start_supervisor(
 
 def request_supervisor(
     workspace: Path, session_path: Path, command: str, schema_store: SchemaStore,
+    timeout_ms: int = 10000,
 ) -> dict[str, Any]:
-    if command not in {"status", "runtime.compare", "shutdown"}:
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1 <= timeout_ms <= 600000:
+        raise ValueError("supervisor timeout must be an integer from 1 to 600000 milliseconds")
+    if command not in {"status", "runtime.compare", "shutdown", "scenario.authorize"} and parse_resource_command(command) is None:
         raise ValueError("supervisor command is not allowlisted")
     session, _, _, workspace_fd, directory_fd, session_name = _open_session_record(
         workspace, session_path, schema_store,
     )
     try:
         return _request_supervisor_loaded(
-            command, schema_store, session, directory_fd, session_name,
+            command, schema_store, session, directory_fd, session_name, timeout_ms,
         )
     finally:
         _close_directory(directory_fd)
@@ -747,6 +1034,7 @@ def _request_supervisor_loaded(
     session: dict[str, Any],
     directory_fd: int,
     session_name: str,
+    timeout_ms: int,
 ) -> dict[str, Any]:
     expires = datetime.strptime(session["expiresAt"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     if _utc_now() >= expires:
@@ -764,9 +1052,18 @@ def _request_supervisor_loaded(
         raise ValueError("supervisor transport is not loopback-only")
     nonce = secrets.token_hex(32)
     challenge = ""
+    deadline = time.monotonic() + timeout_ms / 1000
+    request_started = False
+
+    def remaining() -> float:
+        available = deadline - time.monotonic()
+        if available <= 0:
+            raise TimeoutError(f"supervisor request exceeded {timeout_ms} milliseconds")
+        return available
+
     try:
-        with socket.create_connection(("127.0.0.1", transport["port"]), timeout=3) as connection:
-            connection.settimeout(5)
+        with socket.create_connection(("127.0.0.1", transport["port"]), timeout=min(3, remaining())) as connection:
+            connection.settimeout(remaining())
             from .scenario import load_json_text
 
             challenge_document = load_json_text(_receive_line(connection, 1024).decode("utf-8"))
@@ -789,11 +1086,17 @@ def _request_supervisor_loaded(
             payload = canonical_json(request).encode("utf-8")
             if len(payload) > MAX_REQUEST_BYTES:
                 raise ValueError("supervisor request is too large")
+            # From this point onward a transport failure is deliberately
+            # ambiguous: the daemon may authenticate and apply the operation
+            # even when its response cannot reach this client.
+            connection.settimeout(remaining())
+            request_started = True
             connection.sendall(payload)
             connection.shutdown(socket.SHUT_WR)
             chunks: list[bytes] = []
             size = 0
             while True:
+                connection.settimeout(remaining())
                 chunk = connection.recv(65536)
                 if not chunk:
                     break
@@ -801,13 +1104,18 @@ def _request_supervisor_loaded(
                 if size > MAX_RESPONSE_BYTES:
                     raise ValueError("supervisor response exceeds 16777216 bytes")
                 chunks.append(chunk)
-    except (JsonDocumentError, OSError, UnicodeError, ValueError):
+    except (JsonDocumentError, OSError, UnicodeError, ValueError) as exc:
         state = "expired" if _utc_now() >= expires else "closed"
         _revoke_session_at(directory_fd, session_name, session, state)
         # Windows intentionally keeps directory handles open for the lifetime
         # of the daemon. Wait for its bounded poll loop after revocation so the
         # caller can immediately clean or reuse its test workspace.
         _wait_for_session_process(session)
+        if request_started and (command == "scenario.authorize" or parse_resource_command(command) is not None):
+            raise SupervisorMutationOutcomeUnknown(
+                f"mutation outcome is unknown after transport failure; session was revoked and the command must not be retried automatically: {exc}",
+                session["sessionId"],
+            ) from exc
         raise
     try:
         envelope = load_json_text(b"".join(chunks).decode("utf-8"))
@@ -825,20 +1133,32 @@ def _request_supervisor_loaded(
             raise ValueError("supervisor response authorization is invalid")
         expected_command = {
             "status": "supervisor.status", "shutdown": "supervisor.stop", "runtime.compare": "runtime.compare",
+            "scenario.authorize": "scenario.authorize",
         }.get(command)
+        if expected_command is None and parse_resource_command(command) is not None:
+            expected_command = parse_resource_command(command)[0]
         if expected_command is None or response.get("command") != expected_command:
             raise ValueError("supervisor response command does not match the request")
-        schema = "neon-runtime-compare-result" if command == "runtime.compare" else "neon-supervisor-result"
+        schema = (
+            "neon-runtime-compare-result" if command == "runtime.compare"
+            else "neon-mutation-result" if command == "scenario.authorize" or parse_resource_command(command) is not None
+            else "neon-supervisor-result"
+        )
         issues = schema_store.validate(schema, response)
         if issues:
             raise ValueError("supervisor response violates its advertised schema")
-        identity = response.get("comparison", response.get("session", {})).get("sessionId")
+        identity = response.get("comparison", response.get("session", response.get("operation", {}))).get("sessionId")
         if identity != session["sessionId"]:
             raise ValueError("supervisor response session does not match the request")
-    except (AttributeError, JsonDocumentError, TypeError, UnicodeError, ValueError):
+    except (AttributeError, JsonDocumentError, TypeError, UnicodeError, ValueError) as exc:
         state = "expired" if _utc_now() >= expires else "closed"
         _revoke_session_at(directory_fd, session_name, session, state)
         _wait_for_session_process(session)
+        if command == "scenario.authorize" or parse_resource_command(command) is not None:
+            raise SupervisorMutationOutcomeUnknown(
+                f"mutation outcome is unknown after an invalid authenticated response; session was revoked and the command must not be retried automatically: {exc}",
+                session["sessionId"],
+            ) from exc
         raise
     if command == "shutdown":
         process = _CHILDREN.get(session["pid"])
@@ -961,10 +1281,18 @@ def run_supervisor_daemon(
     snapshot_relative: str,
     ttl_seconds: int,
     schema_store: SchemaStore,
+    enabled_capabilities: tuple[str, ...] = (),
+    server_root: Path | None = None,
 ) -> int:
     listener: socket.socket | None = None
     workspace_fd: int | None = None
     session_fd: int | None = None
+    guardian_process: subprocess.Popen[bytes] | None = None
+    guardian_connection: socket.socket | None = None
+    guardian_listener: socket.socket | None = None
+    driver_fallback: tuple[str, Any] | None = None
+    driver_pid: int | None = None
+    driver_sequence = 0
     try:
         workspace = workspace.resolve()
         if not session_directory.is_dir() or session_directory.is_symlink():
@@ -989,6 +1317,74 @@ def run_supervisor_daemon(
         if project_api["status"] != "pass":
             raise ValueError("project resolution failed")
         project_contract_sha256 = sha256_bytes(canonical_json(project_api).encode("utf-8"))
+        project_resources = {item["name"] for item in project.get("resources", [])}
+        enabled = set(enabled_capabilities)
+        if not enabled.issubset(MUTATION_CAPABILITIES):
+            raise ValueError("daemon capability is not allowlisted")
+        driver: dict[str, Any] | None = None
+        if "resource.lifecycle" in enabled:
+            if server_root is None:
+                raise ValueError("resource.lifecycle has no approved MTA server root")
+            executable, executable_sha256 = _server_executable(server_root)
+            guardian_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            guardian_listener.bind(("127.0.0.1", 0))
+            guardian_listener.listen(1)
+            guardian_listener.settimeout(8)
+            guardian_token = secrets.token_hex(32)
+            guardian_command = [
+                sys.executable, os.fspath(Path(sys.argv[0]).resolve()), "_driver-guardian",
+                "--server-root", os.fspath(server_root), "--expected-sha256", executable_sha256,
+                "--host", "127.0.0.1", "--port", str(guardian_listener.getsockname()[1]),
+                "--token", guardian_token,
+            ]
+            guardian_options: dict[str, Any] = {
+                "cwd": workspace, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL, "close_fds": True,
+            }
+            if os.name == "nt":
+                guardian_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                guardian_options["start_new_session"] = True
+            guardian_process = subprocess.Popen(guardian_command, **guardian_options)
+            guardian_connection, guardian_address = guardian_listener.accept()
+            if guardian_address[0] != "127.0.0.1":
+                raise ValueError("driver guardian did not use the bounded loopback transport")
+            guardian_connection.settimeout(3)
+            ready = load_json_text(_receive_line(guardian_connection, 4096).decode("utf-8"))
+            if isinstance(ready, dict) and set(ready) == {"type", "message", "authorization"}:
+                signed_failure = {"type": ready["type"], "message": ready["message"]}
+                if (
+                    ready["type"] != "error" or not isinstance(ready["message"], str)
+                    or not isinstance(ready["authorization"], str)
+                    or not hmac.compare_digest(
+                        ready["authorization"], _authorization(guardian_token, signed_failure),
+                    )
+                ):
+                    raise ValueError("driver guardian failure proof is invalid")
+                raise ValueError(ready["message"])
+            if not isinstance(ready, dict) or set(ready) != {
+                "type", "pid", "executable", "executableSha256", "authorization",
+            }:
+                raise ValueError("driver guardian readiness contract is invalid")
+            signed_ready = {key: ready[key] for key in ("type", "pid", "executable", "executableSha256")}
+            if (
+                ready["type"] != "ready"
+                or isinstance(ready["pid"], bool) or not isinstance(ready["pid"], int) or ready["pid"] < 1
+                or ready["executable"] != executable.name
+                or ready["executableSha256"] != executable_sha256
+                or not isinstance(ready["authorization"], str)
+                or not hmac.compare_digest(ready["authorization"], _authorization(guardian_token, signed_ready))
+            ):
+                raise ValueError("driver guardian readiness proof is invalid")
+            guardian_listener.close()
+            guardian_listener = None
+            driver_pid = ready["pid"]
+            driver_fallback = _open_driver_fallback(driver_pid)
+            driver = {
+                "kind": "mta-server-stdio", "root": os.fspath(server_root.resolve()),
+                "executable": executable.name, "executableSha256": executable_sha256,
+                "pid": driver_pid, "guardianPid": guardian_process.pid,
+            }
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(("127.0.0.1", 0))
         listener.listen(8)
@@ -999,7 +1395,8 @@ def run_supervisor_daemon(
         token = secrets.token_hex(32)
         session = {
             "schemaVersion": "1.0.0", "sessionId": session_id, "state": "active", "profile": project["profile"],
-            "createdAt": _utc_text(created), "expiresAt": _utc_text(expires), "capabilities": CAPABILITIES,
+            "createdAt": _utc_text(created), "expiresAt": _utc_text(expires),
+            "capabilities": sorted([*CAPABILITIES, *enabled]),
             "project": {
                 "path": project_relative, "sha256": sha256_bytes(project_payload),
                 "contractSha256": project_contract_sha256,
@@ -1009,6 +1406,8 @@ def run_supervisor_daemon(
             "transport": {"kind": "loopback-tcp", "host": "127.0.0.1", "port": listener.getsockname()[1]},
             "pid": os.getpid(), "token": token,
         }
+        if driver is not None:
+            session["driver"] = driver
         issues = schema_store.validate("neon-supervisor-session", session)
         if issues:
             raise ValueError("generated supervisor session is invalid")
@@ -1137,6 +1536,67 @@ def run_supervisor_daemon(
                         result_issues = schema_store.validate("neon-runtime-compare-result", result)
                         if result_issues:
                             raise ValueError("runtime comparator produced an invalid result")
+                    elif command == "scenario.authorize":
+                        if "scenario.execute" not in session["capabilities"]:
+                            result = mutation_failure(command, "SUPERVISOR_CAPABILITY_DENIED", "scenario.execute is not enabled", session_id=session_id)
+                        else:
+                            result = mutation_result("scenario.authorize", session_id, project["name"])
+                        if schema_store.validate("neon-mutation-result", result):
+                            raise ValueError("scenario authorization produced an invalid result")
+                    elif parse_resource_command(command) is not None:
+                        public_command, resource_name = parse_resource_command(command)
+                        if "resource.lifecycle" not in session["capabilities"]:
+                            result = mutation_failure(public_command, "SUPERVISOR_CAPABILITY_DENIED", "resource.lifecycle is not enabled", resource_name, session_id)
+                        elif resource_name not in project_resources:
+                            result = mutation_failure(public_command, "RESOURCE_TARGET_UNDECLARED", "resource is not declared by the pinned project", resource_name, session_id)
+                        elif guardian_process is None or guardian_process.poll() is not None or guardian_connection is None:
+                            if driver_pid is not None:
+                                _terminate_driver_fallback(driver_fallback, driver_pid)
+                                _close_driver_fallback(driver_fallback)
+                                driver_fallback = None
+                                driver_pid = None
+                            result = mutation_failure(public_command, "MTA_SERVER_UNAVAILABLE", "approved MTA server process is not running", resource_name, session_id)
+                        else:
+                            console_action = public_command.removeprefix("resource.")
+                            driver_sequence += 1
+                            try:
+                                driver_status, _ = _submit_guardian_command(
+                                    guardian_connection, driver_sequence, console_action, resource_name,
+                                )
+                            except (JsonDocumentError, OSError, UnicodeError, ValueError) as exc:
+                                driver_status = "unknown"
+                                driver_message = str(exc)
+                            if driver_status == "backpressure":
+                                result = mutation_failure(
+                                    public_command, "MTA_SERVER_INPUT_BACKPRESSURE",
+                                    "approved MTA server input is saturated; Neon did not submit or retry the command",
+                                    resource_name, session_id,
+                                )
+                            elif driver_status == "unavailable":
+                                result = mutation_failure(
+                                    public_command, "MTA_SERVER_UNAVAILABLE",
+                                    "approved MTA server process is not running", resource_name, session_id,
+                                )
+                            elif driver_status in {"partial", "unknown"}:
+                                result = mutation_failure(
+                                    public_command, "MUTATION_OUTCOME_UNKNOWN",
+                                    "MTA server command acknowledgement was incomplete; runtime outcome is unknown and the session must not be reused"
+                                    + (f": {driver_message}" if driver_status == "unknown" else ""),
+                                    resource_name, session_id,
+                                )
+                                session["state"] = "closed"
+                                session.pop("token", None)
+                                _write_session(session_fd, session)
+                                stop = True
+                            else:
+                                result = mutation_result(
+                                    public_command, session_id, resource_name, status="pass",
+                                    code="RESOURCE_COMMAND_SUBMITTED",
+                                    message="Neon submitted the bounded command to the approved MTA server input; processing and runtime state are not claimed until observed",
+                                )
+                        result_issues = schema_store.validate("neon-mutation-result", result)
+                        if result_issues:
+                            raise ValueError("mutation adapter produced an invalid result")
                     elif command == "shutdown":
                         session["state"] = "closed"
                         session.pop("token", None)
@@ -1148,6 +1608,11 @@ def run_supervisor_daemon(
                 except Exception as exc:
                     if requested_command == "runtime.compare":
                         result = _failure_compare("SUPERVISOR_REQUEST_REJECTED", str(exc), project, session)
+                    elif requested_command == "scenario.authorize" or parse_resource_command(requested_command) is not None:
+                        parsed = parse_resource_command(requested_command)
+                        public_command = parsed[0] if parsed is not None else "scenario.authorize"
+                        target = parsed[1] if parsed is not None else project.get("name", "unavailable")
+                        result = mutation_failure(public_command, "SUPERVISOR_REQUEST_REJECTED", str(exc), target, session_id)
                     else:
                         public_command = "supervisor.stop" if requested_command == "shutdown" else "supervisor.status"
                         result = {
@@ -1157,7 +1622,7 @@ def run_supervisor_daemon(
                             "session": _public_session(session, relative, _regular_at(workspace_fd, snapshot_relative)),
                         }
                     command = "rejected"
-                if requested_command != "shutdown":
+                if requested_command != "shutdown" and not stop:
                     if time.monotonic() >= monotonic_deadline:
                         finalize_session("expired", "supervisor.expire", persist=True)
                         break
@@ -1171,6 +1636,12 @@ def run_supervisor_daemon(
                         result = (
                             _failure_compare("SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded", project, session)
                             if requested_command == "runtime.compare"
+                            else mutation_failure(
+                                parse_resource_command(requested_command)[0] if parse_resource_command(requested_command) else "scenario.authorize",
+                                "SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded",
+                                parse_resource_command(requested_command)[1] if parse_resource_command(requested_command) else project.get("name", "unavailable"),
+                                session_id,
+                            ) if requested_command == "scenario.authorize" or parse_resource_command(requested_command) is not None
                             else supervisor_failure("supervisor.status", "SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded")
                         )
                         envelope = _response_envelope(token, session_id, challenge, nonce, requested_command, result)
@@ -1192,6 +1663,23 @@ def run_supervisor_daemon(
     finally:
         if listener is not None:
             listener.close()
+        if guardian_listener is not None:
+            guardian_listener.close()
+        if guardian_connection is not None:
+            guardian_connection.close()
+        if guardian_process is not None and guardian_process.poll() is None:
+            try:
+                guardian_process.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                guardian_process.terminate()
+                try:
+                    guardian_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    guardian_process.kill()
+                    guardian_process.wait(timeout=2)
+        if driver_pid is not None:
+            _terminate_driver_fallback(driver_fallback, driver_pid)
+        _close_driver_fallback(driver_fallback)
         if session_fd is not None:
             _close_directory(session_fd)
         if workspace_fd is not None:

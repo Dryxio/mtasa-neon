@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "properties": {
     "assertions": {"items": {"$ref": "#/$defs/assertionResult"}, "type": "array"},
-    "command": {"const": "scenario.run", "type": "string"},
+    "command": {"enum": ["scenario.run", "scenario.execute"], "type": "string"},
     "diagnostics": {"items": {"$ref": "#/$defs/diagnostic"}, "type": "array"},
     "evidence": {"type": "object"},
     "schemaVersion": {"format": "semver", "type": "string"},

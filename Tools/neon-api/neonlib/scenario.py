@@ -7,7 +7,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from .components import file_sha256
 from .jsonio import JsonDocumentError, canonical_json, load_json, sha256_bytes
@@ -134,11 +134,31 @@ def _action_command(step: dict[str, Any], workspace: Path, tool: Path, scenario_
     return command
 
 
-def _run_step(step: dict[str, Any], workspace: Path, tool: Path, profile: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _run_step(
+    step: dict[str, Any], workspace: Path, tool: Path, profile: str,
+    runtime_executor: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     action = step["action"]
     expected = step.get("expectedStatus", "pass")
     diagnostics: list[dict[str, Any]] = []
     if action in RUNTIME_ACTIONS:
+        if runtime_executor is not None and action in {"resource.start", "resource.stop", "resource.restart"}:
+            try:
+                result = runtime_executor(step)
+            except (JsonDocumentError, OSError, ValueError) as exc:
+                result = _action_failure(action, "SCENARIO_RUNTIME_REQUEST_FAILED", str(exc))
+            for item in result.get("diagnostics", [])[:64]:
+                diagnostics.append({
+                    "code": str(item.get("code", "SCENARIO_RUNTIME_DIAGNOSTIC"))[:128],
+                    "severity": item.get("severity", "error") if item.get("severity") in {"error", "warning"} else "error",
+                    "message": str(item.get("message", "runtime action diagnostic"))[:1024],
+                    "path": str(item.get("path", "."))[:512],
+                    "step": step["id"],
+                })
+            runtime_exit = 0 if result.get("status") == "pass" else (
+                124 if any(item.get("code") == "SCENARIO_STEP_TIMEOUT" for item in result.get("diagnostics", [])) else 1
+            )
+            return _finish_step(step, expected, runtime_exit, result, diagnostics)
         result = _action_failure(action, "SCENARIO_ACTION_UNAVAILABLE", f"{action} is reserved for a later runtime checkpoint")
         diagnostics.append(_diagnostic("SCENARIO_ACTION_UNAVAILABLE", f"{action} is not enabled by the runtime-free runner", step=step["id"]))
         return _finish_step(step, expected, 1, result, diagnostics)
@@ -452,10 +472,15 @@ def run_scenario(
     tool: Path,
     output: Path | None = None,
     observed_at: str | None = None,
+    runtime_executor: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    runtime_profile: str | None = None,
+    result_command: str = "scenario.run",
 ) -> dict[str, Any]:
     started = time.monotonic()
     original_workspace = workspace.absolute()
     workspace = workspace.resolve()
+    if result_command not in {"scenario.run", "scenario.execute"}:
+        raise ValueError("scenario result command is not allowlisted")
     scenario_path = _approved_document(workspace, scenario_path, original_workspace)
     assertion_paths = [_approved_document(workspace, path, original_workspace) for path in assertion_paths]
     scenario_payload, scenario = _capture_json(scenario_path)
@@ -464,6 +489,8 @@ def run_scenario(
         raise ValueError("; ".join(f"{issue.pointer}: {issue.message}" for issue in issues))
     if schema_major(scenario["schemaVersion"]) != 1:
         raise ValueError(f"unsupported scenario schema {scenario['schemaVersion']}")
+    if runtime_profile is not None and scenario["profile"] != runtime_profile:
+        raise ValueError(f"scenario profile {scenario['profile']} does not match supervisor profile {runtime_profile}")
     if len({step["id"] for step in scenario["steps"]}) != len(scenario["steps"]):
         raise ValueError("scenario step ids must be unique")
     if sum(step["timeoutMs"] for step in scenario["steps"]) > 600000:
@@ -506,7 +533,7 @@ def run_scenario(
     step_records: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
     for step in scenario["steps"]:
-        record, step_diagnostics = _run_step(step, workspace, tool, scenario["profile"])
+        record, step_diagnostics = _run_step(step, workspace, tool, scenario["profile"], runtime_executor)
         step_records.append(record)
         diagnostics.extend(step_diagnostics)
 
@@ -548,6 +575,7 @@ def run_scenario(
 
     scenario_hash = sha256_bytes(scenario_payload)
     identity_payload = canonical_json({
+        "command": result_command,
         "scenario": scenario, "assertions": [assertions[item] for item in scenario["assertions"]],
         "steps": [{"id": item["id"], "status": item["status"], "result": item["result"]} for item in step_records],
     }).encode("utf-8")
@@ -556,7 +584,8 @@ def run_scenario(
         observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     evidence = {
         "schemaVersion": "1.0.0", "runId": run_id, "profile": scenario["profile"], "observedAt": observed_at,
-        "durationMs": max(0, round((time.monotonic() - started) * 1000)), "labels": ["static-checked"],
+        "durationMs": max(0, round((time.monotonic() - started) * 1000)),
+        "labels": ["static-checked"] if all(step["action"] in STATIC_ACTIONS for step in scenario["steps"]) else [],
         "scenario": {"id": scenario["id"], "sha256": scenario_hash},
         "assertions": [{"id": item["id"], "status": item["status"]} for item in assertion_records],
         "artifacts": [{"id": item["id"], "path": item["path"], "sha256": item["sha256"]} for item in artifacts],
@@ -568,7 +597,7 @@ def run_scenario(
     errors = sum(item["severity"] == "error" for item in diagnostics)
     warnings = sum(item["severity"] == "warning" for item in diagnostics)
     result = {
-        "schemaVersion": "1.0.0", "command": "scenario.run", "status": "pass" if errors == 0 else "fail",
+        "schemaVersion": "1.0.0", "command": result_command, "status": "pass" if errors == 0 else "fail",
         "summary": {
             "errors": errors, "warnings": warnings, "steps": len(step_records), "assertions": len(assertion_records),
             "passedAssertions": sum(item["status"] == "pass" for item in assertion_records),
@@ -623,9 +652,13 @@ def _scenario_semantic_issues(result: dict[str, Any], evidence: dict[str, Any]) 
         diagnostics.append(_verify_diagnostic(
             "SCENARIO_ASSERTION_EVIDENCE_MISMATCH", "evidence assertions do not match result assertions", "evidence.json",
         ))
-    if evidence.get("labels") != ["static-checked"]:
+    expected_labels = [] if any(
+        isinstance(step, dict) and step.get("action") in RUNTIME_ACTIONS for step in steps
+    ) else ["static-checked"]
+    if evidence.get("labels") != expected_labels:
         diagnostics.append(_verify_diagnostic(
-            "SCENARIO_EVIDENCE_SCOPE_INVALID", "a static scenario run may grant only the static-checked label", "evidence.json",
+            "SCENARIO_EVIDENCE_SCOPE_INVALID",
+            "scenario evidence labels do not match the static or runtime execution scope", "evidence.json",
         ))
     for index, step in enumerate(steps):
         if not isinstance(step, dict):
@@ -670,6 +703,16 @@ def _scenario_semantic_issues(result: dict[str, Any], evidence: dict[str, Any]) 
         child_codes = {
             item.get("code") for item in child_diagnostics if isinstance(item, dict)
         }
+        if (
+            result.get("command") == "scenario.run"
+            and step.get("action") in RUNTIME_ACTIONS
+            and "SCENARIO_ACTION_UNAVAILABLE" not in child_codes
+        ):
+            diagnostics.append(_verify_diagnostic(
+                "SCENARIO_RUNTIME_SCOPE_INVALID",
+                "scenario.run cannot claim that a reserved runtime action was executed",
+                f"result.json#/steps/{index}",
+            ))
         infrastructure_codes = {
             "SCENARIO_ACTION_UNAVAILABLE", "SCENARIO_ACTION_UNKNOWN", "SCENARIO_PROFILE_MISMATCH",
             "SCENARIO_INPUT_INVALID", "SCENARIO_STEP_TIMEOUT", "SCENARIO_STEP_EXEC_FAILED",
@@ -680,8 +723,6 @@ def _scenario_semantic_issues(result: dict[str, Any], evidence: dict[str, Any]) 
             required_codes.add("SCENARIO_STEP_STATUS_MISMATCH")
         if not exit_matches:
             required_codes.add("SCENARIO_STEP_EXIT_MISMATCH")
-        if step.get("action") in RUNTIME_ACTIONS:
-            required_codes.add("SCENARIO_ACTION_UNAVAILABLE")
         if step.get("exitCode") == 124:
             required_codes.add("SCENARIO_STEP_TIMEOUT")
         root_codes = {
@@ -894,6 +935,7 @@ def verify_scenario_run(workspace: Path, run_directory: Path, schema_store: Sche
         if event_path.read_bytes() != expected_event_payload:
             raise ValueError("events.jsonl cannot be reproduced from result.json")
         identity_payload = canonical_json({
+            "command": result["command"],
             "scenario": scenario_document,
             "assertions": ordered_assertions,
             "steps": [{"id": item["id"], "status": item["status"], "result": item["result"]} for item in result["steps"]],

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "assertion:windows-runtime-target",
+  "kind": "equals",
+  "actual": "step:restart#/operation/target",
+  "expected": "inventory",
+  "message": "the Windows supervisor submits only the declared resource target"
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "test:windows-runtime-fixture",
+  "profile": "neon-pair",
+  "steps": [{
+    "id": "step:restart",
+    "action": "resource.restart",
+    "timeoutMs": 5000,
+    "inputs": {"resource": "inventory"}
+  }],
+  "assertions": ["assertion:windows-runtime-target"]
+}
