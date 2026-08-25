@@ -252,6 +252,14 @@ jobs:
           npm run lint
           npm run build:client
 
+      - name: Build and validate Neon DevTools frontend
+        if: matrix.platform == 'win32'
+        working-directory: Tools/neon-devtools
+        run: |
+          npm test
+          npm run build
+          git diff --exit-code -- "../../Shared/data/MTA San Andreas/MTA/cef/devtools"
+
       - name: Create build artifacts
         run: utils\premake5 compose_files
 
@@ -294,6 +302,10 @@ jobs:
             'MTA\cef\serverbrowser\index.html',
             'MTA\cef\serverbrowser\loadscreens\loadsc1.webp',
             'MTA\cef\serverbrowser\loadscreens\loadsc14.webp',
+            'MTA\cef\devtools\index.html',
+            'MTA\cef\devtools\app.mjs',
+            'MTA\cef\devtools\model.mjs',
+            'MTA\cef\devtools\style.css',
             'mods\deathmatch\client.dll',
             'mods\deathmatch\lua5.1c.dll',
             'mods\deathmatch\pcre2.dll',
@@ -411,6 +423,10 @@ jobs:
             'Path = MTA/radar-definitive/THIRD_PARTY_NOTICE.txt',
             'Path = MTA/cgui/unifont.ttf',
             'Path = MTA/cef/serverbrowser/index.html',
+            'Path = MTA/cef/devtools/index.html',
+            'Path = MTA/cef/devtools/app.mjs',
+            'Path = MTA/cef/devtools/model.mjs',
+            'Path = MTA/cef/devtools/style.css',
             'Path = mods/deathmatch/client.dll',
             'Path = mods/deathmatch/lua5.1c.dll',
             'Path = mods/deathmatch/pcre2.dll',

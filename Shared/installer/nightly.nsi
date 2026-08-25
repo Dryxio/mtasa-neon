@@ -1040,6 +1040,12 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
             SetOutPath "$INSTDIR\MTA\cef\serverbrowser\loadscreens"
             File "${FILES_ROOT}\mta\cef\serverbrowser\loadscreens\*.webp"
 
+            ; DebugScript 4 is rendered from this local CEF document. It must
+            ; ship with both fresh installs and updater-driven reinstalls; a
+            ; compiled core.dll alone only exposes an empty browser surface.
+            SetOutPath "$INSTDIR\MTA\cef\devtools"
+            File "${FILES_ROOT}\mta\cef\devtools\*.*"
+
         !endif
 
         SetOutPath "$INSTDIR\MTA\locale\"
