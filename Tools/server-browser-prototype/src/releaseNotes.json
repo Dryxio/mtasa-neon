@@ -2,6 +2,29 @@
   "schema": 1,
   "releases": [
     {
+      "build": 183,
+      "date": "2026-08-25",
+      "title": "Synchronized native traffic",
+      "summary": "Build 183 adds GTA-style synchronized road traffic and improves native NPC navigation.",
+      "highlights": [
+        "GTA-style traffic synchronized between players",
+        "Population scales across occupied areas",
+        "One-way roads keep their legal traffic direction"
+      ],
+      "sections": [
+        {
+          "label": "Players and fixes",
+          "tone": "players",
+          "items": [
+            "Native GTA drivers and vehicles can remain synchronized as ownership moves between nearby players.",
+            "Traffic population is distributed across occupied areas instead of using one global client owner.",
+            "Script-created drivers now reject an impossible one-way route direction when joining GTA's road system.",
+            "Native pedestrian routes recover more reliably after collisions."
+          ]
+        }
+      ]
+    },
+    {
       "build": 182,
       "date": "2026-08-23",
       "title": "Fix settings menu",

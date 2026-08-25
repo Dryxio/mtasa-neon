@@ -611,4 +611,5 @@ static void __declspec(naked) HOOK_CEventHandler_ComputeDamageResponse_Mid()
 void CTasksSA::StaticSetHooks()
 {
     EZHookInstall(CEventHandler_ComputeDamageResponse_Mid);
+    InstallTaskCarSAHooks();
 }

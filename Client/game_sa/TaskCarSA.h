@@ -29,6 +29,8 @@ typedef DWORD AnimationId;
 #define FUNC_CTaskComplexCarDriveMission__Constructor     0x63CC30
 #define FUNC_CTaskSimpleBikeJacked__Constructor           0x648B90
 
+void InstallTaskCarSAHooks();
+
 // ##############################################################################
 // ## Name:    CTaskComplexEnterCar
 // ## Purpose: Makes the ped enter the specified vehicle

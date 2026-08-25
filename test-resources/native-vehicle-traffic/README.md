@@ -26,6 +26,12 @@ data. Native path addresses and autopilot internals are never serialized.
 Vehicle and occupant models are explicitly loaded before proposal. Server-side
 creation remains atomic: vehicle plus every occupant, or zero.
 
+Script-created Wander vehicles pass through GTA's generic road rejoin. Neon
+validates the resulting directed edge against the native lane counts and
+repairs only an impossible one-way direction before driving starts. This keeps
+initial spawns and ownership handoffs on the legal carriageway without
+transporting process-local path pointers.
+
 Runtime controls:
 
 ```text
@@ -67,6 +73,7 @@ cartraffic test spatial
 cartraffic test passengers
 cartraffic test classes
 cartraffic test interaction
+cartraffic test highway
 cartraffic test soak [cycles]
 cartraffic cleanup
 ```
@@ -82,6 +89,10 @@ handoff. `classes` covers car, van, truck, motorcycle, BMX and quad.
 `interaction` uses GTA's real enter/exit tasks for a player passenger ride and
 driver takeover; it does not synthesize lifecycle events or warp the player
 into the vehicle.
+
+`highway` deterministically replays both legal lane poses from the LS Airport
+tunnel regression. Each vehicle must travel at least 25 metres in its expected
+direction without a sustained U-turn or leaving its carriageway.
 
 `soak` deliberately cycles the core fixture/handoff/passenger/lifecycle paths
 and reports `PASS-soak-core`. A V2 freeze additionally requires the individual

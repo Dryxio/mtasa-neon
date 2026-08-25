@@ -70,6 +70,15 @@ local MODEL_CLASS = {
 }
 local CLASS_TEST_MODELS = {401, 413, 403, 461, 481, 471}
 local SOAK_SCENARIOS = {"smooth", "lifecycle", "passengers", "fixture"}
+-- Exact legal lanes from the public-server incident in the LS Airport
+-- tunnel. The regression harness bypasses the probabilistic spawn oracle so
+-- every run exercises both one-way carriageways that exposed the bad rejoin.
+local HIGHWAY_TEST_CASES = {
+    {name = "westbound-premier", model = 426, x = 1850.5289, y = -2682.175, z = 5.6871872, rotation = 90,
+        directionX = -1, directionY = 0},
+    {name = "eastbound-bobcat", model = 422, x = 1923.2065, y = -2667.3, z = 6.0233274, rotation = 270,
+        directionX = 1, directionY = 0},
+}
 local ALLOWED_MODELS = {}
 local ALLOWED_MODEL_COUNT = 0
 for _, group in pairs(VEHICLE_GROUPS) do
@@ -480,6 +489,7 @@ local function fail(unit, reason)
 end
 
 local requestCandidate
+local startHighwayCase
 
 local function finishTestCleanupIfReady()
     if not activeTest or not activeTest.cleanupExpected then return end
@@ -503,6 +513,16 @@ local function finishTestCleanupIfReady()
         end, 500, 1)
     end
     if activeTest.mode == "classes" then trace("PASS-classes", {models = #CLASS_TEST_MODELS}) end
+    if activeTest.mode == "highway" and activeTest.highwayCase < #HIGHWAY_TEST_CASES then
+        activeTest.highwayCase = activeTest.highwayCase + 1
+        activeTest.cleanupExpected = nil
+        activeTest.cleanupFinalizing = false
+        activeTest.unit = nil
+        return setTimer(function()
+            if activeTest and activeTest.mode == "highway" then startHighwayCase() end
+        end, 500, 1)
+    end
+    if activeTest.mode == "highway" then trace("PASS-highway", {cases = #HIGHWAY_TEST_CASES}) end
     if activeTest.mode == "soak" and activeTest.cycle < activeTest.cycles then
         activeTest.cycle = activeTest.cycle + 1
         activeTest.scenario = SOAK_SCENARIOS[((activeTest.cycle - 1) % #SOAK_SCENARIOS) + 1]
@@ -718,6 +738,18 @@ local function startMonitor(unit)
         local x, y, z = getElementPosition(unit.vehicle)
         local vx, vy, vz = getElementVelocity(unit.vehicle)
         local speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+        if unit.mode == "highway" then
+            local deltaX, deltaY = x - unit.startX, y - unit.startY
+            unit.highwayProgress = deltaX * unit.highwayDirectionX + deltaY * unit.highwayDirectionY
+            unit.highwayLateral = math.abs(deltaX * -unit.highwayDirectionY + deltaY * unit.highwayDirectionX)
+            if unit.highwayProgress < -6 then return fail(unit, "highway-wrong-direction") end
+            if unit.highwayLateral > 9 then return fail(unit, "highway-left-carriageway") end
+
+            local _, _, rotation = getElementRotation(unit.vehicle)
+            local wrongHeading = speed >= 0.02 and angleDelta(rotation, unit.spawnRotation) >= 100
+            unit.highwayWrongHeadingMs = wrongHeading and (unit.highwayWrongHeadingMs or 0) + MONITOR_INTERVAL or 0
+            if unit.highwayWrongHeadingMs >= 1500 then return fail(unit, "highway-sustained-u-turn") end
+        end
         if unit.acceptedAt and getTickCount() - unit.acceptedAt <= 1500 then unit.maxResumeSpeed = math.max(unit.maxResumeSpeed or 0, speed) end
         if allUnitsOutsideResidency(unit) then
             if activeTest and activeTest.unit == unit then return fail(unit, "test-left-residency") end
@@ -760,6 +792,7 @@ local function startMonitor(unit)
                 unit.lastMovingAt = getTickCount()
                 return
             end
+            if unit.mode == "highway" then return terminalTestFailure("highway-stuck", unit) end
             if activeTest and activeTest.unit == unit and not unit.fixturePassed then
                 activeTest.routeRetries = (activeTest.routeRetries or 0) + 1
                 local mode = activeTest.mode
@@ -800,7 +833,9 @@ local function startMonitor(unit)
         local ownerQuitRecovery = activeTest and activeTest.unit == unit and activeTest.mode == "ownerquit" and
             activeTest.phase == "recovering-owner-quit" and unit.ownerQuitEpoch == unit.epoch
         local observerQualified = qualifiedObserverCount(unit) >= 1 or unit.mode == "spatial" or ownerQuitRecovery
-        if unit.ownerTaskSamples >= 4 and observerQualified and unit.movingSamples >= 6 and distance >= 20 and not unit.currentEpochStable then
+        local routeProgressReady = unit.mode ~= "highway" or (unit.highwayProgress or 0) >= 25
+        if unit.ownerTaskSamples >= 4 and observerQualified and unit.movingSamples >= 6 and distance >= 20 and routeProgressReady and
+            not unit.currentEpochStable then
             local firstStableEpoch = not unit.fixturePassed
             unit.fixturePassed = true
             unit.currentEpochStable = true
@@ -825,6 +860,12 @@ local function startMonitor(unit)
                     activeTest.initialOwner = unit.owner
                     beginRevoke(unit, ps[1] == unit.owner and ps[2] or ps[1], "test-handoff")
                 end
+            elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "highway" then
+                trace("PASS-highway-case", {id = unit.id, case = unit.highwayCaseName, progress = unit.highwayProgress,
+                    lateral = unit.highwayLateral, rotation = select(3, getElementRotation(unit.vehicle))})
+                activeTest.cleanupFinalizing = true
+                registerTestCleanup(unit)
+                destroyUnit(unit, "highway-case-complete")
             elseif firstStableEpoch and activeTest and activeTest.unit == unit and activeTest.mode == "fixture" then
                 activeTest.cleanupFinalizing = true
                 registerTestCleanup(unit)
@@ -1023,6 +1064,8 @@ local function createUnit(candidate, owner, observers, mode)
         cruiseSpeed = candidate.cruiseSpeed or 16.0, drivingStyle = tonumber(candidate.drivingStyle) or 0,
         model = candidate.model, vehicleClass = tonumber(candidate.vehicleClass) or 0, mode = mode, passengers = passengers, anchorPlayer = owner,
         createdAt = getTickCount(), spawnRotation = tonumber(candidate.rotation), carGroup = candidate.carGroup,
+        highwayCaseName = candidate.highwayCaseName, highwayDirectionX = candidate.highwayDirectionX,
+        highwayDirectionY = candidate.highwayDirectionY,
     }
     units[unit.id] = unit
     -- Vehicle occupants are governed by the car task and seat attachment, not
@@ -1040,6 +1083,25 @@ local function createUnit(candidate, owner, observers, mode)
         drivingStyle = unit.drivingStyle, carGroup = candidate.carGroup})
     assign(unit, owner, "spawn")
     return unit
+end
+
+startHighwayCase = function()
+    if not activeTest or activeTest.mode ~= "highway" then return end
+    local testCase = HIGHWAY_TEST_CASES[activeTest.highwayCase]
+    local owner = chooseOwner()
+    local participants = players()
+    if not testCase or not owner or #participants < 2 then return terminalTestFailure("highway-participants-missing") end
+
+    local candidate = {
+        model = testCase.model, x = testCase.x, y = testCase.y, z = testCase.z, rotation = testCase.rotation,
+        cruiseSpeed = 18, drivingStyle = 0, vehicleClass = 0, occupantModels = {7},
+        highwayCaseName = testCase.name, highwayDirectionX = testCase.directionX, highwayDirectionY = testCase.directionY,
+    }
+    local unit, reason = createUnit(candidate, owner, participants, "highway")
+    if not unit then return terminalTestFailure(reason or "highway-create-refused") end
+    activeTest.unit = unit
+    trace("highway-case-start", {id = unit.id, case = testCase.name, model = testCase.model, x = testCase.x, y = testCase.y,
+        rotation = testCase.rotation, directionX = testCase.directionX, directionY = testCase.directionY})
 end
 
 requestCandidate = function(owner, mode, attempt, generation)
@@ -1587,6 +1649,10 @@ local function handleTrafficCommand(player, action, mode, value)
             setElementDimension(participant, 0)
             if mode == "spatial" and index == 2 then
                 setElementPosition(participant, -1985, 138, 27.7)
+            elseif mode == "highway" then
+                -- Keep both headless participants close enough to stream the
+                -- tunnel while leaving the tested carriageways unobstructed.
+                setElementPosition(participant, 1840 + index * 2, -2625, 14)
             else
                 setElementPosition(participant, 1540 + index * 2, -1675, 13.55)
             end
@@ -1605,8 +1671,14 @@ local function handleTrafficCommand(player, action, mode, value)
             armTestWatchdog(300000)
             return setTimer(function() startPopulation(1, 2, "spatial") end, 1500, 1)
         end
+        if mode == "highway" then
+            if #ps < 2 then return trace("test-refused", {reason = "two-clients-required", mode = mode}) end
+            activeTest = {mode = "highway", highwayCase = 1, startedAt = getTickCount()}
+            armTestWatchdog(180000)
+            return setTimer(startHighwayCase, 1500, 1)
+        end
         if mode ~= "fixture" and mode ~= "all" and mode ~= "lifecycle" and mode ~= "soak" and mode ~= "passengers" and mode ~= "classes" and
-            mode ~= "interaction" and mode ~= "smooth" and mode ~= "spatial" and mode ~= "ownerquit" then
+            mode ~= "interaction" and mode ~= "smooth" and mode ~= "spatial" and mode ~= "ownerquit" and mode ~= "highway" then
             return trace("test-refused", {reason = "unknown-test-mode", mode = mode})
         end
         activeTest = {
@@ -1644,7 +1716,7 @@ local function handleTrafficCommand(player, action, mode, value)
         destroyUnitsWhere("command-cleanup")
         clearTakeovers(false, "command-cleanup")
     else
-        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|soak [cycles] | cartraffic start [perBubble] [cap] | demo on|off | stop | status | cleanup"})
+        trace("usage", {command = "cartraffic test fixture|all|smooth|ownerquit|lifecycle|density|spatial|passengers|classes|interaction|highway|soak [cycles] | cartraffic start [perBubble] [cap] | demo on|off | stop | status | cleanup"})
     end
 end
 
