@@ -16,6 +16,7 @@ Run commands from the repository root:
 ./neon api get Ped --kind class --profile neon-pair --json
 ./neon api get element-type --kind enum --side server --json
 ./neon api stats --json
+./neon project resolve --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
@@ -34,6 +35,54 @@ catalogued; the default avoids misclassifying resource-local functions as
 missing MTA APIs. When `--project` is omitted, the command uses
 `./neon.project.json` from the current workspace and falls back to the repository
 project only when the current directory has none.
+
+## Project-local resource and module APIs
+
+Checkpoint D adds opt-in contracts for APIs that do not belong to the engine:
+resource exports, custom events/elements, native module functions, dependencies,
+lifecycle, ACL requirements, and capabilities. A project selects a contract
+with the resource or module `manifest` field. `neon check` then compares the
+contract with `meta.xml` and Lua definitions; `neon project resolve --json`
+emits deterministic stable IDs such as
+`resource:inventory:server-export:takeItem` and
+`module:example:function:exampleCall`.
+
+Manifests use the dependency-free Neon YAML profile: a `.yaml` or `.yml` file
+must contain strict JSON, which is a valid YAML 1.2 document. This deliberately
+excludes YAML aliases, implicit scalar typing, tags, and duplicate keys from
+daily agent tooling. Maintainers can therefore author YAML-compatible files
+without adding a parser dependency or creating loader-dependent meanings.
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "kind": "resource",
+  "name": "inventory",
+  "version": "1.0.0",
+  "lifecycle": {"start": "automatic", "stop": "clean", "reloadSafe": true, "persistentState": "none"},
+  "dependencies": [],
+  "exports": [{
+    "name": "takeItem", "side": "server",
+    "parameters": [{"name": "item", "type": "string", "optional": false, "description": "Item identifier."}],
+    "returns": [{"name": "removed", "type": "boolean", "description": "Whether removal succeeded."}],
+    "description": "Remove one item.", "http": false, "restricted": false
+  }],
+  "events": [],
+  "elements": [],
+  "acl": [],
+  "capabilities": []
+}
+```
+
+Without an approved manifest, public exports and literal `addEvent` definitions
+remain visible as `opaque`: their parameters and returns are never guessed.
+Resolved opaque callables set `signatureKnown` to `false` and omit parameter and
+return arrays, so an unknown signature cannot be mistaken for verified zero
+arity.
+This is a warning under the default `unknownComponents: "allow-opaque"` policy
+and an error under `unknownComponents: "error"`. An unmanifested native module
+exposes no functions at all. Module records remain `documented-only` until a
+later runtime checkpoint proves that the expected ABI was actually loaded.
 
 ## Catalogue generation
 
@@ -105,6 +154,8 @@ audits the working tree.
 - `schemas/neon-api.schema.json`: canonical API catalogue.
 - `schemas/neon-semantic-snapshot.schema.json`: strict normalized import.
 - `schemas/neon-project.schema.json`: local project and resource selection.
+- `schemas/neon-component.schema.json`: resource/module semantic manifest.
+- `schemas/neon-project-api.schema.json`: resolved project-local API result.
 - `schemas/neon-test.schema.json`: bounded scenario definition.
 - `schemas/neon-assertion.schema.json`: assertion contract.
 - `schemas/neon-artifact.schema.json`: content-addressed artefact record.

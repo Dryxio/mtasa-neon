@@ -14,7 +14,7 @@
           "path": {"minLength": 1, "type": "string"},
           "severity": {"enum": ["error", "warning"], "type": "string"},
           "side": {"enum": ["client", "server", "shared"], "type": "string"},
-          "symbol": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"}
+          "symbol": {"pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$", "type": "string"}
         },
         "required": ["code", "severity", "message", "path"],
         "type": "object"

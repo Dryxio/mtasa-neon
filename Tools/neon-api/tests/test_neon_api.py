@@ -35,7 +35,8 @@ from neonlib.catalogue import (  # noqa: E402
 )
 from neonlib.jsonio import canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
-from neonlib.project import check_project  # noqa: E402
+from neonlib.components import manifest_semantic_issues  # noqa: E402
+from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 
 
@@ -58,6 +59,25 @@ def base_project() -> dict:
 
 def diagnostic_codes(result: dict) -> list[str]:
     return [diagnostic["code"] for diagnostic in result["diagnostics"]]
+
+
+def base_component(name: str = "demo", kind: str = "resource") -> dict:
+    component = {
+        "schemaVersion": "1.0.0",
+        "kind": kind,
+        "name": name,
+        "version": "1.0.0",
+        "lifecycle": {"start": "automatic", "stop": "clean", "reloadSafe": True, "persistentState": "none"},
+        "dependencies": [],
+        "exports": [],
+        "events": [],
+        "elements": [],
+        "acl": [],
+        "capabilities": [],
+    }
+    if kind == "module":
+        component["module"] = {"abi": "MTA-1.7-server", "entrypoint": "InitModule", "platforms": ["windows"], "architectures": ["x64"]}
+    return component
 
 
 class ContractSchemaTests(unittest.TestCase):
@@ -147,6 +167,7 @@ class ContractSchemaTests(unittest.TestCase):
     def test_valid_contract_samples(self) -> None:
         documents = {
             "neon-project": base_project(),
+            "neon-component": base_component(),
             "neon-test": {
                 "schemaVersion": "1.0.0",
                 "id": "test:closed-harness",
@@ -186,6 +207,7 @@ class ContractSchemaTests(unittest.TestCase):
     def test_all_contracts_reject_unknown_fields(self) -> None:
         samples = {
             "neon-project": base_project(),
+            "neon-component": base_component(),
             "neon-test": {
                 "schemaVersion": "1.0.0", "id": "test:x", "profile": "neon-pair",
                 "steps": [{"id": "step:x", "action": "check", "timeoutMs": 1, "inputs": {}}], "assertions": ["assertion:x"],
@@ -197,6 +219,34 @@ class ContractSchemaTests(unittest.TestCase):
             with self.subTest(schema=schema):
                 document["typoField"] = True
                 self.assertTrue(SCHEMAS.validate(schema, document))
+
+    def test_component_semantics_reject_module_without_abi_duplicates_and_bad_parameter_order(self) -> None:
+        component = base_component("native", "module")
+        del component["module"]
+        component["exports"] = [{
+            "name": "call", "side": "server", "description": "Call native code.", "http": False, "restricted": False,
+            "parameters": [
+                {"name": "optional", "type": "string", "optional": True, "description": "Optional value."},
+                {"name": "required", "type": "number", "optional": False, "description": "Required value."},
+            ],
+            "returns": [],
+        }] * 2
+        codes = {issue.code for issue in manifest_semantic_issues(component)}
+        self.assertEqual(codes, {"MODULE_ABI_MISSING", "COMPONENT_DUPLICATE_IDENTITY", "COMPONENT_PARAMETER_ORDER_INVALID"})
+
+    def test_component_schema_cli_applies_semantic_validation(self) -> None:
+        component = base_component()
+        component["dependencies"] = [{"kind": "resource", "name": "demo", "optional": False}]
+        with tempfile.TemporaryDirectory(prefix="neon-component-schema-") as temporary:
+            path = Path(temporary) / "component.yaml"
+            write_json(path, component)
+            completed = subprocess.run(
+                [sys.executable, str(CLI_PATH), "schema", "validate", "--schema", "neon-component", str(path), "--json"],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+        result = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(diagnostic_codes(result), ["COMPONENT_SELF_DEPENDENCY"])
 
     def test_artifact_rejects_path_traversal_and_bad_hash(self) -> None:
         artifact = {
@@ -524,7 +574,10 @@ class ProjectHarnessTests(unittest.TestCase):
     def write_project(self, project: dict) -> None:
         write_json(self.project_path, project)
 
-    def add_resource(self, project: dict, *, meta: str, files: dict[str, str] | None = None, name: str = "demo") -> None:
+    def add_resource(
+        self, project: dict, *, meta: str, files: dict[str, str] | None = None, name: str = "demo",
+        manifest: dict | str | None = None,
+    ) -> None:
         resource = self.root / "resources" / name
         resource.mkdir(parents=True)
         (resource / "meta.xml").write_text(meta, encoding="utf-8")
@@ -532,7 +585,31 @@ class ProjectHarnessTests(unittest.TestCase):
             path = resource / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
-        project["resources"].append({"name": name, "path": f"resources/{name}"})
+        entry = {"name": name, "path": f"resources/{name}"}
+        if manifest is not None:
+            manifest_path = resource / "neon.component.yaml"
+            if isinstance(manifest, str):
+                manifest_path.write_text(manifest, encoding="utf-8")
+            else:
+                write_json(manifest_path, manifest)
+            entry["manifest"] = "neon.component.yaml"
+        project["resources"].append(entry)
+
+    def add_module(self, project: dict, *, name: str = "native", manifest: dict | str | None = None, binary: bool = True) -> None:
+        module = self.root / "modules" / name
+        module.mkdir(parents=True)
+        entry = {"name": name, "path": f"modules/{name}"}
+        if manifest is not None:
+            manifest_path = module / "neon.module.yaml"
+            if isinstance(manifest, str):
+                manifest_path.write_text(manifest, encoding="utf-8")
+            else:
+                write_json(manifest_path, manifest)
+            entry["manifest"] = "neon.module.yaml"
+        if binary:
+            (module / "native.dll").write_bytes(b"closed-harness-placeholder")
+            entry["binary"] = "native.dll"
+        project.setdefault("modules", []).append(entry)
 
     def check(self, project: dict) -> dict:
         self.write_project(project)
@@ -735,6 +812,270 @@ end)
         source = "-- fakeCall()\nlocal text = 'alsoFake()'\n--[[ hiddenCall() ]]\nprint(text)\n"
         self.add_resource(project, meta='<meta><script src="server.lua" type="server"/></meta>', files={"server.lua": source})
         self.assertEqual(self.check(project)["status"], "pass")
+
+    def test_complete_resource_contract_matches_meta_lua_event_acl_and_resolves_stably(self) -> None:
+        project = base_project()
+        manifest = base_component("inventory")
+        manifest["exports"] = [{
+            "name": "takeItem", "side": "server", "parameters": [{"name": "item", "type": "string", "optional": False, "description": "Item identifier."}],
+            "returns": [{"name": "removed", "type": "boolean", "description": "Whether the item was removed."}],
+            "description": "Remove one item.", "http": False, "restricted": False,
+        }]
+        manifest["events"] = [{
+            "name": "inventoryChanged", "side": "server", "directions": ["defines", "emits"], "parameters": [],
+            "allowRemoteTrigger": False, "description": "Signals an inventory mutation.",
+        }]
+        manifest["acl"] = [{"right": "function.restartResource", "required": True, "reason": "Restart the owned inventory resource."}]
+        meta = (
+            '<meta><script src="server.lua" type="server"/><export function="takeItem" type="server" http="false" restricted="false"/>'
+            '<aclrequest><right name="function.restartResource" access="true"/></aclrequest></meta>'
+        )
+        source = "function takeItem(item) return true end\naddEvent('inventoryChanged', false)\n"
+        self.add_resource(project, name="inventory", meta=meta, files={"server.lua": source}, manifest=manifest)
+        result = self.check(project)
+        self.assertEqual(result["status"], "pass")
+        resolved_a = resolve_project_components(self.project_path, SCHEMAS, CATALOGUE_PATH)
+        resolved_b = resolve_project_components(self.project_path, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(canonical_json(resolved_a), canonical_json(resolved_b))
+        self.assertEqual(SCHEMAS.validate("neon-project-api", resolved_a), [])
+        self.assertEqual(resolved_a["components"][0]["state"], "verified")
+        self.assertEqual(
+            [(item["id"], item["state"]) for item in resolved_a["symbols"]],
+            [("resource:inventory:event:inventoryChanged", "verified"), ("resource:inventory:server-export:takeItem", "verified")],
+        )
+        self.assertEqual({item["signatureKnown"] for item in resolved_a["symbols"]}, {True})
+
+    def test_manifest_export_must_match_meta_global_implementation_and_security_flags(self) -> None:
+        project = base_project()
+        manifest = base_component("inventory")
+        manifest["exports"] = [{
+            "name": "takeItem", "side": "server", "parameters": [], "returns": [], "description": "Remove an item.",
+            "http": False, "restricted": True,
+        }]
+        self.add_resource(
+            project, name="inventory", manifest=manifest,
+            meta='<meta><script src="server.lua" type="server"/><export function="takeItem" type="server" restricted="false"/></meta>',
+            files={"server.lua": "local function takeItem() end\n"},
+        )
+        codes = diagnostic_codes(self.check(project))
+        self.assertIn("RESOURCE_EXPORT_IMPLEMENTATION_MISSING", codes)
+        self.assertIn("RESOURCE_EXPORT_SECURITY_MISMATCH", codes)
+
+    def test_manifest_export_absent_from_meta_is_rejected(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["exports"] = [{"name": "publicCall", "side": "server", "parameters": [], "returns": [], "description": "Public call.", "http": False, "restricted": False}]
+        self.add_resource(project, manifest=manifest, meta='<meta><script src="server.lua" type="server"/></meta>', files={"server.lua": "function publicCall() end\n"})
+        self.assertIn("RESOURCE_EXPORT_NOT_IN_META", diagnostic_codes(self.check(project)))
+
+    def test_shared_export_requires_both_meta_sides_and_both_implementations(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["exports"] = [{"name": "sharedCall", "side": "shared", "parameters": [], "returns": [], "description": "Shared call.", "http": False, "restricted": False}]
+        self.add_resource(
+            project, manifest=manifest,
+            meta='<meta><script src="shared.lua" type="shared"/><export function="sharedCall" type="server"/></meta>',
+            files={"shared.lua": "function sharedCall() end\n"},
+        )
+        self.assertIn("RESOURCE_EXPORT_SIDE_MISMATCH", diagnostic_codes(self.check(project)))
+        resource = self.root / "resources" / "demo"
+        (resource / "meta.xml").write_text('<meta><script src="shared.lua" type="shared"/><export function="sharedCall" type="server"/><export function="sharedCall" type="client"/></meta>', encoding="utf-8")
+        self.assertEqual(self.check(project)["status"], "pass")
+
+    def test_opaque_resource_contract_is_warning_by_default_and_error_in_strict_mode(self) -> None:
+        project = base_project()
+        self.add_resource(project, meta='<meta><script src="server.lua"/><export function="legacy" type="server"/></meta>', files={"server.lua": "function legacy() end\naddEvent('legacyChanged', true)\n"})
+        allowed = self.check(project)
+        self.assertEqual(allowed["status"], "pass")
+        self.assertEqual(set(diagnostic_codes(allowed)), {"RESOURCE_EXPORT_OPAQUE", "RESOURCE_EVENT_OPAQUE"})
+        project["unknownComponents"] = "error"
+        strict = self.check(project)
+        self.assertEqual(strict["status"], "fail")
+        self.assertEqual(strict["summary"]["errors"], 2)
+        resolved = resolve_project_components(self.project_path, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual({item["state"] for item in resolved["symbols"]}, {"opaque"})
+
+    def test_custom_event_definition_remote_flag_and_side_are_checked(self) -> None:
+        project = base_project()
+        manifest = base_component("events")
+        manifest["events"] = [{"name": "serverSignal", "side": "server", "directions": ["defines"], "parameters": [], "allowRemoteTrigger": False, "description": "Server signal."}]
+        self.add_resource(project, name="events", manifest=manifest, meta='<meta><script src="server.lua" type="server"/></meta>', files={"server.lua": "addEvent('serverSignal', true)\n"})
+        self.add_resource(project, name="consumer", meta='<meta><script src="client.lua" type="client"/></meta>', files={"client.lua": "addEventHandler('serverSignal', root, function() end)\n"})
+        codes = diagnostic_codes(self.check(project))
+        self.assertIn("RESOURCE_EVENT_REMOTE_MISMATCH", codes)
+        self.assertIn("EVENT_WRONG_SIDE", codes)
+
+    def test_manifest_defined_event_requires_source_definition(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["events"] = [{"name": "missingSignal", "side": "server", "directions": ["defines"], "parameters": [], "allowRemoteTrigger": False, "description": "Missing signal."}]
+        self.add_resource(project, manifest=manifest, meta='<meta><script src="server.lua" type="server"/></meta>', files={"server.lua": "print('no event')\n"})
+        self.assertIn("RESOURCE_EVENT_DEFINITION_MISSING", diagnostic_codes(self.check(project)))
+
+    def test_add_event_default_remote_flag_is_understood_as_false(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["events"] = [{"name": "localSignal", "side": "server", "directions": ["defines"], "parameters": [], "allowRemoteTrigger": False, "description": "Local signal."}]
+        self.add_resource(project, manifest=manifest, meta='<meta><script src="server.lua"/></meta>', files={"server.lua": "addEvent('localSignal')\n"})
+        self.assertEqual(self.check(project)["status"], "pass")
+
+    def test_resource_export_calls_validate_provider_name_and_side(self) -> None:
+        project = base_project()
+        manifest = base_component("inventory")
+        manifest["exports"] = [{"name": "takeItem", "side": "server", "parameters": [], "returns": [], "description": "Take an item.", "http": False, "restricted": False}]
+        self.add_resource(project, name="inventory", manifest=manifest, meta='<meta><script src="server.lua"/><export function="takeItem" type="server"/></meta>', files={"server.lua": "function takeItem() end\n"})
+        self.add_resource(project, name="client-consumer", meta='<meta><script src="client.lua" type="client"/></meta>', files={"client.lua": "exports.inventory:takeItem()\nexports.inventory:missingCall()\nexports.ghost:anyCall()\n"})
+        result = self.check(project)
+        self.assertIn("RESOURCE_EXPORT_WRONG_SIDE", diagnostic_codes(result))
+        self.assertIn("RESOURCE_EXPORT_UNKNOWN", diagnostic_codes(result))
+        self.assertIn("RESOURCE_EXPORT_PROVIDER_UNKNOWN", diagnostic_codes(result))
+        self.assertEqual(result["summary"]["errors"], 1)
+        self.assertEqual(result["summary"]["warnings"], 2)
+
+    def test_acl_and_required_manifest_dependency_are_checked(self) -> None:
+        project = base_project()
+        manifest = base_component("gameplay")
+        manifest["acl"] = [{"right": "function.kickPlayer", "required": True, "reason": "Moderate the local test session."}]
+        manifest["dependencies"] = [{"kind": "resource", "name": "inventory", "optional": False}]
+        self.add_resource(project, name="gameplay", manifest=manifest, meta='<meta><script src="server.lua"/></meta>', files={"server.lua": "print('x')\n"})
+        codes = diagnostic_codes(self.check(project))
+        self.assertIn("COMPONENT_DEPENDENCY_MISSING", codes)
+        self.assertIn("COMPONENT_DEPENDENCY_UNDECLARED", codes)
+        self.assertIn("RESOURCE_ACL_MISSING", codes)
+
+    def test_acl_right_outside_aclrequest_cannot_satisfy_security_contract(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["acl"] = [{"right": "function.kickPlayer", "required": True, "reason": "Moderate the test session."}]
+        self.add_resource(project, manifest=manifest, meta='<meta><unrelated><right name="function.kickPlayer" access="true"/></unrelated></meta>')
+        self.assertIn("RESOURCE_ACL_MISSING", diagnostic_codes(self.check(project)))
+
+    def test_dependency_minimum_version_is_checked_and_unknown_versions_are_not_guessed(self) -> None:
+        project = base_project()
+        inventory = base_component("inventory")
+        inventory["version"] = "1.4.0"
+        gameplay = base_component("gameplay")
+        gameplay["dependencies"] = [{"kind": "resource", "name": "inventory", "optional": False, "minimumVersion": "2.0.0"}]
+        self.add_resource(project, name="inventory", manifest=inventory, meta="<meta/>")
+        self.add_resource(project, name="gameplay", manifest=gameplay, meta='<meta><include resource="inventory"/></meta>')
+        self.assertIn("COMPONENT_DEPENDENCY_VERSION_INCOMPATIBLE", diagnostic_codes(self.check(project)))
+        del project["resources"][0]["manifest"]
+        self.assertIn("COMPONENT_DEPENDENCY_VERSION_UNKNOWN", diagnostic_codes(self.check(project)))
+
+    def test_oop_requirement_checks_true_value_not_tag_presence(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["oopRequired"] = True
+        self.add_resource(project, manifest=manifest, meta="<meta><oop>false</oop></meta>")
+        self.assertIn("RESOURCE_OOP_MISSING", diagnostic_codes(self.check(project)))
+        (self.root / "resources" / "demo" / "meta.xml").write_text("<meta><oop>true</oop></meta>", encoding="utf-8")
+        self.assertEqual(self.check(project)["status"], "pass")
+
+    def test_module_contract_exposes_declared_function_without_claiming_runtime_verification(self) -> None:
+        project = base_project()
+        manifest = base_component("native", "module")
+        manifest["exports"] = [{"name": "nativePing", "side": "server", "parameters": [], "returns": [], "description": "Ping the native module.", "http": False, "restricted": False}]
+        self.add_module(project, manifest=manifest)
+        self.add_resource(project, meta='<meta><script src="server.lua"/></meta>', files={"server.lua": "nativePing()\n"})
+        self.assertEqual(self.check(project)["status"], "pass")
+        resolved = resolve_project_components(self.project_path, SCHEMAS, CATALOGUE_PATH)
+        module = next(item for item in resolved["components"] if item["kind"] == "module")
+        symbol = next(item for item in resolved["symbols"] if item["ownerKind"] == "module")
+        self.assertEqual((module["state"], symbol["state"]), ("documented-only", "documented-only"))
+        self.assertEqual(module["binary"]["size"], len(b"closed-harness-placeholder"))
+        self.assertRegex(module["binary"]["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_module_without_manifest_is_opaque_and_binary_path_is_bounded(self) -> None:
+        project = base_project()
+        self.add_module(project, manifest=None)
+        allowed = self.check(project)
+        self.assertEqual((allowed["status"], diagnostic_codes(allowed)), ("pass", ["MODULE_OPAQUE"]))
+        project["unknownComponents"] = "error"
+        project["modules"][0]["binary"] = "../outside.dll"
+        codes = diagnostic_codes(self.check(project))
+        self.assertIn("PROJECT_SCHEMA_INVALID", codes)
+
+    @unittest.skipIf(os.name == "nt", "creating symlinks is not reliably available to unprivileged Windows tests")
+    def test_component_manifest_and_module_binary_symlinks_cannot_escape_their_roots(self) -> None:
+        project = base_project()
+        self.add_resource(project, meta="<meta/>")
+        self.add_module(project, manifest=None, binary=False)
+        outside = Path(self.temporary.name + "-component-outside")
+        outside.mkdir()
+        try:
+            outside_manifest = outside / "manifest.json"
+            write_json(outside_manifest, base_component())
+            outside_binary = outside / "native.dll"
+            outside_binary.write_bytes(b"outside")
+            (self.root / "resources" / "demo" / "manifest.yaml").symlink_to(outside_manifest)
+            (self.root / "modules" / "native" / "native.dll").symlink_to(outside_binary)
+            project["resources"][0]["manifest"] = "manifest.yaml"
+            project["modules"][0]["binary"] = "native.dll"
+            codes = diagnostic_codes(self.check(project))
+            self.assertEqual(codes.count("PATH_OUTSIDE_WORKSPACE"), 2)
+        finally:
+            outside_manifest.unlink()
+            outside_binary.unlink()
+            outside.rmdir()
+
+    def test_component_kind_name_and_json_compatible_yaml_are_enforced(self) -> None:
+        for index, manifest, expected in (
+            (0, {**base_component("other"), "name": "other"}, "COMPONENT_NAME_MISMATCH"),
+            (1, base_component("demo-1", "module"), "COMPONENT_KIND_MISMATCH"),
+            (2, "schemaVersion: 1.0.0\nkind: resource\n", "COMPONENT_MANIFEST_INVALID"),
+        ):
+            with self.subTest(expected=expected):
+                project = base_project()
+                self.add_resource(project, name=f"demo-{index}", manifest=manifest, meta="<meta/>")
+                result = self.check(project)
+                self.assertIn(expected, diagnostic_codes(result))
+                if index == 2:
+                    self.assertIn("JSON-compatible YAML 1.2", next(item["message"] for item in result["diagnostics"] if item["code"] == expected))
+
+    def test_manifest_does_not_hide_additional_opaque_observations_from_resolution(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        self.add_resource(
+            project, manifest=manifest,
+            meta='<meta><script src="server.lua"/><export function="legacy" type="server"/></meta>',
+            files={"server.lua": "function legacy() end\naddEvent('legacySignal', false)\n"},
+        )
+        self.write_project(project)
+        resolved = resolve_project_components(self.project_path, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(resolved["status"], "pass")
+        self.assertEqual({item["id"] for item in resolved["symbols"]}, {"resource:demo:server-export:legacy", "resource:demo:event:legacySignal"})
+        self.assertEqual({item["state"] for item in resolved["symbols"]}, {"opaque"})
+        self.assertEqual({item["signatureKnown"] for item in resolved["symbols"]}, {False})
+        self.assertTrue(all("parameters" not in item and "returns" not in item for item in resolved["symbols"]))
+
+    def test_project_resolve_cli_emits_schema_valid_byte_stable_json(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        self.add_resource(project, manifest=manifest, meta="<meta/>")
+        self.write_project(project)
+        command = [sys.executable, str(CLI_PATH), "project", "resolve", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--json"]
+        first = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        second = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual((first.returncode, first.stderr), (0, ""))
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(SCHEMAS.validate("neon-project-api", json.loads(first.stdout)), [])
+
+    def test_project_resolve_cli_failure_remains_a_complete_schema_valid_catalogue(self) -> None:
+        project = base_project()
+        manifest = base_component()
+        manifest["exports"] = [{"name": "missingExport", "side": "server", "parameters": [], "returns": [], "description": "Missing export.", "http": False, "restricted": False}]
+        self.add_resource(project, manifest=manifest, meta="<meta/>")
+        self.write_project(project)
+        completed = subprocess.run(
+            [sys.executable, str(CLI_PATH), "project", "resolve", "--project", str(self.project_path), "--catalogue", str(CATALOGUE_PATH), "--json"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(result["command"], "project.resolve")
+        self.assertEqual(SCHEMAS.validate("neon-project-api", result), [])
+        self.assertEqual(result["components"][0]["state"], "conflict")
+        self.assertEqual(result["symbols"][0]["state"], "conflict")
 
 
 class LuaLsGenerationTests(unittest.TestCase):

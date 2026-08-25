@@ -206,7 +206,9 @@ taxonomy makes those distinctions machine-readable; it does not weaken them.
 ### 6.1 Authoring and generated formats
 
 - Human-authored baseline locks, overlays, resource/module manifests, and
-  scenario manifests use YAML encoded as UTF-8.
+  scenario manifests use YAML encoded as UTF-8. Dependency-free daily tooling
+  initially accepts the strict JSON-compatible YAML 1.2 profile only; aliases,
+  tags, implicit scalar typing, and duplicate keys are outside that profile.
 - Every authored document is normalized to the common data model and validated
   with JSON Schema draft 2020-12 before use.
 - Generated catalogues, profiles, results, assertions, and artefact indexes use

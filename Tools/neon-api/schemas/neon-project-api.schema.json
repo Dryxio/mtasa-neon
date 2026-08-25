@@ -1,0 +1,110 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-project-api-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"const": "project.resolve", "type": "string"},
+    "components": {"items": {"$ref": "#/$defs/component"}, "type": "array"},
+    "diagnostics": {"items": {"$ref": "#/$defs/diagnostic"}, "type": "array"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {"$ref": "#/$defs/summary"},
+    "symbols": {"items": {"$ref": "#/$defs/symbol"}, "type": "array"}
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics", "components", "symbols"],
+  "type": "object",
+  "$defs": {
+    "component": {
+      "additionalProperties": false,
+      "properties": {
+        "acl": {"type": "array"},
+        "binary": {"anyOf": [{"$ref": "#/$defs/binary"}, {"type": "null"}]},
+        "capabilities": {"type": "array"},
+        "dependencies": {"type": "array"},
+        "kind": {"enum": ["resource", "module"], "type": "string"},
+        "lifecycle": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "manifest": {"anyOf": [{"$ref": "#/$defs/manifest"}, {"type": "null"}]},
+        "module": {"type": "object"},
+        "name": {"minLength": 1, "type": "string"},
+        "path": {"format": "relative-path", "type": "string"},
+        "state": {"enum": ["verified", "documented-only", "opaque", "conflict"], "type": "string"}
+      },
+      "required": ["kind", "name", "path", "state", "manifest", "lifecycle", "dependencies", "acl", "capabilities"],
+      "type": "object"
+    },
+    "binary": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {"minLength": 1, "type": "string"},
+        "sha256": {"format": "sha256", "type": "string"},
+        "size": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["path", "sha256", "size"],
+      "type": "object"
+    },
+    "diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {"pattern": "^[A-Z][A-Z0-9_]+$", "type": "string"},
+        "line": {"minimum": 1, "type": "integer"},
+        "message": {"minLength": 1, "type": "string"},
+        "path": {"minLength": 1, "type": "string"},
+        "severity": {"enum": ["error", "warning"], "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"},
+        "symbol": {"pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$", "type": "string"}
+      },
+      "required": ["code", "severity", "message", "path"],
+      "type": "object"
+    },
+    "manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {"minLength": 1, "type": "string"},
+        "schemaVersion": {"format": "semver", "type": "string"},
+        "sha256": {"format": "sha256", "type": "string"},
+        "version": {"format": "semver", "type": "string"}
+      },
+      "required": ["path", "schemaVersion", "sha256", "version"],
+      "type": "object"
+    },
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "apiRequirements": {"minimum": 0, "type": "integer"},
+        "components": {"minimum": 0, "type": "integer"},
+        "errors": {"minimum": 0, "type": "integer"},
+        "files": {"minimum": 0, "type": "integer"},
+        "opaque": {"minimum": 0, "type": "integer"},
+        "resources": {"minimum": 0, "type": "integer"},
+        "symbols": {"minimum": 0, "type": "integer"},
+        "warnings": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["errors", "warnings", "resources", "files", "apiRequirements", "components", "symbols", "opaque"],
+      "type": "object"
+    },
+    "symbol": {
+      "additionalProperties": false,
+      "properties": {
+        "allowRemoteTrigger": {"type": "boolean"},
+        "description": {"minLength": 1, "type": "string"},
+        "directions": {"type": "array"},
+        "http": {"type": "boolean"},
+        "id": {"format": "stable-id", "type": "string"},
+        "kind": {"enum": ["export", "function", "event", "element"], "type": "string"},
+        "lifetime": {"type": "string"},
+        "name": {"minLength": 1, "type": "string"},
+        "owner": {"minLength": 1, "type": "string"},
+        "ownerKind": {"enum": ["resource", "module"], "type": "string"},
+        "parameters": {"type": "array"},
+        "provenance": {"type": "object"},
+        "restricted": {"type": "boolean"},
+        "returns": {"type": "array"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"},
+        "signatureKnown": {"type": "boolean"},
+        "state": {"enum": ["verified", "documented-only", "opaque", "conflict"], "type": "string"}
+      },
+      "required": ["id", "kind", "name", "owner", "ownerKind", "side", "state", "description", "provenance"],
+      "type": "object"
+    }
+  }
+}

@@ -14,12 +14,14 @@
       "type": "object"
     },
     "externalDependencies": {"items": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"}, "type": "array", "uniqueItems": true},
+    "modules": {"items": {"$ref": "#/$defs/module"}, "type": "array"},
     "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
     "profile": {"enum": ["mta-upstream", "neon-server", "neon-client", "neon-pair", "neon-multiclient"], "type": "string"},
     "requiredApis": {"items": {"$ref": "#/$defs/apiRequirement"}, "type": "array"},
     "resources": {"items": {"$ref": "#/$defs/resource"}, "type": "array"},
     "schemaVersion": {"format": "semver", "type": "string"},
-    "unknownApis": {"enum": ["allow", "error"], "type": "string"}
+    "unknownApis": {"enum": ["allow", "error"], "type": "string"},
+    "unknownComponents": {"enum": ["allow-opaque", "error"], "type": "string"}
   },
   "required": ["schemaVersion", "name", "profile", "engine", "catalogue", "resources"],
   "type": "object",
@@ -37,10 +39,22 @@
       "additionalProperties": false,
       "properties": {
         "dependencies": {"items": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"}, "type": "array", "uniqueItems": true},
+        "manifest": {"format": "relative-path", "type": "string"},
         "meta": {"format": "relative-path", "type": "string"},
         "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
         "path": {"format": "relative-path", "type": "string"},
         "requiredApis": {"items": {"$ref": "#/$defs/apiRequirement"}, "type": "array"}
+      },
+      "required": ["name", "path"],
+      "type": "object"
+    },
+    "module": {
+      "additionalProperties": false,
+      "properties": {
+        "binary": {"format": "relative-path", "type": "string"},
+        "manifest": {"format": "relative-path", "type": "string"},
+        "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+        "path": {"format": "relative-path", "type": "string"}
       },
       "required": ["name", "path"],
       "type": "object"

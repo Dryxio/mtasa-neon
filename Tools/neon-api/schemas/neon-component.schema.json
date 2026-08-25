@@ -1,0 +1,138 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-component-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acl": {"items": {"$ref": "#/$defs/acl"}, "type": "array"},
+    "capabilities": {"items": {"pattern": "^[a-z][a-z0-9.-]+$", "type": "string"}, "type": "array", "uniqueItems": true},
+    "dependencies": {"items": {"$ref": "#/$defs/dependency"}, "type": "array"},
+    "description": {"minLength": 1, "type": "string"},
+    "elements": {"items": {"$ref": "#/$defs/element"}, "type": "array"},
+    "events": {"items": {"$ref": "#/$defs/event"}, "type": "array"},
+    "exports": {"items": {"$ref": "#/$defs/export"}, "type": "array"},
+    "kind": {"enum": ["resource", "module"], "type": "string"},
+    "lifecycle": {"$ref": "#/$defs/lifecycle"},
+    "module": {"$ref": "#/$defs/module"},
+    "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+    "oopRequired": {"type": "boolean"},
+    "schemaVersion": {"format": "semver", "type": "string"},
+    "version": {"format": "semver", "type": "string"}
+  },
+  "required": ["schemaVersion", "kind", "name", "version", "lifecycle", "dependencies", "exports", "events", "elements", "acl", "capabilities"],
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {"kind": {"const": "resource"}, "module": {"type": "null"}},
+      "required": ["kind"]
+    },
+    {
+      "properties": {"kind": {"const": "module"}},
+      "required": ["kind", "module"]
+    }
+  ],
+  "$defs": {
+    "acl": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {"minLength": 1, "type": "string"},
+        "required": {"type": "boolean"},
+        "right": {"pattern": "^[A-Za-z0-9_.:-]+$", "type": "string"}
+      },
+      "required": ["right", "required", "reason"],
+      "type": "object"
+    },
+    "dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["resource", "module", "external"], "type": "string"},
+        "minimumVersion": {"format": "semver", "type": "string"},
+        "name": {"pattern": "^[A-Za-z0-9_.-]+$", "type": "string"},
+        "optional": {"type": "boolean"}
+      },
+      "required": ["kind", "name", "optional"],
+      "type": "object"
+    },
+    "element": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {"minLength": 1, "type": "string"},
+        "lifetime": {"enum": ["resource", "element", "manual", "opaque"], "type": "string"},
+        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$", "type": "string"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"}
+      },
+      "required": ["name", "side", "lifetime", "description"],
+      "type": "object"
+    },
+    "event": {
+      "additionalProperties": false,
+      "properties": {
+        "allowRemoteTrigger": {"type": "boolean"},
+        "description": {"minLength": 1, "type": "string"},
+        "directions": {"items": {"enum": ["defines", "emits", "handles"], "type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true},
+        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_.:-]*$", "type": "string"},
+        "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"}
+      },
+      "required": ["name", "side", "directions", "parameters", "allowRemoteTrigger", "description"],
+      "type": "object"
+    },
+    "export": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {"minLength": 1, "type": "string"},
+        "http": {"type": "boolean"},
+        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"},
+        "parameters": {"items": {"$ref": "#/$defs/parameter"}, "type": "array"},
+        "restricted": {"type": "boolean"},
+        "returns": {"items": {"$ref": "#/$defs/return"}, "type": "array"},
+        "side": {"enum": ["client", "server", "shared"], "type": "string"}
+      },
+      "required": ["name", "side", "parameters", "returns", "description", "http", "restricted"],
+      "type": "object"
+    },
+    "lifecycle": {
+      "additionalProperties": false,
+      "properties": {
+        "persistentState": {"enum": ["none", "memory", "external", "opaque"], "type": "string"},
+        "reloadSafe": {"type": "boolean"},
+        "start": {"enum": ["manual", "automatic", "dependency"], "type": "string"},
+        "stop": {"enum": ["clean", "best-effort", "opaque"], "type": "string"}
+      },
+      "required": ["start", "stop", "reloadSafe", "persistentState"],
+      "type": "object"
+    },
+    "module": {
+      "additionalProperties": false,
+      "properties": {
+        "abi": {"minLength": 1, "type": "string"},
+        "architectures": {"items": {"enum": ["x86", "x64", "arm64"], "type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true},
+        "entrypoint": {"minLength": 1, "type": "string"},
+        "platforms": {"items": {"enum": ["windows", "linux", "macos"], "type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}
+      },
+      "required": ["abi", "entrypoint", "platforms", "architectures"],
+      "type": "object"
+    },
+    "parameter": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {"type": "string"},
+        "description": {"minLength": 1, "type": "string"},
+        "name": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "type": "string"},
+        "optional": {"type": "boolean"},
+        "type": {"minLength": 1, "type": "string"}
+      },
+      "required": ["name", "type", "optional", "description"],
+      "type": "object"
+    },
+    "return": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {"minLength": 1, "type": "string"},
+        "name": {"minLength": 1, "type": "string"},
+        "type": {"minLength": 1, "type": "string"}
+      },
+      "required": ["type", "description"],
+      "type": "object"
+    }
+  }
+}

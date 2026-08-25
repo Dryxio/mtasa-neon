@@ -26,9 +26,10 @@ from neonlib.catalogue import (  # noqa: E402
     git_snapshot,
     semantic_snapshot_issues,
 )
+from neonlib.components import manifest_semantic_issues  # noqa: E402
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
-from neonlib.project import check_project  # noqa: E402
+from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 
 
@@ -214,6 +215,23 @@ def command_check(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "pass" else 1
 
 
+def command_project_resolve(args: argparse.Namespace) -> int:
+    default_project = Path.cwd() / "neon.project.json"
+    project = Path(args.project).resolve() if args.project else (default_project if default_project.is_file() else DEFAULT_PROJECT)
+    catalogue = Path(args.catalogue).resolve() if args.catalogue else None
+    result = resolve_project_components(project, SCHEMA_STORE, catalogue)
+    issues = SCHEMA_STORE.validate("neon-project-api", result)
+    if issues:
+        result = _failure("project.resolve", "INTERNAL_RESULT_INVALID", "; ".join(f"{issue.pointer}: {issue.message}" for issue in issues))
+    if args.json:
+        sys.stdout.write(canonical_json(result))
+    else:
+        _emit(result, False)
+        if result.get("components"):
+            print(f"{len(result['components'])} components, {len(result['symbols'])} project-local symbols")
+    return 0 if result["status"] == "pass" else 1
+
+
 def command_schema_validate(args: argparse.Namespace) -> int:
     path = Path(args.document).resolve()
     try:
@@ -232,15 +250,20 @@ def command_schema_validate(args: argparse.Namespace) -> int:
         }
         for issue in issues
     ]
+    if args.schema == "neon-component" and not issues and isinstance(document, dict):
+        diagnostics.extend(
+            {"code": issue.code, "severity": "error", "message": issue.message, "path": "/"}
+            for issue in manifest_semantic_issues(document)
+        )
     result = {
         "schemaVersion": "1.0.0",
         "command": "schema.validate",
-        "status": "pass" if not issues else "fail",
-        "summary": {"errors": len(issues), "warnings": 0},
+        "status": "pass" if not diagnostics else "fail",
+        "summary": {"errors": len(diagnostics), "warnings": 0},
         "diagnostics": diagnostics,
     }
     _emit(result, args.json)
-    return 0 if not issues else 1
+    return 0 if not diagnostics else 1
 
 
 def command_catalogue_build(args: argparse.Namespace) -> int:
@@ -523,6 +546,14 @@ def build_parser() -> argparse.ArgumentParser:
     harness.add_argument("--json", action="store_true")
     harness.set_defaults(handler=command_harness)
 
+    project = subcommands.add_parser("project", help="resolve project-local resource and module contracts")
+    project_subcommands = project.add_subparsers(dest="project_command", required=True)
+    resolve = project_subcommands.add_parser("resolve", help="build the deterministic project-local API catalogue")
+    resolve.add_argument("--project", help="project file; defaults to ./neon.project.json, then the repository project")
+    resolve.add_argument("--catalogue")
+    resolve.add_argument("--json", action="store_true")
+    resolve.set_defaults(handler=command_project_resolve)
+
     api = subcommands.add_parser("api", help="search the semantic MTA and Neon API catalogue")
     api_subcommands = api.add_subparsers(dest="api_command", required=True)
 
@@ -554,7 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-semantic-snapshot", "neon-project", "neon-test", "neon-assertion", "neon-artifact", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)

@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from . import SCHEMA_VERSION
+from .components import file_sha256, load_manifest, manifest_sha256, manifest_symbols
 from .jsonio import JsonDocumentError, load_json
 from .schema import SchemaStore, schema_major
 
@@ -16,6 +17,11 @@ MAX_XML_BYTES = 4 * 1024 * 1024
 LUA_CALL_RE = re.compile(r"(?<![.:\w])([A-Za-z_]\w*)\s*\(")
 LUA_FUNCTION_RE = re.compile(r"(?:\blocal\s+)?\bfunction\s+([A-Za-z_]\w*)\s*\(|\blocal\s+([A-Za-z_]\w*)\s*=\s*function\b")
 LUA_EVENT_HANDLER_RE = re.compile(r'''(?<![.:\w])addEventHandler\s*\(\s*(["'])((?:\\.|(?!\1).)*)\1''')
+LUA_ADD_EVENT_RE = re.compile(r'''(?<![.:\w])addEvent\s*\(\s*(["'])((?:\\.|(?!\1).)*)\1(?:\s*,\s*(true|false)\b)?''')
+LUA_EXPORT_CALL_RE = re.compile(
+    r'''\bexports\s*(?:\[\s*(["'])((?:\\.|(?!\1).)*)\1\s*\]|\.\s*([A-Za-z_][A-Za-z0-9_.-]*))\s*:\s*([A-Za-z_]\w*)\s*\('''
+)
+LUA_GLOBAL_FUNCTION_RE = re.compile(r"(?m)^[ \t]*(?:function\s+([A-Za-z_]\w*)\s*\(|([A-Za-z_]\w*)\s*=\s*function\b)")
 LUA_BUILTINS = {
     "assert", "collectgarbage", "dofile", "error", "getfenv", "getmetatable", "ipairs", "load", "loadfile", "loadstring",
     "module", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "require", "select", "setfenv",
@@ -66,11 +72,17 @@ class CheckState:
     def add(self, code: str, message: str, **kwargs: Any) -> None:
         self.diagnostics.append(Diagnostic(code, "error", message, **kwargs))
 
+    def warn(self, code: str, message: str, **kwargs: Any) -> None:
+        self.diagnostics.append(Diagnostic(code, "warning", message, **kwargs))
 
-@dataclass(frozen=True)
+
+@dataclass
 class MetaElement:
     tag: str
     attributes: dict[str, str]
+    text: str = ""
+    parent: str | None = None
+    depth: int = 0
 
     def get(self, name: str, default: str | None = None) -> str | None:
         return self.attributes.get(name, default)
@@ -81,8 +93,64 @@ class MetaDocument:
     tag: str
     elements: tuple[MetaElement, ...]
 
-    def findall(self, name: str) -> list[MetaElement]:
-        return [element for element in self.elements if element.tag == name]
+    def findall(self, name: str, parent: str | None = None, depth: int | None = None) -> list[MetaElement]:
+        return [
+            element for element in self.elements
+            if element.tag == name and (parent is None or element.parent == parent) and (depth is None or element.depth == depth)
+        ]
+
+
+@dataclass(frozen=True)
+class LoadedComponent:
+    kind: str
+    name: str
+    root: Path | None
+    display_root: str
+    manifest_path: Path | None
+    manifest_display: str | None
+    manifest: dict[str, Any] | None
+
+
+def _load_component(workspace: Path, entry: dict[str, Any], kind: str, schema_store: SchemaStore, state: CheckState) -> LoadedComponent:
+    name = entry["name"]
+    display_root = entry["path"].rstrip("/")
+    root = _resolve_relative(workspace, entry["path"])
+    if root is None:
+        state.add("PATH_OUTSIDE_WORKSPACE", f"{kind} path is not workspace-relative: {entry['path']}", path=entry["path"])
+        return LoadedComponent(kind, name, None, display_root, None, None, None)
+    if not root.is_dir():
+        state.add("MISSING_RESOURCE" if kind == "resource" else "MISSING_MODULE", f"{kind} directory does not exist: {entry['path']}", path=entry["path"])
+        return LoadedComponent(kind, name, root, display_root, None, None, None)
+    manifest_name = entry.get("manifest")
+    if not manifest_name:
+        return LoadedComponent(kind, name, root, display_root, None, None, None)
+    manifest_path = _resolve_relative(root, manifest_name)
+    manifest_display = f"{display_root}/{manifest_name}"
+    if manifest_path is None:
+        state.add("PATH_OUTSIDE_WORKSPACE", f"manifest path escapes {kind}: {manifest_name}", path=manifest_display)
+        return LoadedComponent(kind, name, root, display_root, None, manifest_display, None)
+    if not manifest_path.is_file():
+        state.add("COMPONENT_MANIFEST_MISSING", f"declared component manifest does not exist: {manifest_name}", path=manifest_display)
+        return LoadedComponent(kind, name, root, display_root, manifest_path, manifest_display, None)
+    manifest, issues = load_manifest(manifest_path, schema_store)
+    for issue in issues:
+        state.add(issue.code, issue.message, path=manifest_display)
+    if manifest is not None:
+        if manifest["kind"] != kind:
+            state.add("COMPONENT_KIND_MISMATCH", f"manifest kind {manifest['kind']} does not match project {kind}", path=manifest_display)
+            manifest = None
+        elif manifest["name"] != name:
+            state.add("COMPONENT_NAME_MISMATCH", f"manifest name {manifest['name']} does not match project name {name}", path=manifest_display)
+            manifest = None
+    return LoadedComponent(kind, name, root, display_root, manifest_path, manifest_display, manifest)
+
+
+def _component_sides(side: str) -> tuple[str, ...]:
+    return ("client", "server") if side == "shared" else (side,)
+
+
+def _component_policy_diagnostic(state: CheckState, strict: bool, code: str, message: str, **kwargs: Any) -> None:
+    (state.add if strict else state.warn)(code, message, **kwargs)
 
 
 def parse_semver(version: str) -> tuple[int, int, int] | None:
@@ -263,7 +331,19 @@ def _line(source: str, offset: int) -> int:
     return source.count("\n", 0, offset) + 1
 
 
-def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile: str, strict_unknown: bool, state: CheckState) -> None:
+def _scan_lua(
+    path: Path,
+    display_path: str,
+    side: str,
+    catalogue: dict,
+    profile: str,
+    strict_unknown: bool,
+    state: CheckState,
+    project_functions: dict[str, set[str]] | None = None,
+    project_events: dict[str, set[str]] | None = None,
+    resource_exports: dict[str, dict[str, set[str]]] | None = None,
+    strict_components: bool = False,
+) -> None:
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -273,6 +353,9 @@ def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile
     comment_free = strip_lua_comments(source)
     declared = {name for match in LUA_FUNCTION_RE.finditer(code) for name in match.groups() if name}
     available = _available_by_side(catalogue, profile)
+    for candidate_side, names in (project_functions or {}).items():
+        if candidate_side in available:
+            available[candidate_side].update(names)
     all_known = available["client"] | available["server"]
     required_sides = ("client", "server") if side == "shared" else (side,)
     for match in LUA_CALL_RE.finditer(code):
@@ -299,6 +382,9 @@ def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile
                 symbol=name,
             )
     available_events = _available_events_by_side(catalogue, profile)
+    for candidate_side, names in (project_events or {}).items():
+        if candidate_side in available_events:
+            available_events[candidate_side].update(names)
     all_known_events = available_events["client"] | available_events["server"]
     for match in LUA_EVENT_HANDLER_RE.finditer(comment_free):
         try:
@@ -316,6 +402,53 @@ def _scan_lua(path: Path, display_path: str, side: str, catalogue: dict, profile
                 line=_line(comment_free, match.start(2)),
                 side=side,
                 symbol=name,
+            )
+    for match in LUA_EXPORT_CALL_RE.finditer(comment_free):
+        literal = match.group(1) + match.group(2) + match.group(1) if match.group(2) is not None else None
+        if literal is not None:
+            try:
+                dependency = ast.literal_eval(literal)
+            except (SyntaxError, ValueError):
+                continue
+        else:
+            dependency = match.group(3)
+        export_name = match.group(4)
+        if not isinstance(dependency, str):
+            continue
+        contract = (resource_exports or {}).get(dependency)
+        if contract is None:
+            _component_policy_diagnostic(
+                state,
+                strict_components,
+                "RESOURCE_EXPORT_PROVIDER_UNKNOWN",
+                f"resource export provider {dependency} is not declared by this project",
+                path=display_path,
+                line=_line(comment_free, match.start(4)),
+                side=side,
+                symbol=export_name,
+            )
+            continue
+        missing_sides = [required for required in required_sides if export_name not in contract.get(required, set())]
+        all_exports = contract.get("client", set()) | contract.get("server", set())
+        if export_name not in all_exports:
+            _component_policy_diagnostic(
+                state,
+                strict_components,
+                "RESOURCE_EXPORT_UNKNOWN",
+                f"resource {dependency} does not declare export {export_name}",
+                path=display_path,
+                line=_line(comment_free, match.start(4)),
+                side=side,
+                symbol=export_name,
+            )
+        elif missing_sides:
+            state.add(
+                "RESOURCE_EXPORT_WRONG_SIDE",
+                f"resource export {dependency}.{export_name} is unavailable on {', '.join(missing_sides)}",
+                path=display_path,
+                line=_line(comment_free, match.start(4)),
+                side=side,
+                symbol=export_name,
             )
 
 
@@ -406,7 +539,7 @@ def _parse_meta_document(payload: bytes) -> MetaDocument:
         source = payload.decode("utf-8-sig")
     except UnicodeError as exc:
         raise ValueError("meta.xml must be UTF-8") from exc
-    stack: list[str] = []
+    stack: list[tuple[str, int]] = []
     root: str | None = None
     root_closed = False
     elements: list[MetaElement] = []
@@ -416,9 +549,13 @@ def _parse_meta_document(payload: bytes) -> MetaDocument:
         if opening < 0:
             if not stack and source[cursor:].strip():
                 raise ValueError("text is not allowed outside the root element")
+            if stack:
+                elements[stack[-1][1]].text += source[cursor:]
             break
         if not stack and source[cursor:opening].strip():
             raise ValueError("text is not allowed outside the root element")
+        if stack:
+            elements[stack[-1][1]].text += source[cursor:opening]
         token, cursor = _read_xml_token(source, opening)
         if token.startswith("<!--") or token.startswith("<?"):
             continue
@@ -434,7 +571,7 @@ def _parse_meta_document(payload: bytes) -> MetaDocument:
         self_closing = content.endswith("/") and not closing
         if closing:
             name = content[1:].strip()
-            if not XML_NAME_RE.fullmatch(name) or not stack or stack[-1] != name:
+            if not XML_NAME_RE.fullmatch(name) or not stack or stack[-1][0] != name:
                 raise ValueError(f"mismatched closing tag {name}")
             stack.pop()
             if not stack:
@@ -451,15 +588,15 @@ def _parse_meta_document(payload: bytes) -> MetaDocument:
         attributes = _parse_xml_attributes(parts[1] if len(parts) == 2 else "")
         if root is None:
             root = name
-        elements.append(MetaElement(name, attributes))
+        elements.append(MetaElement(name, attributes, parent=stack[-1][0] if stack else None, depth=len(stack)))
         if not self_closing:
-            stack.append(name)
+            stack.append((name, len(elements) - 1))
         elif not stack:
             root_closed = True
     if root is None:
         raise ValueError("meta.xml has no root element")
     if stack:
-        raise ValueError(f"unclosed XML tag {stack[-1]}")
+        raise ValueError(f"unclosed XML tag {stack[-1][0]}")
     return MetaDocument(root, tuple(elements))
 
 
@@ -499,6 +636,122 @@ def _check_engine_version(project: dict, catalogue: dict, state: CheckState) -> 
             "ENGINE_VERSION_INCOMPATIBLE",
             f"catalogue engine {actual_text} is outside [{requirement['minimumVersion']}, {requirement['maximumVersionExclusive']})",
         )
+
+
+def _decode_lua_string(quote: str, value: str) -> str | None:
+    try:
+        decoded = ast.literal_eval(quote + value + quote)
+    except (SyntaxError, ValueError):
+        return None
+    return decoded if isinstance(decoded, str) else None
+
+
+def _lua_contract_facts(path: Path, side: str) -> tuple[set[str], dict[tuple[str, str], bool]]:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return set(), {}
+    code = strip_lua_noncode(source)
+    comment_free = strip_lua_comments(source)
+    functions = {name for match in LUA_GLOBAL_FUNCTION_RE.finditer(code) for name in match.groups() if name}
+    events: dict[tuple[str, str], bool] = {}
+    for match in LUA_ADD_EVENT_RE.finditer(comment_free):
+        name = _decode_lua_string(match.group(1), match.group(2))
+        if name is not None:
+            events[(name, side)] = match.group(3) == "true"
+    return functions, events
+
+
+def _validate_resource_contract(
+    component: LoadedComponent,
+    root: MetaDocument,
+    meta_path: str,
+    global_functions: dict[str, set[str]],
+    defined_events: dict[tuple[str, str], bool],
+    project_dependencies: set[str],
+    strict_components: bool,
+    state: CheckState,
+) -> None:
+    meta_exports: dict[tuple[str, str], MetaElement] = {}
+    for item in root.findall("export", "meta", 1):
+        name = item.get("function")
+        side = item.get("type", "server")
+        if not name or side not in ("client", "server"):
+            state.add("INVALID_META", "export requires a function and a valid type", path=meta_path)
+            continue
+        key = (name, side)
+        if key in meta_exports:
+            state.add("DUPLICATE_META_EXPORT", f"duplicate meta export {name} on {side}", path=meta_path, side=side, symbol=name)
+        meta_exports[key] = item
+
+    manifest = component.manifest
+    if manifest is None:
+        for name, side in sorted(meta_exports):
+            _component_policy_diagnostic(
+                state, strict_components, "RESOURCE_EXPORT_OPAQUE",
+                f"resource {component.name} export {name} has no approved component manifest",
+                path=meta_path, side=side, symbol=name,
+            )
+        for name, side in sorted(defined_events):
+            _component_policy_diagnostic(
+                state, strict_components, "RESOURCE_EVENT_OPAQUE",
+                f"resource {component.name} event {name} has no approved component manifest",
+                path=meta_path, side=side, symbol=name,
+            )
+        return
+
+    manifest_path = component.manifest_display or meta_path
+    declared_exports = {(item["name"], item["side"]): item for item in manifest["exports"]}
+    for (name, side), export in sorted(declared_exports.items()):
+        expected_meta_sides = _component_sides(side)
+        matching_meta = [(name, candidate) for candidate in expected_meta_sides if (name, candidate) in meta_exports]
+        if not matching_meta:
+            if any(candidate[0] == name for candidate in meta_exports):
+                state.add("RESOURCE_EXPORT_SIDE_MISMATCH", f"meta.xml side disagrees with manifest export {name} on {side}", path=meta_path, side=side, symbol=name)
+            else:
+                state.add("RESOURCE_EXPORT_NOT_IN_META", f"manifest export {name} on {side} is absent from meta.xml", path=manifest_path, side=side, symbol=name)
+        elif len(matching_meta) != len(expected_meta_sides):
+            missing_meta_sides = sorted(set(expected_meta_sides) - {candidate[1] for candidate in matching_meta})
+            state.add("RESOURCE_EXPORT_SIDE_MISMATCH", f"meta.xml is missing manifest export {name} on {', '.join(missing_meta_sides)}", path=meta_path, side=side, symbol=name)
+        expected_sides = _component_sides(side)
+        missing_implementations = [candidate for candidate in expected_sides if name not in global_functions[candidate]]
+        if missing_implementations:
+            state.add("RESOURCE_EXPORT_IMPLEMENTATION_MISSING", f"manifest export {name} has no global Lua implementation on {', '.join(missing_implementations)}", path=manifest_path, side=side, symbol=name)
+        for candidate in matching_meta:
+            meta = meta_exports[candidate]
+            if (meta.get("http", "false") == "true") != export["http"] or (meta.get("restricted", "false") == "true") != export["restricted"]:
+                state.add("RESOURCE_EXPORT_SECURITY_MISMATCH", f"meta.xml security flags disagree with manifest export {name}", path=meta_path, side=candidate[1], symbol=name)
+    for name, side in sorted(set(meta_exports) - set(declared_exports)):
+        if not any(candidate["name"] == name and side in _component_sides(candidate["side"]) for candidate in manifest["exports"]):
+            _component_policy_diagnostic(state, strict_components, "RESOURCE_EXPORT_OPAQUE", f"meta export {name} on {side} is absent from the component manifest", path=meta_path, side=side, symbol=name)
+
+    declared_definitions: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in manifest["events"]:
+        if "defines" in event["directions"]:
+            for candidate_side in _component_sides(event["side"]):
+                declared_definitions[(event["name"], candidate_side)] = event
+    for (name, side), event in sorted(declared_definitions.items()):
+        actual = defined_events.get((name, side))
+        if actual is None:
+            state.add("RESOURCE_EVENT_DEFINITION_MISSING", f"manifest event {name} is not defined on {side}", path=manifest_path, side=side, symbol=name)
+        elif actual != event["allowRemoteTrigger"]:
+            state.add("RESOURCE_EVENT_REMOTE_MISMATCH", f"addEvent remote flag disagrees with manifest event {name}", path=manifest_path, side=side, symbol=name)
+    for name, side in sorted(set(defined_events) - set(declared_definitions)):
+        _component_policy_diagnostic(state, strict_components, "RESOURCE_EVENT_OPAQUE", f"defined event {name} on {side} is absent from the component manifest", path=meta_path, side=side, symbol=name)
+
+    meta_rights = {item.get("name"): item.get("access", "false") == "true" for item in root.findall("right", "aclrequest", 2) if item.get("name")}
+    manifest_rights = {item["right"]: item for item in manifest["acl"]}
+    for right, contract in sorted(manifest_rights.items()):
+        if contract["required"] and not meta_rights.get(right, False):
+            state.add("RESOURCE_ACL_MISSING", f"required ACL right {right} is not requested with access=true", path=meta_path)
+    for right in sorted(set(meta_rights) - set(manifest_rights)):
+        _component_policy_diagnostic(state, strict_components, "RESOURCE_ACL_OPAQUE", f"ACL request {right} is absent from the component manifest", path=meta_path)
+
+    if manifest.get("oopRequired") and not any(item.tag == "oop" and item.parent == "meta" and item.depth == 1 and item.text.strip().casefold() == "true" for item in root.elements):
+        state.add("RESOURCE_OOP_MISSING", "component manifest requires OOP but meta.xml has no <oop>true</oop>", path=meta_path)
+    for dependency in manifest["dependencies"]:
+        if dependency["kind"] == "resource" and not dependency["optional"] and dependency["name"] not in project_dependencies:
+            state.add("COMPONENT_DEPENDENCY_UNDECLARED", f"required resource dependency {dependency['name']} is absent from project/meta declarations", path=manifest_path)
 
 
 def check_project(project_path: Path, schema_store: SchemaStore, catalogue_override: Path | None = None) -> dict[str, Any]:
@@ -552,19 +805,75 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
     resource_sequence = [resource["name"] for resource in project["resources"]]
     if len(resource_sequence) != len(set(resource_sequence)):
         state.add("DUPLICATE_RESOURCE", "resource names must be unique")
+    module_sequence = [module["name"] for module in project.get("modules", [])]
+    if len(module_sequence) != len(set(module_sequence)):
+        state.add("DUPLICATE_MODULE", "module names must be unique")
     resource_names = {resource["name"] for resource in project["resources"]}
+    module_names = {module["name"] for module in project.get("modules", [])}
     external = set(project.get("externalDependencies", []))
     strict_unknown = project.get("unknownApis", "allow") == "error"
+    strict_components = project.get("unknownComponents", "allow-opaque") == "error"
+
+    loaded_resources: dict[str, LoadedComponent] = {}
+    for resource in sorted(project["resources"], key=lambda value: value["name"]):
+        state.resources.add(resource["name"])
+        loaded_resources[resource["name"]] = _load_component(workspace, resource, "resource", schema_store, state)
+    loaded_modules: dict[str, LoadedComponent] = {}
+    for module in sorted(project.get("modules", []), key=lambda value: value["name"]):
+        component = _load_component(workspace, module, "module", schema_store, state)
+        loaded_modules[module["name"]] = component
+        if component.manifest is None:
+            _component_policy_diagnostic(state, strict_components, "MODULE_OPAQUE", f"module {module['name']} has no approved valid manifest; no API signatures are assumed", path=module["path"])
+        binary = module.get("binary")
+        if binary and component.root is not None:
+            binary_path = _resolve_relative(component.root, binary)
+            binary_display = f"{component.display_root}/{binary}"
+            if binary_path is None:
+                state.add("PATH_OUTSIDE_WORKSPACE", f"module binary path escapes module: {binary}", path=binary_display)
+            elif not binary_path.is_file():
+                state.add("MODULE_BINARY_MISSING", f"declared module binary does not exist: {binary}", path=binary_display)
+
+    project_functions = {"client": set(), "server": set()}
+    project_events = {"client": set(), "server": set()}
+    resource_exports: dict[str, dict[str, set[str]]] = {
+        name: {"client": set(), "server": set()} for name in resource_names
+    }
+    component_versions = {
+        (component.kind, component.name): component.manifest["version"]
+        for component in [*loaded_resources.values(), *loaded_modules.values()]
+        if component.manifest is not None
+    }
+    for component in [*loaded_resources.values(), *loaded_modules.values()]:
+        manifest = component.manifest
+        if manifest is None:
+            continue
+        manifest_path = component.manifest_display or component.display_root
+        for dependency in manifest["dependencies"]:
+            available_names = resource_names if dependency["kind"] == "resource" else module_names if dependency["kind"] == "module" else external
+            if not dependency["optional"] and dependency["name"] not in available_names:
+                state.add("COMPONENT_DEPENDENCY_MISSING", f"required {dependency['kind']} dependency {dependency['name']} is not in the project", path=manifest_path)
+            minimum_version = dependency.get("minimumVersion")
+            if minimum_version and dependency["name"] in available_names:
+                actual_version = component_versions.get((dependency["kind"], dependency["name"]))
+                if actual_version is None:
+                    state.add("COMPONENT_DEPENDENCY_VERSION_UNKNOWN", f"cannot verify {dependency['kind']} dependency {dependency['name']} against minimum version {minimum_version}", path=manifest_path)
+                elif parse_semver(actual_version) < parse_semver(minimum_version):
+                    state.add("COMPONENT_DEPENDENCY_VERSION_INCOMPATIBLE", f"{dependency['kind']} dependency {dependency['name']} version {actual_version} is below {minimum_version}", path=manifest_path)
+        for export in manifest["exports"]:
+            for side in _component_sides(export["side"]):
+                if component.kind == "module":
+                    project_functions[side].add(export["name"])
+                else:
+                    resource_exports[component.name][side].add(export["name"])
+        for event in manifest["events"]:
+            for side in _component_sides(event["side"]):
+                project_events[side].add(event["name"])
 
     for resource in sorted(project["resources"], key=lambda value: value["name"]):
         name = resource["name"]
-        state.resources.add(name)
-        resource_path = _resolve_relative(workspace, resource["path"])
-        if resource_path is None:
-            state.add("PATH_OUTSIDE_WORKSPACE", f"resource path is not workspace-relative: {resource['path']}", path=resource["path"])
-            continue
-        if not resource_path.is_dir():
-            state.add("MISSING_RESOURCE", f"resource directory does not exist: {resource['path']}", path=resource["path"])
+        component = loaded_resources[name]
+        resource_path = component.root
+        if resource_path is None or not resource_path.is_dir():
             continue
         meta_name = resource.get("meta", "meta.xml")
         meta_path = _resolve_relative(resource_path, meta_name)
@@ -581,7 +890,7 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
             state.add("INVALID_META", "root element must be <meta>", path=meta_display)
             continue
         meta_dependencies: set[str] = set()
-        for include in root.findall("include"):
+        for include in root.findall("include", "meta", 1):
             dependency = include.get("resource")
             if not dependency:
                 state.add("INVALID_META", "include is missing resource", path=meta_display)
@@ -593,7 +902,9 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
                 f"resource {name} requires undeclared project dependency {dependency}",
                 path=meta_display,
             )
-        for script in root.findall("script"):
+        global_functions = {"client": set(), "server": set()}
+        defined_events: dict[tuple[str, str], bool] = {}
+        for script in root.findall("script", "meta", 1):
             source = script.get("src")
             side = script.get("type", "server")
             if not source:
@@ -612,8 +923,139 @@ def check_project(project_path: Path, schema_store: SchemaStore, catalogue_overr
             elif not script_path.is_file():
                 state.add("MISSING_FILE", f"script does not exist: {source}", path=display_path, side=side)
             else:
-                _scan_lua(script_path, display_path, side, catalogue, profile, strict_unknown, state)
+                _scan_lua(
+                    script_path, display_path, side, catalogue, profile, strict_unknown, state,
+                    project_functions, project_events, resource_exports, strict_components,
+                )
+                functions, events = _lua_contract_facts(script_path, side)
+                for candidate_side in _component_sides(side):
+                    global_functions[candidate_side].update(functions)
+                    for (event_name, _event_side), remote in events.items():
+                        key = (event_name, candidate_side)
+                        if key in defined_events and defined_events[key] != remote:
+                            state.add("RESOURCE_EVENT_DEFINITION_CONFLICT", f"event {event_name} is defined with conflicting remote flags", path=display_path, side=candidate_side, symbol=event_name)
+                        defined_events[key] = remote
+        _validate_resource_contract(
+            component, root, meta_display, global_functions, defined_events,
+            declared_dependencies | meta_dependencies, strict_components, state,
+        )
     return _result(state)
+
+
+def _opaque_resource_symbols(component: LoadedComponent, root: MetaDocument, meta_display: str | None = None) -> list[dict[str, Any]]:
+    symbols: list[dict[str, Any]] = []
+    provenance = {"meta": meta_display or f"{component.display_root}/meta.xml"}
+    seen: set[str] = set()
+    for item in root.findall("export", "meta", 1):
+        name = item.get("function")
+        side = item.get("type", "server")
+        if not name or side not in ("client", "server"):
+            continue
+        symbol_id = f"resource:{component.name}:{side}-export:{name}"
+        if symbol_id not in seen:
+            symbols.append({"id": symbol_id, "kind": "export", "name": name, "owner": component.name, "ownerKind": "resource",
+                            "side": side, "state": "opaque", "signatureKnown": False, "description": "Opaque meta.xml export; signature is intentionally unknown.",
+                            "http": item.get("http", "false") == "true", "restricted": item.get("restricted", "false") == "true", "provenance": provenance})
+            seen.add(symbol_id)
+    if component.root is not None:
+        for script in root.findall("script", "meta", 1):
+            source = script.get("src")
+            side = script.get("type", "server")
+            script_path = _resolve_relative(component.root, source) if source else None
+            if script_path is None or not script_path.is_file() or side not in ("client", "server", "shared"):
+                continue
+            _, events = _lua_contract_facts(script_path, side)
+            for (name, _), remote in sorted(events.items()):
+                symbol_id = f"resource:{component.name}:event:{name}"
+                if symbol_id not in seen:
+                    symbols.append({"id": symbol_id, "kind": "event", "name": name, "owner": component.name, "ownerKind": "resource",
+                                    "side": side, "state": "opaque", "directions": ["defines"], "signatureKnown": False,
+                                    "allowRemoteTrigger": remote, "description": "Opaque addEvent definition; parameter contract is intentionally unknown.",
+                                    "provenance": {"source": f"{component.display_root}/{source}"}})
+                    seen.add(symbol_id)
+                else:
+                    existing = next(item for item in symbols if item["id"] == symbol_id)
+                    if existing["kind"] == "event" and existing["side"] != side:
+                        existing["side"] = "shared"
+                        if existing["allowRemoteTrigger"] != remote:
+                            existing["state"] = "conflict"
+                            existing["description"] = "Opaque addEvent definitions disagree on remote triggering; parameter contract is unknown."
+    return sorted(symbols, key=lambda item: item["id"])
+
+
+def resolve_project_components(project_path: Path, schema_store: SchemaStore, catalogue_override: Path | None = None) -> dict[str, Any]:
+    check = check_project(project_path, schema_store, catalogue_override)
+    try:
+        project = load_json(project_path)
+    except JsonDocumentError:
+        return {**check, "command": "project.resolve", "summary": {**check["summary"], "components": 0, "symbols": 0, "opaque": 0}, "components": [], "symbols": []}
+    if schema_store.validate("neon-project", project) or schema_major(project.get("schemaVersion", "")) != 1:
+        return {**check, "command": "project.resolve", "summary": {**check["summary"], "components": 0, "symbols": 0, "opaque": 0}, "components": [], "symbols": []}
+
+    workspace = project_path.parent.resolve()
+    entries = [("resource", item) for item in project["resources"]] + [("module", item) for item in project.get("modules", [])]
+    diagnostic_errors = [item for item in check["diagnostics"] if item["severity"] == "error"]
+    components: list[dict[str, Any]] = []
+    symbols: list[dict[str, Any]] = []
+    for kind, entry in sorted(entries, key=lambda item: (item[0], item[1]["name"])):
+        scratch = CheckState()
+        component = _load_component(workspace, entry, kind, schema_store, scratch)
+        related_errors = [item for item in diagnostic_errors if item["path"] == entry["path"] or item["path"].startswith(entry["path"].rstrip("/") + "/")]
+        manifest = component.manifest
+        binary_record: dict[str, Any] | None = None
+        if kind == "module" and entry.get("binary") and component.root is not None:
+            binary_path = _resolve_relative(component.root, entry["binary"])
+            if binary_path is not None and binary_path.is_file():
+                binary_record = {"path": f"{component.display_root}/{entry['binary']}", "sha256": file_sha256(binary_path), "size": binary_path.stat().st_size}
+        if manifest is None:
+            component_state = "conflict" if related_errors else "opaque"
+            component_symbols: list[dict[str, Any]] = []
+            if kind == "resource" and component.root is not None:
+                meta_name = entry.get("meta", "meta.xml")
+                meta_path = _resolve_relative(component.root, meta_name)
+                meta_state = CheckState()
+                root = _parse_meta(meta_path, f"{component.display_root}/{meta_name}", meta_state) if meta_path else None
+                if root is not None:
+                    component_symbols = _opaque_resource_symbols(component, root, f"{component.display_root}/{meta_name}")
+            component_record = {"kind": kind, "name": entry["name"], "path": entry["path"], "state": component_state,
+                                "manifest": None, "lifecycle": None, "dependencies": [], "acl": [], "capabilities": []}
+        else:
+            component_state = "conflict" if related_errors else "verified" if kind == "resource" else "documented-only"
+            component_symbols = manifest_symbols(manifest, component.manifest_display or entry["path"], component_state)
+            if kind == "resource" and component.root is not None:
+                meta_name = entry.get("meta", "meta.xml")
+                meta_path = _resolve_relative(component.root, meta_name)
+                meta_state = CheckState()
+                root = _parse_meta(meta_path, f"{component.display_root}/{meta_name}", meta_state) if meta_path else None
+                if root is not None:
+                    declared_ids = {item["id"] for item in component_symbols}
+                    component_symbols.extend(
+                        item for item in _opaque_resource_symbols(component, root, f"{component.display_root}/{meta_name}")
+                        if item["id"] not in declared_ids
+                    )
+                    component_symbols.sort(key=lambda item: item["id"])
+            component_record = {
+                "kind": kind, "name": entry["name"], "path": entry["path"], "state": component_state,
+                "manifest": {"path": component.manifest_display, "sha256": manifest_sha256(manifest), "schemaVersion": manifest["schemaVersion"], "version": manifest["version"]},
+                "lifecycle": manifest["lifecycle"], "dependencies": manifest["dependencies"], "acl": manifest["acl"], "capabilities": manifest["capabilities"],
+            }
+            if kind == "module":
+                component_record["module"] = manifest["module"]
+        if kind == "module":
+            component_record["binary"] = binary_record
+        components.append(component_record)
+        symbols.extend(component_symbols)
+    symbols.sort(key=lambda item: item["id"])
+    opaque = sum(item["state"] == "opaque" for item in symbols)
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "command": "project.resolve",
+        "status": check["status"],
+        "summary": {**check["summary"], "components": len(components), "symbols": len(symbols), "opaque": opaque},
+        "diagnostics": check["diagnostics"],
+        "components": components,
+        "symbols": symbols,
+    }
 
 
 def _result(state: CheckState) -> dict[str, Any]:
