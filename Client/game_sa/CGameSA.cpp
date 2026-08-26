@@ -288,15 +288,15 @@ namespace
         if (!attachedToFrom && !attachedToTo)
             return false;
         const unsigned char laneFlags = carLink[0x0B];
-        const unsigned int  oppositeLanes = laneFlags & 0x07;
-        const unsigned int  sameDirectionLanes = (laneFlags >> 3) & 0x07;
-        const unsigned int  laneCount = attachedToTo ? sameDirectionLanes : oppositeLanes;
+        const unsigned int  lanesTowardAttached = laneFlags & 0x07;
+        const unsigned int  lanesAwayFromAttached = (laneFlags >> 3) & 0x07;
+        const unsigned int  laneCount = attachedToTo ? lanesTowardAttached : lanesAwayFromAttached;
         if (laneCount == 0 || ((modelId == 431 || modelId == 437) && laneCount < 2) || (vehicleClass == VehicleClass::BMX && laneCount >= 2))
             return false;
 
-        const float oneWayOffset = oppositeLanes == 0        ? 0.5f - 0.5f * sameDirectionLanes
-                                   : sameDirectionLanes == 0 ? 0.5f - 0.5f * oppositeLanes
-                                                             : static_cast<float>(carLink[0x0A]) * (1.0f / 86.4f) + 0.5f;
+        const float oneWayOffset = lanesTowardAttached == 0      ? 0.5f - 0.5f * lanesAwayFromAttached
+                                   : lanesAwayFromAttached == 0 ? 0.5f - 0.5f * lanesTowardAttached
+                                                                 : static_cast<float>(carLink[0x0A]) * (1.0f / 86.4f) + 0.5f;
         offsetMeters = (oneWayOffset + rand() % laneCount) * 5.4f;
         if (vehicleClass == VehicleClass::BMX)
             offsetMeters += 1.458f;

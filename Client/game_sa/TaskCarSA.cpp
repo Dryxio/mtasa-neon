@@ -49,8 +49,8 @@ namespace
     {
         const unsigned char* carLink{};
         unsigned int         laneCount{};
-        unsigned int         oppositeLanes{};
-        unsigned int         sameDirectionLanes{};
+        unsigned int         lanesTowardAttached{};
+        unsigned int         lanesAwayFromAttached{};
     };
 
     bool GetDirectedLaneData(const SCarPathNodeAddress& from, const SCarPathNodeAddress& to, SDirectedLaneData& output)
@@ -105,9 +105,9 @@ namespace
 
         const unsigned char laneFlags = carLink[0x0B];
         output.carLink = carLink;
-        output.oppositeLanes = laneFlags & 0x07;
-        output.sameDirectionLanes = (laneFlags >> 3) & 0x07;
-        output.laneCount = attachedToTo ? output.sameDirectionLanes : output.oppositeLanes;
+        output.lanesTowardAttached = laneFlags & 0x07;
+        output.lanesAwayFromAttached = (laneFlags >> 3) & 0x07;
+        output.laneCount = attachedToTo ? output.lanesTowardAttached : output.lanesAwayFromAttached;
         return true;
     }
 
@@ -122,9 +122,9 @@ namespace
             *reinterpret_cast<const signed char*>(reinterpret_cast<const unsigned char*>(vehicle) + VEHICLE_AUTOPILOT_NEXT_LINK_DIRECTION_OFFSET));
         const float    directionX = static_cast<float>(*reinterpret_cast<const signed char*>(laneData.carLink + 0x08)) * 0.01f * directionSign;
         const float    directionY = static_cast<float>(*reinterpret_cast<const signed char*>(laneData.carLink + 0x09)) * 0.01f * directionSign;
-        const float    oneWayOffset = laneData.oppositeLanes == 0        ? 0.5f - 0.5f * laneData.sameDirectionLanes
-                                      : laneData.sameDirectionLanes == 0 ? 0.5f - 0.5f * laneData.oppositeLanes
-                                                                         : static_cast<float>(static_cast<signed char>(laneData.carLink[0x0A])) / 86.4f + 0.5f;
+        const float    oneWayOffset = laneData.lanesTowardAttached == 0      ? 0.5f - 0.5f * laneData.lanesAwayFromAttached
+                                      : laneData.lanesAwayFromAttached == 0 ? 0.5f - 0.5f * laneData.lanesTowardAttached
+                                                                            : static_cast<float>(static_cast<signed char>(laneData.carLink[0x0A])) / 86.4f + 0.5f;
         const CVector& position = vehicle->matrix ? vehicle->matrix->vPos : vehicle->m_transform.m_translate;
 
         unsigned char nearestLane = 0;
