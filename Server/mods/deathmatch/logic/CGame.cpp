@@ -72,6 +72,7 @@
 #include "../utils/COpenPortsTester.h"
 #include "../utils/CMasterServerAnnouncer.h"
 #include "../utils/CNeonServerAnnouncer.h"
+#include "../utils/CNeonServerIdentity.h"
 #include "../utils/CHqComms.h"
 #include "../utils/CFunctionUseLogger.h"
 #include "Utils.h"
@@ -217,6 +218,7 @@ CGame::CGame() : m_FloodProtect(4, 30000, 30000)  // Max of 4 connections per 30
     m_pCustomWeaponManager = NULL;
     m_pFunctionUseLogger = NULL;
     m_pNeonServerAnnouncer = nullptr;
+    m_pNeonServerIdentity = nullptr;
 #ifdef WITH_OBJECT_SYNC
     m_pObjectSync = NULL;
 #endif
@@ -409,6 +411,7 @@ CGame::~CGame()
     // The registry announcer retains a reference to the parsed configuration,
     // so cancel its pending HTTP request before releasing that configuration.
     SAFE_DELETE(m_pNeonServerAnnouncer);
+    SAFE_DELETE(m_pNeonServerIdentity);
     SAFE_DELETE(m_pMainConfig);
     if (m_pRegistryManager)
         m_pRegistryManager->CloseRegistry(m_pRegistry);
@@ -811,11 +814,28 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
     if (!m_pMainConfig->Load())
         return false;
 
+    if (m_pMainConfig->GetNeonAuthAutomatic())
+    {
+        m_pNeonServerIdentity = new CNeonServerIdentity();
+        std::string   identityError;
+        const SString identityPath = g_pServerInterface->GetModManager()->GetAbsolutePath("neon-identity.keys");
+        if (!m_pNeonServerIdentity->Initialize(identityPath, identityError))
+        {
+            CLogger::ErrorPrintf("Neon Identity initialization failed: %s\n", identityError.c_str());
+            return false;
+        }
+        m_pMainConfig->SetAutomaticNeonAuthServerId(m_pNeonServerIdentity->GetServerId());
+    }
+
     if (m_pMainConfig->GetNeonAuthMode() != ENeonAuthMode::Disabled)
     {
         std::string identityError;
-        if (!m_neonIdentityTicketVerifier.Configure(m_pMainConfig->GetNeonAuthIssuer(), m_pMainConfig->GetNeonAuthServerId(), m_pMainConfig->GetNeonAuthKeyId(),
-                                                    m_pMainConfig->GetNeonAuthPublicKey(), identityError))
+        const bool  configured =
+            m_pMainConfig->GetNeonAuthAutomatic()
+                 ? m_neonIdentityTicketVerifier.ConfigureOfficial(m_pMainConfig->GetNeonAuthServerId(), identityError)
+                 : m_neonIdentityTicketVerifier.Configure(m_pMainConfig->GetNeonAuthIssuer(), m_pMainConfig->GetNeonAuthServerId(),
+                                                          m_pMainConfig->GetNeonAuthKeyId(), m_pMainConfig->GetNeonAuthPublicKey(), identityError);
+        if (!configured)
         {
             CLogger::ErrorPrintf("Neon Identity configuration failed: %s\n", identityError.c_str());
             return false;
@@ -1137,13 +1157,18 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
 
     // Init ASE
     m_pASE = new ASE(m_pMainConfig, m_pPlayerManager, static_cast<int>(usServerPort), strServerIPList);
-    m_pASE->SetRuleValue("NeonRegistryProtocol", "1");
     if (m_pMainConfig->GetSerialVerificationEnabled())
         m_pASE->SetRuleValue("SerialVerification", "yes");
 
     // Set the Rules loaded from config
     for (const auto& [key, value] : m_pMainConfig->GetRulesForASE())
         m_pASE->SetRuleValue(key, value);
+
+    // These values are part of the endpoint-possession proof, so arbitrary
+    // owner-defined ASE rules must never be able to replace them.
+    m_pASE->SetRuleValue("NeonRegistryProtocol", m_pNeonServerIdentity ? "2" : "1");
+    if (m_pNeonServerIdentity)
+        m_pASE->SetRuleValue("NeonIdentityServerId", m_pNeonServerIdentity->GetServerId().c_str());
 
     ApplyAseSetting();
     m_pMasterServerAnnouncer = new CMasterServerAnnouncer();
@@ -1155,7 +1180,7 @@ bool CGame::Start(int iArgumentCount, char* szArguments[])
 
     // Registration starts only after the complete server configuration has
     // loaded. The registry independently probes ASE before publishing it.
-    m_pNeonServerAnnouncer = new CNeonServerAnnouncer(*m_pMainConfig);
+    m_pNeonServerAnnouncer = new CNeonServerAnnouncer(*m_pMainConfig, m_pNeonServerIdentity, &m_neonIdentityTicketVerifier);
     m_pNeonServerAnnouncer->Pulse();
 
     // Is the script debug log enabled?
@@ -1930,6 +1955,13 @@ void CGame::ProcessTrafficLights(long long llCurrentTime)
 
 void CGame::Packet_PlayerJoin(const NetServerPlayerID& Source)
 {
+    const bool automaticIdentityPending = m_pMainConfig->GetNeonAuthAutomatic() && (!m_pNeonServerAnnouncer || !m_pNeonServerAnnouncer->IsIdentityActive());
+    if (automaticIdentityPending && m_pMainConfig->GetNeonAuthMode() == ENeonAuthMode::Required)
+    {
+        RefusePendingConnection(Source, "This server is still registering with Neon Identity. Please retry shortly.");
+        return;
+    }
+
     // Reply with the mod this server is running
     NetBitStreamInterface* pBitStream = g_pNetServer->AllocateNetServerBitStream(0);
     if (pBitStream)
@@ -1942,7 +1974,7 @@ void CGame::Packet_PlayerJoin(const NetServerPlayerID& Source)
         // new client can therefore obtain an audience-bound ticket only for a
         // registered Neon server, while legacy clients safely ignore these
         // trailing fields and are still rejected by required-mode servers.
-        const ENeonAuthMode neonAuthMode = m_pMainConfig->GetNeonAuthMode();
+        const ENeonAuthMode neonAuthMode = automaticIdentityPending ? ENeonAuthMode::Disabled : m_pMainConfig->GetNeonAuthMode();
         pBitStream->Write(static_cast<unsigned char>(neonAuthMode));
         if (neonAuthMode != ENeonAuthMode::Disabled)
             pBitStream->WriteString(m_pMainConfig->GetNeonAuthServerId());
@@ -1962,6 +1994,13 @@ void CGame::Packet_PlayerJoinData(CPlayerJoinDataPacket& Packet)
         SNeonIdentityClaims neonIdentity;
         const ENeonAuthMode neonAuthMode = m_pMainConfig->GetNeonAuthMode();
         const bool          hasNeonTicket = !Packet.GetNeonIdentityTicket().empty();
+        if (m_pMainConfig->GetNeonAuthAutomatic() && neonAuthMode == ENeonAuthMode::Required &&
+            (!m_pNeonServerAnnouncer || !m_pNeonServerAnnouncer->IsIdentityActive()))
+        {
+            CLogger::LogPrintf("CONNECT: %s refused before player creation (Neon Identity registration pending)\n", szNick);
+            RefusePendingConnection(Packet.GetSourceSocket(), "This server is still registering with Neon Identity. Please retry shortly.");
+            return;
+        }
         if (neonAuthMode == ENeonAuthMode::Required && !hasNeonTicket)
         {
             CLogger::LogPrintf("CONNECT: %s refused before player creation (Neon Identity required)\n", szNick);
@@ -5030,6 +5069,8 @@ void CGame::HandleBackup()
     zipMaker.InsertFile(pModManager->GetAbsolutePath("editor_acl.xml"), PathJoin("config", "editor_acl.xml"));
     zipMaker.InsertFile(pModManager->GetAbsolutePath("local.conf"), PathJoin("config", "local.conf"));
     zipMaker.InsertFile(m_pMainConfig->GetIdFile(), PathJoin("config", "server-id.keys"));
+    if (m_pNeonServerIdentity)
+        zipMaker.InsertFile(m_pNeonServerIdentity->GetPath(), PathJoin("config", "neon-identity.keys"));
     zipMaker.InsertFile(pModManager->GetAbsolutePath(FILENAME_SETTINGS), PathJoin("config", "settings.xml"));
     zipMaker.InsertFile(pModManager->GetAbsolutePath("vehiclecolors.conf"), PathJoin("config", "vehiclecolors.conf"));
 

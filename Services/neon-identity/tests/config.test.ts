@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "../src/config.js";
+import { OFFICIAL_NEON_ISSUER, OFFICIAL_NEON_TICKET_KEY_ID, OFFICIAL_NEON_TICKET_PUBLIC_KEY } from "../src/official-trust.js";
 
 function validEnvironment(): NodeJS.ProcessEnv {
     return {
@@ -45,5 +46,26 @@ describe("static server registry configuration", () => {
         expect(() => loadConfig({ ...validEnvironment(), NEON_SERVER_REGISTRY: '{"valid":["127.00.0.1:22003"]}' })).toThrow(
             "contains an invalid IPv4:port endpoint",
         );
+    });
+
+    it("refuses to start the official production issuer with a key automatic servers do not trust", () => {
+        const environment = {
+            ...validEnvironment(),
+            NODE_ENV: "production",
+            PUBLIC_BASE_URL: OFFICIAL_NEON_ISSUER,
+            DISCORD_REDIRECT_URI: `${OFFICIAL_NEON_ISSUER}/v1/auth/discord/callback`,
+            NEON_ISSUER: OFFICIAL_NEON_ISSUER,
+            NEON_TICKET_KEY_ID: OFFICIAL_NEON_TICKET_KEY_ID,
+        };
+        expect(() => loadConfig(environment)).toThrow("ticket key embedded in automatic servers");
+        expect(() => loadConfig({
+            ...environment,
+            NEON_TICKET_PRIVATE_JWK: JSON.stringify({
+                kty: "OKP",
+                crv: "Ed25519",
+                x: OFFICIAL_NEON_TICKET_PUBLIC_KEY,
+                d: "production-secret-placeholder",
+            }),
+        })).not.toThrow();
     });
 });

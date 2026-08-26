@@ -114,6 +114,7 @@ class CCustomWeaponManager;
 class COpenPortsTester;
 class CMasterServerAnnouncer;
 class CNeonServerAnnouncer;
+class CNeonServerIdentity;
 class CHqComms;
 class CFunctionUseLogger;
 
@@ -670,6 +671,7 @@ private:
     COpenPortsTester*       m_pOpenPortsTester;
     CMasterServerAnnouncer* m_pMasterServerAnnouncer;
     CNeonServerAnnouncer*   m_pNeonServerAnnouncer;
+    CNeonServerIdentity*    m_pNeonServerIdentity;
     CHqComms*               m_pHqComms;
 
     CLightsyncManager m_lightsyncManager;

@@ -5,6 +5,8 @@ import type {
     NeonAccount,
     OAuthFlow,
     RegisteredServer,
+    ServerIdentityLeaseClaim,
+    ServerIdentityLeaseClaimResult,
     ServerAsset,
     ServerAssetSource,
 } from "./model.js";
@@ -13,6 +15,18 @@ interface MemorySession {
     accountId: string;
     tokenHash: Buffer;
     expiresAt: Date;
+}
+
+interface MemoryServerIdentity {
+    publicKey: string;
+    status: "active" | "suspended";
+}
+
+interface MemoryServerLease {
+    endpoint: string;
+    expiresAt: Date;
+    authEnabled: boolean;
+    published: boolean;
 }
 
 function hashesEqual(left: Buffer, right: Buffer): boolean {
@@ -26,6 +40,10 @@ export class MemoryIdentityStore implements IdentityStore {
     readonly registeredServers = new Map<string, RegisteredServer>();
     readonly serverAssets = new Map<string, ServerAsset>();
     readonly serverAssetSources = new Map<string, ServerAssetSource>();
+    readonly serverIdentities = new Map<string, MemoryServerIdentity>();
+    readonly serverLeases = new Map<string, MemoryServerLease>();
+    readonly serverNonces = new Set<string>();
+    readonly blockedServerEndpoints = new Set<string>();
 
     async createFlow(flow: OAuthFlow): Promise<void> {
         this.flows.set(flow.id, {
@@ -131,7 +149,12 @@ export class MemoryIdentityStore implements IdentityStore {
         return account ? structuredClone(account) : null;
     }
 
-    async upsertRegisteredServer(server: RegisteredServer): Promise<void> {
+    async upsertRegisteredServer(server: RegisteredServer, replaceEndpoint = false): Promise<void> {
+        if (replaceEndpoint) {
+            for (const [serverId, registered] of this.registeredServers) {
+                if (serverId !== server.id && registered.endpoint === server.endpoint) this.registeredServers.delete(serverId);
+            }
+        }
         const existing = this.registeredServers.get(server.id);
         this.registeredServers.set(server.id, {
             ...structuredClone(server),
@@ -140,11 +163,66 @@ export class MemoryIdentityStore implements IdentityStore {
         });
     }
 
-    async listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]> {
+    async removeRegisteredServer(serverId: string): Promise<void> {
+        this.registeredServers.delete(serverId);
+    }
+
+    async listRegisteredServers(activeSince: Date, now: Date): Promise<RegisteredServer[]> {
         return [...this.registeredServers.values()]
-            .filter((server) => server.lastSeenAt >= activeSince)
+            .filter((server) => {
+                if (server.lastSeenAt < activeSince) return false;
+                if (server.registryProtocol === 1) {
+                    return ![...this.serverLeases.values()].some((lease) => lease.endpoint === server.endpoint && lease.expiresAt > now);
+                }
+                const identity = this.serverIdentities.get(server.id);
+                const lease = this.serverLeases.get(server.id);
+                return identity?.status === "active" && lease?.published && lease.endpoint === server.endpoint && lease.expiresAt > now;
+            })
             .sort((left, right) => left.id.localeCompare(right.id))
             .map((server) => structuredClone(server));
+    }
+
+    async claimServerIdentityLease(claim: ServerIdentityLeaseClaim): Promise<ServerIdentityLeaseClaimResult> {
+        if (this.blockedServerEndpoints.has(claim.endpoint)) return "endpoint_blocked";
+        const identity = this.serverIdentities.get(claim.serverId);
+        if (identity && identity.publicKey !== claim.publicKey) return "identity_in_use";
+        if (identity?.status === "suspended") return "identity_suspended";
+        for (const [serverId, lease] of this.serverLeases) {
+            if (lease.endpoint !== claim.endpoint || serverId === claim.serverId) continue;
+            if (this.serverIdentities.get(serverId)?.status === "suspended") return "endpoint_blocked";
+            if (lease.expiresAt > claim.verifiedAt) return "endpoint_in_use";
+        }
+        const currentLease = this.serverLeases.get(claim.serverId);
+        if (currentLease && currentLease.endpoint !== claim.endpoint && currentLease.expiresAt > claim.verifiedAt) return "identity_in_use";
+        const nonceKey = `${claim.serverId}:${claim.nonceHash.toString("hex")}`;
+        if (this.serverNonces.has(nonceKey)) return "replay";
+        this.serverNonces.add(nonceKey);
+        this.serverIdentities.set(claim.serverId, { publicKey: claim.publicKey, status: "active" });
+        this.serverLeases.set(claim.serverId, {
+            endpoint: claim.endpoint,
+            expiresAt: new Date(claim.expiresAt),
+            authEnabled: claim.authEnabled,
+            published: claim.published,
+        });
+        for (const [serverId, server] of this.registeredServers) {
+            if ((serverId !== claim.serverId && server.endpoint === claim.endpoint) || (!claim.published && serverId === claim.serverId)) {
+                this.registeredServers.delete(serverId);
+            }
+        }
+        return "accepted";
+    }
+
+    async isEndpointReservedByIdentity(endpoint: string, now: Date): Promise<boolean> {
+        for (const lease of this.serverLeases.values()) {
+            if (lease.endpoint === endpoint && lease.expiresAt > now) return true;
+        }
+        return false;
+    }
+
+    async isServerEndpointAuthorized(serverId: string, endpoint: string, now: Date): Promise<boolean> {
+        const identity = this.serverIdentities.get(serverId);
+        const lease = this.serverLeases.get(serverId);
+        return Boolean(identity?.status === "active" && lease?.authEnabled && lease.endpoint === endpoint && lease.expiresAt > now);
     }
 
     async findServerAssetSource(sourceUrl: string, freshSince: Date): Promise<ServerAssetSource | null> {

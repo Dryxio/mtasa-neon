@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { OFFICIAL_NEON_ISSUER, OFFICIAL_NEON_TICKET_KEY_ID, OFFICIAL_NEON_TICKET_PUBLIC_KEY } from "./official-trust.js";
+
 export const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function isCanonicalIpv4Endpoint(value: string): boolean {
@@ -106,6 +108,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Servic
     if (ticketPrivateJwk.kty !== "OKP" || ticketPrivateJwk.crv !== "Ed25519" || !ticketPrivateJwk.d) {
         throw new Error("NEON_TICKET_PRIVATE_JWK must be a private Ed25519 JWK");
     }
+    const issuer = parsed.NEON_ISSUER.replace(/\/$/, "");
+    if (
+        parsed.NODE_ENV === "production" &&
+        issuer === OFFICIAL_NEON_ISSUER &&
+        (parsed.NEON_TICKET_KEY_ID !== OFFICIAL_NEON_TICKET_KEY_ID || ticketPrivateJwk.x !== OFFICIAL_NEON_TICKET_PUBLIC_KEY)
+    ) {
+        throw new Error("The official Neon issuer must use the ticket key embedded in automatic servers");
+    }
 
     const requiredGuildId = parsed.DISCORD_REQUIRED_GUILD_ID || null;
     const botToken = parsed.DISCORD_BOT_TOKEN || null;
@@ -132,7 +142,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Servic
             botToken,
             requireCompletedScreening: parsed.DISCORD_REQUIRE_COMPLETED_SCREENING,
         },
-        issuer: parsed.NEON_ISSUER.replace(/\/$/, ""),
+        issuer,
         serverRegistry,
         ticketKeyId: parsed.NEON_TICKET_KEY_ID,
         ticketPrivateJwk,

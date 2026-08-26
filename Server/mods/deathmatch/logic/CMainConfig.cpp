@@ -35,6 +35,10 @@ using namespace std;
 
 namespace
 {
+    constexpr const char* OFFICIAL_NEON_IDENTITY_ISSUER = "https://identity.mta-neon.com";
+    constexpr const char* OFFICIAL_NEON_IDENTITY_KEY_ID = "neon-identity-v1-2026-08";
+    constexpr const char* OFFICIAL_NEON_IDENTITY_PUBLIC_KEY = "qjaC1lD6P8XJarwmbnG21ywKdGTgEmOIIRF4GegHA5I";
+
     bool IsValidNeonServerId(const std::string& value)
     {
         const auto isAsciiAlphaNumeric = [](unsigned char character)
@@ -401,13 +405,27 @@ bool CMainConfig::Load()
     GetString(m_pRootNode, "neon_auth_issuer", m_neonAuthIssuer);
     GetString(m_pRootNode, "neon_auth_key_id", m_neonAuthKeyId);
     GetString(m_pRootNode, "neon_auth_public_key", m_neonAuthPublicKey);
-    if (m_neonAuthMode != ENeonAuthMode::Disabled &&
-        (m_neonAuthServerId.empty() || m_neonAuthIssuer.empty() || m_neonAuthKeyId.empty() || m_neonAuthPublicKey.empty()))
+    if (m_neonAuthIssuer.empty())
+        m_neonAuthIssuer = OFFICIAL_NEON_IDENTITY_ISSUER;
+
+    // The normal owner-facing mode has no manually provisioned values. The
+    // official issuer present in older templates does not opt into legacy
+    // configuration by itself.
+    const bool hasManualIdentity =
+        !m_neonAuthServerId.empty() || !m_neonAuthKeyId.empty() || !m_neonAuthPublicKey.empty() || m_neonAuthIssuer != OFFICIAL_NEON_IDENTITY_ISSUER;
+    m_neonAuthAutomatic = m_neonAuthMode != ENeonAuthMode::Disabled && !hasManualIdentity;
+    if (m_neonAuthAutomatic)
     {
-        CLogger::ErrorPrintf("Neon Identity is enabled but its server id, issuer, key id, or public key is missing\n");
+        m_neonAuthKeyId = OFFICIAL_NEON_IDENTITY_KEY_ID;
+        m_neonAuthPublicKey = OFFICIAL_NEON_IDENTITY_PUBLIC_KEY;
+    }
+    else if (m_neonAuthMode != ENeonAuthMode::Disabled &&
+             (m_neonAuthServerId.empty() || m_neonAuthIssuer.empty() || m_neonAuthKeyId.empty() || m_neonAuthPublicKey.empty()))
+    {
+        CLogger::ErrorPrintf("Neon Identity manual configuration is incomplete; remove all legacy identity fields to use automatic onboarding\n");
         return false;
     }
-    if (m_neonAuthMode != ENeonAuthMode::Disabled && !IsValidNeonServerId(m_neonAuthServerId))
+    if (m_neonAuthMode != ENeonAuthMode::Disabled && !m_neonAuthAutomatic && !IsValidNeonServerId(m_neonAuthServerId))
     {
         CLogger::ErrorPrintf("Neon Identity server id must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}\n");
         return false;

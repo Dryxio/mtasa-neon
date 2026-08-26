@@ -40,9 +40,7 @@ const publicServerCatalogSchema = z
     })
     .strict();
 
-export const serverHeartbeatSchema = z
-    .object({
-        registry_protocol: z.literal(1),
+const serverHeartbeatBaseSchema = z.object({
         game_port: z.number().int().min(1).max(65_535),
         http_port: z.number().int().min(1).max(65_535),
         server_version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/),
@@ -55,8 +53,16 @@ export const serverHeartbeatSchema = z
         accent: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
         logo_url: artworkSourceUrlSchema.optional(),
         banner_url: artworkSourceUrlSchema.optional(),
-    })
-    .strict();
+    });
+
+export const serverHeartbeatSchema = z.discriminatedUnion("registry_protocol", [
+    serverHeartbeatBaseSchema.extend({ registry_protocol: z.literal(1) }).strict(),
+    serverHeartbeatBaseSchema.extend({
+        registry_protocol: z.literal(2),
+        auth_enabled: z.boolean(),
+        published: z.boolean(),
+    }).strict(),
+]);
 
 export type PublicServerCatalog = z.infer<typeof publicServerCatalogSchema>;
 export type ServerHeartbeat = z.infer<typeof serverHeartbeatSchema>;

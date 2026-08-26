@@ -24,6 +24,10 @@
 
 namespace
 {
+    constexpr const char*                         OFFICIAL_ISSUER = "https://identity.mta-neon.com";
+    constexpr std::pair<const char*, const char*> OFFICIAL_KEYS[] = {
+        {"neon-identity-v1-2026-08", "qjaC1lD6P8XJarwmbnG21ywKdGTgEmOIIRF4GegHA5I"},
+    };
     constexpr std::size_t MAX_TICKET_LENGTH = 4096;
     constexpr std::size_t MAX_CLAIM_LENGTH = 128;
     constexpr std::time_t MAX_TICKET_LIFETIME_SECONDS = 120;
@@ -222,8 +226,9 @@ bool CNeonIdentityTicketVerifier::Configure(const std::string& issuer, const std
     {
         m_issuer = issuer;
         m_audience = audience;
-        m_keyId = keyId;
-        m_publicKey = std::move(publicKey);
+        m_publicKeys.clear();
+        m_publicKeys.emplace(keyId, std::move(publicKey));
+        m_expectedEndpoint.clear();
         m_consumedTickets.clear();
         error.clear();
         return true;
@@ -231,16 +236,45 @@ bool CNeonIdentityTicketVerifier::Configure(const std::string& issuer, const std
 
     m_issuer.clear();
     m_audience.clear();
-    m_keyId.clear();
-    m_publicKey.clear();
+    m_publicKeys.clear();
+    m_expectedEndpoint.clear();
     m_consumedTickets.clear();
     return false;
+}
+
+bool CNeonIdentityTicketVerifier::ConfigureOfficial(const std::string& audience, std::string& error)
+{
+    if (audience.empty() || audience.size() > MAX_CLAIM_LENGTH)
+    {
+        error = "Neon Identity server id is missing or too long";
+        return false;
+    }
+
+    std::unordered_map<std::string, std::string> publicKeys;
+    for (const auto& [keyId, encodedKey] : OFFICIAL_KEYS)
+    {
+        std::string publicKey;
+        if (!DecodeBase64Url(encodedKey, publicKey) || publicKey.size() != CryptoPP::ed25519Verifier::PUBLIC_KEYLENGTH)
+        {
+            error = "the built-in Neon Identity trust bundle is invalid";
+            return false;
+        }
+        publicKeys.emplace(keyId, std::move(publicKey));
+    }
+
+    m_issuer = OFFICIAL_ISSUER;
+    m_audience = audience;
+    m_publicKeys = std::move(publicKeys);
+    m_expectedEndpoint.clear();
+    m_consumedTickets.clear();
+    error.clear();
+    return true;
 }
 
 bool CNeonIdentityTicketVerifier::VerifyAndConsume(const std::string& ticket, SNeonIdentityClaims& claims, std::string& error)
 {
     claims = {};
-    if (m_publicKey.empty())
+    if (m_publicKeys.empty())
     {
         error = "Neon Identity verifier is not configured";
         return false;
@@ -282,7 +316,7 @@ bool CNeonIdentityTicketVerifier::VerifyAndConsume(const std::string& ticket, SN
     std::string type;
     std::string keyId;
     if (!ReadStringClaim(header.Get(), "alg", algorithm) || algorithm != "EdDSA" || !ReadStringClaim(header.Get(), "typ", type) || type != "JWT" ||
-        !ReadStringClaim(header.Get(), "kid", keyId) || keyId != m_keyId)
+        !ReadStringClaim(header.Get(), "kid", keyId) || m_publicKeys.find(keyId) == m_publicKeys.end())
     {
         error = "Neon Identity ticket header is not accepted";
         return false;
@@ -291,7 +325,8 @@ bool CNeonIdentityTicketVerifier::VerifyAndConsume(const std::string& ticket, SN
     const std::string signedContent = encodedHeader + "." + encodedPayload;
     try
     {
-        const CryptoPP::ed25519Verifier verifier(reinterpret_cast<const CryptoPP::byte*>(m_publicKey.data()));
+        const std::string&              publicKey = m_publicKeys.at(keyId);
+        const CryptoPP::ed25519Verifier verifier(reinterpret_cast<const CryptoPP::byte*>(publicKey.data()));
         if (!verifier.VerifyMessage(reinterpret_cast<const CryptoPP::byte*>(signedContent.data()), signedContent.size(),
                                     reinterpret_cast<const CryptoPP::byte*>(signature.data()), signature.size()))
         {
@@ -314,7 +349,7 @@ bool CNeonIdentityTicketVerifier::VerifyAndConsume(const std::string& ticket, SN
         !ReadStringClaim(payload.Get(), "server_endpoint", claims.serverEndpoint) || !ReadStringClaim(payload.Get(), "jti", claims.ticketId) ||
         !ReadTimeClaim(payload.Get(), "iat", issuedAt) || !ReadTimeClaim(payload.Get(), "nbf", notBefore) ||
         !ReadTimeClaim(payload.Get(), "exp", claims.expiresAt) || !IsValidAccountId(claims.accountId) || !IsValidDiscordId(claims.discordId) ||
-        !IsCanonicalIpv4Endpoint(claims.serverEndpoint))
+        !IsCanonicalIpv4Endpoint(claims.serverEndpoint) || (!m_expectedEndpoint.empty() && claims.serverEndpoint != m_expectedEndpoint))
     {
         error = "Neon Identity ticket claims are invalid";
         return false;

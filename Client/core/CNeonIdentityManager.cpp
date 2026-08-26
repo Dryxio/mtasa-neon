@@ -182,13 +182,14 @@ CNeonIdentityManager::EPrepareResult CNeonIdentityManager::PrepareConnectionTick
     if (!IsAuthenticated())
         return EPrepareResult::Anonymous;
 
-    if (!m_connectionTicket.empty() && m_ticketAudience == audience)
+    if (!m_connectionTicket.empty() && m_ticketAudience == audience && m_ticketEndpoint == serverEndpoint)
         return EPrepareResult::Ready;
 
     if (m_ticketPreparationPending)
         return EPrepareResult::Pending;
 
     m_ticketAudience = audience;
+    m_ticketEndpoint = serverEndpoint;
     m_connectionTicket.clear();
     m_ticketPreparationPending = true;
     m_ticketPreparationComplete = false;
@@ -229,6 +230,7 @@ void CNeonIdentityManager::CancelTicketPreparation()
     m_ticketPreparationComplete = false;
     m_ticketPreparationSucceeded = false;
     m_ticketAudience.clear();
+    m_ticketEndpoint.clear();
     m_connectionTicket.clear();
 }
 

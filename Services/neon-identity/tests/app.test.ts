@@ -8,6 +8,7 @@ import { MemoryIdentityStore } from "../src/memory-store.js";
 import type { DiscordProfile } from "../src/model.js";
 import { AllowAllDiscordPolicy } from "../src/policy.js";
 import { TicketSigner } from "../src/tickets.js";
+import { deriveServerId, serverHeartbeatSigningMessage } from "../src/server-identity.js";
 
 class FakeDiscordClient implements DiscordClient {
     readonly profile: DiscordProfile = {
@@ -203,6 +204,18 @@ describe("Neon Identity HTTP contract", () => {
         expect(response.json()).toEqual({ error: "public_ipv4_required" });
     });
 
+    it("reports malformed signed JSON as a client error", async () => {
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/server-registry/heartbeat",
+            headers: { "content-type": "application/json", "x-real-ip": "203.0.113.10" },
+            payload: "{",
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toEqual({ error: "invalid_json" });
+    });
+
     it("publishes a verified community server without granting an official Identity ID", async () => {
         const heartbeat = await app.inject({
             method: "POST",
@@ -231,6 +244,68 @@ describe("Neon Identity HTTP contract", () => {
                 },
             ],
         });
+    });
+
+    it("auto-enrolls a signed server identity only after the V2 proof and ASE marker agree", async () => {
+        const serverKeys = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true });
+        const serverPublicJwk = await exportJWK(serverKeys.publicKey);
+        const publicKey = serverPublicJwk.x!;
+        const serverId = deriveServerId(publicKey)!;
+        const timestamp = `${Math.floor(new Date("2026-08-03T12:00:00.000Z").getTime() / 1_000)}`;
+        const nonce = Buffer.alloc(16, 9).toString("base64url");
+        const rawBody = JSON.stringify({
+            registry_protocol: 2,
+            game_port: 22003,
+            http_port: 22005,
+            server_version: "1.7.0-9.99999",
+            name: "Automatic Neon server",
+            auth_enabled: true,
+            published: false,
+        });
+        const signature = Buffer.from(await crypto.subtle.sign(
+            "Ed25519",
+            serverKeys.privateKey,
+            Buffer.from(serverHeartbeatSigningMessage(timestamp, nonce, rawBody)),
+        )).toString("base64url");
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/server-registry/heartbeat",
+            headers: {
+                "content-type": "application/json",
+                "x-real-ip": "203.0.113.10",
+                "x-neon-server-key": publicKey,
+                "x-neon-server-timestamp": timestamp,
+                "x-neon-server-nonce": nonce,
+                "x-neon-server-signature": signature,
+            },
+            payload: rawBody,
+        });
+        expect(response.statusCode).toBe(202);
+        expect(response.json()).toEqual({
+            status: "registered",
+            server_id: serverId,
+            endpoint: "203.0.113.10:22003",
+            expires_in: 300,
+        });
+        expect(await store.isServerEndpointAuthorized(serverId, "203.0.113.10:22003", new Date("2026-08-03T12:00:01.000Z"))).toBe(true);
+        expect((await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" })).json()).toEqual({ schema_version: 1, servers: [] });
+
+        const replay = await app.inject({
+            method: "POST",
+            url: "/v1/server-registry/heartbeat",
+            headers: {
+                "content-type": "application/json",
+                "x-real-ip": "203.0.113.10",
+                "x-neon-server-key": publicKey,
+                "x-neon-server-timestamp": timestamp,
+                "x-neon-server-nonce": nonce,
+                "x-neon-server-signature": signature,
+            },
+            payload: rawBody,
+        });
+        expect(replay.statusCode).toBe(401);
+        expect(replay.json()).toEqual({ error: "replay" });
     });
 
     it("completes OAuth once and issues a server-bound Ed25519 ticket", async () => {

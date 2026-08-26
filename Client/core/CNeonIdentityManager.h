@@ -89,5 +89,6 @@ private:
     bool        m_ticketPreparationComplete{};
     bool        m_ticketPreparationSucceeded{};
     std::string m_ticketAudience;
+    std::string m_ticketEndpoint;
     std::string m_connectionTicket;
 };

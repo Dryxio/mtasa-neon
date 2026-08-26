@@ -23,9 +23,10 @@ private key outside the distributed MTA client and server binaries.
 5. The client polls `POST /v1/auth/discord/poll`. The successful response
    reveals the opaque Neon session token exactly once.
 6. Before joining a server, the client calls `POST /v1/tickets` with that
-   session. The backend signs only when `server_id` and endpoint exist in its
-   Identity security allowlist. The returned Ed25519 JWT is audience-bound to
-   that ID and lives for 30–60 seconds (45 by default).
+   session. The backend signs only when `server_id` and endpoint exist in the
+   legacy allowlist or have an active, ASE-verified signed server lease. The
+   returned Ed25519 JWT is audience-bound to that ID and lives for 30–60
+   seconds (45 by default).
 
 The `poll_token`, browser capability, and session token are random 256-bit
 values. Only SHA-256 hashes of poll and session tokens are persisted. SHA-256 is
@@ -192,19 +193,27 @@ The custom Neon client reads the identity policy and stable `server_id` from
 the initial mod-name handshake. Ordinary MTA servers advertise no policy and
 never cause an identity ticket request. The client obtains the endpoint from
 its real network connection rather than trusting server metadata. Both the
-`server_id` and actual `IPv4:port` pair must appear in
-`NEON_SERVER_REGISTRY`; this prevents an arbitrary MTA server from claiming a
-registered Neon audience and capturing a signed-in player's identity ticket.
+`server_id` and actual `IPv4:port` pair must be authorized by Identity; this
+prevents an arbitrary MTA server from claiming another Neon audience and
+capturing a signed-in player's identity ticket.
 
-Configure a Neon server with the public `x` value from the active Ed25519 JWK:
+For an ordinary public Neon server, enable the desired policy directly:
 
 ```xml
 <neon_auth>required</neon_auth>
-<neon_auth_server_id>blitz-production</neon_auth_server_id>
-<neon_auth_issuer>https://identity.example.com</neon_auth_issuer>
-<neon_auth_key_id>neon-identity-2026-01</neon_auth_key_id>
-<neon_auth_public_key>base64url-JWK-x-value</neon_auth_public_key>
 ```
+
+The server creates `neon-identity.keys`, derives a stable `nsrv_...` audience,
+signs its registry heartbeat, and proves the same identity through ASE. Keep
+that private file in backups. Complete legacy configuration remains supported
+for already provisioned servers and custom Identity deployments.
+
+For the official production issuer, service startup also verifies that the
+configured signing `kid` and public JWK coordinate match the trust bundle
+compiled into automatic servers. Key rotation therefore requires an overlap
+release of the server trust bundle before the backend starts signing with the
+new key; a mismatched production deployment fails fast instead of issuing
+unusable tickets.
 
 `neon_auth` accepts `disabled`, `optional`, or `required`. Ticket validation
 happens before the server allocates a player element. Once accepted, resources
@@ -299,8 +308,8 @@ request URLs from structured logs and redacts credential-bearing headers.
 
 ## Identity security allowlist
 
-`NEON_SERVER_REGISTRY` remains a required JSON object mapping Identity-enabled
-official server IDs to canonical endpoints:
+`NEON_SERVER_REGISTRY` remains a required compatibility map for manually
+provisioned server IDs and canonical endpoints:
 
 ```dotenv
 NEON_SERVER_REGISTRY='{"blitz-production":["203.0.113.10:22003","203.0.113.11:22003"],"neon-staging":["127.0.0.1:22003"]}'
@@ -310,10 +319,13 @@ Every ID must match `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and every endpoint must
 be canonical `IPv4:port` without leading-zero aliases. Empty or invalid
 allowlists fail service startup. Matching heartbeats retain their official ID;
 other verified public Neon servers receive a stable endpoint-derived community
-ID and appear in discovery, but cannot request Discord Identity tickets.
-`POST /v1/tickets` authenticates the session, then checks the exact official
-pair before calling the signer. Removal stops new tickets immediately; issued
-tickets remain valid only until their short `exp`.
+ID and appear in discovery, but unsigned V1 heartbeats cannot request Discord
+Identity tickets. Signed V2 servers instead receive a key-derived `nsrv_...`
+ID and a short endpoint lease after the same ID is observed through ASE.
+`POST /v1/tickets` authenticates the session, then checks the exact legacy pair
+or active V2 lease before calling the signer. Removal, suspension, or lease
+expiry stops new tickets immediately; issued tickets remain valid only until
+their short `exp`.
 
 ## Optional Discord guild/role policy
 

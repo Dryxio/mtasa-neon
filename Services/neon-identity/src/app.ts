@@ -13,6 +13,7 @@ import type { DiscordClient } from "./discord.js";
 import type { IdentityStore, NeonAccount } from "./model.js";
 import type { DiscordIdentityPolicy } from "./policy.js";
 import { fetchServerAsset, type ServerAssetFetcher } from "./server-assets.js";
+import { verifyServerHeartbeatProof } from "./server-identity.js";
 import {
     buildPublicServerCatalog,
     isPublicIpv4Address,
@@ -132,6 +133,20 @@ export async function buildApp(dependencies: AppDependencies) {
         trustProxy: config.trustProxy,
         bodyLimit: 16 * 1024,
     });
+    const rawJsonBodies = new WeakMap<object, string>();
+    app.removeContentTypeParser("application/json");
+    app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+        const rawBody = typeof body === "string" ? body : body.toString("utf8");
+        rawJsonBodies.set(request.raw, rawBody);
+        try {
+            done(null, JSON.parse(rawBody));
+        } catch (error) {
+            // Preserve Fastify's normal client-error semantics after replacing
+            // its JSON parser solely to retain the exact signed bytes.
+            (error as Error & { statusCode?: number }).statusCode = 400;
+            done(error as Error, undefined);
+        }
+    });
 
     await app.register(cookie);
     await app.register(helmet, {
@@ -153,8 +168,10 @@ export async function buildApp(dependencies: AppDependencies) {
     });
     app.setErrorHandler((error, request, reply) => {
         request.log.error({ err: error }, "Unhandled Neon Identity request error");
-        const statusCode = (error as { statusCode?: number }).statusCode === 429 ? 429 : 500;
-        return reply.code(statusCode).send({ error: statusCode === 429 ? "rate_limited" : "internal_error" });
+        const errorStatus = (error as { statusCode?: number }).statusCode;
+        const statusCode = errorStatus === 400 || errorStatus === 429 ? errorStatus : 500;
+        const errorCode = statusCode === 400 ? "invalid_json" : statusCode === 429 ? "rate_limited" : "internal_error";
+        return reply.code(statusCode).send({ error: errorCode });
     });
 
     app.get("/healthz", async () => ({ status: "ok" }));
@@ -202,13 +219,67 @@ export async function buildApp(dependencies: AppDependencies) {
             // server from publishing somebody else's public endpoint.
             const address = registrationAddress(request.headers);
             if (!address) return reply.code(403).send({ error: "public_ipv4_required" });
-            if (!(await aseProbe(address, parsed.data.game_port, parsed.data.server_version))) {
+
+            let serverId: string;
+            let signedPublicKey: string | null = null;
+            let signedNonce: string | null = null;
+            if (parsed.data.registry_protocol === 2) {
+                const rawBody = rawJsonBodies.get(request.raw);
+                const header = (name: string) => {
+                    const value = request.headers[name];
+                    return typeof value === "string" ? value : "";
+                };
+                const proof = rawBody ? verifyServerHeartbeatProof({
+                    publicKey: header("x-neon-server-key"),
+                    timestamp: header("x-neon-server-timestamp"),
+                    nonce: header("x-neon-server-nonce"),
+                    signature: header("x-neon-server-signature"),
+                }, rawBody, now()) : { valid: false as const };
+                if (!proof.valid) return reply.code(401).send({ error: "invalid_server_identity_proof" });
+                serverId = proof.serverId;
+                signedPublicKey = proof.publicKey;
+                signedNonce = proof.nonce;
+            } else {
+                serverId = "";
+            }
+
+            if (!(await aseProbe(address, parsed.data.game_port, parsed.data.server_version, parsed.data.registry_protocol === 2 ? serverId : undefined))) {
                 return reply.code(422).send({ error: "ase_verification_failed" });
             }
 
             const currentTime = now();
             const endpoint = `${address}:${parsed.data.game_port}`;
-            const serverId = registeredServerId(config.serverRegistry, endpoint);
+            if (parsed.data.registry_protocol === 1) {
+                if (await store.isEndpointReservedByIdentity(endpoint, currentTime)) {
+                    return reply.code(409).send({ error: "endpoint_in_use" });
+                }
+                serverId = registeredServerId(config.serverRegistry, endpoint);
+            } else {
+                const expiresAt = new Date(currentTime.getTime() + SERVER_REGISTRY_ACTIVE_SECONDS * 1_000);
+                const claimResult = await store.claimServerIdentityLease({
+                    serverId,
+                    publicKey: signedPublicKey!,
+                    endpoint,
+                    nonceHash: hashToken(signedNonce!),
+                    verifiedAt: currentTime,
+                    expiresAt,
+                    authEnabled: parsed.data.auth_enabled,
+                    published: parsed.data.published,
+                });
+                if (claimResult !== "accepted") {
+                    const conflict = claimResult === "identity_in_use" || claimResult === "endpoint_in_use";
+                    const forbidden = claimResult === "identity_suspended" || claimResult === "endpoint_blocked";
+                    return reply.code(conflict ? 409 : forbidden ? 403 : 401).send({ error: claimResult });
+                }
+                if (!parsed.data.published) {
+                    return reply.code(202).send({
+                        status: "registered",
+                        server_id: serverId,
+                        endpoint,
+                        expires_in: SERVER_REGISTRY_ACTIVE_SECONDS,
+                    });
+                }
+            }
 
             const resolveAsset = async (sourceUrl: string | undefined) => {
                 if (!sourceUrl) return null;
@@ -250,7 +321,7 @@ export async function buildApp(dependencies: AppDependencies) {
                 bannerAssetHash,
                 firstSeenAt: currentTime,
                 lastSeenAt: currentTime,
-            });
+            }, true);
             return reply.code(202).send({ status: "registered", server_id: serverId, endpoint, expires_in: SERVER_REGISTRY_ACTIVE_SECONDS });
         },
     );
@@ -262,9 +333,10 @@ export async function buildApp(dependencies: AppDependencies) {
             .header("cache-control", "public, max-age=30, stale-if-error=300")
             .header("access-control-allow-origin", "*")
             .header("cross-origin-resource-policy", "cross-origin");
-        const activeSince = new Date(now().getTime() - SERVER_REGISTRY_ACTIVE_SECONDS * 1_000);
+        const currentTime = now();
+        const activeSince = new Date(currentTime.getTime() - SERVER_REGISTRY_ACTIVE_SECONDS * 1_000);
         const assetUrl = (hash: string) => new URL(`/v1/server-registry/assets/${hash}`, config.publicBaseUrl).href;
-        return buildPublicServerCatalog(await store.listRegisteredServers(activeSince), assetUrl);
+        return buildPublicServerCatalog(await store.listRegisteredServers(activeSince, currentTime), assetUrl);
     });
 
     app.get("/.well-known/jwks.json", async (_request, reply) => {
@@ -459,7 +531,9 @@ export async function buildApp(dependencies: AppDependencies) {
                 return reply.header("www-authenticate", "Bearer").code(401).send({ error: "invalid_session" });
             }
             const registeredEndpoints = config.serverRegistry.get(parsed.data.server_id);
-            if (!registeredEndpoints?.has(parsed.data.server_endpoint)) {
+            const legacyAuthorized = registeredEndpoints?.has(parsed.data.server_endpoint) ?? false;
+            const automaticallyAuthorized = await store.isServerEndpointAuthorized(parsed.data.server_id, parsed.data.server_endpoint, currentTime);
+            if (!legacyAuthorized && !automaticallyAuthorized) {
                 return reply.code(403).send({ error: "server_endpoint_not_allowed" });
             }
             const signed = await ticketSigner.sign(

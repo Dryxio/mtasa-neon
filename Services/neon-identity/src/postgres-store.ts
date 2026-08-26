@@ -9,6 +9,8 @@ import type {
     OAuthFlow,
     RegisteredServer,
     RegisteredServerLink,
+    ServerIdentityLeaseClaim,
+    ServerIdentityLeaseClaimResult,
     ServerAsset,
     ServerAssetSource,
 } from "./model.js";
@@ -96,17 +98,21 @@ function toServerAsset(row: ServerAssetRow): ServerAsset {
 }
 
 async function inTransaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-        const result = await operation(client);
-        await client.query("COMMIT");
-        return result;
-    } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-    } finally {
-        client.release();
+    for (let attempt = 0; ; attempt += 1) {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const result = await operation(client);
+            await client.query("COMMIT");
+            return result;
+        } catch (error) {
+            await client.query("ROLLBACK");
+            const code = (error as { code?: string }).code;
+            if (attempt < 2 && (code === "40P01" || code === "40001")) continue;
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 }
 
@@ -264,8 +270,15 @@ export class PostgresIdentityStore implements IdentityStore {
         return result.rows[0] ? toAccount(result.rows[0]) : null;
     }
 
-    async upsertRegisteredServer(server: RegisteredServer): Promise<void> {
-        await this.#pool.query(
+    async upsertRegisteredServer(server: RegisteredServer, replaceEndpoint = false): Promise<void> {
+        await inTransaction(this.#pool, async (client) => {
+            if (replaceEndpoint) {
+                await client.query(
+                    `DELETE FROM neon_registered_servers WHERE endpoint = $1 AND server_id <> $2`,
+                    [server.endpoint, server.id],
+                );
+            }
+            await client.query(
             `INSERT INTO neon_registered_servers
                 (server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
                  countries, languages, links, accent, logo_asset_hash, banner_asset_hash, first_seen_at, last_seen_at)
@@ -302,20 +315,151 @@ export class PostgresIdentityStore implements IdentityStore {
                 server.bannerAssetHash,
                 server.firstSeenAt,
                 server.lastSeenAt,
-            ],
-        );
+                ],
+            );
+        });
     }
 
-    async listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]> {
+    async removeRegisteredServer(serverId: string): Promise<void> {
+        await this.#pool.query(`DELETE FROM neon_registered_servers WHERE server_id = $1`, [serverId]);
+    }
+
+    async listRegisteredServers(activeSince: Date, now: Date): Promise<RegisteredServer[]> {
         const result = await this.#pool.query<RegisteredServerRow>(
-            `SELECT server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
-                    countries, languages, links, accent, logo_asset_hash, banner_asset_hash, first_seen_at, last_seen_at
-               FROM neon_registered_servers
-              WHERE last_seen_at >= $1
-              ORDER BY server_id`,
-            [activeSince],
+            `SELECT s.server_id, s.endpoint, s.registry_protocol, s.http_port, s.server_version, s.name, s.tagline, s.description,
+                    s.countries, s.languages, s.links, s.accent, s.logo_asset_hash, s.banner_asset_hash, s.first_seen_at, s.last_seen_at
+               FROM neon_registered_servers s
+               LEFT JOIN neon_server_endpoint_leases l ON l.server_id = s.server_id AND l.endpoint = s.endpoint
+               LEFT JOIN neon_server_identities i ON i.server_id = l.server_id
+              WHERE s.last_seen_at >= $1
+                AND ((s.registry_protocol = 1 AND NOT EXISTS (
+                        SELECT 1 FROM neon_server_endpoint_leases reserved
+                         WHERE reserved.endpoint = s.endpoint AND reserved.expires_at > $2
+                     )) OR (l.published AND l.expires_at > $2 AND i.status = 'active'))
+              ORDER BY s.server_id`,
+            [activeSince, now],
         );
         return result.rows.map(toRegisteredServer);
+    }
+
+    async claimServerIdentityLease(claim: ServerIdentityLeaseClaim): Promise<ServerIdentityLeaseClaimResult> {
+        return inTransaction(this.#pool, async (client) => {
+            // An absent row cannot be protected with FOR UPDATE. Serialize
+            // first registration by both identity and endpoint so concurrent
+            // claims cannot bypass the lease checks and surface as a unique
+            // constraint error (or move one identity twice).
+            await client.query(
+                `SELECT pg_advisory_xact_lock(hashtextextended('neon-identity:' || $1, 0))`,
+                [claim.serverId],
+            );
+            await client.query(
+                `SELECT pg_advisory_xact_lock(hashtextextended('neon-endpoint:' || $1, 0))`,
+                [claim.endpoint],
+            );
+            await client.query(`DELETE FROM neon_server_heartbeat_nonces WHERE expires_at <= $1`, [claim.verifiedAt]);
+
+            const blocked = await client.query(
+                `SELECT 1 FROM neon_server_endpoint_blocks
+                  WHERE endpoint = $1 AND (expires_at IS NULL OR expires_at > $2)`,
+                [claim.endpoint, claim.verifiedAt],
+            );
+            if (blocked.rowCount) return "endpoint_blocked";
+
+            const identity = await client.query<{ public_key: string; status: string }>(
+                `SELECT public_key, status FROM neon_server_identities WHERE server_id = $1 FOR UPDATE`,
+                [claim.serverId],
+            );
+            const identityRow = identity.rows[0];
+            if (identityRow && identityRow.public_key !== claim.publicKey) return "identity_in_use";
+            if (identityRow?.status === "suspended") return "identity_suspended";
+
+            const endpointOwner = await client.query<{ server_id: string; expires_at: Date; status: string }>(
+                `SELECT l.server_id, l.expires_at, i.status
+                   FROM neon_server_endpoint_leases l
+                   JOIN neon_server_identities i ON i.server_id = l.server_id
+                  WHERE l.endpoint = $1
+                  FOR UPDATE OF l, i`,
+                [claim.endpoint],
+            );
+            const endpointRow = endpointOwner.rows[0];
+            if (endpointRow && endpointRow.server_id !== claim.serverId && endpointRow.status === "suspended") return "endpoint_blocked";
+            if (endpointRow && endpointRow.server_id !== claim.serverId && endpointRow.expires_at > claim.verifiedAt) {
+                return "endpoint_in_use";
+            }
+
+            const currentLease = await client.query<{ endpoint: string; expires_at: Date }>(
+                `SELECT endpoint, expires_at FROM neon_server_endpoint_leases WHERE server_id = $1 FOR UPDATE`,
+                [claim.serverId],
+            );
+            const currentLeaseRow = currentLease.rows[0];
+            if (currentLeaseRow && currentLeaseRow.endpoint !== claim.endpoint && currentLeaseRow.expires_at > claim.verifiedAt) {
+                return "identity_in_use";
+            }
+
+            await client.query(
+                `INSERT INTO neon_server_identities (server_id, public_key, status, created_at, last_seen_at)
+                 VALUES ($1, $2, 'active', $3, $3)
+                 ON CONFLICT (server_id) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at`,
+                [claim.serverId, claim.publicKey, claim.verifiedAt],
+            );
+
+            const nonce = await client.query(
+                `INSERT INTO neon_server_heartbeat_nonces (server_id, nonce_hash, expires_at)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+                [claim.serverId, claim.nonceHash, claim.expiresAt],
+            );
+            if (nonce.rowCount !== 1) return "replay";
+
+            if (endpointRow && endpointRow.server_id !== claim.serverId) {
+                await client.query(`DELETE FROM neon_server_endpoint_leases WHERE server_id = $1`, [endpointRow.server_id]);
+            }
+            await client.query(
+                `INSERT INTO neon_server_endpoint_leases
+                    (server_id, endpoint, verified_at, expires_at, auth_enabled, published)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (server_id) DO UPDATE SET
+                    endpoint = EXCLUDED.endpoint,
+                    verified_at = EXCLUDED.verified_at,
+                    expires_at = EXCLUDED.expires_at,
+                    auth_enabled = EXCLUDED.auth_enabled,
+                    published = EXCLUDED.published`,
+                [claim.serverId, claim.endpoint, claim.verifiedAt, claim.expiresAt, claim.authEnabled, claim.published],
+            );
+            await client.query(
+                `DELETE FROM neon_registered_servers WHERE endpoint = $2 AND server_id <> $1`,
+                [claim.serverId, claim.endpoint],
+            );
+            if (!claim.published) {
+                await client.query(
+                    `DELETE FROM neon_registered_servers WHERE server_id = $1`,
+                    [claim.serverId],
+                );
+            }
+            return "accepted";
+        });
+    }
+
+    async isEndpointReservedByIdentity(endpoint: string, now: Date): Promise<boolean> {
+        const result = await this.#pool.query(
+            `SELECT 1 FROM neon_server_endpoint_leases WHERE endpoint = $1 AND expires_at > $2`,
+            [endpoint, now],
+        );
+        return result.rowCount === 1;
+    }
+
+    async isServerEndpointAuthorized(serverId: string, endpoint: string, now: Date): Promise<boolean> {
+        const result = await this.#pool.query(
+            `SELECT 1
+               FROM neon_server_endpoint_leases l
+               JOIN neon_server_identities i ON i.server_id = l.server_id
+              WHERE l.server_id = $1
+                AND l.endpoint = $2
+                AND l.auth_enabled
+                AND l.expires_at > $3
+                AND i.status = 'active'`,
+            [serverId, endpoint, now],
+        );
+        return result.rowCount === 1;
     }
 
     async findServerAssetSource(sourceUrl: string, freshSince: Date): Promise<ServerAssetSource | null> {

@@ -31,14 +31,16 @@ public:
     static bool IsValidDiscordId(const std::string& discordId) noexcept;
 
     bool Configure(const std::string& issuer, const std::string& audience, const std::string& keyId, const std::string& publicKeyBase64Url, std::string& error);
+    bool ConfigureOfficial(const std::string& audience, std::string& error);
+    void SetExpectedEndpoint(std::string endpoint) { m_expectedEndpoint = std::move(endpoint); }
     bool VerifyAndConsume(const std::string& ticket, SNeonIdentityClaims& claims, std::string& error);
 
 private:
     void PruneReplayCache(std::time_t now);
 
-    std::string                             m_issuer;
-    std::string                             m_audience;
-    std::string                             m_keyId;
-    std::string                             m_publicKey;
-    std::unordered_map<std::string, time_t> m_consumedTickets;
+    std::string                                  m_issuer;
+    std::string                                  m_audience;
+    std::unordered_map<std::string, std::string> m_publicKeys;
+    std::string                                  m_expectedEndpoint;
+    std::unordered_map<std::string, time_t>      m_consumedTickets;
 };

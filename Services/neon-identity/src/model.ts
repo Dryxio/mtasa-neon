@@ -85,6 +85,25 @@ export interface ServerAssetSource {
     fetchedAt: Date;
 }
 
+export interface ServerIdentityLeaseClaim {
+    serverId: string;
+    publicKey: string;
+    endpoint: string;
+    nonceHash: Buffer;
+    verifiedAt: Date;
+    expiresAt: Date;
+    authEnabled: boolean;
+    published: boolean;
+}
+
+export type ServerIdentityLeaseClaimResult =
+    | "accepted"
+    | "replay"
+    | "identity_suspended"
+    | "identity_in_use"
+    | "endpoint_in_use"
+    | "endpoint_blocked";
+
 export interface IdentityStore {
     createFlow(flow: OAuthFlow): Promise<void>;
     beginFlow(flowId: string, browserTokenHash: Buffer, oauthStateHash: Buffer, now: Date): Promise<boolean>;
@@ -100,8 +119,12 @@ export interface IdentityStore {
         now: Date,
     ): Promise<NeonAccount | null>;
     findAccountBySession(sessionTokenHash: Buffer, now: Date): Promise<NeonAccount | null>;
-    upsertRegisteredServer(server: RegisteredServer): Promise<void>;
-    listRegisteredServers(activeSince: Date): Promise<RegisteredServer[]>;
+    upsertRegisteredServer(server: RegisteredServer, replaceEndpoint?: boolean): Promise<void>;
+    removeRegisteredServer(serverId: string): Promise<void>;
+    listRegisteredServers(activeSince: Date, now: Date): Promise<RegisteredServer[]>;
+    claimServerIdentityLease(claim: ServerIdentityLeaseClaim): Promise<ServerIdentityLeaseClaimResult>;
+    isEndpointReservedByIdentity(endpoint: string, now: Date): Promise<boolean>;
+    isServerEndpointAuthorized(serverId: string, endpoint: string, now: Date): Promise<boolean>;
     findServerAssetSource(sourceUrl: string, freshSince: Date): Promise<ServerAssetSource | null>;
     putServerAsset(asset: ServerAsset, source: ServerAssetSource): Promise<void>;
     findServerAssetByHash(hash: string): Promise<ServerAsset | null>;
