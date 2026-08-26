@@ -19,10 +19,10 @@ CATALOG_PATH = (
 
 
 class ReleaseCatalogTests(unittest.TestCase):
-    def test_repository_catalog_is_valid_and_prepares_build_182(self) -> None:
+    def test_repository_catalog_is_valid_and_prepares_build_183(self) -> None:
         releases = release_catalog.load_catalog(CATALOG_PATH)
-        self.assertEqual(releases[0].build, 182)
-        self.assertEqual(releases[0].display_version, "2026.08.23.182")
+        self.assertEqual(releases[0].build, 183)
+        self.assertEqual(releases[0].display_version, "2026.08.26.183")
 
     def test_next_build_ignores_ci_and_legacy_tags(self) -> None:
         tags = [
@@ -47,12 +47,13 @@ class ReleaseCatalogTests(unittest.TestCase):
                 release_catalog.load_catalog(path)
 
     def test_github_markdown_contains_complete_sections(self) -> None:
-        release = release_catalog.release_for_build(release_catalog.load_catalog(CATALOG_PATH), 180)
+        release = release_catalog.release_for_build(release_catalog.load_catalog(CATALOG_PATH), 183)
         markdown = release_catalog.render_markdown(release)
         self.assertIn("## What’s new", markdown)
         self.assertIn("#### For players", markdown)
+        self.assertIn("#### Server owners and Neon Identity", markdown)
         self.assertIn("#### For creators", markdown)
-        self.assertIn("#### Servers and fixes", markdown)
+        self.assertIn("#### Development tooling", markdown)
         self.assertNotIn("placeholder", markdown.lower())
 
 

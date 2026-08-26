@@ -67,13 +67,24 @@ Before dispatching a release:
 
 1. Add the complete player-facing entry to `releaseNotes.json` and make it the
    first item.
-2. Push the reviewed changes to `master` and wait for its ordinary Build run to
+2. If the release changes `Services/neon-identity`, deploy that service
+   separately: run `npm ci`, `npm test`, `npm run build` and `npm run migrate`,
+   then restart it and verify `/healthz`, JWKS publication and the changed
+   authenticated flow. The GitHub release workflow does not build or deploy the
+   service, and its ignored `dist/` directory must not be assumed current after
+   a source update.
+3. For server upgrades, keep the owner's existing `mtaserver.conf` and
+   `neon-identity.keys`, but install the candidate's new
+   `mtaserver.conf.template`. The server uses that template to add missing
+   settings without replacing existing values; updating only executables and
+   libraries keeps old behavior but cannot add newly documented fields.
+4. Push the reviewed changes to `master` and wait for its ordinary Build run to
    pass.
-3. Dispatch Build on `master` with `prepare_release=true` and
+5. Dispatch Build on `master` with `prepare_release=true` and
    `publish_release=false`. Download and test the candidate artifacts; this
    resolves the next public identity without creating a tag or release.
-4. Without changing the reviewed source, dispatch Build again with
+6. Without changing the reviewed source, dispatch Build again with
    `publish_release=true`. It rebuilds the same public identity and publishes
    only after every required job passes.
-5. Verify the created tag, all six release assets, the signed manifest and an
+7. Verify the created tag, all six release assets, the signed manifest and an
    update from the previous public client before announcing the release.

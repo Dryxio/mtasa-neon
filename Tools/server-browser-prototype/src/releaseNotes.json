@@ -2,6 +2,62 @@
   "schema": 1,
   "releases": [
     {
+      "build": 183,
+      "date": "2026-08-26",
+      "title": "Neon Identity, DevTools and native-world improvements",
+      "summary": "Build 183 makes Neon Identity simple to enable on community servers, adds structured DebugScript 4 diagnostics, expands native AI and story tooling, and fixes traffic, shadows, dialogs and native-world transitions.",
+      "highlights": [
+        "Automatic Neon Identity onboarding for server owners",
+        "Structured DebugScript 4 diagnostics",
+        "Native AI, world switching and player-facing fixes"
+      ],
+      "sections": [
+        {
+          "label": "For players",
+          "tone": "players",
+          "items": [
+            "Disconnect, confirmation and other system dialogs now keep their Close, Cancel and Confirm buttons visible and readable.",
+            "Invisible peds and the local player no longer leave blob or dynamic shadows behind when their alpha is zero.",
+            "Synchronized native traffic no longer turns into an impossible direction after joining a one-way road.",
+            "Switching between native world packs now restores GTA streaming, collision and model state more reliably, including repeated same-session switches and safe loader restarts."
+          ]
+        },
+        {
+          "label": "Server owners and Neon Identity",
+          "tone": "servers",
+          "items": [
+            "Enable Neon authentication with a single neon_auth setting: disabled, optional or required. No server ID or public key needs to be provisioned manually for the official service.",
+            "The server creates a persistent cryptographic identity, proves control of its public ASE endpoint and renews its Identity registration automatically.",
+            "Existing mtaserver.conf files receive the new setting in disabled mode automatically, while complete legacy and custom Identity configurations remain supported.",
+            "Required mode fails closed while registration is unavailable; optional mode keeps ordinary connections available without exposing an unverified identity.",
+            "The cancellable onPlayerConnect event now appends the verified Neon account ID and Discord ID when available, allowing resources to apply account policy before the player joins."
+          ]
+        },
+        {
+          "label": "For creators",
+          "tone": "creators",
+          "items": [
+            "DebugScript level 4 opens a structured CEF diagnostics interface with client/server context, filtering, search, occurrence counts, history and export tools.",
+            "The complete DebugScript 4 frontend is now included in both clean installations and installer-based updates.",
+            "Use setPedNavigateTo to run GTA node-route navigation for synchronized peds, including native building-collision recovery.",
+            "New native task primitives cover ped drive missions, ped physical proofs, vehicle straight-line distance and recorded-playback speed.",
+            "Reusable task-cohort and recorded-playback foundations support authoritative multi-actor missions, ownership handoff and synchronized observers.",
+            "The source repository, rather than the downloadable server package, now includes cooperative Sweet & Kendl and OG Loc reference missions plus bounded native navigation, freeroam traffic and story validation resources."
+          ]
+        },
+        {
+          "label": "Development tooling",
+          "tone": "creators",
+          "items": [
+            "The new Neon CLI provides a deterministic catalogue of inherited MTA APIs and Neon additions, project-local contracts, focused context packs and side-specific LuaLS metadata.",
+            "Closed scenario evidence, project verification and tamper checks make automated development results reproducible without granting arbitrary shell access.",
+            "An authenticated loopback runtime supervisor supports read-only comparison by default and explicitly bounded resource or scenario mutations when enabled.",
+            "Vehicle-audio documentation now explains the prepared Assetto Corsa or Soundize bank workflow and synchronized RPM, throttle, gear and backfire behavior."
+          ]
+        }
+      ]
+    },
+    {
       "build": 182,
       "date": "2026-08-23",
       "title": "Fix settings menu",

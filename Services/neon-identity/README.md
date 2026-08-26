@@ -357,11 +357,12 @@ platform-wide identity service and evaluate Blitz policy at Blitz ticket time.
   logout/revocation endpoint is not part of this first native-client checkpoint.
 - Periodically delete expired flows and sessions after retaining any required
   security audit interval.
-- The heartbeat-backed public registry is separate from the static Identity
-  allowlist. There is not yet a server-owner portal, moderation console, or
-  per-server policy database.
+- The heartbeat-backed public registry and Identity authorization use the same
+  verified V2 server lease for automatically onboarded servers. Legacy/manual
+  server IDs continue to use the static allowlist. There is not yet a
+  server-owner portal or moderation console.
 - Public server-browser metadata is validated by `src/server-catalog.ts` and
-  persisted from verified heartbeats. Only endpoints in the Identity allowlist
-  may receive signed Discord Identity tickets.
+  persisted from verified heartbeats. Signed tickets are issued only for an
+  exact legacy allowlisted pair or an active ASE-verified signed server lease.
 - Store the signing key and Discord credentials in a secrets manager in
   production, not an environment file on disk.
