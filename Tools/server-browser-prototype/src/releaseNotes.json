@@ -7,9 +7,9 @@
       "title": "Neon Identity, DevTools and native-world improvements",
       "summary": "Build 183 makes Neon Identity simple to enable on community servers, adds structured DebugScript 4 diagnostics, expands native AI and story tooling, and fixes traffic, shadows, dialogs and native-world transitions.",
       "highlights": [
-        "Automatic Neon Identity onboarding for server owners",
-        "Structured DebugScript 4 diagnostics",
-        "Native AI, world switching and player-facing fixes"
+        "Enable Neon Identity with a single neon_auth setting, without manually creating a server ID or retrieving keys",
+        "Use DebugScript 4, native ped navigation and new task primitives to diagnose and create synchronized experiences",
+        "More reliable native-world switching, plus fixes for invisible shadows, system dialogs and synchronized traffic"
       ],
       "sections": [
         {
