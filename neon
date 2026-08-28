@@ -1,5 +1,15 @@
-#!/usr/bin/env python3
-from pathlib import Path
-import runpy
+#!/bin/sh
+set -eu
 
-runpy.run_path(str(Path(__file__).resolve().parent / "Tools" / "neon-api" / "neon.py"), run_name="__main__")
+NEON_LAUNCHER_DIRECTORY=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+NEON_PYTHON_SCRIPT="$NEON_LAUNCHER_DIRECTORY/Tools/neon-api/neon.py"
+
+for NEON_PYTHON_COMMAND in python3 python; do
+    if command -v "$NEON_PYTHON_COMMAND" >/dev/null 2>&1 && \
+       "$NEON_PYTHON_COMMAND" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+        exec "$NEON_PYTHON_COMMAND" "$NEON_PYTHON_SCRIPT" "$@"
+    fi
+done
+
+echo "Neon CLI requires Python 3.10 or newer. Install a current Python 3 and try again." >&2
+exit 2

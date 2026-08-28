@@ -34,8 +34,18 @@ def load_json(path: Path, *, max_bytes: int = MAX_JSON_BYTES) -> Any:
     if size > max_bytes:
         raise JsonDocumentError(f"JSON document exceeds {max_bytes} bytes")
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise JsonDocumentError(str(exc)) from exc
+    return parse_json_bytes(payload, max_bytes=max_bytes)
+
+
+def parse_json_bytes(payload: bytes, *, max_bytes: int = MAX_JSON_BYTES) -> Any:
+    if len(payload) > max_bytes:
+        raise JsonDocumentError(f"JSON document exceeds {max_bytes} bytes")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeError as exc:
         raise JsonDocumentError(str(exc)) from exc
     try:
         return json.loads(text, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_nonfinite)

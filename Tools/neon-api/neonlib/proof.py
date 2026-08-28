@@ -64,7 +64,7 @@ def _real_directory(path: Path, label: str) -> Path:
     return original.resolve(strict=True)
 
 
-def _open_probe_directory(server_root: Path, *, create: bool = False) -> tuple[Path, int]:
+def _open_probe_directory(server_root: Path, *, create: bool = False, writable: bool = False) -> tuple[Path, int]:
     root = _real_directory(server_root, "MTA server root")
     components = ("mods", "deathmatch", "resources", PROBE_RESOURCE)
     if os.name == "nt":
@@ -73,7 +73,10 @@ def _open_probe_directory(server_root: Path, *, create: bool = False) -> tuple[P
         handle = winfs.open_directory(root)
         try:
             for index, name in enumerate(components):
-                child = winfs.open_directory_at(handle, name, create=create and index == len(components) - 1)
+                child = winfs.open_directory_at(
+                    handle, name, create=create and index == len(components) - 1,
+                    writable=writable or create,
+                )
                 winfs.close(handle)
                 handle = child
             return root.joinpath(*components), handle
@@ -160,7 +163,7 @@ def _unlink_probe_file(handle: int, name: str) -> None:
 
 
 def install_runtime_probe(server_root: Path) -> dict[str, Any]:
-    _, handle = _open_probe_directory(server_root, create=True)
+    _, handle = _open_probe_directory(server_root, create=True, writable=True)
     assets = probe_assets()
     try:
         for name, payload in assets.items():
@@ -191,7 +194,7 @@ def arm_runtime_probe(server_root: Path, config: dict[str, Any], schema_store: S
     if schema_store.validate("neon-probe-config", config):
         raise ValueError("generated runtime probe configuration is invalid")
     verify_runtime_probe(server_root)
-    target, handle = _open_probe_directory(server_root)
+    target, handle = _open_probe_directory(server_root, writable=True)
     try:
         _unlink_probe_file(handle, REPORT_FILE)
         _write_probe_file(handle, CONFIG_FILE, canonical_json(config).encode("utf-8"))

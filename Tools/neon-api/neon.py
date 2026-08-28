@@ -13,6 +13,11 @@ import unittest
 from pathlib import Path
 
 
+if sys.version_info < (3, 10):
+    sys.stderr.write("Neon CLI requires Python 3.10 or newer.\n")
+    raise SystemExit(2)
+
+
 TOOL_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_DIRECTORY.parents[1]
 sys.path.insert(0, str(TOOL_DIRECTORY))
@@ -32,10 +37,12 @@ from neonlib.components import manifest_semantic_issues  # noqa: E402
 from neonlib.context import ContextGenerationError, generate_project_context, verify_project_context  # noqa: E402
 from neonlib.discovery import search_symbols, tokenize  # noqa: E402
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, write_json  # noqa: E402
+from neonlib.initialize import InitializationError, initialization_failure, initialize_workspace  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
 from neonlib.mutation import mutation_failure  # noqa: E402
 from neonlib.proof import install_runtime_probe, probe_install_failure, proof_failure  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
+from neonlib.portable import distribution_mode, run_portable_self_test  # noqa: E402
 from neonlib.scenario import run_scenario, verify_scenario_run  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 from neonlib.supervisor import (  # noqa: E402
@@ -53,6 +60,7 @@ SCHEMA_STORE = SchemaStore(TOOL_DIRECTORY / "schemas")
 DEFAULT_CATALOGUE = TOOL_DIRECTORY / "neon-api.json"
 DEFAULT_PROJECT = REPOSITORY_ROOT / "neon.project.json"
 DEFAULT_SEMANTICS = TOOL_DIRECTORY / "snapshots" / "api-semantics.json"
+CLI_VERSION = "1.0.0"
 
 
 def _absolute_without_resolving(path: str) -> Path:
@@ -243,6 +251,48 @@ def command_check(args: argparse.Namespace) -> int:
         result = _failure("check", "INTERNAL_RESULT_INVALID", "; ".join(f"{issue.pointer}: {issue.message}" for issue in result_issues))
     _emit(result, args.json)
     return 0 if result["status"] == "pass" else 1
+
+
+def command_init(args: argparse.Namespace) -> int:
+    try:
+        result = initialize_workspace(
+            Path(args.workspace), SCHEMA_STORE, DEFAULT_CATALOGUE,
+            name=args.name, profile=args.profile, explicit_resources=args.resource,
+        )
+    except InitializationError as exc:
+        result = initialization_failure(exc.code, str(exc), exc.path)
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = initialization_failure("INITIALIZATION_FAILED", str(exc))
+    issues = SCHEMA_STORE.validate("neon-init-result", result)
+    if issues:
+        result = initialization_failure(
+            "INTERNAL_RESULT_INVALID",
+            "; ".join(f"{issue.pointer}: {issue.message}" for issue in issues),
+        )
+    _emit(result, args.json)
+    return 0 if result["status"] == "pass" else 1
+
+
+def command_version(args: argparse.Namespace) -> int:
+    catalogue = load_json(DEFAULT_CATALOGUE)
+    result = {
+        "schemaVersion": "1.0.0",
+        "command": "version",
+        "status": "pass",
+        "summary": {"errors": 0, "warnings": 0},
+        "diagnostics": [],
+        "cliVersion": CLI_VERSION,
+        "catalogueVersion": catalogue["catalogueVersion"],
+        "engineVersion": catalogue["engine"]["version"],
+        "minimumPython": "3.10.0",
+        "pythonVersion": ".".join(str(value) for value in sys.version_info[:3]),
+        "mode": distribution_mode(TOOL_DIRECTORY),
+    }
+    if args.json:
+        sys.stdout.write(canonical_json(result))
+    else:
+        print(f"Neon CLI {CLI_VERSION} ({result['mode']}), catalogue {result['catalogueVersion']}, Python {result['pythonVersion']}")
+    return 0
 
 
 def command_project_resolve(args: argparse.Namespace) -> int:
@@ -812,6 +862,10 @@ def command_context_verify(args: argparse.Namespace) -> int:
 
 
 def command_harness(args: argparse.Namespace) -> int:
+    if distribution_mode(TOOL_DIRECTORY) == "portable":
+        result = run_portable_self_test(TOOL_DIRECTORY, SCHEMA_STORE, command="harness")
+        _emit(result, args.json)
+        return 0 if result["status"] == "pass" else 1
     suite = unittest.defaultTestLoader.discover(str(TOOL_DIRECTORY / "tests"))
     captured = io.StringIO()
     outcome = unittest.TextTestRunner(stream=captured, verbosity=2).run(suite)
@@ -844,9 +898,27 @@ def command_harness(args: argparse.Namespace) -> int:
     return 0 if outcome.wasSuccessful() else 1
 
 
+def command_self_test(args: argparse.Namespace) -> int:
+    result = run_portable_self_test(TOOL_DIRECTORY, SCHEMA_STORE)
+    _emit(result, args.json)
+    return 0 if result["status"] == "pass" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="neon", description="MTA Neon agent development contracts")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    version = subcommands.add_parser("version", help="show CLI, catalogue, engine, and Python versions")
+    version.add_argument("--json", action="store_true")
+    version.set_defaults(handler=command_version)
+
+    init = subcommands.add_parser("init", help="discover resources and create a ready agent workspace without overwriting files")
+    init.add_argument("--workspace", default=".")
+    init.add_argument("--name")
+    init.add_argument("--profile", default="neon-pair", choices=("mta-upstream", "neon-client", "neon-server", "neon-pair", "neon-multiclient"))
+    init.add_argument("--resource", action="append", help="workspace-relative resource directory; repeat to disable automatic discovery")
+    init.add_argument("--json", action="store_true")
+    init.set_defaults(handler=command_init)
 
     check = subcommands.add_parser("check", help="validate a project without starting MTA")
     check.add_argument("--project", help="project file; defaults to ./neon.project.json, then the repository project")
@@ -857,6 +929,10 @@ def build_parser() -> argparse.ArgumentParser:
     harness = subcommands.add_parser("harness", help="run the dependency-free closed test harness")
     harness.add_argument("--json", action="store_true")
     harness.set_defaults(handler=command_harness)
+
+    self_test = subcommands.add_parser("self-test", help="verify a portable package and exercise its isolated project workflow")
+    self_test.add_argument("--json", action="store_true")
+    self_test.set_defaults(handler=command_self_test)
 
     project = subcommands.add_parser("project", help="resolve project-local resource and module contracts")
     project_subcommands = project.add_subparsers(dest="project_command", required=True)
@@ -898,7 +974,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-mutation-result", "neon-probe-config", "neon-probe-report", "neon-proof-result", "neon-probe-install-result", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-mutation-result", "neon-probe-config", "neon-probe-report", "neon-proof-result", "neon-probe-install-result", "neon-init-result", "neon-package-manifest", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)

@@ -8,10 +8,29 @@ an explicit short-lived local supervisor capability.
 
 ## Commands
 
-Run commands from the repository root:
+Python 3.10 or newer is required; no third-party Python package is needed. The
+launchers reject older interpreters before loading the tooling. `neon.cmd`
+tries the Windows Python launcher first, then compatible `python3`/`python`
+commands, so an old Python earlier on `PATH` is not selected accidentally.
+
+For a new gamemode workspace containing one or more resource directories with
+`meta.xml`, initialize once:
+
+```sh
+neon init --workspace /path/to/gamemode --profile neon-pair --json
+```
+
+`init` discovers resources, pins a private copy of the bundled full MTA+Neon
+catalogue, creates `neon.project.json` and `NEON_AGENT.md`, generates `.neon`,
+and verifies it. It refuses to overwrite an existing project or context. Use
+repeatable `--resource path/to/resource` arguments if automatic discovery is
+not appropriate.
+
+Run daily commands from the gamemode workspace:
 
 ```sh
 ./neon check --json
+./neon version --json
 ./neon api search "draw text" --side client --kind function --json
 ./neon api get createVehicle --profile neon-pair --json
 ./neon api get Ped --kind class --profile neon-pair --json
@@ -48,11 +67,40 @@ Run commands from the repository root:
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
+./neon self-test --json
 python3 -m unittest discover -s Tools/neon-api/tests -v
 ```
 
 On Windows, use `neon.cmd` instead of `./neon`.
-Python 3.10 or newer is required; no third-party Python package is needed.
+`neon self-test` verifies the portable package manifest and exercises API
+discovery plus an isolated check/generate/verify workflow. In the source
+repository, `neon harness` runs the full maintainer suite; in a portable ZIP it
+automatically runs the bounded portable self-test instead of reporting zero
+tests or attempting repository-only registration audits.
+
+Checks are deliberately explicit. The CLI does not run every validation after
+every file edit: the generated `NEON_AGENT.md` tells coding agents to run
+`neon check --json`, refresh with `neon generate project --json`, and require
+`neon context verify --json` after meaningful Lua, `meta.xml`, dependency, or
+project changes.
+
+## Portable ZIP
+
+Maintainers can build a deterministic standalone ZIP without compiling MTA:
+
+```sh
+python3 Tools/neon-api/packaging/build_portable.py --json
+```
+
+The archive contains the launchers, runtime-free CLI, full MTA+Neon catalogue,
+schemas, licenses, and authenticated runtime probe. It excludes importer
+dependencies, repository tests, evaluations, generated caches, and source
+trees. `NEON_CLI_MANIFEST.json` records every payload hash and the adjacent
+`.sha256` records the complete ZIP checksum. These detect corruption relative
+to the files received; they are not a publisher signature, so authenticity
+still depends on obtaining the ZIP/checksum through a trusted channel.
+Building does not upload, publish, update GitHub Releases, modify the Neon
+updater, or install anything.
 
 `neon check` validates `neon.project.json`, its selected catalogue, engine
 compatibility, declared API requirements, resource directories, `meta.xml`

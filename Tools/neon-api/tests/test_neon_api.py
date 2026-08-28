@@ -12,8 +12,9 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from unittest import mock
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 TOOL_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -62,6 +63,8 @@ from neonlib.schema import SchemaStore  # noqa: E402
 from neonlib.supervisor import MAX_AUDIT_BYTES, _authorization, _load_session, request_supervisor, start_supervisor  # noqa: E402
 import neonlib.supervisor as supervisor_module  # noqa: E402
 import neonlib.proof as proof_module  # noqa: E402
+import neonlib.initialize as initialize_module  # noqa: E402
+import neonlib.anchored as anchored_module  # noqa: E402
 
 
 SCHEMAS = SchemaStore(TOOL_DIRECTORY / "schemas")
@@ -4102,6 +4105,516 @@ class AuthenticatedRuntimeProofTests(unittest.TestCase):
             with self.assertRaises((OSError, ValueError)):
                 install_runtime_probe(anchored_root)
         self.assertEqual(list(outside_swap.iterdir()), [])
+
+
+class PortableDistributionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="neon-portable-tests-")
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def run_cli(self, *arguments: str, cwd: Path | None = None, executable: Path | None = None) -> subprocess.CompletedProcess[str]:
+        command = [sys.executable, str(executable or CLI_PATH), *arguments]
+        return subprocess.run(
+            command, cwd=cwd or self.root, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+
+    def make_resource(self, relative: str, side: str = "server") -> Path:
+        resource = self.root / relative
+        resource.mkdir(parents=True)
+        (resource / "meta.xml").write_text(f'<meta><script src="main.lua" type="{side}" /></meta>\n', encoding="utf-8")
+        source = "local marker = getTickCount()\n" if side == "server" else "local marker = getElementPosition(localPlayer)\n"
+        (resource / "main.lua").write_text(source, encoding="utf-8")
+        return resource
+
+    def test_init_discovers_resources_generates_context_and_never_overwrites(self) -> None:
+        self.make_resource("resources/[core]/inventory")
+        self.make_resource("resources/vehicles", "client")
+        initialized = self.run_cli("init", "--workspace", ".", "--json")
+        self.assertEqual(initialized.returncode, 0, initialized.stderr or initialized.stdout)
+        result = json.loads(initialized.stdout)
+        self.assertEqual(SCHEMAS.validate("neon-init-result", result), [])
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["resources"], [
+            {"name": "inventory", "path": "resources/[core]/inventory"},
+            {"name": "vehicles", "path": "resources/vehicles"},
+        ])
+        self.assertTrue((self.root / ".neon" / "agent-context.json").is_file())
+        self.assertTrue((self.root / ".neon-tooling" / "neon-api.json").is_file())
+        guide = (self.root / "NEON_AGENT.md").read_text(encoding="utf-8")
+        self.assertIn("checks are explicit, not automatic", guide.casefold())
+        checked = self.run_cli("check", "--json")
+        verified = self.run_cli("context", "verify", "--json")
+        self.assertEqual(json.loads(checked.stdout)["status"], "pass")
+        self.assertEqual(json.loads(verified.stdout)["status"], "pass")
+
+        frozen = {
+            path: (self.root / path).read_bytes()
+            for path in ("neon.project.json", "NEON_AGENT.md", ".neon-tooling/neon-api.json")
+        }
+        repeated = self.run_cli("init", "--workspace", ".", "--json")
+        self.assertNotEqual(repeated.returncode, 0)
+        repeated_result = json.loads(repeated.stdout)
+        self.assertEqual(diagnostic_codes(repeated_result), ["PROJECT_ALREADY_EXISTS"])
+        self.assertEqual(SCHEMAS.validate("neon-init-result", repeated_result), [])
+        for path, payload in frozen.items():
+            self.assertEqual((self.root / path).read_bytes(), payload)
+
+    def test_init_failure_is_closed_and_explicit_resources_reject_escape(self) -> None:
+        empty = self.run_cli("init", "--workspace", ".", "--json")
+        self.assertNotEqual(empty.returncode, 0)
+        self.assertEqual(diagnostic_codes(json.loads(empty.stdout)), ["NO_RESOURCES_FOUND"])
+        outside = self.root.parent / f"{self.root.name}-outside"
+        outside.mkdir()
+        try:
+            (outside / "meta.xml").write_text("<meta />\n", encoding="utf-8")
+            escaped = self.run_cli("init", "--workspace", ".", "--resource", str(outside), "--json")
+            self.assertNotEqual(escaped.returncode, 0)
+            self.assertEqual(diagnostic_codes(json.loads(escaped.stdout)), ["RESOURCE_OUTSIDE_WORKSPACE"])
+            self.assertFalse((self.root / "neon.project.json").exists())
+        finally:
+            shutil.rmtree(outside)
+
+    def test_init_rolls_back_an_invalid_project_and_can_be_retried(self) -> None:
+        resource = self.root / "resources" / "broken"
+        resource.mkdir(parents=True)
+        (resource / "meta.xml").write_text('<meta><script src="missing.lua" type="server" /></meta>\n', encoding="utf-8")
+        failed = self.run_cli("init", "--workspace", ".", "--json")
+        self.assertNotEqual(failed.returncode, 0)
+        result = json.loads(failed.stdout)
+        self.assertIn("MISSING_FILE", diagnostic_codes(result))
+        self.assertEqual(result["created"], [])
+        self.assertEqual(SCHEMAS.validate("neon-init-result", result), [])
+        for path in ("neon.project.json", "NEON_AGENT.md", ".neon", ".neon-tooling"):
+            self.assertFalse((self.root / path).exists(), path)
+
+        (resource / "missing.lua").write_text("local marker = getTickCount()\n", encoding="utf-8")
+        retried = self.run_cli("init", "--workspace", ".", "--json")
+        self.assertEqual(retried.returncode, 0, retried.stderr or retried.stdout)
+        self.assertEqual(json.loads(retried.stdout)["status"], "pass")
+
+    def test_init_write_failure_never_publishes_a_partial_project(self) -> None:
+        self.make_resource("resources/demo")
+        original_fsync = anchored_module.os.fsync
+        calls = 0
+
+        def fail_second_fsync(descriptor: int) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected project fsync failure")
+            original_fsync(descriptor)
+
+        with mock.patch.object(anchored_module.os, "fsync", side_effect=fail_second_fsync):
+            with self.assertRaisesRegex(OSError, "injected project fsync failure"):
+                initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(calls, 2)
+        for path in ("neon.project.json", "NEON_AGENT.md", ".neon", ".neon-tooling"):
+            self.assertFalse((self.root / path).exists(), path)
+        self.assertEqual(list(self.root.glob(".*.write")), [])
+
+        retried = self.run_cli("init", "--workspace", ".", "--json")
+        self.assertEqual(retried.returncode, 0, retried.stderr or retried.stdout)
+
+    def test_init_private_directory_publication_never_replaces_a_concurrent_name(self) -> None:
+        self.make_resource("resources/demo")
+        original_publish = anchored_module._rename_noreplace
+        injected = False
+
+        def inject_context_before_publish(parent: int, source: str, target: str) -> None:
+            nonlocal injected
+            if target == ".neon" and not injected:
+                injected = True
+                (self.root / ".neon").mkdir()
+                (self.root / ".neon" / "user-owned.txt").write_text("keep\n", encoding="utf-8")
+            original_publish(parent, source, target)
+
+        with mock.patch.object(
+            anchored_module,
+            "_rename_noreplace",
+            side_effect=inject_context_before_publish,
+        ):
+            with self.assertRaises(initialize_module.InitializationError):
+                initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertTrue(injected)
+        self.assertEqual((self.root / ".neon" / "user-owned.txt").read_text(encoding="utf-8"), "keep\n")
+        self.assertEqual(list(self.root.glob("..neon.*.mkdir")), [])
+        self.assertFalse((self.root / "neon.project.json").exists())
+
+    def test_init_never_descends_into_a_replaced_context_subdirectory(self) -> None:
+        self.make_resource("resources/demo")
+        original_write = initialize_module.DirectoryAnchor.write_new
+        swapped = False
+
+        def swap_client_before_first_write(
+            anchor: object,
+            relative: str,
+            payload: bytes,
+            mode: int = 0o600,
+            *,
+            expected_directories: dict[str, tuple[int, int]] | None = None,
+        ) -> tuple[int, int]:
+            nonlocal swapped
+            if relative.startswith("client/") and not swapped:
+                swapped = True
+                (self.root / ".neon" / "client").rename(self.root / "client-claimed-by-init")
+                (self.root / ".neon" / "client").mkdir()
+            return original_write(
+                anchor,
+                relative,
+                payload,
+                mode,
+                expected_directories=expected_directories,
+            )
+
+        with mock.patch.object(
+            initialize_module.DirectoryAnchor,
+            "write_new",
+            new=swap_client_before_first_write,
+        ):
+            result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertTrue(swapped)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("CONTEXT_CHANGED_CONCURRENTLY", diagnostic_codes(result))
+        self.assertEqual(list((self.root / ".neon" / "client").iterdir()), [])
+        self.assertEqual(list((self.root / "client-claimed-by-init").iterdir()), [])
+
+    def test_init_rollback_preserves_concurrently_created_context_content(self) -> None:
+        self.make_resource("resources/demo")
+
+        def concurrent_failure(*_arguments: object, **_keywords: object) -> dict:
+            (self.root / ".neon" / "user-owned.txt").write_text("keep me\n", encoding="utf-8")
+            return {
+                "status": "fail",
+                "diagnostics": [{
+                    "code": "TEST_FAILURE", "severity": "error",
+                    "message": "force rollback after concurrent content", "path": "neon.project.json",
+                }],
+            }
+
+        with mock.patch.object(initialize_module, "check_project", side_effect=concurrent_failure):
+            result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual((self.root / ".neon" / "user-owned.txt").read_text(encoding="utf-8"), "keep me\n")
+        self.assertIn("INITIALIZATION_ROLLBACK_INCOMPLETE", diagnostic_codes(result))
+        for path in ("neon.project.json", "NEON_AGENT.md", ".neon-tooling"):
+            self.assertFalse((self.root / path).exists(), path)
+
+    def test_init_never_overwrites_a_concurrently_published_context_file(self) -> None:
+        self.make_resource("resources/demo")
+        original_generate = initialize_module.generate_project_context
+
+        def generate_with_concurrent_file(*arguments: object, **keywords: object) -> dict:
+            result = original_generate(*arguments, **keywords)
+            (self.root / ".neon" / "agent-context.json").write_text(
+                '{"owner":"user"}\n', encoding="utf-8",
+            )
+            return result
+
+        with mock.patch.object(
+            initialize_module,
+            "generate_project_context",
+            side_effect=generate_with_concurrent_file,
+        ):
+            result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("CONTEXT_CHANGED_CONCURRENTLY", diagnostic_codes(result))
+        self.assertEqual(
+            (self.root / ".neon" / "agent-context.json").read_text(encoding="utf-8"),
+            '{"owner":"user"}\n',
+        )
+        for path in ("neon.project.json", "NEON_AGENT.md", ".neon-tooling"):
+            self.assertFalse((self.root / path).exists(), path)
+
+    def test_init_rollback_preserves_a_replaced_top_level_file_identity(self) -> None:
+        self.make_resource("resources/demo")
+        original_unlink = initialize_module.DirectoryAnchor.unlink_if_identity
+        replacement_injected = False
+
+        def fail_check(*_arguments: object, **_keywords: object) -> dict:
+            return {
+                "status": "fail",
+                "diagnostics": [{
+                    "code": "TEST_FAILURE", "severity": "error",
+                    "message": "force rollback after identity replacement", "path": "neon.project.json",
+                }],
+            }
+
+        def race_at_conditional_delete(
+            anchor: object,
+            relative: str,
+            expected: tuple[int, int],
+            *,
+            directory: bool = False,
+        ) -> bool:
+            nonlocal replacement_injected
+            if relative == "NEON_AGENT.md" and not replacement_injected:
+                replacement_injected = True
+                guide = self.root / "NEON_AGENT.md"
+                replacement = self.root / "replacement-guide.tmp"
+                replacement.write_text("USER REPLACEMENT\n", encoding="utf-8")
+                os.replace(replacement, guide)
+            return original_unlink(anchor, relative, expected, directory=directory)
+
+        with (
+            mock.patch.object(initialize_module, "check_project", side_effect=fail_check),
+            mock.patch.object(
+                initialize_module.DirectoryAnchor,
+                "unlink_if_identity",
+                new=race_at_conditional_delete,
+            ),
+        ):
+            result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(replacement_injected)
+        self.assertEqual((self.root / "NEON_AGENT.md").read_text(encoding="utf-8"), "USER REPLACEMENT\n")
+        self.assertIn("INITIALIZATION_ROLLBACK_INCOMPLETE", diagnostic_codes(result))
+        for path in ("neon.project.json", ".neon", ".neon-tooling"):
+            self.assertFalse((self.root / path).exists(), path)
+
+    @unittest.skipIf(os.name == "nt", "POSIX quarantine race regression")
+    def test_init_conditional_rollback_restores_a_symlink_raced_at_rename(self) -> None:
+        self.make_resource("resources/demo")
+        sentinel = self.root.parent / f"{self.root.name}-sentinel.txt"
+        sentinel.write_text("DO NOT TOUCH\n", encoding="utf-8")
+        original_rename = anchored_module.os.rename
+        injected = False
+
+        def fail_check(*_arguments: object, **_keywords: object) -> dict:
+            return {
+                "status": "fail",
+                "diagnostics": [{
+                    "code": "TEST_FAILURE", "severity": "error",
+                    "message": "force the conditional rollback", "path": "neon.project.json",
+                }],
+            }
+
+        def rename_with_symlink_race(
+            source: object,
+            destination: object,
+            *arguments: object,
+            **keywords: object,
+        ) -> None:
+            nonlocal injected
+            if source == "NEON_AGENT.md" and ".rollback" in str(destination) and not injected:
+                injected = True
+                guide = self.root / "NEON_AGENT.md"
+                guide.unlink()
+                guide.symlink_to(sentinel)
+            original_rename(source, destination, *arguments, **keywords)
+
+        try:
+            with (
+                mock.patch.object(initialize_module, "check_project", side_effect=fail_check),
+                mock.patch.object(anchored_module.os, "rename", side_effect=rename_with_symlink_race),
+            ):
+                result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+            self.assertEqual(result["status"], "fail")
+            self.assertTrue(injected)
+            self.assertTrue((self.root / "NEON_AGENT.md").is_symlink())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "DO NOT TOUCH\n")
+            self.assertIn("INITIALIZATION_ROLLBACK_INCOMPLETE", diagnostic_codes(result))
+            self.assertEqual(list(self.root.glob(".NEON_AGENT.md.*.rollback")), [])
+        finally:
+            sentinel.unlink(missing_ok=True)
+
+    def test_init_rollback_preserves_a_replaced_published_file_identity(self) -> None:
+        self.make_resource("resources/demo")
+        original_verify = initialize_module.verify_project_context
+        calls = 0
+
+        def replace_context_on_final_verify(*arguments: object, **keywords: object) -> dict:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                target = self.root / ".neon" / "agent-context.json"
+                replacement = self.root / "replacement-context.tmp"
+                replacement.write_text('{"owner":"user"}\n', encoding="utf-8")
+                os.replace(replacement, target)
+                return {
+                    "status": "fail",
+                    "diagnostics": [{
+                        "code": "TEST_FAILURE", "severity": "error",
+                        "message": "force rollback after published identity replacement", "path": ".neon",
+                    }],
+                }
+            return original_verify(*arguments, **keywords)
+
+        with mock.patch.object(
+            initialize_module,
+            "verify_project_context",
+            side_effect=replace_context_on_final_verify,
+        ):
+            result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(
+            (self.root / ".neon" / "agent-context.json").read_text(encoding="utf-8"),
+            '{"owner":"user"}\n',
+        )
+        self.assertIn("INITIALIZATION_ROLLBACK_INCOMPLETE", diagnostic_codes(result))
+        for path in ("neon.project.json", "NEON_AGENT.md", ".neon-tooling"):
+            self.assertFalse((self.root / path).exists(), path)
+
+    @unittest.skipIf(os.name == "nt", "workspace symlink swaps require POSIX symlink support")
+    def test_init_workspace_swap_never_stages_or_writes_through_the_new_path(self) -> None:
+        self.make_resource("resources/demo")
+        parked = self.root.parent / f"{self.root.name}-parked"
+        outside = self.root.parent / f"{self.root.name}-outside-swap"
+        original_check = initialize_module.check_project
+        frozen_outside: set[str] = set()
+
+        def swap_workspace_after_read(*arguments: object, **keywords: object) -> dict:
+            nonlocal frozen_outside
+            result = original_check(*arguments, **keywords)
+            self.root.rename(parked)
+            outside.mkdir()
+            shutil.copytree(parked / "resources", outside / "resources")
+            shutil.copytree(parked / ".neon-tooling", outside / ".neon-tooling")
+            shutil.copy2(parked / "neon.project.json", outside / "neon.project.json")
+            self.root.symlink_to(outside, target_is_directory=True)
+            frozen_outside = {
+                path.relative_to(outside).as_posix()
+                for path in outside.rglob("*")
+            }
+            return result
+
+        try:
+            with mock.patch.object(
+                initialize_module,
+                "check_project",
+                side_effect=swap_workspace_after_read,
+            ):
+                result = initialize_module.initialize_workspace(self.root, SCHEMAS, CATALOGUE_PATH)
+            self.assertEqual(result["status"], "fail")
+            self.assertIn("WORKSPACE_CHANGED_CONCURRENTLY", diagnostic_codes(result))
+            self.assertEqual(
+                {
+                    path.relative_to(outside).as_posix()
+                    for path in outside.rglob("*")
+                },
+                frozen_outside,
+            )
+        finally:
+            if self.root.is_symlink():
+                self.root.unlink()
+            shutil.rmtree(parked, ignore_errors=True)
+            shutil.rmtree(outside, ignore_errors=True)
+            self.root.mkdir(exist_ok=True)
+
+    @unittest.skipIf(os.name == "nt", "symlink creation is not generally available to unprivileged Windows tests")
+    def test_init_rejects_an_agent_guide_symlink_without_touching_its_target(self) -> None:
+        self.make_resource("resources/demo")
+        outside = self.root.parent / f"{self.root.name}-guide.md"
+        outside.write_text("external instructions\n", encoding="utf-8")
+        (self.root / "NEON_AGENT.md").symlink_to(outside)
+        try:
+            failed = self.run_cli("init", "--workspace", ".", "--json")
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual(diagnostic_codes(json.loads(failed.stdout)), ["AGENT_GUIDE_UNSAFE"])
+            self.assertEqual(outside.read_text(encoding="utf-8"), "external instructions\n")
+            self.assertFalse((self.root / "neon.project.json").exists())
+            self.assertFalse((self.root / ".neon-tooling").exists())
+        finally:
+            outside.unlink()
+
+    @unittest.skipIf(os.name == "nt", "POSIX launcher selection is covered here; neon.cmd is exercised in the Windows VM")
+    def test_posix_launcher_skips_an_old_python_and_preserves_arguments(self) -> None:
+        fake_bin = self.root / "fake-bin"
+        fake_bin.mkdir()
+        (fake_bin / "python3").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        invocation = self.root / "python-invocation.txt"
+        (fake_bin / "python").write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$@\" > {invocation!s}\n"
+            f"exec {sys.executable!s} \"$@\"\n",
+            encoding="utf-8",
+        )
+        (fake_bin / "python3").chmod(0o700)
+        (fake_bin / "python").chmod(0o700)
+        environment = dict(os.environ)
+        environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+        completed = subprocess.run(
+            [str(REPOSITORY_ROOT / "neon"), "version", "--json"],
+            cwd=self.root, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["status"], "pass")
+        self.assertIn("Tools/neon-api/neon.py", invocation.read_text(encoding="utf-8"))
+
+    def test_portable_zip_is_deterministic_self_verifying_and_repository_free(self) -> None:
+        builder = TOOL_DIRECTORY / "packaging" / "build_portable.py"
+        first = self.root / "first.zip"
+        second = self.root / "second.zip"
+        for output in (first, second):
+            completed = subprocess.run(
+                [sys.executable, str(builder), "--output", str(output), "--json"],
+                cwd=REPOSITORY_ROOT, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+            self.assertEqual(json.loads(completed.stdout)["status"], "pass")
+        self.assertEqual(first.read_bytes(), second.read_bytes())
+        digest = sha256_file(first)
+        self.assertEqual(first.with_suffix(".zip.sha256").read_text(encoding="ascii"), f"{digest}  first.zip\n")
+
+        with zipfile.ZipFile(first) as archive:
+            names = archive.namelist()
+            self.assertEqual(names, sorted(names))
+            self.assertEqual(len(names), len(set(names)))
+            self.assertTrue(all(name.startswith("neon-cli/") and ".." not in PurePosixPath(name).parts for name in names))
+            self.assertFalse(any("/tests/" in name or "/evals/" in name or "/importer/" in name or "/generated/" in name for name in names))
+            launcher = archive.getinfo("neon-cli/neon")
+            self.assertEqual((launcher.external_attr >> 16) & 0o777, 0o755)
+            archive.extractall(self.root / "extracted")
+
+        extracted = self.root / "extracted" / "neon-cli"
+        extracted_cli = extracted / "Tools" / "neon-api" / "neon.py"
+        version = self.run_cli("version", "--json", executable=extracted_cli)
+        self.assertEqual(json.loads(version.stdout)["mode"], "portable")
+        for command in (("self-test", "--json"), ("harness", "--json")):
+            tested = self.run_cli(*command, executable=extracted_cli)
+            self.assertEqual(tested.returncode, 0, tested.stderr or tested.stdout)
+            document = json.loads(tested.stdout)
+            self.assertEqual((document["status"], document["mode"]), ("pass", "portable"))
+            self.assertGreaterEqual(document["summary"]["tests"], 7)
+
+        manifest = extracted / "NEON_CLI_MANIFEST.json"
+        manifest_payload = manifest.read_bytes()
+        manifest.unlink()
+        for command in (("self-test", "--json"), ("harness", "--json")):
+            missing = self.run_cli(*command, executable=extracted_cli)
+            self.assertNotEqual(missing.returncode, 0)
+            document = json.loads(missing.stdout)
+            self.assertEqual((document["status"], document["mode"]), ("fail", "portable"))
+            self.assertIn("PACKAGE_MANIFEST_MISSING", diagnostic_codes(document))
+            self.assertLess(document["summary"]["tests"], 7)
+        manifest.write_bytes(manifest_payload)
+
+        catalogue = extracted / "Tools" / "neon-api" / "neon-api.json"
+        catalogue.write_bytes(catalogue.read_bytes() + b" ")
+        tampered = self.run_cli("self-test", "--json", executable=extracted_cli)
+        self.assertNotEqual(tampered.returncode, 0)
+        self.assertIn("PACKAGE_FILE_SIZE_MISMATCH", diagnostic_codes(json.loads(tampered.stdout)))
+
+    @unittest.skipIf(os.name == "nt", "output symlink behavior is a POSIX packaging regression")
+    def test_portable_builder_rejects_a_symlink_output(self) -> None:
+        builder = TOOL_DIRECTORY / "packaging" / "build_portable.py"
+        sentinel = self.root / "outside-sentinel.txt"
+        sentinel.write_text("do not replace\n", encoding="utf-8")
+        output = self.root / "requested.zip"
+        output.symlink_to(sentinel)
+        completed = subprocess.run(
+            [sys.executable, str(builder), "--output", str(output), "--json"],
+            cwd=REPOSITORY_ROOT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(diagnostic_codes(json.loads(completed.stdout)), ["PACKAGE_BUILD_FAILED"])
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "do not replace\n")
 
 
 if __name__ == "__main__":

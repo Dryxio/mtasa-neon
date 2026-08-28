@@ -81,6 +81,21 @@ class _FILE_ATTRIBUTE_TAG_INFO(ctypes.Structure):
     _fields_ = [("FileAttributes", wintypes.DWORD), ("ReparseTag", wintypes.DWORD)]
 
 
+class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("FileAttributes", wintypes.DWORD),
+        ("CreationTime", wintypes.FILETIME),
+        ("LastAccessTime", wintypes.FILETIME),
+        ("LastWriteTime", wintypes.FILETIME),
+        ("VolumeSerialNumber", wintypes.DWORD),
+        ("FileSizeHigh", wintypes.DWORD),
+        ("FileSizeLow", wintypes.DWORD),
+        ("NumberOfLinks", wintypes.DWORD),
+        ("FileIndexHigh", wintypes.DWORD),
+        ("FileIndexLow", wintypes.DWORD),
+    ]
+
+
 class _FILE_RENAME_HEADER(ctypes.Structure):
     _fields_ = [
         ("ReplaceIfExists", wintypes.BOOLEAN),
@@ -179,6 +194,8 @@ _kernel32.GetFileInformationByHandleEx.argtypes = [
     wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
 ]
 _kernel32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+_kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
+_kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
 _kernel32.GetFileSizeEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_longlong)]
 _kernel32.GetFileSizeEx.restype = wintypes.BOOL
 _kernel32.ReadFile.argtypes = [
@@ -241,10 +258,21 @@ def _validate_handle(handle: int, *, directory: bool) -> None:
         raise ValueError("approved handle has the wrong filesystem type")
 
 
-def open_directory(path: Path) -> int:
+def handle_identity(handle: int) -> tuple[int, int]:
+    information = _BY_HANDLE_FILE_INFORMATION()
+    if not _kernel32.GetFileInformationByHandle(handle, ctypes.byref(information)):
+        raise _winerror()
+    file_index = (int(information.FileIndexHigh) << 32) | int(information.FileIndexLow)
+    return int(information.VolumeSerialNumber), file_index
+
+
+def open_directory(path: Path, *, writable: bool = False) -> int:
+    desired = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE
+    if writable:
+        desired |= FILE_WRITE_DATA | FILE_ADD_SUBDIRECTORY
     handle = _kernel32.CreateFileW(
         os.fspath(path),
-        FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        desired,
         FILE_SHARE_ALL, None, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None,
     )
@@ -277,7 +305,11 @@ def _relative_handle(
     desired = FILE_READ_ATTRIBUTES | SYNCHRONIZE
     options = FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT
     if directory:
-        desired |= FILE_LIST_DIRECTORY | FILE_WRITE_DATA | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE
+        desired |= FILE_LIST_DIRECTORY | FILE_TRAVERSE
+        if writable or create or open_if:
+            desired |= FILE_WRITE_DATA | FILE_ADD_SUBDIRECTORY
+        if writable:
+            desired |= DELETE
         options |= FILE_DIRECTORY_FILE
     else:
         desired |= FILE_APPEND_DATA if append else FILE_READ_DATA
@@ -299,8 +331,8 @@ def _relative_handle(
         raise
 
 
-def open_directory_at(parent: int, name: str, *, create: bool = False) -> int:
-    return _relative_handle(parent, name, directory=True, create=create)
+def open_directory_at(parent: int, name: str, *, create: bool = False, writable: bool = False) -> int:
+    return _relative_handle(parent, name, directory=True, create=create, writable=writable)
 
 
 def duplicate(handle: int) -> int:
@@ -402,8 +434,14 @@ def resume_suspended_process(process_id: int) -> None:
 
 
 def read_regular_at(parent: int, name: str, maximum: int) -> bytes:
+    payload, _ = read_regular_at_identified(parent, name, maximum)
+    return payload
+
+
+def read_regular_at_identified(parent: int, name: str, maximum: int) -> tuple[bytes, tuple[int, int]]:
     handle = _relative_handle(parent, name, directory=False)
     try:
+        identity = handle_identity(handle)
         size = ctypes.c_longlong()
         if not _kernel32.GetFileSizeEx(handle, ctypes.byref(size)):
             raise _winerror()
@@ -424,7 +462,15 @@ def read_regular_at(parent: int, name: str, maximum: int) -> bytes:
         payload = b"".join(chunks)
         if len(payload) != size.value:
             raise OSError("configured input changed while it was being read")
-        return payload
+        return payload, identity
+    finally:
+        close(handle)
+
+
+def identity_at(parent: int, name: str, *, directory: bool) -> tuple[int, int]:
+    handle = _relative_handle(parent, name, directory=directory)
+    try:
+        return handle_identity(handle)
     finally:
         close(handle)
 
@@ -449,6 +495,51 @@ def unlink_at(parent: int, name: str) -> None:
     try:
         _delete_on_close(handle)
     finally:
+        close(handle)
+
+
+def rmdir_at(parent: int, name: str) -> None:
+    """Delete one empty directory without following a reparse point."""
+    try:
+        handle = _relative_handle(parent, name, directory=True, writable=True)
+    except FileNotFoundError:
+        return
+    try:
+        _delete_on_close(handle)
+    finally:
+        close(handle)
+
+
+def unlink_if_identity_at(
+    parent: int, name: str, expected: tuple[int, int], *, directory: bool,
+) -> bool:
+    """Delete the exact Windows object opened by handle, never a later name replacement."""
+    try:
+        handle = _relative_handle(parent, name, directory=directory, writable=True)
+    except FileNotFoundError:
+        return True
+    try:
+        if handle_identity(handle) != expected:
+            return False
+        _delete_on_close(handle)
+        return True
+    finally:
+        close(handle)
+
+
+def write_new_at(parent: int, name: str, payload: bytes) -> tuple[int, int]:
+    handle = _relative_handle(parent, name, directory=False, create=True, writable=True)
+    written = False
+    try:
+        _write_all(handle, payload)
+        written = True
+        return handle_identity(handle)
+    finally:
+        if not written:
+            try:
+                _delete_on_close(handle)
+            except OSError:
+                pass
         close(handle)
 
 
@@ -509,13 +600,15 @@ def _delete_on_close(handle: int) -> None:
     _raise_status(status, "delete temporary relative file")
 
 
-def atomic_write_at(parent: int, name: str, payload: bytes, temporary: str) -> None:
+def atomic_write_at(parent: int, name: str, payload: bytes, temporary: str) -> tuple[int, int]:
     handle = _relative_handle(parent, temporary, directory=False, create=True, writable=True)
     renamed = False
     try:
         _write_all(handle, payload)
+        identity = handle_identity(handle)
         _rename(handle, parent, name)
         renamed = True
+        return identity
     finally:
         if not renamed:
             try:

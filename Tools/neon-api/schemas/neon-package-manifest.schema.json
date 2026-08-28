@@ -1,0 +1,30 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-package-manifest-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "catalogueSha256": {"format": "sha256", "type": "string"},
+    "catalogueVersion": {"format": "semver", "type": "string"},
+    "engineVersion": {"format": "semver", "type": "string"},
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "executable": {"type": "boolean"},
+          "path": {"format": "relative-path", "type": "string"},
+          "sha256": {"format": "sha256", "type": "string"},
+          "size": {"minimum": 0, "type": "integer"}
+        },
+        "required": ["path", "sha256", "size", "executable"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "minimumPython": {"format": "semver", "type": "string"},
+    "packageVersion": {"format": "semver", "type": "string"},
+    "schemaVersion": {"const": "1.0.0"}
+  },
+  "required": ["schemaVersion", "packageVersion", "minimumPython", "catalogueVersion", "engineVersion", "catalogueSha256", "files"],
+  "type": "object"
+}
