@@ -116,6 +116,8 @@ bool CResource::Load()
 
     m_bOOPEnabledInMetaXml = false;
     m_nativeWorldPackTransport = {};
+    NeonAsset::SecureWipe(m_neonAssetPackage.contentKey.data(), m_neonAssetPackage.contentKey.size());
+    m_neonAssetPackage = {};
 
     m_pVM = nullptr;
     // @@@@@ Set some type of HTTP access here
@@ -272,7 +274,7 @@ bool CResource::Load()
 
             // Read everything that's included. If one of these fail, delete the XML we created and return
             if (!ReadIncludedResources(pRoot) || !ReadIncludedMaps(pRoot) || !ReadIncludedFiles(pRoot) || !ReadIncludedScripts(pRoot) ||
-                !ReadIncludedHTML(pRoot) || !ReadIncludedExports(pRoot) || !ReadIncludedConfigs(pRoot) || !ReadNativeWorldPack(pRoot))
+                !ReadIncludedHTML(pRoot) || !ReadIncludedExports(pRoot) || !ReadIncludedConfigs(pRoot) || !ReadNativeWorldPack(pRoot) || !ReadNeonAssets(pRoot))
             {
                 delete pMetaFile;
                 g_pGame->GetHTTPD()->UnregisterResource(m_strResourceName.c_str());
@@ -403,6 +405,11 @@ CResource::~CResource()
 
 void CResource::TidyUp()
 {
+    // The content key is server-only capability state. Wipe it on unload so a
+    // stopped or reloaded resource cannot retain authority for an old package.
+    NeonAsset::SecureWipe(m_neonAssetPackage.contentKey.data(), m_neonAssetPackage.contentKey.size());
+    m_neonAssetPackage = {};
+
     // Close the zipfile stuff
     if (m_zipfile)
         unzClose(m_zipfile);
@@ -1906,6 +1913,93 @@ bool CResource::ReadNativeWorldPack(CXMLNode* pRoot)
                                                                                   : 0;
     m_nativeWorldPackTransport.manifestPath = manifestPath;
     m_nativeWorldPackTransport.files = taggedFiles;
+    return true;
+}
+
+bool CResource::ReadNeonAssets(CXMLNode* pRoot)
+{
+    CXMLNode* descriptor = pRoot->FindSubNode("neon_assets", 0);
+    if (pRoot->FindSubNode("neon_assets", 1))
+    {
+        m_strFailureReason = SString("Resource '%s' declares more than one neon_assets package\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    std::vector<CResourceFile*> taggedFiles;
+    for (CResourceFile* resourceFile : m_ResourceFiles)
+    {
+        std::string marker;
+        if (!resourceFile->GetMetaFileAttribute("neon_asset", marker))
+            continue;
+
+        const std::string& path = resourceFile->GetName();
+        if (marker != "true" || resourceFile->GetType() != CResourceFile::RESOURCE_FILE_TYPE_CLIENT_FILE ||
+            !static_cast<CResourceClientFileItem*>(resourceFile)->IsAutoDownload() || !NeonAsset::IsCanonicalRelativePath(path) ||
+            (path.size() < 10 || path.compare(path.size() - 10, 10, ".neonasset") != 0))
+        {
+            m_strFailureReason = SString("Resource '%s' has an invalid neon_asset file declaration for '%s'\n", m_strResourceName.c_str(), path.c_str());
+            CLogger::ErrorPrintf(m_strFailureReason);
+            return false;
+        }
+        taggedFiles.push_back(resourceFile);
+    }
+
+    if (!descriptor)
+    {
+        if (!taggedFiles.empty())
+        {
+            m_strFailureReason = SString("Resource '%s' marks neon_asset files without a neon_assets descriptor\n", m_strResourceName.c_str());
+            CLogger::ErrorPrintf(m_strFailureReason);
+            return false;
+        }
+        return true;
+    }
+
+    CXMLAttributes& attributes = descriptor->GetAttributes();
+    CXMLAttribute*  packageAttribute = attributes.Find("package");
+    CXMLAttribute*  keyFileAttribute = attributes.Find("keyfile");
+    if (attributes.Count() != 2 || !packageAttribute || !keyFileAttribute || taggedFiles.empty())
+    {
+        m_strFailureReason = SString("Resource '%s' has an invalid neon_assets descriptor\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    const std::string packageHex = packageAttribute->GetValue();
+    const std::string keyFile = keyFileAttribute->GetValue();
+    std::string       keyPath;
+    if (!NeonAsset::DecodePackageId(packageHex, m_neonAssetPackage.packageId) || !NeonAsset::IsCanonicalRelativePath(keyFile) ||
+        IsFilenameUsed(keyFile.c_str(), true) || !GetFilePath(keyFile.c_str(), keyPath))
+    {
+        m_strFailureReason = SString("Resource '%s' has an invalid or client-visible neon_assets key file\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    SString keyHex;
+    if (!FileLoad(std::nothrow, keyPath, keyHex))
+    {
+        m_strFailureReason = SString("Resource '%s' could not read its neon_assets key file\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+    // SString::TrimStart/TrimEnd remove an exact substring rather than a set of
+    // characters. Select the non-whitespace view explicitly so the newline
+    // written by the packer's keygen command remains accepted.
+    const std::size_t      first = keyHex.find_first_not_of(" \t\r\n");
+    const std::size_t      last = keyHex.find_last_not_of(" \t\r\n");
+    const std::string_view trimmedKey = first == std::string::npos ? std::string_view{} : std::string_view{keyHex}.substr(first, last - first + 1);
+    const bool             validKey = NeonAsset::DecodeContentKey(trimmedKey, m_neonAssetPackage.contentKey);
+    NeonAsset::SecureWipe(keyHex.data(), keyHex.size());
+    if (!validKey)
+    {
+        m_strFailureReason = SString("Resource '%s' neon_assets key must contain exactly 64 hexadecimal characters\n", m_strResourceName.c_str());
+        CLogger::ErrorPrintf(m_strFailureReason);
+        return false;
+    }
+
+    m_neonAssetPackage.present = true;
     return true;
 }
 

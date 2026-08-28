@@ -5361,19 +5361,42 @@ void CPacketHandler::Packet_ResourceStart(NetBitStreamInterface& bitStream)
         double        dChunkDataSize;
         unsigned char nativeWorldFilesRemaining = 0;
         bool          sawResourceChunk = false;
+        bool          sawNeonAssetPackage = false;
 
         while (bitStream.Read(ucChunkType))
         {
-            if ((nativeWorldFilesRemaining != 0 && ucChunkType != 'F') || ((ucChunkType == 'N' || ucChunkType == 'A') && sawResourceChunk))
+            if ((nativeWorldFilesRemaining != 0 && ucChunkType != 'F') || ((ucChunkType == 'N' || ucChunkType == 'A') && sawResourceChunk) ||
+                (ucChunkType == 'K' && sawResourceChunk))
             {
                 bFatalError = true;
-                AddReportLog(2081, "Interrupted or misplaced native world transport descriptor");
+                AddReportLog(2081, "Interrupted or misplaced resource-start descriptor");
                 break;
             }
-            sawResourceChunk = true;
+            if (ucChunkType != 'K')
+                sawResourceChunk = true;
 
             switch (ucChunkType)
             {
+                case 'K':  // Neon authenticated asset package capability
+                {
+                    unsigned char         formatVersion = 0;
+                    NeonAsset::PackageId  packageId{};
+                    NeonAsset::ContentKey contentKey{};
+                    const bool            supported = g_pNet->CanServerBitStream(eBitStreamVersion::NeonEncryptedAssetTransport);
+                    const bool            valid = !sawNeonAssetPackage && supported && bitStream.Read(formatVersion) &&
+                                       bitStream.Read(reinterpret_cast<char*>(packageId.data()), static_cast<int>(packageId.size())) &&
+                                       bitStream.Read(reinterpret_cast<char*>(contentKey.data()), static_cast<int>(contentKey.size())) &&
+                                       pResource->SetNeonAssetPackage(formatVersion, packageId, contentKey);
+                    NeonAsset::SecureWipe(contentKey.data(), contentKey.size());
+                    if (!valid)
+                    {
+                        bFatalError = true;
+                        AddReportLog(2081, "Malformed, duplicate, or unsupported Neon asset capability");
+                        break;
+                    }
+                    sawNeonAssetPackage = true;
+                    break;
+                }
                 case 'A':  // Engine-owned native world transport plus inert startup authorization
                 case 'N':  // Engine-owned native world transport descriptor
                 {

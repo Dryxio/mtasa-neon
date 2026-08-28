@@ -55,6 +55,7 @@ public:
 private:
     bool LoadFromFile(SString filePath);
     bool LoadFromBuffer(SString buffer);
+    void ClearRawData() noexcept;
 
     bool DoReplaceModel(unsigned short usModel, bool bAlphaTransparency);
     void UnloadDFF();

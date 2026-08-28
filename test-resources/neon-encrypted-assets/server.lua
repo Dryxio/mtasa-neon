@@ -1,0 +1,5 @@
+addEvent("neonEncryptedAssetsLoaded", true)
+addEventHandler("neonEncryptedAssetsLoaded", resourceRoot, function()
+    assert(client, "runtime checkpoint must be reported by a connected client")
+    outputServerLog(("[neon-encrypted-assets] %s authenticated and replaced the WOSA TXD/DFF/COL triplet"):format(getPlayerName(client)))
+end)

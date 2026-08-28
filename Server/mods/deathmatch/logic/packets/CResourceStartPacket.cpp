@@ -129,6 +129,18 @@ bool CResourceStartPacket::Write(NetBitStreamInterface& BitStream) const
         }
     };
 
+    const SNeonAssetPackage& neonAssets = m_pResource->GetNeonAssetPackage();
+    if (neonAssets.present)
+    {
+        // The key is capability state, not a downloadable resource file. It is
+        // delivered before scripts execute and is bound to this resource by the
+        // resource-start packet and the authenticated container AAD.
+        BitStream.Write(static_cast<unsigned char>('K'));
+        BitStream.Write(NeonAsset::FORMAT_VERSION);
+        BitStream.Write(reinterpret_cast<const char*>(neonAssets.packageId.data()), static_cast<int>(neonAssets.packageId.size()));
+        BitStream.Write(reinterpret_cast<const char*>(neonAssets.contentKey.data()), static_cast<int>(neonAssets.contentKey.size()));
+    }
+
     // Each format requires its exact capability. Tagged files remain omitted
     // below when that capability is absent, so an older client cannot mistake
     // a generic pack for ordinary resource content. The legacy N layout stays

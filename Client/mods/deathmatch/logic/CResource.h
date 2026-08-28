@@ -18,6 +18,7 @@
 #include "CResourceModelStreamer.h"
 #include "CElementGroup.h"
 #include "CPedNativeEventProfile.h"
+#include <NeonAssetFormat.h>
 #include <game/CGame.h>
 #include <chrono>
 #include <ctime>
@@ -146,6 +147,10 @@ public:
     void         SetStartCounter(unsigned int startCounter) { m_startCounter = startCounter; }
     unsigned int GetStartCounter() const noexcept { return m_startCounter; }
 
+    bool SetNeonAssetPackage(unsigned char formatVersion, const NeonAsset::PackageId& packageId, const NeonAsset::ContentKey& contentKey);
+    bool DecryptNeonAsset(std::string_view container, std::string_view relativePath, std::string& plaintext, NeonAsset::Type& type, std::string& error) const;
+    void RevokeNeonAssetPackage();
+
     bool HasNativeWorldTransport() const noexcept { return m_nativeWorldTransport.present; }
     bool SetNativeWorldTransport(unsigned char format, const SString& manifestPath, unsigned char expectedFileCount);
     bool AddNativeWorldTransportFile(CDownloadableResource* file);
@@ -156,30 +161,33 @@ public:
     void PulseNativeWorldRuntimeAdmission();
 
 private:
-    unsigned short       m_usNetID;
-    uint                 m_uiScriptID;
-    unsigned int         m_startCounter{};
-    SString              m_strResourceName;
-    CLuaMain*            m_pLuaVM;
-    CLuaManager*         m_pLuaManager;
-    class CClientEntity* m_pRootEntity;
-    bool                 m_bActive;
-    bool                 m_bStarting;
-    bool                 m_bStopping;
-    class CClientEntity* m_pResourceEntity;         // no idea what this is used for anymore
-    class CClientEntity* m_pResourceDynamicEntity;  // parent of elements created by the resource
-    class CClientEntity* m_pResourceCOLRoot;
-    class CClientEntity* m_pResourceDFFEntity;
-    class CClientEntity* m_pResourceGUIEntity;
-    class CClientEntity* m_pResourceTXDRoot;
-    class CClientEntity* m_pResourceIFPRoot;
-    class CClientEntity* m_pResourceIMGRoot;
-    unsigned short       m_usRemainingNoClientCacheScripts;
-    bool                 m_bLoadAfterReceivingNoClientCacheScripts;
-    CMtaVersion          m_strMinServerReq;
-    CMtaVersion          m_strMinClientReq;
-    bool                 m_bOOPEnabled;
-    int                  m_iDownloadPriorityGroup;
+    unsigned short        m_usNetID;
+    uint                  m_uiScriptID;
+    unsigned int          m_startCounter{};
+    SString               m_strResourceName;
+    CLuaMain*             m_pLuaVM;
+    CLuaManager*          m_pLuaManager;
+    class CClientEntity*  m_pRootEntity;
+    bool                  m_bActive;
+    bool                  m_bStarting;
+    bool                  m_bStopping;
+    class CClientEntity*  m_pResourceEntity;         // no idea what this is used for anymore
+    class CClientEntity*  m_pResourceDynamicEntity;  // parent of elements created by the resource
+    class CClientEntity*  m_pResourceCOLRoot;
+    class CClientEntity*  m_pResourceDFFEntity;
+    class CClientEntity*  m_pResourceGUIEntity;
+    class CClientEntity*  m_pResourceTXDRoot;
+    class CClientEntity*  m_pResourceIFPRoot;
+    class CClientEntity*  m_pResourceIMGRoot;
+    unsigned short        m_usRemainingNoClientCacheScripts;
+    bool                  m_bLoadAfterReceivingNoClientCacheScripts;
+    CMtaVersion           m_strMinServerReq;
+    CMtaVersion           m_strMinClientReq;
+    bool                  m_bOOPEnabled;
+    int                   m_iDownloadPriorityGroup;
+    bool                  m_hasNeonAssetPackage{};
+    NeonAsset::PackageId  m_neonAssetPackageId{};
+    NeonAsset::ContentKey m_neonAssetContentKey{};
 
     // To control cursor show/hide
     static int m_iShowingCursor;

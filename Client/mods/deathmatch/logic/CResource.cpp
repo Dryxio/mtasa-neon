@@ -130,6 +130,8 @@ CResource::CResource(unsigned short usNetID, const char* szResourceName, CClient
 
 CResource::~CResource()
 {
+    RevokeNeonAssetPackage();
+
     // Resource stop invalidates this offer immediately. The manager retains
     // the future until its cooperative worker exits so std::future destruction
     // cannot block this lifecycle-sensitive destructor.
@@ -940,6 +942,37 @@ bool CResource::SetNativeWorldTransport(unsigned char format, const SString& man
     return true;
 }
 
+bool CResource::SetNeonAssetPackage(unsigned char formatVersion, const NeonAsset::PackageId& packageId, const NeonAsset::ContentKey& contentKey)
+{
+    if (m_hasNeonAssetPackage || formatVersion != NeonAsset::FORMAT_VERSION)
+        return false;
+
+    m_neonAssetPackageId = packageId;
+    m_neonAssetContentKey = contentKey;
+    m_hasNeonAssetPackage = true;
+    return true;
+}
+
+bool CResource::DecryptNeonAsset(std::string_view container, std::string_view relativePath, std::string& plaintext, NeonAsset::Type& type,
+                                 std::string& error) const
+{
+    if (!m_hasNeonAssetPackage)
+    {
+        error = "resource has no Neon asset capability";
+        return false;
+    }
+
+    return NeonAsset::Decrypt(container, m_neonAssetContentKey, m_neonAssetPackageId, m_strResourceName, relativePath, plaintext, type, error);
+}
+
+void CResource::RevokeNeonAssetPackage()
+{
+    NeonAsset::SecureWipe(m_neonAssetContentKey.data(), m_neonAssetContentKey.size());
+    m_neonAssetContentKey = {};
+    m_neonAssetPackageId = {};
+    m_hasNeonAssetPackage = false;
+}
+
 bool CResource::SetNativeWorldStartupAuthorization(unsigned char wireVersion, unsigned char startupMode, unsigned char policy)
 {
     if (!m_nativeWorldTransport.present || m_nativeWorldTransport.authorizationRequested ||
@@ -1526,6 +1559,9 @@ void CResource::Stop()
 {
     m_bStarting = false;
     m_bStopping = true;
+    // Stop handlers must not be able to resurrect protected assets after the
+    // server has revoked this resource's capability.
+    RevokeNeonAssetPackage();
     CLuaArguments Arguments;
     Arguments.PushResource(this);
     m_pResourceEntity->CallEvent("onClientResourceStop", Arguments, true);

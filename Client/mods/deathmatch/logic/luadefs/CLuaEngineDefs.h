@@ -22,6 +22,7 @@ public:
     LUA_DECLARE(EngineLoadDFF);
     LUA_DECLARE(EngineLoadTXD);
     LUA_DECLARE(EngineLoadCOL);
+    LUA_DECLARE(EngineReplaceEncryptedModel);
     LUA_DECLARE(EngineLoadIFP);
     LUA_DECLARE(EngineLoadVehicleAudioConfig);
     LUA_DECLARE(EngineReloadVehicleAudioConfig);

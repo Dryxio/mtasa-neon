@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <NeonAssetFormat.h>
 
 CClientDFF::CClientDFF(CClientManager* pManager, ElementID ID) : ClassInit(this), CClientEntity(ID)
 {
@@ -32,6 +33,7 @@ CClientDFF::~CClientDFF()
 
     // Unload our clumps
     UnloadDFF();
+    ClearRawData();
 }
 
 // Get a clump which has been loaded to replace the specified model id
@@ -63,7 +65,7 @@ RpClump* CClientDFF::GetLoadedClump(ushort usModelId)
             info.pClump = g_pGame->GetRenderWare()->ReadDFF(NULL, m_RawDataBuffer, usModelId, CClientVehicleManager::IsValidModel(usModelId));
 
             // Remove raw data from memory (can only do one replace when using raw data)
-            SString().swap(m_RawDataBuffer);
+            ClearRawData();
         }
     }
 
@@ -145,10 +147,19 @@ bool CClientDFF::LoadFromFile(SString filePath)
 bool CClientDFF::LoadFromBuffer(SString buffer)
 {
     if (!g_pCore->GetNetwork()->CheckFile("dff", "", buffer.data(), buffer.size()))
+    {
+        NeonAsset::SecureWipe(buffer.data(), buffer.size());
         return false;
+    }
 
     m_RawDataBuffer = std::move(buffer);
     return true;
+}
+
+void CClientDFF::ClearRawData() noexcept
+{
+    NeonAsset::SecureWipe(m_RawDataBuffer.data(), m_RawDataBuffer.size());
+    SString().swap(m_RawDataBuffer);
 }
 
 bool CClientDFF::DoReplaceModel(unsigned short usModel, bool bAlphaTransparency)

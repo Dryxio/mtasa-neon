@@ -140,6 +140,7 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineLoadTXD", EngineLoadTXD},
         {"engineLoadCOL", EngineLoadCOL},
         {"engineLoadDFF", EngineLoadDFF},
+        {"engineReplaceEncryptedModel", EngineReplaceEncryptedModel},
         {"engineLoadIFP", EngineLoadIFP},
         {"engineLoadVehicleAudioConfig", EngineLoadVehicleAudioConfig},
         {"engineReloadVehicleAudioConfig", EngineReloadVehicleAudioConfig},
@@ -660,6 +661,120 @@ int CLuaEngineDefs::EngineLoadTXD(lua_State* luaVM)
         m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
     }
 
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaEngineDefs::EngineReplaceEncryptedModel(lua_State* luaVM)
+{
+    SString path;
+    SString modelName;
+    bool    alphaTransparency = false;
+    bool    filteringEnabled = true;
+
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadString(path);
+    argStream.ReadString(modelName);
+    argStream.ReadBool(alphaTransparency, false);
+    argStream.ReadBool(filteringEnabled, true);
+
+    CLuaMain*     luaMain = m_pLuaManager->GetVirtualMachine(luaVM);
+    CResource*    resource = luaMain ? luaMain->GetResource() : nullptr;
+    std::uint16_t modelId = 0;
+    if (!argStream.HasErrors() && resource && NeonAsset::IsCanonicalRelativePath(path) && path.EndsWith(".neonasset") &&
+        ResolveEngineModelID(modelName, modelId))
+    {
+        CResourceFile* resourceFile = resource->GetResourceFile(path);
+        if (resourceFile && resourceFile->GetResourceType() == CDownloadableResource::RESOURCE_FILE_TYPE_CLIENT_FILE && resourceFile->IsAutoDownload())
+        {
+            SString container;
+            if (FileLoad(std::nothrow, resourceFile->GetName(), container))
+            {
+                std::string     plaintext;
+                std::string     error;
+                NeonAsset::Type assetType{};
+                if (resource->DecryptNeonAsset(std::string_view(container.data(), container.size()), path, plaintext, assetType, error))
+                {
+                    // SString's two-argument C-string constructor is printf-style,
+                    // not a byte-range constructor. Go through std::string so
+                    // embedded NULs in RenderWare data remain intact.
+                    SString rawData(std::string(plaintext.data(), plaintext.size()));
+                    NeonAsset::SecureClear(plaintext);
+
+                    CClientEntity* loadedElement = nullptr;
+                    if (assetType == NeonAsset::Type::Dff)
+                    {
+                        auto* dff = new CClientDFF(m_pManager, INVALID_ELEMENT_ID);
+                        if (dff->Load(true, std::move(rawData)))
+                        {
+                            dff->SetParent(resource->GetResourceDFFRoot());
+                            m_pDFFManager->RestoreModel(modelId);
+                            if (dff->ReplaceModel(modelId, alphaTransparency))
+                                loadedElement = dff;
+                            else
+                                error = "authenticated DFF payload could not replace the requested model";
+                        }
+                        else
+                            error = "authenticated DFF payload could not be loaded";
+                        if (!loadedElement)
+                            delete dff;
+                    }
+                    else if (assetType == NeonAsset::Type::Txd && CClientTXD::IsImportableModel(modelId) &&
+                             !(modelId >= CLOTHES_TEX_ID_FIRST && modelId <= CLOTHES_TEX_ID_LAST))
+                    {
+                        auto* txd = new CClientTXD(m_pManager, INVALID_ELEMENT_ID);
+                        if (txd->Load(true, std::move(rawData), filteringEnabled))
+                        {
+                            txd->SetParent(resource->GetResourceTXDRoot());
+                            if (txd->Import(modelId))
+                                loadedElement = txd;
+                            else
+                                error = "authenticated TXD payload could not be imported for the requested model";
+                        }
+                        else
+                            error = "authenticated TXD payload could not be loaded";
+                        if (!loadedElement)
+                            delete txd;
+                    }
+                    else if (assetType == NeonAsset::Type::Col && CClientColModelManager::IsReplacableModel(modelId))
+                    {
+                        auto* col = new CClientColModel(m_pManager, INVALID_ELEMENT_ID);
+                        if (col->Load(true, std::move(rawData)))
+                        {
+                            col->SetParent(resource->GetResourceCOLModelRoot());
+                            if (col->Replace(modelId))
+                                loadedElement = col;
+                            else
+                                error = "authenticated COL payload could not replace the requested model";
+                        }
+                        else
+                            error = "authenticated COL payload could not be loaded";
+                        if (!loadedElement)
+                            delete col;
+                    }
+
+                    if (loadedElement)
+                    {
+                        lua_pushelement(luaVM, loadedElement);
+                        return 1;
+                    }
+                    if (error.empty())
+                        error = "authenticated asset type cannot be applied to the requested model";
+                }
+
+                argStream.SetCustomError(error.c_str(), "Error loading encrypted model");
+            }
+            else
+                argStream.SetCustomError(path, "Error reading encrypted model");
+        }
+        else
+            argStream.SetCustomError(path, "Encrypted model is not a declared auto-download file");
+    }
+    else if (!argStream.HasErrors())
+        argStream.SetCustomError("Expected an own-resource .neonasset path and a valid non-clothes model ID");
+
+    if (argStream.HasErrors())
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
     lua_pushboolean(luaVM, false);
     return 1;
 }

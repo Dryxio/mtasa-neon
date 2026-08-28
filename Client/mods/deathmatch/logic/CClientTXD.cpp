@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include <NeonAssetFormat.h>
 #include <game/CRadar.h>
 
 CClientTXD::CClientTXD(class CClientManager* pManager, ElementID ID) : ClassInit(this), CClientEntity(ID)
@@ -38,6 +39,8 @@ CClientTXD::~CClientTXD()
 
     // Remove us from all the clothes
     g_pGame->GetRenderWare()->ClothesRemoveFile(m_FileData.data());
+
+    ClearFileData();
 }
 
 bool CClientTXD::CopyDataForRadar(SString& output)
@@ -150,13 +153,14 @@ bool CClientTXD::Import(unsigned short usModelID)
                 return false;
         }
 
-        // Free the raw buffer once textures are decoded, unless it's also
-        // referenced by the clothes system (which holds m_FileData by ptr).
+        // ModelInfoTXDLoadTextures can retain views into the source buffer until
+        // AddTextures has installed them. Keep the authenticated plaintext alive
+        // through that call, then wipe it immediately afterwards.
+        const bool imported = g_pGame->GetRenderWare()->ModelInfoTXDAddTextures(&m_ReplacementTextures, usModelID);
         if (!m_bUsingFileDataForClothes)
-            SString().swap(m_FileData);
+            ClearFileData();
 
-        // Have we got textures and haven't already imported into this model?
-        if (g_pGame->GetRenderWare()->ModelInfoTXDAddTextures(&m_ReplacementTextures, usModelID))
+        if (imported)
         {
             Restream(usModelID);
             return true;
@@ -202,19 +206,31 @@ bool CClientTXD::LoadFromFile(SString filePath)
 bool CClientTXD::LoadFromBuffer(SString buffer)
 {
     if (!g_pCore->GetNetwork()->CheckFile("txd", "", buffer.data(), buffer.size()))
+    {
+        NeonAsset::SecureWipe(buffer.data(), buffer.size());
         return false;
+    }
 
     m_FileData = std::move(buffer);
 
     // Validate the bytes once and discard the decoded textures; engineImportTXD
     // will decode the same m_FileData buffer on demand.
     if (!g_pGame->GetRenderWare()->ModelInfoTXDLoadTextures(&m_ReplacementTextures, NULL, m_FileData, m_bFilteringEnabled))
+    {
+        ClearFileData();
         return false;
+    }
 
     g_pGame->GetRenderWare()->ModelInfoTXDRemoveTextures(&m_ReplacementTextures);
     m_ReplacementTextures = SReplacementTextures();
 
     return true;
+}
+
+void CClientTXD::ClearFileData() noexcept
+{
+    NeonAsset::SecureWipe(m_FileData.data(), m_FileData.size());
+    SString().swap(m_FileData);
 }
 
 void CClientTXD::Restream(unsigned short usModelID)

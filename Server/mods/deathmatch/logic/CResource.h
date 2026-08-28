@@ -12,6 +12,7 @@
 #pragma once
 
 #include <net/NativeWorldProtocol.h>
+#include <NeonAssetFormat.h>
 
 #include "packets/CResourceStartPacket.h"
 #include "packets/CResourceStopPacket.h"
@@ -143,6 +144,13 @@ struct SNativeWorldPackTransport
     unsigned char               authorizationPolicy{};
     std::string                 manifestPath;
     std::vector<CResourceFile*> files;
+};
+
+struct SNeonAssetPackage
+{
+    bool                  present{};
+    NeonAsset::PackageId  packageId{};
+    NeonAsset::ContentKey contentKey{};
 };
 
 // A resource is either a directory with files or a ZIP file which contains the content of such directory.
@@ -351,6 +359,7 @@ public:
     int GetDownloadPriorityGroup() const noexcept { return m_iDownloadPriorityGroup; }
 
     const SNativeWorldPackTransport& GetNativeWorldPackTransport() const noexcept { return m_nativeWorldPackTransport; }
+    const SNeonAssetPackage&         GetNeonAssetPackage() const noexcept { return m_neonAssetPackage; }
     bool                             RequiresNativeWorldV3SetStartupCapability() const noexcept
     {
         return m_nativeWorldPackTransport.present && m_nativeWorldPackTransport.startupAuthorization && m_nativeWorldPackTransport.format == 3;
@@ -393,6 +402,7 @@ private:
     bool ReadIncludedExports(CXMLNode* pRoot);
     bool ReadIncludedFiles(CXMLNode* pRoot);
     bool ReadNativeWorldPack(CXMLNode* pRoot);
+    bool ReadNeonAssets(CXMLNode* pRoot);
     bool CreateVM(bool bEnableOOP);
     bool DestroyVM();
     void TidyUp();
@@ -442,6 +452,7 @@ private:
     std::list<CIncludedResources*> m_IncludedResources;  // we store them here temporarily, then read them once all the resources are loaded
     std::list<CResourceFile*>      m_ResourceFiles;
     SNativeWorldPackTransport      m_nativeWorldPackTransport;
+    SNeonAssetPackage              m_neonAssetPackage;
     std::map<std::string, int>     m_ResourceFilesCountPerDir;
     std::list<CResource*>          m_Dependents;  // resources that have "included" or loaded this one
     std::list<CExportedFunction>   m_ExportedFunctions;

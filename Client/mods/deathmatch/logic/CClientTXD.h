@@ -37,6 +37,7 @@ public:
 private:
     bool LoadFromFile(SString filePath);
     bool LoadFromBuffer(SString buffer);
+    void ClearFileData() noexcept;
 
     void Restream(unsigned short usModel);
     bool GetFilenameToUse(SString& strOutFilename);
