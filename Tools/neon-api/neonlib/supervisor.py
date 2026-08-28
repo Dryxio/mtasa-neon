@@ -18,14 +18,25 @@ from typing import Any
 
 from .catalogue import catalogue_semantic_issues
 from .jsonio import JsonDocumentError, canonical_json, sha256_bytes
-from .mutation import mutation_failure, mutation_result, parse_resource_command
+from .mutation import mutation_failure, mutation_result, parse_client_command, parse_resource_command
 from .project import resolve_project_components
+from .proof import (
+    PROBE_RESOURCE,
+    REPORT_FILE,
+    arm_runtime_probe,
+    client_executable,
+    create_probe_config,
+    load_probe_report,
+    proof_failure,
+    prove_runtime,
+    verify_runtime_probe,
+)
 from .runtime import compare_runtime_snapshot
 from .schema import SchemaStore, schema_major
 
 
 CAPABILITIES = ["artifacts.read", "diagnostics.read", "knowledge.read", "project.read", "runtime.observe"]
-MUTATION_CAPABILITIES = {"resource.lifecycle", "scenario.execute"}
+MUTATION_CAPABILITIES = {"resource.lifecycle", "scenario.execute", "client.launch"}
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_SESSION_BYTES = 256 * 1024
@@ -129,6 +140,22 @@ def _submit_guardian_command(
     ):
         raise ValueError("driver guardian acknowledgement is inconsistent")
     return response["status"], written
+
+
+def _query_guardian_alive(connection: socket.socket, sequence: int) -> bool:
+    request = {"sequence": sequence, "action": "status", "resource": PROBE_RESOURCE}
+    connection.settimeout(3)
+    connection.sendall(canonical_json(request).encode("utf-8"))
+    from .scenario import load_json_text
+
+    response = load_json_text(_receive_line(connection, 4096).decode("utf-8"))
+    if (
+        not isinstance(response, dict) or set(response) != {"sequence", "status", "written"}
+        or response.get("sequence") != sequence or response.get("status") not in {"alive", "unavailable"}
+        or response.get("written") != 0
+    ):
+        raise ValueError("driver guardian liveness acknowledgement is invalid")
+    return response["status"] == "alive"
 
 
 def _terminate_server_process(process: subprocess.Popen[Any]) -> None:
@@ -287,12 +314,18 @@ def run_driver_guardian(
                 or not 1 <= request["sequence"] <= 2147483647
                 or not isinstance(request.get("action"), str)
                 or not isinstance(request.get("resource"), str)
-                or parse_resource_command(f"resource.{request['action']}/{request['resource']}") is None
+                or (
+                    not (request["action"] == "status" and request["resource"] == PROBE_RESOURCE)
+                    and parse_resource_command(f"resource.{request['action']}/{request['resource']}") is None
+                )
             ):
                 raise ValueError("driver guardian request is invalid")
             response: dict[str, Any] = {"sequence": request["sequence"]}
             server_exit = server_process.returncode if server_process.poll() is not None else None
-            if server_exit is not None or server_process.stdin is None:
+            if request["action"] == "status":
+                response["status"] = "alive" if server_exit is None else "unavailable"
+                response["written"] = 0
+            elif server_exit is not None or server_process.stdin is None:
                 response["status"] = "unavailable"
                 response["written"] = 0
             else:
@@ -896,6 +929,9 @@ def start_supervisor(
     schema_store: SchemaStore,
     enabled_capabilities: tuple[str, ...] = (),
     server_root: Path | None = None,
+    client_root: Path | None = None,
+    connect_port: int = 22003,
+    test_client_adapter: bool = False,
 ) -> dict[str, Any]:
     _reap_children()
     workspace_original = workspace.absolute()
@@ -909,11 +945,22 @@ def start_supervisor(
             raise ValueError("requested supervisor capability is not allowlisted")
         if "resource.lifecycle" in enabled and server_root is None:
             raise ValueError("resource.lifecycle requires an explicitly approved MTA server root")
+        if "client.launch" in enabled and "resource.lifecycle" not in enabled:
+            raise ValueError("client.launch requires resource.lifecycle in the same bounded session")
+        if "client.launch" in enabled and client_root is None:
+            raise ValueError("client.launch requires an explicitly approved MTA client root")
         if server_root is not None and "resource.lifecycle" not in enabled:
             raise ValueError("an MTA server root may only be supplied with resource.lifecycle")
+        if client_root is not None and "client.launch" not in enabled:
+            raise ValueError("an MTA client root may only be supplied with client.launch")
+        if isinstance(connect_port, bool) or not isinstance(connect_port, int) or not 1 <= connect_port <= 65535:
+            raise ValueError("client connection port must be an integer from 1 to 65535")
         approved_server_root = server_root.resolve() if server_root is not None else None
+        approved_client_root = client_root.resolve() if client_root is not None else None
         if approved_server_root is not None:
             _server_executable(approved_server_root)
+        if approved_client_root is not None:
+            client_executable(approved_client_root, test_client_adapter)
         project_file, project_relative = _inside(workspace_original, project_path)
         _, snapshot_relative = _inside(workspace_original, snapshot_path, allow_missing=True)
         _, root_relative = _inside(workspace_original, session_root, allow_missing=True)
@@ -941,6 +988,10 @@ def start_supervisor(
         )
         if resolved["status"] != "pass":
             raise ValueError("project must pass static resolution before a supervisor session can start")
+        if "client.launch" in enabled:
+            if project["profile"] not in {"neon-pair", "neon-multiclient"}:
+                raise ValueError("client.launch requires a neon-pair or neon-multiclient project profile")
+            verify_runtime_probe(approved_server_root)
         if (
             _read_regular_at(workspace_fd, project_relative, 4 * 1024 * 1024) != project_payload
             or _read_regular_at(workspace_fd, catalogue_relative, 16 * 1024 * 1024) != catalogue_payload
@@ -963,6 +1014,10 @@ def start_supervisor(
             command.extend(("--capability", capability))
         if approved_server_root is not None:
             command.extend(("--server-root", os.fspath(approved_server_root)))
+        if approved_client_root is not None:
+            command.extend(("--client-root", os.fspath(approved_client_root), "--connect-port", str(connect_port)))
+        if test_client_adapter:
+            command.append("--test-client-adapter")
         kwargs: dict[str, Any] = {
             "cwd": workspace, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
             "close_fds": True,
@@ -973,7 +1028,11 @@ def start_supervisor(
             kwargs["start_new_session"] = True
         process = subprocess.Popen(command, **kwargs)
         _CHILDREN[process.pid] = process
-        deadline = time.monotonic() + 8
+        # A cold Windows server can take longer than the guardian's transport
+        # handshake while DLLs and databases are first loaded. Keep startup
+        # bounded, but leave enough headroom for the daemon to report either a
+        # signed guardian failure or its active session contract.
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             try:
                 session_payload = _read_regular_at(session_fd, "session.json", MAX_SESSION_BYTES)
@@ -999,7 +1058,7 @@ def start_supervisor(
                 raise ValueError(f"supervisor exited during startup with code {process.returncode}")
             time.sleep(0.05)
         process.terminate()
-        raise ValueError("supervisor did not become ready within 8 seconds")
+        raise ValueError("supervisor did not become ready within 20 seconds")
     finally:
         if session_fd is not None:
             _close_directory(session_fd)
@@ -1014,7 +1073,10 @@ def request_supervisor(
 ) -> dict[str, Any]:
     if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1 <= timeout_ms <= 600000:
         raise ValueError("supervisor timeout must be an integer from 1 to 600000 milliseconds")
-    if command not in {"status", "runtime.compare", "shutdown", "scenario.authorize"} and parse_resource_command(command) is None:
+    if (
+        command not in {"status", "runtime.compare", "runtime.prove", "shutdown", "scenario.authorize"}
+        and parse_resource_command(command) is None and parse_client_command(command) is None
+    ):
         raise ValueError("supervisor command is not allowlisted")
     session, _, _, workspace_fd, directory_fd, session_name = _open_session_record(
         workspace, session_path, schema_store,
@@ -1111,7 +1173,10 @@ def _request_supervisor_loaded(
         # of the daemon. Wait for its bounded poll loop after revocation so the
         # caller can immediately clean or reuse its test workspace.
         _wait_for_session_process(session)
-        if request_started and (command == "scenario.authorize" or parse_resource_command(command) is not None):
+        if request_started and (
+            command == "scenario.authorize" or parse_resource_command(command) is not None
+            or parse_client_command(command) is not None
+        ):
             raise SupervisorMutationOutcomeUnknown(
                 f"mutation outcome is unknown after transport failure; session was revoked and the command must not be retried automatically: {exc}",
                 session["sessionId"],
@@ -1132,29 +1197,33 @@ def _request_supervisor_loaded(
         if not hmac.compare_digest(envelope["authorization"], expected_authorization):
             raise ValueError("supervisor response authorization is invalid")
         expected_command = {
-            "status": "supervisor.status", "shutdown": "supervisor.stop", "runtime.compare": "runtime.compare",
+            "status": "supervisor.status", "shutdown": "supervisor.stop",
+            "runtime.compare": "runtime.compare", "runtime.prove": "runtime.prove",
             "scenario.authorize": "scenario.authorize",
         }.get(command)
         if expected_command is None and parse_resource_command(command) is not None:
             expected_command = parse_resource_command(command)[0]
+        if expected_command is None and parse_client_command(command) is not None:
+            expected_command = "client.launch"
         if expected_command is None or response.get("command") != expected_command:
             raise ValueError("supervisor response command does not match the request")
         schema = (
             "neon-runtime-compare-result" if command == "runtime.compare"
-            else "neon-mutation-result" if command == "scenario.authorize" or parse_resource_command(command) is not None
+            else "neon-proof-result" if command == "runtime.prove"
+            else "neon-mutation-result" if command == "scenario.authorize" or parse_resource_command(command) is not None or parse_client_command(command) is not None
             else "neon-supervisor-result"
         )
         issues = schema_store.validate(schema, response)
         if issues:
             raise ValueError("supervisor response violates its advertised schema")
-        identity = response.get("comparison", response.get("session", response.get("operation", {}))).get("sessionId")
+        identity = response.get("comparison", response.get("proof", response.get("session", response.get("operation", {})))).get("sessionId")
         if identity != session["sessionId"]:
             raise ValueError("supervisor response session does not match the request")
     except (AttributeError, JsonDocumentError, TypeError, UnicodeError, ValueError) as exc:
         state = "expired" if _utc_now() >= expires else "closed"
         _revoke_session_at(directory_fd, session_name, session, state)
         _wait_for_session_process(session)
-        if command == "scenario.authorize" or parse_resource_command(command) is not None:
+        if command == "scenario.authorize" or parse_resource_command(command) is not None or parse_client_command(command) is not None:
             raise SupervisorMutationOutcomeUnknown(
                 f"mutation outcome is unknown after an invalid authenticated response; session was revoked and the command must not be retried automatically: {exc}",
                 session["sessionId"],
@@ -1283,6 +1352,9 @@ def run_supervisor_daemon(
     schema_store: SchemaStore,
     enabled_capabilities: tuple[str, ...] = (),
     server_root: Path | None = None,
+    client_root: Path | None = None,
+    connect_port: int = 22003,
+    test_client_adapter: bool = False,
 ) -> int:
     listener: socket.socket | None = None
     workspace_fd: int | None = None
@@ -1293,6 +1365,7 @@ def run_supervisor_daemon(
     driver_fallback: tuple[str, Any] | None = None
     driver_pid: int | None = None
     driver_sequence = 0
+    client_processes: dict[str, tuple[subprocess.Popen[Any], int | None]] = {}
     try:
         workspace = workspace.resolve()
         if not session_directory.is_dir() or session_directory.is_symlink():
@@ -1321,6 +1394,31 @@ def run_supervisor_daemon(
         enabled = set(enabled_capabilities)
         if not enabled.issubset(MUTATION_CAPABILITIES):
             raise ValueError("daemon capability is not allowlisted")
+        if "client.launch" in enabled and (
+            "resource.lifecycle" not in enabled or server_root is None or client_root is None
+            or project["profile"] not in {"neon-pair", "neon-multiclient"}
+        ):
+            raise ValueError("client.launch daemon boundary is incomplete")
+        if isinstance(connect_port, bool) or not isinstance(connect_port, int) or not 1 <= connect_port <= 65535:
+            raise ValueError("client connection port is invalid")
+        created = _utc_now()
+        expires = created + timedelta(seconds=ttl_seconds)
+        monotonic_deadline = time.monotonic() + ttl_seconds
+        token = secrets.token_hex(32)
+        probe_config: dict[str, Any] | None = None
+        approved_client: tuple[Path, str] | None = None
+        if "client.launch" in enabled:
+            probe = verify_runtime_probe(server_root)
+            approved_client = client_executable(client_root, test_client_adapter)
+            probe_session = {
+                "sessionId": session_id, "profile": project["profile"],
+                "createdAt": _utc_text(created), "expiresAt": _utc_text(expires),
+                "project": {"sha256": sha256_bytes(project_payload)},
+                "catalogue": {"sha256": sha256_bytes(catalogue_payload)},
+            }
+            probe_config = create_probe_config(probe_session, secrets.token_hex(32), created)
+            arm_runtime_probe(server_root, probe_config, schema_store)
+            project_resources.add(PROBE_RESOURCE)
         driver: dict[str, Any] | None = None
         if "resource.lifecycle" in enabled:
             if server_root is None:
@@ -1329,7 +1427,7 @@ def run_supervisor_daemon(
             guardian_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             guardian_listener.bind(("127.0.0.1", 0))
             guardian_listener.listen(1)
-            guardian_listener.settimeout(8)
+            guardian_listener.settimeout(15)
             guardian_token = secrets.token_hex(32)
             guardian_command = [
                 sys.executable, os.fspath(Path(sys.argv[0]).resolve()), "_driver-guardian",
@@ -1389,10 +1487,6 @@ def run_supervisor_daemon(
         listener.bind(("127.0.0.1", 0))
         listener.listen(8)
         listener.settimeout(0.5)
-        created = _utc_now()
-        expires = created + timedelta(seconds=ttl_seconds)
-        monotonic_deadline = time.monotonic() + ttl_seconds
-        token = secrets.token_hex(32)
         session = {
             "schemaVersion": "1.0.0", "sessionId": session_id, "state": "active", "profile": project["profile"],
             "createdAt": _utc_text(created), "expiresAt": _utc_text(expires),
@@ -1408,6 +1502,18 @@ def run_supervisor_daemon(
         }
         if driver is not None:
             session["driver"] = driver
+        if approved_client is not None and probe_config is not None:
+            executable, executable_sha256 = approved_client
+            session["client"] = {
+                "root": os.fspath(client_root.resolve()), "executable": executable.name,
+                "executableSha256": executable_sha256,
+                "connectUri": f"mtasa://127.0.0.1:{connect_port}",
+            }
+            session["probe"] = {
+                "resource": PROBE_RESOURCE, "sourceSha256": probe["sourceSha256"],
+                "challenge": probe_config["challenge"], "expectedClients": probe_config["expectedClients"],
+                "report": f"{PROBE_RESOURCE}/{REPORT_FILE}",
+            }
         issues = schema_store.validate("neon-supervisor-session", session)
         if issues:
             raise ValueError("generated supervisor session is invalid")
@@ -1536,6 +1642,71 @@ def run_supervisor_daemon(
                         result_issues = schema_store.validate("neon-runtime-compare-result", result)
                         if result_issues:
                             raise ValueError("runtime comparator produced an invalid result")
+                    elif command == "runtime.prove":
+                        driver_sequence += 1
+                        if "client.launch" not in session["capabilities"] or probe_config is None or server_root is None:
+                            result = proof_failure(
+                                "SUPERVISOR_CAPABILITY_DENIED", "client.launch is not enabled for authenticated runtime proof", session,
+                            )
+                        elif (
+                            guardian_process is None or guardian_process.poll() is not None
+                            or guardian_connection is None
+                        ):
+                            result = proof_failure(
+                                "PROBE_SERVER_PROCESS_EXITED",
+                                "the supervisor-owned MTA server is not alive at proof time",
+                                session,
+                            )
+                        elif not _query_guardian_alive(guardian_connection, driver_sequence):
+                            result = proof_failure(
+                                "PROBE_SERVER_PROCESS_EXITED",
+                                "the supervisor-owned MTA server is not alive at proof time",
+                                session,
+                            )
+                        elif set(client_processes) != {
+                            f"client-{ordinal}" for ordinal in range(1, probe_config["expectedClients"] + 1)
+                        }:
+                            result = proof_failure(
+                                "PROBE_CLIENT_ROLES_NOT_LAUNCHED",
+                                "every client role in the selected topology must be launched by this supervisor before proof",
+                                session,
+                            )
+                        elif any(process.poll() is not None for process, _ in client_processes.values()):
+                            result = proof_failure(
+                                "PROBE_CLIENT_PROCESS_EXITED",
+                                "a supervisor-launched client role exited before authenticated proof completed",
+                                session,
+                            )
+                        else:
+                            try:
+                                report = load_probe_report(server_root)
+                            except FileNotFoundError:
+                                result = proof_failure("PROBE_NOT_READY", "authenticated runtime probe report is not ready", session)
+                            except (JsonDocumentError, OSError, UnicodeError, ValueError) as exc:
+                                result = proof_failure("PROBE_REPORT_UNSAFE", str(exc), session)
+                            else:
+                                result, snapshot = prove_runtime(
+                                    report, probe_config, probe_config["secret"], session,
+                                    project, catalogue, project_api, schema_store,
+                                )
+                                if result["status"] == "pass" and snapshot is not None:
+                                    snapshot_path = PurePosixPath(snapshot_relative)
+                                    parent = snapshot_path.parent.as_posix()
+                                    snapshot_fd = workspace_fd if parent == "." else _ensure_directory_at(workspace_fd, parent)
+                                    try:
+                                        _atomic_write_at(
+                                            snapshot_fd, snapshot_path.name,
+                                            canonical_json(snapshot).encode("utf-8"),
+                                        )
+                                    finally:
+                                        if snapshot_fd != workspace_fd:
+                                            _close_directory(snapshot_fd)
+                        result_issues = schema_store.validate("neon-proof-result", result)
+                        evidence = result.get("proof", {}).get("evidence")
+                        if evidence is not None:
+                            result_issues.extend(schema_store.validate("neon-evidence", evidence))
+                        if result_issues:
+                            raise ValueError("runtime proof adapter produced an invalid result")
                     elif command == "scenario.authorize":
                         if "scenario.execute" not in session["capabilities"]:
                             result = mutation_failure(command, "SUPERVISOR_CAPABILITY_DENIED", "scenario.execute is not enabled", session_id=session_id)
@@ -1597,6 +1768,73 @@ def run_supervisor_daemon(
                         result_issues = schema_store.validate("neon-mutation-result", result)
                         if result_issues:
                             raise ValueError("mutation adapter produced an invalid result")
+                    elif parse_client_command(command) is not None:
+                        public_command, role, ordinal = parse_client_command(command)
+                        if "client.launch" not in session["capabilities"] or approved_client is None or client_root is None:
+                            result = mutation_failure(public_command, "SUPERVISOR_CAPABILITY_DENIED", "client.launch is not enabled", role, session_id)
+                        elif probe_config is None or ordinal > probe_config["expectedClients"]:
+                            result = mutation_failure(public_command, "CLIENT_ROLE_OUT_OF_SCOPE", "client role exceeds the selected runtime topology", role, session_id)
+                        elif role in client_processes:
+                            result = mutation_failure(public_command, "CLIENT_ROLE_ALREADY_LAUNCHED", "client role was already launched in this session", role, session_id)
+                        else:
+                            executable, expected_sha256 = approved_client
+                            current_executable, current_sha256 = client_executable(client_root, test_client_adapter)
+                            if current_executable != executable or not hmac.compare_digest(current_sha256, expected_sha256):
+                                result = mutation_failure(public_command, "CLIENT_EXECUTABLE_DRIFT", "approved client executable changed after session start", role, session_id)
+                            else:
+                                arguments = [os.fspath(executable)]
+                                if ordinal > 1:
+                                    arguments.append(f"-cl{ordinal}")
+                                arguments.append(session["client"]["connectUri"])
+                                options: dict[str, Any] = {
+                                    "cwd": client_root, "stdin": subprocess.DEVNULL,
+                                    "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+                                    "close_fds": True,
+                                }
+                                if os.name == "nt":
+                                    from . import winfs
+
+                                    # The launcher must not execute long enough
+                                    # to escape through a child before the job
+                                    # object owns its complete process tree.
+                                    options["creationflags"] = winfs.CREATE_SUSPENDED
+                                else:
+                                    options["start_new_session"] = True
+                                process = subprocess.Popen(arguments, **options)
+                                job_handle: int | None = None
+                                try:
+                                    launched_executable, launched_sha256 = client_executable(client_root, test_client_adapter)
+                                    if launched_executable != executable or not hmac.compare_digest(
+                                        launched_sha256, expected_sha256,
+                                    ):
+                                        raise ValueError("approved client executable changed while it was being launched")
+                                    if os.name == "nt":
+                                        from . import winfs
+
+                                        job_handle = winfs.create_kill_on_close_job(int(process._handle))
+                                        winfs.resume_suspended_process(process.pid)
+                                except Exception:
+                                    if job_handle is not None:
+                                        from . import winfs
+
+                                        winfs.close(job_handle)
+                                    if process.poll() is None:
+                                        try:
+                                            process.terminate()
+                                            process.wait(timeout=3)
+                                        except (OSError, subprocess.TimeoutExpired):
+                                            if process.poll() is None:
+                                                process.kill()
+                                                process.wait(timeout=2)
+                                    raise
+                                client_processes[role] = (process, job_handle)
+                                result = mutation_result(
+                                    public_command, session_id, role, status="pass",
+                                    code="CLIENT_PROCESS_LAUNCHED",
+                                    message="Neon launched the twice-verified executable path inside the approved Windows client root; connection and in-game state are not claimed until authenticated proof succeeds",
+                                )
+                        if schema_store.validate("neon-mutation-result", result):
+                            raise ValueError("client launch adapter produced an invalid result")
                     elif command == "shutdown":
                         session["state"] = "closed"
                         session.pop("token", None)
@@ -1608,10 +1846,16 @@ def run_supervisor_daemon(
                 except Exception as exc:
                     if requested_command == "runtime.compare":
                         result = _failure_compare("SUPERVISOR_REQUEST_REJECTED", str(exc), project, session)
-                    elif requested_command == "scenario.authorize" or parse_resource_command(requested_command) is not None:
+                    elif requested_command == "runtime.prove":
+                        result = proof_failure("SUPERVISOR_REQUEST_REJECTED", str(exc), session)
+                    elif (
+                        requested_command == "scenario.authorize" or parse_resource_command(requested_command) is not None
+                        or parse_client_command(requested_command) is not None
+                    ):
                         parsed = parse_resource_command(requested_command)
-                        public_command = parsed[0] if parsed is not None else "scenario.authorize"
-                        target = parsed[1] if parsed is not None else project.get("name", "unavailable")
+                        parsed_client = parse_client_command(requested_command)
+                        public_command = parsed[0] if parsed is not None else parsed_client[0] if parsed_client is not None else "scenario.authorize"
+                        target = parsed[1] if parsed is not None else parsed_client[1] if parsed_client is not None else project.get("name", "unavailable")
                         result = mutation_failure(public_command, "SUPERVISOR_REQUEST_REJECTED", str(exc), target, session_id)
                     else:
                         public_command = "supervisor.stop" if requested_command == "shutdown" else "supervisor.status"
@@ -1636,12 +1880,14 @@ def run_supervisor_daemon(
                         result = (
                             _failure_compare("SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded", project, session)
                             if requested_command == "runtime.compare"
+                            else proof_failure("SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded", session)
+                            if requested_command == "runtime.prove"
                             else mutation_failure(
-                                parse_resource_command(requested_command)[0] if parse_resource_command(requested_command) else "scenario.authorize",
+                                parse_resource_command(requested_command)[0] if parse_resource_command(requested_command) else parse_client_command(requested_command)[0] if parse_client_command(requested_command) else "scenario.authorize",
                                 "SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded",
-                                parse_resource_command(requested_command)[1] if parse_resource_command(requested_command) else project.get("name", "unavailable"),
+                                parse_resource_command(requested_command)[1] if parse_resource_command(requested_command) else parse_client_command(requested_command)[1] if parse_client_command(requested_command) else project.get("name", "unavailable"),
                                 session_id,
-                            ) if requested_command == "scenario.authorize" or parse_resource_command(requested_command) is not None
+                            ) if requested_command == "scenario.authorize" or parse_resource_command(requested_command) is not None or parse_client_command(requested_command) is not None
                             else supervisor_failure("supervisor.status", "SUPERVISOR_RESPONSE_TOO_LARGE", "bounded supervisor response limit exceeded")
                         )
                         envelope = _response_envelope(token, session_id, challenge, nonce, requested_command, result)
@@ -1680,6 +1926,30 @@ def run_supervisor_daemon(
         if driver_pid is not None:
             _terminate_driver_fallback(driver_fallback, driver_pid)
         _close_driver_fallback(driver_fallback)
+        for process, job_handle in client_processes.values():
+            if job_handle is not None:
+                from . import winfs
+
+                winfs.close(job_handle)
+            if process.poll() is None and os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                if os.name == "nt":
+                    process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    if os.name == "nt":
+                        process.kill()
+                    else:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    process.wait(timeout=2)
         if session_fd is not None:
             _close_directory(session_fd)
         if workspace_fd is not None:

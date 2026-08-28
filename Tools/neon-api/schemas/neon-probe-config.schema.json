@@ -1,0 +1,19 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-probe-config-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "catalogueSha256": {"format": "sha256", "type": "string"},
+    "challenge": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "expectedClients": {"maximum": 8, "minimum": 1, "type": "integer"},
+    "expiresUnix": {"minimum": 0, "type": "integer"},
+    "issuedUnix": {"minimum": 0, "type": "integer"},
+    "profile": {"enum": ["neon-pair", "neon-multiclient"], "type": "string"},
+    "projectSha256": {"format": "sha256", "type": "string"},
+    "schemaVersion": {"const": "1.0.0", "type": "string"},
+    "secret": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"}
+  },
+  "required": ["schemaVersion", "sessionId", "challenge", "secret", "profile", "projectSha256", "catalogueSha256", "expectedClients", "issuedUnix", "expiresUnix"],
+  "type": "object"
+}

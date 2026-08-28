@@ -1,0 +1,42 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-probe-report-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authorization": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "catalogueSha256": {"format": "sha256", "type": "string"},
+    "challenge": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "clients": {"items": {"$ref": "#/$defs/client"}, "maxItems": 8, "minItems": 1, "type": "array"},
+    "expectedClients": {"maximum": 8, "minimum": 1, "type": "integer"},
+    "observedUnix": {"minimum": 0, "type": "integer"},
+    "profile": {"enum": ["neon-pair", "neon-multiclient"], "type": "string"},
+    "projectSha256": {"format": "sha256", "type": "string"},
+    "schemaVersion": {"const": "1.0.0", "type": "string"},
+    "server": {"$ref": "#/$defs/runtime"},
+    "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"}
+  },
+  "required": ["schemaVersion", "sessionId", "challenge", "profile", "projectSha256", "catalogueSha256", "observedUnix", "expectedClients", "server", "clients", "authorization"],
+  "type": "object",
+  "$defs": {
+    "client": {
+      "additionalProperties": false,
+      "properties": {
+        "buildId": {"maxLength": 128, "minLength": 1, "pattern": "^[A-Za-z0-9_.:+-]+$", "type": "string"},
+        "engineVersion": {"format": "semver", "maxLength": 64, "type": "string"},
+        "nonce": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "ordinal": {"maximum": 8, "minimum": 1, "type": "integer"}
+      },
+      "required": ["ordinal", "engineVersion", "buildId", "nonce"],
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "buildId": {"maxLength": 128, "minLength": 1, "pattern": "^[A-Za-z0-9_.:+-]+$", "type": "string"},
+        "engineVersion": {"format": "semver", "maxLength": 64, "type": "string"}
+      },
+      "required": ["engineVersion", "buildId"],
+      "type": "object"
+    }
+  }
+}

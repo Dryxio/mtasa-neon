@@ -35,6 +35,16 @@ Run commands from the repository root:
   --workspace . --json
 ./neon scenario execute .neon-sessions/session-ID/session.json scenario.json \
   --assertion assertion.json --workspace . --output .neon-runs/runtime --json
+./neon runtime probe install --server-root /approved/mta-server --json
+./neon supervisor start --workspace . --enable resource.lifecycle \
+  --enable client.launch --server-root /approved/mta-server \
+  --client-root /approved/mta-client --connect-port 22003 --json
+./neon resource start .neon-sessions/session-ID/session.json neon-agent-probe \
+  --workspace . --json
+./neon client launch .neon-sessions/session-ID/session.json client-1 \
+  --workspace . --json
+./neon runtime prove .neon-sessions/session-ID/session.json \
+  --workspace . --timeout-ms 120000 --json
 ./neon catalogue verify --source-ref HEAD --json
 ./neon generate luals --json
 ./neon harness --json
@@ -370,6 +380,61 @@ request may have been sent, Neon reports `MUTATION_OUTCOME_UNKNOWN`, revokes the
 session, and tells the caller not to retry automatically. This prevents a lost
 response from turning a non-idempotent restart into an unnoticed duplicate.
 
+### Authenticated one-client and multi-client proof
+
+Checkpoint I adds Windows-only `client.launch` for `neon-pair` and `neon-multiclient`
+profiles. It is opt-in, requires `resource.lifecycle`, and requires exact local
+server and client roots. The CLI accepts no executable name, remote host, shell
+fragment, or arbitrary client argument. It pins the approved client executable
+hash, launches `client-1` with only the loopback MTA URI, and launches the
+second role with only `-cl2` plus that URI. A role can be launched once per
+session. The executable path is hashed before launch and again immediately
+after process creation; Windows creates it suspended, attaches it to a
+kill-on-close Job Object, and resumes it only after both checks pass. This
+prevents child-process escape, but it is not cryptographic image attestation
+against an administrator concurrently replacing files inside the approved
+client root. Any ambiguous post-send failure revokes the session and is never
+retried automatically.
+
+`runtime probe install` copies three byte-verified bundled resource files to
+`neon-agent-probe`. Every resource-path traversal, read, delete, and atomic
+write is relative to anchored directory handles and rejects symlinks and
+Windows reparse points. At session start, the supervisor re-verifies those files,
+writes a private expiring challenge bound to the session/project/catalogue,
+and removes any stale report. Start the probe resource before launching the
+clients. Its client script can report only after the real MTA client has loaded
+the resource; the server script counts distinct remote client elements, derives
+their versions from `getPlayerVersion` rather than trusting event payloads, and
+writes an HMAC-authenticated report atomically. The report is invalidated when
+a contributing player leaves. The secret is never included in the public
+session or audit log.
+
+Launching a process still grants zero evidence labels. `runtime prove` grants
+`server-checked`, `client-checked`, and `in-game-checked` only after the signed
+report, exact topology, matching engine versions and client build IDs, live
+supervisor-launched roles, a live supervisor-owned server, a report heartbeat
+no older than ten seconds, the session time window, and pinned runtime contracts
+all pass. `neon-multiclient` additionally requires exactly two distinct clients and
+grants `multiplayer-checked`. A submitted
+snapshot used by `runtime compare` remains observation-only and can never gain
+those labels.
+
+This is development-harness evidence, not anti-cheat or hostile-server
+attestation. It protects the CLI from stale, edited, cross-session, and
+wrong-topology report files and proves that the bundled probe observed real
+remote player elements while the exact supervisor-launched client roles were
+still alive on the explicitly approved local server. MTA does not expose a
+cryptographic mapping between a remote player element and its originating OS
+process, so these two observations are correlated by the isolated harness but
+are not anti-cheat process attestation. A server
+administrator, a native module, or another resource with permission to read or
+replace the probe's private files is inside that local trust boundary and could
+forge the observation. Run proof sessions on an isolated development server;
+do not treat these labels as evidence against adversarial code already holding
+server filesystem or administrator access. On Windows the private file inherits
+the server directory's ACL, so that isolated directory must itself be restricted
+to the developer identity running the harness.
+
 `neon supervisor stop SESSION` closes the loopback listener, removes the token
 from the retained session record, and makes further requests fail. Expiration
 does the same using a monotonic deadline. If the daemon dies abruptly, the next
@@ -398,6 +463,10 @@ records omitted after that cap explicit.
 - `schemas/neon-scenario-verify-result.schema.json`: saved-run integrity result.
 - `schemas/neon-runtime-snapshot.schema.json`: bounded multi-runtime observation.
 - `schemas/neon-runtime-compare-result.schema.json`: read-only divergence result.
+- `schemas/neon-probe-config.schema.json`: private expiring probe challenge.
+- `schemas/neon-probe-report.schema.json`: authenticated real-client report.
+- `schemas/neon-proof-result.schema.json`: bounded runtime proof and evidence.
+- `schemas/neon-probe-install-result.schema.json`: verified probe installation result.
 - `schemas/neon-supervisor-session.schema.json`: local expiring session record.
 - `schemas/neon-supervisor-result.schema.json`: supervisor lifecycle result.
 - `schemas/neon-mutation-result.schema.json`: bounded operation and authorization result.

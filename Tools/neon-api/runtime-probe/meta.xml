@@ -1,0 +1,7 @@
+<meta>
+    <info author="MTA Neon" name="Neon Agent Runtime Probe" version="1.0.0" type="script" />
+    <min_mta_version server="1.7.0" client="1.7.0" />
+    <script src="server.lua" type="server" />
+    <script src="client.lua" type="client" cache="false" />
+    <file src="neon-agent-proof-config.json" download="false" />
+</meta>

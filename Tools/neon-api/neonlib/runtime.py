@@ -66,7 +66,9 @@ def _duplicates(values: list[dict[str, Any]], field: str = "name") -> list[str]:
     return sorted(duplicates)
 
 
-def _topology_issues(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def _topology_issues(
+    snapshot: dict[str, Any], allow_server_client_build_difference: bool = False,
+) -> list[dict[str, Any]]:
     observations = snapshot["observations"]
     sides = [item["side"] for item in observations]
     profile = snapshot["profile"]
@@ -93,7 +95,11 @@ def _topology_issues(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             "error", f"neon-multiclient requires exactly one server and at least two clients; got {servers} and {clients}",
             "/observations",
         ))
-    if profile in {"neon-pair", "neon-multiclient"} and len({item["buildId"] for item in observations}) != 1:
+    if (
+        profile in {"neon-pair", "neon-multiclient"}
+        and not allow_server_client_build_difference
+        and len({item["buildId"] for item in observations}) != 1
+    ):
         diagnostics.append(_diagnostic("RUNTIME_BUILD_MISMATCH", "error", "paired Neon observations must report the same buildId", "/observations"))
     return diagnostics
 
@@ -290,6 +296,7 @@ def compare_runtime_snapshot(
     session_created_at: str | None = None,
     session_expires_at: str | None = None,
     snapshot_payload: bytes | None = None,
+    allow_server_client_build_difference: bool = False,
 ) -> dict[str, Any]:
     diagnostics: list[dict[str, Any]] = []
     snapshot_sha256 = "0" * 64
@@ -346,7 +353,7 @@ def compare_runtime_snapshot(
     identifiers = [item["id"] for item in snapshot["observations"]]
     if len(set(identifiers)) != len(identifiers):
         diagnostics.append(_diagnostic("RUNTIME_OBSERVATION_DUPLICATE", "error", "observation ids must be unique", "/observations"))
-    diagnostics.extend(_topology_issues(snapshot))
+    diagnostics.extend(_topology_issues(snapshot, allow_server_client_build_difference))
     minimum = _version(project["engine"]["minimumVersion"])
     maximum = _version(project["engine"]["maximumVersionExclusive"])
     for observation in snapshot["observations"]:

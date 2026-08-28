@@ -6,6 +6,7 @@ from typing import Any
 
 
 RESOURCE_COMMAND = re.compile(r"^(resource\.(?:start|stop|restart))/([A-Za-z0-9_.-]{1,128})$")
+CLIENT_COMMAND = re.compile(r"^(client\.launch)/(client-([1-8]))$")
 
 
 def utc_text() -> str:
@@ -15,6 +16,11 @@ def utc_text() -> str:
 def parse_resource_command(command: str) -> tuple[str, str] | None:
     match = RESOURCE_COMMAND.fullmatch(command)
     return (match.group(1), match.group(2)) if match else None
+
+
+def parse_client_command(command: str) -> tuple[str, str, int] | None:
+    match = CLIENT_COMMAND.fullmatch(command)
+    return (match.group(1), match.group(2), int(match.group(3))) if match else None
 
 
 def mutation_result(
@@ -34,6 +40,22 @@ def mutation_result(
             "message": message[:1024],
             "path": ".",
         })
+    if command.startswith("resource."):
+        capability = "resource.lifecycle"
+        scope = (
+            "command-submitted" if status == "pass"
+            else "outcome-unknown" if code == "MUTATION_OUTCOME_UNKNOWN"
+            else "not-submitted"
+        )
+    elif command.startswith("client."):
+        capability = "client.launch"
+        scope = (
+            "process-launched" if status == "pass"
+            else "outcome-unknown" if code == "MUTATION_OUTCOME_UNKNOWN"
+            else "not-launched"
+        )
+    else:
+        capability, scope = "scenario.execute", "authorization-only"
     return {
         "schemaVersion": "1.0.0",
         "command": command,
@@ -45,9 +67,9 @@ def mutation_result(
         "diagnostics": diagnostic,
         "operation": {
             "sessionId": session_id,
-            "capability": "resource.lifecycle" if command.startswith("resource.") else "scenario.execute",
+            "capability": capability,
             "target": target,
-            "scope": "command-submitted" if command.startswith("resource.") else "authorization-only",
+            "scope": scope,
             "grantedEvidenceLabels": [],
             "idempotent": command in {"resource.start", "resource.stop", "scenario.authorize"},
             "completedAt": utc_text(),
@@ -59,5 +81,5 @@ def mutation_failure(
     command: str, code: str, message: str, target: str = "unavailable",
     session_id: str = "session:unavailable",
 ) -> dict[str, Any]:
-    public = command if command in {"resource.start", "resource.stop", "resource.restart", "scenario.authorize"} else "scenario.authorize"
+    public = command if command in {"resource.start", "resource.stop", "resource.restart", "scenario.authorize", "client.launch"} else "scenario.authorize"
     return mutation_result(public, session_id, target, status="fail", code=code, message=message)

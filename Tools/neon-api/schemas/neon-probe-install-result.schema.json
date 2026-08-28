@@ -1,0 +1,54 @@
+{
+  "$id": "https://schemas.mtasa-neon.com/agent/neon-probe-install-result-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {"const": "runtime.probe.install", "type": "string"},
+    "diagnostics": {"items": {"type": "object"}, "type": "array"},
+    "probe": {"anyOf": [{
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {"path": {"enum": ["meta.xml", "server.lua", "client.lua"], "type": "string"}, "sha256": {"format": "sha256", "type": "string"}},
+            "required": ["path", "sha256"],
+            "type": "object"
+          },
+          "minItems": 3,
+          "type": "array"
+        },
+        "resource": {"const": "neon-agent-probe", "type": "string"},
+        "sourceSha256": {"format": "sha256", "type": "string"}
+      },
+      "required": ["resource", "sourceSha256", "files"],
+      "type": "object"
+    }, {"type": "null"}]},
+    "schemaVersion": {"const": "1.0.0", "type": "string"},
+    "status": {"enum": ["pass", "fail"], "type": "string"},
+    "summary": {
+      "additionalProperties": false,
+      "properties": {"errors": {"minimum": 0, "type": "integer"}, "files": {"maximum": 3, "minimum": 0, "type": "integer"}, "warnings": {"minimum": 0, "type": "integer"}},
+      "required": ["errors", "warnings", "files"],
+      "type": "object"
+    }
+  },
+  "required": ["schemaVersion", "command", "status", "summary", "diagnostics", "probe"],
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "status": {"const": "pass"},
+        "summary": {"properties": {"errors": {"const": 0}, "files": {"const": 3}}},
+        "probe": {"type": "object"}
+      }
+    },
+    {
+      "properties": {
+        "status": {"const": "fail"},
+        "summary": {"properties": {"errors": {"minimum": 1}, "files": {"const": 0}}},
+        "probe": {"type": "null"}
+      }
+    }
+  ]
+}

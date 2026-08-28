@@ -79,6 +79,8 @@ class SchemaStore:
             if matches != 1:
                 issues.append(SchemaIssue(pointer or "/", f"must match exactly one schema (matched {matches})"))
                 return
+        if "not" in schema and not self._candidate_issues(instance, schema["not"], root, pointer):
+            issues.append(SchemaIssue(pointer or "/", "matches a forbidden schema"))
 
         if "const" in schema and instance != schema["const"]:
             issues.append(SchemaIssue(pointer or "/", f"must equal {schema['const']!r}"))
@@ -123,6 +125,16 @@ class SchemaStore:
             if child:
                 for index, item in enumerate(instance):
                     self._validate_node(item, child, root, self._join(pointer, str(index)), issues)
+            if "contains" in schema:
+                matches = sum(
+                    not self._candidate_issues(item, schema["contains"], root, self._join(pointer, str(index)))
+                    for index, item in enumerate(instance)
+                )
+                minimum = schema.get("minContains", 1)
+                maximum = schema.get("maxContains")
+                if matches < minimum or (maximum is not None and matches > maximum):
+                    description = f"must contain between {minimum} and {maximum} matching items" if maximum is not None else f"must contain at least {minimum} matching items"
+                    issues.append(SchemaIssue(pointer or "/", description))
 
         if isinstance(instance, str):
             if "minLength" in schema and len(instance) < schema["minLength"]:

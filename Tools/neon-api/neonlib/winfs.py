@@ -42,6 +42,11 @@ PIPE_NOWAIT = 0x00000001
 PROCESS_TERMINATE = 0x0001
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+TH32CS_SNAPTHREAD = 0x00000004
+THREAD_SUSPEND_RESUME = 0x0002
+CREATE_SUSPENDED = 0x00000004
 
 
 class _UNICODE_STRING(ctypes.Structure):
@@ -84,6 +89,54 @@ class _FILE_RENAME_HEADER(ctypes.Structure):
     ]
 
 
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+class _THREADENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD),
+        ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", wintypes.LONG),
+        ("tpDeltaPri", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _ntdll = ctypes.WinDLL("ntdll")
 
@@ -106,6 +159,22 @@ _kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
 _kernel32.TerminateProcess.restype = wintypes.BOOL
 _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
 _kernel32.WaitForSingleObject.restype = wintypes.DWORD
+_kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+_kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+_kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+_kernel32.SetInformationJobObject.restype = wintypes.BOOL
+_kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+_kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+_kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+_kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+_kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_THREADENTRY32)]
+_kernel32.Thread32First.restype = wintypes.BOOL
+_kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_THREADENTRY32)]
+_kernel32.Thread32Next.restype = wintypes.BOOL
+_kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_kernel32.OpenThread.restype = wintypes.HANDLE
+_kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+_kernel32.ResumeThread.restype = wintypes.DWORD
 _kernel32.GetFileInformationByHandleEx.argtypes = [
     wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
 ]
@@ -281,6 +350,57 @@ def terminate_process_handle(handle: int) -> None:
     _kernel32.WaitForSingleObject(handle, 5000)
 
 
+def create_kill_on_close_job(process_handle: int) -> int:
+    """Bind a launched client tree to one kernel-owned cleanup identity."""
+    job = _kernel32.CreateJobObjectW(None, None)
+    if job in {None, INVALID_HANDLE_VALUE}:
+        raise _winerror()
+    value = int(job)
+    try:
+        information = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not _kernel32.SetInformationJobObject(
+            value, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+            ctypes.byref(information), ctypes.sizeof(information),
+        ):
+            raise _winerror()
+        if not _kernel32.AssignProcessToJobObject(value, process_handle):
+            raise _winerror()
+        return value
+    except Exception:
+        close(value)
+        raise
+
+
+def resume_suspended_process(process_id: int) -> None:
+    """Resume the initial thread only after its process is confined to a job."""
+    snapshot = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    if snapshot in {None, INVALID_HANDLE_VALUE}:
+        raise _winerror()
+    resumed = False
+    try:
+        entry = _THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(entry)
+        available = _kernel32.Thread32First(snapshot, ctypes.byref(entry))
+        while available:
+            if entry.th32OwnerProcessID == process_id:
+                thread = _kernel32.OpenThread(THREAD_SUSPEND_RESUME, False, entry.th32ThreadID)
+                if not thread:
+                    raise _winerror()
+                try:
+                    if _kernel32.ResumeThread(thread) == 0xFFFFFFFF:
+                        raise _winerror()
+                    resumed = True
+                finally:
+                    close(int(thread))
+                break
+            available = _kernel32.Thread32Next(snapshot, ctypes.byref(entry))
+    finally:
+        close(int(snapshot))
+    if not resumed:
+        raise OSError("suspended client process has no resumable primary thread")
+
+
 def read_regular_at(parent: int, name: str, maximum: int) -> bytes:
     handle = _relative_handle(parent, name, directory=False)
     try:
@@ -316,6 +436,18 @@ def regular_at(parent: int, name: str) -> bool:
         return False
     try:
         return True
+    finally:
+        close(handle)
+
+
+def unlink_at(parent: int, name: str) -> None:
+    """Delete one non-directory entry without following a reparse point."""
+    try:
+        handle = _relative_handle(parent, name, directory=False, writable=True)
+    except FileNotFoundError:
+        return
+    try:
+        _delete_on_close(handle)
     finally:
         close(handle)
 

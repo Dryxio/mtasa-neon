@@ -46,11 +46,22 @@ from neonlib.components import manifest_semantic_issues  # noqa: E402
 from neonlib.context import ContextGenerationError, build_api_index, generate_project_context, verify_project_context  # noqa: E402
 from neonlib.discovery import discovery_keywords, search_symbols, tokenize  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
+from neonlib.proof import (  # noqa: E402
+    CONFIG_FILE,
+    PROBE_RESOURCE,
+    REPORT_FILE,
+    authorize_report,
+    install_runtime_probe,
+    probe_source_sha256,
+    proof_failure,
+    prove_runtime,
+)
 from neonlib.runtime import compare_runtime_snapshot  # noqa: E402
 from neonlib.scenario import _run_step  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
 from neonlib.supervisor import MAX_AUDIT_BYTES, _authorization, _load_session, request_supervisor, start_supervisor  # noqa: E402
 import neonlib.supervisor as supervisor_module  # noqa: E402
+import neonlib.proof as proof_module  # noqa: E402
 
 
 SCHEMAS = SchemaStore(TOOL_DIRECTORY / "schemas")
@@ -216,6 +227,22 @@ class ContractSchemaTests(unittest.TestCase):
         for schema, document in documents.items():
             with self.subTest(schema=schema):
                 self.assertEqual(SCHEMAS.validate(schema, document), [])
+
+    def test_proof_schema_rejects_contradictory_status_labels_and_evidence(self) -> None:
+        session = {"sessionId": "session:test", "profile": "neon-pair"}
+        failure = proof_failure("PROBE_TEST_FAILURE", "expected failure", session)
+        self.assertEqual(SCHEMAS.validate("neon-proof-result", failure), [])
+
+        false_pass = copy.deepcopy(failure)
+        false_pass["status"] = "pass"
+        false_pass["summary"] = {"errors": 0, "warnings": 0, "observations": 2}
+        false_pass["proof"]["snapshotSha256"] = "1" * 64
+        self.assertTrue(SCHEMAS.validate("neon-proof-result", false_pass))
+
+        labelled_failure = copy.deepcopy(failure)
+        labelled_failure["proof"]["grantedEvidenceLabels"] = ["server-checked"]
+        labelled_failure["proof"]["evidence"] = {}
+        self.assertTrue(SCHEMAS.validate("neon-proof-result", labelled_failure))
 
     def test_all_contracts_reject_unknown_fields(self) -> None:
         samples = {
@@ -1795,6 +1822,17 @@ class SupervisorIntegrationTests(unittest.TestCase):
             self.assertTrue(SCHEMAS.validate("neon-mutation-result", inconsistent))
             undeclared = request_supervisor(self.root, session_path, "resource.start/not-declared", SCHEMAS)
             self.assertEqual((undeclared["status"], diagnostic_codes(undeclared)), ("fail", ["RESOURCE_TARGET_UNDECLARED"]))
+            self.assertEqual(undeclared["operation"]["scope"], "not-submitted")
+            self.assertEqual(SCHEMAS.validate("neon-mutation-result", undeclared), [])
+            contradictory = copy.deepcopy(undeclared)
+            contradictory["operation"]["scope"] = "outcome-unknown"
+            self.assertTrue(SCHEMAS.validate("neon-mutation-result", contradictory))
+            unknown = copy.deepcopy(undeclared)
+            unknown["diagnostics"][0]["code"] = "MUTATION_OUTCOME_UNKNOWN"
+            unknown["operation"]["scope"] = "outcome-unknown"
+            self.assertEqual(SCHEMAS.validate("neon-mutation-result", unknown), [])
+            unknown["operation"]["scope"] = "not-submitted"
+            self.assertTrue(SCHEMAS.validate("neon-mutation-result", unknown))
             authorized = request_supervisor(self.root, session_path, "scenario.authorize", SCHEMAS)
             self.assertEqual(authorized["status"], "pass")
             self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
@@ -1957,6 +1995,7 @@ class SupervisorIntegrationTests(unittest.TestCase):
         _, session_path = self.start()
         denied = request_supervisor(self.root, session_path, "resource.start/inventory", SCHEMAS)
         self.assertEqual((denied["status"], diagnostic_codes(denied)), ("fail", ["SUPERVISOR_CAPABILITY_DENIED"]))
+        self.assertEqual(denied["operation"]["scope"], "not-submitted")
         self.assertEqual(SCHEMAS.validate("neon-mutation-result", denied), [])
         self.assertEqual(request_supervisor(self.root, session_path, "status", SCHEMAS)["status"], "pass")
 
@@ -3786,6 +3825,283 @@ class AgentContextGenerationTests(unittest.TestCase):
         self.assertEqual((first.returncode, first.stderr), (0, ""))
         self.assertEqual(first.stdout, second.stdout)
         self.assertEqual(json.loads(first.stdout)["status"], "pass")
+
+
+@unittest.skipIf(os.name == "nt", "portable client/server proof fixtures are POSIX-only")
+class AuthenticatedRuntimeProofTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="neon-proof-")
+        self.root = Path(self.temporary.name)
+        shutil.copyfile(CATALOGUE_PATH, self.root / "api.json")
+        write_json(self.root / "neon.project.json", base_project())
+        self.server_root = self.root / "server"
+        (self.server_root / "mods" / "deathmatch" / "resources").mkdir(parents=True)
+        server = self.server_root / "mta-server64"
+        server.write_text(
+            "#!/usr/bin/env python3\n"
+            "import pathlib, sys, time\n"
+            "for line in sys.stdin:\n"
+            " pathlib.Path('commands.log').open('a', encoding='utf-8').write(line)\n"
+            " time.sleep(0.01)\n",
+            encoding="utf-8",
+        )
+        server.chmod(0o700)
+        self.client_root = self.root / "client"
+        self.client_root.mkdir()
+        client = self.client_root / "mta-client"
+        client.write_text(
+            "#!/usr/bin/env python3\n"
+            "import pathlib, sys, time\n"
+            "pathlib.Path('launches.log').open('a', encoding='utf-8').write(' '.join(sys.argv[1:]) + '\\n')\n"
+            "time.sleep(30)\n",
+            encoding="utf-8",
+        )
+        client.chmod(0o700)
+        self.sessions: list[Path] = []
+
+    def tearDown(self) -> None:
+        for session in self.sessions:
+            try:
+                if load_json(session).get("state") == "active":
+                    request_supervisor(self.root, session, "shutdown", SCHEMAS)
+            except (OSError, ValueError):
+                pass
+        self.temporary.cleanup()
+
+    def start(self, profile: str = "neon-pair") -> tuple[Path, dict]:
+        project = base_project()
+        project["profile"] = profile
+        write_json(self.root / "neon.project.json", project)
+        installed = install_runtime_probe(self.server_root)
+        self.assertEqual(SCHEMAS.validate("neon-probe-install-result", installed), [])
+        result = start_supervisor(
+            self.root, Path("neon.project.json"), None, Path("runtime.json"), Path("sessions"),
+            30, CLI_PATH, SCHEMAS, ("resource.lifecycle", "client.launch"),
+            self.server_root, self.client_root, 22123, True,
+        )
+        session_path = self.root / result["session"]["sessionPath"]
+        self.sessions.append(session_path)
+        return session_path, load_json(session_path)
+
+    def report(self, session: dict, *, clients: int | None = None) -> tuple[dict, dict]:
+        probe_root = self.server_root / "mods" / "deathmatch" / "resources" / PROBE_RESOURCE
+        config = load_json(probe_root / CONFIG_FILE)
+        count = config["expectedClients"] if clients is None else clients
+        report = {
+            "schemaVersion": "1.0.0", "sessionId": session["sessionId"],
+            "challenge": config["challenge"], "profile": session["profile"],
+            "projectSha256": session["project"]["sha256"],
+            "catalogueSha256": session["catalogue"]["sha256"],
+            "observedUnix": config["issuedUnix"], "expectedClients": config["expectedClients"],
+            "server": {"engineVersion": "1.7.0", "buildId": "neon.test"},
+            "clients": [
+                {"ordinal": index, "engineVersion": "1.7.0", "buildId": "neon.test", "nonce": f"{index:064x}"}
+                for index in range(1, count + 1)
+            ],
+        }
+        report["authorization"] = authorize_report(report, config["secret"])
+        return config, report
+
+    def test_pair_launch_and_authenticated_proof_are_separate_claims(self) -> None:
+        session_path, session = self.start()
+        incomplete_session = copy.deepcopy(session)
+        incomplete_session.pop("client")
+        self.assertTrue(SCHEMAS.validate("neon-supervisor-session", incomplete_session))
+        leaked_client_contract = copy.deepcopy(session)
+        leaked_client_contract["capabilities"].remove("client.launch")
+        self.assertTrue(SCHEMAS.validate("neon-supervisor-session", leaked_client_contract))
+        missing_lifecycle = copy.deepcopy(session)
+        missing_lifecycle["capabilities"].remove("resource.lifecycle")
+        self.assertTrue(SCHEMAS.validate("neon-supervisor-session", missing_lifecycle))
+        wrong_topology = copy.deepcopy(session)
+        wrong_topology["probe"]["expectedClients"] = 2
+        self.assertTrue(SCHEMAS.validate("neon-supervisor-session", wrong_topology))
+        bad_port = copy.deepcopy(session)
+        bad_port["client"]["connectUri"] = "mtasa://127.0.0.1:99999"
+        self.assertTrue(SCHEMAS.validate("neon-supervisor-session", bad_port))
+        not_launched = request_supervisor(self.root, session_path, "runtime.prove", SCHEMAS)
+        self.assertEqual(
+            (not_launched["status"], diagnostic_codes(not_launched)),
+            ("fail", ["PROBE_CLIENT_ROLES_NOT_LAUNCHED"]),
+        )
+        launched = request_supervisor(self.root, session_path, "client.launch/client-1", SCHEMAS)
+        self.assertEqual((launched["status"], launched["operation"]["scope"]), ("pass", "process-launched"))
+        self.assertEqual(launched["operation"]["grantedEvidenceLabels"], [])
+        self.assertEqual(SCHEMAS.validate("neon-mutation-result", launched), [])
+        duplicate = request_supervisor(self.root, session_path, "client.launch/client-1", SCHEMAS)
+        self.assertEqual((duplicate["status"], diagnostic_codes(duplicate)), ("fail", ["CLIENT_ROLE_ALREADY_LAUNCHED"]))
+        self.assertEqual(duplicate["operation"]["scope"], "not-launched")
+        out_of_scope = request_supervisor(self.root, session_path, "client.launch/client-2", SCHEMAS)
+        self.assertEqual((out_of_scope["status"], diagnostic_codes(out_of_scope)), ("fail", ["CLIENT_ROLE_OUT_OF_SCOPE"]))
+        with self.assertRaisesRegex(ValueError, "not allowlisted"):
+            request_supervisor(self.root, session_path, "client.launch/client-1 --evil", SCHEMAS)
+        config, report = self.report(session)
+        write_json(self.server_root / "mods" / "deathmatch" / "resources" / PROBE_RESOURCE / REPORT_FILE, report)
+        proved = request_supervisor(self.root, session_path, "runtime.prove", SCHEMAS)
+        self.assertEqual(proved["status"], "pass")
+        self.assertEqual(proved["proof"]["grantedEvidenceLabels"], ["server-checked", "client-checked", "in-game-checked"])
+        self.assertEqual(SCHEMAS.validate("neon-proof-result", proved), [])
+        self.assertEqual(SCHEMAS.validate("neon-evidence", proved["proof"]["evidence"]), [])
+        pass_with_error = copy.deepcopy(proved)
+        pass_with_error["diagnostics"].append({
+            "code": "FORGED_ERROR", "severity": "error", "message": "must invalidate pass", "path": ".",
+        })
+        self.assertTrue(SCHEMAS.validate("neon-proof-result", pass_with_error))
+        self.assertTrue((self.root / "runtime.json").is_file())
+        self.assertNotIn(config["secret"], canonical_json(session))
+        deadline = time.monotonic() + 2
+        launches = self.client_root / "launches.log"
+        while time.monotonic() < deadline and not launches.exists():
+            time.sleep(0.02)
+        self.assertEqual(launches.read_text(encoding="utf-8"), "mtasa://127.0.0.1:22123\n")
+
+    def test_multiclient_requires_exact_unique_matching_clients(self) -> None:
+        session_path, session = self.start("neon-multiclient")
+        first = request_supervisor(self.root, session_path, "client.launch/client-1", SCHEMAS)
+        second = request_supervisor(self.root, session_path, "client.launch/client-2", SCHEMAS)
+        self.assertEqual((first["status"], second["status"]), ("pass", "pass"))
+        config, report = self.report(session)
+        probe_report = self.server_root / "mods" / "deathmatch" / "resources" / PROBE_RESOURCE / REPORT_FILE
+        write_json(probe_report, report)
+        proved = request_supervisor(self.root, session_path, "runtime.prove", SCHEMAS)
+        self.assertEqual(proved["proof"]["grantedEvidenceLabels"][-1], "multiplayer-checked")
+        wrong_observation_count = copy.deepcopy(proved)
+        wrong_observation_count["summary"]["observations"] = 2
+        self.assertTrue(SCHEMAS.validate("neon-proof-result", wrong_observation_count))
+        deadline = time.monotonic() + 2
+        launches = self.client_root / "launches.log"
+        while time.monotonic() < deadline and (not launches.exists() or len(launches.read_text(encoding="utf-8").splitlines()) < 2):
+            time.sleep(0.02)
+        self.assertEqual(
+            sorted(launches.read_text(encoding="utf-8").splitlines()),
+            sorted(["mtasa://127.0.0.1:22123", "-cl2 mtasa://127.0.0.1:22123"]),
+        )
+
+        for name, mutate, expected in (
+            ("bad-auth", lambda value: value.update(authorization="0" * 64), "PROBE_AUTHORIZATION_INVALID"),
+            ("wrong-session", lambda value: value.update(sessionId="session:other"), "PROBE_BINDING_MISMATCH"),
+            ("wrong-build", lambda value: value["clients"][1].update(buildId="neon.other"), "PROBE_CLIENT_BUILD_MISMATCH"),
+            ("duplicate", lambda value: value["clients"][1].update(nonce=value["clients"][0]["nonce"]), "PROBE_CLIENT_DUPLICATE"),
+            ("missing-client", lambda value: value["clients"].pop(), "PROBE_TOPOLOGY_INVALID"),
+            ("extra-client", lambda value: value["clients"].append({"ordinal": 3, "engineVersion": "1.7.0", "buildId": "neon.test", "nonce": "3" * 64}), "PROBE_TOPOLOGY_INVALID"),
+            ("stale", lambda value: value.update(observedUnix=config["issuedUnix"] - 1), "PROBE_TIME_INVALID"),
+        ):
+            with self.subTest(name=name):
+                candidate = copy.deepcopy(report)
+                mutate(candidate)
+                if name not in {"bad-auth", "wrong-session"}:
+                    candidate["authorization"] = authorize_report({key: value for key, value in candidate.items() if key != "authorization"}, config["secret"])
+                result, _ = prove_runtime(
+                    candidate, config, config["secret"], session, base_project() | {"profile": "neon-multiclient"},
+                    load_json(self.root / "api.json"), resolve_project_components(self.root / "neon.project.json", SCHEMAS, self.root / "api.json"), SCHEMAS,
+                )
+                self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", [expected]))
+
+    def test_client_executable_drift_fails_without_launching(self) -> None:
+        session_path, _ = self.start()
+        executable = self.client_root / "mta-client"
+        executable.write_text(executable.read_text(encoding="utf-8") + "# drift\n", encoding="utf-8")
+        executable.chmod(0o700)
+        result = request_supervisor(self.root, session_path, "client.launch/client-1", SCHEMAS)
+        self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", ["CLIENT_EXECUTABLE_DRIFT"]))
+        self.assertFalse((self.client_root / "launches.log").exists())
+
+    def test_proof_fails_after_supervisor_owned_server_exits(self) -> None:
+        session_path, session = self.start()
+        request_supervisor(self.root, session_path, "client.launch/client-1", SCHEMAS)
+        _, report = self.report(session)
+        write_json(self.server_root / "mods" / "deathmatch" / "resources" / PROBE_RESOURCE / REPORT_FILE, report)
+        os.kill(session["driver"]["pid"], signal.SIGKILL)
+        deadline = time.monotonic() + 3
+        result = None
+        while time.monotonic() < deadline:
+            result = request_supervisor(self.root, session_path, "runtime.prove", SCHEMAS)
+            if "PROBE_SERVER_PROCESS_EXITED" in diagnostic_codes(result):
+                break
+            time.sleep(0.02)
+        self.assertIsNotNone(result)
+        self.assertEqual((result["status"], diagnostic_codes(result)), ("fail", ["PROBE_SERVER_PROCESS_EXITED"]))
+
+    def test_post_send_client_launch_failure_is_ambiguous_and_not_retried(self) -> None:
+        session_path, original = self.start()
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        accepted: list[bytes] = []
+
+        def consume_without_reply() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(canonical_json({
+                    "schemaVersion": "1.0.0", "sessionId": original["sessionId"], "challenge": "8" * 64,
+                }).encode("utf-8"))
+                payload = bytearray()
+                while chunk := connection.recv(65536):
+                    payload.extend(chunk)
+                accepted.append(bytes(payload))
+                time.sleep(0.2)
+
+        peer = threading.Thread(target=consume_without_reply, daemon=True)
+        peer.start()
+        redirected = copy.deepcopy(original)
+        redirected["transport"]["port"] = listener.getsockname()[1]
+        write_json(session_path, redirected)
+        try:
+            with self.assertRaisesRegex(supervisor_module.SupervisorMutationOutcomeUnknown, "must not be retried"):
+                request_supervisor(self.root, session_path, "client.launch/client-1", SCHEMAS, 50)
+            peer.join(timeout=2)
+            self.assertEqual(len(accepted), 1)
+            self.assertEqual(json.loads(accepted[0])["command"], "client.launch/client-1")
+            self.assertEqual(load_json(session_path)["state"], "closed")
+        finally:
+            listener.close()
+
+    def test_probe_install_is_exact_and_rejects_tamper_and_symlink(self) -> None:
+        first = install_runtime_probe(self.server_root)
+        second = install_runtime_probe(self.server_root)
+        self.assertEqual(first["probe"]["sourceSha256"], second["probe"]["sourceSha256"])
+        self.assertEqual(first["probe"]["sourceSha256"], probe_source_sha256())
+        probe = self.server_root / "mods" / "deathmatch" / "resources" / PROBE_RESOURCE
+        (probe / "client.lua").write_text("tampered", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "differs"):
+            supervisor_module.verify_runtime_probe(self.server_root)
+        shutil.rmtree(probe)
+        outside = self.root / "outside-probe"
+        outside.mkdir()
+        probe.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises((OSError, ValueError)):
+            install_runtime_probe(self.server_root)
+
+        escaped_root = self.root / "escaped-server"
+        escaped_root.mkdir()
+        escaped_mods = self.root / "escaped-mods"
+        (escaped_mods / "deathmatch" / "resources").mkdir(parents=True)
+        (escaped_root / "mods").symlink_to(escaped_mods, target_is_directory=True)
+        with self.assertRaises((OSError, ValueError)):
+            install_runtime_probe(escaped_root)
+        self.assertFalse((escaped_mods / "deathmatch" / "resources" / PROBE_RESOURCE).exists())
+
+        anchored_root = self.root / "anchored-server"
+        resources = anchored_root / "mods" / "deathmatch" / "resources"
+        resources.mkdir(parents=True)
+        outside_swap = self.root / "outside-swap"
+        outside_swap.mkdir()
+        original_write = proof_module._write_probe_file
+        swapped = False
+
+        def swap_before_write(handle: int, name: str, payload: bytes) -> None:
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                target = resources / PROBE_RESOURCE
+                target.rmdir()
+                target.symlink_to(outside_swap, target_is_directory=True)
+            original_write(handle, name, payload)
+
+        with mock.patch.object(proof_module, "_write_probe_file", side_effect=swap_before_write):
+            with self.assertRaises((OSError, ValueError)):
+                install_runtime_probe(anchored_root)
+        self.assertEqual(list(outside_swap.iterdir()), [])
 
 
 if __name__ == "__main__":

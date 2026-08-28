@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from neonlib.discovery import search_symbols, tokenize  # noqa: E402
 from neonlib.jsonio import JsonDocumentError, canonical_json, load_json, write_json  # noqa: E402
 from neonlib.luals import generate_luals  # noqa: E402
 from neonlib.mutation import mutation_failure  # noqa: E402
+from neonlib.proof import install_runtime_probe, probe_install_failure, proof_failure  # noqa: E402
 from neonlib.project import check_project, resolve_project_components  # noqa: E402
 from neonlib.scenario import run_scenario, verify_scenario_run  # noqa: E402
 from neonlib.schema import SchemaStore  # noqa: E402
@@ -365,6 +367,12 @@ def _emit_validated(result: dict, schema: str, as_json: bool) -> int:
         command = result.get("command", "internal")
         if schema == "neon-runtime-compare-result":
             result = runtime_compare_failure("INTERNAL_RESULT_INVALID", details)
+        elif schema == "neon-proof-result":
+            proof = result.get("proof", {})
+            result = proof_failure("INTERNAL_RESULT_INVALID", details, {
+                "sessionId": proof.get("sessionId", "session:unavailable"),
+                "profile": proof.get("profile", "neon-pair"),
+            })
         elif schema == "neon-supervisor-result":
             if command not in {"supervisor.start", "supervisor.status", "supervisor.stop"}:
                 command = "supervisor.status"
@@ -386,6 +394,7 @@ def command_supervisor_start(args: argparse.Namespace) -> int:
             Path(args.workspace), Path(args.project), Path(args.catalogue) if args.catalogue else None,
             Path(args.snapshot), Path(args.output), args.ttl, Path(__file__).resolve(), SCHEMA_STORE,
             tuple(args.enable), Path(args.server_root) if args.server_root else None,
+            Path(args.client_root) if args.client_root else None, args.connect_port,
         )
     except (JsonDocumentError, OSError, ValueError) as exc:
         result = supervisor_failure("supervisor.start", "SUPERVISOR_START_FAILED", str(exc))
@@ -420,11 +429,60 @@ def command_runtime_compare(args: argparse.Namespace) -> int:
     return _emit_validated(result, "neon-runtime-compare-result", args.json)
 
 
+def command_runtime_probe_install(args: argparse.Namespace) -> int:
+    try:
+        result = install_runtime_probe(Path(args.server_root))
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = probe_install_failure("PROBE_INSTALL_FAILED", str(exc))
+        return _emit_validated(result, "neon-probe-install-result", args.json)
+    return _emit_validated(result, "neon-probe-install-result", args.json)
+
+
+def command_runtime_prove(args: argparse.Namespace) -> int:
+    if not 1 <= args.timeout_ms <= 600000 or not 10 <= args.poll_ms <= 5000:
+        result = proof_failure("PROBE_TIMEOUT_INVALID", "timeout-ms must be 1..600000 and poll-ms must be 10..5000", {
+            "sessionId": "session:unavailable", "profile": "neon-pair",
+        })
+        return _emit_validated(result, "neon-proof-result", args.json)
+    deadline = time.monotonic() + args.timeout_ms / 1000
+    result: dict | None = None
+    try:
+        while True:
+            remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+            result = request_supervisor(
+                Path(args.workspace), Path(args.session), "runtime.prove", SCHEMA_STORE,
+                min(remaining_ms, 10000),
+            )
+            codes = {item.get("code") for item in result.get("diagnostics", [])}
+            if result["status"] == "pass" or "PROBE_NOT_READY" not in codes:
+                break
+            if time.monotonic() >= deadline:
+                proof = result.get("proof", {})
+                result = proof_failure("PROBE_TIMEOUT", f"authenticated runtime proof was not ready within {args.timeout_ms} milliseconds", {
+                    "sessionId": proof.get("sessionId", "session:unavailable"),
+                    "profile": proof.get("profile", "neon-pair"),
+                })
+                break
+            time.sleep(min(args.poll_ms / 1000, max(0, deadline - time.monotonic())))
+    except TimeoutError:
+        proof = result.get("proof", {}) if isinstance(result, dict) else {}
+        result = proof_failure("PROBE_TIMEOUT", f"authenticated runtime proof was not ready within {args.timeout_ms} milliseconds", {
+            "sessionId": proof.get("sessionId", "session:unavailable"),
+            "profile": proof.get("profile", "neon-pair"),
+        })
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = proof_failure("SUPERVISOR_REQUEST_FAILED", str(exc), {
+            "sessionId": "session:unavailable", "profile": "neon-pair",
+        })
+    return _emit_validated(result, "neon-proof-result", args.json)
+
+
 def command_supervisor_daemon(args: argparse.Namespace) -> int:
     return run_supervisor_daemon(
         Path(args.workspace), Path(args.session_directory), args.session_id, args.project,
         args.catalogue, args.snapshot, args.ttl, SCHEMA_STORE, tuple(args.capability),
         Path(args.server_root) if args.server_root else None,
+        Path(args.client_root) if args.client_root else None, args.connect_port, args.test_client_adapter,
     )
 
 
@@ -451,6 +509,21 @@ def command_resource_lifecycle(args: argparse.Namespace) -> int:
         )
     except (JsonDocumentError, OSError, ValueError) as exc:
         result = mutation_failure(f"resource.{args.resource_command}", "SUPERVISOR_REQUEST_FAILED", str(exc), args.resource)
+    return _emit_validated(result, "neon-mutation-result", args.json)
+
+
+def command_client_launch(args: argparse.Namespace) -> int:
+    command = f"client.launch/{args.role}"
+    try:
+        result = request_supervisor(
+            Path(args.workspace), Path(args.session), command, SCHEMA_STORE, args.timeout_ms,
+        )
+    except SupervisorMutationOutcomeUnknown as exc:
+        result = mutation_failure("client.launch", "MUTATION_OUTCOME_UNKNOWN", str(exc), args.role, exc.session_id)
+    except TimeoutError as exc:
+        result = mutation_failure("client.launch", "SUPERVISOR_REQUEST_TIMEOUT", str(exc), args.role)
+    except (JsonDocumentError, OSError, ValueError) as exc:
+        result = mutation_failure("client.launch", "SUPERVISOR_REQUEST_FAILED", str(exc), args.role)
     return _emit_validated(result, "neon-mutation-result", args.json)
 
 
@@ -825,7 +898,7 @@ def build_parser() -> argparse.ArgumentParser:
     schema = subcommands.add_parser("schema", help="validate contract documents")
     schema_subcommands = schema.add_subparsers(dest="schema_command", required=True)
     validate = schema_subcommands.add_parser("validate")
-    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-mutation-result", "neon-check-result"))
+    validate.add_argument("--schema", required=True, choices=("neon-api", "neon-api-index", "neon-agent-context", "neon-semantic-snapshot", "neon-project", "neon-component", "neon-project-api", "neon-test", "neon-assertion", "neon-artifact", "neon-artifact-index", "neon-evidence", "neon-test-result", "neon-scenario-verify-result", "neon-runtime-snapshot", "neon-runtime-compare-result", "neon-supervisor-session", "neon-supervisor-result", "neon-mutation-result", "neon-probe-config", "neon-probe-report", "neon-proof-result", "neon-probe-install-result", "neon-check-result"))
     validate.add_argument("document")
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(handler=command_schema_validate)
@@ -864,8 +937,10 @@ def build_parser() -> argparse.ArgumentParser:
     supervisor_start.add_argument("--snapshot", default=".neon-runtime/runtime-snapshot.json")
     supervisor_start.add_argument("--output", default=".neon-sessions", help="parent directory for a new unique session")
     supervisor_start.add_argument("--ttl", type=int, default=900, help="session lifetime in seconds (10..86400)")
-    supervisor_start.add_argument("--enable", action="append", default=[], choices=("resource.lifecycle", "scenario.execute"), help="explicitly grant one bounded mutation capability")
+    supervisor_start.add_argument("--enable", action="append", default=[], choices=("resource.lifecycle", "scenario.execute", "client.launch"), help="explicitly grant one bounded mutation capability")
     supervisor_start.add_argument("--server-root", help="explicit local MTA server directory required by resource.lifecycle")
+    supervisor_start.add_argument("--client-root", help="explicit local MTA client directory required by client.launch")
+    supervisor_start.add_argument("--connect-port", type=int, default=22003, help="loopback MTA server port used by launched clients")
     supervisor_start.add_argument("--json", action="store_true")
     supervisor_start.set_defaults(handler=command_supervisor_start)
     for name, handler in (("status", command_supervisor_status), ("stop", command_supervisor_stop)):
@@ -882,6 +957,19 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_compare.add_argument("--workspace", default=".")
     runtime_compare.add_argument("--json", action="store_true")
     runtime_compare.set_defaults(handler=command_runtime_compare)
+    runtime_prove = runtime_subcommands.add_parser("prove", help="wait for an authenticated real-client runtime proof")
+    runtime_prove.add_argument("session", help="workspace-relative supervisor session.json path")
+    runtime_prove.add_argument("--workspace", default=".")
+    runtime_prove.add_argument("--timeout-ms", type=int, default=120000)
+    runtime_prove.add_argument("--poll-ms", type=int, default=500)
+    runtime_prove.add_argument("--json", action="store_true")
+    runtime_prove.set_defaults(handler=command_runtime_prove)
+    runtime_probe = runtime_subcommands.add_parser("probe", help="manage the trusted bundled runtime probe")
+    runtime_probe_subcommands = runtime_probe.add_subparsers(dest="runtime_probe_command", required=True)
+    runtime_probe_install = runtime_probe_subcommands.add_parser("install", help="install exact trusted probe assets into a local MTA server")
+    runtime_probe_install.add_argument("--server-root", required=True)
+    runtime_probe_install.add_argument("--json", action="store_true")
+    runtime_probe_install.set_defaults(handler=command_runtime_probe_install)
 
     resource = subcommands.add_parser("resource", help="submit allowlisted resource lifecycle commands")
     resource_subcommands = resource.add_subparsers(dest="resource_command", required=True)
@@ -893,6 +981,16 @@ def build_parser() -> argparse.ArgumentParser:
         lifecycle.add_argument("--timeout-ms", type=int, default=10000)
         lifecycle.add_argument("--json", action="store_true")
         lifecycle.set_defaults(handler=command_resource_lifecycle)
+
+    client = subcommands.add_parser("client", help="launch exact approved local MTA clients")
+    client_subcommands = client.add_subparsers(dest="client_command", required=True)
+    client_launch = client_subcommands.add_parser("launch")
+    client_launch.add_argument("session", help="workspace-relative supervisor session.json path")
+    client_launch.add_argument("role", choices=tuple(f"client-{index}" for index in range(1, 9)))
+    client_launch.add_argument("--workspace", default=".")
+    client_launch.add_argument("--timeout-ms", type=int, default=10000)
+    client_launch.add_argument("--json", action="store_true")
+    client_launch.set_defaults(handler=command_client_launch)
 
     catalogue = subcommands.add_parser("catalogue", help="build or verify the effective MTA API")
     catalogue_subcommands = catalogue.add_subparsers(dest="catalogue_command", required=True)
@@ -970,6 +1068,9 @@ def main() -> int:
         daemon.add_argument("--ttl", type=int, required=True)
         daemon.add_argument("--capability", action="append", default=[])
         daemon.add_argument("--server-root")
+        daemon.add_argument("--client-root")
+        daemon.add_argument("--connect-port", type=int, default=22003)
+        daemon.add_argument("--test-client-adapter", action="store_true")
         args = daemon.parse_args(sys.argv[2:])
         return command_supervisor_daemon(args)
     parser = build_parser()

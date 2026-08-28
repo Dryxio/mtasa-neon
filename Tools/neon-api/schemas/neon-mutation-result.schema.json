@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "command": {"enum": ["resource.start", "resource.stop", "resource.restart", "scenario.authorize"], "type": "string"},
+    "command": {"enum": ["resource.start", "resource.stop", "resource.restart", "scenario.authorize", "client.launch"], "type": "string"},
     "diagnostics": {
       "items": {
         "additionalProperties": false,
@@ -22,11 +22,11 @@
     "operation": {
       "additionalProperties": false,
       "properties": {
-        "capability": {"enum": ["resource.lifecycle", "scenario.execute"], "type": "string"},
+        "capability": {"enum": ["resource.lifecycle", "scenario.execute", "client.launch"], "type": "string"},
         "completedAt": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
         "grantedEvidenceLabels": {"maxItems": 0, "type": "array"},
         "idempotent": {"type": "boolean"},
-        "scope": {"enum": ["command-submitted", "authorization-only"], "type": "string"},
+        "scope": {"enum": ["command-submitted", "not-submitted", "authorization-only", "process-launched", "not-launched", "outcome-unknown"], "type": "string"},
         "sessionId": {"format": "stable-id", "maxLength": 128, "type": "string"},
         "target": {"maxLength": 512, "minLength": 1, "type": "string"}
       },
@@ -54,11 +54,27 @@
         "operation": {
           "properties": {
             "capability": {"const": "resource.lifecycle"},
-            "idempotent": {"const": true},
-            "scope": {"const": "command-submitted"}
+            "idempotent": {"const": true}
           }
         }
-      }
+      },
+      "oneOf": [
+        {"properties": {"status": {"const": "pass"}, "operation": {"properties": {"scope": {"const": "command-submitted"}}}}},
+        {
+          "properties": {
+            "status": {"const": "fail"},
+            "diagnostics": {"contains": {"properties": {"code": {"const": "MUTATION_OUTCOME_UNKNOWN"}}}},
+            "operation": {"properties": {"scope": {"const": "outcome-unknown"}}}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "fail"},
+            "diagnostics": {"not": {"contains": {"properties": {"code": {"const": "MUTATION_OUTCOME_UNKNOWN"}}}}},
+            "operation": {"properties": {"scope": {"const": "not-submitted"}}}
+          }
+        }
+      ]
     },
     {
       "properties": {
@@ -66,11 +82,27 @@
         "operation": {
           "properties": {
             "capability": {"const": "resource.lifecycle"},
-            "idempotent": {"const": false},
-            "scope": {"const": "command-submitted"}
+            "idempotent": {"const": false}
           }
         }
-      }
+      },
+      "oneOf": [
+        {"properties": {"status": {"const": "pass"}, "operation": {"properties": {"scope": {"const": "command-submitted"}}}}},
+        {
+          "properties": {
+            "status": {"const": "fail"},
+            "diagnostics": {"contains": {"properties": {"code": {"const": "MUTATION_OUTCOME_UNKNOWN"}}}},
+            "operation": {"properties": {"scope": {"const": "outcome-unknown"}}}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "fail"},
+            "diagnostics": {"not": {"contains": {"properties": {"code": {"const": "MUTATION_OUTCOME_UNKNOWN"}}}}},
+            "operation": {"properties": {"scope": {"const": "not-submitted"}}}
+          }
+        }
+      ]
     },
     {
       "properties": {
@@ -83,6 +115,31 @@
           }
         }
       }
+    },
+    {
+      "properties": {
+        "command": {"const": "client.launch"},
+        "operation": {
+          "properties": {
+            "capability": {"const": "client.launch"},
+            "idempotent": {"const": false}
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "pass"},
+            "operation": {"properties": {"scope": {"const": "process-launched"}}}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "fail"},
+            "operation": {"properties": {"scope": {"enum": ["not-launched", "outcome-unknown"]}}}
+          }
+        }
+      ]
     }
   ]
 }
