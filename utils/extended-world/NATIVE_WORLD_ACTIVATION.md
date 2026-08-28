@@ -13,6 +13,28 @@ authorization on 2026-07-18. Checkpoint E2 extends the same two-launch
 transaction to the exact `(format=2, policy=static-world-v1)` tuple and passed
 its automated live and negative gates on 2026-07-18.
 
+Issue #69 adds a content-neutral cold-admission path, live validated on
+2026-08-28. Game SA now installs the model-store substrate before server
+selection, arms only the stock CD-directory interception, and captures a
+one-shot admission baseline after the stock directory load. Once a format-3
+set has been downloaded and fully audited, the same GTA process rebases that
+baseline, proves the aggregate transaction, grows the streaming buffer,
+revalidates the session and leases, and commits generation 1. The live cache-
+hit gate reached `state=runtime-active activation=yes lease=process
+restart-required=no` while retaining the original GTA PID. A second gate moved
+the Liberty City child object out of the cache before launch; the client
+reported `disposition=published`, completed the aggregate admission, and
+reached the same runtime-active state while retaining that launch's GTA PID.
+The harness then started from another clean process with no pending record,
+bound its append-only log to GTA PID `13280`, completed two warm-up cycles and
+ten measured Active -> Neutral -> same-set Active cycles, and emitted a bounded
+PASS verdict. Every measured cycle retained that PID, reproduced the invariant
+Neutral ownership signature, reached `restart-required=no`, kept crash dumps
+unchanged, and stayed within the dynamic pool and streaming-memory bounds.
+The historical two-launch transaction below remains the design and evidence
+for legacy format-1/format-2 startup authorization; it is no longer the
+required first-pack route for format-3 aggregate sets.
+
 Read this together with `AGENTS.md`, `LIMIT_PATCHING.md`,
 `NATIVE_WORLD_HANDOFF.md`, and `NATIVE_BW_PACK.md`.
 

@@ -887,13 +887,25 @@ namespace
     }
 }  // namespace
 
+bool CNativeModelStoreSA::InstallProcessFoundation(eGameVersion gameVersion, std::string& error)
+{
+    const bool reused = g_installed;
+    if (!InstallValidated(gameVersion, error))
+        return false;
+
+    DebugLog("[NativeWorldFoundation] state=model-stores-ready executable=%s nativeWrites=%s foundation=%s content=none", g_executableIdentity->name,
+             reused ? "no" : "yes", reused ? "revalidated" : "installed");
+    return true;
+}
+
 void CNativeModelStoreSA::InstallFromEnvironment(eGameVersion gameVersion)
 {
     char  value[8]{};
     DWORD valueLength = GetEnvironmentVariableA(FEATURE_ENVIRONMENT, value, sizeof(value));
     if (valueLength != 1 || value[0] != '1')
     {
-        OutputDebugStringA("[NativeBW] mode=off (MTA_NATIVE_BW_MODEL_STORES is not exactly 1)\n");
+        OutputDebugStringA(g_installed ? "[NativeBW] mode=off developer-selector=no process-foundation=active\n"
+                                       : "[NativeBW] mode=off (MTA_NATIVE_BW_MODEL_STORES is not exactly 1)\n");
         return;
     }
 

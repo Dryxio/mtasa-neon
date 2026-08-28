@@ -913,6 +913,17 @@ CGameSA::CGameSA()
         std::string fileIDError;
         if (!m_fileIDs.CaptureStockLayout(m_eGameVersion, fileIDError))
             throw std::runtime_error(SString("Unable to capture GTA FileID layout: %s", fileIDError.c_str()));
+
+        // Native World cannot relocate GTA's populated inline model stores
+        // after connection. Install only their content-neutral substrate on
+        // every supported Neon launch; no server identity, cache path, model,
+        // archive, or generation is known at this point.
+        std::string nativeWorldFoundationError;
+        if (!CNativeModelStoreSA::InstallProcessFoundation(m_eGameVersion, nativeWorldFoundationError))
+        {
+            SharedUtil::WriteDebugEvent(
+                SString("[NativeWorldFoundation] state=unavailable detail=%s content=none stock-session=preserved", nativeWorldFoundationError.c_str()));
+        }
         char        legacySelectorValue[8]{};
         const DWORD legacySelectorLength = GetEnvironmentVariableA("MTA_NATIVE_BW_MODEL_STORES", legacySelectorValue, sizeof(legacySelectorValue));
         const bool  legacySelectorEnabled = legacySelectorLength == 1 && legacySelectorValue[0] == '1';

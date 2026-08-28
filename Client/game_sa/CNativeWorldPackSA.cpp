@@ -5370,8 +5370,12 @@ namespace
             Fatal("static-world-v3 resident COL/IPL owner publication is incomplete");
         const unsigned int perChannelBlocks = (std::max(largestEntry, g_staticWorldV3LargestEntryBlocks) + 1U) & ~1U;
         const unsigned int requiredTotalBlocks = perChannelBlocks * 2U;
-        *reinterpret_cast<unsigned int*>(0x8E4CA8) = std::max(*reinterpret_cast<unsigned int*>(0x8E4CA8), requiredTotalBlocks);
-        if (*reinterpret_cast<const unsigned int*>(0x8E4CA8) < requiredTotalBlocks)
+        auto&              halfBufferBlocks = *reinterpret_cast<unsigned int*>(0x8E4CA8);
+        if (!publishCoreActive && halfBufferBlocks < perChannelBlocks)
+            Fatal("static-world-v3 connected-session streaming buffer foundation is smaller than the admitted largest entry");
+        if (publishCoreActive)
+            halfBufferBlocks = std::max(halfBufferBlocks, perChannelBlocks);
+        if (halfBufferBlocks < perChannelBlocks)
             Fatal("static-world-v3 bootstrap streaming buffer floor was not published");
         const unsigned int generation = AdvanceStaticWorldV3Generation();
 
@@ -6690,14 +6694,31 @@ namespace
         reinterpret_cast<void(__cdecl*)()>(LOAD_CD_DIRECTORY)();
         if (g_state == EState::Hooked)
         {
-            // This is the last common point where GTA has loaded only its
-            // stock directories and no native-world archive, pool slot, or
-            // ModelInfo has crossed the registrar's mutation barrier.
-            CaptureNativeWorldNeutralBaseline("stock-cd-directory");
             if (g_staticWorldV3Route)
+            {
+                // This is the last common point where GTA has loaded only its
+                // stock directories and no native-world archive, pool slot,
+                // or ModelInfo has crossed the registrar's mutation barrier.
+                CaptureNativeWorldNeutralBaseline("stock-cd-directory");
                 RegisterStaticWorldV3Set();
-            else
+            }
+            else if (g_policy && g_pack)
+            {
+                CaptureNativeWorldNeutralBaseline("stock-cd-directory");
                 RegisterPack();
+            }
+            else
+            {
+                // Cold admission needs the same two empty LOD scratch banks
+                // that an authorized startup would retain after generation
+                // teardown. Reserve them while GTA's startup table is still
+                // empty; they contain no selected-set or server-owned data.
+                ReserveStaticWorldV3LodArrays();
+                g_state = EState::Neutral;
+                CaptureNativeWorldNeutralBaseline("cold-foundation-stock-cd-directory");
+                g_runtimeAdmissionFencePending = true;
+                Log("foundation=neutral content=none hooks=load-cd lodArrays=2 admission-fence=pending");
+            }
         }
     }
 
@@ -7515,11 +7536,45 @@ bool CNativeWorldPackManagerSA::HandleRuntimeSelection(eGameVersion gameVersion,
     bool allLeasesValid = g_authorizedLease.RevalidateClosedObject(error);
     for (CNativeWorldCacheLeaseSA& lease : g_staticWorldV3ChildLeases)
         allLeasesValid = allLeasesValid && lease.RevalidateClosedObject(error);
+    if (!allLeasesValid)
+    {
+        if (error.empty())
+            error = "native-world runtime cache leases changed after the authorization claim";
+        ReleaseRegistrationLease();
+        g_pCore->TerminateNativeWorldStartup(error);
+        return false;
+    }
+
+    // Startup admission can publish its buffer floor before GTA begins
+    // streaming. A connected cold admission instead resizes the already-live
+    // double buffer while the read-only fence proves both channels idle. The
+    // enlarged buffer is content-neutral and may safely remain after refusal.
+    const unsigned int requiredTotalBlocks = GetRequiredStreamingBufferSizeBlocks();
+    const unsigned int halfBufferBefore = g_streaming ? g_streaming->GetLifecycleTelemetry().halfBufferBlocks : 0;
+    if (!g_streaming || requiredTotalBlocks == 0 || !g_streaming->SetStreamingBufferSize(requiredTotalBlocks) ||
+        g_streaming->GetLifecycleTelemetry().halfBufferBlocks < requiredTotalBlocks / 2)
+    {
+        error = "native-world connected-session streaming buffer foundation could not admit the selected set";
+        ReleaseRegistrationLease();
+        ReleaseNativeModelSlotReservation();
+        g_pCore->TerminateNativeWorldStartup(error);
+        return false;
+    }
+    Log("runtime-foundation=streaming-buffer-ready totalBlocks=%u halfBefore=%u halfAfter=%u content=none", requiredTotalBlocks, halfBufferBefore,
+        g_streaming->GetLifecycleTelemetry().halfBufferBlocks);
+
+    // Resizing is the first content-neutral native mutation in this path.
+    // Rebind the exact connected session and immutable objects before hook
+    // installation or registrar-owned state can follow it.
+    allLeasesValid = g_pCore->ValidateNativeWorldStartupSession(error) && g_authorizedLease.RevalidateClosedObject(error);
+    for (CNativeWorldCacheLeaseSA& lease : g_staticWorldV3ChildLeases)
+        allLeasesValid = allLeasesValid && lease.RevalidateClosedObject(error);
     if (!allLeasesValid || !EnsureStaticWorldV3LoaderHookSeal(true, true, error))
     {
         if (error.empty())
-            error = "native-world runtime foundations changed after the authorization claim";
+            error = "native-world runtime foundations changed after the content-neutral buffer preparation";
         ReleaseRegistrationLease();
+        ReleaseNativeModelSlotReservation();
         g_pCore->TerminateNativeWorldStartup(error);
         return false;
     }
@@ -7618,7 +7673,30 @@ void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
     g_streaming = streaming;
     const SNativeWorldPackPolicySA* selected = SelectEnabledPolicy();
     if (!selected)
+    {
+        if (g_state != EState::Off)
+            return;
+        if (!CNativeModelStoreSA::IsInstalled())
+        {
+            Log("foundation=unavailable reason=native-model-store-foundation-inactive stock-session=preserved");
+            g_state = EState::Refused;
+            return;
+        }
+
+        std::string foundationError;
+        if (!EnsureStaticWorldV3LoaderHookSeal(true, false, foundationError))
+        {
+            Log("foundation=unavailable reason=%s stock-session=preserved", foundationError.c_str());
+            g_state = EState::Refused;
+            return;
+        }
+        // The hook delegates to retail until LoadCdDirectory has completed.
+        // Only then can it reserve content-neutral LOD scratch and publish the
+        // first connected-session Neutral admission fence.
+        g_state = EState::Hooked;
+        Log("foundation=armed content=none hooks=load-cd nativeWrites=yes");
         return;
+    }
     if (g_state != EState::Off)
     {
         Log("registrar=unchanged state=%d", static_cast<int>(g_state));

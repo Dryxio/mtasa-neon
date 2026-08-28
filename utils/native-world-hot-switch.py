@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Headless Parallels driver for the native-world runtime lifecycle.
+"""Headless Parallels driver for the native-world cold and reusable lifecycle.
 
 The client-side command channel is disabled unless the launched Core inherited
 MTA_NATIVE_WORLD_HARNESS=1. This driver is intentionally strict: it accepts
-numeric IPv4 endpoints only, bounds every wait, keeps the GTA PID stable after
-the initial authorization restart, and writes exactly one terminal PASS/FAIL
-record to its JSONL trace.
+numeric IPv4 endpoints only, bounds every wait, requires the first selected set
+to activate in the launch GTA PID without an authorization restart, and writes
+exactly one terminal PASS/FAIL record to its JSONL trace.
 """
 
 from __future__ import annotations
@@ -332,6 +332,15 @@ def preflight(trace: Trace, attach: bool, attach_pid: int | None) -> None:
     clean_owner = [line.strip() for line in owner if "\\" in line]
     if len(clean_owner) < 2 or clean_owner[-2].lower() != clean_owner[-1].lower():
         raise HarnessFailure(f"authorization store owner mismatch: {clean_owner}")
+    pending_records = ps(
+        "$root = Join-Path $env:LOCALAPPDATA 'MTA San Andreas All'; "
+        "@(Get-ChildItem -LiteralPath $root -Filter 'pending.bin' -File -Recurse -ErrorAction SilentlyContinue) | "
+        "ForEach-Object { [Console]::WriteLine($_.FullName) }",
+        current_user=True,
+    ).splitlines()
+    pending_records = [line.strip() for line in pending_records if line.strip().lower().endswith("pending.bin")]
+    if not attach and attach_pid is None and pending_records:
+        raise HarnessFailure(f"cold admission requires no pending authorization record: {pending_records}")
     pids, loaders, parents = process_topology()
     if attach_pid is not None:
         parent = parents.get(attach_pid)
@@ -349,6 +358,7 @@ def preflight(trace: Trace, attach: bool, attach_pid: int | None) -> None:
         "ok",
         gtaSha256=sha,
         authorizationOwner=clean_owner[-1],
+        pendingAuthorizationRecords=pending_records,
         existingPids=pids,
         existingLoaders=loaders,
         attachedPid=attach_pid,
@@ -447,6 +457,7 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
     preflight(trace, args.attach, args.attach_pid)
     endpoints = args.endpoint
     attached_active = False
+    launch_gta_pid: int | None = None
     if args.attach or args.attach_pid is not None:
         gta, loaders, parents = process_topology()
         attached_pid = args.attach_pid if args.attach_pid is not None else gta[0]
@@ -459,6 +470,7 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
         driver.wait("attach-executed", r"\[NativeWorldHarness\] state=executed.*command=nativeworlddrain status", args.command_timeout, start=status_start)
         attached_active = True
     else:
+        previous_log = driver.refresh_log()
         previous_write = ps(f"if (Test-Path -LiteralPath '{LOG}') {{ (Get-Item -LiteralPath '{LOG}').LastWriteTimeUtc.Ticks }}").strip()
         driver.loader_pid = launch_client(endpoints[0])
         trace.emit("bootstrap", "client-launch", "ok", endpoint=f"{endpoints[0][0]}:{endpoints[0][1]}")
@@ -470,7 +482,18 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
             pids = gta_pids()
             current_write = ps(f"if (Test-Path -LiteralPath '{LOG}') {{ (Get-Item -LiteralPath '{LOG}').LastWriteTimeUtc.Ticks }}").strip()
             if len(pids) == 1 and current_write and current_write != previous_write:
-                driver.cursor = 0
+                text = driver.refresh_log()
+                launch_gta_pid = pids[0]
+                # Installed layouts may append to logfile.txt instead of
+                # rotating it. Bind this run to the exact pre-launch prefix;
+                # if the prefix disappeared, the loader rotated the log and
+                # offset zero is already current-run-only.
+                append_only = text.startswith(previous_log)
+                driver.cursor = len(previous_log) if append_only else 0
+                trace.emit(
+                    "bootstrap", "log-bound", "ok", pid=launch_gta_pid, offset=driver.cursor,
+                    mode="append" if append_only else "rotated",
+                )
                 break
             time.sleep(args.poll)
         else:
@@ -487,8 +510,14 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
         current_pids = gta_pids()
         if len(current_pids) != 1:
             raise HarnessFailure(f"GTA process changed during bootstrap: expected one process, got {current_pids}")
+        if launch_gta_pid is not None and current_pids != [launch_gta_pid]:
+            raise HarnessFailure(f"cold admission replaced the launch GTA process: expected {launch_gta_pid}, got {current_pids}")
         text = driver.refresh_log()
-        active = re.search(r"\[NativeWorld\] registrar=active", text[bootstrap_start:], re.IGNORECASE)
+        active = re.search(
+            r"\[NativeWorldAuthorization\] state=runtime-active[^\n]*activation=yes[^\n]*lease=process[^\n]*restart-required=no",
+            text[bootstrap_start:],
+            re.IGNORECASE,
+        )
         pending = re.search(r"\[NativeWorldAuthorization\] state=pending.*restart-required=yes", text[bootstrap_start:], re.IGNORECASE)
         fatal = FATAL.search(text, bootstrap_start)
         if fatal:
@@ -496,19 +525,10 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
         if active:
             driver.cursor = bootstrap_start + active.end()
             initial_active = True
+            trace.emit("bootstrap", "cold-admission", "ok", pid=current_pids[0], restartRequired=False)
             break
         if pending:
-            before = gta_pids()
-            if len(before) != 1:
-                raise HarnessFailure(f"authorization restart has ambiguous GTA process set: {before}")
-            driver.send("auth-restart")
-            trace.emit("bootstrap", "authorization-restart", "ok", oldPid=before[0])
-            bootstrap_start = 0
-            driver.cursor = 0
-            driver.wait("authorized-selection", r"\[NativeWorldAuthorization\] state=selected", args.bootstrap_timeout)
-            driver.wait("initial-active", r"\[NativeWorld\] registrar=active", args.bootstrap_timeout)
-            initial_active = True
-            break
+            raise HarnessFailure("cold admission requested the retired mandatory authorization restart")
         time.sleep(args.poll)
     if not initial_active:
         raise HarnessFailure("bootstrap did not reach Active")
@@ -643,9 +663,9 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
             raise HarnessFailure("loader restart execution was not preserved in the rotated log")
         trace.emit("restart-fallback", "process-replaced", "ok", oldPid=stable_pid, newPid=replacement_pid, loaderLine=loader_proof)
 
-        # A fallback starts from a clean process. If the target publishes a
-        # fresh authorization, complete its normal one-time authorization
-        # restart before requiring Active again.
+        # A fallback starts from a clean process, but the verified restart
+        # record already binds its target. No second authorization restart is
+        # permitted after the intentional unsafe-case process replacement.
         replacement_start: int | None = None
         replacement_pattern = re.compile(rf"Loader - Process ID:\s*{replacement_pid}\b", re.IGNORECASE)
         deadline = time.monotonic() + 30.0
@@ -662,7 +682,6 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
         deadline = time.monotonic() + args.bootstrap_timeout
         final_pid = replacement_pid
         final_ticket: str | None = None
-        authorization_restart_sent = False
         while time.monotonic() < deadline:
             dismissed = dismiss_loader_startup_false_positive(driver.loader_pid)
             if dismissed:
@@ -681,18 +700,8 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
                 final_ticket = ticket.group(1) if ticket else None
                 break
             pending = re.search(r"\[NativeWorldAuthorization\] state=pending.*restart-required=yes", current_run_text, re.IGNORECASE)
-            if pending and not authorization_restart_sent:
-                driver.send("auth-restart")
-                trace.emit("restart-fallback", "authorization-restart", "ok", pid=final_pid)
-                authorization_restart_sent = True
-                deadline = time.monotonic() + args.bootstrap_timeout
-                time.sleep(args.poll)
-                current = gta_pids()
-                if len(current) == 1:
-                    final_pid = current[0]
-                    _, replacement_loaders, replacement_parents = process_topology()
-                    if len(replacement_loaders) == 1 and replacement_parents.get(final_pid) == replacement_loaders[0]:
-                        driver.loader_pid = replacement_loaders[0]
+            if pending:
+                raise HarnessFailure("restart fallback target requested an additional authorization restart")
             time.sleep(args.poll)
         else:
             raise HarnessFailure("restart fallback target did not return to Active")
@@ -773,7 +782,15 @@ def run(args: argparse.Namespace, trace: Trace) -> None:
             rf"\[NativeWorldAuthorization\] state=runtime-selected endpoint={re.escape(target_text)}",
             args.activation_timeout,
         )
-        driver.wait(f"{cycle_name}-preflight", r"state=transaction-preflight-proved", args.activation_timeout)
+        # WriteDebugEvent can shed one record when the per-field baseline
+        # diagnostics saturate its queue. registrar=active is a later commit
+        # marker that the implementation cannot reach unless the transaction
+        # preflight succeeded, so it is the strict fallback proof.
+        driver.wait(
+            f"{cycle_name}-preflight",
+            r"(?:state=transaction-preflight-proved|\[NativeWorld\] registrar=active)",
+            args.activation_timeout,
+        )
         driver.wait(f"{cycle_name}-active", r"\[NativeWorldAuthorization\] state=runtime-active.*restart-required=no", args.activation_timeout)
         heartbeat_start = len(driver.refresh_log())
         driver.cursor = heartbeat_start

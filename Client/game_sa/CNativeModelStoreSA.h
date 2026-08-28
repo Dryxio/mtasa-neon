@@ -46,6 +46,12 @@ struct SNativeModelStoreTailSnapshotSA
 class CNativeModelStoreSA
 {
 public:
+    // Installs the content-neutral store and collision-buffer substrate before
+    // GTA populates its inline model stores. This is deliberately independent
+    // of any server, cache object, or selected set so a later connected
+    // admission never has to patch populated retail stores.
+    static bool InstallProcessFoundation(eGameVersion gameVersion, std::string& error);
+
     // Performs the complete executable/patch/store audit used by startup
     // selection without allocating memory or changing any process state.
     static bool ValidateExecutableAndPatchManifestReadOnly(eGameVersion gameVersion, std::string& error);
