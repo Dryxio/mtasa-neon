@@ -192,6 +192,29 @@ local function acceptOwner(unit)
         end
         return fail(unit, "drive-wander-not-installed")
     end
+    local initialVelocityApplied = false
+    local initialSpeed = 0
+    if unit.initialVelocityRequested and not unit.initialVelocityAttempted then
+        unit.initialVelocityAttempted = true
+        local matrix = getElementMatrix(unit.vehicle)
+        local forward = type(matrix) == "table" and matrix[2]
+        local fx = type(forward) == "table" and tonumber(forward[1])
+        local fy = type(forward) == "table" and tonumber(forward[2])
+        local fz = type(forward) == "table" and tonumber(forward[3])
+        local length = fx and fy and fz and math.sqrt(fx * fx + fy * fy + fz * fz) or 0
+        if length > 0.001 then
+            -- GTA cruise speed is expressed in world units per second, while
+            -- MTA vehicle velocity is world units per 50 Hz physics step.
+            initialSpeed = math.max(0, math.min(tonumber(unit.cruiseSpeed) or 0, 30)) / 50
+            initialVelocityApplied = setElementVelocity(unit.vehicle, fx / length * initialSpeed, fy / length * initialSpeed,
+                fz / length * initialSpeed) == true
+        end
+        unit.initialVelocityApplied = initialVelocityApplied
+        unit.initialSpeed = initialSpeed
+    elseif unit.initialVelocityRequested then
+        initialVelocityApplied = unit.initialVelocityApplied == true
+        initialSpeed = unit.initialSpeed or 0
+    end
     local resumeApplied = false
     if not unit.resumeAttempted then
         unit.resumeAttempted = true
@@ -216,6 +239,8 @@ local function acceptOwner(unit)
     report(unit, "accepted", {
         task = true, seat = getPedOccupiedVehicleSeat(unit.ped), passengers = passengerSamples(unit),
         resumeProvided = unit.resumeProvided, resumeValid = unit.resumeKinematics ~= nil, resumeApplied = resumeApplied,
+        initialVelocityRequested = unit.initialVelocityRequested, initialVelocityApplied = initialVelocityApplied,
+        initialSpeed = initialSpeed,
         resumeDelay = resumeDelay, resumeDelayMs = resumeDelay,
         x = x, y = y, z = z, rx = rx, ry = ry, rz = rz, vx = vx, vy = vy, vz = vz, avx = avx, avy = avy, avz = avz,
     })
@@ -378,7 +403,8 @@ addEventHandler("carTraffic:observe", resourceRoot, function(id, epoch, ped, veh
 end)
 
 addEvent("carTraffic:assign", true)
-addEventHandler("carTraffic:assign", resourceRoot, function(id, epoch, ped, vehicle, cruiseSpeed, passengers, drivingStyle, resumeKinematics)
+addEventHandler("carTraffic:assign", resourceRoot, function(id, epoch, ped, vehicle, cruiseSpeed, passengers, drivingStyle, resumeKinematics,
+                                                             initialVelocityRequested)
     triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, id, epoch, "assign-received", {
         ped = isElement(ped), vehicle = isElement(vehicle), pedStreamed = isElement(ped) and isElementStreamedIn(ped) or false,
         vehicleStreamed = isElement(vehicle) and isElementStreamedIn(vehicle) or false,
@@ -392,6 +418,7 @@ addEventHandler("carTraffic:assign", resourceRoot, function(id, epoch, ped, vehi
         cruiseSpeed = tonumber(cruiseSpeed) or 16.0, requestedAt = getTickCount(),
         drivingStyle = tonumber(drivingStyle) == 6 and 6 or 0,
         resumeKinematics = normalizedResume, resumeProvided = resumeProvided,
+        initialVelocityRequested = initialVelocityRequested == true,
         passengers = normalizedPassengers, passengerContractValid = passengerContractValid, observerSeq = 0, ownerSeq = 0,
     }
     releasedProofs[id] = nil

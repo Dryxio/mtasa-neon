@@ -46,7 +46,7 @@ cartraffic stop
 cartraffic cleanup
 ```
 
-Production traffic starts automatically at ten vehicles per spatial player
+Production traffic starts automatically at sixteen vehicles per spatial player
 bubble, with a global circuit breaker of 160 vehicles. Players within 180 world
 units share one bubble; isolated groups receive separate budgets. When the
 global cap is reached, units are distributed fairly between bubbles instead of
@@ -57,6 +57,12 @@ every required driver before it admits optional passengers. Staff may use
 Traffic control and test commands reject players without server-staff rights.
 New players enter the traffic owner/observer pool only after their client has
 confirmed that every synchronized-traffic event handler is ready.
+
+New units remain invisible during their short synchronized-owner staging
+window. Once the owner proves that `DriveWander` is installed, it applies the
+road-aligned cruise velocity from the settled vehicle matrix and the server
+reveals the complete vehicle/occupant unit. This prevents frozen, partially
+settled cars from appearing before their native driving state is active.
 
 With `native-ped-traffic` running, `/trafficdemo on` is the coordinated visual
 demo preset: with exactly two clients it targets 16 road vehicles while the ped

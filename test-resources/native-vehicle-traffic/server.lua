@@ -44,6 +44,10 @@ local OWNER_DISTANCE = 220
 local POPULATION_BUBBLE_DISTANCE = 180
 local MAX_CANDIDATE_ATTEMPTS = 25
 local PRODUCTION_TELEMETRY_INTERVAL = 15000
+-- Element creation and the owner event use separate network packets. Give the
+-- entity stream a short head start, while keeping the staging window well
+-- below the former visibly frozen 1.2-second pause.
+local INITIAL_ASSIGNMENT_DELAY = 350
 local telemetryWindow = VehicleTrafficTelemetry.newCounterWindow()
 
 -- These pools are the road-safe subset of GTA's cargrp.dat categories. MTA
@@ -186,6 +190,15 @@ local function passengerPayload(unit)
         result[#result + 1] = {ped = passenger.ped, seat = passenger.seat}
     end
     return result
+end
+
+local function setUnitStagingVisible(unit, visible)
+    local alpha = visible and 255 or 0
+    if isElement(unit.vehicle) then setElementAlpha(unit.vehicle, alpha) end
+    forEachOccupant(unit, function(ped)
+        if isElement(ped) then setElementAlpha(ped, alpha) end
+    end)
+    unit.stagedHidden = not visible
 end
 
 local function unitCount(predicate)
@@ -617,6 +630,7 @@ local function assign(unit, owner, reason)
     local initialAssignment = not unit.dispatchedOnce
     unit.assignmentStartedAt = getTickCount()
     unit.requiresResume = not initialAssignment
+    unit.requiresInitialVelocity = initialAssignment
     unit.maxEpochStep = 0
     unit.maxResumeSpeed = 0
     unit.epochStartX, unit.epochStartY, unit.epochStartZ = getElementPosition(unit.vehicle)
@@ -636,7 +650,7 @@ local function assign(unit, owner, reason)
     end
     setElementData(unit.vehicle, "neon:ambientVehicleTrafficEpoch", unit.epoch)
     forEachOccupant(unit, function(ped) setElementData(ped, "neon:ambientVehicleTrafficEpoch", unit.epoch) end)
-    local dispatchDelay = unit.dispatchedOnce and 150 or 1200
+    local dispatchDelay = unit.dispatchedOnce and 150 or INITIAL_ASSIGNMENT_DELAY
     local expectedEpoch = unit.epoch
     unit.dispatchTimer = setTimer(function()
         unit.dispatchTimer = nil
@@ -657,7 +671,7 @@ local function assign(unit, owner, reason)
                 setElementFrozen(unit.vehicle, false)
             end
             triggerClientEvent(owner, "carTraffic:assign", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, unit.cruiseSpeed, passengers,
-                unit.drivingStyle, unit.resumeKinematics)
+                unit.drivingStyle, unit.resumeKinematics, initialAssignment)
             unit.dispatchedOnce = true
             trace("assignment-dispatched", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(owner), delay = dispatchDelay})
         end
@@ -1078,6 +1092,10 @@ local function createUnit(candidate, owner, observers, mode)
         highwayDirectionY = candidate.highwayDirectionY,
     }
     units[unit.id] = unit
+    -- Server-created elements can stream before their owner has received the
+    -- native driving task. Keep the complete atomic unit invisible until the
+    -- owner proves that DriveWander and the initial road velocity are active.
+    setUnitStagingVisible(unit, false)
     -- Vehicle occupants are governed by the car task and seat attachment, not
     -- by the on-foot native-ped collision-residency fence. Marking the driver
     -- as ambientPedTraffic would make that fence compare its seated root to
@@ -1289,6 +1307,9 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
     end
     if evidence == "accepted" then
         if client ~= unit.owner or unit.state ~= "assigning" or data.task ~= true or tonumber(data.seat) ~= 0 then return end
+        if unit.requiresInitialVelocity and data.initialVelocityApplied ~= true then
+            return fail(unit, "initial-velocity-not-applied")
+        end
         if unit.requiresResume and data.resumeApplied ~= true then
             if activeTest and activeTest.unit == unit then return fail(unit, "handoff-resume-not-applied") end
             trace("handoff-resume-unavailable", {id = unit.id, epoch = unit.epoch})
@@ -1296,6 +1317,7 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
         clearTimer(unit, "assignmentTimer")
         unit.state = "active"
         unit.acceptedAt = getTickCount()
+        if unit.stagedHidden then setUnitStagingVisible(unit, true) end
         if unit.handoffMetrics then
             local x, y, z = getElementPosition(unit.vehicle)
             local _, _, rz = getElementRotation(unit.vehicle)
@@ -1314,7 +1336,9 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
             unit.pendingPassengerEntry = nil
             if isElement(entry.player) then triggerClientEvent(entry.player, "carTraffic:takeoverReady", resourceRoot, unit.vehicle, entry.seat) end
         end
-        return trace("active", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner)})
+        return trace("active", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner),
+            stagingMs = unit.acceptedAt - (unit.createdAt or unit.acceptedAt), initialVelocityApplied = data.initialVelocityApplied == true,
+            initialSpeed = tonumber(data.initialSpeed) or 0})
     end
     if evidence == "owner-sample" and client == unit.owner and unit.state == "active" then
         local pedVehicleDelta = tonumber(data.pedVehicleDelta)
