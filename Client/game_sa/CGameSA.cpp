@@ -535,7 +535,10 @@ namespace
         const auto* gangPercentages = reinterpret_cast<const unsigned char*>(GTA_POPCYCLE_GANG_PERCENTAGES);
         const auto* dealerPercentages = reinterpret_cast<const unsigned char*>(GTA_POPCYCLE_DEALER_PERCENTAGES);
         const float maximumPeds = static_cast<float>(maxPeds[index]);
-        const float otherPercentage = reinterpret_cast<float(__cdecl*)()>(FUNC_GetCurrentPercOtherPeds)() / 100.0f;
+        // The retail function returns its integer percentage in EAX. Treating it as
+        // an x87 float reads stale floating-point state and intermittently corrupts
+        // the ambient population target.
+        const float otherPercentage = static_cast<float>(reinterpret_cast<int(__cdecl*)()>(FUNC_GetCurrentPercOtherPeds)()) / 100.0f;
         targets.civilian = maximumPeds * civilianShare * otherPercentage;
         targets.cop = maximumPeds * copShare * static_cast<float>(copPercentages[index]) / 100.0f;
         targets.gang = maximumPeds * gangShare * static_cast<float>(gangPercentages[index]) / 100.0f;
