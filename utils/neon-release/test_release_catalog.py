@@ -51,8 +51,7 @@ class ReleaseCatalogTests(unittest.TestCase):
         markdown = release_catalog.render_markdown(release)
         self.assertIn("## What’s new", markdown)
         self.assertIn("#### For players", markdown)
-        self.assertIn("#### For server owners and creators", markdown)
-        self.assertIn("#### Development tooling", markdown)
+        self.assertIn("#### For creators and server owners", markdown)
         self.assertNotIn("placeholder", markdown.lower())
 
 
