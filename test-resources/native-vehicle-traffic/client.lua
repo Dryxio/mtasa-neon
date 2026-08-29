@@ -1,6 +1,12 @@
 local units = {}
 local releasedProofs = {}
 local TASK_NAME = "TASK_COMPLEX_CAR_DRIVE_WANDER"
+-- A native road candidate has yaw but no slope orientation. The server drops
+-- new hidden vehicles slightly above the road; keep staging them until GTA's
+-- suspension reports a stable ground contact before adding forward velocity.
+local INITIAL_PLACEMENT_MIN_SETTLE = 650
+local INITIAL_PLACEMENT_TIMEOUT = 2500
+local INITIAL_PLACEMENT_VERTICAL_SPEED = 0.025
 
 local function clearTimer(unit, name)
     if isTimer(unit[name]) then killTimer(unit[name]) end
@@ -192,6 +198,23 @@ local function acceptOwner(unit)
         end
         return fail(unit, "drive-wander-not-installed")
     end
+    local initialPlacementGrounded = false
+    local initialPlacementSettleMs = 0
+    if unit.initialVelocityRequested then
+        if type(isVehicleOnGround) ~= "function" then return fail(unit, "vehicle-ground-oracle-missing") end
+        unit.initialPlacementStartedAt = unit.initialPlacementStartedAt or getTickCount()
+        initialPlacementSettleMs = getTickCount() - unit.initialPlacementStartedAt
+        local _, _, verticalSpeed = getElementVelocity(unit.vehicle)
+        initialPlacementGrounded = isVehicleOnGround(unit.vehicle) == true and
+            math.abs(tonumber(verticalSpeed) or math.huge) <= INITIAL_PLACEMENT_VERTICAL_SPEED
+        if initialPlacementSettleMs < INITIAL_PLACEMENT_MIN_SETTLE or not initialPlacementGrounded then
+            if initialPlacementSettleMs < INITIAL_PLACEMENT_TIMEOUT then
+                unit.retryTimer = setTimer(function() acceptOwner(unit) end, 50, 1)
+                return
+            end
+            return fail(unit, "initial-placement-timeout")
+        end
+    end
     local initialVelocityApplied = false
     local initialSpeed = 0
     if unit.initialVelocityRequested and not unit.initialVelocityAttempted then
@@ -240,7 +263,8 @@ local function acceptOwner(unit)
         task = true, seat = getPedOccupiedVehicleSeat(unit.ped), passengers = passengerSamples(unit),
         resumeProvided = unit.resumeProvided, resumeValid = unit.resumeKinematics ~= nil, resumeApplied = resumeApplied,
         initialVelocityRequested = unit.initialVelocityRequested, initialVelocityApplied = initialVelocityApplied,
-        initialSpeed = initialSpeed,
+        initialSpeed = initialSpeed, initialPlacementGrounded = initialPlacementGrounded,
+        initialPlacementSettleMs = initialPlacementSettleMs,
         resumeDelay = resumeDelay, resumeDelayMs = resumeDelay,
         x = x, y = y, z = z, rx = rx, ry = ry, rz = rz, vx = vx, vy = vy, vz = vz, avx = avx, avy = avy, avz = avz,
     })

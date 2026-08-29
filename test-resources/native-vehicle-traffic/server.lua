@@ -48,6 +48,11 @@ local PRODUCTION_TELEMETRY_INTERVAL = 15000
 -- entity stream a short head start, while keeping the staging window well
 -- below the former visibly frozen 1.2-second pause.
 local INITIAL_ASSIGNMENT_DELAY = 350
+-- Native candidates describe the road surface and heading, but not its pitch
+-- or roll. Create the hidden vehicle above that surface so GTA's suspension
+-- can land and align it before the owner reveals it; otherwise long cars can
+-- begin embedded in steep roads and remain permanently wedged.
+local INITIAL_PLACEMENT_LIFT = 0.9
 local telemetryWindow = VehicleTrafficTelemetry.newCounterWindow()
 
 -- These pools are the road-safe subset of GTA's cargrp.dat categories. MTA
@@ -1023,9 +1028,10 @@ local function createUnit(candidate, owner, observers, mode)
         return false, "ped-pool-reserve"
     end
 
-    local vehicle = createVehicle(candidate.model, candidate.x, candidate.y, candidate.z, 0, 0, candidate.rotation)
+    local spawnZ = candidate.z + INITIAL_PLACEMENT_LIFT
+    local vehicle = createVehicle(candidate.model, candidate.x, candidate.y, spawnZ, 0, 0, candidate.rotation)
     local driverModel = tonumber(candidate.occupantModels and candidate.occupantModels[1])
-    local ped = vehicle and createPed(driverModel, candidate.x, candidate.y, candidate.z + 1.0, candidate.rotation) or nil
+    local ped = vehicle and createPed(driverModel, candidate.x, candidate.y, spawnZ + 1.0, candidate.rotation) or nil
     if not isElement(vehicle) or not isElement(ped) then
         if isElement(vehicle) then destroyElement(vehicle) end
         if isElement(ped) then destroyElement(ped) end
@@ -1066,7 +1072,7 @@ local function createUnit(candidate, owner, observers, mode)
     end
     for _, seat in ipairs(requestedSeats) do
         local passengerModel = tonumber(candidate.occupantModels[math.min(#candidate.occupantModels, #passengers + 2)])
-        local passengerPed = createPed(passengerModel, candidate.x, candidate.y, candidate.z + 1.0, candidate.rotation)
+        local passengerPed = createPed(passengerModel, candidate.x, candidate.y, spawnZ + 1.0, candidate.rotation)
         if isElement(passengerPed) then warpPedIntoVehicle(passengerPed, vehicle, seat) end
         if not isElement(passengerPed) or getPedOccupiedVehicle(passengerPed) ~= vehicle or getPedOccupiedVehicleSeat(passengerPed) ~= seat then
             if isElement(passengerPed) then destroyElement(passengerPed) end
@@ -1310,6 +1316,9 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
         if unit.requiresInitialVelocity and data.initialVelocityApplied ~= true then
             return fail(unit, "initial-velocity-not-applied")
         end
+        if unit.requiresInitialVelocity and data.initialPlacementGrounded ~= true then
+            return fail(unit, "initial-placement-not-grounded")
+        end
         if unit.requiresResume and data.resumeApplied ~= true then
             if activeTest and activeTest.unit == unit then return fail(unit, "handoff-resume-not-applied") end
             trace("handoff-resume-unavailable", {id = unit.id, epoch = unit.epoch})
@@ -1338,7 +1347,8 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
         end
         return trace("active", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner),
             stagingMs = unit.acceptedAt - (unit.createdAt or unit.acceptedAt), initialVelocityApplied = data.initialVelocityApplied == true,
-            initialSpeed = tonumber(data.initialSpeed) or 0})
+            initialSpeed = tonumber(data.initialSpeed) or 0, initialPlacementGrounded = data.initialPlacementGrounded == true,
+            initialPlacementSettleMs = tonumber(data.initialPlacementSettleMs) or 0})
     end
     if evidence == "owner-sample" and client == unit.owner and unit.state == "active" then
         local pedVehicleDelta = tonumber(data.pedVehicleDelta)
