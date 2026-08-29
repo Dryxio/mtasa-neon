@@ -108,10 +108,11 @@ singly; resident gangs use GTA's native
 two-to-four-member batch.
 The server keeps the native float class deficits and the stock gate as separate
 values. Retail omits dealers from `ms_nTotalPeds`, so dealers reduce only their
-own deficit while still counting against Neon's physical 104-ped cap. The stock
-gate is rounded only at its final integer comparison; families are never
-redistributed merely because cops or gang slots 8/9 remain unsupported. A 64 m
-cell guard of 12 and a 2 m
+own deficit while still counting against Neon's shared physical ped fence. In
+production, GTA's zone/time target is doubled and clamped to 12–20 walkers per
+populated area; every family is scaled together so the native civilian, gang,
+cop and dealer composition is preserved. The gate is rounded only at its final
+integer comparison. A 64 m cell guard of 12 and a 2 m
 server separation check are only final abuse/saturation bounds; GTA's path-node
 density and collision query still decide normal placement.
 
@@ -168,8 +169,9 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
 - `/pedtraffic preset post_intro|post_cleaning_the_hood|post_green_sabre|post_home_coming`
   changes the authoritative campaign population state. Existing traffic is
   cleared and both clients must acknowledge the new revision before refill.
-- `/pedtraffic cap 1..110` changes the safety cap; the default is 90 so two
-  disjoint native population bubbles can fill while preserving 20 logical slots.
+- `/pedtraffic cap 1..240` changes the global circuit breaker; the default is
+  240 so fifteen isolated 16-ped areas can fill while nearby players continue
+  sharing one local population.
 - `/pedtraffic weapon` gives the caller a pistol for the threat checkpoint.
 - `/pedtraffic vehicle [model]` creates one resource-owned player vehicle for
   collision testing (default model 560). It is removed on `off`, quit or stop.

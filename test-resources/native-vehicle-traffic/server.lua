@@ -8,13 +8,17 @@ local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
 local activeTest = false
--- Nearby players see the same road population, so production budgets four
--- units per spatial bubble rather than four duplicate units per player. Forty
--- units can give ten isolated players the full target or twenty isolated
--- players two each while remaining inside the shared scripted-ped budget.
-local PRODUCTION_TARGET_PER_BUBBLE = 4
-local PRODUCTION_GLOBAL_CAP = 40
-local PRODUCTION_PED_POOL_SOFT_LIMIT = 106
+-- Nearby players see the same road population, so production budgets ten
+-- units per spatial bubble rather than ten duplicate units per player. The
+-- global circuit breaker keeps a busy public server bounded while still
+-- allowing sixteen isolated areas to receive the complete local target.
+local PRODUCTION_TARGET_PER_BUBBLE = 10
+local PRODUCTION_GLOBAL_CAP = 160
+-- The pool fence is global because both traffic resources create server-side
+-- ped elements, while GTA's actual pool pressure is local after streaming.
+-- This leaves room for 240 walkers, 160 drivers and a small number of native
+-- optional passengers without forcing distant populations into one client.
+local PRODUCTION_PED_POOL_SOFT_LIMIT = 416
 local population = {
     enabled = false,
     targetPerPlayer = PRODUCTION_TARGET_PER_BUBBLE,
@@ -1565,7 +1569,9 @@ local function startPopulation(targetPerPlayer, cap, testDensity, targetPerPlaye
     pendingCandidates = {}
     candidateReservations = {}
     population.targetPerPlayer = math.max(
-        1, math.min(tonumber(targetPerPlayerLimit) or 4, tonumber(targetPerPlayer) or PRODUCTION_TARGET_PER_BUBBLE))
+        1,
+        math.min(tonumber(targetPerPlayerLimit) or PRODUCTION_TARGET_PER_BUBBLE,
+                 tonumber(targetPerPlayer) or PRODUCTION_TARGET_PER_BUBBLE))
     population.cap = math.max(1, math.min(PRODUCTION_GLOBAL_CAP, tonumber(cap) or PRODUCTION_GLOBAL_CAP))
     population.testDensity = type(testDensity) == "string" and testDensity or false
     population.demo = demoMode == true

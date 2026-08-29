@@ -2,12 +2,19 @@ local config = {
     -- Start the public population with the resource. Tests can still disable
     -- it explicitly before exercising an isolated harness.
     autoStart = true,
-    -- Reserve enough of the common 110-ped engine budget for forty synchronized
-    -- traffic drivers. Nearby players share the 64 on-foot slots; isolated
-    -- players receive them through the round-robin spatial arbiter. The higher
-    -- physical fence counts both those walkers and vehicle occupants.
-    globalCap = 64,
-    pedPoolSoftLimit = 104,
+    -- Walking populations are local after streaming even though their server
+    -- elements are global. This circuit breaker can therefore serve fifteen
+    -- fully isolated 16-ped areas without asking one GTA process to host them
+    -- all. The shared physical fence also leaves room for 160 traffic drivers
+    -- and a small number of optional vehicle passengers.
+    globalCap = 240,
+    globalCapLimit = 240,
+    pedPoolSoftLimit = 416,
+    -- Preserve GTA's zone/time/family mix while lifting sparse retail targets
+    -- into a useful public-server range. Zero-population zones remain empty.
+    productionDensityMultiplier = 2.0,
+    productionMinimumTarget = 12,
+    productionMaximumTarget = 20,
     despawnGrace = 4000,
     cellSize = 64,
     maxPerCell = 12,
@@ -545,10 +552,12 @@ local function calculateNativeTargets(profile, applyDemoDensity)
     -- excludes dealers, and only then compares each family's own deficit.
     -- Preserve those two notions instead of charging dealers against the
     -- stock-counted gate.
-    local civilianNativeTarget = profile.civilianTarget * populationWorld.densityMultiplier
-    local dealerNativeTarget = profile.dealerTarget * populationWorld.densityMultiplier
-    local gangNativeTarget = populationWorld.randomGangMembers and profile.gangTarget * populationWorld.densityMultiplier or 0
-    local copNativeTarget = profile.effectiveCopTarget * populationWorld.densityMultiplier
+    local productionMultiplier = applyDemoDensity and 1 or config.productionDensityMultiplier
+    local densityMultiplier = populationWorld.densityMultiplier * productionMultiplier
+    local civilianNativeTarget = profile.civilianTarget * densityMultiplier
+    local dealerNativeTarget = profile.dealerTarget * densityMultiplier
+    local gangNativeTarget = populationWorld.randomGangMembers and profile.gangTarget * densityMultiplier or 0
+    local copNativeTarget = profile.effectiveCopTarget * densityMultiplier
     local supportedGangWeight = 0
     for index = 1, 8 do supportedGangWeight = supportedGangWeight + profile.gangWeights[index] end
     if profile.totalGangWeight > 0 and supportedGangWeight < profile.totalGangWeight then
@@ -570,10 +579,22 @@ local function calculateNativeTargets(profile, applyDemoDensity)
         gangNativeTarget = gangNativeTarget * scale
         copNativeTarget = copNativeTarget * scale
         fullPopulationTarget = pedTrafficDemoDensity.target
+    else
+        local gtaTarget = profile.pedDensityMultiplier * profile.fewerPedsMultiplier *
+            math.min(profile.maximumPedsInUse, fullPopulationTarget)
+        local productionTarget = math.max(config.productionMinimumTarget,
+                                          math.min(config.productionMaximumTarget, gtaTarget))
+        -- Scale every family together so the denser profile remains native in
+        -- composition instead of filling the extra slots with generic peds.
+        local scale = productionTarget / fullPopulationTarget
+        civilianNativeTarget = civilianNativeTarget * scale
+        dealerNativeTarget = dealerNativeTarget * scale
+        gangNativeTarget = gangNativeTarget * scale
+        copNativeTarget = copNativeTarget * scale
+        fullPopulationTarget = productionTarget
     end
 
-    local fullPopulationGate = applyDemoDensity and pedTrafficDemoDensity.target or
-        profile.pedDensityMultiplier * profile.fewerPedsMultiplier * math.min(profile.maximumPedsInUse, fullPopulationTarget)
+    local fullPopulationGate = fullPopulationTarget
     local total = math.max(0, math.ceil(fullPopulationGate - 0.0001))
     local gangTargets = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     if gangNativeTarget > 0 and supportedGangWeight > 0 then
@@ -7509,11 +7530,11 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
             return
         end
         local cap = math.floor(tonumber(value) or 0)
-        if cap >= 1 and cap <= 110 then
+        if cap >= 1 and cap <= config.globalCapLimit then
             config.globalCap = cap
             outputChatBox("Ped traffic cap = " .. tostring(cap), player, 120, 220, 255)
         else
-            outputChatBox("Usage: /pedtraffic cap 1..110", player, 255, 160, 80)
+            outputChatBox("Usage: /pedtraffic cap 1.." .. tostring(config.globalCapLimit), player, 255, 160, 80)
         end
     elseif action == "weapon" and isElement(player) then
         giveWeapon(player, 22, 200, true)
@@ -7560,8 +7581,9 @@ end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
     if config.autoStart then setEnabled(true, false) end
-    outputServerLog(("[ped-traffic] V1 loaded enabled=%s cap=%d population preset=%s revision=%d"):format(
-        tostring(enabled), config.globalCap, populationWorld.preset, populationWorld.revision))
+    outputServerLog(("[ped-traffic] V1 loaded enabled=%s cap=%d localTarget=%d..%d density=%.1f population preset=%s revision=%d"):format(
+        tostring(enabled), config.globalCap, config.productionMinimumTarget, config.productionMaximumTarget,
+        config.productionDensityMultiplier, populationWorld.preset, populationWorld.revision))
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
