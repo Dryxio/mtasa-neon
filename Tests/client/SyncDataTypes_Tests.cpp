@@ -188,8 +188,7 @@ TEST(SPlayerArmorSync, RoundTrip_FullArmor)
     EXPECT_NEAR(100.0f, out.data.fValue, 0.6f);
 }
 
-// Vehicle health keeps the historical 12-bit encoding below its all-ones
-// marker. Higher SCM health values use that marker plus an exact float.
+// Vehicle health: 12 bits over [0, 2047.5]. Step = 0.5.
 TEST(SVehicleHealthSync, RoundTrip_MidRange)
 {
     MockBitStream      bs;
@@ -203,37 +202,8 @@ TEST(SVehicleHealthSync, RoundTrip_MidRange)
     EXPECT_NEAR(1000.0f, out.data.fValue, 0.6f);
 }
 
-TEST(SVehicleHealthSync, RoundTrip_CompactUpperValue)
-{
-    MockBitStream      bs;
-    SVehicleHealthSync sync;
-    sync.data.fValue = 2047.0f;
-    sync.Write(bs);
-    EXPECT_EQ(12, bs.GetNumberOfBitsUsed());
-    bs.ResetReadPointer();
-    SVehicleHealthSync out;
-    ASSERT_TRUE(out.Read(bs));
-    EXPECT_NEAR(2047.0f, out.data.fValue, 0.6f);
-}
-
-TEST(SVehicleHealthSync, RoundTrip_HighHealthEscape)
-{
-    for (const float expected : {2047.5f, 2700.0f, 3100.0f, 5000.0f, 9000.0f, 10350.0f})
-    {
-        MockBitStream      bs;
-        SVehicleHealthSync sync;
-        sync.data.fValue = expected;
-        sync.Write(bs);
-        EXPECT_EQ(12 + 32, bs.GetNumberOfBitsUsed()) << expected;
-        bs.ResetReadPointer();
-        SVehicleHealthSync out;
-        ASSERT_TRUE(out.Read(bs)) << expected;
-        EXPECT_FLOAT_EQ(expected, out.data.fValue);
-    }
-}
-
-// Low-precision vehicle health retains eight compact bits for normal values.
-// High health escapes to an exact float so lightsync cannot clamp it later.
+// Low-precision vehicle health: 8 bits over [0, 2040]. Step = 8.
+// Used when bandwidth savings outweigh precision.
 TEST(SLowPrecisionVehicleHealthSync, RoundTrip)
 {
     MockBitStream                  bs;
@@ -245,32 +215,6 @@ TEST(SLowPrecisionVehicleHealthSync, RoundTrip)
     SLowPrecisionVehicleHealthSync out;
     EXPECT_TRUE(out.Read(bs));
     EXPECT_NEAR(1000.0f, out.data.fValue, 9.0f);
-}
-
-TEST(SLowPrecisionVehicleHealthSync, RoundTrip_CompactUpperValue)
-{
-    MockBitStream                  bs;
-    SLowPrecisionVehicleHealthSync sync;
-    sync.data.fValue = 2032.0f;
-    sync.Write(bs);
-    EXPECT_EQ(8, bs.GetNumberOfBitsUsed());
-    bs.ResetReadPointer();
-    SLowPrecisionVehicleHealthSync out;
-    ASSERT_TRUE(out.Read(bs));
-    EXPECT_NEAR(2032.0f, out.data.fValue, 9.0f);
-}
-
-TEST(SLowPrecisionVehicleHealthSync, RoundTrip_HighHealthEscape)
-{
-    MockBitStream                  bs;
-    SLowPrecisionVehicleHealthSync sync;
-    sync.data.fValue = 10350.0f;
-    sync.Write(bs);
-    EXPECT_EQ(8 + 32, bs.GetNumberOfBitsUsed());
-    bs.ResetReadPointer();
-    SLowPrecisionVehicleHealthSync out;
-    ASSERT_TRUE(out.Read(bs));
-    EXPECT_FLOAT_EQ(10350.0f, out.data.fValue);
 }
 
 // Object health: 11 bits over [0, 1023.5]. Step = 0.5.

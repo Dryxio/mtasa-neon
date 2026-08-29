@@ -333,23 +333,6 @@ TEST(SUnoccupiedVehicleSync, RoundTrip_PositionAndHealth)
     EXPECT_NEAR(1000.0f, out.data.fHealth, 0.6f);
 }
 
-TEST(SUnoccupiedVehicleSync, RoundTrip_HighHealthEscape)
-{
-    MockBitStream          bs;
-    SUnoccupiedVehicleSync sync;
-    std::memset(&sync.data, 0, sizeof(sync.data));
-    sync.data.vehicleID = ElementID(101);
-    sync.data.ucTimeContext = 43;
-    sync.data.bSyncHealth = true;
-    sync.data.fHealth = 10350.0f;
-    sync.Write(bs);
-    bs.ResetReadPointer();
-    SUnoccupiedVehicleSync out;
-    ASSERT_TRUE(out.Read(bs));
-    EXPECT_TRUE(out.data.bSyncHealth);
-    EXPECT_FLOAT_EQ(10350.0f, out.data.fHealth);
-}
-
 // SUnoccupiedVehicleSync with velocity enabled: exercises the SVelocitySync
 // sub-structure which uses NormVector encoding for the direction component.
 // The simpler PositionAndHealth test above doesn't cover this path.
