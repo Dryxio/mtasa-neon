@@ -71,13 +71,15 @@ local MODEL_CLASS = {
 local CLASS_TEST_MODELS = {401, 413, 403, 461, 481, 471}
 local SOAK_SCENARIOS = {"smooth", "lifecycle", "passengers", "fixture"}
 -- Exact legal lanes from the public-server incident in the LS Airport
--- tunnel. The regression harness bypasses the probabilistic spawn oracle so
--- every run exercises both one-way carriageways that exposed the bad rejoin.
+-- tunnel. The south carriageway is eastbound and the north carriageway is
+-- westbound, matching GTA's retail lane-bit selection and right-hand traffic.
+-- The regression bypasses the probabilistic spawn oracle so every run
+-- exercises both one-way carriageways that exposed the inverted lane halves.
 local HIGHWAY_TEST_CASES = {
-    {name = "westbound-premier", model = 426, x = 1850.5289, y = -2682.175, z = 5.6871872, rotation = 90,
-        directionX = -1, directionY = 0},
-    {name = "eastbound-bobcat", model = 422, x = 1923.2065, y = -2667.3, z = 6.0233274, rotation = 270,
+    {name = "eastbound-premier", model = 426, x = 1850.5289, y = -2682.175, z = 5.6871872, rotation = 270,
         directionX = 1, directionY = 0},
+    {name = "westbound-bobcat", model = 422, x = 1923.2065, y = -2667.3, z = 6.0233274, rotation = 90,
+        directionX = -1, directionY = 0},
 }
 local ALLOWED_MODELS = {}
 local ALLOWED_MODEL_COUNT = 0

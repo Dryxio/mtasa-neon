@@ -27,9 +27,13 @@ Vehicle and occupant models are explicitly loaded before proposal. Server-side
 creation remains atomic: vehicle plus every occupant, or zero.
 
 Script-created Wander vehicles pass through GTA's generic road rejoin. Neon
-validates the resulting directed edge against the native lane counts and
-repairs only an impossible one-way direction before driving starts. This keeps
-initial spawns and ownership handoffs on the legal carriageway without
+validates the resulting directed edge against the retail lane-bit selection.
+If GTA selects an unrelated neighbouring edge, Neon compares loaded directed
+segments against the vehicle's lane position, heading and height, and changes
+the route only when the candidate is materially better. The closed regression
+covers both LS Airport tunnel carriageways, five San Fierro freeway candidates
+captured from the public build 183 session, and a multi-branch road join. This
+keeps initial spawns and ownership handoffs on the legal carriageway without
 transporting process-local path pointers.
 
 Runtime controls:

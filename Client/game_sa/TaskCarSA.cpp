@@ -38,6 +38,13 @@ namespace
     constexpr unsigned int VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET = 0x3B8;
     constexpr unsigned int VEHICLE_AUTOPILOT_NEXT_LINK_DIRECTION_OFFSET = 0x3B6;
 
+    constexpr float ROAD_JOIN_MINIMUM_FORWARD_DOT = 0.35f;
+    constexpr float ROAD_JOIN_HEADING_PENALTY = 16.0f;
+    constexpr float ROAD_JOIN_VERTICAL_TOLERANCE = 3.0f;
+    constexpr float ROAD_JOIN_VERTICAL_PENALTY = 4.0f;
+    constexpr float ROAD_JOIN_MAXIMUM_SCORE = 400.0f;
+    constexpr float ROAD_JOIN_MINIMUM_IMPROVEMENT = 1.0f;
+
     struct SCarPathNodeAddress
     {
         unsigned short area;
@@ -52,6 +59,29 @@ namespace
         unsigned int         lanesTowardAttached{};
         unsigned int         lanesAwayFromAttached{};
     };
+
+    bool EqualPathNodeAddresses(const SCarPathNodeAddress& first, const SCarPathNodeAddress& second)
+    {
+        return first.area == second.area && first.node == second.node;
+    }
+
+    bool GetPathNodePosition(const SCarPathNodeAddress& address, CVector& position, bool& waterPath)
+    {
+        if (address.area >= PATH_AREA_COUNT)
+            return false;
+
+        auto* const* pathNodes = reinterpret_cast<unsigned char* const*>(GTA_PATH_FIND + PATH_NODE_ARRAY_OFFSET);
+        const auto*  vehicleNodeCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_VEHICLE_NODE_COUNT_OFFSET);
+        if (!pathNodes[address.area] || address.node >= vehicleNodeCounts[address.area])
+            return false;
+
+        const unsigned char* node = pathNodes[address.area] + address.node * PATH_NODE_SIZE;
+        const auto*          compressedPosition = reinterpret_cast<const short*>(node + 0x08);
+        position = CVector(static_cast<float>(compressedPosition[0]) / 8.0f, static_cast<float>(compressedPosition[1]) / 8.0f,
+                           static_cast<float>(compressedPosition[2]) / 8.0f);
+        waterPath = (node[0x18] & 0x80) != 0;
+        return true;
+    }
 
     bool GetDirectedLaneData(const SCarPathNodeAddress& from, const SCarPathNodeAddress& to, SDirectedLaneData& output)
     {
@@ -107,8 +137,134 @@ namespace
         output.carLink = carLink;
         output.lanesTowardAttached = laneFlags & 0x07;
         output.lanesAwayFromAttached = (laneFlags >> 3) & 0x07;
+
+        // Keep this selection identical to retail GenerateOneRandomCar. The
+        // older same/opposite naming reverses one-way roads.
         output.laneCount = attachedToTo ? output.lanesTowardAttached : output.lanesAwayFromAttached;
         return true;
+    }
+
+    float GetOneWayLaneOffset(const SDirectedLaneData& laneData)
+    {
+        return laneData.lanesTowardAttached == 0     ? 0.5f - 0.5f * laneData.lanesAwayFromAttached
+               : laneData.lanesAwayFromAttached == 0 ? 0.5f - 0.5f * laneData.lanesTowardAttached
+                                                     : static_cast<float>(static_cast<signed char>(laneData.carLink[0x0A])) / 86.4f + 0.5f;
+    }
+
+    bool ScoreDirectedRoadSegment(const CVehicleSAInterface* vehicle, const SCarPathNodeAddress& from, const SCarPathNodeAddress& to,
+                                  const SDirectedLaneData& laneData, float& score)
+    {
+        if (!vehicle || !laneData.carLink || laneData.laneCount == 0)
+            return false;
+
+        CVector fromPosition{};
+        CVector toPosition{};
+        bool    fromIsWater{};
+        bool    toIsWater{};
+        if (!GetPathNodePosition(from, fromPosition, fromIsWater) || !GetPathNodePosition(to, toPosition, toIsWater) || fromIsWater != toIsWater)
+            return false;
+
+        const CVector& position = vehicle->matrix ? vehicle->matrix->vPos : vehicle->m_transform.m_translate;
+        const CVector  front =
+            vehicle->matrix ? vehicle->matrix->vFront : CVector(-std::sin(vehicle->m_transform.m_heading), std::cos(vehicle->m_transform.m_heading), 0.0f);
+        const float edgeX = toPosition.fX - fromPosition.fX;
+        const float edgeY = toPosition.fY - fromPosition.fY;
+        const float edgeLengthSquared = edgeX * edgeX + edgeY * edgeY;
+        const float frontLengthSquared = front.fX * front.fX + front.fY * front.fY;
+        if (!std::isfinite(edgeLengthSquared) || !std::isfinite(frontLengthSquared) || edgeLengthSquared < 0.01f || frontLengthSquared < 0.01f)
+            return false;
+
+        const float inverseEdgeLength = 1.0f / std::sqrt(edgeLengthSquared);
+        const float inverseFrontLength = 1.0f / std::sqrt(frontLengthSquared);
+        const float directionX = edgeX * inverseEdgeLength;
+        const float directionY = edgeY * inverseEdgeLength;
+        const float forwardDot = (front.fX * directionX + front.fY * directionY) * inverseFrontLength;
+        if (!std::isfinite(forwardDot) || forwardDot < ROAD_JOIN_MINIMUM_FORWARD_DOT)
+            return false;
+
+        const float oneWayOffset = GetOneWayLaneOffset(laneData);
+        float       bestDistanceSquared = std::numeric_limits<float>::max();
+        float       bestProgress = 0.0f;
+        for (unsigned int lane = 0; lane < laneData.laneCount; ++lane)
+        {
+            const float laneOffset = (oneWayOffset + lane) * 5.4f;
+            const float laneFromX = fromPosition.fX + laneOffset * directionY;
+            const float laneFromY = fromPosition.fY - laneOffset * directionX;
+            const float relativeX = position.fX - laneFromX;
+            const float relativeY = position.fY - laneFromY;
+            float       progress = (relativeX * edgeX + relativeY * edgeY) / edgeLengthSquared;
+            progress = std::max(0.0f, std::min(1.0f, progress));
+
+            const float closestX = laneFromX + progress * edgeX;
+            const float closestY = laneFromY + progress * edgeY;
+            const float distanceX = position.fX - closestX;
+            const float distanceY = position.fY - closestY;
+            const float distanceSquared = distanceX * distanceX + distanceY * distanceY;
+            if (distanceSquared < bestDistanceSquared)
+            {
+                bestDistanceSquared = distanceSquared;
+                bestProgress = progress;
+            }
+        }
+
+        const float pathZ = fromPosition.fZ + (toPosition.fZ - fromPosition.fZ) * bestProgress;
+        const float verticalExcess = std::max(0.0f, std::abs(position.fZ - pathZ) - ROAD_JOIN_VERTICAL_TOLERANCE);
+        score = bestDistanceSquared + (1.0f - forwardDot) * ROAD_JOIN_HEADING_PENALTY + verticalExcess * verticalExcess * ROAD_JOIN_VERTICAL_PENALTY;
+        return std::isfinite(score);
+    }
+
+    bool FindBestRoadDirection(const CVehicleSAInterface* vehicle, const SCarPathNodeAddress& stockCurrent, const SCarPathNodeAddress& stockStarting,
+                               SCarPathNodeAddress& bestFrom, SCarPathNodeAddress& bestTo, SDirectedLaneData& bestLaneData, float& bestScore)
+    {
+        CVector stockPosition{};
+        bool    stockIsWater{};
+        if (!GetPathNodePosition(stockCurrent, stockPosition, stockIsWater) && !GetPathNodePosition(stockStarting, stockPosition, stockIsWater))
+            return false;
+
+        auto* const* pathNodes = reinterpret_cast<unsigned char* const*>(GTA_PATH_FIND + PATH_NODE_ARRAY_OFFSET);
+        const auto*  vehicleNodeCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_VEHICLE_NODE_COUNT_OFFSET);
+        const auto*  addressCounts = reinterpret_cast<const unsigned int*>(GTA_PATH_FIND + PATH_ADDRESS_COUNT_OFFSET);
+        auto* const* nodeLinks = reinterpret_cast<SCarPathNodeAddress* const*>(GTA_PATH_FIND + PATH_NODE_LINK_ARRAY_OFFSET);
+
+        bestScore = std::numeric_limits<float>::max();
+        bool found = false;
+        for (unsigned int area = 0; area < PATH_AREA_COUNT; ++area)
+        {
+            if (!pathNodes[area] || !nodeLinks[area])
+                continue;
+
+            for (unsigned int nodeIndex = 0; nodeIndex < vehicleNodeCounts[area]; ++nodeIndex)
+            {
+                const unsigned char* node = pathNodes[area] + nodeIndex * PATH_NODE_SIZE;
+                if (((node[0x18] & 0x80) != 0) != stockIsWater)
+                    continue;
+
+                const int          baseLink = *reinterpret_cast<const short*>(node + 0x10);
+                const unsigned int linkCount = node[0x18] & 0x0F;
+                if (baseLink < 0 || linkCount == 0 || static_cast<unsigned int>(baseLink) + linkCount > addressCounts[area])
+                    continue;
+
+                const SCarPathNodeAddress from{static_cast<unsigned short>(area), static_cast<unsigned short>(nodeIndex)};
+                for (unsigned int linkIndex = 0; linkIndex < linkCount; ++linkIndex)
+                {
+                    const SCarPathNodeAddress to = nodeLinks[area][baseLink + linkIndex];
+                    SDirectedLaneData         laneData{};
+                    if (!GetDirectedLaneData(from, to, laneData) || laneData.laneCount == 0)
+                        continue;
+
+                    float candidateScore{};
+                    if (!ScoreDirectedRoadSegment(vehicle, from, to, laneData, candidateScore) || candidateScore >= bestScore)
+                        continue;
+
+                    bestScore = candidateScore;
+                    bestFrom = from;
+                    bestTo = to;
+                    bestLaneData = laneData;
+                    found = true;
+                }
+            }
+        }
+        return found && bestScore <= ROAD_JOIN_MAXIMUM_SCORE;
     }
 
     unsigned char FindNearestLane(const CVehicleSAInterface* vehicle, const SDirectedLaneData& laneData)
@@ -122,9 +278,7 @@ namespace
             *reinterpret_cast<const signed char*>(reinterpret_cast<const unsigned char*>(vehicle) + VEHICLE_AUTOPILOT_NEXT_LINK_DIRECTION_OFFSET));
         const float    directionX = static_cast<float>(*reinterpret_cast<const signed char*>(laneData.carLink + 0x08)) * 0.01f * directionSign;
         const float    directionY = static_cast<float>(*reinterpret_cast<const signed char*>(laneData.carLink + 0x09)) * 0.01f * directionSign;
-        const float    oneWayOffset = laneData.lanesTowardAttached == 0      ? 0.5f - 0.5f * laneData.lanesAwayFromAttached
-                                      : laneData.lanesAwayFromAttached == 0 ? 0.5f - 0.5f * laneData.lanesTowardAttached
-                                                                            : static_cast<float>(static_cast<signed char>(laneData.carLink[0x0A])) / 86.4f + 0.5f;
+        const float    oneWayOffset = GetOneWayLaneOffset(laneData);
         const CVector& position = vehicle->matrix ? vehicle->matrix->vPos : vehicle->m_transform.m_translate;
 
         unsigned char nearestLane = 0;
@@ -157,26 +311,34 @@ namespace
         auto&             currentNode = *reinterpret_cast<SCarPathNodeAddress*>(bytes + VEHICLE_AUTOPILOT_CURRENT_NODE_OFFSET);
         auto&             startingNode = *reinterpret_cast<SCarPathNodeAddress*>(bytes + VEHICLE_AUTOPILOT_STARTING_NODE_OFFSET);
         SDirectedLaneData selectedDirection{};
-        if (!GetDirectedLaneData(currentNode, startingNode, selectedDirection) || selectedDirection.laneCount != 0)
+        float             selectedScore = std::numeric_limits<float>::max();
+        const bool        selectedIsUsable = GetDirectedLaneData(currentNode, startingNode, selectedDirection) && selectedDirection.laneCount != 0 &&
+                                      ScoreDirectedRoadSegment(vehicle, currentNode, startingNode, selectedDirection, selectedScore);
+
+        SCarPathNodeAddress bestFrom{};
+        SCarPathNodeAddress bestTo{};
+        SDirectedLaneData   bestDirection{};
+        float               bestScore{};
+        if (!FindBestRoadDirection(vehicle, currentNode, startingNode, bestFrom, bestTo, bestDirection, bestScore))
             return;
 
-        SDirectedLaneData reverseDirection{};
-        if (!GetDirectedLaneData(startingNode, currentNode, reverseDirection) || reverseDirection.laneCount == 0)
+        const bool sameDirection = EqualPathNodeAddresses(currentNode, bestFrom) && EqualPathNodeAddresses(startingNode, bestTo);
+        if (sameDirection || (selectedIsUsable && bestScore + ROAD_JOIN_MINIMUM_IMPROVEMENT >= selectedScore))
             return;
 
-        // JoinCarWithRoadSystem chooses the shortest adjacent edge and can bind
-        // a script-created Wander vehicle against a one-way road. Vanilla
-        // ambient cars already carry a lane-valid route and never take this
-        // generic join path. Reverse only an impossible directed edge, then
-        // rebuild the native link state and retain the physical lane nearest
-        // the synchronized vehicle pose.
-        std::swap(currentNode, startingNode);
+        // Retail ambient cars retain the exact node pair produced by the spawn
+        // oracle. Script-created Wander cars instead join through the closest
+        // node and its shortest adjacent edge, which can be a legal but unrelated
+        // branch behind the physical car. Reconstruct the nearest lane-bearing
+        // segment that agrees with the pose and heading before native curve setup.
+        currentNode = bestFrom;
+        startingNode = bestTo;
         using FindLinksToGoWithTheseNodes = void(__cdecl*)(CVehicleSAInterface*);
         reinterpret_cast<FindLinksToGoWithTheseNodes>(FUNC_CCarCtrl_FindLinksToGoWithTheseNodes)(vehicle);
 
-        if (!GetDirectedLaneData(currentNode, startingNode, reverseDirection) || reverseDirection.laneCount == 0)
+        if (!GetDirectedLaneData(currentNode, startingNode, bestDirection) || bestDirection.laneCount == 0)
             return;
-        const unsigned char lane = FindNearestLane(vehicle, reverseDirection);
+        const unsigned char lane = FindNearestLane(vehicle, bestDirection);
         bytes[VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET] = lane;
         bytes[VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET] = lane;
     }
