@@ -243,7 +243,8 @@ end
 local function beginOwner(unit)
     if units[unit.id] ~= unit or not isElement(unit.ped) or not isElement(unit.vehicle) then return end
     if not unit.passengerContractValid then return fail(unit, "passenger-contract-invalid") end
-    if type(acquireElementStreamingLease) ~= "function" or type(setPedDriveWander) ~= "function" then
+    if type(acquireElementStreamingLease) ~= "function" or type(setPedDriveWander) ~= "function" or
+        type(setVehicleLoadCollisionFlag) ~= "function" then
         return fail(unit, "native-api-missing")
     end
     unit.pedLease = unit.pedLease or acquireElementStreamingLease(unit.ped)
@@ -289,6 +290,14 @@ local function beginOwner(unit)
         unit.missionActorApplied = true
     end
 
+    -- Traffic remains alive outside the player's world-collision radius. Use
+    -- GTA's mission-car policy so an authoritative vehicle becomes a ghost
+    -- instead of falling when its road collision unloads, then returns to
+    -- physics and is placed back on the road when collision becomes resident.
+    if not setVehicleLoadCollisionFlag(unit.vehicle, false) then
+        return fail(unit, "vehicle-collision-policy-refused")
+    end
+
     -- Warping a real driver can leave GTA's generic in-car primary in the
     -- script-command slot. Clear it before installing the authoritative
     -- indefinite Wander task so the event response never chains both roots.
@@ -297,6 +306,7 @@ local function beginOwner(unit)
     local started = setPedDriveWander(unit.ped, unit.vehicle, unit.cruiseSpeed, drivingStyleName)
     triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "drive-wander-returned", {
         started = started == true, cleared = cleared == true, drivingStyle = unit.drivingStyle, drivingStyleName = drivingStyleName,
+        remoteCollisionGhostPolicy = true,
     })
     if not started then
         return fail(unit, "drive-wander-refused")
@@ -393,6 +403,9 @@ addEvent("carTraffic:testResumeDrive", true)
 addEventHandler("carTraffic:testResumeDrive", resourceRoot, function(id, epoch)
     local unit = units[id]
     if not unit or unit.epoch ~= epoch or not unit.owner or not isElement(unit.ped) or not isElement(unit.vehicle) then return end
+    if type(setVehicleLoadCollisionFlag) ~= "function" or not setVehicleLoadCollisionFlag(unit.vehicle, false) then
+        return fail(unit, "vehicle-collision-policy-refused")
+    end
     local cleared = killPedTask(unit.ped, "primary", 3, false)
     local drivingStyleName = unit.drivingStyle == 6 and "avoid_cars_stop_for_peds_obey_lights" or "stop_for_cars"
     local started = setPedDriveWander(unit.ped, unit.vehicle, unit.cruiseSpeed, drivingStyleName)
@@ -400,6 +413,7 @@ addEventHandler("carTraffic:testResumeDrive", resourceRoot, function(id, epoch)
     unit.taskQueued = started == true
     triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "test-drive-resume", {
         started = started == true, cleared = cleared == true, drivingStyle = unit.drivingStyle,
+        remoteCollisionGhostPolicy = true,
     })
 end)
 
