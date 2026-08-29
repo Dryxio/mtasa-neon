@@ -15,12 +15,17 @@
 #include "SharedUtil.Misc.h"
 #include "sha2.h"
 
+#include <bcrypt.h>
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <limits>
 #include <locale>
+#include <mutex>
 #include <set>
 #include <sstream>
+
+#pragma comment(lib, "bcrypt.lib")
 
 namespace
 {
@@ -60,6 +65,20 @@ namespace
         return *state;
     }
 
+    struct SVerificationTelemetryState
+    {
+        std::mutex   mutex;
+        size_t       objects{};
+        size_t       handles{};
+        unsigned int objectsHighWater{};
+    };
+
+    SVerificationTelemetryState& VerificationTelemetryState()
+    {
+        static SVerificationTelemetryState* state = new SVerificationTelemetryState;
+        return *state;
+    }
+
     // Compatibility owners preserve the existing startup behavior. New
     // generation code receives the same move-only group directly and can
     // release it after its own teardown fence instead of flattening handles
@@ -72,6 +91,8 @@ namespace
         ~CScopedHandles() { Close(); }
 
         void Add(HANDLE handle) { m_handles.push_back(handle); }
+
+        const std::vector<HANDLE>& Get() const { return m_handles; }
 
         void Close()
         {
@@ -278,6 +299,78 @@ namespace
         return true;
     }
 
+    bool HasExactHash(HANDLE file, const std::string& expected, const std::shared_ptr<std::atomic_bool>& cancellation, std::string& error)
+    {
+        if (!file || file == INVALID_HANDLE_VALUE || !IsLowerSha256(expected))
+        {
+            error = "cache SHA-256 request is invalid";
+            return false;
+        }
+
+        BCRYPT_ALG_HANDLE     algorithm = nullptr;
+        BCRYPT_HASH_HANDLE    hash = nullptr;
+        DWORD                 objectBytes = 0;
+        DWORD                 digestBytes = 0;
+        DWORD                 returned = 0;
+        std::vector<UCHAR>    object;
+        std::array<UCHAR, 32> digest{};
+        std::vector<UCHAR>    buffer(1024 * 1024);
+        LARGE_INTEGER         begin{};
+        bool                  success = false;
+
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0 ||
+            BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectBytes), sizeof(objectBytes), &returned, 0) < 0 ||
+            BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&digestBytes), sizeof(digestBytes), &returned, 0) < 0 ||
+            digestBytes != digest.size())
+        {
+            error = "Windows SHA-256 provider is unavailable";
+            goto cleanup;
+        }
+        object.resize(objectBytes);
+        if (BCryptCreateHash(algorithm, &hash, object.data(), static_cast<ULONG>(object.size()), nullptr, 0, 0) < 0 ||
+            !SetFilePointerEx(file, begin, nullptr, FILE_BEGIN))
+        {
+            error = "cache SHA-256 initialization failed";
+            goto cleanup;
+        }
+        while (true)
+        {
+            if (cancellation && cancellation->load(std::memory_order_acquire))
+            {
+                error = "cache SHA-256 was cancelled";
+                goto cleanup;
+            }
+            DWORD read = 0;
+            if (!ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr))
+            {
+                error = SString("cache SHA-256 read failed win32=%u", GetLastError());
+                goto cleanup;
+            }
+            if (!read)
+                break;
+            if (BCryptHashData(hash, buffer.data(), read, 0) < 0)
+            {
+                error = "cache SHA-256 update failed";
+                goto cleanup;
+            }
+        }
+        if (BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0)
+        {
+            error = "cache SHA-256 finalization failed";
+            goto cleanup;
+        }
+        success = SharedUtil::ConvertDataToHexString(digest.data(), digest.size()).ToLower() == expected.c_str();
+        if (!success)
+            error = "cache SHA-256 differs from its semantic content address";
+
+    cleanup:
+        if (hash)
+            BCryptDestroyHash(hash);
+        if (algorithm)
+            BCryptCloseAlgorithmProvider(algorithm, 0);
+        return success;
+    }
+
     bool HasExactHash(const SString& path, const std::string& expected)
     {
         const SString actual = SharedUtil::GenerateSha256HexStringFromFile(path);
@@ -402,7 +495,8 @@ namespace
     bool LockAndValidatePublishedFiles(const SNativeWorldCacheRequestSA& request, const SCachePaths& paths, CScopedHandles& handles, std::string& error)
     {
         const std::string canonicalManifest = BuildCanonicalManifest(request);
-        const std::string canonicalManifestHash = SharedUtil::GenerateSha256HexString(canonicalManifest);
+        const std::string canonicalManifestHash = SharedUtil::GenerateSha256HexString(canonicalManifest).ToLower();
+        const size_t      firstFileHandle = handles.Get().size();
         if (!LockRegularFile(paths.manifest, canonicalManifest.size(), canonicalManifest.size(), handles, error) ||
             !LockRegularFile(paths.ide, request.ide.bytes, request.ide.bytes, handles, error))
             return false;
@@ -418,26 +512,32 @@ namespace
         }
         else if (!LockRegularFile(paths.img, request.img.bytes, request.img.bytes, handles, error))
             return false;
-        if (!HasExactHash(paths.manifest, canonicalManifestHash) || !HasExactHash(paths.ide, request.ide.sha256) ||
-            (request.format == 3 && !HasExactHash(paths.lod, request.lod.sha256)))
+
+        size_t handleIndex = firstFileHandle;
+        if (!HasExactHash(handles.Get()[handleIndex++], canonicalManifestHash, request.cancellation, error) ||
+            !HasExactHash(handles.Get()[handleIndex++], request.ide.sha256, request.cancellation, error) ||
+            (request.format == 3 && !HasExactHash(handles.Get()[handleIndex++], request.lod.sha256, request.cancellation, error)))
         {
-            error = "published cache SHA-256 differs from its semantic content address";
+            if (error.empty())
+                error = "published cache SHA-256 differs from its semantic content address";
             return false;
         }
         if (request.format == 3)
         {
             for (size_t index = 0; index < request.images.size(); ++index)
             {
-                if (!HasExactHash(paths.images[index], request.images[index].sha256))
+                if (!HasExactHash(handles.Get()[handleIndex++], request.images[index].sha256, request.cancellation, error))
                 {
-                    error = "published cache IMG SHA-256 differs from its semantic content address";
+                    if (error.empty())
+                        error = "published cache IMG SHA-256 differs from its semantic content address";
                     return false;
                 }
             }
         }
-        else if (!HasExactHash(paths.img, request.img.sha256))
+        else if (!HasExactHash(handles.Get()[handleIndex], request.img.sha256, request.cancellation, error))
         {
-            error = "published cache SHA-256 differs from its semantic content address";
+            if (error.empty())
+                error = "published cache SHA-256 differs from its semantic content address";
             return false;
         }
         return true;
@@ -1237,11 +1337,116 @@ namespace
     }
 }  // namespace
 
+struct CNativeWorldCacheVerifiedObjectSA::SImpl
+{
+    struct SHandleIdentity
+    {
+        std::string   path;
+        DWORD         volumeSerial{};
+        DWORD         fileIndexHigh{};
+        DWORD         fileIndexLow{};
+        std::uint64_t bytes{};
+        bool          directory{};
+    };
+
+    ~SImpl()
+    {
+        const size_t handleCount = handles.size();
+        for (HANDLE handle : handles)
+            if (handle && handle != INVALID_HANDLE_VALUE)
+                CloseHandle(handle);
+        handles.clear();
+
+        if (registered)
+        {
+            SVerificationTelemetryState& telemetry = VerificationTelemetryState();
+            std::lock_guard<std::mutex>  lock(telemetry.mutex);
+            if (telemetry.objects)
+                --telemetry.objects;
+            if (telemetry.handles >= handleCount)
+                telemetry.handles -= handleCount;
+            else
+                telemetry.handles = 0;
+        }
+    }
+
+    void Register()
+    {
+        if (registered || handles.empty() || handles.size() != identities.size())
+            return;
+        SVerificationTelemetryState& telemetry = VerificationTelemetryState();
+        std::lock_guard<std::mutex>  lock(telemetry.mutex);
+        registered = true;
+        ++telemetry.objects;
+        telemetry.handles += handles.size();
+        telemetry.objectsHighWater = std::max(telemetry.objectsHighWater, static_cast<unsigned int>(telemetry.objects));
+    }
+
+    std::vector<HANDLE>          handles;
+    std::vector<SHandleIdentity> identities;
+    unsigned int                 format{};
+    std::string                  policy;
+    std::string                  contentId;
+    std::string                  directory;
+    std::set<std::wstring>       expectedFileNames;
+    bool                         registered{};
+};
+
+CNativeWorldCacheVerifiedObjectSA::CNativeWorldCacheVerifiedObjectSA() = default;
+CNativeWorldCacheVerifiedObjectSA::~CNativeWorldCacheVerifiedObjectSA() = default;
+
+bool CNativeWorldCacheVerifiedObjectSA::IsValid() const
+{
+    return m_impl && m_impl->registered && !m_impl->handles.empty() && m_impl->handles.size() == m_impl->identities.size();
+}
+
+size_t CNativeWorldCacheVerifiedObjectSA::GetHandleCount() const
+{
+    return IsValid() ? m_impl->handles.size() : 0;
+}
+
+const std::string& CNativeWorldCacheVerifiedObjectSA::GetDirectory() const
+{
+    static const std::string empty;
+    return IsValid() ? m_impl->directory : empty;
+}
+
+bool CNativeWorldCacheVerifiedObjectSA::RevalidateClosedObject(std::string& error) const
+{
+    if (!IsValid())
+    {
+        error = "verified native-world cache object is absent or invalid";
+        return false;
+    }
+    for (size_t index = 0; index < m_impl->handles.size(); ++index)
+    {
+        const HANDLE                  handle = m_impl->handles[index];
+        const SImpl::SHandleIdentity& expected = m_impl->identities[index];
+        BY_HANDLE_FILE_INFORMATION    information{};
+        if (!HandleMatchesPath(handle, expected.path.c_str(), expected.directory, error) || !GetFileInformationByHandle(handle, &information) ||
+            !!(information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != expected.directory ||
+            (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || information.dwVolumeSerialNumber != expected.volumeSerial ||
+            information.nFileIndexHigh != expected.fileIndexHigh || information.nFileIndexLow != expected.fileIndexLow)
+        {
+            if (error.empty())
+                error = "verified native-world cache handle identity changed";
+            return false;
+        }
+        const std::uint64_t bytes = (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
+        if (!expected.directory && bytes != expected.bytes)
+        {
+            error = "verified native-world cache handle length changed";
+            return false;
+        }
+    }
+    return ValidateClosedPublishedDirectory(m_impl->directory.c_str(), m_impl->expectedFileNames, error);
+}
+
 struct CNativeWorldCacheCommittedLeaseSA::SImpl
 {
     ~SImpl()
     {
-        const size_t handleCount = handles.size();
+        const size_t handleCount = verifiedObject ? verifiedObject->GetHandleCount() : handles.size();
         for (HANDLE handle : handles)
         {
             // Acquirers reject invalid handles before transfer. Keep release
@@ -1251,6 +1456,7 @@ struct CNativeWorldCacheCommittedLeaseSA::SImpl
                 CloseHandle(handle);
         }
         handles.clear();
+        verifiedObject.reset();
 
         if (registered)
         {
@@ -1266,22 +1472,27 @@ struct CNativeWorldCacheCommittedLeaseSA::SImpl
 
     void Register()
     {
-        if (registered || handles.empty() ||
-            std::any_of(handles.begin(), handles.end(), [](HANDLE handle) { return !handle || handle == INVALID_HANDLE_VALUE; }))
+        const size_t handleCount = verifiedObject ? verifiedObject->GetHandleCount() : handles.size();
+        if (registered || !handleCount ||
+            (!verifiedObject && std::any_of(handles.begin(), handles.end(), [](HANDLE handle) { return !handle || handle == INVALID_HANDLE_VALUE; })))
             return;
         SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
         registered = true;
         ++telemetry.groups;
-        telemetry.handles += handles.size();
+        if (verifiedObject)
+            telemetry.handles += handleCount;
+        else
+            telemetry.handles += handles.size();
         telemetry.groupsHighWater = std::max(telemetry.groupsHighWater, static_cast<unsigned int>(telemetry.groups));
     }
 
-    std::vector<HANDLE> handles;
-    unsigned int        format{};
-    std::string         policy;
-    std::string         contentId;
-    std::string         ticketId;
-    bool                registered{};
+    std::vector<HANDLE>                                handles;
+    std::shared_ptr<CNativeWorldCacheVerifiedObjectSA> verifiedObject;
+    unsigned int                                       format{};
+    std::string                                        policy;
+    std::string                                        contentId;
+    std::string                                        ticketId;
+    bool                                               registered{};
 };
 
 CNativeWorldCacheCommittedLeaseSA::CNativeWorldCacheCommittedLeaseSA() = default;
@@ -1291,12 +1502,12 @@ CNativeWorldCacheCommittedLeaseSA& CNativeWorldCacheCommittedLeaseSA::operator=(
 
 bool CNativeWorldCacheCommittedLeaseSA::IsValid() const
 {
-    return m_impl && m_impl->registered && !m_impl->handles.empty();
+    return m_impl && m_impl->registered && (!m_impl->handles.empty() || (m_impl->verifiedObject && m_impl->verifiedObject->IsValid()));
 }
 
 size_t CNativeWorldCacheCommittedLeaseSA::GetHandleCount() const
 {
-    return IsValid() ? m_impl->handles.size() : 0;
+    return IsValid() ? (m_impl->verifiedObject ? m_impl->verifiedObject->GetHandleCount() : m_impl->handles.size()) : 0;
 }
 
 void CNativeWorldCacheCommittedLeaseSA::Release()
@@ -1306,14 +1517,16 @@ void CNativeWorldCacheCommittedLeaseSA::Release()
 
 bool CNativeWorldCacheCommittedLeaseSA::ReleaseChecked(std::string& error)
 {
-    if (!m_impl || !m_impl->registered || m_impl->handles.empty() ||
-        std::any_of(m_impl->handles.begin(), m_impl->handles.end(), [](HANDLE handle) { return !handle || handle == INVALID_HANDLE_VALUE; }))
+    if (!m_impl || !m_impl->registered ||
+        (m_impl->verifiedObject ? !m_impl->verifiedObject->IsValid()
+                                : m_impl->handles.empty() || std::any_of(m_impl->handles.begin(), m_impl->handles.end(),
+                                                                         [](HANDLE handle) { return !handle || handle == INVALID_HANDLE_VALUE; })))
     {
         error = "committed native-world cache lease is not valid for checked release";
         return false;
     }
 
-    const size_t handleCount = m_impl->handles.size();
+    const size_t handleCount = m_impl->verifiedObject ? m_impl->verifiedObject->GetHandleCount() : m_impl->handles.size();
     for (size_t index = 0; index < m_impl->handles.size(); ++index)
     {
         if (!CloseHandle(m_impl->handles[index]))
@@ -1324,6 +1537,7 @@ bool CNativeWorldCacheCommittedLeaseSA::ReleaseChecked(std::string& error)
         m_impl->handles[index] = nullptr;
     }
     m_impl->handles.clear();
+    m_impl->verifiedObject.reset();
 
     SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
     if (!telemetry.groups || telemetry.handles < handleCount)
@@ -1346,13 +1560,14 @@ struct CNativeWorldCacheLeaseSA::SImpl
             CloseHandle(handle);
     }
 
-    std::vector<HANDLE>    handles;
-    unsigned int           format{};
-    std::string            policy;
-    std::string            contentId;
-    std::string            ticketId;
-    std::string            directory;
-    std::set<std::wstring> expectedFileNames;
+    std::vector<HANDLE>                                handles;
+    std::shared_ptr<CNativeWorldCacheVerifiedObjectSA> verifiedObject;
+    unsigned int                                       format{};
+    std::string                                        policy;
+    std::string                                        contentId;
+    std::string                                        ticketId;
+    std::string                                        directory;
+    std::set<std::wstring>                             expectedFileNames;
 };
 
 CNativeWorldCacheLeaseSA::CNativeWorldCacheLeaseSA() = default;
@@ -1362,7 +1577,7 @@ CNativeWorldCacheLeaseSA& CNativeWorldCacheLeaseSA::operator=(CNativeWorldCacheL
 
 bool CNativeWorldCacheLeaseSA::IsValid() const
 {
-    return m_impl && !m_impl->handles.empty();
+    return m_impl && (!m_impl->handles.empty() || (m_impl->verifiedObject && m_impl->verifiedObject->IsValid()));
 }
 
 bool CNativeWorldCacheLeaseSA::RevalidateClosedObject(std::string& error) const
@@ -1372,7 +1587,8 @@ bool CNativeWorldCacheLeaseSA::RevalidateClosedObject(std::string& error) const
         error = "native-world cache lease is absent or already completed";
         return false;
     }
-    return ValidateClosedPublishedDirectory(m_impl->directory.c_str(), m_impl->expectedFileNames, error);
+    return m_impl->verifiedObject ? m_impl->verifiedObject->RevalidateClosedObject(error)
+                                  : ValidateClosedPublishedDirectory(m_impl->directory.c_str(), m_impl->expectedFileNames, error);
 }
 
 bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& policy, const std::string& contentId, const std::string& ticketId,
@@ -1400,6 +1616,7 @@ bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& po
     committed->contentId = m_impl->contentId;
     committed->ticketId = m_impl->ticketId;
     committed->handles.swap(m_impl->handles);
+    committed->verifiedObject = std::move(m_impl->verifiedObject);
     committed->Register();
     if (!committed->registered)
     {
@@ -1429,6 +1646,137 @@ bool CNativeWorldCacheLeaseSA::Commit(unsigned int format, const std::string& po
 void CNativeWorldCacheLeaseSA::Release()
 {
     m_impl.reset();
+}
+
+bool VerifyExistingNativeWorldCacheObject(const SNativeWorldCacheRequestSA& request, const NativeWorldCacheAuditSA& audit,
+                                          std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>& verifiedObject, std::string& publishedDirectory,
+                                          std::string& error)
+{
+    verifiedObject.reset();
+    publishedDirectory.clear();
+    const bool isV3 = request.format == 3;
+    if (!audit || !IsValidRequestIdentity(request) || !HasValidCacheRequestFiles(request) || request.manifestFileName != CACHED_MANIFEST_FILE ||
+        request.ide.name != CACHED_IDE_FILE || (isV3 && request.lod.name != CACHED_LOD_FILE) || (!isV3 && request.img.name != CACHED_IMG_FILE) ||
+        !IsLowerSha256(request.contentId) || GenerateNativeWorldContentId(request) != request.contentId ||
+        BuildCanonicalManifest(request).size() > request.maximumManifestBytes)
+    {
+        error = "verified native-world cache object identity is invalid";
+        return false;
+    }
+    if (IsCancelled(request))
+    {
+        error = "verified native-world cache object request was cancelled";
+        return false;
+    }
+
+    const SString     dataRoot = SharedUtil::GetMTADataPath();
+    const SString     root = JoinPath(dataRoot, CACHE_ROOT_DIRECTORY);
+    const SString     format = JoinPath(root, CacheFormatDirectory(request));
+    const SString     pack = JoinPath(format, CachePolicyDirectory(request));
+    const SString     published = JoinPath(pack, request.contentId);
+    const SCachePaths paths = MakeCachePaths(request, published);
+    publishedDirectory = published.c_str();
+
+    const auto     started = std::chrono::steady_clock::now();
+    CScopedHandles locks;
+    if (!LockDirectory(paths.dataRoot, locks, error) || !LockDirectory(paths.root, locks, error) || !LockDirectory(paths.format, locks, error) ||
+        !LockDirectory(paths.pack, locks, error) || !LockDirectory(paths.published, locks, error) ||
+        !ValidateClosedPublishedDirectory(paths.published, ExpectedCachedFileNames(request), error) ||
+        !LockAndValidatePublishedFiles(request, paths, locks, error))
+    {
+        if (error.empty())
+            error = "verified native-world cache object lock or hash validation failed";
+        return false;
+    }
+    const auto hashCompleted = std::chrono::steady_clock::now();
+    if (IsCancelled(request) || !audit(publishedDirectory, error) || IsCancelled(request) ||
+        !ValidateClosedPublishedDirectory(paths.published, ExpectedCachedFileNames(request), error))
+    {
+        if (error.empty())
+            error = "verified native-world cache object semantic audit was cancelled";
+        return false;
+    }
+    const auto semanticCompleted = std::chrono::steady_clock::now();
+
+    std::vector<std::pair<std::string, bool>> identities = {{paths.dataRoot.c_str(), true}, {paths.root.c_str(), true},      {paths.format.c_str(), true},
+                                                            {paths.pack.c_str(), true},     {paths.published.c_str(), true}, {paths.manifest.c_str(), false},
+                                                            {paths.ide.c_str(), false}};
+    if (isV3)
+    {
+        identities.emplace_back(paths.lod.c_str(), false);
+        for (const SString& image : paths.images)
+            identities.emplace_back(image.c_str(), false);
+    }
+    else
+        identities.emplace_back(paths.img.c_str(), false);
+    if (identities.size() != locks.Get().size())
+    {
+        error = "verified native-world cache handle inventory is inconsistent";
+        return false;
+    }
+
+    auto impl = std::make_unique<CNativeWorldCacheVerifiedObjectSA::SImpl>();
+    impl->format = request.format;
+    impl->policy = request.policyKey;
+    impl->contentId = request.contentId;
+    impl->directory = publishedDirectory;
+    impl->expectedFileNames = ExpectedCachedFileNames(request);
+    for (size_t index = 0; index < identities.size(); ++index)
+    {
+        BY_HANDLE_FILE_INFORMATION information{};
+        const HANDLE               handle = locks.Get()[index];
+        if (!GetFileInformationByHandle(handle, &information))
+        {
+            error = "verified native-world cache handle metadata capture failed";
+            return false;
+        }
+        CNativeWorldCacheVerifiedObjectSA::SImpl::SHandleIdentity identity;
+        identity.path = identities[index].first;
+        identity.volumeSerial = information.dwVolumeSerialNumber;
+        identity.fileIndexHigh = information.nFileIndexHigh;
+        identity.fileIndexLow = information.nFileIndexLow;
+        identity.directory = identities[index].second;
+        identity.bytes = (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
+        impl->identities.emplace_back(std::move(identity));
+    }
+    locks.TransferTo(impl->handles);
+    impl->Register();
+    if (!impl->registered)
+    {
+        error = "verified native-world cache object could not register its handles";
+        return false;
+    }
+    verifiedObject = std::make_shared<CNativeWorldCacheVerifiedObjectSA>();
+    verifiedObject->m_impl = std::move(impl);
+    const auto sealed = std::chrono::steady_clock::now();
+    SharedUtil::WriteDebugEvent(
+        SString("[NativeWorldCacheVerification] state=sealed contentId=%s lockHashMs=%lld semanticMs=%lld sealMs=%lld handles=%u", request.contentId.c_str(),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(hashCompleted - started).count()),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(semanticCompleted - hashCompleted).count()),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(sealed - semanticCompleted).count()),
+                static_cast<unsigned int>(verifiedObject->GetHandleCount())));
+    return true;
+}
+
+bool CreateNativeWorldCacheLeaseFromVerifiedObject(const std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>& verifiedObject, const std::string& ticketId,
+                                                   CNativeWorldCacheLeaseSA& lease, std::string& error)
+{
+    if (lease.IsValid() || !verifiedObject || !verifiedObject->IsValid() || !IsLowerHex(ticketId, 32) || !verifiedObject->RevalidateClosedObject(error))
+    {
+        if (error.empty())
+            error = "verified native-world cache lease request is invalid";
+        return false;
+    }
+    auto impl = std::make_unique<CNativeWorldCacheLeaseSA::SImpl>();
+    impl->verifiedObject = verifiedObject;
+    impl->format = verifiedObject->m_impl->format;
+    impl->policy = verifiedObject->m_impl->policy;
+    impl->contentId = verifiedObject->m_impl->contentId;
+    impl->ticketId = ticketId;
+    impl->directory = verifiedObject->m_impl->directory;
+    impl->expectedFileNames = verifiedObject->m_impl->expectedFileNames;
+    lease.m_impl = std::move(impl);
+    return true;
 }
 
 bool AcquireExistingNativeWorldCacheLease(const SNativeWorldCacheRequestSA& request, const std::string& ticketId, const NativeWorldCacheAuditSA& audit,
@@ -1861,5 +2209,8 @@ void ReleaseNativeWorldCacheLease()
 SNativeWorldCacheLeaseTelemetrySA GetNativeWorldCacheLeaseTelemetry()
 {
     const SCommittedLeaseTelemetryState& telemetry = CommittedLeaseTelemetryState();
-    return {g_pendingLocks.size(), telemetry.handles, telemetry.groups, telemetry.groupsHighWater, g_cachePrepared};
+    SVerificationTelemetryState&         verification = VerificationTelemetryState();
+    std::lock_guard<std::mutex>          lock(verification.mutex);
+    return {g_pendingLocks.size(),         telemetry.handles, telemetry.groups, telemetry.groupsHighWater, verification.handles, verification.objects,
+            verification.objectsHighWater, g_cachePrepared};
 }

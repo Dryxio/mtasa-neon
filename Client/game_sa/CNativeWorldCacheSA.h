@@ -69,8 +69,13 @@ struct SNativeWorldCacheLeaseTelemetrySA
     size_t       processHandles{};
     size_t       committedGroups{};
     unsigned int committedGroupsHighWater{};
+    size_t       verificationHandles{};
+    size_t       verifiedObjects{};
+    unsigned int verifiedObjectsHighWater{};
     bool         legacyCachePrepared{};
 };
+
+class CNativeWorldCacheVerifiedObjectSA;
 
 // A committed lease group owns the exact cache handles promoted by one
 // successful admission transaction. Keeping groups separate lets a future
@@ -129,6 +134,36 @@ private:
                                                      CNativeWorldCacheLeaseSA&, std::string&, std::string&);
     friend bool AcquireExistingNativeWorldV3SetLease(const SNativeWorldV3SetRequestSA&, const std::string&, const NativeWorldCacheAuditSA&,
                                                      CNativeWorldCacheLeaseSA&, std::string&, std::string&);
+    friend bool CreateNativeWorldCacheLeaseFromVerifiedObject(const std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>&, const std::string&,
+                                                              CNativeWorldCacheLeaseSA&, std::string&);
+};
+
+// A verified object is a process-local proof about immutable cache bytes. It
+// owns no GTA state and deliberately survives generation teardown so a later
+// server session can reuse the completed semantic audit without trusting a
+// path which was mutable between admissions.
+class CNativeWorldCacheVerifiedObjectSA
+{
+public:
+    CNativeWorldCacheVerifiedObjectSA();
+    ~CNativeWorldCacheVerifiedObjectSA();
+
+    CNativeWorldCacheVerifiedObjectSA(const CNativeWorldCacheVerifiedObjectSA&) = delete;
+    CNativeWorldCacheVerifiedObjectSA& operator=(const CNativeWorldCacheVerifiedObjectSA&) = delete;
+
+    bool               IsValid() const;
+    size_t             GetHandleCount() const;
+    const std::string& GetDirectory() const;
+    bool               RevalidateClosedObject(std::string& error) const;
+
+private:
+    struct SImpl;
+    std::unique_ptr<SImpl> m_impl;
+
+    friend bool VerifyExistingNativeWorldCacheObject(const SNativeWorldCacheRequestSA&, const NativeWorldCacheAuditSA&,
+                                                     std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>&, std::string&, std::string&);
+    friend bool CreateNativeWorldCacheLeaseFromVerifiedObject(const std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>&, const std::string&,
+                                                              CNativeWorldCacheLeaseSA&, std::string&);
 };
 
 std::string GenerateNativeWorldContentId(const SNativeWorldCacheRequestSA& request);
@@ -141,6 +176,14 @@ bool PrepareAndLockNativeWorldCache(const SNativeWorldCacheRequestSA& request, s
 // returns with every handle closed and no activation lease retained.
 bool PublishNativeWorldCache(const SNativeWorldCacheRequestSA& request, const NativeWorldCacheAuditSA& audit, std::string& publishedDirectory, bool& cacheHit,
                              std::string& error);
+// Cache-hit fast path. Hashes the exact already-open files once, runs the
+// caller's semantic audit under those locks, and returns a process-local seal
+// which is separate from all ticket and generation ownership.
+bool VerifyExistingNativeWorldCacheObject(const SNativeWorldCacheRequestSA& request, const NativeWorldCacheAuditSA& audit,
+                                          std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>& verifiedObject, std::string& publishedDirectory,
+                                          std::string& error);
+bool CreateNativeWorldCacheLeaseFromVerifiedObject(const std::shared_ptr<CNativeWorldCacheVerifiedObjectSA>& verifiedObject, const std::string& ticketId,
+                                                   CNativeWorldCacheLeaseSA& lease, std::string& error);
 // Opens only the exact already-published semantic object. It never creates,
 // repairs, quarantines, or scans, and runs the closed audit while every exact
 // handle is held by a transaction-typed lease.

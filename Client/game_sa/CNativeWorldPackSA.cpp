@@ -39,6 +39,7 @@
 #include <core/CCoreInterface.h>
 
 #include <cstdarg>
+#include <condition_variable>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -406,6 +407,26 @@ namespace
         CStreamingInfo original{};
     };
 
+    enum class EVerifiedV3ChildState
+    {
+        Verifying,
+        Ready,
+        Failed,
+    };
+
+    struct SVerifiedV3Child
+    {
+        EVerifiedV3ChildState                              state{EVerifiedV3ChildState::Verifying};
+        SNativeWorldV3SetPackSA                            identity;
+        SStaticWorldV3Manifest                             manifest;
+        SStaticWorldV3Ide                                  ide;
+        SStaticWorldV3Inventory                            inventory;
+        std::string                                        directory;
+        std::shared_ptr<CNativeWorldCacheVerifiedObjectSA> verifiedObject;
+        std::string                                        error;
+        std::uint64_t                                      lastUsed{};
+    };
+
     CStreamingSA*                                                      g_streaming = nullptr;
     const SNativeWorldPackPolicySA*                                    g_policy = nullptr;
     SNativeWorldPackRuntimeDataSA                                      g_manifest;
@@ -415,6 +436,14 @@ namespace
     const SNativeWorldPackDescriptorSA*                                g_pack = nullptr;
     EState                                                             g_state = EState::Off;
     std::mutex                                                         g_transportPublisherMutex;
+    std::mutex                                                         g_staticWorldV3RegistryMutex;
+    std::condition_variable                                            g_staticWorldV3RegistryChanged;
+    std::map<std::string, std::shared_ptr<SVerifiedV3Child>>           g_staticWorldV3VerifiedChildren;
+    std::mutex                                                         g_staticWorldV3AuditPermitMutex;
+    std::condition_variable                                            g_staticWorldV3AuditPermitChanged;
+    unsigned int                                                       g_staticWorldV3ActiveAudits = 0;
+    constexpr unsigned int                                             STATIC_WORLD_V3_MAX_ACTIVE_AUDITS = 1;
+    std::mutex                                                         g_staticWorldV3CacheNamespaceMutex;
     bool                                                               g_authorizedRoute = false;
     SNativeWorldStartupSelection                                       g_authorizedSelection{};
     CNativeWorldCacheLeaseSA                                           g_authorizedLease;
@@ -924,15 +953,17 @@ namespace
             "baseline=%s "
             "generation=%u "
             "activePack=%d banks=%d,%d catalogModels=%u colOwners=%u iplOwners=%u permanentBindings=%u reservations=%s leaseObjects=%u "
-            "cacheHandles=%u,%u cacheCommitHighWater=%u lod=%s arrays=%u scratchOwned=%s reserved=%u nonNull=%u",
+            "cacheHandles=%u,%u cacheCommitHighWater=%u verifiedObjects=%u verificationHandles=%u verificationHighWater=%u lod=%s arrays=%u "
+            "scratchOwned=%s reserved=%u nonNull=%u",
             safeContext, StateName(g_state), sample.contentNeutral ? "yes" : "no", sample.admissionBaselineMatches ? "yes" : "no",
             sample.sessionNeutral ? "yes" : "no", sample.ioQuiescent ? "yes" : "no", g_nativeWorldNeutralBaseline.captured ? "captured" : "absent",
             g_staticWorldV3Generation.load(std::memory_order_acquire), g_staticWorldV3ActivePack, g_staticWorldV3BankOwners[0], g_staticWorldV3BankOwners[1],
             sample.catalogModels, static_cast<unsigned int>(g_staticWorldV3ColOwners.size()), static_cast<unsigned int>(g_staticWorldV3IplOwners.size()),
             static_cast<unsigned int>(g_staticWorldV3PermanentBindings.size()), g_nativeModelSlotsReserved.load(std::memory_order_acquire) ? "yes" : "no",
             sample.validLeaseObjects, static_cast<unsigned int>(sample.cache.pendingHandles), static_cast<unsigned int>(sample.cache.processHandles),
-            sample.cache.committedGroupsHighWater, LodStateName(g_staticWorldV3LodState), sample.lodArrayCount, sample.lodArraysReserved ? "yes" : "no",
-            sample.lodReservedArrays, sample.lodReservedNonNullEntries));
+            sample.cache.committedGroupsHighWater, static_cast<unsigned int>(sample.cache.verifiedObjects),
+            static_cast<unsigned int>(sample.cache.verificationHandles), sample.cache.verifiedObjectsHighWater, LodStateName(g_staticWorldV3LodState),
+            sample.lodArrayCount, sample.lodArraysReserved ? "yes" : "no", sample.lodReservedArrays, sample.lodReservedNonNullEntries));
 
         const SFileIDLayout& layout = pGame->GetFileIDLayout();
         SharedUtil::WriteDebugEvent(
@@ -6723,12 +6754,12 @@ namespace
     }
 
     bool AuditStaticWorldV3Directory(const std::filesystem::path& directory, const SStaticWorldV3Manifest& manifest, const std::function<bool()>& isCancelled,
-                                     SStaticWorldV3Inventory& inventory, std::string& error)
+                                     SStaticWorldV3Inventory& inventory, std::string& error, bool verifyHashes = true)
     {
         const std::filesystem::path idePath = directory / manifest.ide.name;
         const SString               nativeIdePath = idePath.string().c_str();
         if (!IsNativePathSafe(nativeIdePath) || !IsSafeRegularFile(nativeIdePath) || !HasExactFileSize64(nativeIdePath, manifest.ide.bytes) ||
-            SharedUtil::GenerateSha256HexStringFromFile(nativeIdePath).ToLower() != manifest.ide.sha256.c_str())
+            (verifyHashes && SharedUtil::GenerateSha256HexStringFromFile(nativeIdePath).ToLower() != manifest.ide.sha256.c_str()))
         {
             error = "static-world-v3 IDE identity differs from its manifest";
             return false;
@@ -6741,7 +6772,7 @@ namespace
         const std::filesystem::path lodPath = directory / manifest.lod.name;
         const SString               nativeLodPath = lodPath.string().c_str();
         if (!IsNativePathSafe(nativeLodPath) || !IsSafeRegularFile(nativeLodPath) || !HasExactFileSize64(nativeLodPath, manifest.lod.bytes) ||
-            SharedUtil::GenerateSha256HexStringFromFile(nativeLodPath).ToLower() != manifest.lod.sha256.c_str())
+            (verifyHashes && SharedUtil::GenerateSha256HexStringFromFile(nativeLodPath).ToLower() != manifest.lod.sha256.c_str()))
         {
             error = "static-world-v3 LOD identity differs from its manifest";
             return false;
@@ -6765,7 +6796,7 @@ namespace
             const std::filesystem::path imagePath = directory / image.name;
             const SString               nativeImagePath = imagePath.string().c_str();
             if (!IsNativePathSafe(nativeImagePath) || !IsSafeRegularFile(nativeImagePath) || !HasExactFileSize64(nativeImagePath, image.bytes) ||
-                SharedUtil::GenerateSha256HexStringFromFile(nativeImagePath).ToLower() != image.sha256.c_str() ||
+                (verifyHashes && SharedUtil::GenerateSha256HexStringFromFile(nativeImagePath).ToLower() != image.sha256.c_str()) ||
                 !ValidateStaticWorldV3Archive(imagePath, image.bytes, ide, inventory, error))
             {
                 if (error.empty())
@@ -6915,26 +6946,123 @@ namespace
         return true;
     }
 
+    std::string StaticWorldV3VerifiedKey(const SNativeWorldV3SetPackSA& identity)
+    {
+        return SString("%u:%s:%s", STATIC_WORLD_V3_FORMAT, STATIC_WORLD_V3_POLICY, identity.contentId.c_str());
+    }
+
+    class CStaticWorldV3AuditPermit
+    {
+    public:
+        ~CStaticWorldV3AuditPermit()
+        {
+            if (!m_acquired)
+                return;
+            {
+                std::lock_guard<std::mutex> lock(g_staticWorldV3AuditPermitMutex);
+                if (g_staticWorldV3ActiveAudits)
+                    --g_staticWorldV3ActiveAudits;
+            }
+            g_staticWorldV3AuditPermitChanged.notify_one();
+        }
+
+        bool Acquire(const std::function<bool()>& isCancelled, std::string& error)
+        {
+            std::unique_lock<std::mutex> lock(g_staticWorldV3AuditPermitMutex);
+            // All current packs share one physical VM disk. A second full
+            // payload reader halves aggregate throughput and delays the large
+            // pack; retain independent single-flight jobs but schedule their
+            // heavy I/O one at a time.
+            while (g_staticWorldV3ActiveAudits >= STATIC_WORLD_V3_MAX_ACTIVE_AUDITS)
+            {
+                if (isCancelled())
+                {
+                    error = "static-world-v3 verification was cancelled while waiting for an I/O permit";
+                    return false;
+                }
+                g_staticWorldV3AuditPermitChanged.wait_for(lock, std::chrono::milliseconds(50));
+            }
+            ++g_staticWorldV3ActiveAudits;
+            m_acquired = true;
+            return true;
+        }
+
+    private:
+        bool m_acquired{};
+    };
+
+    bool WaitForVerifiedStaticWorldV3Children(const std::vector<SNativeWorldV3SetPackSA>& identities, const std::function<bool()>& isCancelled,
+                                              std::vector<std::shared_ptr<SVerifiedV3Child>>& children, std::string& error)
+    {
+        const std::int64_t           deadline = GetTickCount64_() + 180000;
+        std::unique_lock<std::mutex> lock(g_staticWorldV3RegistryMutex);
+        while (true)
+        {
+            children.clear();
+            bool waiting = false;
+            for (const SNativeWorldV3SetPackSA& identity : identities)
+            {
+                const auto found = g_staticWorldV3VerifiedChildren.find(StaticWorldV3VerifiedKey(identity));
+                if (found == g_staticWorldV3VerifiedChildren.end() || found->second->state == EVerifiedV3ChildState::Verifying)
+                {
+                    waiting = true;
+                    break;
+                }
+                if (found->second->state != EVerifiedV3ChildState::Ready || found->second->identity.packId != identity.packId ||
+                    found->second->identity.contentId != identity.contentId || !found->second->verifiedObject)
+                {
+                    error = found->second->error.empty() ? "static-world-v3 verified child is unavailable" : found->second->error;
+                    return false;
+                }
+                children.push_back(found->second);
+            }
+            if (!waiting && children.size() == identities.size())
+                break;
+            if (isCancelled())
+            {
+                error = "static-world-v3 set verification was cancelled while waiting for its children";
+                return false;
+            }
+            if (GetTickCount64_() >= deadline)
+            {
+                error = "static-world-v3 set verification timed out waiting for its children";
+                return false;
+            }
+            g_staticWorldV3RegistryChanged.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        for (const std::shared_ptr<SVerifiedV3Child>& child : children)
+            child->lastUsed = GetTickCount64_();
+        lock.unlock();
+        for (const std::shared_ptr<SVerifiedV3Child>& child : children)
+        {
+            if (!child->verifiedObject->RevalidateClosedObject(error))
+            {
+                error = "static-world-v3 verified child seal failed revalidation: " + error;
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool AcquireStaticWorldV3SetChildren(const SStaticWorldV3SetManifest& setManifest, const std::string& ticketId, const std::function<bool()>& isCancelled,
                                          std::vector<CNativeWorldCacheLeaseSA>& leases, std::vector<SStaticWorldV3Inventory>& inventories,
                                          std::vector<SStaticWorldV3Manifest>& manifests, std::vector<std::string>& directories, std::string& error)
     {
+        std::vector<std::shared_ptr<SVerifiedV3Child>> children;
+        if (!WaitForVerifiedStaticWorldV3Children(setManifest.packs, isCancelled, children, error))
+            return false;
         leases.resize(setManifest.packs.size());
         inventories.resize(setManifest.packs.size());
         manifests.resize(setManifest.packs.size());
         directories.resize(setManifest.packs.size());
-        for (size_t index = 0; index < setManifest.packs.size(); ++index)
+        for (size_t index = 0; index < children.size(); ++index)
         {
-            SNativeWorldCacheRequestSA request;
-            if (!BuildStaticWorldV3CachedRequest(setManifest.packs[index], request, manifests[index], directories[index], error))
+            const std::shared_ptr<SVerifiedV3Child>& child = children[index];
+            if (!CreateNativeWorldCacheLeaseFromVerifiedObject(child->verifiedObject, ticketId, leases[index], error))
                 return false;
-            request.cancellation = nullptr;
-            const auto audit = [&manifests, &inventories, index, &isCancelled](const std::string& lockedDirectory, std::string& auditError)
-            { return AuditStaticWorldV3Directory(lockedDirectory, manifests[index], isCancelled, inventories[index], auditError); };
-            std::string leasedDirectory;
-            if (!AcquireExistingNativeWorldCacheLease(request, ticketId, audit, leases[index], leasedDirectory, error))
-                return false;
-            directories[index] = leasedDirectory;
+            inventories[index] = child->inventory;
+            manifests[index] = child->manifest;
+            directories[index] = child->directory;
         }
         return ValidateStaticWorldV3Aggregate(setManifest.packs, inventories, error);
     }
@@ -7074,10 +7202,6 @@ namespace
             return result;
         }
 
-        SStaticWorldV3Inventory inventory;
-        if (!AuditStaticWorldV3Directory(sourceDirectory, manifest, isCancelled, inventory, result.error))
-            return result;
-
         std::ostringstream offerIdentity;
         offerIdentity << "mta-native-world-transport-offer-v3\nresource=" << offer.resourceName << "\nformat=3\nmanifest=" << offer.manifestRelativePath
                       << "\nmanifest.bytes=" << manifest.manifestBytes << "\nmanifest.sha256=" << manifest.manifestSha256 << "\nide.name=" << manifest.ide.name
@@ -7104,41 +7228,193 @@ namespace
         request.contentId = GenerateNativeWorldContentId(request);
         result.contentId = request.contentId;
 
-        const auto auditQuarantine = [&request, &isCancelled](const std::string& directory, std::string& auditError)
+        const SNativeWorldV3SetPackSA     identity{manifest.packId, request.contentId};
+        const std::string                 verifiedKey = StaticWorldV3VerifiedKey(identity);
+        std::shared_ptr<SVerifiedV3Child> verifiedChild;
+        bool                              ownsVerification = false;
+        {
+            std::unique_lock<std::mutex> lock(g_staticWorldV3RegistryMutex);
+            const std::int64_t           deadline = GetTickCount64_() + 180000;
+            while (true)
+            {
+                const auto found = g_staticWorldV3VerifiedChildren.find(verifiedKey);
+                if (found == g_staticWorldV3VerifiedChildren.end() || found->second->state == EVerifiedV3ChildState::Failed)
+                {
+                    verifiedChild = std::make_shared<SVerifiedV3Child>();
+                    verifiedChild->identity = identity;
+                    verifiedChild->lastUsed = GetTickCount64_();
+                    g_staticWorldV3VerifiedChildren[verifiedKey] = verifiedChild;
+                    ownsVerification = true;
+                    break;
+                }
+                verifiedChild = found->second;
+                if (verifiedChild->identity.packId != identity.packId || verifiedChild->identity.contentId != identity.contentId)
+                {
+                    result.error = "static-world-v3 verified registry identity collision";
+                    return result;
+                }
+                if (verifiedChild->state == EVerifiedV3ChildState::Ready)
+                    break;
+                if (isCancelled())
+                {
+                    result.error = "static-world-v3 publication was cancelled while waiting for its verification";
+                    return result;
+                }
+                if (GetTickCount64_() >= deadline)
+                {
+                    result.error = "static-world-v3 publication timed out waiting for its verification";
+                    return result;
+                }
+                g_staticWorldV3RegistryChanged.wait_for(lock, std::chrono::milliseconds(50));
+            }
+        }
+
+        if (!ownsVerification)
+        {
+            if (!verifiedChild->verifiedObject || !verifiedChild->verifiedObject->RevalidateClosedObject(result.error))
+            {
+                std::lock_guard<std::mutex> lock(g_staticWorldV3RegistryMutex);
+                verifiedChild->state = EVerifiedV3ChildState::Failed;
+                verifiedChild->error = result.error.empty() ? "static-world-v3 process seal failed revalidation" : result.error;
+                g_staticWorldV3RegistryChanged.notify_all();
+                return result;
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_staticWorldV3RegistryMutex);
+                verifiedChild->lastUsed = GetTickCount64_();
+            }
+            result.success = true;
+            result.cacheHit = true;
+            result.publishedDirectory = verifiedChild->directory;
+            SharedUtil::WriteDebugEvent(SString("[NativeWorldV3Verification] state=reused-process-seal pack=%s contentId=%s hashes=0 directory=%s",
+                                                manifest.packId.c_str(), request.contentId.c_str(), result.publishedDirectory.c_str()));
+            return result;
+        }
+
+        const auto finishVerification = [&verifiedChild](bool success, const std::string& error)
+        {
+            std::lock_guard<std::mutex> lock(g_staticWorldV3RegistryMutex);
+            verifiedChild->state = success ? EVerifiedV3ChildState::Ready : EVerifiedV3ChildState::Failed;
+            verifiedChild->error = success ? std::string() : error;
+            verifiedChild->lastUsed = GetTickCount64_();
+            if (success)
+            {
+                while (g_staticWorldV3VerifiedChildren.size() > 16)
+                {
+                    auto victim = g_staticWorldV3VerifiedChildren.end();
+                    for (auto candidate = g_staticWorldV3VerifiedChildren.begin(); candidate != g_staticWorldV3VerifiedChildren.end(); ++candidate)
+                    {
+                        if (candidate->second == verifiedChild || candidate->second->state == EVerifiedV3ChildState::Verifying ||
+                            (candidate->second->verifiedObject && candidate->second->verifiedObject.use_count() > 1))
+                            continue;
+                        if (victim == g_staticWorldV3VerifiedChildren.end() || candidate->second->lastUsed < victim->second->lastUsed)
+                            victim = candidate;
+                    }
+                    if (victim == g_staticWorldV3VerifiedChildren.end())
+                        break;
+                    g_staticWorldV3VerifiedChildren.erase(victim);
+                }
+            }
+            g_staticWorldV3RegistryChanged.notify_all();
+        };
+
+        CStaticWorldV3AuditPermit auditPermit;
+        if (!auditPermit.Acquire(isCancelled, result.error))
+        {
+            finishVerification(false, result.error);
+            return result;
+        }
+
+        SStaticWorldV3Manifest  lockedManifest;
+        SStaticWorldV3Inventory lockedInventory;
+        const auto auditVerified = [&request, &isCancelled, &lockedManifest, &lockedInventory](const std::string& directory, std::string& auditError)
         {
             const std::filesystem::path manifestPath = std::filesystem::path(directory) / STATIC_WORLD_V3_MANIFEST;
             const SString               nativeManifestPath = manifestPath.string().c_str();
-            SStaticWorldV3Manifest      lockedManifest;
+            SStaticWorldV3Manifest      candidateManifest;
             if (isCancelled())
             {
                 auditError = "static-world-v3 publication was cancelled";
                 return false;
             }
             if (!IsNativePathSafe(nativeManifestPath) || !IsSafeRegularFile(nativeManifestPath) ||
-                !LoadStaticWorldV3Manifest(nativeManifestPath, lockedManifest, auditError))
+                !LoadStaticWorldV3Manifest(nativeManifestPath, candidateManifest, auditError))
             {
                 if (auditError.empty())
                     auditError = "static-world-v3 quarantine manifest is unsafe";
                 return false;
             }
             SNativeWorldCacheRequestSA lockedIdentity = request;
-            lockedIdentity.packId = lockedManifest.packId;
-            lockedIdentity.sourceManifestSha256 = lockedManifest.manifestSha256;
-            lockedIdentity.sourceManifestBytes = lockedManifest.manifestBytes;
-            lockedIdentity.ide = {lockedManifest.ide.name, lockedManifest.ide.sha256, lockedManifest.ide.bytes};
-            lockedIdentity.lod = {lockedManifest.lod.name, lockedManifest.lod.sha256, lockedManifest.lod.bytes};
+            lockedIdentity.packId = candidateManifest.packId;
+            lockedIdentity.sourceManifestSha256 = candidateManifest.manifestSha256;
+            lockedIdentity.sourceManifestBytes = candidateManifest.manifestBytes;
+            lockedIdentity.ide = {candidateManifest.ide.name, candidateManifest.ide.sha256, candidateManifest.ide.bytes};
+            lockedIdentity.lod = {candidateManifest.lod.name, candidateManifest.lod.sha256, candidateManifest.lod.bytes};
             lockedIdentity.images.clear();
-            for (const SStaticWorldV3File& image : lockedManifest.images)
+            for (const SStaticWorldV3File& image : candidateManifest.images)
                 lockedIdentity.images.push_back({image.name, image.sha256, image.bytes});
             if (GenerateNativeWorldContentId(lockedIdentity) != request.contentId)
             {
                 auditError = "static-world-v3 quarantine semantic content ID differs from the offer";
                 return false;
             }
-            SStaticWorldV3Inventory lockedInventory;
-            return AuditStaticWorldV3Directory(directory, lockedManifest, isCancelled, lockedInventory, auditError);
+            SStaticWorldV3Inventory candidateInventory;
+            if (!AuditStaticWorldV3Directory(directory, candidateManifest, isCancelled, candidateInventory, auditError, false))
+                return false;
+            lockedManifest = std::move(candidateManifest);
+            lockedInventory = std::move(candidateInventory);
+            return true;
         };
-        result.success = PublishNativeWorldCache(request, auditQuarantine, result.publishedDirectory, result.cacheHit, result.error);
+
+        const std::uint64_t                                started = GetTickCount64_();
+        std::shared_ptr<CNativeWorldCacheVerifiedObjectSA> verifiedObject;
+        bool verified = VerifyExistingNativeWorldCacheObject(request, auditVerified, verifiedObject, result.publishedDirectory, result.error);
+        if (!verified)
+        {
+            // Cache repairs mutate a shared namespace. Serialize only that
+            // exceptional path; unrelated cache hits remain concurrent.
+            std::lock_guard<std::mutex> cacheLock(g_staticWorldV3CacheNamespaceMutex);
+            result.error.clear();
+            verified = VerifyExistingNativeWorldCacheObject(request, auditVerified, verifiedObject, result.publishedDirectory, result.error);
+            if (!verified)
+            {
+                result.error.clear();
+                SStaticWorldV3Inventory sourceInventory;
+                if (!AuditStaticWorldV3Directory(sourceDirectory, manifest, isCancelled, sourceInventory, result.error) ||
+                    !PublishNativeWorldCache(request, auditVerified, result.publishedDirectory, result.cacheHit, result.error))
+                {
+                    finishVerification(false, result.error);
+                    return result;
+                }
+                result.error.clear();
+                if (!VerifyExistingNativeWorldCacheObject(request, auditVerified, verifiedObject, result.publishedDirectory, result.error))
+                {
+                    finishVerification(false, result.error);
+                    return result;
+                }
+            }
+            else
+                result.cacheHit = true;
+        }
+        else
+            result.cacheHit = true;
+
+        const SString lockedIdePath = SString("%s\\%s", result.publishedDirectory.c_str(), lockedManifest.ide.name.c_str());
+        if (!ParseStaticWorldV3Ide(lockedIdePath, verifiedChild->ide, result.error))
+        {
+            finishVerification(false, result.error);
+            return result;
+        }
+        verifiedChild->manifest = std::move(lockedManifest);
+        verifiedChild->inventory = std::move(lockedInventory);
+        verifiedChild->directory = result.publishedDirectory;
+        verifiedChild->verifiedObject = std::move(verifiedObject);
+        finishVerification(true, {});
+        result.success = true;
+        SharedUtil::WriteDebugEvent(SString("[NativeWorldV3Verification] state=ready pack=%s contentId=%s cache=%s elapsedMs=%llu handles=%u directory=%s",
+                                            manifest.packId.c_str(), request.contentId.c_str(), result.cacheHit ? "hit" : "published",
+                                            static_cast<unsigned long long>(GetTickCount64_() - started),
+                                            static_cast<unsigned int>(verifiedChild->verifiedObject->GetHandleCount()), result.publishedDirectory.c_str()));
         return result;
     }
 }  // namespace
@@ -7791,7 +8067,6 @@ void CNativeWorldPackManagerSA::InstallFromEnvironment(CStreamingSA* streaming)
 
 SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOffer(const SNativeWorldTransportOffer& offer)
 {
-    std::lock_guard<std::mutex>        lock(g_transportPublisherMutex);
     SNativeWorldTransportPublishResult result;
     const auto                         isCancelled = [&offer]() { return offer.cancelled && offer.cancelled->load(std::memory_order_acquire); };
     if (isCancelled())
@@ -7799,6 +8074,27 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
         result.error = "transport publication was cancelled";
         return result;
     }
+    {
+        std::lock_guard<std::mutex> lock(g_transportPublisherMutex);
+        if (g_state != EState::Off && g_state != EState::Neutral)
+        {
+            result.existingActivationActive = HasCommittedActivation(g_state);
+            result.error = "native registrar state is not idle; transport publication cannot share its mutable descriptor";
+            return result;
+        }
+    }
+    const bool isStaticWorldV3Set =
+        offer.format == STATIC_WORLD_V3_FORMAT && offer.startupAuthorization && offer.startupAuthorization->policy == NATIVE_WORLD_STATIC_V3_SET_POLICY;
+    if (offer.format == STATIC_WORLD_V3_FORMAT && !isStaticWorldV3Set)
+    {
+        // Child verification does not mutate the GTA registrar. Hold the
+        // lifecycle lock only long enough to prove admission is still idle so
+        // multiple resource download callbacks can hash independent packs on
+        // the bounded I/O workers while a set callback waits for them.
+        return PublishStaticWorldV3TransportOffer(offer, isCancelled);
+    }
+
+    std::lock_guard<std::mutex> lock(g_transportPublisherMutex);
     if (g_state != EState::Off && g_state != EState::Neutral)
     {
         result.existingActivationActive = HasCommittedActivation(g_state);
@@ -7810,9 +8106,7 @@ SNativeWorldTransportPublishResult CNativeWorldPackManagerSA::PublishTransportOf
     // g_policy/g_pack state makes an accepted cache object incapable of
     // becoming native GTA input through the format-1/2 startup route.
     if (offer.format == STATIC_WORLD_V3_FORMAT)
-        return offer.startupAuthorization && offer.startupAuthorization->policy == NATIVE_WORLD_STATIC_V3_SET_POLICY
-                   ? PublishStaticWorldV3SetOffer(offer, isCancelled)
-                   : PublishStaticWorldV3TransportOffer(offer, isCancelled);
+        return PublishStaticWorldV3SetOffer(offer, isCancelled);
 
     const auto resetTransportAuditState = [&]()
     {
