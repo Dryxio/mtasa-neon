@@ -8,11 +8,11 @@ local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
 local activeTest = false
--- Nearby players see the same road population, so production budgets ten
--- units per spatial bubble rather than ten duplicate units per player. The
--- global circuit breaker keeps a busy public server bounded while still
--- allowing sixteen isolated areas to receive the complete local target.
-local PRODUCTION_TARGET_PER_BUBBLE = 10
+-- Nearby players see the same road population, so production budgets sixteen
+-- units per spatial bubble rather than sixteen duplicate units per player.
+-- Keep the existing global circuit breaker: ten isolated areas can receive
+-- the complete local target without raising the combined traffic-ped fence.
+local PRODUCTION_TARGET_PER_BUBBLE = 16
 local PRODUCTION_GLOBAL_CAP = 160
 -- The pool fence is global because both traffic resources create server-side
 -- ped elements, while GTA's actual pool pressure is local after streaming.
@@ -28,12 +28,16 @@ local population = {
 local demoPopulationSnapshot = false
 
 local MONITOR_INTERVAL = 500
+-- Population admission is idle once the spatial target is full. A short tick
+-- only matters while a fast player has just shed several distant cars, where
+-- the former one-second cadence left the visible bubble half empty.
+local PRODUCTION_REFILL_INTERVAL = 250
 -- Eight seconds is shorter than an ordinary red-light wait. Keep deliberate
 -- lifecycle stalls immediate by backdating lastMovingAt in that scenario,
 -- while normal fixtures get a realistic traffic timeout.
 local TEST_STUCK_TIMEOUT = 20000
 local PRODUCTION_STUCK_TIMEOUT = 30000
-local RESIDENCY_DISTANCE = 280
+local RESIDENCY_DISTANCE = 220
 local OWNER_DISTANCE = 220
 -- Players this close can reliably observe traffic created around the same
 -- anchor while still respecting the wider residency boundary above.
@@ -1174,7 +1178,7 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
     local ox, oy, oz = getElementPosition(pending.owner)
     local finite = x and y and z and x == x and y == y and z == z and math.abs(x) < 10000 and math.abs(y) < 10000 and math.abs(z) < 2000
     if not finite or not occupantsValid or vehicleClass ~= (MODEL_CLASS[pending.model] or 0) or (drivingStyle ~= 0 and drivingStyle ~= 6) or
-        getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) > 240 then
+        getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) > RESIDENCY_DISTANCE then
         pendingCandidates[session] = nil
         trace("candidate-retry", {session = session, reason = "server-validation", finite = finite == true,
             occupantsValid = occupantsValid, occupantCount = type(occupantModels) == "table" and #occupantModels or -1,
@@ -1577,7 +1581,7 @@ local function startPopulation(targetPerPlayer, cap, testDensity, targetPerPlaye
     population.demo = demoMode == true
     population.enabled = true
     if isTimer(population.timer) then killTimer(population.timer) end
-    population.timer = setTimer(populationTick, 1000, 0)
+    population.timer = setTimer(populationTick, PRODUCTION_REFILL_INTERVAL, 0)
     populationTick()
     trace("population-start", {
         targetPerPlayer = population.targetPerPlayer, cap = population.cap, testDensity = population.testDensity, demo = population.demo,

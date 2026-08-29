@@ -39,6 +39,11 @@ local config = {
     nativeDealerFightWeaponAmmo = 50,
     dealerStrengthGrowthInterval = 60000,
     populationWorldConvergenceGrace = 5000,
+    -- A zone can request a family whose native path oracle has no usable node
+    -- near the player. Stop that family from monopolizing every 100 ms request
+    -- while other valid population deficits are waiting.
+    candidateMissCooldownThreshold = 5,
+    candidateMissCooldown = 5000,
     minimumGangGroupSize = 2,
     maximumGangGroupSize = 4,
     maximumGangGroupSpan = 8,
@@ -237,6 +242,7 @@ local requestCursor = 0
 local pendingRequests = {}
 local pendingVisibilityChecks = {}
 local populationProfiles = {}
+populationCandidateMisses = {}
 local populationWorld = PedTrafficPopulationWorld.create("post_home_coming")
 pedTrafficDemoDensity = {
     enabled = false,
@@ -809,6 +815,14 @@ local function selectPopulationForPlayer(player)
     local gangChance = gangDeficit
     local copChance = copDeficit
     local demoFallback = false
+    local missState = populationCandidateMisses[player]
+    local now = getTickCount()
+    if missState then
+        if missState.civilian and now < (missState.civilian.cooldownUntil or 0) then civilianChance = -math.huge end
+        if missState.dealer and now < (missState.dealer.cooldownUntil or 0) then dealerChance = -math.huge end
+        if missState.gang and now < (missState.gang.cooldownUntil or 0) then gangChance = -math.huge end
+        if missState.cop and now < (missState.cop.cooldownUntil or 0) then copChance = -math.huge end
+    end
     -- This small independent randomization is part of FindNewPedType itself;
     -- it prevents low remaining deficits from producing a rigid cadence.
     if civilianChance < 2 then civilianChance = civilianChance * math.random() end
@@ -3483,6 +3497,7 @@ local function setEnabled(value, actor)
             clearTestVehicles()
             pendingNativeBikeJacks = {}
             populationProfiles = {}
+            populationCandidateMisses = {}
             populationWorldRevisions = {}
             if coupleTest then finishCoupleTest("CANCEL", "traffic-disabled") end
         end
@@ -3509,6 +3524,7 @@ local function setEnabled(value, actor)
         clearTraffic("disabled")
         clearTestVehicles()
         populationProfiles = {}
+        populationCandidateMisses = {}
         populationWorldRevisions = {}
     end
     triggerClientEvent(root, "pedTraffic:setEnabled", resourceRoot, enabled, debugEnabled)
@@ -3978,6 +3994,26 @@ addEventHandler("pedTraffic:candidate", resourceRoot, function(requestId, worldR
     if candidate == false then
         stats.candidateMisses = stats.candidateMisses + 1
         countReason(stats.missReasons, missReason)
+        local populationClass = request.selection.populationClass
+        local playerMisses = populationCandidateMisses[player] or {}
+        local classMisses = playerMisses[populationClass] or {count = 0, cooldownUntil = 0}
+        if missReason == "no-path" then
+            classMisses.count = classMisses.count + 1
+            if classMisses.count >= config.candidateMissCooldownThreshold then
+                classMisses.count = 0
+                classMisses.cooldownUntil = getTickCount() + config.candidateMissCooldown
+                writePopulationTrace("candidate_class_cooldown", {
+                    player_id = getPopulationClientId(player),
+                    population_class = populationClass,
+                    cooldown_ms = config.candidateMissCooldown,
+                    reason = tostring(missReason),
+                })
+            end
+        else
+            classMisses.count = 0
+        end
+        playerMisses[populationClass] = classMisses
+        populationCandidateMisses[player] = playerMisses
         writePopulationTrace("candidate_miss", {
             request_id = requestId,
             player_id = getPopulationClientId(player),
@@ -3987,6 +4023,10 @@ addEventHandler("pedTraffic:candidate", resourceRoot, function(requestId, worldR
             reason = tostring(missReason),
         })
         return
+    end
+    local playerMisses = populationCandidateMisses[player]
+    if playerMisses and playerMisses[request.selection.populationClass] then
+        playerMisses[request.selection.populationClass] = nil
     end
     if getTrafficPedCount() >= config.globalCap then
         stats.rejected = stats.rejected + 1
@@ -4056,6 +4096,7 @@ addEvent("pedTraffic:populationProfile", true)
 addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
     if not enabled or not isEligiblePlayer(client) then
         populationProfiles[client] = nil
+        populationCandidateMisses[client] = nil
         return
     end
     if not isPopulationWorldReady(client) then
@@ -4065,6 +4106,7 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
     local validated = validatePopulationProfile(profile)
     if not validated then
         populationProfiles[client] = nil
+        populationCandidateMisses[client] = nil
         return
     end
 
@@ -4085,6 +4127,7 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
     else
         validated.stableSince = validated.receivedAt
         validated.nextRebalanceAt = validated.receivedAt + 3000
+        populationCandidateMisses[client] = nil
     end
     populationProfiles[client] = validated
     if not previous or previous.signature ~= validated.signature then
@@ -5100,6 +5143,7 @@ addEventHandler("onPlayerQuit", root, function()
     end
     pendingRequests[source] = nil
     populationProfiles[source] = nil
+    populationCandidateMisses[source] = nil
     populationWorldRevisions[source] = nil
     populationClientIds[source] = nil
     removeTestVehicle(source)
@@ -7517,6 +7561,7 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
         clearTraffic("population-preset-change")
         pendingRequests = {}
         populationProfiles = {}
+        populationCandidateMisses = {}
         populationWorldRevisions = {}
         if enabled then
             sendPopulationWorldState(root)
@@ -7607,5 +7652,6 @@ addEventHandler("onResourceStop", resourceRoot, function()
     clearTraffic("resource-stop")
     clearTestVehicles()
     populationProfiles = {}
+    populationCandidateMisses = {}
     populationWorldRevisions = {}
 end)
