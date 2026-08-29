@@ -2,6 +2,46 @@
   "schema": 1,
   "releases": [
     {
+      "build": 184,
+      "date": "2026-08-29",
+      "title": "Faster native worlds and encrypted resource assets",
+      "summary": "Build 184 removes the first-join restart for format-3 native worlds, accelerates verified cached-world admission, improves native traffic routing and adds authenticated encrypted DFF, TXD and COL assets.",
+      "highlights": [
+        "Enter the first format-3 native world in the current GTA session instead of restarting the game",
+        "Reuse verified native-world cache objects for substantially faster repeat admission while retaining corruption recovery",
+        "Protect downloadable DFF, TXD and COL files at rest with authenticated Neon asset packages"
+      ],
+      "sections": [
+        {
+          "label": "For players",
+          "tone": "players",
+          "items": [
+            "The first format-3 native-world set can now activate in the current GTA session instead of requiring a bootstrap restart.",
+            "Previously verified native-world cache objects are reused without repeatedly hashing the same payloads, reducing repeat activation time while corrupt cache entries still fail closed and rebuild safely.",
+            "Scripted native traffic selects road joins from the vehicle's lane, heading and elevation more reliably, including one-way and multi-branch roads."
+          ]
+        },
+        {
+          "label": "For server owners and creators",
+          "tone": "servers",
+          "items": [
+            "Package downloadable DFF, TXD and COL files as authenticated AES-256-GCM .neonasset containers and apply them atomically with engineReplaceEncryptedModel.",
+            "Asset content keys remain server-only files and are delivered as resource-scoped capability state; authenticated plaintext and keys are wiped at lifecycle boundaries.",
+            "Encrypted-asset transport advances the Neon network protocol, so clients and servers must both run build 184; matching Windows and Linux server packages are included in this release.",
+            "The repository's native traffic reference resources now support per-player-area population budgets and preserve authoritative vehicles outside the owner's loaded collision range."
+          ]
+        },
+        {
+          "label": "Development tooling",
+          "tone": "creators",
+          "items": [
+            "The repository can build a deterministic portable Neon CLI workspace with Python 3.10-aware launchers, exact payload hashes and a bounded self-test.",
+            "Authenticated Windows runtime proofs can verify real server, client, in-game and multiplayer observations without treating process startup alone as evidence."
+          ]
+        }
+      ]
+    },
+    {
       "build": 183,
       "date": "2026-08-26",
       "title": "Neon Identity, DevTools and native-world improvements",
