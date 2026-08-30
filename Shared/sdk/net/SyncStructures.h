@@ -185,6 +185,75 @@ struct SFloatAsBitsSync : public SFloatAsBitsSyncBase
     }
 };
 
+// Retains an established compact float encoding while allowing trusted game
+// state to exceed its historical range. The all-ones compact value is an
+// escape marker followed by the exact float. Ordinary values therefore keep
+// their previous bit count and quantization; only values which would collide
+// with the marker pay the additional 32 bits.
+template <unsigned int bits>
+struct SFloatAsBitsWithOverflowSync : public ISyncStructure
+{
+    SFloatAsBitsWithOverflowSync(float fMin, float fCompactMax, bool bPreserveGreaterThanMin)
+        : m_ulCompactCodeMax((1UL << bits) - 1),
+          m_fMin(fMin),
+          m_fCompactMax(fCompactMax),
+          m_fEscapeThreshold(fCompactMax - ((fCompactMax - fMin) / m_ulCompactCodeMax) * 0.5f),
+          m_bPreserveGreaterThanMin(bPreserveGreaterThanMin)
+    {
+    }
+
+    bool Read(NetBitStreamInterface& bitStream)
+    {
+        unsigned long ulValue = 0;
+        if (!bitStream.ReadBits(&ulValue, bits))
+            return false;
+
+        if (ulValue == m_ulCompactCodeMax)
+        {
+            float fOverflowValue = 0.0f;
+            if (!bitStream.Read(fOverflowValue) || !std::isfinite(fOverflowValue) || fOverflowValue < m_fEscapeThreshold)
+                return false;
+            data.fValue = fOverflowValue;
+            return true;
+        }
+
+        const float fAlpha = ulValue / static_cast<float>(m_ulCompactCodeMax);
+        data.fValue = Lerp(m_fMin, fAlpha, m_fCompactMax);
+        return true;
+    }
+
+    void Write(NetBitStreamInterface& bitStream) const
+    {
+        const float fValue = std::isfinite(data.fValue) ? data.fValue : m_fMin;
+        if (fValue >= m_fEscapeThreshold)
+        {
+            bitStream.WriteBits(&m_ulCompactCodeMax, bits);
+            bitStream.Write(fValue);
+            return;
+        }
+
+        const float   fAlpha = UnlerpClamped(m_fMin, fValue, m_fCompactMax);
+        unsigned long ulValue = Round(m_ulCompactCodeMax * fAlpha);
+        if (ulValue >= m_ulCompactCodeMax)
+            ulValue = m_ulCompactCodeMax - 1;
+        if (m_bPreserveGreaterThanMin && ulValue == 0 && fAlpha > 0.0f)
+            ulValue = 1;
+        bitStream.WriteBits(&ulValue, bits);
+    }
+
+    struct
+    {
+        float fValue;
+    } data;
+
+private:
+    const unsigned long m_ulCompactCodeMax;
+    const float         m_fMin;
+    const float         m_fCompactMax;
+    const float         m_fEscapeThreshold;
+    const bool          m_bPreserveGreaterThanMin;
+};
+
 // Declare specific health and armor sync structures
 struct SPlayerHealthSync : public SFloatAsBitsSync<8>
 {
@@ -198,16 +267,18 @@ struct SPlayerArmorSync : public SFloatAsBitsSync<8>
     SPlayerArmorSync() : SFloatAsBitsSync<8>(0.f, 127.5f, true, false) {}
 };
 
-struct SVehicleHealthSync : public SFloatAsBitsSync<12>
+struct SVehicleHealthSync : public SFloatAsBitsWithOverflowSync<12>
 {
-    // 0 - 2000 step 0.5                                2047.5 = ( 2^12 - 1 ) * 0.5
-    SVehicleHealthSync() : SFloatAsBitsSync<12>(0.f, 2047.5f, true, false) {}
+    // Compact: 0 - 2047 step 0.5. Values at the former 2047.5 ceiling and
+    // above use the all-ones marker plus an exact float.
+    SVehicleHealthSync() : SFloatAsBitsWithOverflowSync<12>(0.f, 2047.5f, true) {}
 };
 
-struct SLowPrecisionVehicleHealthSync : public SFloatAsBitsSync<8>
+struct SLowPrecisionVehicleHealthSync : public SFloatAsBitsWithOverflowSync<8>
 {
-    // 0 - 2000 step 8                                              2040 = ( 2^8 - 1 ) * 8
-    SLowPrecisionVehicleHealthSync() : SFloatAsBitsSync<8>(0.0f, 2040.0f, true, false) {}
+    // Compact: 0 - 2032 step 8. Values colliding with the 2040 marker use an
+    // exact float, preventing lightsync from reintroducing the old clamp.
+    SLowPrecisionVehicleHealthSync() : SFloatAsBitsWithOverflowSync<8>(0.0f, 2040.0f, true) {}
 };
 
 struct SObjectHealthSync : public SFloatAsBitsSync<11>
@@ -823,7 +894,8 @@ struct SUnoccupiedVehicleSync : public ISyncStructure
             if (data.bSyncHealth)
             {
                 SVehicleHealthSync health;
-                bitStream.Read(&health);
+                if (!bitStream.Read(&health))
+                    return false;
                 data.fHealth = health.data.fValue;
             }
 
