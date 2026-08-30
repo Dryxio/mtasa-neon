@@ -58,6 +58,12 @@ bool CTasksSA::AddPedScriptCommandTask(CPed* pPed, CTask* pTask, bool bAffectsDe
     return true;
 }
 
+bool CTasksSA::IsPedScriptCommandTaskReady(CPed* pPed) const
+{
+    const CPedSAInterface* pPedInterface = pPed ? pPed->GetPedInterface() : nullptr;
+    return pPedInterface && pPedInterface->pPedIntelligence;
+}
+
 CTaskSimplePlayerOnFoot* CTasksSA::CreateTaskSimplePlayerOnFoot()
 {
     CTaskSimplePlayerOnFootSA* pTask = NewTask<CTaskSimplePlayerOnFootSA>();

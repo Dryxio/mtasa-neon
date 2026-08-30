@@ -303,6 +303,7 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedExitVehicle", ArgumentParser<SetPedExitVehicle>},
         {"setPedWeaponShootingRate", ArgumentParser<SetPedWeaponShootingRate>},
         {"setPedWeaponAccuracy", ArgumentParser<SetPedWeaponAccuracy>},
+        {"isPedNativeTaskReady", ArgumentParser<IsPedNativeTaskReady>},
         {"setPedGoTo", ArgumentParser<SetPedGoTo>},
         {"setPedNavigateTo", ArgumentParser<SetPedNavigateTo>},
         {"setPedChatWith", ArgumentParser<SetPedChatWith>},
@@ -518,6 +519,7 @@ void CLuaPedDefs::AddClass(lua_State* luaVM)
     lua_classfunction(luaVM, "getWeaponShootingRate", "getPedWeaponShootingRate");
     lua_classfunction(luaVM, "setWeaponShootingRate", "setPedWeaponShootingRate");
     lua_classfunction(luaVM, "setWeaponAccuracy", "setPedWeaponAccuracy");
+    lua_classfunction(luaVM, "isNativeTaskReady", "isPedNativeTaskReady");
     lua_classfunction(luaVM, "setGoTo", "setPedGoTo");
     lua_classfunction(luaVM, "setNavigateTo", "setPedNavigateTo");
     lua_classfunction(luaVM, "setChatWith", "setPedChatWith");
@@ -2972,6 +2974,14 @@ bool CLuaPedDefs::SetPedWeaponAccuracy(CClientPed* ped, int accuracy)
     // Restricting this persistent stat to that owner avoids divergent combat.
     ped->GetGamePlayer()->SetWeaponAccuracy(static_cast<std::uint8_t>(accuracy));
     return true;
+}
+
+bool CLuaPedDefs::IsPedNativeTaskReady(CClientPed* ped)
+{
+    if (!ped || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer())
+        return false;
+
+    return g_pGame->GetTasks()->IsPedScriptCommandTaskReady(ped->GetGamePlayer());
 }
 
 bool CLuaPedDefs::SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,

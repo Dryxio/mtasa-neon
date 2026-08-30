@@ -146,6 +146,7 @@ public:
     CTaskComplexFollowNodeRoute* CreateTaskComplexFollowNodeRoute(const int iMoveState, const CVector& vecTarget, const float fTargetRadius,
                                                                   const float fSlowDownDistance, const float fHeightChangeThreshold,
                                                                   const bool bKeepNodesHeadingAwayFromTarget, const int iTime, const bool bUseBlending);
+    bool                         IsPedScriptCommandTaskReady(CPed* pPed) const;
 
     static void StaticSetHooks();
 };

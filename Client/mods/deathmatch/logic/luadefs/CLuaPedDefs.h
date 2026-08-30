@@ -128,6 +128,7 @@ public:
     static int  GetPedWeaponAccuracy(CClientPed* ped);
     static bool SetPedWeaponShootingRate(CClientPed* ped, int rate);
     static bool SetPedWeaponAccuracy(CClientPed* ped, int accuracy);
+    static bool IsPedNativeTaskReady(CClientPed* ped);
     static bool SetPedGoTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,
                            std::optional<float> slowdownRadius, std::optional<int> timeout);
     static bool SetPedNavigateTo(CClientPed* ped, CVector target, std::optional<std::string> movement, std::optional<float> radius,

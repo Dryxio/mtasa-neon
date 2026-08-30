@@ -144,13 +144,31 @@ local function controlsRestored(player)
 end
 
 local function restoredPlayerMatches(player, expected)
-    if not isElement(player) or isPedInVehicle(player) or getElementInterior(player) ~= expected.interior or
-        getElementDimension(player) ~= expected.dimension or isElementFrozen(player) ~= expected.frozen or
-        getElementCollisionsEnabled(player) ~= expected.collisions then
-        return false
+    if not isElement(player) then return false, {field = "element", expected = true, actual = false} end
+    if isPedInVehicle(player) then return false, {field = "vehicle", expected = false, actual = true} end
+    local actualInterior = getElementInterior(player)
+    if actualInterior ~= expected.interior then
+        return false, {field = "interior", expected = expected.interior, actual = actualInterior}
+    end
+    local actualDimension = getElementDimension(player)
+    if actualDimension ~= expected.dimension then
+        return false, {field = "dimension", expected = expected.dimension, actual = actualDimension}
+    end
+    local actualFrozen = isElementFrozen(player)
+    if actualFrozen ~= expected.frozen then
+        return false, {field = "frozen", expected = expected.frozen, actual = actualFrozen}
+    end
+    local actualCollisions = getElementCollisionsEnabled(player)
+    if actualCollisions ~= expected.collisions then
+        return false, {field = "collisions", expected = expected.collisions, actual = actualCollisions}
     end
     local x, y, z = getElementPosition(player)
-    return getDistanceBetweenPoints3D(x, y, z, expected.x, expected.y, expected.z) <= 0.1
+    local distance = getDistanceBetweenPoints3D(x, y, z, expected.x, expected.y, expected.z)
+    if distance > 0.1 then
+        return false, {field = "position", expectedX = expected.x, expectedY = expected.y, expectedZ = expected.z,
+                       actualX = x, actualY = y, actualZ = z, distance = distance}
+    end
+    return true, {field = "none", distance = distance}
 end
 
 local function finishTransitionTerminal(ok, reason)
@@ -1250,13 +1268,15 @@ addEventHandler("ogl:cleanupDone", resourceRoot, function(id, ok, reason, data)
     end
     local expected = mission.players[client]
     local controlsOk, disabledControl = controlsRestored(client)
-    local serverRestored = expected and restoredPlayerMatches(client, expected)
+    local serverRestored, restoreDiagnostic = expected and restoredPlayerMatches(client, expected)
     data = type(data) == "table" and data or {}
     trace("cleanup", {player = getPlayerName(client), ok = ok == true, serverRestored = serverRestored,
                        controls = controlsOk, chatControl = isControlEnabled(client, "chatbox"),
-                       targetLocal = data.targetLocal == true, reason = reason})
+                       targetLocal = data.targetLocal == true, reason = reason,
+                       restoreDiagnostic = restoreDiagnostic})
     if ok ~= true or not serverRestored or not controlsOk or data.targetLocal ~= true then
-        local detail = reason or (not serverRestored and "server state") or
+        local detail = reason or (not serverRestored and
+                           ("server state " .. tostring(restoreDiagnostic and restoreDiagnostic.field))) or
                            (not controlsOk and ("control " .. tostring(disabledControl))) or "camera target"
         return finishTransitionTerminal(false, "cleanup invalide: " .. tostring(detail))
     end

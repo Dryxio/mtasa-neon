@@ -3,8 +3,10 @@
 
     <script src="shared.lua" type="shared" cache="false" />
     <script src="server.lua" type="server" />
+    <script src="harness_server.lua" type="server" />
     <script src="instruction_feed.lua" type="client" cache="false" />
     <script src="client.lua" type="client" cache="false" />
+    <script src="harness_client.lua" type="client" cache="false" />
 
     <min_mta_version client="1.6.0" server="1.6.0" />
 </meta>

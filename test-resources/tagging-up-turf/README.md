@@ -36,6 +36,89 @@ Development commands:
 - `/taguptracechat [on|off]` sends each new trace operation to the local chatbox.
 - `/taguptracepreview` loads a presentation-only sample sequence for visual QA.
 
+## Bounded A-to-Z transition harness
+
+The development resource includes a file-command harness for the complete
+ordinary mission graph. It starts the same `startMission` function as `/tagup`,
+waits for the real stage handlers, native task observations, camera/audio
+barriers, exact `09D0` wheel predicates, recording `207`, finale, reward and
+delayed cleanup, then requires one final physical movement input from every
+restored client before emitting one terminal `PASS` or `FAIL`. Every record is also
+written as a single JSON line prefixed with
+`[tagging-up-turf-harness-jsonl]` in the server or client log.
+
+Create exactly one of these empty files in the **deployed** resource directory:
+
+```text
+tagup-transition-natural-1.request
+tagup-transition-skip-1.request
+tagup-transition-natural-2.request
+tagup-transition-skip-2.request
+tagup-transition-native-natural-1.request
+tagup-transition-native-skip-1.request
+tagup-transition-native-natural-2.request
+tagup-transition-native-skip-2.request
+```
+
+The suffix is the exact required connected-client count. The natural profiles
+let file and world scenes finish naturally; the skip profiles exercise their
+leader-authorized synchronized skip paths. Both profiles retain Sweet's real
+Idlewood native sequence, the Ballas native encounter, the recorded-car return,
+the post-rooftop scene and the finale cleanup. The harness stages the Greenwood
+above each SCM arrival box but does not advance from that placement: the normal
+client syncer must still observe all four native wheel contacts and submit the
+ordinary validated arrival report.
+
+At each playable transition the clients emit an `INPUT_READY` JSONL record. The
+VM runner focuses the matching GTA process and sends a physical `W` or left
+mouse press. A client acknowledges only when the corresponding MTA control is
+enabled and the physical state is observed. Run it from macOS without launching
+or restarting either client or server:
+
+```bash
+./utils/tagging-up-turf-transition-harness.sh coop-skip dryxio EvasivePanpipe6_CL2 1200
+./utils/tagging-up-turf-transition-harness.sh coop-native-natural dryxio EvasivePanpipe6_CL2 1200
+```
+
+Every profile deliberately refuses to synthesize
+`onClientObjectGangTagProgress`, call the server tag-progress event, or assign
+alpha directly. The original four profiles prove that physical fire remains
+available and label their bounded debug transitions `COVERAGE_GAP`; they cannot
+be reported as tag-completion proof. The four `native-*` profiles instead place
+the leader 1.75 metres in front of each mission object after a client collision
+probe, select the existing spraycan, and drive genuine right- and left-mouse
+input through the Win32 runner. A bounded physical vertical sweep lets GTA's
+own shot query hit the surface. The ordinary mission validator must accept the
+complete 32-step native `0 -> 8 -> ... -> 248 -> 255` chain for all five tags.
+A priority-low harness observer counts only events already accepted into the
+ordinary mission state, so a debug mutation to `255` cannot satisfy this proof.
+Every connected client must then observe native and mirrored alpha `255` plus
+its synchronized `completedTags` entry for three stable samples. These profiles
+never call the tag-group debug skip.
+
+The 30 August 2026 VM validation completed all four real-spray profiles:
+`solo-native-natural`, `solo-native-skip`, `coop-native-natural`, and
+`coop-native-skip`. Each run accepted the exact 32 native increments on every
+one of the five tags and reached synchronized alpha `255`; the coop-natural
+profile also passed again after an exact resource restart. The first honest
+run exposed a harness placement bug rather than a spray-runtime failure: its
+ground ray selected an awning above the wall and left the shot segment more
+than 3.5 metres from the tag. Placement now samples outward from the tag and
+accepts only a plausible target-to-ground height, while firing is armed only
+when GTA's actual aim segment is within the native 0.5-metre hit radius.
+
+The harness also logs two engine-level gaps without installing a mission-local
+substitute: `DM_PED_MISSION_EMPTY` and
+`SET_CHAR_CAN_BE_SHOT_IN_VEHICLE sweet FALSE`. They must be implemented through
+generic synchronized Neon contracts before those SCM properties can move from
+`uncertain` to `implemented`.
+
+Resource shutdown now runs the same complete cleanup families as normal mission
+completion, including transition audio, Ballas encounter, post-rooftop camera,
+recording and story-protection state. Direct destruction of Sweet or the
+Greenwood is terminal during every gameplay phase rather than only while a
+native scene object happens to be active.
+
 ## SCM coverage audit
 
 The installed `main.scm` has SHA-256

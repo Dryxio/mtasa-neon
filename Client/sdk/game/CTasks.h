@@ -212,4 +212,10 @@ public:
                                                                           const float fSlowDownDistance, const float fHeightChangeThreshold,
                                                                           const bool bKeepNodesHeadingAwayFromTarget, const int iTime,
                                                                           const bool bUseBlending) = 0;
+
+    // A streamed element wrapper can briefly outlive GTA's task brain while a
+    // player is rebuilt after a file cutscene. Expose the stricter dispatch
+    // precondition so mission runtimes can wait without submitting throwaway
+    // tasks or mistaking that convergence window for a permanent failure.
+    virtual bool IsPedScriptCommandTaskReady(CPed* pPed) const = 0;
 };

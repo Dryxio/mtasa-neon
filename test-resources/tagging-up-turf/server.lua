@@ -304,7 +304,7 @@ local function warpSweetIntoFirstFreeSeat()
     local x, y, z = getElementPosition(vehicle)
     setElementPosition(sweet, x, y, z + 1)
     if isElement(mission.leader) then
-        setElementSyncer(sweet, mission.leader)
+        setElementSyncer(sweet, mission.leader, true, true)
     end
 
     for seat = 1, getVehicleMaxPassengers(vehicle) do
@@ -2187,6 +2187,7 @@ failMission = function(reason, failureTextKey)
     cancelDemoShoot("mission_failed")
     cancelDemoEnter("mission_failed")
     cancelDemoScene("mission_failed")
+    cancelBallasDeparture("mission_failed")
     cancelBallasGangScene("mission_failed")
     cancelBallasEncounter("mission_failed")
     cancelPostRoofScene("mission_failed")
@@ -3358,9 +3359,9 @@ addCommandHandler("taguplosespray", function(player)
     takeWeapon(player, TAGUP.sprayWeapon)
 end)
 
-addCommandHandler("tagupskip", function(player)
+local function skipMissionStage(player)
     if not mission.running or player ~= mission.leader then
-        return
+        return false
     end
     if mission.stage == "sweet1a" and mission.fileCutscene then
         local scene = mission.fileCutscene
@@ -3433,6 +3434,11 @@ addCommandHandler("tagupskip", function(player)
     elseif mission.stage == "final_scene" and mission.finalScene then
         requestFinalSceneRelease(mission.finalScene, true)
     end
+    return true
+end
+
+addCommandHandler("tagupskip", function(player)
+    skipMissionStage(player)
 end)
 
 local startDemoSequence
@@ -3447,7 +3453,7 @@ local function startDemoWalk(sweet, kind, overrideProfile)
 
     -- SWEET1 starts this sequence only after its black-screen actor staging has
     -- placed Sweet at the exact scripted coordinate and heading.
-    setElementSyncer(sweet, mission.leader)
+    setElementSyncer(sweet, mission.leader, true, true)
 
     mission.demoWalkSerial = mission.demoWalkSerial + 1
     local walk = {id = mission.demoWalkSerial, ped = sweet, kind = kind or "spray", profile = profile}
@@ -3510,7 +3516,7 @@ local function startDemoLeave()
     cancelDemoLeave("replaced")
     cancelDemoWalk("replaced")
     cancelDemoShoot("replaced")
-    setElementSyncer(sweet, mission.leader)
+    setElementSyncer(sweet, mission.leader, true, true)
 
     mission.demoLeaveSerial = mission.demoLeaveSerial + 1
     local leave = {
@@ -3692,7 +3698,7 @@ local function stageDemoActors(scene)
     end
     setElementPosition(sweet, profile.sweetStage.x, profile.sweetStage.y, tagupScmCharacterPlacementZ(profile.sweetStage.z))
     setElementRotation(sweet, 0, 0, profile.sweetStage.heading)
-    setElementSyncer(sweet, mission.leader)
+    setElementSyncer(sweet, mission.leader, true, true)
     scene.actorsStaged = true
     outputDebugString(("[tagging-up-turf] Sweet staged at SCM coordinate=(%.2f, %.2f, %.2f, heading=%.1f); sequence gate leaveComplete=%s"):format(
                           profile.sweetStage.x, profile.sweetStage.y, profile.sweetStage.z, profile.sweetStage.heading,
@@ -3996,7 +4002,7 @@ startDemoSequence = function(ped)
         return failMission("La Greenwood a disparu avant la sequence native de demonstration.")
     end
     giveWeapon(ped, TAGUP.sprayWeapon, 500, true)
-    setElementSyncer(ped, mission.leader)
+    setElementSyncer(ped, mission.leader, true, true)
 
     mission.demoShootSerial = mission.demoShootSerial + 1
     local shoot = {id = mission.demoShootSerial, ped = ped, requestedAt = getTickCount()}
@@ -4045,7 +4051,7 @@ startSweetReturnEnter = function(ped)
     end
 
     cancelDemoEnter("replaced")
-    setElementSyncer(ped, mission.leader)
+    setElementSyncer(ped, mission.leader, true, true)
     mission.demoEnterSerial = mission.demoEnterSerial + 1
     local enter = {
         id = mission.demoEnterSerial,
@@ -4908,18 +4914,10 @@ addEventHandler("onPedWasted", root, function()
 end)
 
 addEventHandler("onElementDestroy", root, function()
-    if mission.running and (source == mission.entities.sweet or source == mission.entities.vehicle) and
-        (mission.introScene or mission.demoScene or mission.demoLeave or mission.demoWalk or mission.demoShoot or mission.demoEnter or
-            mission.ballasDeparture or mission.finalScene) then
-        cancelIntroScene("ped_destroyed")
-        cancelDemoScene("ped_destroyed")
-        cancelDemoLeave("ped_destroyed")
-        cancelDemoWalk("ped_destroyed")
-        cancelDemoShoot("ped_destroyed")
-        cancelDemoEnter("ped_destroyed")
-        cancelBallasDeparture("ped_destroyed")
-        cancelFinalScene("ped_destroyed")
-        failMission("Sweet ou la Greenwood a ete detruit pendant sa demonstration native.")
+    if mission.running and not mission.finishing and mission.stage ~= "failed" and
+        (source == mission.entities.sweet or source == mission.entities.vehicle) then
+        local destroyedRole = source == mission.entities.sweet and "Sweet" or "La Greenwood"
+        failMission(destroyedRole .. " a ete detruit pendant la mission.")
     elseif mission.running and mission.introScene and source == mission.entities.smoke then
         cancelIntroScene("smoke_destroyed")
         failMission("Big Smoke a ete detruit pendant la scene d'intro.")
@@ -4952,6 +4950,10 @@ addEventHandler("onPlayerQuit", root, function()
 end)
 
 addEventHandler("onResourceStop", resourceRoot, function()
+    -- Suppress mission-failure callbacks while this resource deliberately
+    -- tears down its own elements. The explicit cleanup below is the terminal
+    -- owner during resource shutdown.
+    mission.finishing = true
     cancelFileCutscene("resource_stopped")
     cancelIntroScene("resource_stopped")
     cancelDemoLeave("resource_stopped")
@@ -4961,7 +4963,11 @@ addEventHandler("onResourceStop", resourceRoot, function()
     cancelDemoScene("resource_stopped")
     cancelBallasDeparture("resource_stopped")
     cancelBallasGangScene("resource_stopped")
+    cancelBallasEncounter("resource_stopped")
+    cancelPostRoofScene("resource_stopped")
+    cancelVehiclePlayback("resource_stopped")
     cancelFinalScene("resource_stopped")
+    cancelTransitionAudio("resource_stopped")
     clearMissionTimers()
     for _, player in ipairs(mission.party) do
         restorePlayer(player, mission.snapshots[player])
@@ -4971,4 +4977,28 @@ end)
 
 addEventHandler("onResourceStart", resourceRoot, function()
     outputDebugString("[tagging-up-turf] Ready. Use /tagup for the full mission or /tagupfinal for the Grove Street finale (up to three connected players).")
+    outputServerLog("[tagging-up-turf][transversal-gap] DM_PED_MISSION_EMPTY has no generic Neon Lua contract; no mission-local approximation is installed.")
+    outputServerLog("[tagging-up-turf][transversal-gap] SET_CHAR_CAN_BE_SHOT_IN_VEHICLE FALSE has no generic Neon Lua contract; recording 207 keeps the ordinary synchronized damage policy.")
 end)
+
+-- A separate, development-only harness script consumes this narrow surface.
+-- It starts the same mission and invokes the same debug skip implementation;
+-- mission state and progression remain owned by the ordinary handlers above.
+TAGUP_HARNESS_INTERNAL = {
+    getMission = function()
+        return mission
+    end,
+    startMission = function(player)
+        return startMission(player)
+    end,
+    skipMissionStage = function(player)
+        return skipMissionStage(player)
+    end,
+    abortMission = function(reason)
+        if not mission.running or mission.finishing or mission.stage == "failed" then
+            return false
+        end
+        failMission(reason or "Mission abandonnee.")
+        return true
+    end,
+}

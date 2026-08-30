@@ -229,7 +229,7 @@ local function cleanup()
         if isTimer(state.cutscene.timer) then killTimer(state.cutscene.timer) end
         pcall(releaseFileCutscene, state.cutscene.token)
     end
-    if state.text then textApi("clearMissionTexts") end
+    if state.text then textApi("releaseMissionText") end
     state = {active = false, timers = {}, text = false, cutscene = nil, camera = nil, marker = nil, blip = nil,
              audio = nil, audioGeneration = 0}
 end
@@ -511,7 +511,9 @@ local function beginTransitionCheckpoint(id, probeId, name, kind, leader, payloa
     end
     if not requiresInput then
         local targetOk = not isElement(payload.target) or isElementStreamedIn(payload.target)
-        return reportCheckpoint(id, probeId, name, targetOk, targetOk and nil or "cible non streamee",
+        local reason
+        if not targetOk then reason = "cible non streamee" end
+        return reportCheckpoint(id, probeId, name, targetOk, reason,
                                 {targetLocal = true, samples = 0, occupied = occupied, seat = seat,
                                  streamed = streamed, targetStreamed = targetOk}, false)
     end
@@ -556,8 +558,9 @@ local function beginTransitionCheckpoint(id, probeId, name, kind, leader, payloa
         if keyProbe.keyObserved and inputFrames >= 3 and maxDisplacement > 0.5 then
             killTimer(timer)
             local targetLocal = cameraTargetsLocalPlayer()
-            return reportCheckpoint(id, probeId, name, targetLocal,
-                                    targetLocal and nil or "camera perdue pendant la preuve",
+            local reason
+            if not targetLocal then reason = "camera perdue pendant la preuve" end
+            return reportCheckpoint(id, probeId, name, targetLocal, reason,
                                     {targetLocal = targetLocal, raw = maxRaw, processed = maxProcessed,
                                      displacement = maxDisplacement, samples = inputFrames,
                                      occupied = occupied, seat = seat, streamed = streamed}, true, control)
@@ -646,8 +649,9 @@ addEventHandler("ogl:cleanup", resourceRoot, function(id, report)
     if report == true then
         setTimer(function()
             local targetLocal = cameraTargetsLocalPlayer()
-            triggerServerEvent("ogl:cleanupDone", resourceRoot, id, targetLocal, targetLocal and nil or "camera target",
-                               {targetLocal = targetLocal})
+            local reason
+            if not targetLocal then reason = "camera target" end
+            triggerServerEvent("ogl:cleanupDone", resourceRoot, id, targetLocal, reason, {targetLocal = targetLocal})
         end, 50, 1)
     end
 end)

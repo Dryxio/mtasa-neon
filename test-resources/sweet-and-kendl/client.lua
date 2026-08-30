@@ -227,6 +227,22 @@ local function finishScene(scene, ok, reason)
     reportBarrier(scene.id, ok ~= false, reason)
 end
 
+local function startLocalGoToWhenNativeReady(scene, target, movement, attempt)
+    if not sceneIsActive(scene) then return end
+    attempt = attempt or 1
+    if type(isPedNativeTaskReady) == "function" and isPedNativeTaskReady(localPlayer) and
+        type(setPedGoTo) == "function" and
+        setPedGoTo(localPlayer, target, movement, 0.5, 2.0, 10000) then
+        outputDebugString(("[sweet-and-kendl] Local native go-to accepted attempt=%d"):format(attempt))
+        return
+    end
+    if attempt >= 25 then
+        finishScene(scene, false, "local_player_native_task_not_ready")
+        return
+    end
+    rememberTimer(setTimer(startLocalGoToWhenNativeReady, 100, 1, scene, target, movement, attempt + 1))
+end
+
 local function ownsPedPresentation(ped)
     return isElement(ped) and (ped == localPlayer or isElementSyncer(ped))
 end
@@ -442,9 +458,8 @@ local function runFuneralScene(id, actors)
                             playQueue(SAK.audio.postFuneral, actors, function() finishScene(scene, true) end)
                         end)
                     end, nil, function()
-                        if localPlayer == state.leader and type(setPedGoTo) == "function" then
-                            pcall(setPedGoTo, localPlayer, Vector3(971.1810, -1108.1931, 22.8672), "run", 0.5,
-                                  2.0, 10000)
+                        if localPlayer == state.leader then
+                            startLocalGoToWhenNativeReady(scene, Vector3(971.1810, -1108.1931, 22.8672), "run")
                         end
                     end)
                 end, nil, nil, {1600})
@@ -680,7 +695,7 @@ local function cleanup()
         stopRecording(id, recording.vehicle)
     end
     if state.text then
-        textApi("clearMissionTexts")
+        textApi("releaseMissionText")
     end
     state = {active = false, timers = {}, audio = nil, camera = nil, text = false, recordings = {}}
     setCameraTarget(localPlayer)
@@ -925,8 +940,10 @@ addEventHandler("sak:cleanup", resourceRoot, function(id, report)
     if report == true then
         setTimer(function()
             local targetLocal = cameraTargetsLocalPlayer()
-            triggerServerEvent("sak:cleanupDone", resourceRoot, id, targetLocal,
-                               targetLocal and nil or "camera target", {targetLocal = targetLocal})
+            local reason
+            if not targetLocal then reason = "camera target" end
+            triggerServerEvent("sak:cleanupDone", resourceRoot, id, targetLocal, reason,
+                               {targetLocal = targetLocal})
         end, 50, 1)
     end
 end)

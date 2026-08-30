@@ -527,8 +527,9 @@ addEventHandler("storyWorldRuntime:releaseFileCutscene", resourceRoot, function(
     id = tonumber(id)
     if source ~= resourceRoot or not fileCutscenes[id] then return end
     local released = stopFileCutscene(id, false, true)
-    triggerServerEvent("storyWorldRuntime:fileCutsceneReleased", resourceRoot, id, released,
-                       released and nil or "native file cutscene release refused")
+    local reason
+    if not released then reason = "native file cutscene release refused" end
+    triggerServerEvent("storyWorldRuntime:fileCutsceneReleased", resourceRoot, id, released, reason)
     if not released then ensureFileCutsceneReleaseRetry(fileCutscenes[id]) end
 end)
 

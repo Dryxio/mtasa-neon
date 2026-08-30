@@ -1371,7 +1371,7 @@ local function clearIntroScene(reason)
     if not scene then
         return true
     end
-    for _, name in ipairs({"prepareTimer", "audioLoadTimer", "audioFinishTimer", "entryTimer", "leaseTimer"}) do
+    for _, name in ipairs({"prepareTimer", "audioLoadTimer", "audioFinishTimer", "entryTimer", "leaseTimer", "taskRetryTimer"}) do
         if isTimer(scene[name]) then
             killTimer(scene[name])
         end
@@ -1469,7 +1469,8 @@ addEventHandler("tagup:introScenePrepare", resourceRoot, function(sceneId, sweet
     clearIntroScene("replaced")
     local required = {"acquireScriptCamera", "releaseScriptCamera", "isScriptCameraLeaseActive", "resetScriptCamera",
                       "setScriptCameraWidescreen", "setScriptCameraNearClip", "setScriptCameraFixed", "setScriptCameraPersist",
-                      "moveScriptCamera", "trackScriptCamera", "fadeScriptCamera", "enginePreloadWorldArea", "setPedGoTo", "setPedEnterVehicle",
+                      "moveScriptCamera", "trackScriptCamera", "fadeScriptCamera", "enginePreloadWorldArea", "isPedNativeTaskReady", "setPedGoTo",
+                      "setPedEnterVehicle",
                       "setPedLookAt", "setPedTurnToFace", "killPedTask",
                       "requestMissionAudio", "isMissionAudioLoaded", "playMissionAudio", "isMissionAudioFinished", "releaseMissionAudio"}
     for _, name in ipairs(required) do
@@ -1526,10 +1527,31 @@ addEventHandler("tagup:introSceneStart", resourceRoot, function(sceneId)
                                              2.0, 10000)
         local sweetAccepted = setPedGoTo(scene.sweet, Vector3(profile.sweetWalk.x, profile.sweetWalk.y, profile.sweetWalk.z), "walk", 0.5, 2.0,
                                              10000)
-        local leaderAccepted = setPedGoTo(localPlayer, Vector3(profile.leaderWalk.x, profile.leaderWalk.y, profile.leaderWalk.z), "walk", 0.5,
-                                              2.0, 10000)
-        triggerServerEvent("tagup:introSceneTasksStarted", resourceRoot, scene.id, smokeAccepted == true, sweetAccepted == true,
-                           leaderAccepted == true)
+        local function startLeaderTask(attempt)
+            if state.introScene ~= scene or scene.tasksReported then
+                return
+            end
+            local nativeTaskReady = isPedNativeTaskReady(localPlayer)
+            local leaderAccepted = nativeTaskReady and
+                                       setPedGoTo(localPlayer,
+                                                  Vector3(profile.leaderWalk.x, profile.leaderWalk.y, profile.leaderWalk.z), "walk", 0.5,
+                                                  2.0, 10000)
+            if leaderAccepted ~= true then
+                outputDebugString(("[tagging-up-turf] Intro leader walk refused attempt=%d elapsed=%d streamed=%s dead=%s frozen=%s " ..
+                                      "health=%.1f interior=%d dimension=%d nativeTaskReady=%s"):format(
+                                      attempt, getTickCount() - scene.startedAt, tostring(isElementStreamedIn(localPlayer)),
+                                      tostring(isPedDead(localPlayer)), tostring(isElementFrozen(localPlayer)), getElementHealth(localPlayer),
+                                      getElementInterior(localPlayer), getElementDimension(localPlayer), tostring(nativeTaskReady)), 2)
+            end
+            if leaderAccepted == true or attempt >= 20 then
+                scene.tasksReported = true
+                triggerServerEvent("tagup:introSceneTasksStarted", resourceRoot, scene.id, smokeAccepted == true, sweetAccepted == true,
+                                   leaderAccepted == true)
+                return
+            end
+            scene.taskRetryTimer = setTimer(startLeaderTask, 100, 1, attempt + 1)
+        end
+        startLeaderTask(1)
     end
     outputDebugString(("[tagging-up-turf] Intro world scene #%d native fixed shot started"):format(scene.id))
 end)
@@ -5910,6 +5932,7 @@ end)
 
 addEventHandler("onClientResourceStop", resourceRoot, function()
     state.checkpointGroundProbeToken = nil
+    clearTransitionAudio("resource_stopped")
     clearFileCutscene("resource_stopped", false)
     releaseArrivalGate("resource_stopped")
     clearSweetDemoAudioPreload("resource_stopped")
@@ -5929,10 +5952,19 @@ addEventHandler("onClientResourceStop", resourceRoot, function()
     clearBallasEncounter("resource_stopped", true)
     clearBallasEncounterAudioPreload()
     clearVehiclePlayback(true)
+    clearPostRoofScene("resource_stopped")
     clearFinalScene("resource_stopped", false)
+    killMissionTextTimers()
     if isElement(state.sweet) and type(setPedMissionActor) == "function" then
         setPedMissionActor(state.sweet, false)
     end
+    if isElement(state.sweet) and type(setPedStoryProtected) == "function" then
+        setPedStoryProtected(state.sweet, false)
+    end
     clearIntroScene("resource_stopped")
     destroyNavigation()
+    if state.missionTextReady then
+        callMissionTextApi("releaseMissionText")
+        state.missionTextReady = false
+    end
 end)
