@@ -2,6 +2,12 @@ local run
 local serial = 0
 local autoStarted = false
 
+-- MTA registers custom event names globally but keeps one declaring Lua VM per
+-- resource. The included runtime starts after this resource's server scripts
+-- on a cold start, so the consumer must keep the name alive long enough to
+-- attach its handler and across a standalone runtime restart.
+addEvent("onNativeTaskCohortStateChange", false)
+
 local function encode(value)
     local encoded = toJSON(value, true)
     return encoded and encoded:gsub("[\r\n]", "") or "{}"
@@ -15,6 +21,7 @@ local function trace(event, fields)
         event = event,
         run = run.id,
         phase = run.phase,
+        generation = run.generation,
         tick = getTickCount(),
     }
     for key, value in pairs(type(fields) == "table" and fields or {}) do
@@ -116,6 +123,14 @@ local function ownedBy(expected)
         getElementSyncer(run.voodoo) == expected
 end
 
+local function authoritySnapshot(expected)
+    return {
+        driverOwned = getElementSyncer(run.driver) == expected,
+        passengerOwned = getElementSyncer(run.passenger) == expected,
+        vehicleOwned = getElementSyncer(run.voodoo) == expected,
+    }
+end
+
 local function advanceFromActive(epoch)
     run.epoch = epoch
     local x, y, z = getElementPosition(run.voodoo)
@@ -123,6 +138,54 @@ local function advanceFromActive(epoch)
     run.observerSeen = {}
     publishObserverEpoch()
     trace("active", {epoch = epoch, owner = getPlayerName(run.owner)})
+end
+
+local function beginHandoff()
+    run.phase = "handoff"
+    trace("handoff_requested", {from = getPlayerName(run.owner), to = getPlayerName(run.nextOwner)})
+    local voodooX, voodooY, voodooZ = getElementPosition(run.voodoo)
+    setElementPosition(run.target, voodooX, voodooY + 60, voodooZ)
+    local accepted, handoffReason = exports["native-task-runtime"]:handoffNativeTaskCohort(run.handle,
+                                                                                            run.nextOwner, false)
+    if not accepted then
+        verdict(false, "handoff_refused: " .. tostring(handoffReason))
+    end
+end
+
+local function beginRapidReplacement()
+    run.phase = "replacement_cancel"
+    trace("replacement_requested", {owner = getPlayerName(run.owner), samples = 0})
+    if not exports["native-task-runtime"]:cancelNativeTaskCohort(run.handle) then
+        return verdict(false, "rapid_replace_cancel_refused")
+    end
+    run.handle = nil
+
+    -- Recreate the real mission race deterministically: the automatic owner is
+    -- already the requested player, but it is not persistent. Admission must
+    -- promote every element instead of trusting the transient owner pointer.
+    for name, element in pairs({driver = run.driver, passenger = run.passenger, vehicle = run.voodoo}) do
+        if not setElementSyncer(element, run.owner, false) then
+            return verdict(false, "rapid_replace_preconverge_" .. name .. "_refused")
+        end
+    end
+
+    run.phase = "replacement_assignment"
+    run.generation = run.generation + 1
+    run.epoch = 0
+    run.preReturnState = nil
+    run.replacementSamples = 0
+    run.createInProgress = true
+    local handle, reason = exports["native-task-runtime"]:createNativeTaskCohort(
+        run.owner, run.descriptor, {fallbackOwners = {run.nextOwner}})
+    run.createInProgress = false
+    if not handle then
+        return verdict(false, "rapid_replace_create_refused: " .. tostring(reason))
+    end
+    run.handle = handle
+    if run.preReturnState then
+        return verdict(false, "rapid_replace_preturn_state: " .. tostring(run.preReturnState))
+    end
+    trace("replacement_created", {owner = getPlayerName(run.owner), samples = run.replacementSamples})
 end
 
 local function startHarness(requester)
@@ -133,7 +196,10 @@ local function startHarness(requester)
     if #players < 2 then
         return false, "deux clients sont requis"
     end
-    local owner = isElement(requester) and requester or players[1]
+    -- Command handlers receive the console element when invoked headlessly.
+    -- Only an actual player can own sync authority, so console runs must use
+    -- the same deterministic player selection as the automatic harness.
+    local owner = isElement(requester) and getElementType(requester) == "player" and requester or players[1]
     local observer = players[1] == owner and players[2] or players[1]
     serial = serial + 1
     local tracePath = "cohort-test-" .. tostring(serial) .. ".jsonl"
@@ -145,6 +211,7 @@ local function startHarness(requester)
         phase = "setup",
         owner = owner,
         nextOwner = observer,
+        generation = 1,
         players = {},
         elements = {},
         observerSeen = {},
@@ -221,16 +288,28 @@ local function startHarness(requester)
         vehicles = {{vehicle = run.voodoo, straightLineDistance = 10}},
         dependencies = {run.target, owner},
     }
+    run.descriptor = descriptor
     run.phase = "first_assignment"
+    -- Cover both branches in assignEpoch: one element already converged to the
+    -- requested owner, while the remaining elements synchronously emit
+    -- onElementStartSync from setElementSyncer.
+    if not setElementSyncer(run.driver, owner, true) then
+        return verdict(false, "preconvergence partielle du syncer refusee")
+    end
+    run.createInProgress = true
     local handle, reason = exports["native-task-runtime"]:createNativeTaskCohort(owner, descriptor,
                                                                                  {fallbackOwners = {observer}})
+    run.createInProgress = false
     if not handle then
         return verdict(false, "creation de cohorte refusee: " .. tostring(reason))
     end
     run.handle = handle
+    if run.preReturnState then
+        return verdict(false, "etat " .. tostring(run.preReturnState) .. " publie avant le retour du handle")
+    end
     run.timeoutTimer = setTimer(function()
-        verdict(false, "timeout terminal apres 45 s")
-    end, 45000, 1)
+        verdict(false, "terminal_timeout_after_60s")
+    end, 60000, 1)
     run.monitorTimer = setTimer(function()
         if not run or run.finished or not run.phaseStart then
             return
@@ -238,36 +317,88 @@ local function startHarness(requester)
         local x, y, z = getElementPosition(run.voodoo)
         local moved = getDistanceBetweenPoints3D(x, y, z, run.phaseStart.x, run.phaseStart.y, run.phaseStart.z)
         local observerSeen = run.observerSeen[run.phase] == true
-        trace("sample", {epoch = run.epoch, moved = moved, observerSeen = observerSeen, authority = ownedBy(run.owner)})
+        local authority = authoritySnapshot(run.owner)
+        local ownerX, ownerY, ownerZ = getElementPosition(run.owner)
+        local authorityDistance = getDistanceBetweenPoints3D(x, y, z, ownerX, ownerY, ownerZ)
+        trace("sample", {
+            epoch = run.epoch,
+            owner = getPlayerName(run.owner),
+            moved = moved,
+            observerSeen = observerSeen,
+            authority = authority.driverOwned and authority.passengerOwned and authority.vehicleOwned,
+            driverOwned = authority.driverOwned,
+            passengerOwned = authority.passengerOwned,
+            vehicleOwned = authority.vehicleOwned,
+            authorityDistance = authorityDistance,
+            samples = run.replacementSamples or 0,
+        })
         if run.phase == "first_active" and moved >= 5 and observerSeen and ownedBy(run.owner) then
-            run.phase = "handoff"
-            trace("handoff_requested", {from = getPlayerName(run.owner), to = getPlayerName(run.nextOwner)})
-            local targetX, targetY, targetZ = getElementPosition(run.target)
-            setElementPosition(run.target, targetX, targetY + 60, targetZ)
-            local accepted, handoffReason = exports["native-task-runtime"]:handoffNativeTaskCohort(run.handle,
-                                                                                                    run.nextOwner,
-                                                                                                    false)
-            if not accepted then
-                return verdict(false, "handoff refuse: " .. tostring(handoffReason))
+            beginRapidReplacement()
+        elseif run.phase == "replacement_stress" then
+            local elapsed = getTickCount() - run.replacementActivatedAt
+            if not authority.driverOwned then
+                return verdict(false, "rapid_replace_driver_authority_lost")
+            elseif not authority.passengerOwned then
+                return verdict(false, "rapid_replace_passenger_authority_lost")
+            elseif not authority.vehicleOwned then
+                return verdict(false, "rapid_replace_vehicle_authority_lost")
+            elseif elapsed >= 500 and authorityDistance < 200 then
+                return verdict(false, "rapid_replace_stress_distance_missing")
+            elseif elapsed >= 1500 and run.replacementSamples >= 2 then
+                trace("replacement_pass", {
+                    owner = getPlayerName(run.owner),
+                    elapsed = elapsed,
+                    samples = run.replacementSamples,
+                })
+                beginHandoff()
+            elseif elapsed >= 6000 then
+                return verdict(false, "rapid_replace_sample_timeout")
             end
         elseif run.phase == "second_active" and moved >= 5 and observerSeen and ownedBy(run.owner) then
-            verdict(true, "deux epochs actifs, handoff atomique et observation passive valides")
+            verdict(true, "rapid replacement, two active owners, atomic handoff and passive observation validated")
         end
     end, 500, 0)
     return true
 end
 
 addEventHandler("onNativeTaskCohortStateChange", root, function(state, data)
-    if not run or source ~= run.handle then
+    if not run then
+        return
+    end
+    if run.createInProgress and isElement(source) and getElementType(source) == "native-task-cohort" then
+        trace("runtime_state_during_create", {state = state, epoch = data and data.epoch})
+        if state ~= "assigning" then
+            run.preReturnState = state
+        end
+        return
+    end
+    if source ~= run.handle then
         return
     end
     trace("runtime_state", {state = state, epoch = data.epoch, reason = data.reason})
     if state == "failed" then
         return verdict(false, "runtime: " .. tostring(data.reason))
     end
+    if state == "active" and data.sample and run.phase == "replacement_stress" and data.epoch == run.epoch then
+        run.replacementSamples = run.replacementSamples + 1
+        trace("replacement_client_sample", {
+            epoch = data.epoch,
+            owner = getPlayerName(run.owner),
+            samples = run.replacementSamples,
+        })
+    end
     if state == "active" and data.epoch ~= run.epoch then
         if run.phase == "first_assignment" then
             run.phase = "first_active"
+        elseif run.phase == "replacement_assignment" then
+            run.phase = "replacement_stress"
+            run.replacementActivatedAt = getTickCount()
+            local targetX, targetY, targetZ = getElementPosition(run.target)
+            setElementPosition(run.target, targetX + 350, targetY, targetZ)
+            trace("replacement_stress_begin", {
+                owner = getPlayerName(run.owner),
+                samples = run.replacementSamples,
+            })
         elseif run.phase == "handoff" then
             run.owner, run.nextOwner = run.nextOwner, run.owner
             run.phase = "second_active"

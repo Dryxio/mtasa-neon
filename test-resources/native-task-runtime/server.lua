@@ -2,6 +2,13 @@ local tasks = {}
 local tasksByElement = {}
 local nextTaskId = 0
 
+addEvent("onNativeTaskRuntimeStopping", false)
+addEventHandler("onResourceStop", root, function(stoppedResource)
+    if stoppedResource == getThisResource() then
+        triggerEvent("onNativeTaskRuntimeStopping", resourceRoot)
+    end
+end)
+
 local function copyRoute(route)
     if type(route) ~= "table" or #route == 0 then
         return false, "route vide"

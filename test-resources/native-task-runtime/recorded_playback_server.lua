@@ -18,6 +18,10 @@ local function copyOptions(options)
         target = target,
         distanceMode = options.distanceMode == "2d" and "2d" or "3d",
         pivotDistance = pivotDistance,
+        -- Some SCM scripts compare against an integer threshold while their
+        -- interpolation still pivots around a different float distance. Keep
+        -- both values so callers can reproduce that boundary literally.
+        closeThreshold = math.max(0, tonumber(options.closeThreshold) or pivotDistance),
         closeSpeed = math.max(0.05, tonumber(options.closeSpeed) or 2),
         pivotSpeed = math.max(0.05, tonumber(options.pivotSpeed) or 1),
         farSlopeDistance = math.max(1, tonumber(options.farSlopeDistance) or 90),

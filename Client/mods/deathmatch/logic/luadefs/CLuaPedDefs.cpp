@@ -345,6 +345,8 @@ void CLuaPedDefs::LoadFunctions()
         {"addPedNativeBikeJackTask", AddPedNativeBikeJackTask},
         {"setPedStoryProtected", ArgumentParser<SetPedStoryProtected>},
         {"setPedSuffersCriticalHits", ArgumentParser<SetPedSuffersCriticalHits>},
+        {"setPedCanBeDraggedOut", ArgumentParser<SetPedCanBeDraggedOut>},
+        {"setPedOnlyDamagedByPlayer", ArgumentParser<SetPedOnlyDamagedByPlayer>},
         {"setPedStayInSamePlace", ArgumentParser<SetPedStayInSamePlace>},
         {"setPedNeverTargeted", ArgumentParser<SetPedNeverTargeted>},
         {"setPedPhysicalProofs", ArgumentParser<SetPedPhysicalProofs>},
@@ -377,6 +379,8 @@ void CLuaPedDefs::LoadFunctions()
         {"isPedMissionActor", ArgumentParser<IsPedMissionActor>},
         {"isPedStoryProtected", ArgumentParser<IsPedStoryProtected>},
         {"getPedSuffersCriticalHits", ArgumentParser<GetPedSuffersCriticalHits>},
+        {"canPedBeDraggedOut", ArgumentParser<CanPedBeDraggedOut>},
+        {"isPedOnlyDamagedByPlayer", ArgumentParser<IsPedOnlyDamagedByPlayer>},
         {"getPedStayInSamePlace", ArgumentParser<GetPedStayInSamePlace>},
         {"isPedNeverTargeted", ArgumentParser<IsPedNeverTargeted>},
         {"getPedPhysicalProofs", ArgumentParser<GetPedPhysicalProofs>},
@@ -3529,10 +3533,9 @@ bool CLuaPedDefs::SetPedDriveMission(CClientPed* ped, CClientVehicle* vehicle, C
                                      float speed, std::optional<std::variant<std::string, int>> drivingStyle)
 {
     if (!ped || !vehicle || !targetVehicle || vehicle == targetVehicle || !ped->IsStreamedIn() || ped->IsDead() || !ped->GetGamePlayer() ||
-        (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || !vehicle->IsStreamedIn() || vehicle->IsBlown() ||
-        !vehicle->GetGameVehicle() || !targetVehicle->IsStreamedIn() || targetVehicle->IsBlown() || !targetVehicle->GetGameVehicle() ||
-        ped->GetOccupiedVehicle() != vehicle || vehicle->GetOccupant(0) != ped || !OwnsDrivenVehicle(ped, vehicle) || !std::isfinite(speed) || speed < 0.0f ||
-        speed >= 255.0f)
+        (!ped->IsLocalPlayer() && !ped->IsLocalEntity() && !ped->IsSyncing()) || !vehicle->IsStreamedIn() || vehicle->IsBlown() || !vehicle->GetGameVehicle() ||
+        !targetVehicle->IsStreamedIn() || targetVehicle->IsBlown() || !targetVehicle->GetGameVehicle() || ped->GetOccupiedVehicle() != vehicle ||
+        vehicle->GetOccupant(0) != ped || !OwnsDrivenVehicle(ped, vehicle) || !std::isfinite(speed) || speed < 0.0f || speed >= 255.0f)
     {
         return false;
     }
@@ -3633,6 +3636,16 @@ bool CLuaPedDefs::IsPedStoryProtected(CClientPed* ped)
 bool CLuaPedDefs::GetPedSuffersCriticalHits(CClientPed* ped)
 {
     return ped && ped->GetType() == CCLIENTPED && ped->GetSuffersCriticalHits();
+}
+
+bool CLuaPedDefs::CanPedBeDraggedOut(CClientPed* ped)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->CanBeDraggedOut();
+}
+
+bool CLuaPedDefs::IsPedOnlyDamagedByPlayer(CClientPed* ped)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->IsOnlyDamagedByPlayer();
 }
 
 bool CLuaPedDefs::GetPedStayInSamePlace(CClientPed* ped)
@@ -4304,6 +4317,16 @@ bool CLuaPedDefs::SetPedStoryProtected(CClientPed* ped, bool enabled)
 bool CLuaPedDefs::SetPedSuffersCriticalHits(CClientPed* ped, bool suffersCriticalHits)
 {
     return ped && ped->GetType() == CCLIENTPED && ped->SetSuffersCriticalHits(suffersCriticalHits);
+}
+
+bool CLuaPedDefs::SetPedCanBeDraggedOut(CClientPed* ped, bool canBeDraggedOut)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->SetCanBeDraggedOut(canBeDraggedOut);
+}
+
+bool CLuaPedDefs::SetPedOnlyDamagedByPlayer(CClientPed* ped, bool onlyDamagedByPlayer)
+{
+    return ped && ped->GetType() == CCLIENTPED && ped->SetOnlyDamagedByPlayer(onlyDamagedByPlayer);
 }
 
 bool CLuaPedDefs::SetPedStayInSamePlace(CClientPed* ped, bool stayInSamePlace)

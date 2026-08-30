@@ -5687,6 +5687,8 @@ void CClientPed::_CreateModel()
         ApplyMissionActorState();
         ApplyStoryProtectionState();
         ApplySuffersCriticalHitsState();
+        ApplyCanBeDraggedOutState();
+        ApplyOnlyDamagedByPlayerState();
         ApplyStayInSamePlaceState();
         ApplyNeverTargetedState();
         ApplyScriptPhysicalProofsState();
@@ -7144,6 +7146,8 @@ bool CClientPed::SetStoryProtected(bool enabled)
     // Independent scalar policies must win over the grouped protagonist
     // policy regardless of the order in which a resource applies them.
     ApplySuffersCriticalHitsState();
+    ApplyCanBeDraggedOutState();
+    ApplyOnlyDamagedByPlayerState();
     ApplyNeverTargetedState();
 
     return true;
@@ -7159,7 +7163,13 @@ void CClientPed::ApplyStoryProtectionState()
     // values so a resource can relinquish this policy without contaminating
     // an actor that it does not own.
     m_storyProtectionNativeState = m_pPlayerPed->GetStoryProtectionState();
-    m_pPlayerPed->SetStoryProtectionState({true, true, true, true, false});
+    auto state = *m_storyProtectionNativeState;
+    state.neverTargeted = true;
+    state.noCriticalHits = true;
+    state.cannotBeDraggedOut = true;
+    state.stayInCarWhenJacked = true;
+    state.getOutOfUpsideDownCar = false;
+    m_pPlayerPed->SetStoryProtectionState(state);
 }
 
 bool CClientPed::SetSuffersCriticalHits(bool suffersCriticalHits)
@@ -7182,6 +7192,64 @@ void CClientPed::ApplySuffersCriticalHitsState()
 
     auto state = m_pPlayerPed->GetStoryProtectionState();
     state.noCriticalHits = !*m_suffersCriticalHits;
+    m_pPlayerPed->SetStoryProtectionState(state);
+}
+
+bool CClientPed::CanBeDraggedOut() const
+{
+    if (m_canBeDraggedOut)
+        return *m_canBeDraggedOut;
+
+    return !m_pPlayerPed || !m_pPlayerPed->GetStoryProtectionState().cannotBeDraggedOut;
+}
+
+bool CClientPed::SetCanBeDraggedOut(bool canBeDraggedOut)
+{
+    if (GetType() != CCLIENTPED)
+        return false;
+
+    m_canBeDraggedOut = canBeDraggedOut;
+    ApplyCanBeDraggedOutState();
+    return true;
+}
+
+void CClientPed::ApplyCanBeDraggedOutState()
+{
+    if (!m_canBeDraggedOut || !m_pPlayerPed)
+        return;
+
+    auto state = m_pPlayerPed->GetStoryProtectionState();
+    state.cannotBeDraggedOut = !*m_canBeDraggedOut;
+    m_pPlayerPed->SetStoryProtectionState(state);
+}
+
+bool CClientPed::IsOnlyDamagedByPlayer() const
+{
+    if (m_onlyDamagedByPlayer)
+        return *m_onlyDamagedByPlayer;
+
+    return m_pPlayerPed && m_pPlayerPed->GetStoryProtectionState().onlyDamagedByPlayer;
+}
+
+bool CClientPed::SetOnlyDamagedByPlayer(bool onlyDamagedByPlayer)
+{
+    if (GetType() != CCLIENTPED)
+        return false;
+
+    m_onlyDamagedByPlayer = onlyDamagedByPlayer;
+    ApplyOnlyDamagedByPlayerState();
+    return true;
+}
+
+void CClientPed::ApplyOnlyDamagedByPlayerState()
+{
+    if (!m_onlyDamagedByPlayer || !m_pPlayerPed)
+        return;
+
+    // Opcode 02A9 uses CPhysical::bInvulnerable. GTA's CEventDamage then
+    // rejects non-player attackers while deliberately retaining player damage.
+    auto state = m_pPlayerPed->GetStoryProtectionState();
+    state.onlyDamagedByPlayer = *m_onlyDamagedByPlayer;
     m_pPlayerPed->SetStoryProtectionState(state);
 }
 

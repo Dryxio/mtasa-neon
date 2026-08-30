@@ -54,6 +54,7 @@ struct SPedStoryProtectionState
     bool cannotBeDraggedOut{};
     bool stayInCarWhenJacked{};
     bool getOutOfUpsideDownCar{};
+    bool onlyDamagedByPlayer{};
 };
 
 enum ePedPieceTypes

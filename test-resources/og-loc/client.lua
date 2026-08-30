@@ -36,22 +36,27 @@ local function clearAudio()
     releaseAudioSlot()
 end
 
-local function playQueue(lines, finished)
+local function playQueue(lines, finished, failed)
     clearAudio()
     local generation = state.audioGeneration
-    local function play(index)
+    local play
+    local function failOrFallback(reason, line, nextIndex)
+        releaseAudioSlot()
+        if failed then return failed(reason) end
+        showText(line[2], 4500)
+        rememberTimer(setTimer(function() play(nextIndex) end, 4700, 1))
+    end
+    play = function(index)
         if not state.active or generation ~= state.audioGeneration then return end
         releaseAudioSlot()
         local line = lines[index]
         if not line then if finished then finished() end return end
         if type(requestMissionAudio) ~= "function" then
-            showText(line[2], 4500)
-            return rememberTimer(setTimer(function() play(index + 1) end, 4700, 1))
+            return failOrFallback("API mission audio absente", line, index + 1)
         end
         local handle = requestMissionAudio(line[1])
         if not handle then
-            showText(line[2], 4500)
-            return rememberTimer(setTimer(function() play(index + 1) end, 4700, 1))
+            return failOrFallback("requestMissionAudio refuse " .. tostring(line[1]), line, index + 1)
         end
         local audio = {handle = handle, requestedAt = getTickCount()}
         state.audio = audio
@@ -59,19 +64,22 @@ local function playQueue(lines, finished)
             if state.audio ~= audio or generation ~= state.audioGeneration then return end
             if isMissionAudioLoaded(handle) then
                 killTimer(audio.loadTimer)
-                if not playMissionAudio(handle) then releaseAudioSlot() return play(index + 1) end
+                if not playMissionAudio(handle) then
+                    return failOrFallback("playMissionAudio refuse " .. tostring(line[1]), line, index + 1)
+                end
                 showText(line[2], 4500)
                 audio.startedAt = getTickCount()
                 audio.finishTimer = setTimer(function()
                     if state.audio ~= audio or generation ~= state.audioGeneration then return end
-                    if isMissionAudioFinished(handle) or getTickCount() - audio.startedAt > 30000 then
+                    if isMissionAudioFinished(handle) then
                         releaseAudioSlot()
                         play(index + 1)
+                    elseif getTickCount() - audio.startedAt > 30000 then
+                        failOrFallback("mission audio timeout " .. tostring(line[1]), line, index + 1)
                     end
                 end, 50, 0)
             elseif getTickCount() - audio.requestedAt > 10000 then
-                releaseAudioSlot()
-                play(index + 1)
+                failOrFallback("chargement mission audio timeout " .. tostring(line[1]), line, index + 1)
             end
         end, 50, 0)
     end
@@ -119,12 +127,31 @@ local function reportBarrier(id, ok, reason)
     return triggerServerEvent("ogl:barrierDone", resourceRoot, id, ok == true, reason)
 end
 
-local function reportBarrierNextFrame(id, ok, reason)
+local function cameraTargetsLocalPlayer()
+    local target = getCameraTarget()
+    if target == localPlayer then return true end
+    -- GTA changes the active gameplay camera target to the occupied vehicle.
+    -- Requiring the ped element alone falsely classified a healthy post-warp
+    -- chase camera as the historical far/fixed-camera regression.
+    local vehicle = getPedOccupiedVehicle(localPlayer)
+    return isElement(vehicle) and target == vehicle
+end
+
+local function transitionLog(event, data)
+    local record = {event = event}
+    for key, value in pairs(type(data) == "table" and data or {}) do record[key] = value end
+    outputDebugString("[og-loc-transition-jsonl] " .. tostring(toJSON(record, true)):gsub("[\r\n]", ""))
+end
+
+local function reportBarrierNextFrame(id, ok, reason, probe)
     -- Native cutscene teardown mutates camera/control ownership while the Lua
     -- timer callback is still running. Queue the reliable barrier event from a
     -- fresh frame so it cannot be lost behind that teardown transition.
     rememberTimer(setTimer(function()
-        if state.active then reportBarrier(id, ok, reason) end
+        if state.active then
+            if probe then probe() end
+            reportBarrier(id, ok, reason)
+        end
     end, 50, 1))
 end
 
@@ -173,6 +200,20 @@ local function startVehicleProbe(vehicle, scriptZ, actors, probeStage)
     timer = rememberTimer(setTimer(report, 250, 39))
 end
 
+local function startVisibilityProbe(target, probeStage)
+    if localPlayer ~= state.leader or not isElement(target) then return end
+    local timer
+    local function report()
+        if not state.active or state.stage ~= probeStage or not isElement(target) then
+            if isTimer(timer) then killTimer(timer) end
+            return
+        end
+        triggerServerEvent("ogl:visibilityProbe", resourceRoot, target, probeStage, isElementOnScreen(target))
+    end
+    report()
+    timer = rememberTimer(setTimer(report, 250, 0))
+end
+
 local function clearTimers()
     for _, timer in ipairs(state.timers) do if isTimer(timer) then killTimer(timer) end end
     state.timers = {}
@@ -183,6 +224,7 @@ local function cleanup()
     clearAudio()
     clearObjective()
     releaseCamera()
+    fadeCamera(true, 0)
     if state.cutscene then
         if isTimer(state.cutscene.timer) then killTimer(state.cutscene.timer) end
         pcall(releaseFileCutscene, state.cutscene.token)
@@ -193,9 +235,11 @@ local function cleanup()
 end
 
 addEvent("ogl:start", true)
-addEventHandler("ogl:start", resourceRoot, function(id, leader, headless)
+addEventHandler("ogl:start", resourceRoot, function(id, leader, headless, options)
     cleanup()
     state.active, state.id, state.leader, state.headless = true, id, leader, headless == true
+    options = type(options) == "table" and options or {}
+    state.transition, state.profile = options.transition == true, options.profile
     ensureText()
 end)
 
@@ -242,7 +286,12 @@ addEventHandler("ogl:fileCutscene", resourceRoot, function(id, name, leader)
                 -- here stranded skipped cutscenes before the barrier ACK.
                 local released, result = pcall(releaseFileCutscene, token, false)
                 state.cutscene = nil
-                reportBarrierNextFrame(id, released and result == true, "releaseFileCutscene refuse")
+                reportBarrierNextFrame(id, released and result == true, "releaseFileCutscene refuse", function()
+                    if state.transition then
+                        triggerServerEvent("ogl:cutsceneProbe", resourceRoot, id, name, "released",
+                                           {targetLocal = cameraTargetsLocalPlayer()})
+                    end
+                end)
             elseif getTickCount() - scene.requestedAt > 140000 then
                 killTimer(scene.timer)
                 pcall(releaseFileCutscene, token, false)
@@ -325,19 +374,212 @@ addEventHandler("ogl:scene", resourceRoot, function(id, name, leader, payload)
     local actors = payload.actors
     clearObjective()
     if not fixedCamera(scene.camera, scene.target) then return reportBarrier(id, false, "camera refusee") end
-    stageSceneActors(name, actors)
-    local function finishScene()
-        if not state.active then return end
-        clearSceneActors(actors)
-        releaseCamera()
-        reportBarrier(id, true)
+    local function beginScenePresentation()
+        stageSceneActors(name, actors)
+        local sceneDone = false
+        local function finishScene()
+            if not state.active or sceneDone then return end
+            sceneDone = true
+            clearSceneActors(actors)
+            releaseCamera()
+            if state.transition then
+                return reportBarrierNextFrame(id, true, nil, function()
+                    triggerServerEvent("ogl:sceneProbe", resourceRoot, id, name, "released",
+                                       {targetLocal = cameraTargetsLocalPlayer()})
+                end)
+            end
+            reportBarrier(id, true)
+        end
+        local function failSceneAudio(reason)
+            if not state.active or sceneDone then return end
+            sceneDone = true
+            clearSceneActors(actors)
+            releaseCamera()
+            reportBarrier(id, false, "audio de scene: " .. tostring(reason))
+        end
+        local audio = OGL.audio[sceneAudio[name]]
+        if audio then
+            local function finishSceneAudio()
+                if state.transition then
+                    triggerServerEvent("ogl:sceneProbe", resourceRoot, id, name, "audio", {complete = true})
+                end
+                finishScene()
+            end
+            playQueue(audio, finishSceneAudio, state.transition and failSceneAudio or nil)
+        else
+            if state.transition and sceneAudio[name] then return failSceneAudio("queue absente") end
+            if scene.text then showText(scene.text, scene.duration) end
+            rememberTimer(setTimer(finishScene, scene.duration, 1))
+        end
     end
-    local audio = OGL.audio[sceneAudio[name]]
-    if audio then
-        playQueue(audio, finishScene)
-    else
-        if scene.text then showText(scene.text, scene.duration) end
-        rememberTimer(setTimer(finishScene, scene.duration, 1))
+    if not state.transition then return beginScenePresentation() end
+    local startedAt = getTickCount()
+    local cameraTimer
+    cameraTimer = rememberTimer(setTimer(function()
+        if not state.active or state.camera == nil then
+            if isTimer(cameraTimer) then killTimer(cameraTimer) end
+            return
+        end
+        local x, y, z = getCameraMatrix()
+        local cameraError = getDistanceBetweenPoints3D(x, y, z, scene.camera[1], scene.camera[2], scene.camera[3])
+        if cameraError <= 1.5 then
+            killTimer(cameraTimer)
+            triggerServerEvent("ogl:sceneProbe", resourceRoot, id, name, "camera", {cameraError = cameraError})
+            beginScenePresentation()
+        elseif getTickCount() - startedAt >= 2500 then
+            killTimer(cameraTimer)
+            releaseCamera()
+            reportBarrier(id, false, ("camera hors tolerance: %.2f m"):format(cameraError))
+        end
+    end, 50, 0))
+end)
+
+local function checkpointElement(kind)
+    if kind:find("vehicle") then return getPedOccupiedVehicle(localPlayer) end
+    return localPlayer
+end
+
+local function checkpointRequiresPhysicalInput(kind, leader)
+    if kind == "vehicle_leader" then return localPlayer == leader end
+    return kind == "vehicle_all" or kind == "foot_all"
+end
+
+local function reportCheckpoint(id, probeId, name, ok, reason, data, inputRequired, control)
+    data = type(data) == "table" and data or {}
+    if state.transitionKeyProbe and state.transitionKeyProbe.probeId == probeId then
+        data.keyObserved = state.transitionKeyProbe.keyObserved == true
+        state.transitionKeyProbe = nil
+    end
+    transitionLog(inputRequired and (ok == true and "INPUT_PASS" or "INPUT_FAIL") or
+                      (ok == true and "PROBE_PASS" or "PROBE_FAIL"),
+                  {player = getPlayerName(localPlayer), probeId = probeId, checkpoint = name, control = control,
+                   reason = reason, raw = data.raw, processed = data.processed,
+                   displacement = data.displacement, samples = data.samples,
+                   keyObserved = data.keyObserved == true})
+    triggerServerEvent("ogl:transitionCheckpointDone", resourceRoot, id, probeId, name, ok == true, reason, data)
+end
+
+local function beginTransitionCheckpoint(id, probeId, name, kind, leader, payload, waitStartedAt)
+    if not state.active or not state.transition or state.id ~= tonumber(id) then return end
+    payload = type(payload) == "table" and payload or {}
+    waitStartedAt = tonumber(waitStartedAt) or getTickCount()
+    local requiresInput = checkpointRequiresPhysicalInput(kind, leader)
+    local control = requiresInput and (kind == "foot_all" and "forwards" or "accelerate") or nil
+    local element = checkpointElement(kind)
+    local vehicleCheckpoint = kind:find("vehicle") ~= nil
+    local occupied = not vehicleCheckpoint or isElement(element)
+    local seat = occupied and vehicleCheckpoint and getPedOccupiedVehicleSeat(localPlayer) or -1
+    local streamed = occupied and vehicleCheckpoint and isElementStreamedIn(element) or not vehicleCheckpoint
+    local readinessReason
+    if vehicleCheckpoint and not occupied then
+        readinessReason = "joueur hors vehicule"
+    elseif vehicleCheckpoint and requiresInput and seat ~= 0 then
+        readinessReason = "joueur non conducteur"
+    elseif vehicleCheckpoint and not streamed then
+        readinessReason = "vehicule non streame"
+    elseif vehicleCheckpoint and (isElementFrozen(element) or not getElementCollisionsEnabled(element)) then
+        readinessReason = "vehicule non pilotable"
+    elseif not cameraTargetsLocalPlayer() then
+        readinessReason = "camera non rendue au joueur"
+    end
+    if readinessReason and getTickCount() - waitStartedAt < 5000 then
+        -- Network event ordering is preserved, but camera-target and
+        -- occupancy application finish on subsequent GTA frames. Probing in
+        -- the travel-release RPC itself produced a false P0 failure even
+        -- though cleanup observed the restored camera one frame later.
+        return rememberTimer(setTimer(beginTransitionCheckpoint, 50, 1, id, probeId, name, kind, leader, payload,
+                                      waitStartedAt))
+    end
+    if vehicleCheckpoint and not occupied then
+        return reportCheckpoint(id, probeId, name, false, "joueur hors vehicule",
+                                {targetLocal = cameraTargetsLocalPlayer(), occupied = false, seat = -1,
+                                 streamed = false}, requiresInput, control)
+    end
+    if vehicleCheckpoint and requiresInput and seat ~= 0 then
+        return reportCheckpoint(id, probeId, name, false, "joueur non conducteur", nil, requiresInput, control)
+    end
+    if vehicleCheckpoint and not streamed then
+        return reportCheckpoint(id, probeId, name, false, "vehicule non streame",
+                                {targetLocal = cameraTargetsLocalPlayer(), occupied = true, seat = seat,
+                                 streamed = false}, requiresInput, control)
+    end
+    if vehicleCheckpoint and (isElementFrozen(element) or not getElementCollisionsEnabled(element)) then
+        return reportCheckpoint(id, probeId, name, false, "vehicule non pilotable", nil, requiresInput, control)
+    end
+    if not cameraTargetsLocalPlayer() then
+        return reportCheckpoint(id, probeId, name, false, "camera non rendue au joueur", nil, requiresInput, control)
+    end
+    if not requiresInput then
+        local targetOk = not isElement(payload.target) or isElementStreamedIn(payload.target)
+        return reportCheckpoint(id, probeId, name, targetOk, targetOk and nil or "cible non streamee",
+                                {targetLocal = true, samples = 0, occupied = occupied, seat = seat,
+                                 streamed = streamed, targetStreamed = targetOk}, false)
+    end
+
+    local subject = kind == "foot_all" and localPlayer or element
+    local startX, startY, startZ = getElementPosition(subject)
+    local startedAt = getTickCount()
+    local inputFrames, maxRaw, maxProcessed, maxDisplacement = 0, 0, 0, 0
+    local keyProbe = {probeId = probeId, keyObserved = false}
+    state.transitionKeyProbe = keyProbe
+    outputDebugString(("[og-loc-transition] INPUT_READY checkpoint=%s player=%s key=w control=%s"):format(
+        tostring(name), getPlayerName(localPlayer), control))
+    transitionLog("INPUT_READY", {player = getPlayerName(localPlayer), probeId = probeId, checkpoint = name,
+                                   control = control, key = "w"})
+    triggerServerEvent("ogl:transitionInputReady", resourceRoot, id, probeId, name, control)
+    local timer
+    timer = rememberTimer(setTimer(function()
+        if not state.active or state.id ~= tonumber(id) then
+            if isTimer(timer) then killTimer(timer) end
+            return
+        end
+        if not isElement(subject) or (vehicleCheckpoint and getPedOccupiedVehicle(localPlayer) ~= subject) then
+            killTimer(timer)
+            return reportCheckpoint(id, probeId, name, false, "occupation perdue pendant la preuve",
+                                    {targetLocal = cameraTargetsLocalPlayer(), occupied = false, seat = -1,
+                                     streamed = false, raw = maxRaw, processed = maxProcessed,
+                                     displacement = maxDisplacement, samples = inputFrames}, true, control)
+        end
+        local raw = tonumber(getAnalogControlState(control, true)) or 0
+        local processed = tonumber(getAnalogControlState(control, false)) or 0
+        local keyDown = getKeyState("w") == true
+        if keyDown then keyProbe.keyObserved = true end
+        maxRaw, maxProcessed = math.max(maxRaw, raw), math.max(maxProcessed, processed)
+        local x, y, z = getElementPosition(subject)
+        maxDisplacement = math.max(maxDisplacement, getDistanceBetweenPoints3D(x, y, z, startX, startY, startZ))
+        -- The key event and pad snapshot are delivered by different MTA
+        -- callbacks. Keep their evidence separate, then require both at the
+        -- server: coupling them to the same callback lost valid UI presses.
+        if raw > 0.8 and processed > 0.8 then
+            inputFrames = inputFrames + 1
+        end
+        if keyProbe.keyObserved and inputFrames >= 3 and maxDisplacement > 0.5 then
+            killTimer(timer)
+            local targetLocal = cameraTargetsLocalPlayer()
+            return reportCheckpoint(id, probeId, name, targetLocal,
+                                    targetLocal and nil or "camera perdue pendant la preuve",
+                                    {targetLocal = targetLocal, raw = maxRaw, processed = maxProcessed,
+                                     displacement = maxDisplacement, samples = inputFrames,
+                                     occupied = occupied, seat = seat, streamed = streamed}, true, control)
+        end
+        if getTickCount() - startedAt >= 60000 then
+            killTimer(timer)
+            reportCheckpoint(id, probeId, name, false, "entree physique W non observee",
+                             {targetLocal = cameraTargetsLocalPlayer(), raw = maxRaw, processed = maxProcessed,
+                              displacement = maxDisplacement, samples = inputFrames,
+                              occupied = occupied, seat = seat, streamed = streamed}, true, control)
+        end
+    end, 50, 0))
+end
+
+addEvent("ogl:transitionCheckpoint", true)
+addEventHandler("ogl:transitionCheckpoint", resourceRoot, function(id, probeId, name, kind, leader, payload)
+    beginTransitionCheckpoint(id, probeId, name, kind, leader, payload, getTickCount())
+end)
+
+addEventHandler("onClientKey", root, function(button, pressed)
+    if pressed == true and button == "w" and state.transitionKeyProbe then
+        state.transitionKeyProbe.keyObserved = true
     end
 end)
 
@@ -348,6 +590,9 @@ addEventHandler("ogl:stage", resourceRoot, function(stage, payload)
     payload = type(payload) == "table" and payload or {}
     if isElement(payload.probeVehicle) then
         startVehicleProbe(payload.probeVehicle, payload.probeScriptZ, payload.probeActors, stage)
+    end
+    if stage:find("^chase_recording:") and isElement(payload.target) then
+        startVisibilityProbe(payload.target, stage)
     end
     if state.headless then return end
     if payload.textKey then showText(payload.textKey, 7000) end
@@ -396,5 +641,14 @@ addEventHandler("ogl:passed", resourceRoot, function(respect)
 end)
 
 addEvent("ogl:cleanup", true)
-addEventHandler("ogl:cleanup", resourceRoot, cleanup)
+addEventHandler("ogl:cleanup", resourceRoot, function(id, report)
+    cleanup()
+    if report == true then
+        setTimer(function()
+            local targetLocal = cameraTargetsLocalPlayer()
+            triggerServerEvent("ogl:cleanupDone", resourceRoot, id, targetLocal, targetLocal and nil or "camera target",
+                               {targetLocal = targetLocal})
+        end, 50, 1)
+    end
+end)
 addEventHandler("onClientResourceStop", resourceRoot, cleanup)

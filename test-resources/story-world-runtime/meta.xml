@@ -8,6 +8,12 @@
     <export function="releaseStoryScmVehicle" type="server" />
     <export function="getStoryScmVehicleState" type="server" />
     <export function="createStoryScmPed" type="server" />
+    <export function="createStoryPlayerModelLease" type="server" />
+    <export function="releaseStoryPlayerModelLease" type="server" />
+    <export function="getStoryPlayerModelLeaseState" type="server" />
+    <export function="createStoryVehicleOccupancy" type="server" />
+    <export function="releaseStoryVehicleOccupancy" type="server" />
+    <export function="getStoryVehicleOccupancyState" type="server" />
     <export function="destroyStoryWorldElements" type="server" />
     <export function="releaseStoryWorldTeardown" type="server" />
 

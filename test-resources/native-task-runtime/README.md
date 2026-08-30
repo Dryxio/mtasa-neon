@@ -15,11 +15,19 @@ explicit failure after ten seconds instead of leaving the task pending.
 
 The second checkpoint adds a generic `native-task-cohort` handle. A cohort can
 atomically own several peds and vehicles, retain read-only target dependencies,
-and run `drive_route`, `drive_mission`, `drive_by`, `kill_on_foot`, or `none`
-member tasks. This
-keeps one GTA process responsible for the native AI while observers receive the
-normal synchronized result. Ped mission/proof policy and vehicle straight-line
-distance are captured and restored at revocation.
+  and run `drive_route`, `drive_mission`, `drive_by`, `kill_on_foot`,
+  `enter_vehicle`, generic native `sequence`, or `none` member tasks. Sequence
+  descriptors currently expose the reusable `go_to`, `leave_car`,
+  `leave_car_immediately`, `shoot_at`, `smart_flee`, and `die` primitives. This
+  keeps one GTA process responsible for the native AI while observers receive the
+  normal synchronized result. Ped mission/proof policy and vehicle straight-line
+  distance are captured and restored at revocation. Optional member policies
+  likewise preserve and restore weapon accuracy, shooting rate, critical-hit
+  behavior and bike-ejection behavior across owner handoffs. Story actor
+  policies independently expose the vanilla `SET_CHAR_CANT_BE_DRAGGED_OUT`,
+  `SET_CHAR_NEVER_TARGETTED`, `SET_CHAR_SUFFERS_CRITICAL_HITS`, and
+  `SET_CHAR_ONLY_DAMAGED_BY_PLAYER` semantics, so missions can reproduce the
+  exact SCM tuple without granting blanket bullet proofing.
 
 The recorded-vehicle checkpoint adds a stable server handle above GTA's direct
 recording player. The caller supplies a vehicle whose syncer is already owned
@@ -44,8 +52,10 @@ recording and receive the ordinary synchronized vehicle result.
 - `getNativeTaskCohortState(cohort)` returns its authoritative state snapshot.
 - `createNativeRecordedVehiclePlayback(vehicle, recordingId, owner, options)`
   starts one authoritative native recording. Optional `target`,
-  `distanceMode`, `pivotDistance`, speed bounds and slope parameters describe a
-  reusable catch-up profile.
+  `distanceMode`, `closeThreshold`, `pivotDistance`, speed bounds and slope
+  parameters describe a reusable catch-up profile. `closeThreshold` selects
+  the comparison branch while `pivotDistance` remains the interpolation
+  divisor, matching SCM scripts which use an integer gate around a float pivot.
 - `cancelNativeRecordedVehiclePlayback(playback)` releases its native slot and
   streaming leases.
 - `getNativeRecordedVehiclePlaybackState(playback)` returns its server state.
@@ -76,6 +86,11 @@ with `dispatched`, `active`, `completed`, `failed`, or `cancelled`. The vehicle
 index is released before the terminal completion event, allowing callers to
 chain adjacent SCM recordings synchronously without a one-frame ownership
 race.
+
+Before a standalone resource stop destroys runtime handles, it emits
+`onNativeTaskRuntimeStopping` from its resource root. Mission consumers should
+treat that event as a terminal lifecycle interruption and restore their own
+world, input and presentation state.
 
 ## Boundary of this checkpoint
 

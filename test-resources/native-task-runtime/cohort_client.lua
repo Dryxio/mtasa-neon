@@ -29,6 +29,15 @@ local function restorePolicies(cohort)
                 setPedPhysicalProofs(ped, previous.proofs[1], previous.proofs[2], previous.proofs[3],
                                      previous.proofs[4], previous.proofs[5])
             end
+            if previous.weaponAccuracy ~= nil then setPedWeaponAccuracy(ped, previous.weaponAccuracy) end
+            if previous.weaponShootingRate ~= nil then setPedWeaponShootingRate(ped, previous.weaponShootingRate) end
+            if previous.canBeKnockedOffBike ~= nil then setPedCanBeKnockedOffBike(ped, previous.canBeKnockedOffBike) end
+            if previous.suffersCriticalHits ~= nil then setPedSuffersCriticalHits(ped, previous.suffersCriticalHits) end
+            if previous.canBeDraggedOut ~= nil then setPedCanBeDraggedOut(ped, previous.canBeDraggedOut) end
+            if previous.onlyDamagedByPlayer ~= nil then
+                setPedOnlyDamagedByPlayer(ped, previous.onlyDamagedByPlayer)
+            end
+            if previous.neverTargeted ~= nil then setPedNeverTargeted(ped, previous.neverTargeted) end
         end
     end
     for vehicle, distance in pairs(cohort.previousDistances or {}) do
@@ -78,21 +87,36 @@ local function acquireLeases(cohort)
     return true
 end
 
-local function ready(cohort)
-    for _, element in ipairs(cohort.descriptor.owned) do
-        if not isElement(element) or not isElementStreamedIn(element) or not isElementSyncer(element) then
-            return false
+local function ready(cohort, beforeDispatch)
+    for index, element in ipairs(cohort.descriptor.owned) do
+        local exists = isElement(element)
+        local streamed = exists and isElementStreamedIn(element) or false
+        local syncer = exists and isElementSyncer(element) or false
+        if not exists or not streamed or not syncer then
+            return false, ("owned[%d] type=%s exists=%s streamed=%s syncer=%s"):format(
+                index, exists and getElementType(element) or "missing", tostring(exists), tostring(streamed),
+                tostring(syncer))
         end
     end
-    for _, element in ipairs(cohort.descriptor.dependencies) do
-        if not isElement(element) or not isElementStreamedIn(element) then
-            return false
+    for index, element in ipairs(cohort.descriptor.dependencies) do
+        local exists = isElement(element)
+        local streamed = exists and isElementStreamedIn(element) or false
+        if not exists or not streamed then
+            return false, ("dependency[%d] type=%s exists=%s streamed=%s"):format(
+                index, exists and getElementType(element) or "missing", tostring(exists), tostring(streamed))
         end
     end
-    for _, member in ipairs(cohort.descriptor.members) do
-        if member.vehicle and
+    for index, member in ipairs(cohort.descriptor.members) do
+        local requiresStableSeat = member.task.type == "drive_mission" or member.task.type == "drive_route" or
+                                       member.task.type == "drive_by" or member.task.type == "none"
+        local requiresInitialSeat = beforeDispatch and member.task.type == "sequence"
+        if member.vehicle and (requiresStableSeat or requiresInitialSeat) and
             (getPedOccupiedVehicle(member.ped) ~= member.vehicle or getPedOccupiedVehicleSeat(member.ped) ~= member.seat) then
-            return false
+            return false, ("member[%d] seat expected=%s actual=%s"):format(
+                index, tostring(member.seat), tostring(getPedOccupiedVehicleSeat(member.ped)))
+        end
+        if beforeDispatch and member.task.type == "enter_vehicle" and getPedOccupiedVehicle(member.ped) then
+            return false, ("member[%d] enter_vehicle already occupied"):format(index)
         end
     end
     return true
@@ -113,6 +137,46 @@ local function applyPolicies(cohort)
             if not setPedPhysicalProofs(member.ped, member.proofs.bullet, member.proofs.fire,
                                         member.proofs.explosion, member.proofs.collision, member.proofs.melee) then
                 return false, "protections physiques refusees"
+            end
+        end
+        if member.weaponAccuracy ~= nil then
+            previous.weaponAccuracy = getPedWeaponAccuracy(member.ped)
+            if not setPedWeaponAccuracy(member.ped, member.weaponAccuracy) then return false, "precision d'arme refusee" end
+        end
+        if member.weaponShootingRate ~= nil then
+            previous.weaponShootingRate = getPedWeaponShootingRate(member.ped)
+            if not setPedWeaponShootingRate(member.ped, member.weaponShootingRate) then
+                return false, "cadence de tir refusee"
+            end
+        end
+        if member.canBeKnockedOffBike ~= nil then
+            previous.canBeKnockedOffBike = canPedBeKnockedOffBike(member.ped)
+            if not setPedCanBeKnockedOffBike(member.ped, member.canBeKnockedOffBike) then
+                return false, "politique d'ejection refusee"
+            end
+        end
+        if member.suffersCriticalHits ~= nil then
+            previous.suffersCriticalHits = getPedSuffersCriticalHits(member.ped)
+            if not setPedSuffersCriticalHits(member.ped, member.suffersCriticalHits) then
+                return false, "politique de coups critiques refusee"
+            end
+        end
+        if member.canBeDraggedOut ~= nil then
+            previous.canBeDraggedOut = canPedBeDraggedOut(member.ped)
+            if not setPedCanBeDraggedOut(member.ped, member.canBeDraggedOut) then
+                return false, "politique d'extraction du vehicule refusee"
+            end
+        end
+        if member.onlyDamagedByPlayer ~= nil then
+            previous.onlyDamagedByPlayer = isPedOnlyDamagedByPlayer(member.ped)
+            if not setPedOnlyDamagedByPlayer(member.ped, member.onlyDamagedByPlayer) then
+                return false, "politique de degats reserves aux joueurs refusee"
+            end
+        end
+        if member.neverTargeted ~= nil then
+            previous.neverTargeted = isPedNeverTargeted(member.ped)
+            if not setPedNeverTargeted(member.ped, member.neverTargeted) then
+                return false, "politique de ciblage refusee"
             end
         end
         cohort.previousPeds[member.ped] = previous
@@ -159,6 +223,12 @@ local function startTask(member)
         end
         return setPedTaskSequence(member.ped, sequence, task.loop)
     end
+    if task.type == "sequence" then
+        return setPedTaskSequence(member.ped, task.sequence, task.loop)
+    end
+    if task.type == "enter_vehicle" then
+        return setPedEnterVehicle(member.ped, member.vehicle, member.seat)
+    end
     return false
 end
 
@@ -169,14 +239,23 @@ local function beginCohort(cohort)
     if type(acquireElementStreamingLease) ~= "function" or type(setPedMissionActor) ~= "function" or
         type(setPedDriveMission) ~= "function" or type(setPedDriveBy) ~= "function" or
         type(setPedKillOnFoot) ~= "function" or type(isPedDoingTask) ~= "function" or
+        type(setPedEnterVehicle) ~= "function" or
         type(setPedPhysicalProofs) ~= "function" or type(getPedPhysicalProofs) ~= "function" or
+        type(setPedWeaponAccuracy) ~= "function" or type(getPedWeaponAccuracy) ~= "function" or
+        type(setPedWeaponShootingRate) ~= "function" or type(getPedWeaponShootingRate) ~= "function" or
+        type(setPedCanBeKnockedOffBike) ~= "function" or type(canPedBeKnockedOffBike) ~= "function" or
+        type(setPedSuffersCriticalHits) ~= "function" or type(getPedSuffersCriticalHits) ~= "function" or
+        type(setPedCanBeDraggedOut) ~= "function" or type(canPedBeDraggedOut) ~= "function" or
+        type(setPedOnlyDamagedByPlayer) ~= "function" or type(isPedOnlyDamagedByPlayer) ~= "function" or
+        type(setPedNeverTargeted) ~= "function" or type(isPedNeverTargeted) ~= "function" or
         type(setVehicleStraightLineDistance) ~= "function" or type(getVehicleStraightLineDistance) ~= "function" then
         return fail(cohort, "API Neon de cohorte absente")
     end
     if not cohort.leases and not acquireLeases(cohort) then
         return fail(cohort, "acquisition des leases de cohorte refusee")
     end
-    if not ready(cohort) then
+    local isReady, readinessReason = ready(cohort, true)
+    if not isReady then
         if getTickCount() - cohort.assignedAt < 10000 then
             clearTimer(cohort, "retryTimer")
             cohort.retryTimer = setTimer(function()
@@ -184,7 +263,7 @@ local function beginCohort(cohort)
             end, 200, 1)
             return
         end
-        return fail(cohort, "streaming, autorite ou sieges non converges apres 10 s")
+        return fail(cohort, "cohorte non convergee apres 10 s: " .. tostring(readinessReason))
     end
     local policyAccepted, policyReason = applyPolicies(cohort)
     if not policyAccepted then
@@ -203,8 +282,9 @@ local function beginCohort(cohort)
         if cohorts[cohort.handle] ~= cohort then
             return
         end
-        if not ready(cohort) then
-            return fail(cohort, "autorite, streaming ou siege perdu pendant la cohorte")
+        local stillReady, readinessReason = ready(cohort, false)
+        if not stillReady then
+            return fail(cohort, "cohorte divergee: " .. tostring(readinessReason))
         end
         local tasks = {}
         for index, member in ipairs(cohort.descriptor.members) do

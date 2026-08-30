@@ -475,18 +475,22 @@ public:
     {
         return m_nativeEventProfileOwner && m_uiNativeEventProfileToken != 0 && m_nativeEventProfile == profile;
     }
-    bool AddNativeGunAimedAtEvent(CClientPed* aimingPed);
-    bool AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone);
-    bool AddNativeDamageEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction);
-    bool IsNativeDamageReplayFor(const CClientPed* damagedPed) const noexcept { return damagedPed && m_pNativeDamageReplayVictim == damagedPed; }
-    bool IsStoryProtected() const noexcept { return m_bStoryProtected; }
-    bool SetStoryProtected(bool enabled);
-    bool GetSuffersCriticalHits() const noexcept { return m_suffersCriticalHits.value_or(true); }
-    bool SetSuffersCriticalHits(bool suffersCriticalHits);
-    bool GetStayInSamePlace() const;
-    bool SetStayInSamePlace(bool stayInSamePlace);
-    bool IsNeverTargeted() const;
-    bool SetNeverTargeted(bool neverTargeted);
+    bool            AddNativeGunAimedAtEvent(CClientPed* aimingPed);
+    bool            AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone);
+    bool            AddNativeDamageEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction);
+    bool            IsNativeDamageReplayFor(const CClientPed* damagedPed) const noexcept { return damagedPed && m_pNativeDamageReplayVictim == damagedPed; }
+    bool            IsStoryProtected() const noexcept { return m_bStoryProtected; }
+    bool            SetStoryProtected(bool enabled);
+    bool            GetSuffersCriticalHits() const noexcept { return m_suffersCriticalHits.value_or(true); }
+    bool            SetSuffersCriticalHits(bool suffersCriticalHits);
+    bool            CanBeDraggedOut() const;
+    bool            SetCanBeDraggedOut(bool canBeDraggedOut);
+    bool            IsOnlyDamagedByPlayer() const;
+    bool            SetOnlyDamagedByPlayer(bool onlyDamagedByPlayer);
+    bool            GetStayInSamePlace() const;
+    bool            SetStayInSamePlace(bool stayInSamePlace);
+    bool            IsNeverTargeted() const;
+    bool            SetNeverTargeted(bool neverTargeted);
     SPhysicalProofs GetScriptPhysicalProofs() const;
     bool            SetScriptPhysicalProofs(const SPhysicalProofs& proofs);
 
@@ -698,6 +702,8 @@ protected:
     void ClearNativeAmbientWanderResponse();
     void ApplyStoryProtectionState();
     void ApplySuffersCriticalHitsState();
+    void ApplyCanBeDraggedOutState();
+    void ApplyOnlyDamagedByPlayerState();
     void ApplyStayInSamePlaceState();
     void ApplyNeverTargetedState();
     void ApplyScriptPhysicalProofsState();
@@ -874,6 +880,8 @@ public:
     std::optional<SPedCreatedByState>       m_missionActorNativeState;
     std::optional<SPedStoryProtectionState> m_storyProtectionNativeState;
     std::optional<bool>                     m_suffersCriticalHits;
+    std::optional<bool>                     m_canBeDraggedOut;
+    std::optional<bool>                     m_onlyDamagedByPlayer;
     std::optional<bool>                     m_stayInSamePlace;
     std::optional<bool>                     m_neverTargeted;
     std::optional<SPhysicalProofs>          m_scriptPhysicalProofs;

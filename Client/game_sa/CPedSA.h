@@ -524,8 +524,8 @@ public:
     SPedStoryProtectionState GetStoryProtectionState() const override
     {
         const auto& flags = GetPedInterface()->pedFlags;
-        return {flags.bNeverEverTargetThisPed != 0, flags.bNoCriticalHits != 0, flags.bDontDragMeOutCar != 0, flags.bStayInCarOnJack != 0,
-                flags.bGetOutUpsideDownCar != 0};
+        return {flags.bNeverEverTargetThisPed != 0, flags.bNoCriticalHits != 0,      flags.bDontDragMeOutCar != 0,
+                flags.bStayInCarOnJack != 0,        flags.bGetOutUpsideDownCar != 0, GetPedInterface()->bInvulnerable != 0};
     }
     void SetStoryProtectionState(const SPedStoryProtectionState& state) override
     {
@@ -535,6 +535,7 @@ public:
         flags.bDontDragMeOutCar = state.cannotBeDraggedOut;
         flags.bStayInCarOnJack = state.stayInCarWhenJacked;
         flags.bGetOutUpsideDownCar = state.getOutOfUpsideDownCar;
+        GetPedInterface()->bInvulnerable = state.onlyDamagedByPlayer;
     }
     void SetNativeMissionEventProfileActive(bool active) override { m_bNativeMissionEventProfileActive = active; }
     bool IsNativeMissionEventProfileActive() const override { return m_bNativeMissionEventProfileActive; }

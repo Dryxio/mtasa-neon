@@ -47,7 +47,7 @@ local function playbackSpeed(playback)
     local distance = options.distanceMode == "2d" and getDistanceBetweenPoints2D(x, y, tx, ty) or
                          getDistanceBetweenPoints3D(x, y, z, tx, ty, tz)
     local speed
-    if distance <= options.pivotDistance then
+    if distance < options.closeThreshold then
         local ratio = distance / options.pivotDistance
         speed = options.closeSpeed + (options.pivotSpeed - options.closeSpeed) * ratio
     else

@@ -19,6 +19,11 @@ local function copyProofs(value)
     }
 end
 
+local function copyOptionalBoolean(value)
+    if value == nil then return nil end
+    return value == true
+end
+
 local function copyRoute(route)
     if type(route) ~= "table" or #route == 0 then
         return false, "route vide"
@@ -42,6 +47,57 @@ local function copyRoute(route)
     return result
 end
 
+local function copySequence(sequence)
+    if type(sequence) ~= "table" or #sequence == 0 or #sequence > 8 then
+        return false, "sequence native vide ou superieure a huit taches"
+    end
+    local result = {}
+    for index, step in ipairs(sequence) do
+        if type(step) ~= "table" or type(step.task) ~= "string" then
+            return false, "etape de sequence " .. tostring(index) .. " invalide"
+        end
+        local task = step.task
+        if task == "go_to" then
+            if type(step.x) ~= "number" or type(step.y) ~= "number" or type(step.z) ~= "number" then
+                return false, "destination go_to " .. tostring(index) .. " invalide"
+            end
+            local movement = step.movement or "walk"
+            if movement ~= "walk" and movement ~= "run" and movement ~= "sprint" then
+                return false, "mouvement go_to " .. tostring(index) .. " invalide"
+            end
+            result[index] = {task = task, x = step.x, y = step.y, z = step.z, movement = movement,
+                             radius = tonumber(step.radius) or 0.5,
+                             slowdownRadius = tonumber(step.slowdownRadius) or 2,
+                             timeout = math.floor(tonumber(step.timeout) or -2)}
+        elseif task == "leave_car" or task == "leave_car_immediately" then
+            if not isElement(step.vehicle) or getElementType(step.vehicle) ~= "vehicle" then
+                return false, "vehicule de sortie " .. tostring(index) .. " invalide"
+            end
+            result[index] = {task = task, vehicle = step.vehicle}
+        elseif task == "shoot_at" then
+            if type(step.x) ~= "number" or type(step.y) ~= "number" or type(step.z) ~= "number" then
+                return false, "cible shoot_at " .. tostring(index) .. " invalide"
+            end
+            result[index] = {task = task, x = step.x, y = step.y, z = step.z,
+                             duration = math.floor(tonumber(step.duration) or 1000),
+                             burstLength = math.floor(tonumber(step.burstLength) or 5)}
+        elseif task == "smart_flee" then
+            local targetType = isElement(step.target) and getElementType(step.target)
+            if targetType ~= "ped" and targetType ~= "player" then
+                return false, "cible smart_flee " .. tostring(index) .. " invalide"
+            end
+            result[index] = {task = task, target = step.target,
+                             safeDistance = tonumber(step.safeDistance) or 100,
+                             duration = math.floor(tonumber(step.duration) or 1000000)}
+        elseif task == "die" then
+            result[index] = {task = task}
+        else
+            return false, "type de sequence inconnu: " .. tostring(task)
+        end
+    end
+    return result
+end
+
 local function copyTask(task)
     if type(task) ~= "table" or task.type == "none" then
         return {type = "none"}
@@ -52,6 +108,16 @@ local function copyTask(task)
             return false, reason
         end
         return {type = "drive_route", route = route, loop = task.loop == true}
+    end
+    if task.type == "sequence" then
+        local sequence, reason = copySequence(task.sequence)
+        if not sequence then
+            return false, reason
+        end
+        return {type = "sequence", sequence = sequence, loop = task.loop == true}
+    end
+    if task.type == "enter_vehicle" then
+        return {type = "enter_vehicle"}
     end
     if task.type == "drive_mission" then
         if not isElement(task.targetVehicle) or getElementType(task.targetVehicle) ~= "vehicle" then
@@ -120,6 +186,14 @@ local function copyDescriptor(descriptor)
             if not vehicle or seat ~= 0 then
                 return false, "une tache de conduite exige le siege conducteur"
             end
+        elseif task.type == "enter_vehicle" and not vehicle then
+            return false, "une tache d'entree exige un vehicule et un siege"
+        elseif task.type == "sequence" then
+            for sequenceIndex, step in ipairs(task.sequence) do
+                if (step.task == "leave_car" or step.task == "leave_car_immediately") and step.vehicle ~= vehicle then
+                    return false, "la sortie de sequence " .. tostring(sequenceIndex) .. " doit viser le vehicule du membre"
+                end
+            end
         end
         owned[member.ped] = true
         if vehicle then
@@ -131,6 +205,14 @@ local function copyDescriptor(descriptor)
             seat = seat,
             missionActor = member.missionActor ~= false,
             proofs = copyProofs(member.proofs),
+            weaponAccuracy = member.weaponAccuracy and math.max(0, math.min(100, math.floor(tonumber(member.weaponAccuracy) or 0))) or nil,
+            weaponShootingRate = member.weaponShootingRate and
+                math.max(0, math.min(65535, math.floor(tonumber(member.weaponShootingRate) or 0))) or nil,
+            canBeKnockedOffBike = copyOptionalBoolean(member.canBeKnockedOffBike),
+            suffersCriticalHits = copyOptionalBoolean(member.suffersCriticalHits),
+            canBeDraggedOut = copyOptionalBoolean(member.canBeDraggedOut),
+            onlyDamagedByPlayer = copyOptionalBoolean(member.onlyDamagedByPlayer),
+            neverTargeted = copyOptionalBoolean(member.neverTargeted),
             task = task,
         }
     end
@@ -160,6 +242,10 @@ local function copyDescriptor(descriptor)
             addDependency(member.task.target)
         elseif member.task.type == "kill_on_foot" then
             addDependency(member.task.target)
+        elseif member.task.type == "sequence" then
+            for _, step in ipairs(member.task.sequence) do
+                if step.task == "smart_flee" then addDependency(step.target) end
+            end
         end
     end
     for _, element in ipairs(type(descriptor.dependencies) == "table" and descriptor.dependencies or {}) do
@@ -226,11 +312,7 @@ local function restoreAutomaticSync(cohort)
     end
 end
 
-local function removeCohort(cohort, destroyHandle)
-    if not cohort or cohort.removing then
-        return
-    end
-    cohort.removing = true
+local function finalizeCohortRemoval(cohort, destroyHandle)
     clearTimer(cohort, "dispatchTimer")
     clearTimer(cohort, "ackTimer")
     clearTimer(cohort, "handoffTimer")
@@ -246,6 +328,12 @@ local function removeCohort(cohort, destroyHandle)
     if destroyHandle and isElement(cohort.handle) then
         destroyElement(cohort.handle)
     end
+end
+
+local function removeCohort(cohort, destroyHandle)
+    if not cohort or cohort.removing then return end
+    cohort.removing = true
+    finalizeCohortRemoval(cohort, destroyHandle)
 end
 
 local function failCohort(cohort, reason)
@@ -291,28 +379,60 @@ local function assignEpoch(cohort, owner)
     cohort.dispatchAttempts = 0
     cohort.reason = nil
     cohort.streamedOut = {}
+    -- setElementSyncer synchronously emits onElementStartSync. Keep dispatch
+    -- closed until createNativeTaskCohort has finished assigning every owned
+    -- element and has scheduled the first epoch. Otherwise a fast client can
+    -- acknowledge the cohort before the caller has even received its handle.
+    cohort.assignmentInitializing = true
+    local expectedEpoch, expectedNonce, expectedOwner = cohort.epoch, cohort.nonce, cohort.owner
+    local function assignmentStillCurrent()
+        return cohorts[cohort.handle] == cohort and not cohort.removing and cohort.state == "assigning" and
+                   cohort.owner == expectedOwner and cohort.epoch == expectedEpoch and cohort.nonce == expectedNonce
+    end
     emit(cohort, "assigning")
+    if not assignmentStillCurrent() then
+        cohort.assignmentInitializing = false
+        return false
+    end
     for _, element in ipairs(cohort.descriptor.owned) do
-        if not setElementSyncer(element, owner, true) then
+        -- Always promote the current owner to persistent authority. Both the
+        -- ped and unoccupied-vehicle sync managers reduce a same-owner call to
+        -- SetSyncerPersistent, without StopSync/StartSync or a network packet.
+        -- Skipping that call leaves an automatic owner revocable underneath a
+        -- newly active cohort after rapid cancel-and-replace lifecycles.
+        local accepted = setElementSyncer(element, owner, true)
+        if not assignmentStillCurrent() then
+            cohort.assignmentInitializing = false
+            return false
+        end
+        if not accepted then
+            cohort.assignmentInitializing = false
             failCohort(cohort, "override syncer refuse")
             return false
         end
     end
     clearTimer(cohort, "dispatchTimer")
+    if not assignmentStillCurrent() then
+        cohort.assignmentInitializing = false
+        return false
+    end
     cohort.dispatchTimer = setTimer(function()
         dispatch(cohort)
     end, 100, 1)
+    cohort.assignmentInitializing = false
     return true
 end
 
 dispatch = function(cohort)
-    if not cohort or cohort.removing or (cohort.state ~= "assigning" and cohort.state ~= "dispatched") then
+    if not cohort or cohort.removing or cohort.assignmentInitializing or
+        (cohort.state ~= "assigning" and cohort.state ~= "dispatched") then
         return
     end
     if not validPlayer(cohort.owner) then
         return failCohort(cohort, "owner absent au dispatch")
     end
-    if not allOwnedBy(cohort, cohort.owner) then
+    local authorityReady = allOwnedBy(cohort, cohort.owner)
+    if not authorityReady then
         if getTickCount() - cohort.assignmentStartedAt >= 10000 then
             return failCohort(cohort, "cohorte d'autorite incomplete apres 10 s")
         end
@@ -324,10 +444,20 @@ dispatch = function(cohort)
     end
 
     cohort.dispatchAttempts = cohort.dispatchAttempts + 1
-    triggerClientEvent(cohort.owner, "nativeTaskRuntime:cohortAssign", resourceRoot, cohort.handle, cohort.epoch,
-                       cohort.nonce, cohort.descriptor)
+    -- Publish the server state before delivering work. A local owner can
+    -- acknowledge in the same pulse; accepting that reply must not depend on
+    -- network latency being long enough for this function to resume first.
     if cohort.state ~= "dispatched" then
+        local expectedOwner, expectedEpoch, expectedNonce = cohort.owner, cohort.epoch, cohort.nonce
         emit(cohort, "dispatched", {dispatchAttempts = cohort.dispatchAttempts})
+        if cohort.removing or cohort.state ~= "dispatched" then return end
+        if cohort.owner ~= expectedOwner or cohort.epoch ~= expectedEpoch or cohort.nonce ~= expectedNonce or
+            not validPlayer(cohort.owner) or not allOwnedBy(cohort, cohort.owner) then
+            return failCohort(cohort, "autorite modifiee pendant la publication du dispatch")
+        end
+    end
+    if cohort.removing or cohort.state ~= "dispatched" then
+        return
     end
     clearTimer(cohort, "ackTimer")
     local epoch, nonce = cohort.epoch, cohort.nonce
@@ -340,6 +470,8 @@ dispatch = function(cohort)
             end
         end
     end, 1000, 1)
+    triggerClientEvent(cohort.owner, "nativeTaskRuntime:cohortAssign", resourceRoot, cohort.handle, cohort.epoch,
+                       cohort.nonce, cohort.descriptor)
 end
 
 local function beginPendingEpoch(cohort)
@@ -433,11 +565,15 @@ end
 
 function cancelNativeTaskCohort(handle)
     local cohort = cohorts[handle]
-    if not cohort or cohort.caller ~= (sourceResourceRoot or resourceRoot) then
+    if not cohort or cohort.removing or cohort.caller ~= (sourceResourceRoot or resourceRoot) then
         return false
     end
+    -- Mark terminal before notifying consumers. A listener may synchronously
+    -- call cancel again or destroy the handle; neither path may recurse or
+    -- resurrect authority while cancellation is being published.
+    cohort.removing = true
     emit(cohort, "cancelled")
-    removeCohort(cohort, true)
+    finalizeCohortRemoval(cohort, true)
     return true
 end
 
@@ -548,9 +684,10 @@ end)
 
 addEventHandler("onResourceStop", root, function(stoppedResource)
     local stoppedRoot = getResourceRootElement(stoppedResource)
+    local runtimeStopping = stoppedResource == getThisResource()
     local owned = {}
     for _, cohort in pairs(cohorts) do
-        if cohort.caller == stoppedRoot then
+        if runtimeStopping or cohort.caller == stoppedRoot then
             owned[#owned + 1] = cohort
         end
     end
