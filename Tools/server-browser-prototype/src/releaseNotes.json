@@ -2,6 +2,27 @@
   "schema": 1,
   "releases": [
     {
+      "build": 185,
+      "date": "2026-08-30",
+      "title": "Native traffic fixes",
+      "summary": "Fixed pedestrian traffic occasionally stopping after playing for a while.",
+      "highlights": [
+        "Fixed pedestrian traffic occasionally stopping after playing for a while.",
+        "Improved native traffic vehicle placement on slopes and uneven roads.",
+        "Improved ambient traffic stability and consistency."
+      ],
+      "sections": [
+        {
+          "label": "Fixes",
+          "tone": "players",
+          "items": [
+            "Improved native traffic vehicle placement on slopes and uneven roads.",
+            "Improved ambient traffic stability and consistency."
+          ]
+        }
+      ]
+    },
+    {
       "build": 184,
       "date": "2026-08-29",
       "title": "Faster native worlds and protected custom assets",
