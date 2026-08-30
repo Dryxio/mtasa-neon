@@ -39,6 +39,10 @@ local config = {
     nativeDealerFightWeaponAmmo = 50,
     dealerStrengthGrowthInterval = 60000,
     populationWorldConvergenceGrace = 5000,
+    -- Native profile reads can be unavailable for one frame while a zone or
+    -- world revision changes. Preserve only lifecycle continuity during that
+    -- gap; candidate admission still requires a fresh exact-revision profile.
+    populationProfileContinuityGrace = 10000,
     -- A zone can request a family whose native path oracle has no usable node
     -- near the player. Stop that family from monopolizing every 100 ms request
     -- while other valid population deficits are waiting.
@@ -242,7 +246,12 @@ local requestCursor = 0
 local pendingRequests = {}
 local pendingVisibilityChecks = {}
 local populationProfiles = {}
+populationProfileDiagnostics = {}
 populationCandidateMisses = {}
+pedPopulationMotion = {}
+PED_PRODUCTION_MAX_VISIBILITY_LANES = 4
+PED_PRODUCTION_PREDICTION_HORIZON = 1.0
+PED_PRODUCTION_PREDICTION_MAX_LEAD = 45
 local populationWorld = PedTrafficPopulationWorld.create("post_home_coming")
 pedTrafficDemoDensity = {
     enabled = false,
@@ -462,36 +471,51 @@ local function isIntegerInRange(value, minimum, maximum)
 end
 
 local function validatePopulationProfile(profile)
-    if type(profile) ~= "table" or profile.worldRevision ~= populationWorld.revision or
-        profile.catalogRevision ~= populationCatalog.revision or type(profile.zoneLabel) ~= "string" or
-        #profile.zoneLabel < 1 or #profile.zoneLabel > 8 or profile.zoneLabel:find("[^A-Z0-9]") or
-        populationWorld.zones[profile.zoneLabel] == nil or
-        not isFiniteNumber(profile.target) or not isFiniteNumber(profile.supportedTarget) or not isFiniteNumber(profile.civilianTarget) or
-        not isFiniteNumber(profile.rawCopTarget) or not isFiniteNumber(profile.copTarget) or not isFiniteNumber(profile.gangTarget) or
-        not isFiniteNumber(profile.dealerTarget) or not isFiniteNumber(profile.pedDensityMultiplier) or
-        not isFiniteNumber(profile.fewerPedsMultiplier) or not isFiniteNumber(profile.creationDistanceMultiplier) or
-        not isFiniteNumber(profile.generationDistanceMultiplier) or not isIntegerInRange(profile.maximumPedsInUse, 0, 110) or
-        not isIntegerInRange(profile.zoneType, 0, 19) or
-        not isIntegerInRange(profile.timeIndex, 0, 11) or type(profile.weekend) ~= "boolean" or
-        not isIntegerInRange(profile.dealerStrength, 0, 255) or not isIntegerInRange(profile.raceFlags, 0, 15) or
-        type(profile.noCops) ~= "boolean" or not isIntegerInRange(profile.worldLevel, 0, 3) or
-        not isIntegerInRange(profile.copSuppressionFlags, 0, 15) or type(profile.gangWeights) ~= "table" then
-        return false
+    if type(profile) ~= "table" then return false, "profile-not-table" end
+    if profile.worldRevision ~= populationWorld.revision then return false, "world-revision-mismatch" end
+    if profile.catalogRevision ~= populationCatalog.revision then return false, "catalog-revision-mismatch" end
+    if type(profile.zoneLabel) ~= "string" or #profile.zoneLabel < 1 or #profile.zoneLabel > 8 or
+        profile.zoneLabel:find("[^A-Z0-9]") then
+        return false, "invalid-zone-label"
     end
+    if populationWorld.zones[profile.zoneLabel] == nil then return false, "unknown-zone-label" end
 
-    if profile.target < 0 or profile.target > 110 or profile.supportedTarget < 0 or profile.supportedTarget > 110 or
-        profile.civilianTarget < 0 or profile.civilianTarget > 110 or profile.rawCopTarget < 0 or profile.rawCopTarget > 110 or
-        profile.copTarget < 0 or profile.copTarget > 110 or
-        profile.gangTarget < 0 or profile.gangTarget > 110 or profile.dealerTarget < 0 or profile.dealerTarget > 110 or
-        math.abs(profile.supportedTarget - profile.civilianTarget - profile.gangTarget - profile.dealerTarget - profile.copTarget) > 0.05 or
-        math.abs(profile.target - profile.supportedTarget) > 0.05 or
-        ((profile.copSuppressionFlags ~= 0) and profile.copTarget > 0.05) or
-        ((profile.copSuppressionFlags == 0) and math.abs(profile.copTarget - profile.rawCopTarget) > 0.05) or
-        (((profile.copSuppressionFlags % 2) == 1) ~= profile.noCops) or
-        profile.pedDensityMultiplier < 0 or profile.pedDensityMultiplier > 10 or profile.fewerPedsMultiplier < 0 or
-        profile.fewerPedsMultiplier > 10 or profile.creationDistanceMultiplier < 0.999 or profile.creationDistanceMultiplier > 1.501 or
-        profile.generationDistanceMultiplier <= 0 or profile.generationDistanceMultiplier > 10 then
-        return false
+    local boundedTargets = {"target", "supportedTarget", "civilianTarget", "rawCopTarget", "copTarget", "gangTarget", "dealerTarget"}
+    for _, field in ipairs(boundedTargets) do
+        if not isFiniteNumber(profile[field]) then return false, "invalid-" .. field end
+        if profile[field] < 0 or profile[field] > 110 then return false, "out-of-range-" .. field end
+    end
+    local finiteMultipliers = {"pedDensityMultiplier", "fewerPedsMultiplier", "creationDistanceMultiplier", "generationDistanceMultiplier"}
+    for _, field in ipairs(finiteMultipliers) do
+        if not isFiniteNumber(profile[field]) then return false, "invalid-" .. field end
+    end
+    if not isIntegerInRange(profile.maximumPedsInUse, 0, 110) then return false, "invalid-maximumPedsInUse" end
+    if not isIntegerInRange(profile.zoneType, 0, 19) then return false, "invalid-zoneType" end
+    if not isIntegerInRange(profile.timeIndex, 0, 11) then return false, "invalid-timeIndex" end
+    if type(profile.weekend) ~= "boolean" then return false, "invalid-weekend" end
+    if not isIntegerInRange(profile.dealerStrength, 0, 255) then return false, "invalid-dealerStrength" end
+    if not isIntegerInRange(profile.raceFlags, 0, 15) then return false, "invalid-raceFlags" end
+    if type(profile.noCops) ~= "boolean" then return false, "invalid-noCops" end
+    if not isIntegerInRange(profile.worldLevel, 0, 3) then return false, "invalid-worldLevel" end
+    if not isIntegerInRange(profile.copSuppressionFlags, 0, 15) then return false, "invalid-copSuppressionFlags" end
+    if type(profile.gangWeights) ~= "table" then return false, "invalid-gangWeights" end
+
+    if math.abs(profile.supportedTarget - profile.civilianTarget - profile.gangTarget - profile.dealerTarget - profile.copTarget) > 0.05 then
+        return false, "target-components-mismatch"
+    end
+    if math.abs(profile.target - profile.supportedTarget) > 0.05 then return false, "supported-target-mismatch" end
+    if profile.copSuppressionFlags ~= 0 and profile.copTarget > 0.05 then return false, "suppressed-cop-target-nonzero" end
+    if profile.copSuppressionFlags == 0 and math.abs(profile.copTarget - profile.rawCopTarget) > 0.05 then
+        return false, "raw-cop-target-mismatch"
+    end
+    if (((profile.copSuppressionFlags % 2) == 1) ~= profile.noCops) then return false, "no-cops-flag-mismatch" end
+    if profile.pedDensityMultiplier < 0 or profile.pedDensityMultiplier > 10 then return false, "out-of-range-pedDensityMultiplier" end
+    if profile.fewerPedsMultiplier < 0 or profile.fewerPedsMultiplier > 10 then return false, "out-of-range-fewerPedsMultiplier" end
+    if profile.creationDistanceMultiplier < 0.999 or profile.creationDistanceMultiplier > 1.501 then
+        return false, "out-of-range-creationDistanceMultiplier"
+    end
+    if profile.generationDistanceMultiplier <= 0 or profile.generationDistanceMultiplier > 10 then
+        return false, "out-of-range-generationDistanceMultiplier"
     end
 
     local gangWeights = {}
@@ -499,22 +523,20 @@ local function validatePopulationProfile(profile)
     for index = 1, 10 do
         local weight = profile.gangWeights[index]
         if not isIntegerInRange(weight, 0, 255) then
-            return false
+            return false, "invalid-gang-weight-" .. tostring(index)
         end
         gangWeights[index] = weight
         totalGangWeight = totalGangWeight + weight
     end
-    if profile.gangTarget > 0.05 and totalGangWeight == 0 then
-        return false
-    end
+    if profile.gangTarget > 0.05 and totalGangWeight == 0 then return false, "gang-target-without-weights" end
     local zoneState = populationWorld.zones[profile.zoneLabel]
-    if profile.zoneType ~= zoneState.populationType or profile.dealerStrength ~= zoneState.dealerStrength or
-        profile.raceFlags ~= zoneState.races or profile.noCops ~= zoneState.noCops then
-        return false
-    end
+    if profile.zoneType ~= zoneState.populationType then return false, "zone-type-state-mismatch" end
+    if profile.dealerStrength ~= zoneState.dealerStrength then return false, "dealer-strength-state-mismatch" end
+    if profile.raceFlags ~= zoneState.races then return false, "race-flags-state-mismatch" end
+    if profile.noCops ~= zoneState.noCops then return false, "no-cops-state-mismatch" end
     for index = 1, 10 do
         if gangWeights[index] ~= zoneState.gangStrengths[index] then
-            return false
+            return false, "gang-weight-state-mismatch-" .. tostring(index)
         end
     end
 
@@ -620,11 +642,17 @@ local function getPopulationRadii(profile, resume)
     -- returning from that boundary must cross back inside 50.5. Preserve that
     -- spatial hysteresis so a frozen edge pose cannot suspend/resume forever.
     local civilian = scaledDistance * (resume and 50.5 or 54.5)
-    return {
+    local radii = {
         civilian = civilian,
         gang = civilian + 30,
         maximum = civilian + 30,
     }
+    if profile.continuityUntil and getTickCount() <= profile.continuityUntil then
+        radii.civilian = math.max(radii.civilian, profile.continuityCivilian or 0)
+        radii.gang = math.max(radii.gang, profile.continuityGang or 0)
+        radii.maximum = math.max(radii.maximum, profile.continuityMaximum or 0)
+    end
+    return radii
 end
 
 local function getNativeTargetsNearPlayer(player)
@@ -679,13 +707,19 @@ local function getPopulationRadiusForClass(profile, populationClass)
     return radii and (populationClass == "gang" and radii.gang or radii.civilian) or false
 end
 
-local function findClosestPopulationResident(x, y, z, populationClass, excludedPlayer, resume)
+local function findClosestPopulationResident(x, y, z, populationClass, excludedPlayer, resume, admissionExtraRadius)
     local closest, closestDistanceSquared
     for _, player in ipairs(getEligiblePlayers()) do
         if player ~= excludedPlayer then
             local profile = populationProfiles[player]
-            local radii = profile and profile.worldRevision == populationWorld.revision and getPopulationRadii(profile, resume) or false
+            local profileContinuous = profile and
+                (profile.worldRevision == populationWorld.revision or
+                    getTickCount() - profile.receivedAt <= config.populationProfileContinuityGrace)
+            local radii = profileContinuous and getPopulationRadii(profile, resume) or false
             local radius = radii and (populationClass == "gang" and radii.gang or radii.civilian) or false
+            if radius then
+                radius = radius + math.max(0, math.min(PED_PRODUCTION_PREDICTION_MAX_LEAD, tonumber(admissionExtraRadius) or 0))
+            end
             if radius then
                 local px, py, pz = getElementPosition(player)
                 local distanceSquared = squaredDistance2D(x, y, px, py)
@@ -1720,15 +1754,20 @@ local function countNativeGroupsForOwner(owner, excludedGroup)
     return count
 end
 
-local function findClosestGroupResident(group, excludedPlayer, requireCapacity, resume)
+local function findClosestGroupResident(group, excludedPlayer, requireCapacity, resume, admissionExtraRadius)
     local closest, closestDistanceSquared
     for _, player in ipairs(getEligiblePlayers()) do
         if player ~= excludedPlayer and
             (not requireCapacity or countNativeGroupsForOwner(player, group) < config.maximumNativeGangGroups) then
             local profile = populationProfiles[player]
-            local radii = profile and profile.worldRevision == populationWorld.revision and getPopulationRadii(profile, resume) or false
+            local profileContinuous = profile and
+                (profile.worldRevision == populationWorld.revision or
+                    getTickCount() - profile.receivedAt <= config.populationProfileContinuityGrace)
+            local radii = profileContinuous and getPopulationRadii(profile, resume) or false
             local distanceSquared = radii and getGroupDistanceSquaredToPlayer(group, player)
-            if distanceSquared and distanceSquared <= radii.gang * radii.gang and
+            local radius = radii and radii.gang +
+                math.max(0, math.min(PED_PRODUCTION_PREDICTION_MAX_LEAD, tonumber(admissionExtraRadius) or 0)) or false
+            if distanceSquared and radius and distanceSquared <= radius * radius and
                 (not closestDistanceSquared or distanceSquared < closestDistanceSquared) then
                 closest = player
                 closestDistanceSquared = distanceSquared
@@ -2104,7 +2143,7 @@ setTimer(function()
 
 end, 100, 0)
 
-local function validateCandidate(player, candidate)
+local function validateCandidate(player, candidate, selection)
     if type(candidate) ~= "table" or not isFiniteNumber(candidate.x) or not isFiniteNumber(candidate.y) or
         not isFiniteNumber(candidate.z) or not isFiniteNumber(candidate.model) or not isFiniteNumber(candidate.pedType) or
         not isFiniteNumber(candidate.direction) or (candidate.populationClass == "gang" and not isFiniteNumber(candidate.heading)) then
@@ -2156,7 +2195,9 @@ local function validateCandidate(player, candidate)
         (populationClass == "gang" and 30 or 0)
     local hiddenMinimum = math.max(0, profile.creationDistanceMultiplier * 25 - 10)
     local hiddenMaximum = profile.creationDistanceMultiplier * 25
-    local maximum = math.max(visibleMaximum, hiddenMaximum) + config.maximumGangGroupSpan
+    local predictionLead = type(selection) == "table" and
+        math.max(0, math.min(PED_PRODUCTION_PREDICTION_MAX_LEAD, tonumber(selection.predictionLead) or 0)) or 0
+    local maximum = math.max(visibleMaximum, hiddenMaximum) + config.maximumGangGroupSpan + predictionLead
     if distanceSquared < math.max(0, hiddenMinimum - config.maximumGangGroupSpan) ^ 2 or distanceSquared > maximum * maximum or
         math.abs(candidate.z - playerZ) > 35 then
         return false, "distance"
@@ -2189,7 +2230,7 @@ local function validateGroupCandidate(player, candidate, selection)
     local anchorX, anchorY, anchorZ
     local maximumSpanSquared = config.maximumGangGroupSpan * config.maximumGangGroupSpan
     for index, candidateMember in ipairs(members) do
-        local valid, modelOrReason, direction, populationClass, gang = validateCandidate(player, candidateMember)
+        local valid, modelOrReason, direction, populationClass, gang = validateCandidate(player, candidateMember, selection)
         if not valid then
             return false, "group-member-" .. tostring(index) .. ":" .. tostring(modelOrReason)
         end
@@ -2247,7 +2288,8 @@ function coupleRuntime.validateCandidate(player, candidate, selection)
     local visibleMaximum = profile.creationDistanceMultiplier * profile.generationDistanceMultiplier * 50.5
     local hiddenMinimum = math.max(0, profile.creationDistanceMultiplier * 25 - 10)
     local hiddenMaximum = profile.creationDistanceMultiplier * 25
-    local maximum = math.max(visibleMaximum, hiddenMaximum) + config.maximumGangGroupSpan
+    local predictionLead = math.max(0, math.min(PED_PRODUCTION_PREDICTION_MAX_LEAD, tonumber(selection.predictionLead) or 0))
+    local maximum = math.max(visibleMaximum, hiddenMaximum) + config.maximumGangGroupSpan + predictionLead
     local plannedCells = {}
     local validated = {}
     for index, member in ipairs(members) do
@@ -2495,7 +2537,8 @@ function coupleRuntime.spawn(player, candidate, selection)
 
     beginSpawnFade({couple.members[1].ped, couple.members[2].ped})
     local centreX, centreY, centreZ = coupleRuntime.getCentre(couple)
-    local owner = centreX and findClosestPopulationResident(centreX, centreY, centreZ, "civilian") or false
+    local owner = centreX and findClosestPopulationResident(
+        centreX, centreY, centreZ, "civilian", nil, nil, selection.predictionLead) or false
     if not owner or not coupleRuntime.assignOwner(couple, owner, "couple-spawn") then
         stats.coupleRollbacks = stats.coupleRollbacks + 1
         coupleRuntime.remove(couple, "couple-no-owner")
@@ -2619,7 +2662,7 @@ local function spawnGangGroup(player, candidate, selection)
     beginSpawnFade(fadingPeds)
 
     local centreX, centreY, centreZ = getGroupCentre(group)
-    local owner = findClosestGroupResident(group, nil, true)
+    local owner = findClosestGroupResident(group, nil, true, nil, selection.predictionLead)
     if not owner then
         removeGroup(group, "group-no-owner")
         return false, "group-no-owner"
@@ -2687,7 +2730,7 @@ local function spawnCandidate(player, candidate, selection)
         return false, "runtime-unavailable"
     end
 
-    local valid, modelOrReason, direction, populationClass, gang = validateCandidate(player, candidate)
+    local valid, modelOrReason, direction, populationClass, gang = validateCandidate(player, candidate, selection)
     if not valid then
         return false, modelOrReason
     end
@@ -2699,7 +2742,8 @@ local function spawnCandidate(player, candidate, selection)
         return false, staleReason
     end
 
-    local owner = findClosestPopulationResident(candidate.x, candidate.y, candidate.z, populationClass)
+    local owner = findClosestPopulationResident(
+        candidate.x, candidate.y, candidate.z, populationClass, nil, nil, selection.predictionLead)
     if not owner then
         return false, "no-owner"
     end
@@ -2892,7 +2936,7 @@ local function beginCandidateVisibilityCheck(player, candidate, request)
     elseif request.selection.populationClass == "gang" then
         valid, reason = validateGroupCandidate(player, candidate, request.selection)
     else
-        valid, reason = validateCandidate(player, candidate)
+        valid, reason = validateCandidate(player, candidate, request.selection)
     end
     if not valid then
         return false, reason
@@ -2907,7 +2951,8 @@ local function beginCandidateVisibilityCheck(player, candidate, request)
         -- PedCreationDistMultiplier is stock-clamped to 1.0..1.5. Use the
         -- maximum only to bound network voters; each client applies its exact
         -- current multiplier before querying GTA's camera.
-        local threshold = 1.5 * 42.5 + (request.selection.populationClass == "gang" and 30 or 0)
+        local threshold = 1.5 * 42.5 + (request.selection.populationClass == "gang" and 30 or 0) +
+            math.max(0, math.min(PED_PRODUCTION_PREDICTION_MAX_LEAD, tonumber(request.selection.predictionLead) or 0))
         local playerX, playerY = getElementPosition(voter)
         for _, probe in ipairs(probes) do
             if squaredDistance2D(playerX, playerY, probe.x, probe.y) < threshold * threshold then
@@ -4093,7 +4138,7 @@ addEventHandler("pedTraffic:visibilityProbeResult", resourceRoot, function(check
 end)
 
 addEvent("pedTraffic:populationProfile", true)
-addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
+addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile, diagnostic)
     if not enabled or not isEligiblePlayer(client) then
         populationProfiles[client] = nil
         populationCandidateMisses[client] = nil
@@ -4103,11 +4148,58 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
         return
     end
 
-    local validated = validatePopulationProfile(profile)
+    local validated, rejectionReason = validatePopulationProfile(profile)
     if not validated then
-        populationProfiles[client] = nil
-        populationCandidateMisses[client] = nil
+        local now = getTickCount()
+        local preservedProfile = populationProfiles[client]
+        if preservedProfile then
+            -- A transient native miss must not instantly make every existing
+            -- ped non-resident. Clear only if the same profile remains stale
+            -- for the complete handover grace; a recovered profile replaces
+            -- this table and makes the timer harmless.
+            local preservedPlayer = client
+            setTimer(function()
+                if populationProfiles[preservedPlayer] == preservedProfile and
+                    getTickCount() - preservedProfile.receivedAt >= config.populationProfileContinuityGrace then
+                    populationProfiles[preservedPlayer] = nil
+                    populationCandidateMisses[preservedPlayer] = nil
+                end
+            end, config.populationProfileContinuityGrace, 1)
+        else
+            populationCandidateMisses[client] = nil
+        end
+        -- Diagnostics arrive from an untrusted client. Reduce them to small,
+        -- canonical values before constructing a signature or a forced log.
+        local clientDiagnostic = type(diagnostic) == "table" and diagnostic or {}
+        local allowedProfileTypes = {boolean = true, ["function-missing"] = true, ["nil"] = true, table = true}
+        local profileType = allowedProfileTypes[clientDiagnostic.profileType] and clientDiagnostic.profileType or type(profile)
+        local profileFunctionPresent = clientDiagnostic.profileFunctionPresent == true
+        local updateFunctionPresent = clientDiagnostic.updateFunctionPresent == true
+        local dimension = isIntegerInRange(clientDiagnostic.dimension, 0, 65535) and clientDiagnostic.dimension or "invalid"
+        local interior = isIntegerInRange(clientDiagnostic.interior, 0, 255) and clientDiagnostic.interior or "invalid"
+        local clientWorldRevision = isIntegerInRange(clientDiagnostic.worldRevision, 0, 2147483647) and
+            clientDiagnostic.worldRevision or "invalid"
+        local catalogStatus = clientDiagnostic.catalogRevision == populationCatalog.revision and "match" or "mismatch"
+        local signature = table.concat({
+            tostring(rejectionReason), profileType,
+            tostring(profileFunctionPresent), tostring(updateFunctionPresent), tostring(dimension), tostring(interior),
+            tostring(clientWorldRevision), catalogStatus,
+        }, ":")
+        local previousDiagnostic = populationProfileDiagnostics[client]
+        if not previousDiagnostic or previousDiagnostic.signature ~= signature or now - previousDiagnostic.loggedAt >= 60000 then
+            log(("population-profile-rejected player=%s reason=%s profileType=%s profileFn=%s updateFn=%s dimension=%s interior=%s clientWorldRevision=%s serverWorldRevision=%s clientCatalogRevision=%s"):format(
+                    getPlayerName(client), tostring(rejectionReason), profileType,
+                    tostring(profileFunctionPresent), tostring(updateFunctionPresent), tostring(dimension), tostring(interior),
+                    tostring(clientWorldRevision), tostring(populationWorld.revision), catalogStatus), true)
+            populationProfileDiagnostics[client] = {signature = signature, loggedAt = now}
+        end
         return
+    end
+
+    if populationProfileDiagnostics[client] then
+        log(("population-profile-recovered player=%s previousReason=%s"):format(
+                getPlayerName(client), tostring(populationProfileDiagnostics[client].signature)), true)
+        populationProfileDiagnostics[client] = nil
     end
 
     local totalTarget, civilianTarget, dealerTarget, copTarget, gangTarget, gangTargets =
@@ -4124,9 +4216,20 @@ addEventHandler("pedTraffic:populationProfile", resourceRoot, function(profile)
     if previous and previous.signature == validated.signature then
         validated.stableSince = previous.stableSince
         validated.nextRebalanceAt = previous.nextRebalanceAt
+        validated.continuityUntil = previous.continuityUntil
+        validated.continuityCivilian = previous.continuityCivilian
+        validated.continuityGang = previous.continuityGang
+        validated.continuityMaximum = previous.continuityMaximum
     else
         validated.stableSince = validated.receivedAt
-        validated.nextRebalanceAt = validated.receivedAt + 3000
+        validated.nextRebalanceAt = validated.receivedAt + config.populationProfileContinuityGrace
+        if previous then
+            local previousRadii = getPopulationRadii(previous)
+            validated.continuityUntil = validated.receivedAt + config.populationProfileContinuityGrace
+            validated.continuityCivilian = previousRadii.civilian
+            validated.continuityGang = previousRadii.gang
+            validated.continuityMaximum = previousRadii.maximum
+        end
         populationCandidateMisses[client] = nil
     end
     populationProfiles[client] = validated
@@ -5143,7 +5246,9 @@ addEventHandler("onPlayerQuit", root, function()
     end
     pendingRequests[source] = nil
     populationProfiles[source] = nil
+    populationProfileDiagnostics[source] = nil
     populationCandidateMisses[source] = nil
+    pedPopulationMotion[source] = nil
     populationWorldRevisions[source] = nil
     populationClientIds[source] = nil
     removeTestVehicle(source)
@@ -5332,6 +5437,51 @@ setTimer(function()
     end
 end, 100, 0)
 
+function samplePedPopulationMotion(players)
+    local now = getTickCount()
+    local present = {}
+    for _, player in ipairs(players) do
+        present[player] = true
+        local x, y, z = getElementPosition(player)
+        local sample = pedPopulationMotion[player]
+        if sample then
+            local elapsed = now - sample.tick
+            local displacement = getDistanceBetweenPoints3D(x, y, z, sample.x, sample.y, sample.z)
+            if elapsed >= 50 and elapsed <= 2000 and displacement <= 100 then
+                local scale = 1000 / elapsed
+                sample.vx = (x - sample.x) * scale
+                sample.vy = (y - sample.y) * scale
+            else
+                sample.vx, sample.vy = 0, 0
+            end
+            sample.x, sample.y, sample.z, sample.tick = x, y, z, now
+        else
+            pedPopulationMotion[player] = {x = x, y = y, z = z, tick = now, vx = 0, vy = 0}
+        end
+    end
+    for player in pairs(pedPopulationMotion) do
+        if not present[player] then pedPopulationMotion[player] = nil end
+    end
+end
+
+function getPedPopulationPredictedOrigin(player)
+    local x, y, z = getElementPosition(player)
+    local motion = pedPopulationMotion[player]
+    if not motion then return x, y, z, 0, 0 end
+    local speed = math.sqrt(motion.vx * motion.vx + motion.vy * motion.vy)
+    if speed < 1 then return x, y, z, 0, speed end
+    local lead = math.min(PED_PRODUCTION_PREDICTION_MAX_LEAD, speed * PED_PRODUCTION_PREDICTION_HORIZON)
+    return x + motion.vx / speed * lead, y + motion.vy / speed * lead, z, lead, speed
+end
+
+function countPedCandidateVisibilityChecks(player)
+    local count = 0
+    for _, check in pairs(pendingVisibilityChecks) do
+        if check.kind == "candidate" and check.player == player then count = count + 1 end
+    end
+    return count
+end
+
 setTimer(function()
     if not enabled then
         return
@@ -5385,6 +5535,8 @@ setTimer(function()
         -- eligible player remains a resident, observer and visibility voter.
         players = {pedTrafficDemoDensity.anchor}
     end
+
+    samplePedPopulationMotion(players)
 
     requestCursor = requestCursor % #players + 1
     for offset = 0, #players - 1 do
@@ -5476,8 +5628,8 @@ setTimer(function()
         end
 
         local selection = nativeTarget and selectPopulationForPlayer(player)
-        if selection and selection.populationClass == "civilian" and not request and not next(pendingRequests) and
-            not next(pendingVisibilityChecks) then
+        local visibilityLanesAvailable = countPedCandidateVisibilityChecks(player) < PED_PRODUCTION_MAX_VISIBILITY_LANES
+        if selection and selection.populationClass == "civilian" and not request and visibilityLanesAvailable then
             local sample15, taken = coupleRuntime.roll()
             local demoRemaining = selection.demoPhysicalCeiling and
                 math.min(selection.demoPhysicalCeiling - selection.physicalCount,
@@ -5521,12 +5673,15 @@ setTimer(function()
                 selection = false
             end
         end
-        if selection and not request and not next(pendingRequests) and not next(pendingVisibilityChecks) and
+        if selection and not request and visibilityLanesAvailable and
             (not selection.demoPhysicalCeiling or getTrafficPedCount() < selection.demoPhysicalCeiling) and
             getTrafficPedCount() < config.globalCap and
             #getElementsByType("ped") < config.pedPoolSoftLimit then
             nextRequestId = nextRequestId + 1
             selection.requestId = nextRequestId
+            local originX, originY, originZ, predictionLead, playerSpeed = getPedPopulationPredictedOrigin(player)
+            selection.predictionLead = predictionLead
+            selection.predictionPlayerSpeed = playerSpeed
             pendingRequests[player] = {
                 id = nextRequestId,
                 issuedAt = getTickCount(),
@@ -5563,11 +5718,11 @@ setTimer(function()
                 },
                 deficits = {civilian = selection.civilianDeficit, dealer = selection.dealerDeficit, cop = selection.copDeficit,
                             gang = selection.gangDeficit},
+                prediction = {lead = predictionLead, speed = playerSpeed, horizon = PED_PRODUCTION_PREDICTION_HORIZON},
             })
             triggerClientEvent(player, "pedTraffic:candidateRequest", resourceRoot, nextRequestId, populationWorld.revision,
                                selection.populationClass, selection.gang, selection.maximumGroupMembers or 1,
-                               selection.coupleAttempt == true)
-            break
+                               selection.coupleAttempt == true, originX, originY, originZ)
         end
     end
 end, config.requestInterval, 0)

@@ -8,6 +8,8 @@ local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
 local activeTest = false
+local playerMotion = {}
+local readyLatencyByPlayer = {}
 -- Nearby players see the same road population, so production budgets sixteen
 -- units per spatial bubble rather than sixteen duplicate units per player.
 -- Keep the existing global circuit breaker: ten isolated areas can receive
@@ -53,6 +55,22 @@ local INITIAL_ASSIGNMENT_DELAY = 350
 -- can land and align it before the owner reveals it; otherwise long cars can
 -- begin embedded in steep roads and remain permanently wedged.
 local INITIAL_PLACEMENT_LIFT = 0.9
+local REVEAL_PROBE_TIMEOUT = 1000
+local PRODUCTION_MAX_CANDIDATES_PER_BUBBLE = 4
+local PRODUCTION_ADMISSIONS_PER_TICK = 2
+local PRODUCTION_PREDICTION_MAX_LEAD = 45
+local PRODUCTION_PREDICTION_DEFAULT_LATENCY = 0.9
+-- Begin replacing cars before they leave the collision-resident bubble. The
+-- overlap is deliberately small and applies only to cars already behind a
+-- moving player (or at the very edge), so it bridges native-oracle latency
+-- without turning the configured density target into a permanently larger
+-- population.
+local PRODUCTION_HANDOVER_RESERVE_PER_BUBBLE = 4
+local PRODUCTION_HANDOVER_BEHIND_DISTANCE = 165
+local PRODUCTION_HANDOVER_EDGE_DISTANCE = 210
+local PRODUCTION_HANDOVER_MINIMUM_SPEED = 8
+local PRODUCTION_STATIONARY_SEARCH_START_ATTEMPT = 6
+local PRODUCTION_STATIONARY_SEARCH_MAX_OFFSET = 45
 local telemetryWindow = VehicleTrafficTelemetry.newCounterWindow()
 
 -- These pools are the road-safe subset of GTA's cargrp.dat categories. MTA
@@ -199,7 +217,12 @@ end
 
 local function setUnitStagingVisible(unit, visible)
     local alpha = visible and 255 or 0
-    if isElement(unit.vehicle) then setElementAlpha(unit.vehicle, alpha) end
+    if isElement(unit.vehicle) then
+        setElementAlpha(unit.vehicle, alpha)
+        -- Vehicle alpha does not hide coronas/headlights. Keep the complete
+        -- staged unit visually atomic, then return lighting to GTA at reveal.
+        setVehicleOverrideLights(unit.vehicle, visible and 0 or 1)
+    end
     forEachOccupant(unit, function(ped)
         if isElement(ped) then setElementAlpha(ped, alpha) end
     end)
@@ -216,10 +239,33 @@ end
 
 local function pendingCount()
     local count = 0
-    for _, generation in pairs(candidateReservations) do
-        if generation == trafficGeneration then count = count + 1 end
+    for _, reservation in pairs(candidateReservations) do
+        if type(reservation) == "table" and reservation.generation == trafficGeneration then
+            count = count + reservation.count
+        end
     end
     return count
+end
+
+local function pendingCandidateCount(owner)
+    local reservation = candidateReservations[owner]
+    return type(reservation) == "table" and reservation.generation == trafficGeneration and reservation.count or 0
+end
+
+local function reserveCandidate(owner, generation)
+    local reservation = candidateReservations[owner]
+    if type(reservation) ~= "table" or reservation.generation ~= generation then
+        reservation = {generation = generation, count = 0}
+        candidateReservations[owner] = reservation
+    end
+    reservation.count = reservation.count + 1
+end
+
+local function releaseCandidate(owner, generation)
+    local reservation = candidateReservations[owner]
+    if type(reservation) ~= "table" or reservation.generation ~= generation then return end
+    reservation.count = math.max(0, reservation.count - 1)
+    if reservation.count == 0 then candidateReservations[owner] = nil end
 end
 
 local function distanceToUnit(player, unit)
@@ -249,12 +295,48 @@ local function nearestBubbleIndex(bubbles, unit)
     return selected
 end
 
-local function ownerHasPendingCandidate(owner)
-    if candidateReservations[owner] == trafficGeneration then return true end
-    for _, pending in pairs(pendingCandidates) do
-        if pending.owner == owner then return true end
+local function ownerHasPendingCandidate(owner, limit)
+    return pendingCandidateCount(owner) >= (limit or 1)
+end
+
+local function updatePlayerMotion(ps)
+    local now = getTickCount()
+    local present = {}
+    for _, player in ipairs(ps) do
+        present[player] = true
+        local x, y, z = getElementPosition(player)
+        local sample = playerMotion[player]
+        if sample then
+            local elapsed = now - sample.tick
+            local displacement = getDistanceBetweenPoints3D(x, y, z, sample.x, sample.y, sample.z)
+            if elapsed >= 50 and elapsed <= 2000 and displacement <= 100 then
+                local scale = 1000 / elapsed
+                sample.vx = (x - sample.x) * scale
+                sample.vy = (y - sample.y) * scale
+                sample.vz = (z - sample.z) * scale
+            else
+                sample.vx, sample.vy, sample.vz = 0, 0, 0
+            end
+            sample.x, sample.y, sample.z, sample.tick = x, y, z, now
+        else
+            playerMotion[player] = {x = x, y = y, z = z, tick = now, vx = 0, vy = 0, vz = 0}
+        end
     end
-    return false
+    for player in pairs(playerMotion) do
+        if not present[player] then playerMotion[player] = nil end
+    end
+end
+
+local function predictedCandidateOrigin(owner)
+    local x, y, z = getElementPosition(owner)
+    local motion = playerMotion[owner]
+    if not motion then return x, y, z, 0, 0, 0 end
+    local speed = math.sqrt(motion.vx * motion.vx + motion.vy * motion.vy)
+    if speed < 1 then return x, y, z, 0, speed, 0 end
+    local latency = readyLatencyByPlayer[owner] or PRODUCTION_PREDICTION_DEFAULT_LATENCY
+    local horizon = math.max(0.2, math.min(1.0, latency + 0.1))
+    local lead = math.min(PRODUCTION_PREDICTION_MAX_LEAD, speed * horizon)
+    return x + motion.vx / speed * lead, y + motion.vy / speed * lead, z, lead, speed, horizon
 end
 
 local function productionBubbleLoads(ps, includePending)
@@ -285,10 +367,39 @@ local function productionBubbleLoads(ps, includePending)
     return bubbles, loads, bubbleUnits
 end
 
+local function productionHandoverCapacity(ps, desired)
+    local outgoing = 0
+    for _, unit in pairs(units) do
+        if unit.mode == "production" and isElement(unit.vehicle) then
+            local ux, uy, uz = getElementPosition(unit.vehicle)
+            local nearestDistance = math.huge
+            local leaving = false
+            for _, player in ipairs(ps) do
+                local px, py, pz = getElementPosition(player)
+                local dx, dy, dz = ux - px, uy - py, uz - pz
+                local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if distance < nearestDistance then
+                    nearestDistance = distance
+                    local motion = playerMotion[player]
+                    local speed = motion and math.sqrt(motion.vx * motion.vx + motion.vy * motion.vy) or 0
+                    local directionDot = speed > 0 and (dx * motion.vx + dy * motion.vy) / (math.max(distance, 0.001) * speed) or 1
+                    leaving = distance >= PRODUCTION_HANDOVER_EDGE_DISTANCE or
+                        (speed >= PRODUCTION_HANDOVER_MINIMUM_SPEED and
+                            distance >= PRODUCTION_HANDOVER_BEHIND_DISTANCE and directionDot <= -0.15)
+                end
+            end
+            if leaving then outgoing = outgoing + 1 end
+        end
+    end
+    local reserveLimit = #populationBubbles(ps) * PRODUCTION_HANDOVER_RESERVE_PER_BUBBLE
+    return math.min(population.cap, desired + math.min(outgoing, reserveLimit)), outgoing
+end
+
 local function emitProductionTelemetry()
     if not population.enabled then return end
     local ps = players()
     local desired = populationDesired(ps, "production")
+    local handoverCapacity, outgoing = productionHandoverCapacity(ps, desired)
     local bubbles, loads, bubbleUnits = productionBubbleLoads(ps, false)
     local bubbleSnapshots = {}
     local base = #bubbles > 0 and math.floor(desired / #bubbles) or 0
@@ -335,6 +446,8 @@ local function emitProductionTelemetry()
         players = #ps,
         bubbles = #bubbles,
         desired = desired,
+        handoverCapacity = handoverCapacity,
+        outgoing = outgoing,
         cap = population.cap,
         targetPerBubble = population.targetPerPlayer,
         units = productionUnits,
@@ -352,7 +465,8 @@ local function chooseProductionOwner(ps)
     local bubbles, loads = productionBubbleLoads(ps, true)
     local selected = false
     for index, bubble in ipairs(bubbles) do
-        if not ownerHasPendingCandidate(bubble.anchor) and (not selected or loads[index] < loads[selected]) then
+        if not ownerHasPendingCandidate(bubble.anchor, PRODUCTION_MAX_CANDIDATES_PER_BUBBLE) and
+            (not selected or loads[index] < loads[selected]) then
             selected = index
         end
     end
@@ -428,6 +542,7 @@ local function destroyUnit(unit, reason)
     clearTimer(unit, "handoffTimer")
     clearTimer(unit, "dispatchTimer")
     clearTimer(unit, "assignmentTimer")
+    clearTimer(unit, "revealTimeoutTimer")
     triggerClientEvent(root, "carTraffic:stop", resourceRoot, unit.id, unit.epoch)
     forEachOccupant(unit, function(ped)
         if isElement(ped) then destroyElement(ped) end
@@ -676,7 +791,7 @@ local function assign(unit, owner, reason)
                 setElementFrozen(unit.vehicle, false)
             end
             triggerClientEvent(owner, "carTraffic:assign", resourceRoot, unit.id, unit.epoch, unit.ped, unit.vehicle, unit.cruiseSpeed, passengers,
-                unit.drivingStyle, unit.resumeKinematics, initialAssignment)
+                unit.drivingStyle, unit.resumeKinematics, initialAssignment, unit.oracleDiagnostic)
             unit.dispatchedOnce = true
             trace("assignment-dispatched", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(owner), delay = dispatchDelay})
         end
@@ -1094,6 +1209,18 @@ local function createUnit(candidate, owner, observers, mode)
         cruiseSpeed = candidate.cruiseSpeed or 16.0, drivingStyle = tonumber(candidate.drivingStyle) or 0,
         model = candidate.model, vehicleClass = tonumber(candidate.vehicleClass) or 0, mode = mode, passengers = passengers, anchorPlayer = owner,
         createdAt = getTickCount(), spawnRotation = tonumber(candidate.rotation), carGroup = candidate.carGroup,
+        candidateRequestedAt = tonumber(candidate.serverChainRequestedAt), predictionLead = tonumber(candidate.serverPredictionLead) or 0,
+        predictionPlayerSpeed = tonumber(candidate.serverPlayerSpeed) or 0,
+        predictionHorizon = tonumber(candidate.serverPredictionHorizon) or 0,
+        oracleDiagnostic = {
+            pathLerp = candidate.diagnosticPathLerp, laneOffset = candidate.diagnosticLaneOffset,
+            nodeAArea = candidate.diagnosticNodeAArea, nodeAId = candidate.diagnosticNodeAId,
+            nodeBArea = candidate.diagnosticNodeBArea, nodeBId = candidate.diagnosticNodeBId,
+            carLinkArea = candidate.diagnosticCarLinkArea, carLinkId = candidate.diagnosticCarLinkId,
+            laneCount = candidate.diagnosticLaneCount, laneIndex = candidate.diagnosticLaneIndex,
+            directionX = candidate.diagnosticDirectionX, directionY = candidate.diagnosticDirectionY,
+            dotLimit = candidate.diagnosticDotLimit, requireInsideCone = candidate.diagnosticRequireInsideCone,
+        },
         highwayCaseName = candidate.highwayCaseName, highwayDirectionX = candidate.highwayDirectionX,
         highwayDirectionY = candidate.highwayDirectionY,
     }
@@ -1114,7 +1241,7 @@ local function createUnit(candidate, owner, observers, mode)
     setElementData(vehicle, "neon:ambientVehicleTrafficId", unit.id)
     trace("spawn", {id = unit.id, model = unit.model, vehicleClass = unit.vehicleClass, passengers = #passengers,
         x = candidate.x, y = candidate.y, z = candidate.z, rotation = candidate.rotation, cruiseSpeed = unit.cruiseSpeed,
-        drivingStyle = unit.drivingStyle, carGroup = candidate.carGroup})
+        drivingStyle = unit.drivingStyle, carGroup = candidate.carGroup, oracle = unit.oracleDiagnostic})
     assign(unit, owner, "spawn")
     return unit
 end
@@ -1138,35 +1265,58 @@ startHighwayCase = function()
         rotation = testCase.rotation, directionX = testCase.directionX, directionY = testCase.directionY})
 end
 
-requestCandidate = function(owner, mode, attempt, generation)
+requestCandidate = function(owner, mode, attempt, generation, chainRequestedAt)
     generation = generation or trafficGeneration
     if generation ~= trafficGeneration then return end
     local ps = players()
     if not isElement(owner) then
-        if owner ~= nil then candidateReservations[owner] = nil end
+        if owner ~= nil then releaseCandidate(owner, generation) end
         return trace("candidate-aborted", {reason = "owner-missing", mode = mode})
     end
     if mode ~= "production" and mode ~= "density" and mode ~= "spatial" and #ps < 2 then return terminalTestFailure("two-clients-required") end
     if #ps < 1 then return trace("candidate-aborted", {reason = "no-clients", mode = mode}) end
     attempt = tonumber(attempt) or 1
     if attempt == 1 then
-        if candidateReservations[owner] == generation then return end
-        candidateReservations[owner] = generation
+        local limit = mode == "production" and PRODUCTION_MAX_CANDIDATES_PER_BUBBLE or 1
+        if ownerHasPendingCandidate(owner, limit) then return end
+        reserveCandidate(owner, generation)
+        chainRequestedAt = getTickCount()
     end
     if attempt > MAX_CANDIDATE_ATTEMPTS then
-        candidateReservations[owner] = nil
+        releaseCandidate(owner, generation)
         if mode ~= "production" and mode ~= "density" and mode ~= "spatial" then return terminalTestFailure("candidate-attempt-limit") end
         return trace("candidate-aborted", {reason = "candidate-attempt-limit", attempts = attempt - 1, mode = mode})
     end
     nextSession = nextSession + 1
-    local x, y, z = getElementPosition(owner)
+    local x, y, z, predictionLead, playerSpeed, predictionHorizon
+    if mode == "production" then
+        x, y, z, predictionLead, playerSpeed, predictionHorizon = predictedCandidateOrigin(owner)
+        -- A freshly connected stationary client can have valid streamed road
+        -- geometry while GTA's four retail starting-node caches all point at
+        -- an unproductive camera cone. After several exact retries, sample a
+        -- small deterministic ring around the same player. The returned road
+        -- candidate still passes the ordinary distance and camera vetoes.
+        if playerSpeed < 1 and attempt >= PRODUCTION_STATIONARY_SEARCH_START_ATTEMPT then
+            local fallbackStep = attempt - PRODUCTION_STATIONARY_SEARCH_START_ATTEMPT
+            local fallbackRadius = math.min(PRODUCTION_STATIONARY_SEARCH_MAX_OFFSET, 15 + math.floor(fallbackStep / 4) * 10)
+            local fallbackAngle = (nextSession * 137.507764 + fallbackStep * 47) * math.pi / 180
+            x = x + math.cos(fallbackAngle) * fallbackRadius
+            y = y + math.sin(fallbackAngle) * fallbackRadius
+            predictionLead = fallbackRadius
+        end
+    else
+        x, y, z = getElementPosition(owner)
+    end
     local model = (mode == "production" or mode == "density" or mode == "spatial") and false or selectVehicleModel(owner, nextSession, mode)
     pendingCandidates[nextSession] = {
         session = nextSession, owner = owner, players = ps, mode = mode, model = model or nil,
-        attempt = attempt, requestedAt = getTickCount(), generation = generation,
+        attempt = attempt, requestedAt = getTickCount(), chainRequestedAt = chainRequestedAt or getTickCount(), generation = generation,
+        predictionLead = predictionLead or 0, playerSpeed = playerSpeed or 0, predictionHorizon = predictionHorizon or 0,
     }
     triggerClientEvent(owner, "carTraffic:requestCandidate", resourceRoot, nextSession, model, x, y, z)
-    trace("candidate-request", {session = nextSession, owner = getPlayerName(owner), model = model or "native", attempt = attempt, x = x, y = y, z = z})
+    trace("candidate-request", {session = nextSession, owner = getPlayerName(owner), model = model or "native", attempt = attempt,
+        x = x, y = y, z = z, predictionLead = predictionLead or 0, playerSpeed = playerSpeed or 0,
+        predictionHorizon = predictionHorizon or 0, inFlight = pendingCandidateCount(owner)})
 end
 
 addEvent("carTraffic:candidate", true)
@@ -1177,7 +1327,7 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
     if type(candidate) ~= "table" or not proposedModel or (pending.model and proposedModel ~= pending.model) or not ALLOWED_MODELS[proposedModel] then
         pendingCandidates[session] = nil
         trace("candidate-retry", {session = session, reason = tostring(reason)})
-        return setTimer(requestCandidate, 250, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation)
+        return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
     end
     pending.model = proposedModel
     local x, y, z = tonumber(candidate.x), tonumber(candidate.y), tonumber(candidate.z)
@@ -1208,7 +1358,7 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
             occupantsValid = occupantsValid, occupantCount = type(occupantModels) == "table" and #occupantModels or -1,
             vehicleClass = vehicleClass, expectedVehicleClass = MODEL_CLASS[pending.model] or 0, drivingStyle = drivingStyle,
             distance = x and y and z and getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) or false})
-        return setTimer(requestCandidate, 250, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation)
+        return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
     end
     for _, unit in pairs(units) do
         if isElement(unit.vehicle) then
@@ -1216,13 +1366,20 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
             if getDistanceBetweenPoints3D(ux, uy, uz, x, y, z) < 18 then
                 pendingCandidates[session] = nil
                 trace("candidate-retry", {session = session, reason = "deduplicated"})
-                return setTimer(requestCandidate, 250, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation)
+                return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
             end
         end
     end
     pending.candidate = candidate
     pending.visibility = {}
-    trace("candidate", {session = session, x = candidate.x, y = candidate.y, z = candidate.z, model = candidate.model})
+    trace("candidate", {session = session, x = candidate.x, y = candidate.y, z = candidate.z, model = candidate.model,
+        oracle = {pathLerp = candidate.diagnosticPathLerp, laneOffset = candidate.diagnosticLaneOffset,
+            nodeAArea = candidate.diagnosticNodeAArea, nodeAId = candidate.diagnosticNodeAId,
+            nodeBArea = candidate.diagnosticNodeBArea, nodeBId = candidate.diagnosticNodeBId,
+            carLinkArea = candidate.diagnosticCarLinkArea, carLinkId = candidate.diagnosticCarLinkId,
+            laneCount = candidate.diagnosticLaneCount, laneIndex = candidate.diagnosticLaneIndex,
+            directionX = candidate.diagnosticDirectionX, directionY = candidate.diagnosticDirectionY,
+            dotLimit = candidate.diagnosticDotLimit, requireInsideCone = candidate.diagnosticRequireInsideCone}})
     for _, player in ipairs(pending.players) do
         triggerClientEvent(player, "carTraffic:visibilityProbe", resourceRoot, session, candidate.x, candidate.y, candidate.z)
     end
@@ -1262,18 +1419,25 @@ addEventHandler("carTraffic:visibility", resourceRoot, function(session, visible
         if probe.veto then
             pendingCandidates[session] = nil
             trace("candidate-veto", {session = session, player = getPlayerName(player), visible = probe.visible, distance = probe.distance})
-            return setTimer(requestCandidate, 250, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation)
+            return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
         end
     end
     pendingCandidates[session] = nil
-    candidateReservations[pending.owner] = nil
+    releaseCandidate(pending.owner, pending.generation)
     if pending.mode == "production" or pending.mode == "density" or pending.mode == "spatial" then
         local desired = populationDesired(players(), pending.mode)
+        if pending.mode == "production" and not population.demo then
+            desired = productionHandoverCapacity(players(), desired)
+        end
         local relevant = unitCount(function(unit) return unit.mode == pending.mode end)
         if relevant >= desired then
             return trace("candidate-aborted", {session = session, mode = pending.mode, reason = "cap-commit-fence", units = relevant, desired = desired})
         end
     end
+    pending.candidate.serverChainRequestedAt = pending.chainRequestedAt
+    pending.candidate.serverPredictionLead = pending.predictionLead
+    pending.candidate.serverPlayerSpeed = pending.playerSpeed
+    pending.candidate.serverPredictionHorizon = pending.predictionHorizon
     local unit, reason = createUnit(pending.candidate, pending.owner, pending.players, pending.mode)
     if not unit then
         if pending.mode ~= "production" then return terminalTestFailure(reason) end
@@ -1289,6 +1453,88 @@ addEventHandler("carTraffic:visibility", resourceRoot, function(session, visible
     else
         activeTest = {mode = pending.mode, unit = unit, startedAt = getTickCount()}
     end
+end)
+
+local function completeUnitActivation(unit, data)
+    if units[unit.id] ~= unit or unit.removing then return end
+    unit.state = "active"
+    unit.acceptedAt = unit.acceptedAt or getTickCount()
+    if unit.mode == "production" and unit.candidateRequestedAt and isElement(unit.anchorPlayer) then
+        local readyLatency = math.max(0, math.min(3, (unit.acceptedAt - unit.candidateRequestedAt) / 1000))
+        local previous = readyLatencyByPlayer[unit.anchorPlayer]
+        readyLatencyByPlayer[unit.anchorPlayer] = previous and previous * 0.8 + readyLatency * 0.2 or readyLatency
+    end
+    if unit.stagedHidden then setUnitStagingVisible(unit, true) end
+    if unit.handoffMetrics then
+        local x, y, z = getElementPosition(unit.vehicle)
+        local _, _, rz = getElementRotation(unit.vehicle)
+        unit.handoffMetrics.acceptDelay = unit.acceptedAt - unit.handoffMetrics.startedAt
+        unit.handoffMetrics.acceptJump = getDistanceBetweenPoints3D(x, y, z, unit.handoffMetrics.preX, unit.handoffMetrics.preY, unit.handoffMetrics.preZ)
+        unit.handoffMetrics.acceptHeadingDelta = angleDelta(rz, unit.handoffMetrics.preHeading)
+        if activeTest and activeTest.unit == unit and (unit.handoffMetrics.acceptDelay > 3000 or unit.handoffMetrics.acceptJump > 8 or
+            unit.handoffMetrics.acceptHeadingDelta > 35) then
+            return fail(unit, "handoff-continuity-invalid")
+        end
+    end
+    unit.observerSamples = 0
+    startMonitor(unit)
+    if unit.assignmentReason == "passenger-seat-release" and unit.pendingPassengerEntry then
+        local entry = unit.pendingPassengerEntry
+        unit.pendingPassengerEntry = nil
+        if isElement(entry.player) then triggerClientEvent(entry.player, "carTraffic:takeoverReady", resourceRoot, unit.vehicle, entry.seat) end
+    end
+    return trace("active", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner),
+        stagingMs = unit.acceptedAt - (unit.createdAt or unit.acceptedAt), initialVelocityApplied = data.initialVelocityApplied == true,
+        initialSpeed = tonumber(data.initialSpeed) or 0, initialPlacementGrounded = data.initialPlacementGrounded == true,
+        initialPlacementSettleMs = tonumber(data.initialPlacementSettleMs) or 0,
+        initialPlacementStableSamples = tonumber(data.initialPlacementStableSamples) or 0,
+        predictionLead = unit.predictionLead, predictionPlayerSpeed = unit.predictionPlayerSpeed,
+        predictionHorizon = unit.predictionHorizon,
+        requestToReadyMs = unit.candidateRequestedAt and unit.acceptedAt - unit.candidateRequestedAt or 0})
+end
+
+local function beginUnitReveal(unit, data)
+    unit.state = "revealing"
+    unit.pendingAcceptedData = data
+    unit.revealResponses = {}
+    unit.revealExpected = {}
+    local expectedCount = 0
+    for participant in pairs(unit.participants or {}) do
+        if isElement(participant) then
+            unit.revealExpected[participant] = true
+            expectedCount = expectedCount + 1
+            triggerClientEvent(participant, "carTraffic:revealProbe", resourceRoot, unit.id, unit.epoch, unit.vehicle)
+        end
+    end
+    if expectedCount == 0 then return fail(unit, "reveal-no-observers") end
+    unit.revealTimeoutTimer = setTimer(function()
+        unit.revealTimeoutTimer = nil
+        if units[unit.id] == unit and unit.state == "revealing" then fail(unit, "reveal-probe-timeout") end
+    end, REVEAL_PROBE_TIMEOUT, 1)
+end
+
+addEvent("carTraffic:revealVisibility", true)
+addEventHandler("carTraffic:revealVisibility", resourceRoot, function(id, epoch, veto, visible, distance)
+    local unit = units[tonumber(id)]
+    if not unit or tonumber(epoch) ~= unit.epoch or unit.state ~= "revealing" or not unit.revealExpected[client] or
+        unit.revealResponses[client] then
+        return
+    end
+    unit.revealResponses[client] = true
+    if veto == true then
+        trace("reveal-veto", {id = unit.id, epoch = unit.epoch, player = getPlayerName(client), visible = visible == true,
+            distance = tonumber(distance)})
+        return fail(unit, "reveal-visible-too-close")
+    end
+    for participant in pairs(unit.revealExpected) do
+        if not unit.revealResponses[participant] then return end
+    end
+    clearTimer(unit, "revealTimeoutTimer")
+    local data = unit.pendingAcceptedData or {}
+    unit.pendingAcceptedData = nil
+    unit.revealExpected = nil
+    unit.revealResponses = nil
+    completeUnitActivation(unit, data)
 end)
 
 addEvent("carTraffic:evidence", true)
@@ -1324,31 +1570,9 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
             trace("handoff-resume-unavailable", {id = unit.id, epoch = unit.epoch})
         end
         clearTimer(unit, "assignmentTimer")
-        unit.state = "active"
         unit.acceptedAt = getTickCount()
-        if unit.stagedHidden then setUnitStagingVisible(unit, true) end
-        if unit.handoffMetrics then
-            local x, y, z = getElementPosition(unit.vehicle)
-            local _, _, rz = getElementRotation(unit.vehicle)
-            unit.handoffMetrics.acceptDelay = unit.acceptedAt - unit.handoffMetrics.startedAt
-            unit.handoffMetrics.acceptJump = getDistanceBetweenPoints3D(x, y, z, unit.handoffMetrics.preX, unit.handoffMetrics.preY, unit.handoffMetrics.preZ)
-            unit.handoffMetrics.acceptHeadingDelta = angleDelta(rz, unit.handoffMetrics.preHeading)
-            if activeTest and activeTest.unit == unit and (unit.handoffMetrics.acceptDelay > 3000 or unit.handoffMetrics.acceptJump > 8 or
-                unit.handoffMetrics.acceptHeadingDelta > 35) then
-                return fail(unit, "handoff-continuity-invalid")
-            end
-        end
-        unit.observerSamples = 0
-        startMonitor(unit)
-        if unit.assignmentReason == "passenger-seat-release" and unit.pendingPassengerEntry then
-            local entry = unit.pendingPassengerEntry
-            unit.pendingPassengerEntry = nil
-            if isElement(entry.player) then triggerClientEvent(entry.player, "carTraffic:takeoverReady", resourceRoot, unit.vehicle, entry.seat) end
-        end
-        return trace("active", {id = unit.id, epoch = unit.epoch, owner = getPlayerName(unit.owner),
-            stagingMs = unit.acceptedAt - (unit.createdAt or unit.acceptedAt), initialVelocityApplied = data.initialVelocityApplied == true,
-            initialSpeed = tonumber(data.initialSpeed) or 0, initialPlacementGrounded = data.initialPlacementGrounded == true,
-            initialPlacementSettleMs = tonumber(data.initialPlacementSettleMs) or 0})
+        if unit.stagedHidden then return beginUnitReveal(unit, data) end
+        return completeUnitActivation(unit, data)
     end
     if evidence == "owner-sample" and client == unit.owner and unit.state == "active" then
         local pedVehicleDelta = tonumber(data.pedVehicleDelta)
@@ -1513,20 +1737,25 @@ local function populationTick()
     if not population.enabled then return end
     local ps = players()
     if #ps == 0 then return end
+    updatePlayerMotion(ps)
     if #getElementsByType("ped") >= PRODUCTION_PED_POOL_SOFT_LIMIT and not population.testDensity then return end
 
     for session, pending in pairs(pendingCandidates) do
         if getTickCount() - pending.requestedAt > 15000 then
             pendingCandidates[session] = nil
-            candidateReservations[pending.owner] = nil
+            releaseCandidate(pending.owner, pending.generation)
             trace("candidate-timeout", {session = session, mode = pending.mode})
         end
     end
 
     local mode = type(population.testDensity) == "string" and population.testDensity or "production"
     local desired = populationDesired(ps, mode)
+    local admissionTarget = desired
+    if mode == "production" and not population.demo then
+        admissionTarget = productionHandoverCapacity(ps, desired)
+    end
     local relevant = unitCount(function(unit) return unit.mode == mode end)
-    if relevant > desired then
+    if relevant > admissionTarget then
         local excess = {}
         for _, unit in pairs(units) do
             if unit.mode == mode then
@@ -1539,18 +1768,18 @@ local function populationTick()
             if a.distance == b.distance then return a.unit.id > b.unit.id end
             return a.distance > b.distance
         end)
-        for index = 1, relevant - desired do
+        for index = 1, relevant - admissionTarget do
             local excessUnit = excess[index].unit
             if activeTest and activeTest.mode == "spatial" and activeTest.units and activeTest.units[excessUnit.id] then
                 registerTestCleanup(excessUnit)
             end
             destroyUnit(excessUnit, "density-reconcile")
         end
-        relevant = desired
+        relevant = admissionTarget
     end
 
-    if mode == "production" and not population.demo and relevant >= desired then
-        local excessUnit = productionRebalanceUnit(ps, desired)
+    if mode == "production" and not population.demo and relevant >= admissionTarget then
+        local excessUnit = productionRebalanceUnit(ps, admissionTarget)
         if excessUnit then
             destroyUnit(excessUnit, "bubble-rebalance")
             relevant = relevant - 1
@@ -1590,16 +1819,20 @@ local function populationTick()
             end
         end
     end
-    if relevant + pendingCount() >= desired then return end
-
-    local useProductionBubbles = mode == "production" and not population.demo
-    local owner = useProductionBubbles and chooseProductionOwner(ps) or chooseOwner()
-    if not useProductionBubbles and (not owner or ownerHasPendingCandidate(owner)) then
-        for _, candidateOwner in ipairs(ps) do
-            if not ownerHasPendingCandidate(candidateOwner) then owner = candidateOwner break end
+    local admissions = 0
+    while relevant + pendingCount() < admissionTarget and admissions < PRODUCTION_ADMISSIONS_PER_TICK do
+        local useProductionBubbles = mode == "production" and not population.demo
+        local owner = useProductionBubbles and chooseProductionOwner(ps) or chooseOwner()
+        if not useProductionBubbles and (not owner or ownerHasPendingCandidate(owner)) then
+            for _, candidateOwner in ipairs(ps) do
+                if not ownerHasPendingCandidate(candidateOwner) then owner = candidateOwner break end
+            end
         end
+        local limit = useProductionBubbles and PRODUCTION_MAX_CANDIDATES_PER_BUBBLE or 1
+        if not owner or ownerHasPendingCandidate(owner, limit) then break end
+        requestCandidate(owner, mode, 1)
+        admissions = admissions + 1
     end
-    if owner and not ownerHasPendingCandidate(owner) then requestCandidate(owner, mode, 1) end
 end
 
 local function startPopulation(targetPerPlayer, cap, testDensity, targetPerPlayerLimit, demoMode)
@@ -1871,7 +2104,7 @@ addEventHandler("onPlayerQuit", root, function()
         for _, participant in ipairs(pending.players) do if participant == source then affected = true break end end
         if affected then
             pendingCandidates[session] = nil
-            candidateReservations[pending.owner] = nil
+            releaseCandidate(pending.owner, pending.generation)
             trace("candidate-aborted", {session = session, mode = pending.mode, reason = "client-left"})
         end
     end

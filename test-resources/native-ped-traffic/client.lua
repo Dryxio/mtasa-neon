@@ -1246,7 +1246,7 @@ end)
 
 addEvent("pedTraffic:candidateRequest", true)
 addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId, worldRevision, populationClass, gang, maximumGroupMembers,
-                                                                      coupleAttempt)
+                                                                      coupleAttempt, originX, originY, originZ)
     local startedAt = getTickCount()
     if not enabled or not populationWorldReady or worldRevision ~= populationWorldRevision or getElementDimension(localPlayer) ~= 0 or
         getElementInterior(localPlayer) ~= 0 or isPedDead(localPlayer) or
@@ -1281,7 +1281,14 @@ addEventHandler("pedTraffic:candidateRequest", resourceRoot, function(requestId,
         return
     end
 
-    local x, y, z = getElementPosition(localPlayer)
+    local playerX, playerY, playerZ = getElementPosition(localPlayer)
+    local x, y, z = tonumber(originX), tonumber(originY), tonumber(originZ)
+    -- The server caps its latency prediction at 45 m. Keep one metre of
+    -- numeric tolerance so a valid high-speed request is not silently reset
+    -- to the player's stale position before reaching the native oracle.
+    local predictedOriginValid = x and y and z and x == x and y == y and z == z and
+        getDistanceBetweenPoints3D(playerX, playerY, playerZ, x, y, z) <= 46
+    if not predictedOriginValid then x, y, z = playerX, playerY, playerZ end
     local candidate, missReason
     if coupleAttempt == true then
         candidate, missReason = getAmbientPedCivilianCoupleCandidate(x, y, z)
@@ -1401,21 +1408,33 @@ setTimer(function()
     -- participate in deterministic owner/observer tests.
     updateLocalPopulationModels()
 
-    if type(getAmbientPedPopulationProfile) ~= "function" then
-        triggerServerEvent("pedTraffic:populationProfile", resourceRoot, false)
+    -- The native API intentionally collapses unsupported runtime states to
+    -- false. Send bounded Lua-side context with the ordinary report so the
+    -- server can distinguish that case from a missing function or rejection.
+    local profileFunctionPresent = type(getAmbientPedPopulationProfile) == "function"
+    local diagnostic = {
+        profileFunctionPresent = profileFunctionPresent,
+        updateFunctionPresent = type(updateAmbientPedPopulationModels) == "function",
+        dimension = getElementDimension(localPlayer),
+        interior = getElementInterior(localPlayer),
+        worldRevision = populationWorldRevision,
+        catalogRevision = populationCatalogRevision,
+    }
+    if not profileFunctionPresent then
+        diagnostic.profileType = "function-missing"
+        triggerServerEvent("pedTraffic:populationProfile", resourceRoot, false, diagnostic)
         return
     end
 
     local profile = getAmbientPedPopulationProfile()
+    diagnostic.profileType = type(profile)
     if type(profile) == "table" then
         profile.worldRevision = populationWorldRevision
         profile.catalogRevision = populationCatalogRevision
         profile.capturedAt = getTickCount()
         latestPopulationProfile = profile
-    else
-        latestPopulationProfile = false
     end
-    triggerServerEvent("pedTraffic:populationProfile", resourceRoot, type(profile) == "table" and profile or false)
+    triggerServerEvent("pedTraffic:populationProfile", resourceRoot, type(profile) == "table" and profile or false, diagnostic)
 end, 1000, 0)
 
 addEvent("pedTraffic:assign", true)

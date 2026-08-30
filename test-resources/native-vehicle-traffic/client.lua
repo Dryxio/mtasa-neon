@@ -4,9 +4,10 @@ local TASK_NAME = "TASK_COMPLEX_CAR_DRIVE_WANDER"
 -- A native road candidate has yaw but no slope orientation. The server drops
 -- new hidden vehicles slightly above the road; keep staging them until GTA's
 -- suspension reports a stable ground contact before adding forward velocity.
-local INITIAL_PLACEMENT_MIN_SETTLE = 650
+local INITIAL_PLACEMENT_STABLE_SAMPLES = 3
 local INITIAL_PLACEMENT_TIMEOUT = 2500
 local INITIAL_PLACEMENT_VERTICAL_SPEED = 0.025
+local REVEAL_VISIBLE_MIN_DISTANCE = 70.0
 
 local function clearTimer(unit, name)
     if isTimer(unit[name]) then killTimer(unit[name]) end
@@ -15,6 +16,12 @@ end
 
 local function report(unit, evidence, data)
     triggerServerEvent("carTraffic:evidence", resourceRoot, unit.id, unit.epoch, evidence, data or {})
+end
+
+local function nativeAutoPilotDiagnostic(vehicle)
+    if type(getVehicleNativeAutoPilotDiagnostic) ~= "function" or not isElement(vehicle) then return false end
+    local ok, diagnostic = pcall(getVehicleNativeAutoPilotDiagnostic, vehicle)
+    return ok and type(diagnostic) == "table" and diagnostic or false
 end
 
 local function normalizePassengers(passengers, driver)
@@ -200,14 +207,18 @@ local function acceptOwner(unit)
     end
     local initialPlacementGrounded = false
     local initialPlacementSettleMs = 0
+    local initialPlacementStableSamples = 0
     if unit.initialVelocityRequested then
         if type(isVehicleOnGround) ~= "function" then return fail(unit, "vehicle-ground-oracle-missing") end
         unit.initialPlacementStartedAt = unit.initialPlacementStartedAt or getTickCount()
         initialPlacementSettleMs = getTickCount() - unit.initialPlacementStartedAt
         local _, _, verticalSpeed = getElementVelocity(unit.vehicle)
-        initialPlacementGrounded = isVehicleOnGround(unit.vehicle) == true and
+        local groundedNow = isVehicleOnGround(unit.vehicle) == true and
             math.abs(tonumber(verticalSpeed) or math.huge) <= INITIAL_PLACEMENT_VERTICAL_SPEED
-        if initialPlacementSettleMs < INITIAL_PLACEMENT_MIN_SETTLE or not initialPlacementGrounded then
+        unit.initialPlacementStableSamples = groundedNow and (unit.initialPlacementStableSamples or 0) + 1 or 0
+        initialPlacementStableSamples = unit.initialPlacementStableSamples
+        initialPlacementGrounded = initialPlacementStableSamples >= INITIAL_PLACEMENT_STABLE_SAMPLES
+        if not initialPlacementGrounded then
             if initialPlacementSettleMs < INITIAL_PLACEMENT_TIMEOUT then
                 unit.retryTimer = setTimer(function() acceptOwner(unit) end, 50, 1)
                 return
@@ -264,9 +275,10 @@ local function acceptOwner(unit)
         resumeProvided = unit.resumeProvided, resumeValid = unit.resumeKinematics ~= nil, resumeApplied = resumeApplied,
         initialVelocityRequested = unit.initialVelocityRequested, initialVelocityApplied = initialVelocityApplied,
         initialSpeed = initialSpeed, initialPlacementGrounded = initialPlacementGrounded,
-        initialPlacementSettleMs = initialPlacementSettleMs,
+        initialPlacementSettleMs = initialPlacementSettleMs, initialPlacementStableSamples = initialPlacementStableSamples,
         resumeDelay = resumeDelay, resumeDelayMs = resumeDelay,
         x = x, y = y, z = z, rx = rx, ry = ry, rz = rz, vx = vx, vy = vy, vz = vz, avx = avx, avy = avy, avz = avz,
+        oracle = unit.oracleDiagnostic, nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle),
     })
     unit.monitorTimer = setTimer(function()
         if units[unit.id] ~= unit or not isElement(unit.ped) or not isElement(unit.vehicle) then return end
@@ -275,7 +287,22 @@ local function acceptOwner(unit)
         local rx, ry, rz = getElementRotation(unit.vehicle)
         local avx, avy, avz = getElementAngularVelocity(unit.vehicle)
         local px, py, pz = getElementPosition(unit.ped)
+        local nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle)
         unit.ownerSeq = unit.ownerSeq + 1
+        if type(nativeAutoPilot) == "table" then
+            local signature = table.concat({
+                tostring(nativeAutoPilot.currentAddressArea), tostring(nativeAutoPilot.currentAddressNode),
+                tostring(nativeAutoPilot.startingAddressArea), tostring(nativeAutoPilot.startingAddressNode),
+                tostring(nativeAutoPilot.currentLane), tostring(nativeAutoPilot.nextLane),
+                tostring(nativeAutoPilot.laneChangeCounter), tostring(nativeAutoPilot.roadJoinSequence),
+            }, ":")
+            if signature ~= unit.lastNativeAutoPilotSignature then
+                unit.lastNativeAutoPilotSignature = signature
+                triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "native-autopilot-change", {
+                    seq = unit.ownerSeq, x = x, y = y, z = z, oracle = unit.oracleDiagnostic, nativeAutoPilot = nativeAutoPilot,
+                })
+            end
+        end
         report(unit, "owner-sample", {
             seq = unit.ownerSeq, capturedAt = getTickCount(),
             task = type(isPedDoingTask) == "function" and isPedDoingTask(unit.ped, TASK_NAME) == true,
@@ -352,10 +379,14 @@ local function beginOwner(unit)
     -- indefinite Wander task so the event response never chains both roots.
     local cleared = killPedTask(unit.ped, "primary", 3, false)
     local drivingStyleName = unit.drivingStyle == 6 and "avoid_cars_stop_for_peds_obey_lights" or "stop_for_cars"
+    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "drive-wander-before", {
+        oracle = unit.oracleDiagnostic, nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle),
+    })
     local started = setPedDriveWander(unit.ped, unit.vehicle, unit.cruiseSpeed, drivingStyleName)
     triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "drive-wander-returned", {
         started = started == true, cleared = cleared == true, drivingStyle = unit.drivingStyle, drivingStyleName = drivingStyleName,
-        remoteCollisionGhostPolicy = true,
+        remoteCollisionGhostPolicy = true, oracle = unit.oracleDiagnostic,
+        nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle),
     })
     if not started then
         return fail(unit, "drive-wander-refused")
@@ -428,7 +459,7 @@ end)
 
 addEvent("carTraffic:assign", true)
 addEventHandler("carTraffic:assign", resourceRoot, function(id, epoch, ped, vehicle, cruiseSpeed, passengers, drivingStyle, resumeKinematics,
-                                                             initialVelocityRequested)
+                                                             initialVelocityRequested, oracleDiagnostic)
     triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, id, epoch, "assign-received", {
         ped = isElement(ped), vehicle = isElement(vehicle), pedStreamed = isElement(ped) and isElementStreamedIn(ped) or false,
         vehicleStreamed = isElement(vehicle) and isElementStreamedIn(vehicle) or false,
@@ -443,6 +474,7 @@ addEventHandler("carTraffic:assign", resourceRoot, function(id, epoch, ped, vehi
         drivingStyle = tonumber(drivingStyle) == 6 and 6 or 0,
         resumeKinematics = normalizedResume, resumeProvided = resumeProvided,
         initialVelocityRequested = initialVelocityRequested == true,
+        oracleDiagnostic = type(oracleDiagnostic) == "table" and oracleDiagnostic or false,
         passengers = normalizedPassengers, passengerContractValid = passengerContractValid, observerSeq = 0, ownerSeq = 0,
     }
     releasedProofs[id] = nil
@@ -657,6 +689,22 @@ addEventHandler("carTraffic:visibilityProbe", resourceRoot, function(session, x,
     -- near-camera pop-in guard here.
     local tooClose = visible == true and distance < 30.0
     triggerServerEvent("carTraffic:visibility", resourceRoot, session, tooClose, visible == true, distance)
+end)
+
+addEvent("carTraffic:revealProbe", true)
+addEventHandler("carTraffic:revealProbe", resourceRoot, function(id, epoch, vehicle)
+    if not isElement(vehicle) then
+        return triggerServerEvent("carTraffic:revealVisibility", resourceRoot, id, epoch, true, false, false)
+    end
+    local x, y, z = getElementPosition(vehicle)
+    local px, py, pz = getElementPosition(localPlayer)
+    local distance = getDistanceBetweenPoints3D(px, py, pz, x, y, z)
+    local visible = type(isAmbientPedSphereVisible) ~= "function" or isAmbientPedSphereVisible(x, y, z, 5.0) == true
+    -- Staging happens while the player keeps moving. Recheck the live pose at
+    -- reveal time so a formerly valid distant candidate can never pop into an
+    -- already visible near field.
+    local veto = visible and distance < REVEAL_VISIBLE_MIN_DISTANCE
+    triggerServerEvent("carTraffic:revealVisibility", resourceRoot, id, epoch, veto, visible, distance)
 end)
 
 local interactionProbe
