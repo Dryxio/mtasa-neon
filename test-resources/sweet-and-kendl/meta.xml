@@ -4,5 +4,6 @@
     <script src="server.lua" type="server" />
     <script src="client.lua" type="client" cache="false" />
     <include resource="native-task-runtime" />
+    <include resource="story-world-runtime" />
     <min_mta_version client="1.6.0" server="1.6.0" />
 </meta>

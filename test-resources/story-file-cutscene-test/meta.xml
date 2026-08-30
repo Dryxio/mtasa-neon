@@ -1,0 +1,8 @@
+<meta>
+    <info author="MTA Neon" name="Story grouped file-cutscene test" type="script" version="0.1.0" />
+
+    <script src="server.lua" type="server" />
+
+    <include resource="story-world-runtime" />
+    <min_mta_version client="1.6.0" server="1.6.0" />
+</meta>

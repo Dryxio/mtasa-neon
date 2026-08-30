@@ -624,16 +624,26 @@ vehicles. Opcode `06FD SET_PLAYBACK_SPEED` is available as
 `setVehiclePlaybackSpeed`; it is restricted to the resource that owns the
 active playback slot and the client currently owning the vehicle.
 
-The bounded filesystem harness produces JSONL stage evidence without GUI
-input. Two consecutive two-client runs crossed both native cohort phases and
-terminated in `PASS`; a separate natural run loaded `INTRO1A`, synchronized its
-skip, and entered the Smoke scene on both clients. The isolated recording
-harness completed recording `207` at `2.00x` in `4014 ms` with `0.00 m`
-server-observed endpoint error, proving the new playback-speed path. No client
-script error was recorded during those checkpoints. Camera composition, audio
-mix, animation nuance, and moment-to-moment visual parity still require human
-review; the resource remains an SCM-derived Lua conformance implementation, not
-evidence that the generic SCM bytecode interpreter is complete.
+The bounded filesystem harness produces JSONL stage evidence while injecting
+real physical acceleration input into each GTA process. Solo/co-op and
+natural/skip profiles all completed the ordinary mission graph with terminal
+`PASS`; the two-client headless graph, an active-resource restart followed by a
+fresh co-op completion, isolated natural/skip `INTRO1A` runs, and ten clean
+occupied-vehicle relocation cycles also passed. Both client logs remained free
+of Sweet/runtime script errors. The implementation was compared directly with
+the installed `main.scm` for command order, coordinates, timings, cameras,
+task composition and mission-audio order.
+
+The reusable story-world runtime now owns grouped file-cutscene, atomic world
+teardown, player-model lease, vehicle-occupancy and transactional occupied-
+vehicle relocation barriers. Relocation preserves the original syncer, proves
+rollback and destinations with three stable client samples, and supports a
+grounded vehicle whose caller-owned source policy is already frozen. The two
+remaining primitive-fidelity gaps are `TASK_DIVE_AND_GET_UP` during the funeral
+reaction and the original `SET_CAR_FORWARD_SPEED` impulses of `10` and `5`.
+Campaign respect/progress/save persistence remains outside the isolated
+resource. These explicit limits do not bypass the mission's synchronized stage,
+presentation or cleanup barriers.
 
 ## Current implementation slice: OG Loc / SMOKE1
 

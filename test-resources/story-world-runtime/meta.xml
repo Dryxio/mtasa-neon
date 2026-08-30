@@ -1,5 +1,5 @@
 <meta>
-    <info author="MTA Neon" name="Story world runtime" type="script" version="0.1.0" />
+    <info author="MTA Neon" name="Story world runtime" type="script" version="0.3.0" />
 
     <script src="server.lua" type="server" />
     <script src="client.lua" type="client" cache="false" />
@@ -11,6 +11,13 @@
     <export function="createStoryPlayerModelLease" type="server" />
     <export function="releaseStoryPlayerModelLease" type="server" />
     <export function="getStoryPlayerModelLeaseState" type="server" />
+    <export function="createStoryFileCutscene" type="server" />
+    <export function="skipStoryFileCutscene" type="server" />
+    <export function="releaseStoryFileCutscene" type="server" />
+    <export function="getStoryFileCutsceneState" type="server" />
+    <export function="createStoryVehicleRelocation" type="server" />
+    <export function="releaseStoryVehicleRelocation" type="server" />
+    <export function="getStoryVehicleRelocationState" type="server" />
     <export function="createStoryVehicleOccupancy" type="server" />
     <export function="releaseStoryVehicleOccupancy" type="server" />
     <export function="getStoryVehicleOccupancyState" type="server" />
