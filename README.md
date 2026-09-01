@@ -114,7 +114,7 @@ That is the short list. The [full comparison table](https://mtasa-neon-wiki.verc
 
 ## For scripters
 
-Neon adds **284 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
+Neon adds **302 documented Lua functions** on top of MTA's API, plus new elements and events. A few, to give the shape of it:
 
 ```lua
 engineSetRadarMapTile(column, row, txd)        -- resource-owned extended radar tiles
@@ -133,6 +133,20 @@ enginePlayVehicleAudioBackfire(car, 2)           -- a strong pop and flames from
 
 The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the complete reference, with signatures, lifecycle rules, source commits and test evidence for every entry.
 
+## Build gamemodes with AI agents
+
+The **[Neon CLI](https://mtasa-neon-wiki.vercel.app/neon/cli/)** gives an AI coding agent the complete MTA + Neon API and the exact context for your gamemode. The agent can find the right functions, read their arguments and client/server side, check common project mistakes, and verify whether the server, client, and GTA actually joined a test—all locally, without an MCP server.
+
+Start once from your gamemode folder:
+
+```sh
+neon init --workspace /path/to/gamemode --profile neon-pair --json
+```
+
+Then point the agent to the generated `NEON_AGENT.md` and let it use the CLI while it works. The same portable ZIP supports Windows and macOS with Python 3.10 or newer.
+
+**[Download Neon CLI Portable v1.0.0](https://github.com/Dryxio/mtasa-neon/releases/download/neon-cli-v1.0.0/Neon-CLI-Portable.zip)** · **[Setup and complete agent workflow](https://mtasa-neon-wiki.vercel.app/neon/cli/)**
+
 ## Documentation
 
 | | |
@@ -140,6 +154,7 @@ The **[Neon Lua API](https://mtasa-neon-wiki.vercel.app/neon/functions)** is the
 | [Neon wiki](https://mtasa-neon-wiki.vercel.app/neon) | Everything: guides, Lua API, evidence |
 | [Synchronized NPCs](https://mtasa-neon-wiki.vercel.app/neon/synchronized-ai) | How shared native AI works |
 | [Extended world](https://mtasa-neon-wiki.vercel.app/neon/extended-world) | Boundaries, radar, water, seabed |
+| [Neon CLI for AI agents](https://mtasa-neon-wiki.vercel.app/neon/cli/) | Give an agent the complete API, project context, checks, and runtime proof |
 | [Tooling and verification](https://mtasa-neon-wiki.vercel.app/neon/tooling-and-verification) | What is actually proven, and what is not |
 | [BUILDING.md](./BUILDING.md) | Compiling the client and server |
 
