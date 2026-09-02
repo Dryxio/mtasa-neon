@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "resource",
+  "name": "camera-pointing-test",
+  "version": "1.0.0",
+  "description": "Synchronizes a resource-scoped native right-arm pointing presentation between players.",
+  "lifecycle": {
+    "start": "manual",
+    "stop": "clean",
+    "reloadSafe": true,
+    "persistentState": "none"
+  },
+  "dependencies": [],
+  "exports": [],
+  "events": [
+    {
+      "name": "cameraPointing:update",
+      "side": "server",
+      "directions": ["defines", "handles"],
+      "parameters": [
+        {"name": "active", "type": "boolean", "optional": false, "description": "Whether the sending player is pointing."},
+        {"name": "directionX", "type": "number", "optional": true, "description": "Normalized camera direction X component when active."},
+        {"name": "directionY", "type": "number", "optional": true, "description": "Normalized camera direction Y component when active."},
+        {"name": "directionZ", "type": "number", "optional": true, "description": "Normalized camera direction Z component when active."}
+      ],
+      "allowRemoteTrigger": true,
+      "description": "Accepts the owning player's bounded camera direction update."
+    },
+    {
+      "name": "cameraPointing:requestState",
+      "side": "server",
+      "directions": ["defines", "handles"],
+      "parameters": [],
+      "allowRemoteTrigger": true,
+      "description": "Requests the current pointing state after a client resource start."
+    },
+    {
+      "name": "cameraPointing:setState",
+      "side": "client",
+      "directions": ["defines", "handles"],
+      "parameters": [
+        {"name": "player", "type": "player", "optional": false, "description": "Player whose presentation changed."},
+        {"name": "active", "type": "boolean", "optional": false, "description": "Whether the player is pointing."},
+        {"name": "directionX", "type": "number", "optional": true, "description": "Normalized pointing direction X component when active."},
+        {"name": "directionY", "type": "number", "optional": true, "description": "Normalized pointing direction Y component when active."},
+        {"name": "directionZ", "type": "number", "optional": true, "description": "Normalized pointing direction Z component when active."}
+      ],
+      "allowRemoteTrigger": true,
+      "description": "Replicates one player's pointing state to an observing client."
+    }
+  ],
+  "elements": [],
+  "acl": [],
+  "capabilities": []
+}

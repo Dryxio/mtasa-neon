@@ -390,6 +390,10 @@ public:
                                                              unsigned char sideB) override;
     bool ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePresentationId, CPed* a, CPed* b) override;
     bool IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePresentationId, CPed* a, CPed* b) const override;
+    bool AcquirePedNativePointArm(CPed* ped, unsigned int& nativePointArmId) override;
+    bool UpdatePedNativePointArm(unsigned int nativePointArmId, CPed* ped, const CVector& target) override;
+    bool ReleasePedNativePointArm(unsigned int nativePointArmId, CPed* ped) override;
+    bool IsPedNativePointArmActive(unsigned int nativePointArmId, CPed* ped) const override;
     EAmbientPedSpawnCandidateResult GetAmbientPedCivilianCoupleCandidate(const CVector& origin, SAmbientPedCivilianCoupleSpawnCandidate& candidate) override;
     EAmbientVehicleSpawnCandidateResult GetAmbientVehicleSpawnCandidate(const CVector& origin, unsigned int modelId,
                                                                         SAmbientVehicleSpawnCandidate& candidate) override;
@@ -429,6 +433,15 @@ private:
 
     unsigned int                                                               m_nextAmbientPedNativeCouplePresentationId{1};
     std::unordered_map<unsigned int, SAmbientPedNativeCouplePresentationLease> m_ambientPedNativeCouplePresentationLeases;
+
+    struct SPedNativePointArmLease
+    {
+        CPed* member{};
+        void* pointArmTask{};
+    };
+
+    unsigned int                                              m_nextPedNativePointArmId{1};
+    std::unordered_map<unsigned int, SPedNativePointArmLease> m_pedNativePointArmLeases;
     std::unique_ptr<CPools>                                                    m_Pools;
     CPlayerInfo*                                                               m_pPlayerInfo;
     CProjectileInfo*                                                           m_pProjectileInfo;

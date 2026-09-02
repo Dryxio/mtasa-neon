@@ -340,6 +340,10 @@ void CLuaPedDefs::LoadFunctions()
         {"updatePedNativeCouplePresentation", UpdatePedNativeCouplePresentation},
         {"releasePedNativeCouplePresentation", ReleasePedNativeCouplePresentation},
         {"isPedNativeCouplePresentationActive", IsPedNativeCouplePresentationActive},
+        {"acquirePedNativePointArm", AcquirePedNativePointArm},
+        {"updatePedNativePointArm", UpdatePedNativePointArm},
+        {"releasePedNativePointArm", ReleasePedNativePointArm},
+        {"isPedNativePointArmActive", IsPedNativePointArmActive},
         {"addPedNativeGunAimedAtEvent", AddPedNativeGunAimedAtEvent},
         {"addPedNativeDamageResponseEvent", AddPedNativeDamageResponseEvent},
         {"addPedNativeDamageEvent", AddPedNativeDamageEvent},
@@ -4156,6 +4160,56 @@ int CLuaPedDefs::IsPedNativeCouplePresentationActive(lua_State* luaVM)
     CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
     CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
     lua_pushboolean(luaVM, pResource && pResource->IsPedNativeCouplePresentationActive(token));
+    return 1;
+}
+
+int CLuaPedDefs::AcquirePedNativePointArm(lua_State* luaVM)
+{
+    CClientPed*      ped = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(ped);
+    CLuaMain*          pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource*         pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    const unsigned int token = pResource ? pResource->AcquirePedNativePointArm(ped) : 0;
+    if (token != 0)
+        lua_pushnumber(luaVM, token);
+    else
+        lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaPedDefs::UpdatePedNativePointArm(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CVector          target;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    argStream.ReadVector3D(target);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->UpdatePedNativePointArm(token, target));
+    return 1;
+}
+
+int CLuaPedDefs::ReleasePedNativePointArm(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->ReleasePedNativePointArm(token));
+    return 1;
+}
+
+int CLuaPedDefs::IsPedNativePointArmActive(lua_State* luaVM)
+{
+    unsigned int     token = 0;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadNumber(token);
+    CLuaMain*  pLuaMain = !argStream.HasErrors() ? m_pLuaManager->GetVirtualMachine(luaVM) : nullptr;
+    CResource* pResource = pLuaMain ? pLuaMain->GetResource() : nullptr;
+    lua_pushboolean(luaVM, pResource && pResource->IsPedNativePointArmActive(token));
     return 1;
 }
 

@@ -143,6 +143,7 @@ CResource::~CResource()
     // Native relationships own tasks containing GTA safe references. Tear
     // them down while their member streaming leases still guarantee live game
     // interfaces, then revoke event policy before dropping those references.
+    ReleaseAllPedNativePointArms();
     ReleaseAllPedNativeCouplePresentations();
     ReleaseAllPedNativeCouples();
     ReleaseAllPedNativeGroups();
@@ -830,6 +831,77 @@ void CResource::ReleaseAllPedNativeCouplePresentations()
 {
     while (!m_pedNativeCouplePresentationLeases.empty())
         ReleasePedNativeCouplePresentation(m_pedNativeCouplePresentationLeases.begin()->first);
+}
+
+unsigned int CResource::AcquirePedNativePointArm(CClientPed* pPed)
+{
+    if (!pPed || !IS_PED(pPed) || !pPed->GetGamePlayer())
+        return 0;
+
+    for (const auto& [token, lease] : m_pedNativePointArmLeases)
+    {
+        if (static_cast<CClientEntity*>(lease->ped) == pPed)
+            return 0;
+    }
+
+    unsigned int nativePointArmId = 0;
+    if (!g_pGame->AcquirePedNativePointArm(pPed->GetGamePlayer(), nativePointArmId))
+        return 0;
+
+    unsigned int token = 0;
+    do
+    {
+        token = m_uiNextPedNativePointArmToken++;
+    } while (token == 0 || m_pedNativePointArmLeases.contains(token));
+
+    auto lease = std::make_unique<SPedNativePointArmLease>();
+    lease->ped = pPed;
+    lease->nativePointArmId = nativePointArmId;
+    m_pedNativePointArmLeases.emplace(token, std::move(lease));
+    return token;
+}
+
+bool CResource::UpdatePedNativePointArm(unsigned int uiToken, const CVector& target)
+{
+    const auto leaseIter = m_pedNativePointArmLeases.find(uiToken);
+    if (leaseIter == m_pedNativePointArmLeases.end())
+        return false;
+
+    auto* entity = static_cast<CClientEntity*>(leaseIter->second->ped);
+    auto* ped = entity && IS_PED(entity) ? static_cast<CClientPed*>(entity) : nullptr;
+    return ped && ped->GetGamePlayer() && g_pGame->UpdatePedNativePointArm(leaseIter->second->nativePointArmId, ped->GetGamePlayer(), target);
+}
+
+bool CResource::ReleasePedNativePointArm(unsigned int uiToken)
+{
+    const auto leaseIter = m_pedNativePointArmLeases.find(uiToken);
+    if (leaseIter == m_pedNativePointArmLeases.end())
+        return false;
+
+    auto* entity = static_cast<CClientEntity*>(leaseIter->second->ped);
+    auto* ped = entity && IS_PED(entity) ? static_cast<CClientPed*>(entity) : nullptr;
+    bool  released = g_pGame->ReleasePedNativePointArm(leaseIter->second->nativePointArmId, ped ? ped->GetGamePlayer() : nullptr);
+    if (!released)
+        released = g_pGame->ReleasePedNativePointArm(leaseIter->second->nativePointArmId, nullptr);
+    m_pedNativePointArmLeases.erase(leaseIter);
+    return released;
+}
+
+bool CResource::IsPedNativePointArmActive(unsigned int uiToken) const
+{
+    const auto leaseIter = m_pedNativePointArmLeases.find(uiToken);
+    if (leaseIter == m_pedNativePointArmLeases.end())
+        return false;
+
+    auto* entity = static_cast<CClientEntity*>(leaseIter->second->ped);
+    auto* ped = entity && IS_PED(entity) ? static_cast<CClientPed*>(entity) : nullptr;
+    return ped && ped->GetGamePlayer() && g_pGame->IsPedNativePointArmActive(leaseIter->second->nativePointArmId, ped->GetGamePlayer());
+}
+
+void CResource::ReleaseAllPedNativePointArms()
+{
+    while (!m_pedNativePointArmLeases.empty())
+        ReleasePedNativePointArm(m_pedNativePointArmLeases.begin()->first);
 }
 
 CDownloadableResource* CResource::AddResourceFile(CDownloadableResource::eResourceType resourceType, const char* szFileName, uint uiDownloadSize,

@@ -86,6 +86,11 @@ public:
     bool                              ReleasePedNativeCouplePresentation(unsigned int uiToken);
     bool                              IsPedNativeCouplePresentationActive(unsigned int uiToken) const;
     void                              ReleaseAllPedNativeCouplePresentations();
+    unsigned int                      AcquirePedNativePointArm(class CClientPed* pPed);
+    bool                              UpdatePedNativePointArm(unsigned int uiToken, const CVector& target);
+    bool                              ReleasePedNativePointArm(unsigned int uiToken);
+    bool                              IsPedNativePointArmActive(unsigned int uiToken) const;
+    void                              ReleaseAllPedNativePointArms();
 
     CDownloadableResource* AddResourceFile(CDownloadableResource::eResourceType resourceType, const char* szFileName, uint uiDownloadSize,
                                            CChecksum serverChecksum, bool bAutoDownload);
@@ -251,6 +256,15 @@ private:
 
     unsigned int                                                                         m_uiNextPedNativeCouplePresentationToken{1};
     std::unordered_map<unsigned int, std::unique_ptr<SPedNativeCouplePresentationLease>> m_pedNativeCouplePresentationLeases;
+
+    struct SPedNativePointArmLease
+    {
+        CClientEntityPtr ped;
+        unsigned int     nativePointArmId{};
+    };
+
+    unsigned int                                                               m_uiNextPedNativePointArmToken{1};
+    std::unordered_map<unsigned int, std::unique_ptr<SPedNativePointArmLease>> m_pedNativePointArmLeases;
 
     struct
     {

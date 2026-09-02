@@ -827,4 +827,12 @@ public:
     virtual EAmbientVehicleModelCandidateResult GetAmbientVehicleModelCandidate(SAmbientVehicleModelCandidate& candidate) = 0;
     virtual bool                                GetAmbientVehicleOccupantModelCandidate(unsigned int vehicleModelId, unsigned int maximumOccupants,
                                                                                         SAmbientVehicleOccupantModelCandidate& candidate) = 0;
+
+    // Append-only presentation lease backed by GTA's CTaskSimpleIKPointArm.
+    // It modifies one arm through native IK without replacing the ped's
+    // locomotion or full-body animation.
+    virtual bool AcquirePedNativePointArm(CPed* ped, unsigned int& nativePointArmId) = 0;
+    virtual bool UpdatePedNativePointArm(unsigned int nativePointArmId, CPed* ped, const CVector& target) = 0;
+    virtual bool ReleasePedNativePointArm(unsigned int nativePointArmId, CPed* ped) = 0;
+    virtual bool IsPedNativePointArmActive(unsigned int nativePointArmId, CPed* ped) const = 0;
 };

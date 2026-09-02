@@ -174,6 +174,10 @@ public:
     LUA_DECLARE(UpdatePedNativeCouplePresentation);
     LUA_DECLARE(ReleasePedNativeCouplePresentation);
     LUA_DECLARE(IsPedNativeCouplePresentationActive);
+    LUA_DECLARE(AcquirePedNativePointArm);
+    LUA_DECLARE(UpdatePedNativePointArm);
+    LUA_DECLARE(ReleasePedNativePointArm);
+    LUA_DECLARE(IsPedNativePointArmActive);
     LUA_DECLARE(AddPedNativeGunAimedAtEvent);
     LUA_DECLARE(AddPedNativeDamageResponseEvent);
     LUA_DECLARE(AddPedNativeDamageEvent);

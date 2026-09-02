@@ -421,7 +421,7 @@ namespace
         return reinterpret_cast<int(__thiscall*)(CTaskSAInterface*)>(task->VTBL->GetTaskType)(task);
     }
 
-    void DestroyAmbientCouplePointArm(void*& task)
+    void DestroyPointArmTask(void*& task)
     {
         if (!task)
             return;
@@ -430,7 +430,7 @@ namespace
         task = nullptr;
     }
 
-    bool UpdateAmbientCouplePointArm(void*& pointArmTask, CPedSAInterface* ped, int arm, const CVector& target)
+    bool UpdatePointArmTask(void*& pointArmTask, CPedSAInterface* ped, int arm, const CVector& target, const char* purpose)
     {
         if (!ped || arm < 0 || arm > 1)
             return false;
@@ -439,8 +439,6 @@ namespace
         using GameNew = void*(__cdecl*)(std::size_t);
         using ConstructPointArm = void*(__thiscall*)(void*, const char*, int, CEntitySAInterface*, int, CVector, float, int);
         using ProcessPointArm = bool(__thiscall*)(void*, CPedSAInterface*);
-
-        static const char purpose[] = "CoupleObserver";
 
         if (pointArmTask)
         {
@@ -462,7 +460,7 @@ namespace
         const auto processPed = reinterpret_cast<TaskSimpleVTBL*>(static_cast<CTaskSAInterface*>(pointArmTask)->VTBL)->ProcessPed;
         if (reinterpret_cast<ProcessPointArm>(processPed)(pointArmTask, ped))
         {
-            DestroyAmbientCouplePointArm(pointArmTask);
+            DestroyPointArmTask(pointArmTask);
             return false;
         }
         return true;
@@ -1191,6 +1189,12 @@ CGameSA::CGameSA()
 
 CGameSA::~CGameSA()
 {
+    // These presentation tasks deliberately live outside the ped task tree,
+    // so the resource leases retain and clean up their native IK chains.
+    for (auto& [id, lease] : m_pedNativePointArmLeases)
+        DestroyPointArmTask(lease.pointArmTask);
+    m_pedNativePointArmLeases.clear();
+
     ResetAmbientPedPopulationModels();
     delete reinterpret_cast<CPlayerInfoSA*>(m_pPlayerInfo);
 
@@ -3360,8 +3364,8 @@ bool CGameSA::UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int n
     // actors are strictly less than 1.5 metres apart in XY.
     if (!std::isfinite(horizontalDistanceSquared) || horizontalDistanceSquared >= 2.25f)
     {
-        DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[0]);
-        DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[1]);
+        DestroyPointArmTask(leaseIter->second.pointArmTasks[0]);
+        DestroyPointArmTask(leaseIter->second.pointArmTasks[1]);
         leaseIter->second.activeArms = {};
         return true;
     }
@@ -3384,7 +3388,7 @@ bool CGameSA::UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int n
         const int arm = ownerSides[index] == 2 ? 0 : ownerSides[index] == 1 ? 1 : -1;
         if (arm < 0)
         {
-            DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[index]);
+            DestroyPointArmTask(leaseIter->second.pointArmTasks[index]);
             leaseIter->second.activeArms[index] = 0;
             continue;
         }
@@ -3394,12 +3398,12 @@ bool CGameSA::UpdateAmbientPedCivilianCouplePresentationWithSides(unsigned int n
         {
             // GTA removes the old arm and creates the replacement in the same
             // frame; PointArm itself owns the native 250 ms blend.
-            DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[index]);
+            DestroyPointArmTask(leaseIter->second.pointArmTasks[index]);
             leaseIter->second.activeArms[index] = 0;
         }
 
         leaseIter->second.activeArms[index] =
-            UpdateAmbientCouplePointArm(leaseIter->second.pointArmTasks[index], peds[index], arm, targets[index]) ? encodedArm : 0;
+            UpdatePointArmTask(leaseIter->second.pointArmTasks[index], peds[index], arm, targets[index], "CoupleObserver") ? encodedArm : 0;
     }
     return true;
 }
@@ -3412,8 +3416,8 @@ bool CGameSA::ReleaseAmbientPedCivilianCouplePresentation(unsigned int nativePre
         return false;
     }
 
-    DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[0]);
-    DestroyAmbientCouplePointArm(leaseIter->second.pointArmTasks[1]);
+    DestroyPointArmTask(leaseIter->second.pointArmTasks[0]);
+    DestroyPointArmTask(leaseIter->second.pointArmTasks[1]);
     m_ambientPedNativeCouplePresentationLeases.erase(leaseIter);
     return true;
 }
@@ -3423,6 +3427,64 @@ bool CGameSA::IsAmbientPedCivilianCouplePresentationActive(unsigned int nativePr
     const auto leaseIter = m_ambientPedNativeCouplePresentationLeases.find(nativePresentationId);
     return leaseIter != m_ambientPedNativeCouplePresentationLeases.end() && a == leaseIter->second.members[0] && b == leaseIter->second.members[1] &&
            leaseIter->second.activeArms[0] != 0 && leaseIter->second.activeArms[1] != 0;
+}
+
+bool CGameSA::AcquirePedNativePointArm(CPed* ped, unsigned int& nativePointArmId)
+{
+    nativePointArmId = 0;
+    auto* gamePed = dynamic_cast<CPedSA*>(ped);
+    if (m_eGameVersion != VERSION_US_10 || !gamePed || !gamePed->GetPedInterface())
+        return false;
+
+    for (const auto& [id, lease] : m_pedNativePointArmLeases)
+    {
+        if (lease.member == ped)
+            return false;
+    }
+
+    unsigned int leaseId = 0;
+    do
+    {
+        leaseId = m_nextPedNativePointArmId++;
+    } while (leaseId == 0 || m_pedNativePointArmLeases.contains(leaseId));
+
+    SPedNativePointArmLease lease;
+    lease.member = ped;
+    if (!m_pedNativePointArmLeases.emplace(leaseId, lease).second)
+        return false;
+
+    nativePointArmId = leaseId;
+    return true;
+}
+
+bool CGameSA::UpdatePedNativePointArm(unsigned int nativePointArmId, CPed* ped, const CVector& target)
+{
+    const auto leaseIter = m_pedNativePointArmLeases.find(nativePointArmId);
+    if (leaseIter == m_pedNativePointArmLeases.end() || leaseIter->second.member != ped || !std::isfinite(target.fX) || !std::isfinite(target.fY) ||
+        !std::isfinite(target.fZ))
+    {
+        return false;
+    }
+
+    auto* gamePed = dynamic_cast<CPedSA*>(ped);
+    return gamePed && UpdatePointArmTask(leaseIter->second.pointArmTask, gamePed->GetPedInterface(), 0, target, "ResourcePointArm");
+}
+
+bool CGameSA::ReleasePedNativePointArm(unsigned int nativePointArmId, CPed* ped)
+{
+    const auto leaseIter = m_pedNativePointArmLeases.find(nativePointArmId);
+    if (leaseIter == m_pedNativePointArmLeases.end() || (ped && leaseIter->second.member != ped))
+        return false;
+
+    DestroyPointArmTask(leaseIter->second.pointArmTask);
+    m_pedNativePointArmLeases.erase(leaseIter);
+    return true;
+}
+
+bool CGameSA::IsPedNativePointArmActive(unsigned int nativePointArmId, CPed* ped) const
+{
+    const auto leaseIter = m_pedNativePointArmLeases.find(nativePointArmId);
+    return leaseIter != m_pedNativePointArmLeases.end() && leaseIter->second.member == ped && leaseIter->second.pointArmTask;
 }
 
 eGameVersion CGameSA::FindGameVersion()

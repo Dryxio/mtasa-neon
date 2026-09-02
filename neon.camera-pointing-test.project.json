@@ -1,0 +1,27 @@
+{
+  "catalogue": "Tools/neon-api/neon-api.json",
+  "engine": {
+    "maximumVersionExclusive": "1.8.0",
+    "minimumVersion": "1.7.0"
+  },
+  "externalDependencies": [],
+  "modules": [],
+  "name": "camera-pointing-test",
+  "profile": "neon-pair",
+  "requiredApis": [
+    { "name": "getCameraMatrix", "side": "client" },
+    { "name": "acquirePedNativePointArm", "side": "client" },
+    { "name": "updatePedNativePointArm", "side": "client" },
+    { "name": "releasePedNativePointArm", "side": "client" }
+  ],
+  "resources": [
+    {
+      "name": "camera-pointing-test",
+      "path": "test-resources/camera-pointing-test",
+      "manifest": "neon.resource.yaml"
+    }
+  ],
+  "schemaVersion": "1.1.0",
+  "unknownApis": "allow",
+  "unknownComponents": "allow-opaque"
+}
