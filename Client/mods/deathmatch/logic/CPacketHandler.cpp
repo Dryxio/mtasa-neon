@@ -342,6 +342,7 @@ void CPacketHandler::Packet_ServerConnected(NetBitStreamInterface& bitStream)
         return;
 
     g_pClientGame->BeginConnectionLoading(_("Starting San Andreas"));
+    CChecksum::ConfigurePersistentCache(PathJoin(g_pClientGame->GetFileCacheRoot(), "cache", "resource-checksums-v2.bin"));
 
     // m_Status = CClientGame::STATUS_TRANSFER;
 

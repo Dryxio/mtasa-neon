@@ -118,6 +118,8 @@ void CResourceFileDownloadManager::OnRemoveResourceFile(CDownloadableResource* p
 ///////////////////////////////////////////////////////////////
 void CResourceFileDownloadManager::DoPulse()
 {
+    CChecksum::PulsePersistentCache();
+
     if (!g_pNet->IsConnected())
         return;
 
