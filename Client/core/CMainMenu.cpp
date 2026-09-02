@@ -902,7 +902,22 @@ void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
     m_bHideGame = !bOverlay;
 
     if (m_pServerBrowserWeb)
+    {
         m_pServerBrowserWeb->SetVisible(bVisible);
+
+        if (!bVisible)
+        {
+            // The web shell disappears immediately instead of rendering the
+            // legacy fade-out. Retaining the old fade state keeps
+            // IsMainMenuVisible() true for a few otherwise empty frames and
+            // briefly re-enables the cursor after joining a server.
+            m_fFader = 0.0f;
+            m_ucFade = FADE_INVISIBLE;
+            m_bIsVisible = false;
+            m_bIsFullyVisible = false;
+            m_bCursorAlphaReset = false;
+        }
+    }
 }
 
 bool CMainMenu::IsVisible()

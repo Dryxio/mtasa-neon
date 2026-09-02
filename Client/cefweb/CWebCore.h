@@ -30,8 +30,10 @@
 
 class CWebBrowserItem;
 class CWebsiteRequests;
+class CWebApp;
 class CWebView;
 class CWebViewInterface;
+class CefRequestContext;
 
 class CWebCore : public CWebCoreInterface
 {
@@ -109,6 +111,7 @@ public:
     bool IsExternalFrameSchedulingEnabled() const noexcept { return m_bExternalFrameScheduling; }
     bool IsFrameStatsEnabled() const noexcept { return m_bFrameStatsEnabled; }
     bool IsSharedTextureEnabled() const noexcept { return m_bSharedTextureEnabled; }
+    bool RegisterMtaSchemeHandlerFactory(CefRefPtr<CefRequestContext> requestContext);
 
     bool SetGlobalAudioVolume(float fVolume);
 
@@ -149,6 +152,7 @@ private:
     // Shouldn't be changed after init
     bool                                  m_bGPUEnabled;
     bool                                  m_bInitialised = false;  // Track if CefInitialize() succeeded
+    CefRefPtr<CWebApp>                    m_pWebApp;
     bool                                  m_bExternalFrameScheduling = false;
     bool                                  m_bSharedTextureEnabled = false;
     std::chrono::steady_clock::time_point m_NextExternalBeginFrame{};

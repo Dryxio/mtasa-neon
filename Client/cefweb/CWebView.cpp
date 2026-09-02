@@ -11,6 +11,7 @@
 #include "CWebView.h"
 #include "CAjaxResourceHandler.h"
 #include <cef3/cef/include/cef_parser.h>
+#include <cef3/cef/include/cef_request_context.h>
 #include <cef3/cef/include/cef_task.h>
 #include "CWebDevTools.h"
 #include <chrono>
@@ -380,7 +381,22 @@ bool CWebView::EnsureBrowserCreated()
     // virtualized adapters may not support that interop reliably.
     windowInfo.shared_texture_enabled = pWebCore && pWebCore->IsSharedTextureEnabled();
 
-    CefBrowserHost::CreateBrowser(windowInfo, this, "", browserSettings, nullptr, nullptr);
+    CefRefPtr<CefRequestContext> requestContext;
+    if (const auto it = m_Properties.find("isolated_request_context"); it != m_Properties.end() && it->second == "1")
+    {
+        // Local resource pages all use the http://mta origin. Give core-owned
+        // UI a distinct browser context so a busy or wedged resource renderer
+        // cannot share and block the Neon menu's renderer process.
+        CefRequestContextSettings contextSettings;
+        requestContext = CefRequestContext::CreateContext(contextSettings, nullptr);
+        if (!pWebCore || !pWebCore->RegisterMtaSchemeHandlerFactory(requestContext))
+        {
+            // Preserve a working menu if CEF cannot configure the isolated context. The global context already owns the http://mta handler.
+            requestContext = nullptr;
+        }
+    }
+
+    CefBrowserHost::CreateBrowser(windowInfo, this, "", browserSettings, nullptr, requestContext);
     m_bBrowserCreated = true;
     return true;
 }
@@ -509,6 +525,7 @@ void CWebView::ApplyRenderingPaused(bool bPaused, bool preserveLastFrame)
 {
     // Store pause state even when the host is not created yet so async
     // browser creation cannot lose the requested visibility state.
+    const bool wasPaused = m_bIsRenderingPaused;
     m_bIsRenderingPaused = bPaused;
 
     if (bPaused)
@@ -516,7 +533,22 @@ void CWebView::ApplyRenderingPaused(bool bPaused, bool preserveLastFrame)
 
     if (m_pWebView)
     {
-        m_pWebView->GetHost()->WasHidden(bPaused);
+        CefRefPtr<CefBrowserHost> host = m_pWebView->GetHost();
+        host->WasHidden(bPaused);
+
+        if (wasPaused && !bPaused)
+        {
+            // CEF stops layout and OnPaint delivery while an OSR browser is
+            // hidden. On some busy clients WasHidden(false) alone leaves the
+            // compositor dormant even though input and JavaScript resume.
+            // A resize notification guarantees an asynchronous paint, while
+            // the short invalidation tail covers the context update queued by
+            // the menu immediately after wake-up. This work only runs on the
+            // hidden -> visible transition.
+            host->WasResized();
+            host->Invalidate(PET_VIEW);
+            ArmInteractionRefreshFrames(8);
+        }
 
         if (bPaused && !preserveLastFrame)
         {
@@ -871,6 +903,9 @@ void CWebView::ExecuteJavascript(const SString& strJavascriptCode)
 bool CWebView::SetProperty(const SString& strKey, const SString& strValue)
 {
     if (strKey == "mobile" && (strValue == "0" || strValue == "1"))
+    {
+    }
+    else if (strKey == "isolated_request_context" && !m_bBrowserCreated && (strValue == "0" || strValue == "1"))
     {
     }
     else

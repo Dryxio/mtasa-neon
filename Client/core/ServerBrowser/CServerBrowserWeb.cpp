@@ -3078,14 +3078,13 @@ bool CServerBrowserWeb::IsInputRoutedToWeb()
         !ms_instance->m_webView)
         return false;
 
-    CWebCoreInterface* webCore = g_pCore->GetWebCoreUnchecked();
-    if (!webCore)
-        return false;
-
-    // Query live native state as well as the frame-cached flag. A console or
-    // modal can be opened from the Windows message loop between menu pulses.
-    return !ms_instance->m_mainMenu.HasNativeInputOwner() && ms_instance->m_widget->IsVisible() && ms_instance->m_widget->IsEnabled() &&
-           ms_instance->m_widget->IsActive() && webCore->GetFocusedWebView() == ms_instance->m_webView;
+    // Resource GUIs and browsers are allowed to activate themselves while
+    // gameplay owns the screen. That transient state must not revoke input
+    // from the visible core menu: otherwise a resource which repeatedly calls
+    // focusBrowser or guiFocus leaves Neon displaying a valid but inert frame.
+    // Native dialogs remain the only higher-priority input owner.
+    return g_pCore->GetWebCoreUnchecked() && !ms_instance->m_mainMenu.HasNativeInputOwner() && ms_instance->m_widget->IsVisible() &&
+           ms_instance->m_widget->IsEnabled();
 }
 
 bool CServerBrowserWeb::HandleEscapeKey()
@@ -3450,8 +3449,33 @@ bool CServerBrowserWeb::RouteInputMessage(UINT message, WPARAM wParam, LPARAM lP
     if (!webCore)
         return false;
 
-    // Focus is granted only by the CEGUI widget activation path. Input
-    // routing must never steal it back from a native edit box or modal.
+    const bool keyboardMessage =
+        message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR || message == WM_SYSCHAR || message == WM_SYSKEYDOWN || message == WM_SYSKEYUP;
+    const bool mouseMessage = message == WM_MOUSEMOVE || message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL || message == WM_LBUTTONDOWN ||
+                              message == WM_LBUTTONUP || message == WM_LBUTTONDBLCLK || message == WM_MBUTTONDOWN || message == WM_MBUTTONUP ||
+                              message == WM_MBUTTONDBLCLK || message == WM_RBUTTONDOWN || message == WM_RBUTTONUP || message == WM_RBUTTONDBLCLK ||
+                              message == WM_XBUTTONDOWN || message == WM_XBUTTONUP || message == WM_XBUTTONDBLCLK;
+    if (!keyboardMessage && !mouseMessage)
+        return false;
+
+    // Reclaim modal ownership only when an input message actually arrives.
+    // This avoids a per-frame focus contest with resource browsers while
+    // guaranteeing that the visible core menu receives the complete gesture.
+    if (!ms_instance->m_widget->IsActive())
+    {
+        ms_instance->m_widget->BringToFront();
+        ms_instance->m_widget->Activate();
+    }
+    if (webCore->GetFocusedWebView() != ms_instance->m_webView)
+        ms_instance->m_webView->Focus(true);
+
+    // Mouse input must still pass through the regular CEGUI widget so its
+    // click counting and cursor behaviour remain intact. Activating the core
+    // widget above first releases any capture held by a resource GUI; the
+    // message can then continue to CLocalGUI and be injected exactly once.
+    if (!keyboardMessage)
+        return false;
+
     webCore->ProcessInputMessage(message, wParam, lParam);
     return true;
 }
@@ -3568,6 +3592,10 @@ bool CServerBrowserWeb::InitialiseWebView()
         return false;
 
     m_webView->SetWebBrowserEvents(this);
+    // Resource browsers share the http://mta origin. Keep the core menu in a
+    // separate renderer process so heavy resource JS cannot freeze its input
+    // and painting while the game remains responsive.
+    m_webView->SetProperty("isolated_request_context", "1");
     m_webView->Initialise();
 
     m_widget = g_pCore->GetGUI()->CreateWebBrowser(static_cast<CGUIElement*>(nullptr));

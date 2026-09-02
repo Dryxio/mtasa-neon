@@ -13,6 +13,7 @@
 #include "CWebsiteRequests.h"
 #include <cef3/cef/include/cef_app.h>
 #include <cef3/cef/include/cef_browser.h>
+#include <cef3/cef/include/cef_request_context.h>
 #include <cef3/cef/include/cef_sandbox_win.h>
 #include <cef3/cef/include/cef_parser.h>
 #include "WebBrowserHelpers.h"
@@ -74,6 +75,7 @@ CWebCore::~CWebCore()
                           });
     m_WebViews.clear();
     CefClearSchemeHandlerFactories();
+    m_pWebApp = nullptr;
 
     // Don't call CefShutdown() here to avoid freeze.
     // TerminateProcess (during quit) is called before CCore destruction anyways.
@@ -276,7 +278,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     CefMainArgs mainArgs;
     void*       sandboxInfo = nullptr;
 
-    CefRefPtr<CWebApp> app(new CWebApp);
+    m_pWebApp = new CWebApp;
 
 #ifdef CEF_ENABLE_SANDBOX
     CefScopedSandboxInfo scopedSandbox;
@@ -305,7 +307,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     // Wrap CefInitialize in try-catch for exception safety
     try
     {
-        m_bInitialised = CefInitialize(mainArgs, settings, app, sandboxInfo);
+        m_bInitialised = CefInitialize(mainArgs, settings, m_pWebApp, sandboxInfo);
     }
     catch (...)
     {
@@ -319,7 +321,7 @@ bool CWebCore::Initialise(bool gpuEnabled)
     if (m_bInitialised)
     {
         // Register custom scheme handler factory only if initialization succeeded
-        CefRegisterSchemeHandlerFactory("http", "mta", app);
+        CefRegisterSchemeHandlerFactory("http", "mta", m_pWebApp);
     }
     else
     {
@@ -329,6 +331,16 @@ bool CWebCore::Initialise(bool gpuEnabled)
     }
 
     return m_bInitialised;
+}
+
+bool CWebCore::RegisterMtaSchemeHandlerFactory(CefRefPtr<CefRequestContext> requestContext)
+{
+    // CefRegisterSchemeHandlerFactory only configures the global request context. Core-owned UI uses an isolated context so it cannot share a renderer
+    // with resource pages, therefore its http://mta loader must be registered explicitly on that context as well.
+    const bool registered = requestContext && m_pWebApp && requestContext->RegisterSchemeHandlerFactory("http", "mta", m_pWebApp);
+    if (!registered)
+        WriteDebugEvent("Neon CEF isolated request context registration failed; using global context");
+    return registered;
 }
 
 CWebViewInterface* CWebCore::CreateWebView(unsigned int uiWidth, unsigned int uiHeight, bool bIsLocal, CWebBrowserItem* pWebBrowserRenderItem,
