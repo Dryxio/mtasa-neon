@@ -5,12 +5,13 @@ local BENCHMARK_DEFAULT_SECONDS = 15
 
 local function outputStats()
     local stats = engineGetDistantLightStats()
-    local message = ("[Project2DFX] enabled=%s definitions=%d active=%d/%d distance=%.0f"):format(
+    local message = ("[Project2DFX] enabled=%s definitions=%d active=%d/%d distance=%.0f (%s)"):format(
         tostring(stats.enabled),
         stats.definitions,
         stats.activeCoronas,
         stats.coronaCapacity,
-        stats.drawDistance
+        stats.drawDistance,
+        stats.automaticDrawDistance and "auto" or "manual"
     )
     outputChatBox(message, 255, 210, 80)
     outputDebugString(message)
@@ -24,7 +25,7 @@ local function setProject2DFX(_, state, requestedDistance)
 
     state = state and state:lower() or ""
     if state ~= "on" and state ~= "off" and state ~= "rebuild" then
-        outputChatBox("[Project2DFX] /project2dfx [on|off|rebuild] [300-5000]", 255, 210, 80)
+        outputChatBox("[Project2DFX] /project2dfx [on|off|rebuild] [auto|300-5000]", 255, 210, 80)
         return
     end
 
@@ -35,10 +36,14 @@ local function setProject2DFX(_, state, requestedDistance)
     end
 
     if state == "on" then
-        local distance = tonumber(requestedDistance) or 2000
-        if not engineSetDistantLightsDrawDistance(distance) then
-            outputChatBox("[Project2DFX] Distance must be between 300 and 5000", 255, 100, 100)
-            return
+        if not requestedDistance or requestedDistance == "auto" then
+            engineSetDistantLightsAutomaticDrawDistance(true)
+        else
+            local distance = tonumber(requestedDistance)
+            if not distance or not engineSetDistantLightsDrawDistance(distance) then
+                outputChatBox("[Project2DFX] Use auto or a distance between 300 and 5000", 255, 100, 100)
+                return
+            end
         end
         engineSetDistantLightsEnabled(true)
         enabledByResource = true
@@ -70,6 +75,7 @@ local function restoreBenchmarkState()
     end
 
     engineSetDistantLightsDrawDistance(benchmark.initialStats.drawDistance)
+    engineSetDistantLightsAutomaticDrawDistance(benchmark.initialStats.automaticDrawDistance)
     engineSetDistantLightsEnabled(benchmark.initialStats.enabled)
     if benchmark.initialStats.enabled then
         engineRebuildDistantLights()

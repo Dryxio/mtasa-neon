@@ -57,6 +57,7 @@ public:
     LUA_DECLARE(EngineResetRendererStats);
     LUA_DECLARE(EngineSetDistantLightsEnabled);
     LUA_DECLARE(EngineSetDistantLightsDrawDistance);
+    LUA_DECLARE(EngineSetDistantLightsAutomaticDrawDistance);
     LUA_DECLARE(EngineRebuildDistantLights);
     LUA_DECLARE(EngineGetDistantLightStats);
     LUA_DECLARE(EngineGetCullZones);

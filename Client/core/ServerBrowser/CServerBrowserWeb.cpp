@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "../CDistantLightPreferences.h"
 #include "CServerBrowserWeb.h"
 
 #include "CMainMenu.h"
@@ -995,18 +996,20 @@ public:
         int  advancedUpdateBuildType{};
         int  advancedUpdateAutoInstall{1};
 
-        bool              extendedWorldEnabled{};
-        int               extendedWorldDistance{2000};
-        bool              distantLightsEnabled{};
-        int               distantLightsDistance{2000};
-        float             distantLightsCoronaSize{0.25f};
-        SkyGfxMTAConfigV1 skyGfx{};
-        int               radarStyle{};
-        float             radarPositionX{40.0f};
-        float             radarPositionY{104.0f};
-        float             radarWidth{85.5f};
-        float             radarHeight{78.0f};
-        bool              radarWidescreenSafe{true};
+        bool                  extendedWorldEnabled{};
+        int                   extendedWorldDistance{2000};
+        bool                  distantLightsEnabled{};
+        bool                  distantLightSearchlightsEnabled{true};
+        SDistantLightSettings distantLightSettings;
+        int                   distantLightsDistance{2000};
+        float                 distantLightsCoronaSize{0.25f};
+        SkyGfxMTAConfigV1     skyGfx{};
+        int                   radarStyle{};
+        float                 radarPositionX{40.0f};
+        float                 radarPositionY{104.0f};
+        float                 radarWidth{85.5f};
+        float                 radarHeight{78.0f};
+        bool                  radarWidescreenSafe{true};
 
         int   graphicsVideoMode{};
         int   graphicsDisplayMode{1};
@@ -1096,6 +1099,20 @@ public:
             m_draft.extendedWorldDistance = QuantizeInteger(numberValue, 300, 5000, 100);
         else if (id == "distantLights.enabled" && ParseBoolean(value, booleanValue))
             m_draft.distantLightsEnabled = booleanValue;
+        else if (id == "distantLights.searchlights" && ParseBoolean(value, booleanValue))
+            m_draft.distantLightSearchlightsEnabled = booleanValue;
+        else if (id == "distantLights.autoDistance" && ParseBoolean(value, booleanValue))
+            m_draft.distantLightSettings.automaticDistance = booleanValue;
+        else if (id == "distantLights.growWithDistance" && ParseBoolean(value, booleanValue))
+            m_draft.distantLightSettings.growWithDistance = booleanValue;
+        else if (id == "distantLights.nearAlpha" && ParseNumber(value, numberValue))
+            m_draft.distantLightSettings.nearAlpha = QuantizeFloat(numberValue, 0.0f, 1.0f, 0.05f);
+        else if (id == "distantLights.reachFullAlpha" && ParseNumber(value, numberValue))
+            m_draft.distantLightSettings.reachFullAlpha = QuantizeFloat(numberValue, 1.0f, 2000.0f, 1.0f);
+        else if (id == "distantLights.boostStart" && ParseNumber(value, numberValue))
+            m_draft.distantLightSettings.boostStart = QuantizeFloat(numberValue, 0.0f, 5000.0f, 10.0f);
+        else if (id == "distantLights.farAlphaBoost" && ParseNumber(value, numberValue))
+            m_draft.distantLightSettings.farAlphaBoost = QuantizeFloat(numberValue, 1.0f, 8.0f, 0.1f);
         else if (id == "distantLights.distance" && ParseNumber(value, numberValue))
             m_draft.distantLightsDistance = QuantizeInteger(numberValue, 300, 5000, 100);
         else if (id == "distantLights.coronaSize" && ParseNumber(value, numberValue))
@@ -1427,6 +1444,8 @@ public:
             m_draft.extendedWorldEnabled = defaults.extendedWorldEnabled;
             m_draft.extendedWorldDistance = defaults.extendedWorldDistance;
             m_draft.distantLightsEnabled = defaults.distantLightsEnabled;
+            m_draft.distantLightSettings = defaults.distantLightSettings;
+            m_draft.distantLightSearchlightsEnabled = defaults.distantLightSearchlightsEnabled;
             m_draft.distantLightsDistance = defaults.distantLightsDistance;
             m_draft.distantLightsCoronaSize = defaults.distantLightsCoronaSize;
         }
@@ -1490,7 +1509,9 @@ public:
         CVARS_SET("extended_draw_distance", m_draft.extendedWorldDistance);
         CCore::GetSingleton().ApplyExtendedWorldDrawDistancePreferences();
 
+        SaveDistantLightPreferences(m_draft.distantLightSettings);
         CVARS_SET("distant_lights_enabled", m_draft.distantLightsEnabled);
+        CVARS_SET("distant_lights_searchlights_enabled", m_draft.distantLightSearchlightsEnabled);
         CVARS_SET("distant_lights_draw_distance", m_draft.distantLightsDistance);
         CVARS_SET("distant_lights_corona_radius_multiplier", m_draft.distantLightsCoronaSize);
         if (CGame* game = g_pCore->GetGame())
@@ -1498,6 +1519,8 @@ public:
             CCoronas* coronas = game->GetCoronas();
             coronas->SetDistantLightsDrawDistance(static_cast<float>(m_draft.distantLightsDistance));
             coronas->SetDistantLightsCoronaRadiusMultiplier(m_draft.distantLightsCoronaSize);
+            coronas->SetDistantLightSearchlightsEnabled(m_draft.distantLightSearchlightsEnabled);
+            coronas->SetDistantLightSettings(m_draft.distantLightSettings);
             coronas->SetDistantLightsEnabled(m_draft.distantLightsEnabled);
         }
 
@@ -1722,6 +1745,13 @@ public:
     {
         const bool generalDirty =
             m_draft.extendedWorldEnabled != m_original.extendedWorldEnabled || m_draft.extendedWorldDistance != m_original.extendedWorldDistance ||
+            m_draft.distantLightSettings.automaticDistance != m_original.distantLightSettings.automaticDistance ||
+            m_draft.distantLightSettings.growWithDistance != m_original.distantLightSettings.growWithDistance ||
+            m_draft.distantLightSettings.nearAlpha != m_original.distantLightSettings.nearAlpha ||
+            m_draft.distantLightSettings.reachFullAlpha != m_original.distantLightSettings.reachFullAlpha ||
+            m_draft.distantLightSettings.boostStart != m_original.distantLightSettings.boostStart ||
+            m_draft.distantLightSettings.farAlphaBoost != m_original.distantLightSettings.farAlphaBoost ||
+            m_draft.distantLightSearchlightsEnabled != m_original.distantLightSearchlightsEnabled ||
             m_draft.distantLightsEnabled != m_original.distantLightsEnabled || m_draft.distantLightsDistance != m_original.distantLightsDistance ||
             m_draft.distantLightsCoronaSize != m_original.distantLightsCoronaSize;
         const bool skyGfxDirty = !IsSkyGfxManaged() && std::memcmp(&m_draft.skyGfx, &m_original.skyGfx, sizeof(m_draft.skyGfx)) != 0;
@@ -2958,7 +2988,9 @@ private:
 
         CVARS_GET("extended_draw_distance_enabled", state.extendedWorldEnabled);
         CVARS_GET("extended_draw_distance", state.extendedWorldDistance);
+        state.distantLightSettings = ReadDistantLightPreferences();
         CVARS_GET("distant_lights_enabled", state.distantLightsEnabled);
+        CVARS_GET("distant_lights_searchlights_enabled", state.distantLightSearchlightsEnabled);
         CVARS_GET("distant_lights_draw_distance", state.distantLightsDistance);
         CVARS_GET("distant_lights_corona_radius_multiplier", state.distantLightsCoronaSize);
         state.skyGfx = SkyGfx::CManager::Get().HasRuntimeOverrides() ? SkyGfx::CManager::Get().GetConfig() : SkyGfx::CManager::Get().GetUserConfig();
@@ -4521,6 +4553,13 @@ void CServerBrowserWeb::QueueSettingsState(bool initial)
     AddBoolean(values, "extendedWorld.enabled", state.extendedWorldEnabled);
     AddInteger(values, "extendedWorld.distance", state.extendedWorldDistance);
     AddBoolean(values, "distantLights.enabled", state.distantLightsEnabled);
+    AddBoolean(values, "distantLights.autoDistance", state.distantLightSettings.automaticDistance);
+    AddBoolean(values, "distantLights.growWithDistance", state.distantLightSettings.growWithDistance);
+    AddDouble(values, "distantLights.nearAlpha", state.distantLightSettings.nearAlpha);
+    AddDouble(values, "distantLights.reachFullAlpha", state.distantLightSettings.reachFullAlpha);
+    AddDouble(values, "distantLights.boostStart", state.distantLightSettings.boostStart);
+    AddDouble(values, "distantLights.farAlphaBoost", state.distantLightSettings.farAlphaBoost);
+    AddBoolean(values, "distantLights.searchlights", state.distantLightSearchlightsEnabled);
     AddInteger(values, "distantLights.distance", state.distantLightsDistance);
     AddDouble(values, "distantLights.coronaSize", state.distantLightsCoronaSize);
     AddBoolean(values, "skyGfx.enabled", state.skyGfx.enabled != 0);

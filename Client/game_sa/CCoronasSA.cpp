@@ -11,6 +11,11 @@
 
 #include "StdInc.h"
 #include "CCoronasSA.h"
+#include "CDistantLightsSA.h"
+#include "HookSystem.h"
+#include "CDistantLightNativeTransitionsSA.h"
+#include "CColModelSA.h"
+#include <game/CPointLights.h>
 #include "CRegisteredCoronaSA.h"
 #include "CBuildingSA.h"
 #include "CDummyPoolSA.h"
@@ -39,6 +44,30 @@ namespace
     // GTA stores the corona array in the executable's data segment. Keep the
     // replacement alive for the rest of the process because GTA can render
     // coronas before and after MTA recreates its CGameSA wrapper objects.
+    void InstallDistantLightNativeTransitions()
+    {
+        static bool attempted = false;
+        if (attempted)
+            return;
+        attempted = true;
+        // Refuse unknown code instead of overwriting another hook or a different
+        // executable layout. Each adapter replays the overwritten instructions.
+        const BYTE first[] = {0x8B, 0x46, 0x14, 0x33, 0xC9};
+        const BYTE normal[] = {0x8B, 0x4E, 0x14, 0x52, 0x50};
+        const BYTE update[] = {0x8B, 0x4E, 0x14, 0x8B, 0x44, 0x24, 0x1C};
+        const BYTE traffic[] = {0x68, 0x00, 0x00, 0x48, 0x42};
+        if (memcmp(reinterpret_cast<void*>(0x6FCEA9), first, sizeof(first)) || memcmp(reinterpret_cast<void*>(0x6FCFC4), normal, sizeof(normal)) ||
+            memcmp(reinterpret_cast<void*>(0x6FD040), update, sizeof(update)) || memcmp(reinterpret_cast<void*>(0x49DCF3), traffic, sizeof(traffic)))
+        {
+            OutputReleaseLine("[Project2DFX] Native light transitions skipped: unexpected executable instructions");
+            return;
+        }
+        HookInstall(0x6FCEA9, DistantLightNativeTransitions::First, 5);
+        HookInstall(0x6FCFC4, DistantLightNativeTransitions::Normal, 5);
+        HookInstall(0x6FD040, DistantLightNativeTransitions::Update, 7);
+        HookInstall(0x49DCF3, DistantLightNativeTransitions::Traffic, 5);
+    }
+
     CRegisteredCoronaSAInterface* g_pCoronaArray = reinterpret_cast<CRegisteredCoronaSAInterface*>(ARRAY_CORONAS);
 
     void PatchCoronaArrayPointer(std::uintptr_t address, const void* value)
@@ -139,24 +168,13 @@ namespace
         BYTE       alpha;
         BYTE       flashType;
         BYTE       flareType;
-        bool       noDistance;
+        BYTE       noDistance;
         bool       trafficLight;
         bool       trafficLightFacesEastWest;
+        float      searchlightHeight;
     };
 
-    struct SDistantLightDefinition
-    {
-        CVector localPosition;
-        float   coronaSize;
-        float   drawDistance;
-        BYTE    red;
-        BYTE    green;
-        BYTE    blue;
-        BYTE    alpha;
-        BYTE    flashType;
-        bool    noDistance;
-        bool    trafficLight;
-    };
+    using SDistantLightDefinition = DistantLights::Definition<CVector>;
 
     struct SDistantLightKey
     {
@@ -164,6 +182,9 @@ namespace
         int   y;
         int   z;
         DWORD color;
+        BYTE  type = 0, flashType = 0;
+        bool  searchlight = false, facesEastWest = false;
+        float size = 0.0f, drawDistance = 0.0f;
 
         bool operator==(const SDistantLightKey&) const = default;
     };
@@ -198,6 +219,13 @@ namespace
         BYTE       alpha;
     };
 
+    struct SDistantLightConeInstance
+    {
+        CVector             position;
+        DistantLights::Cone cone;
+        SColor              color;
+    };
+
     struct SDistantLightSourceInstance
     {
         CVector   position;
@@ -207,14 +235,24 @@ namespace
 
     static_assert(sizeof(SDistantLightSourceInstance) == 0x20, "Unexpected deferred Project2DFX source size");
 
-    bool                                                       g_bDistantLightsEnabled = false;
-    bool                                                       g_bDistantLightsNeedRebuild = true;
-    float                                                      g_fDistantLightsDrawDistance = 2000.0f;
+    std::vector<SDistantLightConeInstance> g_DistantLightCones;
+    std::vector<SDistantLightCandidate>    g_DistantLightConeCandidates;
+
+    bool                  g_bDistantLightsEnabled = false;
+    bool                  g_bDistantLightSearchlightsEnabled = true;
+    bool                  g_bDistantLightsNeedRebuild = true;
+    float                 g_fDistantLightsDrawDistance = 2000.0f;
+    SDistantLightSettings g_DistantLightSettings;
+
+    float GetDistantLightRange()
+    {
+        return DistantLights::ResolveRange(g_DistantLightSettings.automaticDistance, *reinterpret_cast<const float*>(0xB7C4F0), g_fDistantLightsDrawDistance);
+    }
     float                                                      g_fDistantLightsCoronaRadiusMultiplier = 0.25f;
     std::vector<SDistantLight>                                 g_DistantLights;
     std::vector<SDistantLightCandidate>                        g_DistantLightCandidates;
     std::vector<SDistantLightRenderInstance>                   g_DistantLightRenderQueue;
-    std::vector<SDistantLightSourceInstance>                   g_DistantLightSourceInstances;
+    DistantLights::Sources<SDistantLightSourceInstance>        g_DistantLightSourceInstances;
     std::unordered_set<SDistantLightKey, SDistantLightKeyHash> g_DistantLightKeys;
     DWORD                                                      g_dwDistantLightEntitiesScanned = 0;
     DWORD                                                      g_dwDistantLightEffectsScanned = 0;
@@ -250,38 +288,6 @@ namespace
         return reinterpret_cast<S2dEffect*(__thiscall*)(CBaseModelInfoSAInterface*, int)>(0x4C4C70)(modelInfo, index);
     }
 
-    bool ParseDistantLightDefinition(const char* line, SDistantLightDefinition& definition, bool& drawSearchlight)
-    {
-        unsigned int red = 0;
-        unsigned int green = 0;
-        unsigned int blue = 0;
-        unsigned int alpha = 0;
-        int          flashType = 0;
-        int          noDistance = 0;
-        int          searchlight = 0;
-
-        const int fields =
-            sscanf(line, "%3u %3u %3u %3u %f %f %f %f %f %2d %1d %1d", &red, &green, &blue, &alpha, &definition.localPosition.fX, &definition.localPosition.fY,
-                   &definition.localPosition.fZ, &definition.coronaSize, &definition.drawDistance, &flashType, &noDistance, &searchlight);
-        if (fields != 12)
-        {
-            definition.drawDistance = 0.0f;
-            if (sscanf(line, "%3u %3u %3u %3u %f %f %f %f %2d %1d %1d", &red, &green, &blue, &alpha, &definition.localPosition.fX, &definition.localPosition.fY,
-                       &definition.localPosition.fZ, &definition.coronaSize, &flashType, &noDistance, &searchlight) != 11)
-                return false;
-        }
-
-        definition.red = static_cast<BYTE>(std::min(red, 255u));
-        definition.green = static_cast<BYTE>(std::min(green, 255u));
-        definition.blue = static_cast<BYTE>(std::min(blue, 255u));
-        definition.alpha = static_cast<BYTE>(std::min(alpha, 255u));
-        definition.flashType = static_cast<BYTE>(flashType > 0 && flashType <= 7 ? flashType + 18 : 0);
-        definition.noDistance = noDistance != 0;
-        definition.trafficLight = std::abs(definition.coronaSize - 0.45f) < 0.001f;
-        drawSearchlight = searchlight != 0;
-        return definition.coronaSize > 0.0f;
-    }
-
     bool LoadDistantLightDefinitions(SDistantLightDefinitions& modelDefinitions, std::vector<SDistantLightDefinition>& additionalDefinitions)
     {
         const SString path = CalcMTASAPath("MTA\\data\\SALodLights.dat");
@@ -296,7 +302,7 @@ namespace
         bool  additionalCoronas = false;
         DWORD namedModels = 0;
         DWORD unresolvedModels = 0;
-        DWORD skippedSearchlights = 0;
+        DWORD searchlights = 0;
         char  line[512];
         while (fgets(line, sizeof(line), file))
         {
@@ -329,19 +335,11 @@ namespace
             }
 
             SDistantLightDefinition definition{};
-            bool                    drawSearchlight = false;
-            if ((!additionalCoronas && currentModel < 0) || !ParseDistantLightDefinition(begin, definition, drawSearchlight))
+            if ((!additionalCoronas && currentModel < 0) || !DistantLights::Parse(begin, definition))
                 continue;
 
-            // TODO(Project2DFX): Only 24 rows in the current SA DAT request a
-            // searchlight, so phase 1 keeps their coronas and defers the cones.
-            // If this is revisited, reuse CPointLightsSA::RenderHeliLight from
-            // CClientPointLightsManager::RenderHeliLightHandler instead of
-            // importing Project2DFX's Im3D renderer. Derive the downward cone
-            // length from the model collision bounds and keep enable, distance,
-            // and budget controls separate and disabled by default.
-            if (drawSearchlight)
-                ++skippedSearchlights;
+            if (definition.drawSearchlight)
+                ++searchlights;
 
             if (additionalCoronas)
                 additionalDefinitions.push_back(definition);
@@ -353,77 +351,19 @@ namespace
         std::size_t definitionCount = additionalDefinitions.size();
         for (const auto& [model, definitions] : modelDefinitions)
             definitionCount += definitions.size();
-        OutputReleaseLine(SString("[Project2DFX] loaded %u DAT definitions for %u models (%u unresolved, %u searchlight cones omitted)",
-                                  static_cast<DWORD>(definitionCount), namedModels, unresolvedModels, skippedSearchlights));
+        OutputReleaseLine(SString("[Project2DFX] loaded %u DAT definitions for %u models (%u unresolved, %u searchlight definitions)",
+                                  static_cast<DWORD>(definitionCount), namedModels, unresolvedModels, searchlights));
         return !modelDefinitions.empty() || !additionalDefinitions.empty();
     }
 
     void ClearActiveDistantLights()
     {
+        g_DistantLightCones.clear();
         g_DistantLightRenderQueue.clear();
     }
 
-    float SolveLinear(float a, float b, float c, float d, float value)
-    {
-        const float determinant = a - c;
-        if (std::abs(determinant) < 0.001f)
-            return d;
-
-        const float x = (b - d) / determinant;
-        const float y = (a * d - b * c) / determinant;
-        return std::min(x * value + y, d);
-    }
-
-    BYTE GetNightAlpha(BYTE hour, BYTE minute)
-    {
-        const unsigned int time = hour * 60 + minute;
-        if (time >= 20 * 60)
-            return static_cast<BYTE>(std::clamp((15.0f / 16.0f) * time - 1095.0f, 0.0f, 255.0f));
-        if (time < 3 * 60)
-            return 255;
-        return static_cast<BYTE>(std::clamp((-15.0f / 16.0f) * time + 424.0f, 0.0f, 255.0f));
-    }
-
-    bool IsDistantLightOn(BYTE flashType, std::size_t index, DWORD timeMs)
-    {
-        const DWORD seed = static_cast<DWORD>(index * 2654435761u);
-        switch (flashType)
-        {
-            case 0:  // FLASH_DEFAULT
-                return true;
-            case 1:  // FLASH_RANDOM
-            case 2:  // FLASH_RANDOM_WHEN_WET; weather dependency is omitted in phase 1
-                return ((timeMs ^ seed) & 0x60) != 0 || ((seed ^ (timeMs / 4096)) & 0x3) != 0;
-            case 3:  // FLASH_ANIM_SPEED_4X
-                return ((timeMs + seed * 128) & 0x200) != 0;
-            case 4:  // FLASH_ANIM_SPEED_2X
-                return ((timeMs + seed * 256) & 0x400) != 0;
-            case 5:  // FLASH_ANIM_SPEED_1X
-                return ((timeMs + seed * 512) & 0x800) != 0;
-            case 11:  // FLASH_5ON_5OFF
-                return (timeMs + seed) % 10000 < 5000;
-            case 12:  // FLASH_6ON_4OFF
-                return (timeMs + seed) % 10000 < 6000;
-            case 13:  // FLASH_4ON_6OFF
-                return (timeMs + seed) % 10000 < 4000;
-            case 19:  // Project2DFX DAT: random flashing (500 ms on/off)
-                return (timeMs + seed) % 1000 < 500;
-            case 20:  // Project2DFX DAT: 1 second on/off
-                return (timeMs + seed) % 2000 < 1000;
-            case 21:  // Project2DFX DAT: 2 seconds on/off
-                return (timeMs + seed) % 4000 < 2000;
-            case 22:  // Project2DFX DAT: 3 seconds on/off
-                return (timeMs + seed) % 6000 < 3000;
-            case 23:  // Project2DFX DAT: 4 seconds on/off
-                return (timeMs + seed) % 8000 < 4000;
-            case 24:  // Project2DFX DAT: 5 seconds on/off
-                return (timeMs + seed) % 10000 < 5000;
-            case 25:  // Project2DFX DAT: 6 seconds on, 4 seconds off
-                return (timeMs + seed) % 10000 < 6000;
-            default:
-                return false;
-        }
-    }
+    using DistantLights::GetNightAlpha;
+    using DistantLights::IsDistantLightOn;
 
     bool IsTrafficLightOn(const SDistantLight& light, BYTE minute)
     {
@@ -441,9 +381,10 @@ namespace
     }
 
     bool AddDistantLight(const CVector& position, const SDistantLightDefinition& definition, float objectDrawDistance, bool trafficLightFacesEastWest,
-                         std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
+                         std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen, float searchlightHeight = 0.0f)
     {
-        if (position.fZ < -15.0f || position.fZ > 1030.0f)
+        if (!std::isfinite(position.fX) || !std::isfinite(position.fY) || !std::isfinite(position.fZ) || std::abs(position.fX) > 1.0e7f ||
+            std::abs(position.fY) > 1.0e7f || position.fZ < -15.0f || position.fZ > 1030.0f)
             return false;
 
         const DWORD color = static_cast<DWORD>(definition.red) | static_cast<DWORD>(definition.green) << 8 | static_cast<DWORD>(definition.blue) << 16 |
@@ -453,6 +394,12 @@ namespace
             static_cast<int>(std::lround(position.fY * 10.0f)),
             static_cast<int>(std::lround(position.fZ * 10.0f)),
             color,
+            definition.noDistance,
+            definition.flashType,
+            definition.drawSearchlight,
+            trafficLightFacesEastWest,
+            definition.coronaSize,
+            objectDrawDistance,
         };
         if (!seen.insert(key).second)
             return false;
@@ -471,6 +418,7 @@ namespace
             definition.noDistance,
             definition.trafficLight,
             trafficLightFacesEastWest,
+            definition.drawSearchlight ? searchlightHeight : 0.0f,
         });
         return true;
     }
@@ -490,6 +438,14 @@ namespace
                 AddDistantLight(definition.localPosition, definition, definition.drawDistance, false, g_DistantLightKeys);
         }
         return g_bDistantLightDefinitionsLoaded;
+    }
+
+    float GetSearchlightHeight(const CBaseModelInfoSAInterface* model)
+    {
+        if (!model->pColModel)
+            return 0.0f;
+        const auto& bounds = model->pColModel->m_bounds;
+        return std::max(0.0f, bounds.m_vecMax.fZ - bounds.m_vecMin.fZ);
     }
 
     void AddDatDistantLightsForEntity(CEntitySAInterface* entity, const SDistantLightDefinitions& modelDefinitions,
@@ -516,37 +472,8 @@ namespace
             const float worldOffsetX = definition.localPosition.fX * std::cos(heading) - definition.localPosition.fY * std::sin(heading);
             const float worldOffsetY = definition.localPosition.fX * std::sin(heading) + definition.localPosition.fY * std::cos(heading);
             AddDistantLight(worldPosition, definition, std::min(configuredDrawDistance, modelInfo->fLodDistanceUnscaled),
-                            std::abs(worldOffsetX) > std::abs(worldOffsetY), seen);
+                            std::abs(worldOffsetX) > std::abs(worldOffsetY), seen, GetSearchlightHeight(modelInfo));
         }
-    }
-
-    CVector TransformDistantLightOffset(const SDistantLightSourceInstance& instance, const CVector& localPosition)
-    {
-        float       x = instance.rotation.fX;
-        float       y = instance.rotation.fY;
-        float       z = instance.rotation.fZ;
-        float       w = instance.rotation.fW;
-        const float lengthSquared = x * x + y * y + z * z + w * w;
-        if (lengthSquared <= std::numeric_limits<float>::epsilon())
-        {
-            x = 0.0f;
-            y = 0.0f;
-            z = 0.0f;
-            w = 1.0f;
-        }
-        else if (std::abs(lengthSquared - 1.0f) > std::numeric_limits<float>::epsilon())
-        {
-            const float inverseLength = 1.0f / std::sqrt(lengthSquared);
-            x *= inverseLength;
-            y *= inverseLength;
-            z *= inverseLength;
-            w *= inverseLength;
-        }
-
-        const CVector right(1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + w * z), 2.0f * (x * z - w * y));
-        const CVector front(2.0f * (x * y - w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + w * x));
-        const CVector up(2.0f * (x * z + w * y), 2.0f * (y * z - w * x), 1.0f - 2.0f * (x * x + y * y));
-        return instance.position + right * localPosition.fX + front * localPosition.fY + up * localPosition.fZ;
     }
 
     CVector4D GetDistantLightSourceRotation(const SFileObjectInstance& instance)
@@ -584,11 +511,11 @@ namespace
 
         for (const SDistantLightDefinition& definition : definitions->second)
         {
-            const CVector worldPosition = TransformDistantLightOffset(instance, definition.localPosition);
+            const CVector worldPosition = DistantLights::Transform(instance, definition.localPosition);
             const CVector worldOffset = worldPosition - instance.position;
             const float   configuredDrawDistance = definition.drawDistance > 0.0f ? definition.drawDistance : modelInfo->fLodDistanceUnscaled;
             AddDistantLight(worldPosition, definition, std::min(configuredDrawDistance, modelInfo->fLodDistanceUnscaled),
-                            std::abs(worldOffset.fX) > std::abs(worldOffset.fY), seen);
+                            std::abs(worldOffset.fX) > std::abs(worldOffset.fY), seen, GetSearchlightHeight(modelInfo));
         }
     }
 
@@ -673,20 +600,19 @@ namespace
     void AddNativeDistantLightsForSourceInstance(const SDistantLightSourceInstance& instance, std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen)
     {
         AddNativeDistantLightsForInstance(
-            instance.modelId, [&instance](const CVector& localPosition) { return TransformDistantLightOffset(instance, localPosition); }, seen);
+            instance.modelId, [&instance](const CVector& localPosition) { return DistantLights::Transform(instance, localPosition); }, seen);
     }
 
     void ConsumeDeferredDistantLightSources(bool loadedDat)
     {
-        for (const SDistantLightSourceInstance& instance : g_DistantLightSourceInstances)
-        {
-            if (loadedDat)
-                AddDatDistantLightsForSourceInstance(instance, g_DistantLightDefinitions, g_DistantLightKeys);
-            else
-                AddNativeDistantLightsForSourceInstance(instance, g_DistantLightKeys);
-        }
-
-        std::vector<SDistantLightSourceInstance>().swap(g_DistantLightSourceInstances);
+        g_DistantLightSourceInstances.Replay(
+            [loadedDat](const SDistantLightSourceInstance& instance)
+            {
+                if (loadedDat)
+                    AddDatDistantLightsForSourceInstance(instance, g_DistantLightDefinitions, g_DistantLightKeys);
+                else
+                    AddNativeDistantLightsForSourceInstance(instance, g_DistantLightKeys);
+            });
     }
 
     template <class T>
@@ -799,6 +725,7 @@ void CCoronasSA::RelocateCoronaArray()
 CCoronasSA::CCoronasSA()
 {
     RelocateCoronaArray();
+    InstallDistantLightNativeTransitions();
 
     for (int i = 0; i < MAX_CORONAS; i++)
     {
@@ -826,6 +753,9 @@ CCoronasSA::~CCoronasSA()
     g_dwDistantLightEffectsScanned = 0;
     g_dwDistantLightEffectsFound = 0;
     g_bDistantLightsEnabled = false;
+    DistantLightNativeTransitions::enabled = false;
+    g_bDistantLightSearchlightsEnabled = true;
+    g_DistantLightSettings = {};
     g_bDistantLightsNeedRebuild = true;
 
     for (int i = 0; i < MAX_CORONAS; i++)
@@ -961,10 +891,35 @@ void CCoronasSA::SetDistantLightsEnabled(bool enabled)
         return;
 
     g_bDistantLightsEnabled = enabled;
+    DistantLightNativeTransitions::enabled = enabled;
     if (enabled)
         g_bDistantLightsNeedRebuild = true;
     else
         ClearActiveDistantLights();
+}
+
+void CCoronasSA::SetDistantLightSearchlightsEnabled(bool enabled)
+{
+    // Keep the preference independent of the master switch and discard queued
+    // cones immediately, even if settings are applied between update/render.
+    g_bDistantLightSearchlightsEnabled = enabled;
+    if (!enabled)
+        g_DistantLightCones.clear();
+}
+
+bool CCoronasSA::SetDistantLightSettings(const SDistantLightSettings& settings)
+{
+    if (!settings.IsValid())
+        return false;
+    g_DistantLightSettings = settings;
+    ClearActiveDistantLights();
+    return true;
+}
+
+void CCoronasSA::SetDistantLightsAutomaticDrawDistance(bool enabled)
+{
+    g_DistantLightSettings.automaticDistance = enabled;
+    ClearActiveDistantLights();
 }
 
 bool CCoronasSA::GetDistantLightsEnabled() const
@@ -978,6 +933,8 @@ bool CCoronasSA::SetDistantLightsDrawDistance(float distance)
         return false;
 
     g_fDistantLightsDrawDistance = distance;
+    // Existing Lua callers explicitly requesting a distance retain manual behavior.
+    g_DistantLightSettings.automaticDistance = false;
     return true;
 }
 
@@ -1000,6 +957,15 @@ void CCoronasSA::RebuildDistantLights()
 
     EnsureDistantLightStorageAllocated();
     ClearActiveDistantLights();
+    // Derived lights and DAT definitions must be replaced, otherwise edits and
+    // removed definitions survive rebuilds. IPL placements outlive streaming.
+    g_DistantLights.clear();
+    g_DistantLightKeys.clear();
+    g_DistantLightDefinitions.clear();
+    g_AdditionalDistantLightDefinitions.clear();
+    g_bDistantLightDefinitionsLoadAttempted = false;
+    g_bAdditionalDistantLightsRegistered = false;
+    g_dwDistantLightEntitiesScanned = g_dwDistantLightEffectsScanned = g_dwDistantLightEffectsFound = 0;
     const bool loadedDat = EnsureDistantLightDefinitionsLoaded();
     if (!g_DistantLightSourceInstances.empty())
         ConsumeDeferredDistantLightSources(loadedDat);
@@ -1030,21 +996,12 @@ void CCoronasSA::CaptureDistantLight(const SFileObjectInstance& instance, CEntit
     if (!entity)
         return;
 
-    // The startup world-bounds pass observes every binary IPL even though most
-    // instances are streamed out afterwards. Retaining its compact source
-    // records is what lets the first opt-in build the complete catalogue
-    // without paying DAT parsing, hashing, trigonometry, or render-queue
-    // allocations for players who leave Project2DFX disabled.
-    if (!g_bDistantLightsEnabled && !g_bDistantLightDefinitionsLoadAttempted)
-    {
-        // m_nInstanceType packs the area code into its low byte and keeps
-        // tunnel, underwater, and streaming flags above it. The created entity
-        // is the authoritative area-code result and avoids rejecting flagged
-        // exterior instances.
-        if (entity->m_areaCode == 0 && instance.modelID >= 0 && static_cast<DWORD>(instance.modelID) < pGame->GetBaseIDforTXD())
-            g_DistantLightSourceInstances.push_back({instance.position, GetDistantLightSourceRotation(instance), instance.modelID});
+    // Remember every observed static IPL placement, including those streamed
+    // while enabled, so later DAT reloads do not lose off-screen lights.
+    if (entity->m_areaCode == 0 && instance.modelID >= 0 && static_cast<DWORD>(instance.modelID) < pGame->GetBaseIDforTXD())
+        g_DistantLightSourceInstances.Remember({instance.position, GetDistantLightSourceRotation(instance), instance.modelID});
+    if (!g_bDistantLightsEnabled)
         return;
-    }
 
     EnsureDistantLightStorageAllocated();
 
@@ -1073,10 +1030,12 @@ void CCoronasSA::DoPulseDistantLights()
     CMatrix cameraMatrix;
     pGame->GetCamera()->GetMatrix(&cameraMatrix);
     const CVector& cameraPosition = cameraMatrix.vPos;
-    const float    farDistanceSquared = g_fDistantLightsDrawDistance * g_fDistantLightsDrawDistance;
+    const float    farDistance = GetDistantLightRange();
+    const float    farDistanceSquared = farDistance * farDistance;
 
     std::vector<SDistantLightCandidate>& candidates = g_DistantLightCandidates;
     candidates.clear();
+    g_DistantLightConeCandidates.clear();
     candidates.reserve(std::min<std::size_t>(g_DistantLights.size(), MAX_DISTANT_LIGHT_CORONAS));
     for (std::size_t i = 0; i < g_DistantLights.size(); ++i)
     {
@@ -1088,63 +1047,68 @@ void CCoronasSA::DoPulseDistantLights()
         const float dy = cameraPosition.fY - light.position.fY;
         const float dz = cameraPosition.fZ - light.position.fZ;
         const float distanceSquared = dx * dx + dy * dy + dz * dz;
+        if (g_bDistantLightSearchlightsEnabled && light.searchlightHeight > 0 && distanceSquared > 45.0f * 45.0f && distanceSquared < 300.0f * 300.0f)
+            g_DistantLightConeCandidates.push_back({distanceSquared, i});
         const float nearDistance = light.noDistance ? 0.0f : std::max(0.0f, light.objectDrawDistance - 30.0f);
         if ((light.noDistance || distanceSquared > nearDistance * nearDistance) && distanceSquared < farDistanceSquared)
             candidates.push_back({distanceSquared, i});
     }
 
-    if (candidates.size() > MAX_DISTANT_LIGHT_CORONAS)
-    {
-        std::nth_element(candidates.begin(), candidates.begin() + MAX_DISTANT_LIGHT_CORONAS, candidates.end(),
-                         [](const SDistantLightCandidate& left, const SDistantLightCandidate& right) { return left.distanceSquared < right.distanceSquared; });
-        candidates.resize(MAX_DISTANT_LIGHT_CORONAS);
-    }
+    DistantLights::KeepNearest(candidates, MAX_DISTANT_LIGHT_CORONAS);
 
     g_DistantLightRenderQueue.clear();
     const BYTE  nightAlpha = GetNightAlpha(hour, minute);
     const DWORD timeMs = *reinterpret_cast<DWORD*>(0xB7CB7C);
+    // Cones have an independent near/far window; corona LOD fading must not
+    // suppress a beam on a nearby building. Bound native geometry work.
+    DistantLights::KeepNearest(g_DistantLightConeCandidates, 32);
+    g_DistantLightCones.clear();
+    for (const auto& candidate : g_DistantLightConeCandidates)
+    {
+        const auto&         light = g_DistantLights[candidate.index];
+        DistantLights::Cone cone;
+        if (DistantLights::MakeCone(std::sqrt(candidate.distanceSquared), light.searchlightHeight, light.coronaSize,
+                                    IsDistantLightOn(light.flashType, candidate.index, timeMs), cone))
+        {
+            const float intensity = cone.intensity * (light.alpha / 255.0f);
+            g_DistantLightCones.push_back({light.position, cone,
+                                           SColorRGBA(static_cast<BYTE>(light.red * intensity), static_cast<BYTE>(light.green * intensity),
+                                                      static_cast<BYTE>(light.blue * intensity), 255)});
+        }
+    }
     for (const SDistantLightCandidate& candidate : candidates)
     {
         const std::size_t    index = candidate.index;
         const SDistantLight& light = g_DistantLights[index];
         const float          distance = std::sqrt(candidate.distanceSquared);
-        const float          nearDistance = light.noDistance ? 0.0f : std::max(0.0f, light.objectDrawDistance - 30.0f);
-
-        float radius = light.noDistance ? 1.75f : SolveLinear(nearDistance, 0.0f, std::max(light.objectDrawDistance, nearDistance + 1.0f), 1.75f, distance);
-        radius *= std::min(SolveLinear(nearDistance, 1.0f, 1000.0f, 4.0f, distance), 4.0f);
-        const float finalRadius = radius * light.coronaSize * g_fDistantLightsCoronaRadiusMultiplier;
-
-        float alphaMultiplier = light.noDistance ? 1.0f : std::clamp((distance - nearDistance) / 30.0f, 0.0f, 1.0f);
-        if (distance > g_fDistantLightsDrawDistance - 100.0f)
-            alphaMultiplier *= std::clamp((g_fDistantLightsDrawDistance - distance) / 100.0f, 0.0f, 1.0f);
-
-        const float distanceFromFadeStart = distance - nearDistance;
-        float       distanceAlpha = 0.5f + std::clamp(distanceFromFadeStart / 150.0f, 0.0f, 1.0f) * 0.5f;
-        if (distanceFromFadeStart > 150.0f)
-            distanceAlpha = 1.0f + std::clamp((distanceFromFadeStart - 150.0f) / 900.0f, 0.0f, 1.0f) * 3.0f;
-
-        const float radiusAlpha = finalRadius > 1.0f ? std::clamp(1.0f / (0.75f * finalRadius + 0.25f), 0.3f, 1.0f) : 1.0f;
-        BYTE        alpha = static_cast<BYTE>(
-            std::clamp((nightAlpha / 255.0f) * (light.alpha / 255.0f) * alphaMultiplier * distanceAlpha * radiusAlpha * 255.0f, 0.0f, 255.0f));
-        if (!IsDistantLightOn(light.flashType, index, timeMs))
-            alpha = 0;
+        const auto           corona =
+            DistantLights::Evaluate(distance, light.objectDrawDistance, farDistance, light.coronaSize, g_fDistantLightsCoronaRadiusMultiplier, light.noDistance,
+                                    light.alpha, nightAlpha, IsDistantLightOn(light.flashType, index, timeMs), g_DistantLightSettings);
+        DistantLights::PointLight point;
+        if (DistantLights::MakePointLight(light.noDistance, distance, light.coronaSize, light.objectDrawDistance, corona.intensity, light.red, light.green,
+                                          light.blue, point))
+        {
+            // Native colors are floats: going through SColor would clamp the
+            // authored intensity boost before GTA receives it.
+            DistantLights::SubmitPointLight(reinterpret_cast<DistantLights::AddPointLight>(0x7000E0), light.position, point);
+        }
 
         g_DistantLightRenderQueue.push_back({
             light.position,
             light.texture,
-            finalRadius,
-            g_fDistantLightsDrawDistance,
+            corona.radius,
+            farDistance,
             light.red,
             light.green,
             light.blue,
-            alpha,
+            corona.alpha,
         });
     }
 }
 
 void CCoronasSA::RenderDistantLights()
 {
-    if (g_DistantLightRenderQueue.empty())
+    if (!g_bDistantLightsEnabled || (g_DistantLightRenderQueue.empty() && g_DistantLightCones.empty()))
         return;
 
     const auto* scene = reinterpret_cast<const SGtaScene*>(VAR_SCENE);
@@ -1162,6 +1126,27 @@ void CCoronasSA::RenderDistantLights()
     const auto renderBufferedSprite = reinterpret_cast<RenderBufferedSpriteFunction>(FUNC_CSPRITE_RENDER_BUFFERED_XLU);
     if (!renderStateSet || !renderStateGet || !flushSpriteBuffer || !renderBufferedSprite)
         return;
+
+    if (!g_DistantLightCones.empty())
+    {
+        // GTA's heli cone renderer already has Neon's color hooks. Its post
+        // function restores defaults, so save the caller's actual states too.
+        DistantLights::WithConeStates(renderStateGet, renderStateSet,
+                                      [&]()
+                                      {
+                                          flushSpriteBuffer();
+                                          auto* pointLights = pGame->GetPointLights();
+                                          pointLights->PreRenderHeliLights();
+                                          for (const auto& light : g_DistantLightCones)
+                                          {
+                                              CVector end = light.position;
+                                              end.fZ -= light.cone.length;
+                                              pointLights->RenderHeliLight(light.position, end, light.cone.startRadius, light.cone.endRadius, false,
+                                                                           light.color);
+                                          }
+                                          pointLights->PostRenderHeliLights();
+                                      });
+    }
 
     void* oldTextureRaster = nullptr;
     void* oldZTest = nullptr;
@@ -1249,10 +1234,7 @@ void CCoronasSA::RenderDistantLights()
 SDistantLightStats CCoronasSA::GetDistantLightStats() const
 {
     return {
-        g_bDistantLightsEnabled,
-        static_cast<DWORD>(g_DistantLights.size()),
-        static_cast<DWORD>(g_DistantLightRenderQueue.size()),
-        MAX_DISTANT_LIGHT_CORONAS,
-        g_fDistantLightsDrawDistance,
+        g_bDistantLightsEnabled, static_cast<DWORD>(g_DistantLights.size()), static_cast<DWORD>(g_DistantLightRenderQueue.size()), MAX_DISTANT_LIGHT_CORONAS,
+        GetDistantLightRange(),  g_DistantLightSettings.automaticDistance,
     };
 }

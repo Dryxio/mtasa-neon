@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CDistantLightPreferences.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -315,6 +316,9 @@ void CSettings::ResetGuiPointers()
     m_pExtendedDrawDistanceDescriptionLabel = NULL;
     m_pDistantLightsRenderingLabel = NULL;
     m_pCheckBoxDistantLights = NULL;
+    m_pCheckBoxDistantLightSearchlights = NULL;
+    m_pDistantLightAutomatic = m_pDistantLightGrowth = nullptr;
+    m_DistantLightAdvancedControls.clear();
     m_pDistantLightsDrawDistanceLabel = NULL;
     m_pDistantLightsDrawDistance = NULL;
     m_pDistantLightsDrawDistanceValueLabel = NULL;
@@ -1646,28 +1650,10 @@ void CSettings::CreateGUI()
     m_pCheckBoxDistantLights->SetPosition(neonPosition);
     m_pCheckBoxDistantLights->AutoSize(nullptr, 20.0f);
 
-    neonPosition.fY += 32.0f;
-    m_pDistantLightsDrawDistanceLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, _("Distant light draw distance:")));
-    m_pDistantLightsDrawDistanceLabel->SetPosition(neonPosition);
-    m_pDistantLightsDrawDistanceLabel->AutoSize();
-
-    CVector2D distantLightsLabelSize;
-    m_pDistantLightsDrawDistanceLabel->GetSize(distantLightsLabelSize);
-    const CVector2D distantLightsSliderPosition(neonPosition.fX + distantLightsLabelSize.fX + kSliderLeftSpacing, neonPosition.fY);
-    m_pDistantLightsDrawDistance = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, pTabNeon));
-    m_pDistantLightsDrawDistance->SetPosition(distantLightsSliderPosition);
-    m_pDistantLightsDrawDistance->SetSize(CVector2D(ComputeSliderWidth(neonContentSize.fX, distantLightsSliderPosition.fX, 260.0f), 20.0f));
-    m_pDistantLightsDrawDistance->SetProperty(
-        "StepSize", SString("%1.6f", static_cast<float>(kDistantLightsDrawDistanceStep) / (kDistantLightsDrawDistanceMax - kDistantLightsDrawDistanceMin)));
-
-    CVector2D distantLightsSliderSize;
-    m_pDistantLightsDrawDistance->GetSize(distantLightsSliderSize);
-    m_pDistantLightsDrawDistanceValueLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, SString("%i m", kDistantLightsDrawDistanceDefault)));
-    m_pDistantLightsDrawDistanceValueLabel->SetPosition(
-        CVector2D(distantLightsSliderPosition.fX + distantLightsSliderSize.fX + kSliderLabelSpacing, distantLightsSliderPosition.fY));
-    m_pDistantLightsDrawDistanceValueLabel->AutoSize("5000 m");
-    FinalizeSliderRow(neonContentSize.fX, m_pDistantLightsDrawDistance, m_pDistantLightsDrawDistanceValueLabel, 260.0f, kSliderLabelSpacing,
-                      m_pDistantLightsDrawDistanceLabel);
+    neonPosition.fY += 28.0f;
+    m_pCheckBoxDistantLightSearchlights = reinterpret_cast<CGUICheckBox*>(pManager->CreateCheckBox(pTabNeon, _("Light beams"), true));
+    m_pCheckBoxDistantLightSearchlights->SetPosition(neonPosition);
+    m_pCheckBoxDistantLightSearchlights->AutoSize(nullptr, 20.0f);
 
     neonPosition.fY += 38.0f;
     m_pDistantLightsCoronaSizeLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, _("Distant corona radius:")));
@@ -1706,6 +1692,66 @@ void CSettings::CreateGUI()
     m_pRebuildDistantLightsButton->SetPosition(neonPosition);
     m_pRebuildDistantLightsButton->AutoSize(nullptr, 24.0f, 12.0f);
     m_pRebuildDistantLightsButton->SetZOrderingEnabled(false);
+
+    // Put detailed controls on their own tab: the legacy rendering panel is
+    // not scrollable and must remain usable at the minimum window size.
+    pTabNeon = neonTabPanel->CreateTab(_("Lighting (advanced)"));
+    neonPosition = CVector2D(12.0f, 12.0f);
+    m_pDistantLightAutomatic = reinterpret_cast<CGUICheckBox*>(pManager->CreateCheckBox(pTabNeon, _("Automatic light range"), true));
+    m_pDistantLightAutomatic->SetPosition(neonPosition);
+    m_pDistantLightAutomatic->AutoSize(nullptr, 20.0f);
+    m_DistantLightAdvancedControls.push_back(m_pDistantLightAutomatic);
+    neonPosition.fY += 32.0f;
+    m_pDistantLightsDrawDistanceLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, _("Distant light draw distance:")));
+    m_pDistantLightsDrawDistanceLabel->SetPosition(neonPosition);
+    m_pDistantLightsDrawDistanceLabel->AutoSize();
+
+    CVector2D distantLightsLabelSize;
+    m_pDistantLightsDrawDistanceLabel->GetSize(distantLightsLabelSize);
+    const CVector2D distantLightsSliderPosition(neonPosition.fX + distantLightsLabelSize.fX + kSliderLeftSpacing, neonPosition.fY);
+    m_pDistantLightsDrawDistance = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, pTabNeon));
+    m_pDistantLightsDrawDistance->SetPosition(distantLightsSliderPosition);
+    m_pDistantLightsDrawDistance->SetSize(CVector2D(ComputeSliderWidth(neonContentSize.fX, distantLightsSliderPosition.fX, 260.0f), 20.0f));
+    m_pDistantLightsDrawDistance->SetProperty(
+        "StepSize", SString("%1.6f", static_cast<float>(kDistantLightsDrawDistanceStep) / (kDistantLightsDrawDistanceMax - kDistantLightsDrawDistanceMin)));
+
+    CVector2D distantLightsSliderSize;
+    m_pDistantLightsDrawDistance->GetSize(distantLightsSliderSize);
+    m_pDistantLightsDrawDistanceValueLabel = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, SString("%i m", kDistantLightsDrawDistanceDefault)));
+    m_pDistantLightsDrawDistanceValueLabel->SetPosition(
+        CVector2D(distantLightsSliderPosition.fX + distantLightsSliderSize.fX + kSliderLabelSpacing, distantLightsSliderPosition.fY));
+    m_pDistantLightsDrawDistanceValueLabel->AutoSize("5000 m");
+    FinalizeSliderRow(neonContentSize.fX, m_pDistantLightsDrawDistance, m_pDistantLightsDrawDistanceValueLabel, 260.0f, kSliderLabelSpacing,
+                      m_pDistantLightsDrawDistanceLabel);
+
+    m_DistantLightAdvancedControls.insert(m_DistantLightAdvancedControls.end(),
+                                          {m_pDistantLightsDrawDistanceLabel, m_pDistantLightsDrawDistance, m_pDistantLightsDrawDistanceValueLabel});
+    neonPosition.fY += 28.0f;
+    m_pDistantLightGrowth = reinterpret_cast<CGUICheckBox*>(pManager->CreateCheckBox(pTabNeon, _("Grow halos with distance"), true));
+    m_pDistantLightGrowth->SetPosition(neonPosition);
+    m_pDistantLightGrowth->AutoSize(nullptr, 20.0f);
+    m_DistantLightAdvancedControls.push_back(m_pDistantLightGrowth);
+    const char* curveLabels[] = {_("Near brightness"), _("Full brightness distance"), _("Brightness boost distance"), _("Far brightness multiplier")};
+    for (int i = 0; i < 4; ++i)
+    {
+        neonPosition.fY += 30.0f;
+        auto* label = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, curveLabels[i]));
+        label->SetPosition(neonPosition);
+        label->AutoSize();
+        auto* slider = reinterpret_cast<CGUIScrollBar*>(pManager->CreateScrollBar(true, pTabNeon));
+        slider->SetPosition(CVector2D(neonPosition.fX + 230.0f, neonPosition.fY));
+        slider->SetSize(CVector2D(180.0f, 20.0f));
+        auto* value = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabNeon, ""));
+        value->SetPosition(CVector2D(neonPosition.fX + 420.0f, neonPosition.fY));
+        value->SetSize(CVector2D(80.0f, 20.0f));
+        m_pDistantLightCurves[i] = slider;
+        m_pDistantLightCurveValues[i] = value;
+        m_DistantLightAdvancedControls.insert(m_DistantLightAdvancedControls.end(), {label, slider, value});
+        slider->SetOnScrollHandler(GUI_CALLBACK(&CSettings::OnDistantLightAdvancedChanged, this));
+    }
+    m_pDistantLightAutomatic->SetClickHandler(GUI_CALLBACK(&CSettings::OnDistantLightAdvancedChanged, this));
+    for (auto* control : m_DistantLightAdvancedControls)
+        control->SetVisible(false);
 
     CreateRadarTabGUI(radarContentSize);
     CreateSkyGfxTabGUI(tabPanelSize);
@@ -2668,7 +2714,16 @@ void CSettings::UpdateNeonTab()
     m_pExtendedDrawDistance->SetEnabled(extendedDrawDistanceEnabled);
     m_pExtendedDrawDistanceValueLabel->SetEnabled(extendedDrawDistanceEnabled);
 
+    const auto lightSettings = ReadDistantLightPreferences();
+    m_pDistantLightAutomatic->SetSelected(lightSettings.automaticDistance);
+    m_pDistantLightGrowth->SetSelected(lightSettings.growWithDistance);
+    const float curveValues[] = {lightSettings.nearAlpha, lightSettings.reachFullAlpha, lightSettings.boostStart, lightSettings.farAlphaBoost};
+    const float curveMin[] = {0, 1, 0, 1}, curveMax[] = {1, 2000, 5000, 8};
+    for (int i = 0; i < 4; ++i)
+        m_pDistantLightCurves[i]->SetScrollPosition(NormalizeSliderValue(curveValues[i], curveMin[i], curveMax[i]));
     m_pCheckBoxDistantLights->SetSelected(distantLightsEnabled);
+    m_pCheckBoxDistantLightSearchlights->SetSelected(CVARS_GET_VALUE<bool>("distant_lights_searchlights_enabled"));
+    m_pCheckBoxDistantLightSearchlights->SetEnabled(distantLightsEnabled);
     m_pDistantLightsDrawDistance->SetScrollPosition(
         NormalizeSliderValue(distantLightsDrawDistance, kDistantLightsDrawDistanceMin, kDistantLightsDrawDistanceMax));
     m_pDistantLightsDrawDistanceValueLabel->SetText(SString("%i m", distantLightsDrawDistance));
@@ -2680,6 +2735,7 @@ void CSettings::UpdateNeonTab()
     m_pDistantLightsCoronaSize->SetEnabled(distantLightsEnabled);
     m_pDistantLightsCoronaSizeValueLabel->SetEnabled(distantLightsEnabled);
     m_pRebuildDistantLightsButton->SetEnabled(distantLightsEnabled && m_bIsModLoaded);
+    OnDistantLightAdvancedChanged(nullptr);
 }
 
 void CSettings::CreateSkyGfxTabGUI(const CVector2D& tabPanelSize)
@@ -5068,12 +5124,23 @@ void CSettings::SaveData()
     const int   distantLightsDrawDistance = GetDistantLightsDrawDistanceFromSlider(m_pDistantLightsDrawDistance);
     const float distantLightsCoronaRadiusMultiplier = GetDistantLightsCoronaRadiusMultiplierFromSlider(m_pDistantLightsCoronaSize);
     CVARS_SET("distant_lights_enabled", distantLightsEnabled);
+    CVARS_SET("distant_lights_searchlights_enabled", m_pCheckBoxDistantLightSearchlights->GetSelected());
     CVARS_SET("distant_lights_draw_distance", distantLightsDrawDistance);
     CVARS_SET("distant_lights_corona_radius_multiplier", distantLightsCoronaRadiusMultiplier);
 
     CCoronas* coronas = g_pCore->GetGame()->GetCoronas();
     coronas->SetDistantLightsDrawDistance(static_cast<float>(distantLightsDrawDistance));
     coronas->SetDistantLightsCoronaRadiusMultiplier(distantLightsCoronaRadiusMultiplier);
+    coronas->SetDistantLightSearchlightsEnabled(m_pCheckBoxDistantLightSearchlights->GetSelected());
+    SDistantLightSettings lightSettings;
+    lightSettings.automaticDistance = m_pDistantLightAutomatic->GetSelected();
+    lightSettings.growWithDistance = m_pDistantLightGrowth->GetSelected();
+    lightSettings.nearAlpha = DenormalizeSliderValue(m_pDistantLightCurves[0]->GetScrollPosition(), 0, 1);
+    lightSettings.reachFullAlpha = DenormalizeSliderValue(m_pDistantLightCurves[1]->GetScrollPosition(), 1, 2000);
+    lightSettings.boostStart = DenormalizeSliderValue(m_pDistantLightCurves[2]->GetScrollPosition(), 0, 5000);
+    lightSettings.farAlphaBoost = DenormalizeSliderValue(m_pDistantLightCurves[3]->GetScrollPosition(), 1, 8);
+    SaveDistantLightPreferences(lightSettings);
+    coronas->SetDistantLightSettings(lightSettings);
     coronas->SetDistantLightsEnabled(distantLightsEnabled);
 
     const float borderlessGamma = DenormalizeSliderValue(m_pBorderlessGamma->GetScrollPosition(), kBorderlessGammaMin, kBorderlessGammaMax);
@@ -6043,11 +6110,33 @@ bool CSettings::OnExtendedDrawDistanceChanged(CGUIElement* pElement)
 bool CSettings::OnDistantLightsEnabledClick(CGUIElement* pElement)
 {
     const bool enabled = m_pCheckBoxDistantLights->GetSelected();
+    m_pCheckBoxDistantLightSearchlights->SetEnabled(enabled);
     m_pDistantLightsDrawDistance->SetEnabled(enabled);
     m_pDistantLightsDrawDistanceValueLabel->SetEnabled(enabled);
     m_pDistantLightsCoronaSize->SetEnabled(enabled);
     m_pDistantLightsCoronaSizeValueLabel->SetEnabled(enabled);
     m_pRebuildDistantLightsButton->SetEnabled(enabled && m_bIsModLoaded);
+    OnDistantLightAdvancedChanged(nullptr);
+    return true;
+}
+
+bool CSettings::OnDistantLightAdvancedChanged(CGUIElement*)
+{
+    const bool visible = true;
+    const bool enabled = m_pCheckBoxDistantLights->GetSelected();
+    for (auto* control : m_DistantLightAdvancedControls)
+    {
+        control->SetVisible(visible);
+        control->SetEnabled(enabled);
+    }
+    const bool manual = visible && !m_pDistantLightAutomatic->GetSelected();
+    m_pDistantLightsDrawDistanceLabel->SetVisible(manual);
+    m_pDistantLightsDrawDistance->SetVisible(manual);
+    m_pDistantLightsDrawDistanceValueLabel->SetVisible(manual);
+    const float curveMin[] = {0, 1, 0, 1}, curveMax[] = {1, 2000, 5000, 8};
+    for (int i = 0; i < 4; ++i)
+        m_pDistantLightCurveValues[i]->SetText(
+            SString("%.2f", DenormalizeSliderValue(m_pDistantLightCurves[i]->GetScrollPosition(), curveMin[i], curveMax[i])));
     return true;
 }
 

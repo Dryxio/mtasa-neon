@@ -277,6 +277,13 @@ void CClientVariables::ValidateValues()
     ClampValue("borderless_contrast_scale", 0.5f, 2.0f);
     ClampValue("borderless_saturation_scale", 0.5f, 2.0f);
     ClampValue("distant_lights_enabled", false, true);
+    ClampValue("distant_lights_searchlights_enabled", false, true);
+    ClampValue("distant_lights_automatic_distance", false, true);
+    ClampValue("distant_lights_grow_with_distance", false, true);
+    ClampValue("distant_lights_near_alpha", 0.0f, 1.0f);
+    ClampValue("distant_lights_reach_full_alpha", 1.0f, 2000.0f);
+    ClampValue("distant_lights_boost_start", 0.0f, 5000.0f);
+    ClampValue("distant_lights_far_alpha_boost", 1.0f, 8.0f);
     ClampValue("distant_lights_draw_distance", 300, 5000);
     ClampValue("distant_lights_corona_radius_multiplier", 0.1f, 1.0f);
     ClampValue("extended_draw_distance_enabled", false, true);
@@ -370,30 +377,37 @@ void CClientVariables::LoadDefaults()
     DEFAULT("high_detail_peds", 0);                                         // Disable rendering high detail peds all the time
     DEFAULT("blur", 0);                                                     // Keep GTA's legacy motion blur opt-in
     DEFAULT("corona_reflections", 0);                                       // Disable corona rain reflections
-    DEFAULT("distant_lights_enabled", 0);                                   // Disable Neon Project2DFX distant lights
-    DEFAULT("distant_lights_draw_distance", 2000);                          // Project2DFX distant light range in world units
-    DEFAULT("distant_lights_corona_radius_multiplier", 0.25f);              // Less bloated distant coronas; Project2DFX master uses 0.5
-    DEFAULT("extended_draw_distance_enabled", 0);                           // Keep vanilla far clip and model LOD distances
-    DEFAULT("extended_draw_distance", 2000);                                // Extended far clip and stock-world model LOD range
-    DEFAULT("dynamic_ped_shadows", 0);                                      // Disable dynamic ped shadows
-    DEFAULT("fast_clothes_loading", 1);                                     // 0-off 1-auto 2-on
-    DEFAULT("allow_screen_upload", 1);                                      // 0-off 1-on
-    DEFAULT("allow_external_sounds", 1);                                    // 0-off 1-on
-    DEFAULT("max_clientscript_log_kb", 5000);                               // Max size in KB (0-No limit)
-    DEFAULT("display_fullscreen_style", 0);                                 // 0-standard 1-borderless 2-borderless keep res 3-borderless stretch
-    DEFAULT("display_windowed", 0);                                         // 0-off 1-on
-    DEFAULT("multimon_fullscreen_minimize", 1);                             // 0-off 1-on
-    DEFAULT("borderless_gamma_power", 0.95f);                               // Gamma exponent applied to windowed gamma ramp (1.0 = unchanged)
-    DEFAULT("borderless_brightness_scale", 1.03f);                          // Brightness multiplier for windowed gamma ramp (1.0 = unchanged)
-    DEFAULT("borderless_contrast_scale", 1.0f);                             // Contrast multiplier for borderless presentation (1.0 = unchanged)
-    DEFAULT("borderless_saturation_scale", 1.0f);                           // Saturation multiplier for borderless presentation (1.0 = unchanged)
-    DEFAULT("borderless_enable_srgb", false);                               // Enable sRGB correction when running borderless
-    DEFAULT("borderless_gamma_enabled", false);                             // Apply gamma adjustment while borderless tuning active
-    DEFAULT("borderless_brightness_enabled", false);                        // Apply brightness adjustment while borderless tuning active
-    DEFAULT("borderless_contrast_enabled", false);                          // Apply contrast adjustment while borderless tuning active
-    DEFAULT("borderless_saturation_enabled", false);                        // Apply saturation adjustment while borderless tuning active
-    DEFAULT("borderless_apply_windowed", false);                            // Apply display adjustments while windowed/borderless
-    DEFAULT("borderless_apply_fullscreen", false);                          // Apply display adjustments while in exclusive fullscreen
+    DEFAULT("distant_lights_automatic_distance", 1);
+    DEFAULT("distant_lights_grow_with_distance", 1);
+    DEFAULT("distant_lights_near_alpha", 0.5f);
+    DEFAULT("distant_lights_reach_full_alpha", 150);
+    DEFAULT("distant_lights_boost_start", 150);
+    DEFAULT("distant_lights_far_alpha_boost", 4);
+    DEFAULT("distant_lights_searchlights_enabled", 1);          // Enabled when the Project2DFX master switch is on
+    DEFAULT("distant_lights_enabled", 0);                       // Disable Neon Project2DFX distant lights
+    DEFAULT("distant_lights_draw_distance", 2000);              // Project2DFX distant light range in world units
+    DEFAULT("distant_lights_corona_radius_multiplier", 0.25f);  // Less bloated distant coronas; Project2DFX master uses 0.5
+    DEFAULT("extended_draw_distance_enabled", 0);               // Keep vanilla far clip and model LOD distances
+    DEFAULT("extended_draw_distance", 2000);                    // Extended far clip and stock-world model LOD range
+    DEFAULT("dynamic_ped_shadows", 0);                          // Disable dynamic ped shadows
+    DEFAULT("fast_clothes_loading", 1);                         // 0-off 1-auto 2-on
+    DEFAULT("allow_screen_upload", 1);                          // 0-off 1-on
+    DEFAULT("allow_external_sounds", 1);                        // 0-off 1-on
+    DEFAULT("max_clientscript_log_kb", 5000);                   // Max size in KB (0-No limit)
+    DEFAULT("display_fullscreen_style", 0);                     // 0-standard 1-borderless 2-borderless keep res 3-borderless stretch
+    DEFAULT("display_windowed", 0);                             // 0-off 1-on
+    DEFAULT("multimon_fullscreen_minimize", 1);                 // 0-off 1-on
+    DEFAULT("borderless_gamma_power", 0.95f);                   // Gamma exponent applied to windowed gamma ramp (1.0 = unchanged)
+    DEFAULT("borderless_brightness_scale", 1.03f);              // Brightness multiplier for windowed gamma ramp (1.0 = unchanged)
+    DEFAULT("borderless_contrast_scale", 1.0f);                 // Contrast multiplier for borderless presentation (1.0 = unchanged)
+    DEFAULT("borderless_saturation_scale", 1.0f);               // Saturation multiplier for borderless presentation (1.0 = unchanged)
+    DEFAULT("borderless_enable_srgb", false);                   // Enable sRGB correction when running borderless
+    DEFAULT("borderless_gamma_enabled", false);                 // Apply gamma adjustment while borderless tuning active
+    DEFAULT("borderless_brightness_enabled", false);            // Apply brightness adjustment while borderless tuning active
+    DEFAULT("borderless_contrast_enabled", false);              // Apply contrast adjustment while borderless tuning active
+    DEFAULT("borderless_saturation_enabled", false);            // Apply saturation adjustment while borderless tuning active
+    DEFAULT("borderless_apply_windowed", false);                // Apply display adjustments while windowed/borderless
+    DEFAULT("borderless_apply_fullscreen", false);              // Apply display adjustments while in exclusive fullscreen
 
     if (Exists("borderless_enable_srgb"))
     {

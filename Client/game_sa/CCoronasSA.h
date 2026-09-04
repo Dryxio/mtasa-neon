@@ -60,6 +60,9 @@ public:
     void               DoPulseDistantLights() override;
     SDistantLightStats GetDistantLightStats() const override;
     void               RenderDistantLights() override;
+    void               SetDistantLightSearchlightsEnabled(bool enabled) override;
+    bool               SetDistantLightSettings(const SDistantLightSettings& settings) override;
+    void               SetDistantLightsAutomaticDrawDistance(bool enabled) override;
 
     // GTA creates every static IPL entity once while calculating the world
     // bounds, before streaming most of them back out. Preserve only the raw

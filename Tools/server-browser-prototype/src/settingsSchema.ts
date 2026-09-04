@@ -78,6 +78,13 @@ export const SETTING_IDS = [
   'extendedWorld.enabled',
   'extendedWorld.distance',
   'distantLights.enabled',
+  'distantLights.searchlights',
+  'distantLights.autoDistance',
+  'distantLights.growWithDistance',
+  'distantLights.nearAlpha',
+  'distantLights.reachFullAlpha',
+  'distantLights.boostStart',
+  'distantLights.farAlphaBoost',
   'distantLights.distance',
   'distantLights.coronaSize',
   'skyGfx.enabled',
@@ -231,6 +238,34 @@ export const SETTINGS_COPY = {
   'distantLights.enabled': {
     label: 'Distant city lights',
     description: 'Enables Neon\'s integrated Project2DFX distant coronas so city lights remain visible from far away.',
+  },
+  'distantLights.searchlights': {
+    label: 'Light beams',
+    description: 'Shows light beams beneath supported streetlights at night. Requires distant city lights.',
+  },
+  'distantLights.autoDistance': {
+    label: 'Automatic light range',
+    description: 'Follows the current world view distance, including weather and server overrides.',
+  },
+  'distantLights.growWithDistance': {
+    label: 'Grow halos with distance',
+    description: 'Gradually enlarges distant halos, matching Project2DFX.',
+  },
+  'distantLights.nearAlpha': {
+    label: 'Near brightness',
+    description: 'Starting brightness multiplier for the distance curve.',
+  },
+  'distantLights.reachFullAlpha': {
+    label: 'Full brightness distance',
+    description: 'Distance from the start of the halo transition to normal brightness, in metres.',
+  },
+  'distantLights.boostStart': {
+    label: 'Brightness boost distance',
+    description: 'Distance from the start of the transition where the extra brightness boost begins, in metres.',
+  },
+  'distantLights.farAlphaBoost': {
+    label: 'Far brightness multiplier',
+    description: 'Maximum distance-based brightness multiplier.',
   },
   'distantLights.distance': {
     label: 'Light draw distance',
@@ -420,6 +455,13 @@ export const DEFAULT_SETTINGS: SettingValues = {
   'extendedWorld.enabled': false,
   'extendedWorld.distance': 2000,
   'distantLights.enabled': false,
+  'distantLights.searchlights': true,
+  'distantLights.autoDistance': true,
+  'distantLights.growWithDistance': true,
+  'distantLights.nearAlpha': 0.5,
+  'distantLights.reachFullAlpha': 150,
+  'distantLights.boostStart': 150,
+  'distantLights.farAlphaBoost': 4,
   'distantLights.distance': 2000,
   'distantLights.coronaSize': 0.25,
   'skyGfx.enabled': true,

@@ -165,10 +165,23 @@ export function Settings({ onClose }: SettingsProps) {
 
           <SettingsGroup title="Project2DFX">
             <ToggleRow id="distantLights.enabled" value={Boolean(values['distantLights.enabled'])} onChange={setValue} />
-            <RangeRow id="distantLights.distance" value={Number(values['distantLights.distance'])} min={300} max={5000} step={100} suffix=" m"
+            <ToggleRow id="distantLights.searchlights" value={Boolean(values['distantLights.searchlights'])}
               disabled={!values['distantLights.enabled']} onChange={setValue} />
             <RangeRow id="distantLights.coronaSize" value={Number(values['distantLights.coronaSize'])} min={0.1} max={1} step={0.05}
               format={(value) => `${Math.round(value * 100)}%`} disabled={!values['distantLights.enabled']} onChange={setValue} />
+            <details>
+              <summary>Advanced light settings</summary>
+              <ToggleRow id="distantLights.autoDistance" value={Boolean(values['distantLights.autoDistance'])} disabled={!values['distantLights.enabled']} onChange={setValue} />
+              {!values['distantLights.autoDistance'] && <>
+            <RangeRow id="distantLights.distance" value={Number(values['distantLights.distance'])} min={300} max={5000} step={100} suffix=" m"
+              disabled={!values['distantLights.enabled']} onChange={setValue} />
+              </>}
+              <ToggleRow id="distantLights.growWithDistance" value={Boolean(values['distantLights.growWithDistance'])} disabled={!values['distantLights.enabled']} onChange={setValue} />
+              <RangeRow id="distantLights.nearAlpha" value={Number(values['distantLights.nearAlpha'])} min={0} max={1} step={0.05} disabled={!values['distantLights.enabled']} onChange={setValue} />
+              <RangeRow id="distantLights.reachFullAlpha" value={Number(values['distantLights.reachFullAlpha'])} min={1} max={2000} step={1} disabled={!values['distantLights.enabled']} onChange={setValue} />
+              <RangeRow id="distantLights.boostStart" value={Number(values['distantLights.boostStart'])} min={0} max={5000} step={10} disabled={!values['distantLights.enabled']} onChange={setValue} />
+              <RangeRow id="distantLights.farAlphaBoost" value={Number(values['distantLights.farAlphaBoost'])} min={1} max={8} step={0.1} disabled={!values['distantLights.enabled']} onChange={setValue} />
+            </details>
             <ActionRow
               label="Rebuild distant lights"
               description="Re-scans the loaded GTA world for Project2DFX light sources. Use this after world assets change during a session."

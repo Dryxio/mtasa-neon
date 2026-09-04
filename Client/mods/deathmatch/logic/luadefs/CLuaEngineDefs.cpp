@@ -170,6 +170,7 @@ void CLuaEngineDefs::LoadFunctions()
         {"engineResetRendererStats", EngineResetRendererStats},
         {"engineSetDistantLightsEnabled", EngineSetDistantLightsEnabled},
         {"engineSetDistantLightsDrawDistance", EngineSetDistantLightsDrawDistance},
+        {"engineSetDistantLightsAutomaticDrawDistance", EngineSetDistantLightsAutomaticDrawDistance},
         {"engineRebuildDistantLights", EngineRebuildDistantLights},
         {"engineGetDistantLightStats", EngineGetDistantLightStats},
         {"engineGetCullZones", EngineGetCullZones},
@@ -1710,6 +1711,18 @@ int CLuaEngineDefs::EngineSetDistantLightsDrawDistance(lua_State* luaVM)
     return 1;
 }
 
+int CLuaEngineDefs::EngineSetDistantLightsAutomaticDrawDistance(lua_State* luaVM)
+{
+    bool             enabled = true;
+    CScriptArgReader args(luaVM);
+    args.ReadBool(enabled);
+    if (args.HasErrors())
+        return luaL_error(luaVM, args.GetFullErrorMessage());
+    g_pGame->GetCoronas()->SetDistantLightsAutomaticDrawDistance(enabled);
+    lua_pushboolean(luaVM, true);
+    return 1;
+}
+
 int CLuaEngineDefs::EngineRebuildDistantLights(lua_State* luaVM)
 {
     g_pGame->GetCoronas()->RebuildDistantLights();
@@ -1732,6 +1745,8 @@ int CLuaEngineDefs::EngineGetDistantLightStats(lua_State* luaVM)
     lua_setfield(luaVM, -2, "coronaCapacity");
     lua_pushnumber(luaVM, stats.drawDistance);
     lua_setfield(luaVM, -2, "drawDistance");
+    lua_pushboolean(luaVM, stats.automaticDrawDistance);
+    lua_setfield(luaVM, -2, "automaticDrawDistance");
     return 1;
 }
 

@@ -11,6 +11,7 @@
 
 #pragma once
 #include "enums/CoronaType.h"
+#include "SDistantLightSettings.h"
 
 class CRegisteredCorona;
 class CVector;
@@ -22,6 +23,7 @@ struct SDistantLightStats
     DWORD activeCoronas;
     DWORD coronaCapacity;
     float drawDistance;
+    bool  automaticDrawDistance;
 };
 
 // these are the IDs that are used internally for coronas
@@ -47,4 +49,7 @@ public:
     virtual void               DoPulseDistantLights() = 0;
     virtual SDistantLightStats GetDistantLightStats() const = 0;
     virtual void               RenderDistantLights() = 0;
+    virtual void               SetDistantLightSearchlightsEnabled(bool enabled) = 0;
+    virtual bool               SetDistantLightSettings(const SDistantLightSettings& settings) = 0;
+    virtual void               SetDistantLightsAutomaticDrawDistance(bool enabled) = 0;
 };

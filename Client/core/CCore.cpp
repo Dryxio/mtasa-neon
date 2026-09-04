@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CDistantLightPreferences.h"
 #include "CNativeWorldAuthorizationStore.h"
 #include "SharedUtil.Hash.h"
 #include <MultiClient.h>
@@ -310,6 +311,8 @@ namespace
             coronas->SetDistantLightsEnabled(false);
         coronas->SetDistantLightsDrawDistance(static_cast<float>(drawDistance));
         coronas->SetDistantLightsCoronaRadiusMultiplier(radiusMultiplier);
+        coronas->SetDistantLightSearchlightsEnabled(CVARS_GET_VALUE<bool>("distant_lights_searchlights_enabled"));
+        coronas->SetDistantLightSettings(ReadDistantLightPreferences());
         coronas->SetDistantLightsEnabled(enabled);
     }
 
