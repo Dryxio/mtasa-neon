@@ -1324,33 +1324,95 @@ void RelaunchAsAdmin(const SString& strCmdLine, const SString& strReason)
     ShellExecuteNonBlocking("runas", PathJoin(GetMTASAPath(), MTA_EXE_NAME), strCmdLine);
 }
 
-/////////////////////////////////////////////////////////////////////
-//
-// GetLibraryHandle
-//
-//
-//
-/////////////////////////////////////////////////////////////////////
-HMODULE GetLibraryHandle(const SString& strFilename, DWORD* pdwOutLastError)
+// Version probes must release netc before the updater replaces files. Runtime
+// service/process exports need a separate, initialized handle with process lifetime.
+static HMODULE LoadNetworkModule(DWORD& dwLastError)
 {
-    if (!hLibraryModule)
+#ifdef MTA_DEBUG
+    const SString strFilename = "netc_d.dll";
+#else
+    const SString strFilename = "netc.dll";
+#endif
+    const auto LoadVersionModule = [&](const SString& strRootPath, DWORD& dwOutLastError) -> HMODULE
     {
-        // Get path to the relevant file
-        SString strLibPath = PathJoin(GetLaunchPath(), "mta");
-        SString strLibPathFilename = PathJoin(strLibPath, strFilename);
+        if (strRootPath.empty())
+            return NULL;
 
-        SString strPrevCurDir = GetSystemCurrentDirectory();
+        const SString strLibPath = PathJoin(strRootPath, "mta");
+        const SString strLibPathFilename = PathJoin(strLibPath, strFilename);
+        if (!FileExists(strLibPathFilename))
+        {
+            dwOutLastError = ERROR_FILE_NOT_FOUND;
+            return NULL;
+        }
+
+        const SString strPrevCurDir = GetSystemCurrentDirectory();
         SetCurrentDirectory(strLibPath);
         SetDllDirectory(strLibPath);
 
-        hLibraryModule = LoadLibrary(strLibPathFilename);
-        if (pdwOutLastError)
-            *pdwOutLastError = GetLastError();
+        HMODULE hLoadedModule = LoadLibrary(strLibPathFilename);
+        dwOutLastError = GetLastError();
 
         SetCurrentDirectory(strPrevCurDir);
         SetDllDirectory(strPrevCurDir);
+        return hLoadedModule;
+    };
+
+    HMODULE hModule = NULL;
+
+    const SString strInstallPath = GetInstallPathForLauncher();
+    if (SharedUtil::IsUsableMtasaInstallRoot(strInstallPath))
+    {
+        hModule = LoadVersionModule(strInstallPath, dwLastError);
     }
 
+    // GetInstallPathForLauncher returns empty when running from a temp update directory and no
+    // usable non-temp install root could be resolved. GetMTASAPath consults SetMTASABaseDirOverride
+    // (which the install manager populates from the sequencer-carried INSTALL_ROOT in the far branch),
+    // so this attempt covers the recovered far-update case before falling back to the launch dir.
+    if (!hModule)
+    {
+        const SString strBaseDirPath = GetMTASAPath();
+        if (SharedUtil::IsUsableMtasaInstallRoot(strBaseDirPath) && !strBaseDirPath.CompareI(strInstallPath))
+        {
+            hModule = LoadVersionModule(strBaseDirPath, dwLastError);
+        }
+    }
+
+    if (!hModule)
+    {
+        hModule = LoadVersionModule(GetLaunchPath(), dwLastError);
+    }
+
+    return hModule;
+}
+
+HMODULE GetNetworkLibraryHandle(DWORD* pdwOutLastError)
+{
+    DWORD dwLastError = ERROR_SUCCESS;
+    if (!hLibraryModule)
+    {
+        hLibraryModule = LoadNetworkModule(dwLastError);
+        if (hLibraryModule)
+        {
+            using InitNetRev = void (*)(const char*, const char*, const char*);
+            auto initNetRev = reinterpret_cast<InitNetRev>(GetProcAddress(hLibraryModule, "InitNetRev"));
+            if (!initNetRev)
+            {
+                dwLastError = GetLastError();
+                AddReportLog(8070, SString("Network module missing InitNetRev (error %d)", dwLastError));
+                FreeLibraryHandle();
+            }
+            else
+            {
+                // Service calls must not depend on a previous version probe having
+                // initialized netc: that probe intentionally unloads its own reference.
+                initNetRev(GetProductRegistryPath(), GetProductCommonDataDir(), GetProductVersion());
+            }
+        }
+    }
+    if (pdwOutLastError)
+        *pdwOutLastError = dwLastError;
     return hLibraryModule;
 }
 
@@ -1400,61 +1462,8 @@ void UpdateMTAVersionApplicationSetting(bool bQuiet)
         usNetRel = static_cast<unsigned short>(atoi(parts[5]));
     }
 
-    const auto LoadVersionModule = [&](const SString& strRootPath, DWORD& dwOutLastError) -> HMODULE
-    {
-        if (strRootPath.empty())
-            return NULL;
-
-        const SString strLibPath = PathJoin(strRootPath, "mta");
-        const SString strLibPathFilename = PathJoin(strLibPath, strFilename);
-        if (!FileExists(strLibPathFilename))
-        {
-            dwOutLastError = ERROR_FILE_NOT_FOUND;
-            return NULL;
-        }
-
-        const SString strPrevCurDir = GetSystemCurrentDirectory();
-        SetCurrentDirectory(strLibPath);
-        SetDllDirectory(strLibPath);
-
-        HMODULE hLoadedModule = LoadLibrary(strLibPathFilename);
-        dwOutLastError = GetLastError();
-
-        SetCurrentDirectory(strPrevCurDir);
-        SetDllDirectory(strPrevCurDir);
-        return hLoadedModule;
-    };
-
     DWORD   dwLastError = 0;
-    HMODULE hModule = NULL;
-    bool    bFreeModule = false;
-
-    const SString strInstallPath = GetInstallPathForLauncher();
-    if (SharedUtil::IsUsableMtasaInstallRoot(strInstallPath))
-    {
-        hModule = LoadVersionModule(strInstallPath, dwLastError);
-        bFreeModule = hModule != NULL;
-    }
-
-    // GetInstallPathForLauncher returns empty when running from a temp update directory and no
-    // usable non-temp install root could be resolved. GetMTASAPath consults SetMTASABaseDirOverride
-    // (which the install manager populates from the sequencer-carried INSTALL_ROOT in the far branch),
-    // so this attempt covers the recovered far-update case before falling back to the launch dir.
-    if (!hModule)
-    {
-        const SString strBaseDirPath = GetMTASAPath();
-        if (SharedUtil::IsUsableMtasaInstallRoot(strBaseDirPath) && !strBaseDirPath.CompareI(strInstallPath))
-        {
-            hModule = LoadVersionModule(strBaseDirPath, dwLastError);
-            bFreeModule = hModule != NULL;
-        }
-    }
-
-    if (!hModule)
-    {
-        hModule = LoadVersionModule(GetLaunchPath(), dwLastError);
-        bFreeModule = hModule != NULL;
-    }
+    HMODULE hModule = LoadNetworkModule(dwLastError);
 
     if (hModule)
     {
@@ -1477,7 +1486,7 @@ void UpdateMTAVersionApplicationSetting(bool bQuiet)
         DisplayErrorMessageBox(strMessage, _E("CL38"), "module-not-loadable&name=" + ExtractBeforeExtension(strFilename));
     }
 
-    if (bFreeModule)
+    if (hModule)
         FreeLibrary(hModule);
 
     if (!bQuiet)
@@ -1569,10 +1578,10 @@ bool TerminateProcess(DWORD dwProcessID, uint uiExitCode)
 {
     bool success = false;
 
-    if (HMODULE handle = GetLibraryHandle("kernel32.dll"); handle)
+    if (HMODULE handle = GetNetworkLibraryHandle(); handle)
     {
         using Signature = bool (*)(DWORD, UINT);
-        static auto NtTerminateProcess_ = reinterpret_cast<Signature>(static_cast<void*>(GetProcAddress(handle, "NtTerminateProcess")));
+        auto NtTerminateProcess_ = reinterpret_cast<Signature>(static_cast<void*>(GetProcAddress(handle, "NtTerminateProcess")));
 
         if (NtTerminateProcess_)
         {
@@ -1648,7 +1657,7 @@ uint WaitForObject(HANDLE hProcess, HANDLE hThread, DWORD dwMilliseconds, HANDLE
 {
     uint uiResult = 0;
 
-    HMODULE hModule = GetLibraryHandle("kernel32.dll");
+    HMODULE hModule = GetNetworkLibraryHandle();
 
     if (hModule)
     {
@@ -1672,7 +1681,8 @@ uint WaitForObject(HANDLE hProcess, HANDLE hThread, DWORD dwMilliseconds, HANDLE
 ///////////////////////////////////////////////////////////////////////////
 bool CheckService(uint uiStage)
 {
-    HMODULE hModule = GetLibraryHandle("kernel32.dll");
+    DWORD   dwLastError = ERROR_SUCCESS;
+    HMODULE hModule = GetNetworkLibraryHandle(&dwLastError);
 
     if (hModule)
     {
@@ -1685,6 +1695,12 @@ bool CheckService(uint uiStage)
             AddReportLog(8070, SString("CheckService %d result: %d", uiStage, bResult));
             return bResult;
         }
+        dwLastError = GetLastError();
+        AddReportLog(8070, SString("CheckService %d export missing (error %d)", uiStage, dwLastError));
+    }
+    else
+    {
+        AddReportLog(8070, SString("CheckService %d could not load initialized netc (error %d)", uiStage, dwLastError));
     }
 
     return false;

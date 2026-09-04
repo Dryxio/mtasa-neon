@@ -108,7 +108,7 @@ void ReleaseSingleInstanceMutex();
 
 void CleanDownloadCache();
 
-HMODULE GetLibraryHandle(const SString& strFilename, DWORD* pdwOutLastError = NULL);
+HMODULE GetNetworkLibraryHandle(DWORD* pdwOutLastError = NULL);
 void    FreeLibraryHandle();
 uint    WaitForObject(HANDLE hProcess, HANDLE hThread, DWORD dwMilliseconds, HANDLE hMutex);
 bool    CheckService(uint uiStage);
