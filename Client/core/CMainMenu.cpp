@@ -905,12 +905,14 @@ void CMainMenu::SetVisible(bool bVisible, bool bOverlay, bool bFrameDelay)
     {
         m_pServerBrowserWeb->SetVisible(bVisible);
 
-        if (!bVisible)
+        if (!bVisible && m_bIsIngame)
         {
             // The web shell disappears immediately instead of rendering the
             // legacy fade-out. Retaining the old fade state keeps
             // IsMainMenuVisible() true for a few otherwise empty frames and
-            // briefly re-enables the cursor after joining a server.
+            // briefly re-enables the cursor after joining a server. Preserve
+            // the offline bootstrap sentinel: CreateWindows(false) relies on
+            // Update() observing it and explicitly showing the initial menu.
             m_fFader = 0.0f;
             m_ucFade = FADE_INVISIBLE;
             m_bIsVisible = false;
