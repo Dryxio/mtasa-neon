@@ -12,6 +12,7 @@
 #include <game/CWorld.h>
 #include <game/RenderWare.h>
 #include <array>
+#include <new>
 extern CCoreInterface*           g_pCore;
 GameEntityRenderHandler*         pGameEntityRenderHandler = nullptr;
 PreRenderSkyHandler*             pPreRenderSkyHandlerHandler = nullptr;
@@ -30,6 +31,178 @@ namespace
     // visible entry.
     std::array<CEntitySAInterface*, MAX_VISIBLE_ENTITY_PTRS + 1> ms_VisibleEntityPtrs{};
     std::array<CEntitySAInterface*, MAX_VISIBLE_LOD_PTRS + 1>    ms_VisibleLodPtrs{};
+
+    /*
+     * Alpha queue growth adapted from III.VC.SA.LimitAdjuster:
+     * src/shared/utility/LinkListAdjuster.hpp and src/limits/EntityPtrs/AlphaEntityList.cpp.
+     * Copyright (c) 2014 LINK/2012 <dma_2012@hotmail.com>
+     * Copyright (c) 2014 ThirteenAG <thirteenag@gmail.com>
+     * Copyright (c) 2014 Silent <zdanio95@gmail.com>
+     *
+     * Permission is hereby granted, free of charge, to any person obtaining a copy
+     * of this software and associated documentation files (the "Software"), to deal
+     * in the Software without restriction, including without limitation the rights
+     * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     * copies of the Software, and to permit persons to whom the Software is
+     * furnished to do so, subject to the following conditions:
+     * The above copyright notice and this permission notice shall be included in
+     * all copies or substantial portions of the Software.
+     * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+     * THE SOFTWARE.
+     */
+
+    // Demand-grown alpha queues, following Open Limit Adjuster's InsertSorted
+    // retry strategy (LINK/2012, MIT). Keep GTA's sorting and callbacks intact:
+    // rendering immediately when a full queue rejects a window breaks blending.
+    // Vehicle callbacks inline insertion, so patching 0x733D10 alone misses them.
+    struct AlphaRenderInfo
+    {
+        void* object;
+        void* callback;
+        float distance;
+    };
+
+    struct AlphaRenderLink
+    {
+        AlphaRenderInfo  info;
+        AlphaRenderLink* prev;
+        AlphaRenderLink* next;
+    };
+
+    struct AlphaRenderList
+    {
+        AlphaRenderLink  usedHead, usedTail, freeHead, freeTail;
+        AlphaRenderLink* links;
+    };
+
+    static_assert(sizeof(AlphaRenderInfo) == 0xC, "Invalid GTA alpha item layout");
+    static_assert(sizeof(AlphaRenderLink) == 0x14, "Invalid GTA alpha link layout");
+    static_assert(sizeof(AlphaRenderList) == 0x54, "Invalid GTA alpha list layout");
+
+    struct AlphaRenderExpansion
+    {
+        AlphaRenderLink*      links;
+        AlphaRenderExpansion* next;
+    };
+
+    struct AlphaRenderQueueState
+    {
+        const char*           name;
+        AlphaRenderExpansion* expansions = nullptr;
+        unsigned int          saturationCount = 0;
+        unsigned int          failureCount = 0;
+
+        void Release()
+        {
+            // Called only after GTA has detached the lists. Its own allocation
+            // remains owned by GTA; each extension must use our matching delete.
+            while (expansions)
+            {
+                auto* block = expansions;
+                expansions = block->next;
+                delete[] block->links;
+                delete block;
+            }
+            saturationCount = failureCount = 0;
+        }
+    };
+
+    AlphaRenderQueueState ms_AlphaAtomics{"vehicle-atomics"};
+    AlphaRenderQueueState ms_AlphaEntities{"world-entities"};
+
+    bool GrowAlphaRenderList(AlphaRenderList& list, AlphaRenderQueueState& state)
+    {
+        ++state.saturationCount;
+        // Only walk the used list on exhaustion, not on every insertion. All
+        // links are used here, so adding this many doubles the actual capacity.
+        size_t count = 0;
+        for (auto* link = list.usedHead.next; link != &list.usedTail; link = link->next)
+            ++count;
+        count = std::max<size_t>(count, 20);
+
+        auto* block = new (std::nothrow) AlphaRenderExpansion{};
+        auto* links = block ? new (std::nothrow) AlphaRenderLink[count]{} : nullptr;
+        if (!links)
+        {
+            delete block;
+            ++state.failureCount;
+            // Keep GTA's existing fallback on allocation failure and avoid
+            // flooding the log each frame if the process is out of memory.
+            if (state.failureCount == 1)
+                OutputReleaseLine(SString("[AlphaQueues] %s allocation failed; native fallback retained", state.name));
+            return false;
+        }
+
+        block->links = links;
+        block->next = state.expansions;
+        state.expansions = block;
+        for (size_t i = 0; i < count; ++i)
+        {
+            auto& link = links[i];
+            link.prev = &list.freeHead;
+            link.next = list.freeHead.next;
+            link.next->prev = &link;
+            list.freeHead.next = &link;
+        }
+        OutputReleaseLine(SString("[AlphaQueues] %s added %u links; saturations=%u allocation-failures=%u", state.name, static_cast<unsigned int>(count),
+                                  state.saturationCount, state.failureCount));
+        return true;
+    }
+
+    AlphaRenderLink* __fastcall InsertAlphaRenderList(AlphaRenderList* list, int, AlphaRenderInfo* info)
+    {
+        using InsertSorted = AlphaRenderLink*(__thiscall*)(AlphaRenderList*, AlphaRenderInfo*);
+        const auto insert = reinterpret_cast<InsertSorted>(0x733910);
+        auto*      result = insert(list, info);
+        if (result)
+            return result;
+
+        auto& state = reinterpret_cast<DWORD>(list) == 0xC88070 ? ms_AlphaAtomics : ms_AlphaEntities;
+        return GrowAlphaRenderList(*list, state) ? insert(list, info) : nullptr;
+    }
+
+    void __cdecl InitialiseAlphaRenderLists()
+    {
+        reinterpret_cast<void(__cdecl*)()>(0x733A20)();
+        // Initialization has replaced every list head. Never free extensions
+        // during a frame clear: native Clear reuses them on subsequent frames.
+        ms_AlphaAtomics.Release();
+        ms_AlphaEntities.Release();
+    }
+
+    void __cdecl ShutdownAlphaRenderLists()
+    {
+        reinterpret_cast<void(__cdecl*)()>(0x732EB0)();
+        ms_AlphaAtomics.Release();
+        ms_AlphaEntities.Release();
+    }
+
+    void InstallAlphaRenderQueueHooks()
+    {
+        // SA 1.0 US call sites verified against the executable, including all
+        // five inlined vehicle callbacks and both world-entity insertion paths.
+        constexpr DWORD insertCalls[] = {0x733D35, 0x734092, 0x734141, 0x734211, 0x734356, 0x734482, 0x733DF5, 0x7345F2};
+        const auto      isCallTo = [](DWORD address, DWORD target)
+        { return *reinterpret_cast<const BYTE*>(address) == 0xE8 && address + 5 + *reinterpret_cast<const DWORD*>(address + 1) == target; };
+        bool compatible = isCallTo(0x5BD615, 0x733A20) && isCallTo(0x53BBDC, 0x732EB0);
+        for (DWORD address : insertCalls)
+            compatible = compatible && isCallTo(address, 0x733910);
+        if (!compatible)
+        {
+            OutputReleaseLine("[AlphaQueues] Hook mismatch; dynamic alpha queues were not installed");
+            return;
+        }
+        for (DWORD address : insertCalls)
+            HookInstallCall(address, reinterpret_cast<DWORD>(InsertAlphaRenderList));
+        HookInstallCall(0x5BD615, reinterpret_cast<DWORD>(InitialiseAlphaRenderLists));
+        HookInstallCall(0x53BBDC, reinterpret_cast<DWORD>(ShutdownAlphaRenderLists));
+        OutputReleaseLine("[AlphaQueues] Dynamic world-entity and vehicle-atomic queues installed");
+    }
 
     struct StreamingObjectInstanceLink
     {
@@ -984,6 +1157,8 @@ static void __declspec(naked) HOOK_CRenderer_EverythingBarRoads()
 //////////////////////////////////////////////////////////////////////////////////////////
 void CMultiplayerSA::InitHooks_Rendering()
 {
+    InstallAlphaRenderQueueHooks();
+
     // GTA assigns main-world temporary directional lights to slots 1 through 6,
     // but the vehicle env-map pipeline overwrites slot 1 with its specular light.
     // Reserve slot 7 for the specular light so headlights can illuminate vehicle
