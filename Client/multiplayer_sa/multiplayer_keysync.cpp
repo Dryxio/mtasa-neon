@@ -688,9 +688,38 @@ void EntityPerformanceRecordBroadPhaseCandidate(CPhysicalSAInterface* pPhysical,
 }
 #endif
 
+// Fight strafing needs mouse look enabled, but ProcessPed then reads
+// Cams[0].Front at 0x62A054 to set the heading. That vector belongs to the
+// observer, not the remote fighter. Skip only this heading write for remote
+// contexts; synchronized heading and native target-entity turning remain intact.
+// Install once through HookInstall so its memory-protection handling is used.
+static DWORD RETURN_FightCameraHeadingLocal = 0x62A059;
+static DWORD RETURN_FightCameraHeadingRemote = 0x62A083;
+
+static void __declspec(naked) HOOK_FightCameraHeading()
+{
+    MTA_VERIFY_HOOK_LOCAL_SIZE;
+    // clang-format off
+    __asm
+    {
+        pushfd
+        cmp     byte ptr [bNotInLocalContext], 0
+        jne     remote
+        popfd
+        mov     eax, dword ptr ds:[0xB6F32C]
+        jmp     dword ptr [RETURN_FightCameraHeadingLocal]
+    remote:
+        popfd
+        jmp     dword ptr [RETURN_FightCameraHeadingRemote]
+    }
+    // clang-format on
+}
+
 VOID InitKeysyncHooks()
 {
     // OutputDebugString("InitKeysyncHooks");
+    HookCheckOriginalByte(0x62A054, 0xA1);
+    HookInstall(0x62A054, (DWORD)HOOK_FightCameraHeading, 5);
     HookInstallMethod(VTBL_CPlayerPed__ProcessControl, (DWORD)HOOK_CPlayerPed__ProcessControl);
     HookInstallMethod(VTBL_CAutomobile__ProcessControl, (DWORD)HOOK_CAutomobile__ProcessControl);
     HookInstallMethod(VTBL_CMonsterTruck__ProcessControl, (DWORD)HOOK_CMonsterTruck__ProcessControl);
@@ -984,9 +1013,9 @@ void SwitchContext(CPed* thePed)
                         }
                     }
 
-                    // Disable mouse look if they're not in a fight task and not aiming (strafing)
-                    // Fix GitHub Issue #395
-                    if (thePed->GetCurrentWeaponSlot() == eWeaponSlot::WEAPONSLOT_TYPE_UNARMED && data->m_pad.NewState.RightShoulder1 != 0 &&
+                    // Fight strafing needs mouse-look movement for every melee weapon,
+                    // including weapons outside the unarmed slot (GitHub Issue #395).
+                    if (pWeaponStat && pWeaponStat->GetFireType() == FIRETYPE_MELEE && data->m_pad.NewState.RightShoulder1 != 0 &&
                         thePed->GetPedIntelligence()->GetFightTask())
                         bDisableMouseLook = false;
 
@@ -1182,6 +1211,28 @@ struct CSavedRegs
 };
 static CSavedRegs PlayerPed__ProcessControl_Saved;
 
+static void ConsumeRemoteMeleeSpecialPress()
+{
+    if (!bNotInLocalContext || !pContextSwitchedPed)
+        return;
+
+    auto* pad = static_cast<CPadSA*>(pGameInterface->GetPad())->GetInterface();
+    if ((!pad->NewState.RightShoulder1 && !pad->OldState.RightShoulder1) || (!pad->NewState.ButtonTriangle && !pad->OldState.ButtonTriangle))
+        return;
+
+    CWeapon*     weapon = pContextSwitchedPed->GetWeapon(pContextSwitchedPed->GetCurrentWeaponSlot());
+    CWeaponStat* info = weapon ? pGameInterface->GetWeaponStatManager()->GetWeaponStats(weapon->GetType()) : nullptr;
+    if (!info || info->GetFireType() != FIRETYPE_MELEE)
+        return;
+
+    // GTA's MeleeAttackJustDown treats F as an edge, but remote OldState is
+    // otherwise advanced only by incoming packets. Consume this combat edge
+    // after one simulation step so a held packet cannot requeue command 12 on
+    // every frame. Preserve the held state and other controls (including normal
+    // vehicle entry); ReturnContextToLocalPlayer stores this history in the pad.
+    pad->OldState.ButtonTriangle = pad->NewState.ButtonTriangle;
+}
+
 static void __declspec(naked) HOOK_CPlayerPed__ProcessControl()
 {
     MTA_VERIFY_HOOK_LOCAL_SIZE;
@@ -1221,6 +1272,7 @@ static void __declspec(naked) HOOK_CPlayerPed__ProcessControl()
     }
     // clang-format on
 
+    ConsumeRemoteMeleeSpecialPress();
     ReturnContextToLocalPlayer();
 
     // clang-format off
