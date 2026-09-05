@@ -25,9 +25,23 @@ namespace
         std::unordered_set<std::string> smallMessages;
         std::unordered_set<std::string> bigMessages;
         bool                            helpVisible{};
+        bool                            helpHudWasVisible{};
     };
 
     SMissionTextLease g_missionTextLease;
+
+    void ClearOwnedMissionHelp()
+    {
+        if (!g_missionTextLease.helpVisible)
+            return;
+
+        if (g_pGame)
+        {
+            g_pGame->ClearMissionHelp();
+            g_pGame->GetHud()->SetComponentVisible(HUD_HELP_TEXT, g_missionTextLease.helpHudWasVisible);
+        }
+        g_missionTextLease.helpVisible = false;
+    }
 
     CResource* GetCallingResource(lua_State* luaVM)
     {
@@ -46,8 +60,7 @@ namespace
     {
         if (g_pGame)
         {
-            if (g_missionTextLease.helpVisible)
-                g_pGame->ClearMissionHelp();
+            ClearOwnedMissionHelp();
             for (const std::string& key : g_missionTextLease.smallMessages)
                 g_pGame->ClearMissionText(key.c_str(), false);
             for (const std::string& key : g_missionTextLease.bigMessages)
@@ -182,6 +195,12 @@ bool CLuaPlayerDefs::ShowMissionHelp(lua_State* luaVM, std::string key, std::opt
     if (!OwnsMissionText(luaVM) || !IsValidGxtName(key) || !g_pGame->ShowMissionHelp(key.c_str(), permanent.value_or(false)))
         return false;
 
+    // MTA disables the native help renderer on connection. Queueing a GXT
+    // message alone succeeds but leaves it invisible; borrow the renderer
+    // for this lease and restore its previous visibility when help is cleared.
+    if (!g_missionTextLease.helpVisible)
+        g_missionTextLease.helpHudWasVisible = g_pGame->GetHud()->IsComponentVisible(HUD_HELP_TEXT);
+    g_pGame->GetHud()->SetComponentVisible(HUD_HELP_TEXT, true);
     g_missionTextLease.helpVisible = true;
     return true;
 }
@@ -217,9 +236,7 @@ bool CLuaPlayerDefs::ClearMissionHelp(lua_State* luaVM)
     if (!OwnsMissionText(luaVM))
         return false;
 
-    if (g_missionTextLease.helpVisible)
-        g_pGame->ClearMissionHelp();
-    g_missionTextLease.helpVisible = false;
+    ClearOwnedMissionHelp();
     return true;
 }
 
