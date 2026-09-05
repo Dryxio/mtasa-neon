@@ -1978,7 +1978,6 @@ void CModelInfoSA::MakeObjectModel(ushort usBaseID)
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
     m_pInterface->usUnknown = 65535;
-    m_pInterface->usDynamicIndex = 65535;
     m_pInterface->m_nAnimFileIndex = 0xFFFFFFFF;
 
     CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
@@ -1996,7 +1995,6 @@ void CModelInfoSA::MakeObjectDamageableModel(std::uint16_t baseModel)
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
     m_pInterface->usUnknown = 65535;
-    m_pInterface->usDynamicIndex = 65535;
     m_pInterface->m_damagedAtomic = nullptr;
 
     CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
@@ -2014,7 +2012,6 @@ void CModelInfoSA::MakeTimedObjectModel(ushort usBaseID)
     m_pInterface->usNumberOfRefs = 0;
     m_pInterface->pRwObject = nullptr;
     m_pInterface->usUnknown = 65535;
-    m_pInterface->usDynamicIndex = 65535;
     m_pInterface->timeInfo.m_wOtherTimeModel = -1;
 
     CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = m_pInterface;
@@ -2031,7 +2028,6 @@ void CModelInfoSA::MakeClumpModel(ushort usBaseID)
     pNewInterface->usNumberOfRefs = 0;
     pNewInterface->pRwObject = nullptr;
     pNewInterface->usUnknown = 65535;
-    pNewInterface->usDynamicIndex = 65535;
 
     CModelInfoSAInterface::ms_modelInfoPtrs[m_dwModelID] = pNewInterface;
 
