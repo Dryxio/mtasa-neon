@@ -713,6 +713,7 @@ protected:
     void UpdateNativeAmbientOwnerCollisionFence();
     void ClearNativeAmbientOwnerCollisionFence(const char* reason, bool restoreSafeTransform = true);
     void UpdateRemoteReplicaPhysicsFence();
+    void UpdateRemoteReplicaLighting();
     void ApplyPhysicalFreezeState();
     void UpdateAlphaAndVisibility();
     void RecordNativeAIRotationTelemetryPostProcess() noexcept;
@@ -876,6 +877,7 @@ public:
         bool    previousStaticWaitingForCollision{};
     } m_nativeCollisionAuthorityFence;
     bool                                    m_remoteReplicaPhysicsFenceActive{};
+    unsigned long                           m_remoteReplicaLightingNextProbeAt{};
     bool                                    m_bStoryProtected{false};
     std::optional<SPedCreatedByState>       m_missionActorNativeState;
     std::optional<SPedStoryProtectionState> m_storyProtectionNativeState;

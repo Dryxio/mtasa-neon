@@ -4687,6 +4687,7 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
         UpdateNativeTaskWeaponPresentation();
         UpdateNativeTaskAnimationPresentation();
         UpdateRemoteReplicaPhysicsFence();
+        UpdateRemoteReplicaLighting();
 
         if (RefreshNativeCollisionResidency())
             ApplyNativeEventProfileState();
@@ -7093,6 +7094,54 @@ void CClientPed::UpdateRemoteReplicaPhysicsFence()
     ApplyPhysicalFreezeState();
     CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, shouldFence ? "remote_replica_physics_fenced" : "remote_replica_physics_released",
                                        this);
+}
+
+void CClientPed::UpdateRemoteReplicaLighting()
+{
+    // Replicas follow network transforms with physical movement fenced. They
+    // still need the ground contact lighting normally refreshed by GTA's ped
+    // collision path. Sample it locally without releasing that fence or
+    // creating collision responses on a second authority.
+    if (!m_pPlayerPed || !m_remoteReplicaPhysicsFenceActive || m_bIsSyncing || !g_pGame || !g_pGame->GetWorld())
+    {
+        m_remoteReplicaLightingNextProbeAt = 0;
+        return;
+    }
+
+    const unsigned long now = CClientTime::GetTime();
+    if (now < m_remoteReplicaLightingNextProbeAt)
+        return;
+    m_remoteReplicaLightingNextProbeAt = now + 100;
+
+    CVector start = *m_pPlayerPed->GetPosition();
+    if (!std::isfinite(start.fX) || !std::isfinite(start.fY) || !std::isfinite(start.fZ))
+        return;
+    const float rawBaseOffset = m_pPlayerPed->GetDistanceFromCentreOfMassToBaseOfModel();
+    const float baseOffset = std::isfinite(rawBaseOffset) ? std::clamp(rawBaseOffset, 0.0f, 2.0f) : 1.0f;
+    CVector     end = start;
+    start.fZ += 0.1f;
+    end.fZ -= baseOffset + NATIVE_COLLISION_BASE_TOLERANCE_ABOVE;
+
+    SLineOfSightFlags flags;
+    flags.bCheckPeds = false;
+    CColPoint* collision = nullptr;
+    const bool hit = g_pGame->GetWorld()->ProcessLineOfSight(&start, &end, &collision, nullptr, flags);
+    if (hit && collision)
+    {
+        // CPed::ProcessEntityCollision blends the day/night nibbles using
+        // 1/30 (retail constant 0x858F10), whereas this shared helper uses
+        // 1/15. Keep the ped scale so observers do not become twice as bright.
+        const float lighting = collision->GetLightingForTimeOfDay() * 0.5f;
+        if (std::isfinite(lighting) && lighting >= 0.0f && lighting <= 0.5f)
+        {
+            m_pPlayerPed->SetLighting(lighting);
+            m_fLighting = lighting;
+        }
+    }
+    // Missing/unloaded ground must preserve the last valid sample, not turn
+    // the ped black again during streaming or a brief unsupported interval.
+    if (collision)
+        collision->Destroy();
 }
 
 void CClientPed::ClearNativeAmbientWanderResponse()
