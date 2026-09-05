@@ -126,6 +126,7 @@ typedef bool(ProcessCamHandler)(class CCam* pCam);
 typedef void(DrawRadarAreasHandler)();
 typedef void(Render3DStuffHandler)();
 typedef void(PreRenderSkyHandler)();
+typedef void(PreConstructRenderListHandler)();
 typedef void(RenderHeliLightHandler)();
 typedef bool(ChokingHandler)(class CPedSAInterface* pVictim, unsigned char ucWeaponType);
 typedef void(PreWeatherUpdateHandler)();
@@ -355,6 +356,7 @@ public:
     virtual float GetSunSize() = 0;
     virtual void  SetSunSize(float fSize) = 0;
     virtual void  ResetSunSize() = 0;
+    virtual void  GetSunDirection(CVector& vecDirection) = 0;
     virtual void  SetMoonSize(int iSize) = 0;
     virtual int   GetMoonSize() = 0;
     virtual void  ResetMoonSize() = 0;
@@ -433,6 +435,22 @@ public:
     virtual void SetDrawRadarAreasHandler(DrawRadarAreasHandler* pRadarAreasHandler) = 0;
     virtual void SetRender3DStuffHandler(Render3DStuffHandler* pHandler) = 0;
     virtual void SetPreRenderSkyHandler(PreRenderSkyHandler* pHandler) = 0;
+    virtual void SetPreConstructRenderListHandler(PreConstructRenderListHandler* pHandler) = 0;
+    // Consumed by the next RenderSecondaryScene() call only - set immediately before it, mirroring
+    // CRenderItemManagerInterface::SetSceneViewShaderContext's scoped-per-render-context pattern.
+    // Orthographic width/height are the full (not half) view volume extents in world units. fNearClip/
+    // fFarClip are also applied to cube-map faces (see SetSceneViewSquarePerspective below) even though
+    // bOrthographic is false for those - an ordinary perspective SceneView ignores both and keeps
+    // inheriting the primary camera's near/far, unchanged from before this parameter pair existed.
+    virtual void SetSceneViewProjection(bool bOrthographic, float fWidth, float fHeight, float fNearClip, float fFarClip) = 0;
+    // Also consumed by the next RenderSecondaryScene() call only. Forces the RenderWare camera's view window
+    // to an exactly symmetric (tan(45), tan(45)) perspective frustum after CameraCalculateDerived's own
+    // (aspect-ratio-dependent) computation - the only configuration where a square cube-map face's FOV is
+    // genuinely 90 degrees both horizontally and vertically - and applies SetSceneViewProjection's near/far
+    // pair explicitly (see above). No effect while orthographic mode is active.
+    virtual void SetSceneViewSquarePerspective(bool bEnable) = 0;
+    virtual bool RenderSecondaryScene() = 0;
+    virtual void ReleaseSecondarySceneResources() = 0;
     virtual void SetRenderHeliLightHandler(RenderHeliLightHandler* pHandler) = 0;
     virtual void SetRenderEverythingBarRoadsHandler(RenderEverythingBarRoadsHandler* pHandler) = 0;
 
@@ -527,4 +545,7 @@ public:
     virtual void           RegisterNativeBehaviorOnlyDamageEvent(CEventDamageSAInterface* pEvent, CPedSAInterface* pVictim) = 0;
     virtual void           SetNativeInstantHitResolvedHandler(NativeInstantHitResolvedHandler* pHandler) = 0;
     virtual void           SetNativeBikeJackAttemptHandler(NativeBikeJackAttemptHandler* pHandler) = 0;
+
+    // Appended to preserve the ABI indices of every existing cross-DLL virtual method.
+    virtual const SString& GetLastSecondarySceneRenderError() const = 0;
 };

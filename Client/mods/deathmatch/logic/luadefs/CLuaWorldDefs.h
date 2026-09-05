@@ -95,6 +95,7 @@ public:
     LUA_DECLARE(SetSunColor);
     LUA_DECLARE(ResetSunColor);
     LUA_DECLARE(GetSunSize);
+    LUA_DECLARE(GetSunDirection);
     LUA_DECLARE(SetSunSize);
     LUA_DECLARE(ResetSunSize);
     LUA_DECLARE(RemoveWorldBuilding);

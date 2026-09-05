@@ -294,6 +294,7 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pMultiplayer->SetProjectileHandler(CClientProjectileManager::Hook_StaticProjectileCreation);
     g_pMultiplayer->SetRender3DStuffHandler(CClientGame::StaticRender3DStuffHandler);
     g_pMultiplayer->SetPreRenderSkyHandler(CClientGame::StaticPreRenderSkyHandler);
+    g_pMultiplayer->SetPreConstructRenderListHandler(CClientGame::StaticPreConstructRenderListHandler);
     g_pMultiplayer->SetRenderHeliLightHandler(CClientGame::StaticRenderHeliLightHandler);
     g_pMultiplayer->SetRenderEverythingBarRoadsHandler(CClientGame::StaticRenderEverythingBarRoadsHandler);
     g_pMultiplayer->SetChokingHandler(CClientGame::StaticChokingHandler);
@@ -530,6 +531,7 @@ CClientGame::~CClientGame()
     g_pMultiplayer->SetProcessCamHandler(nullptr);
     g_pMultiplayer->SetRender3DStuffHandler(NULL);
     g_pMultiplayer->SetPreRenderSkyHandler(NULL);
+    g_pMultiplayer->SetPreConstructRenderListHandler(NULL);
     g_pMultiplayer->SetRenderHeliLightHandler(nullptr);
     g_pMultiplayer->SetRenderEverythingBarRoadsHandler(nullptr);
     g_pMultiplayer->SetChokingHandler(NULL);
@@ -3710,6 +3712,11 @@ void CClientGame::StaticPreRenderSkyHandler()
     g_pClientGame->PreRenderSkyHandler();
 }
 
+void CClientGame::StaticPreConstructRenderListHandler()
+{
+    g_pClientGame->PreConstructRenderListHandler();
+}
+
 void CClientGame::StaticRenderHeliLightHandler()
 {
     g_pClientGame->GetManager()->GetPointLightsManager()->RenderHeliLightHandler();
@@ -4068,6 +4075,14 @@ void CClientGame::Render3DStuffHandler()
 void CClientGame::PreRenderSkyHandler()
 {
     g_pCore->GetGraphics()->GetRenderItemManager()->PreDrawWorld();
+}
+
+void CClientGame::PreConstructRenderListHandler()
+{
+    // GTA's own ConstructRenderList and PreRender execute immediately after this callback, replacing every
+    // shared secondary list and camera-dependent dynamic-entity value before the primary frame is drawn.
+    m_pManager->GetRenderElementManager()->RenderRequestedSceneView();
+    m_pManager->GetRenderElementManager()->RenderRequestedCubemaps();
 }
 
 void CClientGame::PreWeatherUpdateHandler()

@@ -51,6 +51,7 @@ void CLuaWorldDefs::LoadFunctions()
         {"getFogDistance", GetFogDistance},
         {"getSunColor", GetSunColor},
         {"getSunSize", GetSunSize},
+        {"getSunDirection", GetSunDirection},
         {"getAircraftMaxHeight", GetAircraftMaxHeight},
         {"getAircraftMaxVelocity", GetAircraftMaxVelocity},
         {"getOcclusionsEnabled", GetOcclusionsEnabled},
@@ -2460,6 +2461,20 @@ int CLuaWorldDefs::SetSunSize(lua_State* luaVM)
 
     lua_pushboolean(luaVM, false);
     return 1;
+}
+
+int CLuaWorldDefs::GetSunDirection(lua_State* luaVM)
+{
+    //  float, float, float getSunDirection ()
+    // A unit vector pointing from the world toward the sun's current position, derived from time of day
+    // and weather exactly like GTA's own directional light. Read-only - there is no independent "sun
+    // direction" setting to write back; use setTime()/setWeather() to change it.
+    CVector vecDirection;
+    g_pMultiplayer->GetSunDirection(vecDirection);
+    lua_pushnumber(luaVM, vecDirection.fX);
+    lua_pushnumber(luaVM, vecDirection.fY);
+    lua_pushnumber(luaVM, vecDirection.fZ);
+    return 3;
 }
 
 int CLuaWorldDefs::ResetSunSize(lua_State* luaVM)
