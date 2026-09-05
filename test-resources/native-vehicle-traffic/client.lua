@@ -15,8 +15,31 @@ local function clearTimer(unit, name)
 end
 
 local function report(unit, evidence, data)
-    triggerServerEvent("carTraffic:evidence", resourceRoot, unit.id, unit.epoch, evidence, data or {})
+    if evidence == "owner-sample" or evidence == "observer-sample" then
+        VehicleTrafficTransport.enqueue(unit, evidence, data or {})
+    else
+        triggerServerEvent("carTraffic:evidence", resourceRoot, unit.id, unit.epoch, evidence, data or {})
+    end
 end
+
+local function sendDiagnostic(id, epoch, stage, data)
+    if VehicleTrafficTransport.diagnosticsEnabled then
+        triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, id, epoch, stage, data)
+    end
+end
+
+addEvent("carTraffic:diagnostics", true)
+addEventHandler("carTraffic:diagnostics", resourceRoot, function(enabled)
+    VehicleTrafficTransport.diagnosticsEnabled = enabled == true
+end)
+
+setTimer(function()
+    VehicleTrafficTransport.flush(function(unit)
+        return units[unit.id] == unit and isElement(unit.ped) and isElement(unit.vehicle)
+    end, function(batch)
+        triggerServerEvent("carTraffic:evidenceBatch", resourceRoot, batch)
+    end)
+end, 500, 0)
 
 local function nativeAutoPilotDiagnostic(vehicle)
     if type(getVehicleNativeAutoPilotDiagnostic) ~= "function" or not isElement(vehicle) then return false end
@@ -287,7 +310,7 @@ local function acceptOwner(unit)
         local rx, ry, rz = getElementRotation(unit.vehicle)
         local avx, avy, avz = getElementAngularVelocity(unit.vehicle)
         local px, py, pz = getElementPosition(unit.ped)
-        local nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle)
+        local nativeAutoPilot = VehicleTrafficTransport.diagnosticsEnabled and nativeAutoPilotDiagnostic(unit.vehicle)
         unit.ownerSeq = unit.ownerSeq + 1
         if type(nativeAutoPilot) == "table" then
             local signature = table.concat({
@@ -298,7 +321,7 @@ local function acceptOwner(unit)
             }, ":")
             if signature ~= unit.lastNativeAutoPilotSignature then
                 unit.lastNativeAutoPilotSignature = signature
-                triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "native-autopilot-change", {
+                sendDiagnostic(unit.id, unit.epoch, "native-autopilot-change", {
                     seq = unit.ownerSeq, x = x, y = y, z = z, oracle = unit.oracleDiagnostic, nativeAutoPilot = nativeAutoPilot,
                 })
             end
@@ -334,7 +357,7 @@ local function beginOwner(unit)
 
     if not unit.readinessReported then
         unit.readinessReported = true
-        triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "owner-readiness", {
+        sendDiagnostic(unit.id, unit.epoch, "owner-readiness", {
             pedStreamed = isElementStreamedIn(unit.ped), vehicleStreamed = isElementStreamedIn(unit.vehicle),
             pedSyncer = isElementSyncer(unit.ped), vehicleSyncer = isElementSyncer(unit.vehicle),
             occupied = getPedOccupiedVehicle(unit.ped) == unit.vehicle, seat = getPedOccupiedVehicleSeat(unit.ped),
@@ -379,11 +402,11 @@ local function beginOwner(unit)
     -- indefinite Wander task so the event response never chains both roots.
     local cleared = killPedTask(unit.ped, "primary", 3, false)
     local drivingStyleName = unit.drivingStyle == 6 and "avoid_cars_stop_for_peds_obey_lights" or "stop_for_cars"
-    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "drive-wander-before", {
+    sendDiagnostic(unit.id, unit.epoch, "drive-wander-before", {
         oracle = unit.oracleDiagnostic, nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle),
     })
     local started = setPedDriveWander(unit.ped, unit.vehicle, unit.cruiseSpeed, drivingStyleName)
-    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "drive-wander-returned", {
+    sendDiagnostic(unit.id, unit.epoch, "drive-wander-returned", {
         started = started == true, cleared = cleared == true, drivingStyle = unit.drivingStyle, drivingStyleName = drivingStyleName,
         remoteCollisionGhostPolicy = true, oracle = unit.oracleDiagnostic,
         nativeAutoPilot = nativeAutoPilotDiagnostic(unit.vehicle),
@@ -441,7 +464,7 @@ end
 
 addEvent("carTraffic:observe", true)
 addEventHandler("carTraffic:observe", resourceRoot, function(id, epoch, ped, vehicle, passengers)
-    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, id, epoch, "observe-received", {
+    sendDiagnostic(id, epoch, "observe-received", {
         ped = isElement(ped), vehicle = isElement(vehicle), pedStreamed = isElement(ped) and isElementStreamedIn(ped) or false,
         vehicleStreamed = isElement(vehicle) and isElementStreamedIn(vehicle) or false,
     })
@@ -460,7 +483,7 @@ end)
 addEvent("carTraffic:assign", true)
 addEventHandler("carTraffic:assign", resourceRoot, function(id, epoch, ped, vehicle, cruiseSpeed, passengers, drivingStyle, resumeKinematics,
                                                              initialVelocityRequested, oracleDiagnostic)
-    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, id, epoch, "assign-received", {
+    sendDiagnostic(id, epoch, "assign-received", {
         ped = isElement(ped), vehicle = isElement(vehicle), pedStreamed = isElement(ped) and isElementStreamedIn(ped) or false,
         vehicleStreamed = isElement(vehicle) and isElementStreamedIn(vehicle) or false,
     })
@@ -494,7 +517,7 @@ addEventHandler("carTraffic:testResumeDrive", resourceRoot, function(id, epoch)
     local started = setPedDriveWander(unit.ped, unit.vehicle, unit.cruiseSpeed, drivingStyleName)
     unit.taskStartedAt = getTickCount()
     unit.taskQueued = started == true
-    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, unit.id, unit.epoch, "test-drive-resume", {
+    sendDiagnostic(unit.id, unit.epoch, "test-drive-resume", {
         started = started == true, cleared = cleared == true, drivingStyle = unit.drivingStyle,
         remoteCollisionGhostPolicy = true,
     })
@@ -711,7 +734,7 @@ local interactionProbe
 local interactionExitProbe
 
 local function reportInteractionDiagnostic(stage, data)
-    triggerServerEvent("carTraffic:clientDiagnostic", resourceRoot, 0, 0, stage, data or {})
+    sendDiagnostic(0, 0, stage, data or {})
 end
 
 local function releaseInteractionProbe()

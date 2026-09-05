@@ -6,4 +6,7 @@
     <script src="server.lua" type="server" />
     <script src="client.lua" type="client" cache="false" />
     <export function="pedTrafficSetDemo" type="server" />
+    <settings>
+        <setting name="*debug" value="false" />
+    </settings>
 </meta>

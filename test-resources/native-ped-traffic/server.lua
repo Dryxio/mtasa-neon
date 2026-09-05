@@ -236,7 +236,7 @@ local function applyDealerFightWeapons(record, knifeModelLoaded)
 end
 
 local enabled = false
-local debugEnabled = false
+local debugEnabled = tostring(get("debug")) == "true"
 local populationTracePath = "@population-server.jsonl"
 local populationTraceRows = 0
 local populationTraceLimit = 20000
@@ -348,7 +348,8 @@ function coupleRuntime.roll()
 end
 
 local function log(message, force)
-    if debugEnabled or force then
+    if debugEnabled or (force and (message:find("FAIL", 1, true) or message:find("failure", 1, true) or
+        message:find("PASS", 1, true) or message:find("CANCEL", 1, true) or message:find("debug=", 1, true))) then
         outputDebugString("[ped-traffic][server] " .. message)
     end
 end
@@ -5349,6 +5350,7 @@ end)
 -- 5.1 chunk already consumes the 200-local compile-time budget. The state
 -- itself remains scoped under stats and is reset whenever the resource loads.
 function emitPedProductionTelemetry()
+    if not debugEnabled then return end
     local now = getTickCount()
     local allPlayers = getElementsByType("player")
     local activeTraffic = getTrafficPedCount()
@@ -7748,6 +7750,7 @@ addCommandHandler("pedtraffic", function(player, _, action, value)
             writePopulationTrace("trace_stopped", {active = getTrafficPedCount()})
         end
         debugEnabled = requested
+        set("debug", debugEnabled and "true" or "false")
         triggerClientEvent(root, "pedTraffic:setDebug", resourceRoot, debugEnabled)
         log("debug=" .. tostring(debugEnabled), true)
         if debugEnabled then

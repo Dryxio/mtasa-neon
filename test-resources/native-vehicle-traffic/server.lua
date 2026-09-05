@@ -8,6 +8,7 @@ local nextUnitId = 0
 local nextSession = 0
 local trafficGeneration = 0
 local activeTest = false
+local debugEnabled = tostring(get("debug")) == "true"
 local playerMotion = {}
 local readyLatencyByPlayer = {}
 -- Nearby players see the same road population, so production budgets sixteen
@@ -147,7 +148,12 @@ local function trace(event, fields)
     if event ~= "population-snapshot" then
         VehicleTrafficTelemetry.record(telemetryWindow, event, fields.reason)
     end
-    outputServerLog("[car-traffic] " .. toJSON(fields, true))
+    -- Record bounded counters independently of console verbosity. Routine
+    -- traffic must not serialize and print diagnostics in production.
+    if debugEnabled or activeTest or event == "FAIL" or event == "unit-failure" or event:find("^PASS") or
+        event == "status" or event == "usage" or event:find("refused", 1, true) then
+        outputServerLog("[car-traffic] " .. toJSON(fields, true))
+    end
 end
 
 local function finiteNumber(value, limit)
@@ -396,7 +402,7 @@ local function productionHandoverCapacity(ps, desired)
 end
 
 local function emitProductionTelemetry()
-    if not population.enabled then return end
+    if not population.enabled or not debugEnabled then return end
     local ps = players()
     local desired = populationDesired(ps, "production")
     local handoverCapacity, outgoing = productionHandoverCapacity(ps, desired)
@@ -1327,7 +1333,9 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
     if type(candidate) ~= "table" or not proposedModel or (pending.model and proposedModel ~= pending.model) or not ALLOWED_MODELS[proposedModel] then
         pendingCandidates[session] = nil
         trace("candidate-retry", {session = session, reason = tostring(reason)})
-        return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
+        -- Retain the chain reservation while backing off unproductive native
+        -- searches, so a miss cannot turn the population refill into a burst.
+        return setTimer(requestCandidate, pending.mode == "production" and math.min(1000, 150 * pending.attempt) or 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
     end
     pending.model = proposedModel
     local x, y, z = tonumber(candidate.x), tonumber(candidate.y), tonumber(candidate.z)
@@ -1358,7 +1366,7 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
             occupantsValid = occupantsValid, occupantCount = type(occupantModels) == "table" and #occupantModels or -1,
             vehicleClass = vehicleClass, expectedVehicleClass = MODEL_CLASS[pending.model] or 0, drivingStyle = drivingStyle,
             distance = x and y and z and getDistanceBetweenPoints3D(ox, oy, oz, x, y, z) or false})
-        return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
+        return setTimer(requestCandidate, pending.mode == "production" and math.min(1000, 150 * pending.attempt) or 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
     end
     for _, unit in pairs(units) do
         if isElement(unit.vehicle) then
@@ -1366,7 +1374,7 @@ addEventHandler("carTraffic:candidate", resourceRoot, function(session, candidat
             if getDistanceBetweenPoints3D(ux, uy, uz, x, y, z) < 18 then
                 pendingCandidates[session] = nil
                 trace("candidate-retry", {session = session, reason = "deduplicated"})
-                return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
+                return setTimer(requestCandidate, pending.mode == "production" and math.min(1000, 150 * pending.attempt) or 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
             end
         end
     end
@@ -1419,7 +1427,7 @@ addEventHandler("carTraffic:visibility", resourceRoot, function(session, visible
         if probe.veto then
             pendingCandidates[session] = nil
             trace("candidate-veto", {session = session, player = getPlayerName(player), visible = probe.visible, distance = probe.distance})
-            return setTimer(requestCandidate, 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
+            return setTimer(requestCandidate, pending.mode == "production" and math.min(1000, 150 * pending.attempt) or 50, 1, pending.owner, pending.mode, pending.attempt + 1, pending.generation, pending.chainRequestedAt)
         end
     end
     pendingCandidates[session] = nil
@@ -1537,8 +1545,8 @@ addEventHandler("carTraffic:revealVisibility", resourceRoot, function(id, epoch,
     completeUnitActivation(unit, data)
 end)
 
-addEvent("carTraffic:evidence", true)
-addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidence, data)
+local function receiveEvidence(id, epoch, evidence, data)
+    if source ~= resourceRoot or not isElement(client) then return end
     local unit = units[tonumber(id)]
     if not unit or tonumber(epoch) ~= unit.epoch or type(evidence) ~= "string" then return end
     data = type(data) == "table" and data or {}
@@ -1699,10 +1707,26 @@ addEventHandler("carTraffic:evidence", resourceRoot, function(id, epoch, evidenc
         end
         return
     end
+end
+
+addEvent("carTraffic:evidence", true)
+addEventHandler("carTraffic:evidence", resourceRoot, receiveEvidence)
+addEvent("carTraffic:evidenceBatch", true)
+addEventHandler("carTraffic:evidenceBatch", resourceRoot, function(batch)
+    if source ~= resourceRoot or not isElement(client) or type(batch) ~= "table" or #batch < 1 or #batch > 32 then return end
+    for _, sample in ipairs(batch) do
+        if type(sample) ~= "table" or (sample.evidence ~= "owner-sample" and sample.evidence ~= "observer-sample") then return end
+    end
+    for _, sample in ipairs(batch) do
+        -- Keep the original sender and every per-unit epoch/owner/sequence
+        -- check. A batch is a transport envelope, not a trust boundary.
+        receiveEvidence(sample.id, sample.epoch, sample.evidence, sample.data)
+    end
 end)
 
 addEvent("carTraffic:clientDiagnostic", true)
 addEventHandler("carTraffic:clientDiagnostic", resourceRoot, function(id, epoch, stage, data)
+    if source ~= resourceRoot or not readyClients[client] or not (debugEnabled or activeTest) then return end
     trace("client-diagnostic", {
         id = tonumber(id), epoch = tonumber(epoch), client = isElement(client) and getPlayerName(client) or "invalid",
         stage = tostring(stage), data = type(data) == "table" and data or {},
@@ -2004,7 +2028,16 @@ addCommandHandler("cartraffic", function(player, _, action, mode, value)
         outputChatBox("Vehicle traffic controls are restricted to server staff", player, 255, 100, 80)
         return
     end
+    if action == "debug" then
+        debugEnabled = tostring(mode or "on"):lower() ~= "off"
+        set("debug", debugEnabled and "true" or "false")
+        triggerClientEvent(root, "carTraffic:diagnostics", resourceRoot, debugEnabled or activeTest ~= false)
+        outputServerLog("[car-traffic] debug=" .. tostring(debugEnabled))
+        return
+    end
+    if action == "test" then triggerClientEvent(root, "carTraffic:diagnostics", resourceRoot, true) end
     handleTrafficCommand(player, action, mode, value)
+    triggerClientEvent(root, "carTraffic:diagnostics", resourceRoot, debugEnabled or activeTest ~= false)
 end)
 
 addCommandHandler("trafficdemo", function(player, _, action)
@@ -2149,6 +2182,7 @@ addEventHandler("carTraffic:clientReady", resourceRoot, function()
     local player = client
     if not isElement(player) or getElementType(player) ~= "player" then return end
     readyClients[player] = true
+    triggerClientEvent(player, "carTraffic:diagnostics", resourceRoot, debugEnabled or activeTest ~= false)
     trace("client-ready", {client = getPlayerName(player)})
     if getElementDimension(player) ~= 0 or getElementInterior(player) ~= 0 then return end
     for _, unit in pairs(units) do
@@ -2266,3 +2300,15 @@ addEventHandler("onResourceStart", resourceRoot, function()
         pedPoolSoftLimit = PRODUCTION_PED_POOL_SOFT_LIMIT,
     })
 end)
+
+-- Tests may finish from asynchronous evidence, outside the command handler.
+do
+    local last
+    setTimer(function()
+        local enabled = debugEnabled or activeTest ~= false
+        if enabled ~= last then
+            last = enabled
+            triggerClientEvent(root, "carTraffic:diagnostics", resourceRoot, enabled)
+        end
+    end, 500, 0)
+end

@@ -149,6 +149,12 @@ Leaving that residency radius must be continuous for three seconds before a
 resident peer takes over. The old owner kills its native task and releases its
 streaming lease before the revalidated new epoch is assigned.
 
+Detailed logs and periodic population snapshots are off by default
+(`*debug=false` in `meta.xml`). `/pedtraffic debug on|off` persists the choice
+across resource restarts. Failures and test verdicts remain visible with debug
+off. Ped test harnesses may enable debug; use `/pedtraffic debug off` after
+testing to return to quiet operation.
+
 With debug enabled, the server also writes bounded structured records to the
 deployed resource's private `@population-server.jsonl`. Its
 `neon.ped_traffic.population` schema version 2 correlates profile changes, per-player
@@ -165,7 +171,7 @@ The file is reset when `/pedtraffic debug on` begins a new session and stops at
 - `/pedtraffic demo on|off` controls the 32-ped visual-demo target for this
   resource. When `native-vehicle-traffic` is running, `/trafficdemo on|off`
   controls both resources with one command and pairs it with 16 road vehicles.
-- `/pedtraffic debug on|off` enables bounded client/server telemetry.
+- `/pedtraffic debug on|off` controls persistent, bounded client/server telemetry.
 - `/pedtraffic preset post_intro|post_cleaning_the_hood|post_green_sabre|post_home_coming`
   changes the authoritative campaign population state. Existing traffic is
   cleared and both clients must acknowledge the new revision before refill.

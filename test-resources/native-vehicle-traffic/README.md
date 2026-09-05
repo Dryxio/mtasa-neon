@@ -111,13 +111,38 @@ test passes only after exact participants acknowledge task shutdown, restored
 mission-actor state, released streaming leases and empty local registries.
 Observer samples are monotonic and correlated to unique recent server poses.
 
-The authoritative trace is the server log's `[car-traffic]` JSON stream. Native
+Detailed logs are off by default (`*debug=false` in `meta.xml`). Server staff
+can use `/cartraffic debug on|off`; the choice persists across resource restarts.
+Failures, test verdicts and explicit status output remain available with debug
+off. Tests temporarily enable client diagnostics and detailed server traces.
+
+With debug or a test enabled, the authoritative trace is the server log's
+`[car-traffic]` JSON stream. Native
 placement is probabilistic, so individual `candidate-retry` entries are normal;
 only a terminal `PASS-*` or `FAIL` entry is a harness verdict.
 
-Production also emits `population-snapshot` every 15 seconds. It records the
+With debug enabled, production also emits `population-snapshot` every 15 seconds. It records the
 desired and live population, allocation and distance range for every spatial
 bubble, lifecycle and motion states, ped-pool pressure, and event/reason counts
 since the previous snapshot. `motion-anomaly` means owner samples remained
 aligned against the vehicle heading for at least two seconds; it is rate-limited
 per unit and followed by `motion-recovered` when forward travel resumes.
+
+## Network reporting
+
+Periodic owner/observer samples are grouped per client every 500 ms, with at
+most 32 samples per event. Only the newest pending sample for each unit, epoch
+and role is kept; released units and old epochs are discarded. Lifecycle
+acknowledgements and failures are sent immediately. The server retains the
+per-unit sender, epoch and sequence checks. Detailed client diagnostics are
+sent only with debug enabled or during a test.
+
+Production candidate retries back off from 150 ms to at most 1 second after
+repeated misses or visibility vetoes. Population targets and candidate
+reservation limits are unchanged; harness retries retain their 50 ms interval.
+
+Run `lua test-resources/native-vehicle-traffic/tests/transport_test.lua` from
+the repository root for mocked transport and logging checks. The fixture
+reduces 32 periodic events (16 vehicles over two sampling cycles) to two
+batches. This measures event envelopes, not total bytes or live-server load;
+spawn bursts and other resources still count toward the server event limit.
