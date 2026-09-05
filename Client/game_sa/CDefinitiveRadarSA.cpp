@@ -49,8 +49,6 @@ namespace
     constexpr DWORD FUNC_DRAW_HUD = 0x58FAE0;
     constexpr DWORD VAR_FRONTEND_MAP_ACTIVE = 0xBA67A1;
     constexpr DWORD VAR_RADAR_RANGE = 0xBA8314;
-    constexpr DWORD VAR_SCREEN_WIDTH = 0xC17044;
-    constexpr DWORD VAR_SCREEN_HEIGHT = 0xC17048;
 
     constexpr int   MAP_TILE_COUNT = 144;
     constexpr int   MAP_TILES_PER_ROW = 12;
@@ -63,6 +61,10 @@ namespace
     constexpr float DEFAULT_CAMERA_OFFSET_Y = -105.0f;
     constexpr float DEFAULT_CAMERA_PITCH = -26.0f * RADAR_PI / 180.0f;
     constexpr float DEFAULT_CAMERA_FOV = 70.0f * RADAR_PI / 180.0f;
+    // The square target retains the authored 16:9 camera framing on every display.
+    // Both GPU map rendering and CPU blip projection must use this same ratio.
+    constexpr float RADAR_PROJECTION_ASPECT = 1080.0f / 1920.0f;
+    constexpr float RADAR_REFERENCE_SIZE = 265.0f;
     constexpr float NEAR_PLANE = 0.3f;
     constexpr float FAR_PLANE = 10000.0f;
 
@@ -753,10 +755,8 @@ namespace
             if (point.z < NEAR_PLANE || point.z > FAR_PLANE)
                 return false;
 
-            const float screenAspect =
-                static_cast<float>(*reinterpret_cast<const int*>(0xC17048)) / std::max(1.0f, static_cast<float>(*reinterpret_cast<const int*>(0xC17044)));
             const float widthScale = 1.0f / std::tan(camera.fov * 0.5f);
-            const float heightScale = widthScale / screenAspect;
+            const float heightScale = widthScale / RADAR_PROJECTION_ASPECT;
             const float ndcX = point.x * widthScale / point.z;
             const float ndcY = point.y * heightScale / point.z;
             output = {(ndcX + 1.0f) * 0.5f * targetSize - 0.5f, (1.0f - ndcY) * 0.5f * targetSize - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, point.u, point.v};
@@ -844,10 +844,8 @@ namespace
             view._43 = -Dot(camera.zAxis, camera.position);
             view._44 = 1.0f;
 
-            const float screenAspect =
-                static_cast<float>(*reinterpret_cast<const int*>(0xC17048)) / std::max(1.0f, static_cast<float>(*reinterpret_cast<const int*>(0xC17044)));
             const float widthScale = 1.0f / std::tan(camera.fov * 0.5f);
-            const float heightScale = widthScale / screenAspect;
+            const float heightScale = widthScale / RADAR_PROJECTION_ASPECT;
             const float depthScale = FAR_PLANE / (FAR_PLANE - NEAR_PLANE);
             D3DMATRIX   projection{};
             projection._11 = widthScale;
@@ -979,12 +977,11 @@ namespace
             m_Device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices.data(), sizeof(ScreenVertex));
         }
 
-        void DrawDefaultCoordinateBlip(float centerX, float centerY, float halfWidth, float halfHeight, DWORD color)
+        void DrawDefaultCoordinateBlip(float centerX, float centerY, float halfWidth, float halfHeight, float radarScale, DWORD color)
         {
-            const float                       screenWidth = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_WIDTH));
-            const float                       screenHeight = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_HEIGHT));
-            const float                       borderX = screenWidth / 640.0f;
-            const float                       borderY = screenHeight / 448.0f;
+            // Preserve the authored trace proportions while scaling with the radar.
+            const float                       borderX = 3.0f * radarScale;
+            const float                       borderY = (1080.0f / 448.0f) * radarScale;
             const DWORD                       alpha = color & 0xFF000000;
             const std::array<ScreenVertex, 4> borderVertices = {
                 ScreenVertex{centerX - halfWidth - borderX - 0.5f, centerY - halfHeight - borderY - 0.5f, 0.0f, 1.0f, alpha, 0.0f, 0.0f},
@@ -1015,9 +1012,8 @@ namespace
         {
             const float centerX = radarX + radarSize * 0.5f;
             const float centerY = radarY + radarSize * 0.5f;
-            const float screenWidth = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_WIDTH));
-            const float screenHeight = static_cast<float>(*reinterpret_cast<const int*>(VAR_SCREEN_HEIGHT));
-            const float iconSize = std::max(12.0f, 24.0f * screenWidth / 1920.0f);
+            const float radarScale = radarSize / RADAR_REFERENCE_SIZE;
+            const float iconSize = 24.0f * radarScale;
             const float usableRadius = radarSize * 0.5f - iconSize * 0.55f;
             const float radarRange = *reinterpret_cast<const float*>(VAR_RADAR_RANGE);
 
@@ -1075,9 +1071,9 @@ namespace
                 {
                     const DWORD color =
                         D3DCOLOR_ARGB((marker.nColour) & 0xFF, (marker.nColour >> 24) & 0xFF, (marker.nColour >> 16) & 0xFF, (marker.nColour >> 8) & 0xFF);
-                    const float halfWidth = static_cast<float>(marker.nBlipScale) * screenWidth / 640.0f;
-                    const float halfHeight = static_cast<float>(marker.nBlipScale) * screenHeight / 448.0f;
-                    DrawDefaultCoordinateBlip(screenX, screenY, halfWidth, halfHeight, color);
+                    const float halfWidth = static_cast<float>(marker.nBlipScale) * 3.0f * radarScale;
+                    const float halfHeight = static_cast<float>(marker.nBlipScale) * (1080.0f / 448.0f) * radarScale;
+                    DrawDefaultCoordinateBlip(screenX, screenY, halfWidth, halfHeight, radarScale, color);
                 }
                 else
                     DrawSprite(m_BlipTextures[sprite], screenX, screenY, iconSize);
@@ -1088,7 +1084,7 @@ namespace
         {
             if (!m_BlipTextures[4])
                 return;
-            const float iconSize = std::max(14.0f, 28.0f * static_cast<float>(*reinterpret_cast<const int*>(0xC17044)) / 1920.0f);
+            const float iconSize = 28.0f * radarSize / RADAR_REFERENCE_SIZE;
             const float radius = radarSize * 0.5f - iconSize * 0.5f;
             const float angle = -camera.yaw - RADAR_PI * 0.5f;
             DrawSprite(m_BlipTextures[4], radarX + radarSize * 0.5f + std::cos(angle) * radius, radarY + radarSize * 0.5f + std::sin(angle) * radius, iconSize);

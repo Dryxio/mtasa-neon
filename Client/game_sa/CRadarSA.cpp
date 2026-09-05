@@ -597,21 +597,23 @@ bool CRadarSA::GetLayout(CVector2D& position, CVector2D& size) const
         g_pCore->GetCVars()->Get("radar_width", width);
         g_pCore->GetCVars()->Get("radar_height", height);
 
-        // Radar Trilogy SA defines its defaults in 1920x1080 pixels and uses
-        // the mean of the horizontal and vertical screen ratios. Keep that
-        // exact 265/85/55 baseline while treating NEON's shared sliders as
-        // relative customisation around the Definitive preset.
+        bool widescreenSafe = true;
+        g_pCore->GetCVars()->Get("radar_widescreen_safe", widescreenSafe);
+
+        // Keep the 1080p preset stable across aspect ratios when safe scaling is
+        // enabled. The legacy mean scale remains available through the shared option.
         const float scaleX = screenWidth / DEFINITIVE_REFERENCE_WIDTH;
         const float scaleY = screenHeight / DEFINITIVE_REFERENCE_HEIGHT;
-        const float baseScale = (scaleX + scaleY) * 0.5f;
+        const float baseScale = widescreenSafe ? scaleY : (scaleX + scaleY) * 0.5f;
         const float customSizeScale = ((width / NEON_RADAR_WIDTH) + (height / NEON_RADAR_HEIGHT)) * 0.5f;
-        const float radarSize = std::max(1.0f, DEFINITIVE_RADAR_SIZE * baseScale * customSizeScale);
+        // Bound custom layouts too, so changing resolution cannot hide the radar.
+        const float radarSize = std::clamp(DEFINITIVE_RADAR_SIZE * baseScale * customSizeScale, 1.0f, std::min(screenWidth, screenHeight));
         const float customOffsetX = (positionX - NEON_RADAR_POSITION_X) * (screenHeight / 480.0f);
         const float customOffsetY = (positionY - NEON_RADAR_POSITION_Y) * (screenHeight / 448.0f);
-        const float left = DEFINITIVE_OFFSET_X * scaleX + customOffsetX;
+        const float left = DEFINITIVE_OFFSET_X * (widescreenSafe ? scaleY : scaleX) + customOffsetX;
         const float bottom = DEFINITIVE_OFFSET_Y * scaleY + customOffsetY;
 
-        position = CVector2D(left, screenHeight - bottom - radarSize);
+        position = CVector2D(std::clamp(left, 0.0f, screenWidth - radarSize), std::clamp(screenHeight - bottom - radarSize, 0.0f, screenHeight - radarSize));
         size = CVector2D(radarSize, radarSize);
         return true;
     }
