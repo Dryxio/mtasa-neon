@@ -36,6 +36,9 @@ public static class Program
     private static extern bool GetWindowRect(IntPtr window, out Rect rect);
 
     [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr window, int index);
+
+    [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr window, int command);
 
     [DllImport("user32.dll")]
@@ -87,6 +90,13 @@ public static class Program
 
         if (server != IntPtr.Zero)
             ShowWindow(server, 6); // SW_MINIMIZE
+
+        // Native borderless layouts already own their exact pixel coordinates.
+        // Recentering them in the taskbar work area would spoil edge-to-edge captures.
+        const int frameStyles = 0x00800000 | 0x00400000; // WS_BORDER | WS_DLGFRAME
+        if ((GetWindowLong(primary, -16) & frameStyles) == 0 &&
+            (GetWindowLong(secondary, -16) & frameStyles) == 0)
+            return 0;
 
         var workArea = new Rect();
         if (!SystemParametersInfo(48, 0, ref workArea, 0)) // SPI_GETWORKAREA

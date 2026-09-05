@@ -163,14 +163,49 @@ UINT CProxyDirect3D9::GetAdapterModeCount(UINT Adapter, D3DFORMAT Format)
 {
     if (!m_pDevice)
         return 0;
-    return m_pDevice->GetAdapterModeCount(Adapter, Format);
+    D3DDISPLAYMODE customMode{};
+    return m_pDevice->GetAdapterModeCount(Adapter, Format) + (GetCustomWindowedMode(Adapter, Format, customMode) ? 1 : 0);
 }
 
 HRESULT CProxyDirect3D9::EnumAdapterModes(UINT Adapter, D3DFORMAT Format, UINT Mode, D3DDISPLAYMODE* pMode)
 {
     if (!m_pDevice)
         return D3DERR_INVALIDDEVICE;
+    if (!pMode)
+        return D3DERR_INVALIDCALL;
+    if (Mode == m_pDevice->GetAdapterModeCount(Adapter, Format) && GetCustomWindowedMode(Adapter, Format, *pMode))
+        return D3D_OK;
     return m_pDevice->EnumAdapterModes(Adapter, Format, Mode, pMode);
+}
+
+bool CProxyDirect3D9::GetCustomWindowedMode(UINT adapter, D3DFORMAT format, D3DDISPLAYMODE& mode)
+{
+    int width = 0;
+    int height = 0;
+    if (format != D3DFMT_X8R8G8B8 || !GetCustomWindowedResolution(width, height))
+        return false;
+
+    D3DDISPLAYMODE desktop{};
+    D3DCAPS9       caps{};
+    if (FAILED(m_pDevice->GetAdapterDisplayMode(adapter, &desktop)) || FAILED(m_pDevice->GetDeviceCaps(adapter, D3DDEVTYPE_HAL, &caps)) ||
+        FAILED(m_pDevice->CheckDeviceType(adapter, D3DDEVTYPE_HAL, desktop.Format, format, TRUE)) || static_cast<UINT>(width) > caps.MaxTextureWidth ||
+        static_cast<UINT>(height) > caps.MaxTextureHeight)
+        return false;
+
+    const UINT count = m_pDevice->GetAdapterModeCount(adapter, format);
+    for (UINT index = 0; index < count; ++index)
+    {
+        D3DDISPLAYMODE existing{};
+        if (SUCCEEDED(m_pDevice->EnumAdapterModes(adapter, format, index, &existing)) && existing.Width == static_cast<UINT>(width) &&
+            existing.Height == static_cast<UINT>(height))
+            return false;
+    }
+
+    // RenderWare builds its mode table from this enumeration. Appending a mode
+    // keeps its camera, raster and screen-size bookkeeping consistent with D3D.
+    // It is exposed only for windowed use; no physical display mode is installed.
+    mode = {static_cast<UINT>(width), static_cast<UINT>(height), desktop.RefreshRate, format};
+    return true;
 }
 
 HRESULT CProxyDirect3D9::GetAdapterDisplayMode(UINT Adapter, D3DDISPLAYMODE* pMode)

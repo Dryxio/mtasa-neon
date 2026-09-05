@@ -15,6 +15,19 @@
 #include <game/CGame.h>
 #include <game/CSettings.h>
 
+bool GetCustomWindowedResolution(int& width, int& height)
+{
+    bool windowed = false;
+    width = height = 0;
+    CVARS_GET("display_windowed", windowed);
+    CVARS_GET("display_windowed_width", width);
+    CVARS_GET("display_windowed_height", height);
+
+    // Keep unusably small GUIs and unreasonable allocations out of the mode list.
+    // Zero defaults leave ordinary driver-provided resolutions unchanged.
+    return windowed && width >= 640 && height >= 480 && width <= 16384 && height <= 16384;
+}
+
 ///////////////////////////////////////////////////////////////
 //
 // CVideoModeManager class
@@ -77,6 +90,10 @@ private:
 
     bool m_bPendingGainFocus;
     bool m_bOriginalDesktopResMatches;
+    bool m_bWindowedBorderless = false;
+    bool m_bWindowedPosition = false;
+    int  m_iWindowedX = 0;
+    int  m_iWindowedY = 0;
 };
 
 ///////////////////////////////////////////////////////////////
@@ -263,7 +280,7 @@ void CVideoModeManager::PostReset(D3DPRESENT_PARAMETERS* pp)
     {
         // Add frame
         LONG Style = WS_VISIBLE | WS_CLIPSIBLINGS | WS_SYSMENU | WS_MINIMIZEBOX;
-        if (IsDisplayModeWindowed())
+        if (IsDisplayModeWindowed() && !m_bWindowedBorderless)
             Style |= WS_BORDER | WS_DLGFRAME;
 
         SetWindowLong(m_hDeviceWindow, GWL_STYLE, Style);
@@ -278,7 +295,26 @@ void CVideoModeManager::PostReset(D3DPRESENT_PARAMETERS* pp)
         int SizeX = ClientRect.right - ClientRect.left;
         int SizeY = ClientRect.bottom - ClientRect.top;
 
-        SetWindowPos(m_hDeviceWindow, HWND_NOTOPMOST, 0, 0, SizeX, SizeY, SWP_NOMOVE | SWP_FRAMECHANGED);
+        UINT flags = SWP_FRAMECHANGED | SWP_NOMOVE;
+        int  x = 0;
+        int  y = 0;
+        if (IsDisplayModeWindowed() && m_bWindowedPosition)
+        {
+            // Apply after frame adjustment (and again after device resets) so the
+            // configured coordinates refer to the outer window, without DPI borders.
+            x = m_iWindowedX;
+            y = m_iWindowedY;
+            RECT        requested = {x, y, x + SizeX, y + SizeY};
+            MONITORINFO monitor = {sizeof(MONITORINFO)};
+            if (GetMonitorInfo(MonitorFromRect(&requested, MONITOR_DEFAULTTONEAREST), &monitor))
+            {
+                // A disconnected monitor must not leave a borderless window unreachable.
+                x = std::max(monitor.rcMonitor.left, std::min<LONG>(x, monitor.rcMonitor.right - SizeX));
+                y = std::max(monitor.rcMonitor.top, std::min<LONG>(y, monitor.rcMonitor.bottom - SizeY));
+            }
+            flags &= ~SWP_NOMOVE;
+        }
+        SetWindowPos(m_hDeviceWindow, HWND_NOTOPMOST, x, y, SizeX, SizeY, flags);
 
         if (m_bPendingGainFocus)
             OnGainFocus();
@@ -492,6 +528,12 @@ void CVideoModeManager::LoadCVars()
     CVARS_GET("display_windowed", m_bCurrentWindowed);
     CVARS_GET("display_fullscreen_style", m_iCurrentFullscreenStyle);
     CVARS_GET("multimon_fullscreen_minimize", m_bCurrentFullScreenMinimize);
+    CVARS_GET("display_windowed_borderless", m_bWindowedBorderless);
+    CVARS_GET("display_windowed_position", m_bWindowedPosition);
+    CVARS_GET("display_windowed_x", m_iWindowedX);
+    CVARS_GET("display_windowed_y", m_iWindowedY);
+    m_iWindowedX = std::max(-32768, std::min(32767, m_iWindowedX));
+    m_iWindowedY = std::max(-32768, std::min(32767, m_iWindowedY));
 
     // Save the video mode resolution that is being used
     VideoMode info;
@@ -749,6 +791,17 @@ bool CVideoModeManager::GetRequiredDisplayResolution(int& iOutWidth, int& iOutHe
             if (adapter >= 0)
                 iOutAdapterIndex = static_cast<int>(adapter);
         }
+    }
+
+    int customWidth = 0;
+    int customHeight = 0;
+    if (GetCustomWindowedResolution(customWidth, customHeight))
+    {
+        // Request the synthetic 32-bit mode rather than merely stretching a
+        // differently sized backbuffer; GTA's camera and GUI use the mode dimensions.
+        iOutWidth = customWidth;
+        iOutHeight = customHeight;
+        iOutColorBits = 32;
     }
 
     return (iOutWidth > 0) && (iOutHeight > 0) && (iOutColorBits == 16 || iOutColorBits == 32);

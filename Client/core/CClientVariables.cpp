@@ -396,18 +396,25 @@ void CClientVariables::LoadDefaults()
     DEFAULT("max_clientscript_log_kb", 5000);                   // Max size in KB (0-No limit)
     DEFAULT("display_fullscreen_style", 0);                     // 0-standard 1-borderless 2-borderless keep res 3-borderless stretch
     DEFAULT("display_windowed", 0);                             // 0-off 1-on
-    DEFAULT("multimon_fullscreen_minimize", 1);                 // 0-off 1-on
-    DEFAULT("borderless_gamma_power", 0.95f);                   // Gamma exponent applied to windowed gamma ramp (1.0 = unchanged)
-    DEFAULT("borderless_brightness_scale", 1.03f);              // Brightness multiplier for windowed gamma ramp (1.0 = unchanged)
-    DEFAULT("borderless_contrast_scale", 1.0f);                 // Contrast multiplier for borderless presentation (1.0 = unchanged)
-    DEFAULT("borderless_saturation_scale", 1.0f);               // Saturation multiplier for borderless presentation (1.0 = unchanged)
-    DEFAULT("borderless_enable_srgb", false);                   // Enable sRGB correction when running borderless
-    DEFAULT("borderless_gamma_enabled", false);                 // Apply gamma adjustment while borderless tuning active
-    DEFAULT("borderless_brightness_enabled", false);            // Apply brightness adjustment while borderless tuning active
-    DEFAULT("borderless_contrast_enabled", false);              // Apply contrast adjustment while borderless tuning active
-    DEFAULT("borderless_saturation_enabled", false);            // Apply saturation adjustment while borderless tuning active
-    DEFAULT("borderless_apply_windowed", false);                // Apply display adjustments while windowed/borderless
-    DEFAULT("borderless_apply_fullscreen", false);              // Apply display adjustments while in exclusive fullscreen
+    // Opt-in, per-profile window layout; changes take effect on client restart.
+    DEFAULT("display_windowed_width", 0);  // 0 uses the normal video mode list
+    DEFAULT("display_windowed_height", 0);
+    DEFAULT("display_windowed_borderless", false);
+    DEFAULT("display_windowed_position", false);  // Explicit outer-window desktop coordinates
+    DEFAULT("display_windowed_x", 0);
+    DEFAULT("display_windowed_y", 0);
+    DEFAULT("multimon_fullscreen_minimize", 1);       // 0-off 1-on
+    DEFAULT("borderless_gamma_power", 0.95f);         // Gamma exponent applied to windowed gamma ramp (1.0 = unchanged)
+    DEFAULT("borderless_brightness_scale", 1.03f);    // Brightness multiplier for windowed gamma ramp (1.0 = unchanged)
+    DEFAULT("borderless_contrast_scale", 1.0f);       // Contrast multiplier for borderless presentation (1.0 = unchanged)
+    DEFAULT("borderless_saturation_scale", 1.0f);     // Saturation multiplier for borderless presentation (1.0 = unchanged)
+    DEFAULT("borderless_enable_srgb", false);         // Enable sRGB correction when running borderless
+    DEFAULT("borderless_gamma_enabled", false);       // Apply gamma adjustment while borderless tuning active
+    DEFAULT("borderless_brightness_enabled", false);  // Apply brightness adjustment while borderless tuning active
+    DEFAULT("borderless_contrast_enabled", false);    // Apply contrast adjustment while borderless tuning active
+    DEFAULT("borderless_saturation_enabled", false);  // Apply saturation adjustment while borderless tuning active
+    DEFAULT("borderless_apply_windowed", false);      // Apply display adjustments while windowed/borderless
+    DEFAULT("borderless_apply_fullscreen", false);    // Apply display adjustments while in exclusive fullscreen
 
     if (Exists("borderless_enable_srgb"))
     {

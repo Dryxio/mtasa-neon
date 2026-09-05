@@ -48,6 +48,8 @@ public:
     static IDirect3D9* StaticGetDirect3D();
 
 private:
+    bool GetCustomWindowedMode(UINT adapter, D3DFORMAT format, D3DDISPLAYMODE& mode);
+
     IDirect3D9*       m_pDevice;
     std::atomic<LONG> m_lRefCount;
 };

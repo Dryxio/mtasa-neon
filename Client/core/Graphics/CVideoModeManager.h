@@ -41,3 +41,6 @@ public:
 };
 
 CVideoModeManagerInterface* GetVideoModeManager();
+
+// Windowed render sizes need not be physical fullscreen modes exposed by the driver.
+bool GetCustomWindowedResolution(int& width, int& height);
