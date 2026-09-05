@@ -16,6 +16,7 @@
 #include "luadefs/CLuaAudioDefs.h"
 #include "luadefs/CLuaPlayerDefs.h"
 #include "luadefs/CLuaVehicleDefs.h"
+#include "luadefs/CLuaWorldDefs.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -157,6 +158,10 @@ CResource::~CResource()
     // Mission GXT blocks and native HUD queues contain GTA-global pointers.
     // Clear this resource's prints/help before its Lua state disappears.
     CLuaPlayerDefs::ReleaseMissionTextForResource(this);
+
+    // Garage types are GTA-global state rather than child elements. Release
+    // this resource's script control before its ownership identity disappears.
+    CLuaWorldDefs::ReleaseGarageControlForResource(this);
 
     // Native gang tags outlive streamed GTA objects and are not represented by
     // child elements alone. Revoke this resource's spray registrations before

@@ -58,6 +58,9 @@ public:
     LUA_DECLARE(SetMinuteDuration);
     LUA_DECLARE(SetWaveHeight);
     LUA_DECLARE(SetGarageOpen);
+    static bool AcquireGarageControl(lua_State* luaVM, unsigned int garageID);
+    static bool ReleaseGarageControl(lua_State* luaVM, unsigned int garageID);
+    static void ReleaseGarageControlForResource(class CResource* resource);
     static bool SetWorldSpecialPropertyEnabled(const WorldSpecialProperty property, const bool enabled) noexcept;
     LUA_DECLARE(SetBlurLevel);
     LUA_DECLARE(ResetBlurLevel);

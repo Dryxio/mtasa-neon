@@ -14,6 +14,40 @@
 #include <game/CCoronas.h>
 #include <game/CClock.h>
 #include "lua/CLuaFunctionParser.h"
+#include <game/CGarage.h>
+#include <game/CGarages.h>
+#include <unordered_map>
+
+namespace
+{
+    CResource* GetCallingResource(lua_State* luaVM)
+    {
+        return luaVM && g_pClientGame ? g_pClientGame->GetResourceManager()->GetResourceFromLuaState(luaVM) : nullptr;
+    }
+
+    struct SGarageControlLease
+    {
+        CResource* owner{};
+        BYTE       originalType{};
+    };
+
+    std::unordered_map<unsigned int, SGarageControlLease> g_garageControlLeases;
+
+    void RestoreGarageControl(unsigned int garageID, const SGarageControlLease& lease)
+    {
+        if (!g_pGame || !g_pGame->GetGarages())
+            return;
+
+        if (CGarage* garage = g_pGame->GetGarages()->GetGarage(garageID))
+        {
+            // A safehouse closing branch can store/delete native traffic even
+            // with MTA's automatic opening disabled. Enter OPENING before
+            // restoring its type, and leave the exit clear after owner teardown.
+            garage->SetOpen(true);
+            garage->SetType(lease.originalType);
+        }
+    }
+}
 
 void CLuaWorldDefs::LoadFunctions()
 {
@@ -88,6 +122,8 @@ void CLuaWorldDefs::LoadFunctions()
         {"setWaveHeight", SetWaveHeight},
         {"setMinuteDuration", SetMinuteDuration},
         {"setGarageOpen", SetGarageOpen},
+        {"acquireGarageControl", ArgumentParser<AcquireGarageControl>},
+        {"releaseGarageControl", ArgumentParser<ReleaseGarageControl>},
         {"setWorldSpecialPropertyEnabled", ArgumentParser<SetWorldSpecialPropertyEnabled>},
         {"setBlurLevel", SetBlurLevel},
         {"setJetpackMaxHeight", SetJetpackMaxHeight},
@@ -1603,6 +1639,53 @@ int CLuaWorldDefs::SetWaveHeight(lua_State* luaVM)
 
     lua_pushboolean(luaVM, false);
     return 1;
+}
+
+bool CLuaWorldDefs::AcquireGarageControl(lua_State* luaVM, unsigned int garageID)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    if (!resource || !g_pGame || !g_pGame->GetGarages())
+        return false;
+
+    CGarage* garage = g_pGame->GetGarages()->GetGarage(garageID);
+    if (!garage)
+        return false;
+
+    const auto existing = g_garageControlLeases.find(garageID);
+    if (existing != g_garageControlLeases.end())
+        return existing->second.owner == resource;
+
+    // Native safehouse storage belongs to the solo player. Multiplayer garages
+    // need server-owned persistence while retaining GTA's original door motion.
+    g_garageControlLeases.emplace(garageID, SGarageControlLease{resource, garage->GetType()});
+    garage->SetType(1);
+    return true;
+}
+
+bool CLuaWorldDefs::ReleaseGarageControl(lua_State* luaVM, unsigned int garageID)
+{
+    CResource* resource = GetCallingResource(luaVM);
+    const auto existing = g_garageControlLeases.find(garageID);
+    if (!resource || existing == g_garageControlLeases.end() || existing->second.owner != resource)
+        return false;
+
+    RestoreGarageControl(garageID, existing->second);
+    g_garageControlLeases.erase(existing);
+    return true;
+}
+
+void CLuaWorldDefs::ReleaseGarageControlForResource(CResource* resource)
+{
+    for (auto it = g_garageControlLeases.begin(); it != g_garageControlLeases.end();)
+    {
+        if (it->second.owner == resource)
+        {
+            RestoreGarageControl(it->first, it->second);
+            it = g_garageControlLeases.erase(it);
+        }
+        else
+            ++it;
+    }
 }
 
 int CLuaWorldDefs::SetGarageOpen(lua_State* luaVM)
