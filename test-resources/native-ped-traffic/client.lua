@@ -63,6 +63,7 @@ local gangStandardWeaponStats = {
 }
 
 local trafficNativeDamageWeapons = {
+    [3] = true, -- stock cop nightstick / BBALLBAT combo
     [0] = true,
     [4] = true,
     [22] = true,
@@ -77,6 +78,8 @@ local function log(message, level)
         outputDebugString("[ped-traffic][client] " .. message, level or 3)
     end
 end
+
+local nativeCombatContexts = {}
 
 local function rememberNativeDamage(ped, attacker, weapon, bodypart)
     local observations = nativeDamageObservations[ped] or {}
@@ -291,6 +294,7 @@ local function releaseTrafficEventProfile(ped)
     vehicleReactionStates[ped] = nil
     healthStates[ped] = nil
     nativeDamageObservations[ped] = nil
+    nativeCombatContexts[ped] = nil
     nativeDamageTraceTimes[ped] = nil
 end
 
@@ -2252,7 +2256,9 @@ addEventHandler("pedTraffic:gunAimedAt", resourceRoot, function(ped, aimingPed)
 end)
 
 addEvent("pedTraffic:damageResponse", true)
-addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attackingPed, weapon, bodypart, damageId)
+addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attackingPed, weapon, bodypart, damageId, epoch)
+    if not isIntegerInRange(epoch, 1, 2147483647) or
+        getElementData(ped, "neon:ambientPedTrafficEpoch") ~= epoch then return end
     if damageId ~= false and not isIntegerInRange(damageId, 1, 2147483647) then
         return
     end
@@ -2272,12 +2278,13 @@ addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attacki
     end
     local deadline = getTickCount() + 1000
     local function inject()
-        if not isElement(ped) or not isElement(attackingPed) then
+        if not isElement(ped) or not isElement(attackingPed) or
+            getElementData(ped, "neon:ambientPedTrafficEpoch") ~= epoch then
             return
         end
         if consumeNativeDamage(ped, attackingPed, weapon, bodypart) then
             log(("damage-bridge id=%s damage=%s skipped=local-native source=%s weapon=%s bodypart=%s"):format(
-                    tostring(getElementData(ped, "neon:ambientPedTrafficId")), tostring(damageId), getPlayerName(attackingPed),
+                    tostring(getElementData(ped, "neon:ambientPedTrafficId")), tostring(damageId), tostring(getElementType(attackingPed) == "player" and getPlayerName(attackingPed) or getElementData(attackingPed, "neon:ambientPedTrafficId")),
                     tostring(weapon), tostring(bodypart)))
             return
         end
@@ -2286,9 +2293,12 @@ addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attacki
         if isElement(ped) and isElement(attackingPed) and token and isPedNativeEventProfileActive(ped, token) and
             type(addPedNativeDamageResponseEvent) == "function" then
             local accepted = addPedNativeDamageResponseEvent(ped, attackingPed, weapon, bodypart, token)
+            if accepted then
+                nativeCombatContexts[ped] = {attacker = attackingPed, weapon = weapon, bodypart = bodypart, epoch = epoch, at = getTickCount()}
+            end
             log(("damage-bridge id=%s damage=%s accepted=%s source=%s weapon=%s bodypart=%s"):format(
                     tostring(getElementData(ped, "neon:ambientPedTrafficId")), tostring(damageId), tostring(accepted),
-                    getPlayerName(attackingPed), tostring(weapon), tostring(bodypart)))
+                    tostring(getElementType(attackingPed) == "player" and getPlayerName(attackingPed) or getElementData(attackingPed, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart)))
             return
         end
         if getTickCount() < deadline then
@@ -2305,7 +2315,14 @@ addEventHandler("pedTraffic:damageResponse", resourceRoot, function(ped, attacki
 end)
 
 addEvent("pedTraffic:nativePlayerDamage", true)
-addEventHandler("pedTraffic:nativePlayerDamage", resourceRoot, function(attackingPed, epoch, nonce, weapon, bodypart, damageFactor, direction)
+addEventHandler("pedTraffic:nativePlayerDamage", resourceRoot, function(attackingPed, epoch, nonce, weapon, bodypart, damageFactor, direction, victim, victimEpoch)
+    victim = victim or localPlayer
+    if victim ~= localPlayer then
+        local task = assignments[victim] or groupByPed[victim] or coupleByPed[victim]
+        if not isElement(victim) or getElementType(victim) ~= "ped" or not isElementSyncer(victim) or
+            not task or not task.accepted or task.epoch ~= victimEpoch or
+            getElementData(victim, "neon:ambientPedTrafficEpoch") ~= victimEpoch then return end
+    end
     if not enabled or not isElement(attackingPed) or getElementType(attackingPed) ~= "ped" or
         getElementData(attackingPed, "neon:ambientPedTraffic") ~= true or not isIntegerInRange(epoch, 1, 2147483647) or
         getElementData(attackingPed, "neon:ambientPedTrafficEpoch") ~= epoch or
@@ -2334,10 +2351,10 @@ addEventHandler("pedTraffic:nativePlayerDamage", resourceRoot, function(attackin
     end
 
     nativePlayerDamageReceipts[attackingPed] = {epoch = epoch, nonce = nonce}
-    local accepted = addPedNativeDamageEvent(localPlayer, attackingPed, weapon, bodypart, damageFactor, direction, token)
+    local accepted = addPedNativeDamageEvent(victim, attackingPed, weapon, bodypart, damageFactor, direction, token)
     log(("native-player-damage id=%s epoch=%d nonce=%d accepted=%s weapon=%d bodypart=%d factor=%d direction=%d health=%.2f"):format(
             tostring(getElementData(attackingPed, "neon:ambientPedTrafficId")), epoch, nonce, tostring(accepted), weapon,
-            bodypart, damageFactor, direction, getElementHealth(localPlayer)), accepted and 3 or 2)
+            bodypart, damageFactor, direction, getElementHealth(victim)), accepted and 3 or 2)
 end)
 
 addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
@@ -2373,6 +2390,11 @@ addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
     local token = nativeEventProfiles[source]
     if token and isPedNativeEventProfileActive(source, token) then
         rememberNativeDamage(source, attacker, weapon, bodypart)
+        local task = assignments[source] or groupByPed[source] or coupleByPed[source]
+        if task and task.accepted and isElement(attacker) then
+            nativeCombatContexts[source] = {attacker = attacker, weapon = weapon, bodypart = bodypart, epoch = task.epoch, at = getTickCount()}
+            triggerServerEvent("pedTraffic:combatContext", resourceRoot, source, attacker, task.epoch, weapon, bodypart)
+        end
         traceNativeDamageSource(source, attacker, weapon, bodypart, "owner")
         log(("damage-observed id=%s role=owner weapon=%s bodypart=%s"):format(
                 tostring(getElementData(source, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart)))
@@ -2394,18 +2416,41 @@ addEventHandler("onClientPedDamage", root, function(attacker, weapon, bodypart)
     triggerServerEvent("pedTraffic:damageObserved", resourceRoot, source, weapon, bodypart, nextObservedDamageNonce)
 end)
 
-addEventHandler("onClientPlayerNativeDamageAttempt", root, function(attacker, weapon, bodypart, damageFactor, direction)
+-- Refresh an existing reaction while GTA still runs it, so a long flee/fight
+-- survives handoff without reviving a reaction that has already completed.
+setTimer(function()
+    for ped, context in pairs(nativeCombatContexts) do
+        local task = assignments[ped] or coupleByPed[ped]
+        if not enabled or not isElement(ped) or not isElement(context.attacker) or not isElementSyncer(ped) or
+            not task or not task.accepted or task.epoch ~= context.epoch then
+            nativeCombatContexts[ped] = nil
+        elseif getTickCount() - context.at >= 1000 then
+            local reacting = getThreatState(ped) or hasDealerFightingControl(ped)
+            if reacting and getElementHealth(ped) > 0 and getElementHealth(context.attacker) > 0 then
+                triggerServerEvent("pedTraffic:combatContext", resourceRoot, ped, context.attacker, context.epoch, context.weapon, context.bodypart)
+            else
+                triggerServerEvent("pedTraffic:combatContext", resourceRoot, ped, false, context.epoch)
+                nativeCombatContexts[ped] = nil
+            end
+        end
+    end
+end, 1000, 0)
+
+local function observeNativeTrafficDamage(attacker, weapon, bodypart, damageFactor, direction)
     if not enabled or source == localPlayer or not isElement(attacker) or getElementType(attacker) ~= "ped" or
         getElementData(attacker, "neon:ambientPedTraffic") ~= true or not isElementSyncer(attacker) then
         return
     end
+
+    if getElementType(source) == "ped" and
+        (getElementData(source, "neon:ambientPedTraffic") ~= true or isElementSyncer(source)) then return end
 
     local token = nativeEventProfiles[attacker]
     if not token or not isPedNativeEventProfileActive(attacker, token) then
         return
     end
 
-    local task = assignments[attacker] or groupByPed[attacker]
+    local task = assignments[attacker] or groupByPed[attacker] or coupleByPed[attacker]
     if not task or not task.accepted or not isIntegerInRange(task.epoch, 1, 2147483647) then
         return
     end
@@ -2423,10 +2468,13 @@ addEventHandler("onClientPlayerNativeDamageAttempt", root, function(attacker, we
     nextNativePlayerDamageNonce = nextNativePlayerDamageNonce % 2147483647 + 1
     log(("native-player-damage-observed id=%s epoch=%d nonce=%d victim=%s weapon=%s bodypart=%s factor=%d direction=%d"):format(
             tostring(getElementData(attacker, "neon:ambientPedTrafficId")), task.epoch, nextNativePlayerDamageNonce,
-            getPlayerName(source), tostring(weapon), tostring(bodypart), damageFactor, direction))
+            tostring(getElementType(source) == "player" and getPlayerName(source) or getElementData(source, "neon:ambientPedTrafficId")), tostring(weapon), tostring(bodypart), damageFactor, direction))
     triggerServerEvent("pedTraffic:nativePlayerDamageObserved", resourceRoot, attacker, source, task.epoch,
-                       nextNativePlayerDamageNonce, weapon, bodypart, damageFactor, direction)
-end)
+                       nextNativePlayerDamageNonce, weapon, bodypart, damageFactor, direction,
+                       getElementType(source) == "ped" and getElementData(source, "neon:ambientPedTrafficEpoch") or false)
+end
+addEventHandler("onClientPlayerNativeDamageAttempt", root, observeNativeTrafficDamage)
+addEventHandler("onClientPedNativeDamageAttempt", root, observeNativeTrafficDamage)
 
 addEventHandler("onClientPedNativeBikeJackAttempt", root, function(targetPlayer, vehicle, targetDoor, secondaryPassenger)
     local attackingPed = source

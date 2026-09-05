@@ -6817,18 +6817,18 @@ bool CClientPed::AddNativeDamageResponseEvent(CClientPed* attackingPed, eWeaponT
 
 bool CClientPed::AddNativeDamageEvent(CClientPed* attackingPed, eWeaponType weaponType, ePedPieceTypes hitZone, int damageFactor, unsigned char direction)
 {
-    // Player health is owned by that player's client. A native script ped may
-    // be simulated by another peer, so only the local player may consume the
-    // authenticated replay and let its ordinary puresync publish the result.
-    if (!attackingPed || attackingPed == this || GetType() != CCLIENTPLAYER || !m_bIsLocalPlayer || IsDead() || !m_pPlayerPed ||
-        attackingPed->GetType() != CCLIENTPED || !attackingPed->m_pPlayerPed)
+    // Only the victim's authority may apply a replay. Remote NPC health stays
+    // locked just like remote player health; its syncer publishes the result.
+    const bool ownsVictim = GetType() == CCLIENTPLAYER ? m_bIsLocalPlayer : GetType() == CCLIENTPED && IsSyncing() && !IsHealthLocked() && !IsArmorLocked();
+    if (!attackingPed || attackingPed == this || !ownsVictim || IsDead() || !m_pPlayerPed || attackingPed->GetType() != CCLIENTPED ||
+        !attackingPed->m_pPlayerPed)
     {
         return false;
     }
 
     // The observer normally suppresses damage produced by the attacker's
     // replicated weapon presentation. This call is different: the server has
-    // authenticated the owner's native hit and selected this local player as
+    // authenticated the owner's native hit and selected this client as
     // its authoritative victim. Scope that distinction to the exact pair for
     // the synchronous AffectsPed/DamageHandler passes, then restore any outer
     // replay context before returning.

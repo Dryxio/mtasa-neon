@@ -4303,8 +4303,8 @@ int CLuaPedDefs::AddPedNativeDamageEvent(lua_State* luaVM)
 
         // The server-side resource authenticates simulation ownership before
         // asking the victim to replay a hit. Require the same resource's
-        // observer lease here, and let only the local player mutate its own
-        // GTA damage state; an unrelated resource or remote player is refused.
+        // observer lease here. The primitive accepts only the local player or
+        // an NPC whose health this client owns; remote victims are refused.
         lua_pushboolean(luaVM,
                         validWeapon && validHitZone && validDamageFactor && validDirection && pResource &&
                             pResource->HasPedNativeEventProfileLease(pAttackingPed, uiToken) && pDamagedPed &&

@@ -84,12 +84,17 @@ local stockGangFirearmDamage = {
 
 local function getCanonicalTrafficNativeDamage(record, weapon, damageFactor)
     if weapon == 0 then
-        if record.populationClass == "gang" and stockUnarmedGangDamageFactors[damageFactor] == true or
+        if (record.populationClass == "gang" or record.populationClass == "cop") and stockUnarmedGangDamageFactors[damageFactor] == true or
             record.populationClass == "dealer" and stockUnarmedDealerDamageFactors[damageFactor] == true or
             record.populationClass == "civilian" and stockUnarmedCivilianDamageFactors[damageFactor] == true then
             return config.nativeMeleeDamageRadius, config.nativeMeleeDamageInterval
         end
         return false
+    end
+    -- Retail NIGHTSTICK selects BBALLBAT: moving=10, strikes=18/25.
+    -- STAT_COP unarmed strength is 1.0; weapons retain the combo factor.
+    if weapon == 3 and record.populationClass == "cop" and (damageFactor == 10 or damageFactor == 18 or damageFactor == 25) then
+        return config.nativeMeleeDamageRadius, config.nativeMeleeDamageInterval
     end
     if weapon == 4 and record.populationClass == "dealer" and record.dealerFightArmed == true and
         record.dealerHasKnife == true and stockKnifeDealerDamageFactors[damageFactor] == true then
@@ -99,6 +104,7 @@ local function getCanonicalTrafficNativeDamage(record, weapon, damageFactor)
     if record.populationClass == "dealer" and record.dealerFightArmed == true and record.dealerHasPistol == true and weapon == 22 then
         firearm = stockGangFirearmDamage[22]
     end
+    if record.populationClass == "cop" and weapon == 22 then firearm = stockGangFirearmDamage[22] end
     if firearm and damageFactor == firearm.factor then
         return firearm.radius, config.nativeFirearmDamageInterval
     end
@@ -1309,9 +1315,10 @@ local function bridgeDamageResponse(record, attackingPlayer, weapon, bodypart, f
     end
 
     log(("damage-bridge id=%d damage=%s attacker=%s owner=%s weapon=%d bodypart=%d"):format(
-            record.id, tostring(damageId or false), getPlayerName(attackingPlayer), getPlayerName(record.owner), weapon, bodypart))
+            record.id, tostring(damageId or false), tostring(getElementType(attackingPlayer) == "player" and getPlayerName(attackingPlayer) or
+                getElementData(attackingPlayer, "neon:ambientPedTrafficId")), getPlayerName(record.owner), weapon, bodypart))
     return triggerClientEvent(record.owner, "pedTraffic:damageResponse", resourceRoot, record.ped, attackingPlayer, weapon, bodypart,
-                              damageId or false)
+                              damageId or false, record.epoch)
 end
 
 local function rememberGroupCombatContext(record, attackingPlayer, weapon, bodypart, source, observerNonce)
@@ -1375,9 +1382,9 @@ local function rememberGroupCombatContext(record, attackingPlayer, weapon, bodyp
     return context
 end
 
-local function rememberDealerCombatContext(record, attackingPlayer, weapon, bodypart, source)
-    if not record or record.group or record.populationClass ~= "dealer" or record.removing or not isElement(attackingPlayer) or
-        getElementType(attackingPlayer) ~= "player" then
+local function rememberTrafficCombatContext(record, attackingPlayer, weapon, bodypart, source)
+    if not record or record.group or record.removing or not isElement(attackingPlayer) or
+        (getElementType(attackingPlayer) ~= "player" and getElementType(attackingPlayer) ~= "ped") then
         return false
     end
     record.combatContext = {
@@ -1387,7 +1394,7 @@ local function rememberDealerCombatContext(record, attackingPlayer, weapon, body
         observedAt = getTickCount(),
         source = tostring(source or "unknown"),
     }
-    writePopulationTrace("dealer_combat_context", {
+    writePopulationTrace(record.populationClass == "dealer" and "dealer_combat_context" or "traffic_combat_context", {
         traffic_id = record.id,
         epoch = record.epoch,
         owner_id = isElement(record.owner) and getPopulationClientId(record.owner) or false,
@@ -1399,7 +1406,7 @@ local function rememberDealerCombatContext(record, attackingPlayer, weapon, body
     return true
 end
 
-local function restoreDealerCombatContext(record)
+local function restoreTrafficCombatContext(record)
     local context = record and record.combatContext
     if not context then
         return false
@@ -1419,7 +1426,7 @@ local function restoreDealerCombatContext(record)
         getElementInterior(context.attacker) == getElementInterior(record.ped) and pedX and attackerX and
         squaredDistance(pedX, pedY, pedZ, attackerX, attackerY, attackerZ) <= 250 * 250 then
         local restored = bridgeDamageResponse(record, context.attacker, context.weapon, context.bodypart, true)
-        writePopulationTrace("dealer_combat_context_restored", {
+        writePopulationTrace(record.populationClass == "dealer" and "dealer_combat_context_restored" or "traffic_combat_context_restored", {
             traffic_id = record.id,
             epoch = record.epoch,
             owner_id = isElement(record.owner) and getPopulationClientId(record.owner) or false,
@@ -1432,7 +1439,7 @@ local function restoreDealerCombatContext(record)
         return restored
     end
 
-    writePopulationTrace("dealer_combat_context_expired", {
+    writePopulationTrace(record.populationClass == "dealer" and "dealer_combat_context_expired" or "traffic_combat_context_expired", {
         traffic_id = record.id,
         epoch = record.epoch,
         context_age_ms = contextAge,
@@ -4401,7 +4408,7 @@ addEventHandler("pedTraffic:evidence", resourceRoot, function(ped, epoch, eviden
             owner_id = getPopulationClientId(client),
         })
         log(("accepted id=%d epoch=%d owner=%s"):format(record.id, epoch, getPlayerName(client)))
-        restoreDealerCombatContext(record)
+        restoreTrafficCombatContext(record)
         for _, player in ipairs(getEligiblePlayers()) do
             -- Reconstruct a still-active threat after an owner handoff, but do
             -- not confuse MTA's permanent shot raycast with actual aiming.
@@ -4751,6 +4758,7 @@ addEventHandler("pedTraffic:damageObserved", resourceRoot, function(ped, weapon,
     record.damageObserverNonces = record.damageObserverNonces or {}
     record.damageObserverNonces[client] = observerNonce
     local context = rememberGroupCombatContext(record, client, weapon, bodypart, "observer-bridge", observerNonce)
+    rememberTrafficCombatContext(record, client, weapon, bodypart, "observer-bridge")
     local dispatched = bridgeDamageResponse(record, client, math.floor(weapon), math.floor(bodypart), false,
                                             context and context.damageId or false)
     if context and dispatched then
@@ -4769,8 +4777,20 @@ end)
 
 addEvent("pedTraffic:nativePlayerDamageObserved", true)
 addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
-                function(attackingPed, victim, epoch, nonce, weapon, bodypart, damageFactor, direction)
+                function(attackingPed, victim, epoch, nonce, weapon, bodypart, damageFactor, direction, victimEpoch)
     local record = trafficPeds[attackingPed]
+    local victimRecord = trafficPeds[victim]
+    local recipient = victim
+    if victimRecord then
+        -- Do not redirect an old contact into a new victim authority. Both
+        -- ends must still own the epochs that produced the collision.
+        if victimRecord.removing or victimRecord.state ~= "active" or victimRecord.epoch ~= victimEpoch or
+            not isElement(victimRecord.owner) or getElementSyncer(victim) ~= victimRecord.owner or
+            victimRecord.owner == client then return end
+        recipient = victimRecord.owner
+    elseif not isElement(victim) or getElementType(victim) ~= "player" then
+        return
+    end
     epoch = tonumber(epoch)
     nonce = tonumber(nonce)
     weapon = tonumber(weapon)
@@ -4778,7 +4798,7 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
     damageFactor = tonumber(damageFactor)
     direction = tonumber(direction)
     if not record or record.removing or record.state ~= "active" or client ~= record.owner or
-        getElementSyncer(attackingPed) ~= client or not isElement(victim) or getElementType(victim) ~= "player" or victim == client or
+        getElementSyncer(attackingPed) ~= client or not isElement(victim) or victim == attackingPed or recipient == client or
         getElementHealth(victim) <= 0 or not isIntegerInRange(epoch, 1, 2147483647) or epoch ~= record.epoch or
         not isIntegerInRange(nonce, 1, 2147483647) or not isIntegerInRange(weapon, 0, 46) or
         (bodypart ~= 0 and not isIntegerInRange(bodypart, 3, 9)) or not isIntegerInRange(damageFactor, 1, 200) or
@@ -4786,6 +4806,8 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
         return
     end
 
+    if record.couple and (record.couple.removing or record.couple.state ~= "active" or
+        record.couple.owner ~= client or record.couple.epoch ~= epoch) then return end
     if record.group and (record.group.removing or record.group.state ~= "active" or record.group.owner ~= client or
         record.group.epoch ~= epoch) then
         return
@@ -4812,21 +4834,27 @@ addEventHandler("pedTraffic:nativePlayerDamageObserved", resourceRoot,
 
     local now = getTickCount()
     if record.nativePlayerDamageOwner == client and record.nativePlayerDamageEpoch == epoch then
-        if nonce <= (record.nativePlayerDamageNonce or 0) or now - (record.nativePlayerDamageAt or 0) < damageInterval then
+        if nonce <= (record.nativePlayerDamageNonce or 0) or
+            now - (record.nativeDamageVictimTimes and record.nativeDamageVictimTimes[victim] or -damageInterval) < damageInterval then
             return
         end
     end
 
+    if record.nativePlayerDamageOwner ~= client or record.nativePlayerDamageEpoch ~= epoch then
+        record.nativeDamageVictimTimes = setmetatable({}, {__mode = "k"})
+    end
+    record.nativeDamageVictimTimes[victim] = now
     record.nativePlayerDamageOwner = client
     record.nativePlayerDamageEpoch = epoch
     record.nativePlayerDamageNonce = nonce
     record.nativePlayerDamageAt = now
     record.lastInteractionAt = now
     log(("native-player-damage id=%d epoch=%d nonce=%d owner=%s victim=%s weapon=%d bodypart=%d factor=%d direction=%d"):format(
-            record.id, epoch, nonce, getPlayerName(client), getPlayerName(victim), canonicalWeapon, math.floor(bodypart),
+            record.id, epoch, nonce, getPlayerName(client), tostring(victimRecord and victimRecord.id or getPlayerName(victim)), canonicalWeapon, math.floor(bodypart),
             math.floor(damageFactor), math.floor(direction)))
-    triggerClientEvent(victim, "pedTraffic:nativePlayerDamage", resourceRoot, attackingPed, epoch, nonce,
-                       canonicalWeapon, math.floor(bodypart), math.floor(damageFactor), math.floor(direction))
+    triggerClientEvent(recipient, "pedTraffic:nativePlayerDamage", resourceRoot, attackingPed, epoch, nonce,
+                       canonicalWeapon, math.floor(bodypart), math.floor(damageFactor), math.floor(direction),
+                       victimRecord and victim or false, victimRecord and victimRecord.epoch or false)
 end)
 
 local nativeBikeJackTargetDoors = {[8] = true, [9] = true, [10] = true, [11] = true, [18] = true}
@@ -5073,6 +5101,25 @@ addEventHandler("pedTraffic:nativeBikeJackResult", resourceRoot, function(attack
     end
 end)
 
+addEvent("pedTraffic:combatContext", true)
+addEventHandler("pedTraffic:combatContext", resourceRoot, function(ped, attacker, epoch, weapon, bodypart)
+    local record = trafficPeds[ped]
+    if record and not record.removing and record.state == "active" and record.owner == client and
+        getElementSyncer(ped) == client and record.epoch == epoch and attacker == false then
+        record.combatContext = nil
+        return
+    end
+    if not record or record.removing or record.state ~= "active" or record.owner ~= client or
+        getElementSyncer(ped) ~= client or epoch ~= record.epoch or not isElement(attacker) or attacker == ped or
+        (getElementType(attacker) ~= "player" and not trafficPeds[attacker]) or getElementHealth(attacker) <= 0 or
+        not isIntegerInRange(weapon, 0, 54) or (bodypart ~= 0 and not isIntegerInRange(bodypart, 3, 9)) or
+        getElementDimension(attacker) ~= getElementDimension(ped) or getElementInterior(attacker) ~= getElementInterior(ped) then return end
+    local x, y, z = getElementPosition(ped)
+    local ax, ay, az = getElementPosition(attacker)
+    if squaredDistance(x, y, z, ax, ay, az) > 250 * 250 then return end
+    rememberTrafficCombatContext(record, attacker, weapon, bodypart, "owner-damage")
+end)
+
 addEventHandler("onPedDamage", root, function(attacker, weapon, bodypart)
     local record = trafficPeds[source]
     if not record or record.removing or not isElement(attacker) or getElementType(attacker) ~= "player" then
@@ -5080,7 +5127,7 @@ addEventHandler("onPedDamage", root, function(attacker, weapon, bodypart)
     end
     record.lastInteractionAt = getTickCount()
     rememberGroupCombatContext(record, attacker, weapon, bodypart, "server-ped-damage")
-    rememberDealerCombatContext(record, attacker, weapon, bodypart, "server-ped-damage")
+    rememberTrafficCombatContext(record, attacker, weapon, bodypart, "server-ped-damage")
 end)
 
 addEvent("pedTraffic:dealerFightStarted", true)
@@ -7332,11 +7379,11 @@ local function pulseDealerTest(testId)
                 epoch = test.record.epoch,
                 owner_id = getPopulationClientId(test.ownerA),
             })
-            rememberDealerCombatContext(test.record, test.ownerA, 0, 3, "dealer-test-stimulus")
+            rememberTrafficCombatContext(test.record, test.ownerA, 0, 3, "dealer-test-stimulus")
             -- Dealer combat has its own single-actor context lifecycle. Pass an
             -- explicit untracked identity so the group-only replay guard does
             -- not reject this deterministic harness stimulus.
-            triggerClientEvent(test.ownerA, "pedTraffic:damageResponse", resourceRoot, test.record.ped, test.ownerA, 0, 3, false)
+            triggerClientEvent(test.ownerA, "pedTraffic:damageResponse", resourceRoot, test.record.ped, test.ownerA, 0, 3, false, test.record.epoch)
         end
     elseif test.action == "sample-combat" then
         if validateDealerTestSamples(test, "combat") then

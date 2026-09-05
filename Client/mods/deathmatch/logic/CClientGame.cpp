@@ -2741,6 +2741,7 @@ void CClientGame::AddBuiltInEvents()
     m_Events.AddEvent("onClientPlayerStuntFinish", "type, time, distance", NULL, false);
     m_Events.AddEvent("onClientPlayerRadioSwitch", "", NULL, false);
     m_Events.AddEvent("onClientPlayerDamage", "attacker, weapon, bodypart, loss, damageFactor, direction", NULL, false);
+    m_Events.AddEvent("onClientPedNativeDamageAttempt", "attacker, weapon, bodypart, damageFactor, direction", NULL, false);
     m_Events.AddEvent("onClientPlayerNativeDamageAttempt", "attacker, weapon, bodypart, damageFactor, direction", NULL, false);
     m_Events.AddEvent("onClientPlayerWeaponFire", "weapon, ammo, ammoInClip, hitX, hitY, hitZ, hitElement", NULL, false);
     m_Events.AddEvent("onClientPlayerWeaponReload", "weapon, clip, ammo", nullptr, false);
@@ -4507,12 +4508,12 @@ bool CClientGame::DamageHandler(CPed* pDamagePed, CEventDamage* pEvent)
     if (pPresentationPed && pPresentationPed->IsNativeTaskWeaponPresentationActive() && !pPresentationPed->IsNativeDamageReplayFor(pDamagedPed))
         return false;
 
-    // Remote player health is authoritative on the victim's client. GTA can
+    // Health is authoritative on the victim's owner. GTA can
     // still produce the native contact and physical response on the attacking
     // ped's owner without reaching the health-delta gate used by
     // onClientPlayerDamage. Emit the original GenerateDamageEvent association
     // once so a resource can authenticate and relay that native attempt.
-    if (pDamagedPed && IS_PLAYER(pDamagedPed) && pEvent->IsNativeDamageAttempt())
+    if (pDamagedPed && pEvent->IsNativeDamageAttempt())
     {
         CLuaArguments arguments;
         if (pInflictingEntity)
@@ -4523,7 +4524,7 @@ bool CClientGame::DamageHandler(CPed* pDamagePed, CEventDamage* pEvent)
         arguments.PushNumber(static_cast<unsigned char>(hitZone));
         arguments.PushNumber(pEvent->GetDamageFactor());
         arguments.PushNumber(static_cast<unsigned char>(pEvent->GetDirection()));
-        pDamagedPed->CallEvent("onClientPlayerNativeDamageAttempt", arguments, false);
+        pDamagedPed->CallEvent(IS_PLAYER(pDamagedPed) ? "onClientPlayerNativeDamageAttempt" : "onClientPedNativeDamageAttempt", arguments, false);
     }
 
     // If the damage was caused by an explosion
