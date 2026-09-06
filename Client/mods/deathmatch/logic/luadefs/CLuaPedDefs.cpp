@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "../CClientCargoManager.h"
 #include <game/CWeapon.h>
 #include "lua/CLuaFunctionParser.h"
 #include <game/CTasks.h>
@@ -319,6 +320,10 @@ void CLuaPedDefs::LoadFunctions()
         {"stopPedFacialTalk", ArgumentParser<StopPedFacialTalk>},
         {"setPedShootAt", ArgumentParser<SetPedShootAt>},
         {"setPedTaskSequence", SetPedTaskSequence},
+        {"setPedCarryObject", SetPedCarryObject},
+        {"getPedCarriedObject", GetPedCarriedObject},
+        {"putDownPedObject", PutDownPedObject},
+        {"cancelPedCarryObject", CancelPedCarryObject},
         {"setPedDriveWander", ArgumentParser<SetPedDriveWander>},
         {"setPedDriveTo", ArgumentParser<SetPedDriveTo>},
         {"setPedDriveMission", ArgumentParser<SetPedDriveMission>},
@@ -4448,4 +4453,45 @@ void CLuaPedDefs::PlayPedVoiceLine(CClientPed* ped, int speechId, std::optional<
         throw LuaFunctionError("The argument probability cannot have a negative value.");
 
     ped->Say(speechContextId, probability.value_or(1.0f));
+}
+
+
+int CLuaPedDefs::SetPedCarryObject(lua_State* luaVM)
+{
+    CClientPed*      ped = nullptr;
+    CClientObject*   object = nullptr;
+    SString          preset;
+    CScriptArgReader args(luaVM);
+    args.ReadUserData(ped);
+    args.ReadUserData(object);
+    args.ReadString(preset, "box");
+    const bool result = !args.HasErrors() && preset == "box" && CClientCargoManager::GetSingleton().Start(m_pLuaManager->GetVirtualMachine(luaVM), ped, object);
+    lua_pushboolean(luaVM, result);
+    return 1;
+}
+
+int CLuaPedDefs::GetPedCarriedObject(lua_State* luaVM)
+{
+    auto* ped = dynamic_cast<CClientPed*>(lua_toelement(luaVM, 1));
+    auto& manager = CClientCargoManager::GetSingleton();
+    if (auto* object = manager.GetObject(ped))
+        lua_pushelement(luaVM, object);
+    else
+        lua_pushboolean(luaVM, false);
+    lua_pushstring(luaVM, manager.GetState(ped));
+    return 2;
+}
+
+int CLuaPedDefs::PutDownPedObject(lua_State* luaVM)
+{
+    auto* ped = dynamic_cast<CClientPed*>(lua_toelement(luaVM, 1));
+    lua_pushboolean(luaVM, CClientCargoManager::GetSingleton().PutDown(m_pLuaManager->GetVirtualMachine(luaVM), ped));
+    return 1;
+}
+
+int CLuaPedDefs::CancelPedCarryObject(lua_State* luaVM)
+{
+    auto* ped = dynamic_cast<CClientPed*>(lua_toelement(luaVM, 1));
+    lua_pushboolean(luaVM, CClientCargoManager::GetSingleton().Cancel(m_pLuaManager->GetVirtualMachine(luaVM), ped));
+    return 1;
 }

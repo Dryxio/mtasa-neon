@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "CClientCargoManager.h"
 #include "CClientFireManager.h"
 #include "CClientBirdManager.h"
 #include "CClientBreakEffectManager.h"
@@ -236,6 +237,7 @@ void CClientManager::DoPulse(bool bDoStandardPulses, bool bDoVehicleManagerPulse
             TIMING_CHECKPOINT("-MTA_PedManager");
             m_pProjectileManager->DoPulse();
             m_pFireManager->DoPulse();
+            CClientCargoManager::GetSingleton().DoPulse();
             CClientBirdManager::GetSingleton().DoPulse(this);
             CClientBreakEffectManager::GetSingleton().DoPulse(this);
             m_pSoundManager->DoPulse();

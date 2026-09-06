@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include "../CClientCargoManager.h"
 #define DECLARE_PROFILER_SECTION_CLuaMain
 #include "profiler/SharedUtil.Profiler.h"
 
@@ -46,6 +47,7 @@ CLuaMain::CLuaMain(CLuaManager* pLuaManager, CResource* pResourceOwner, bool bEn
 
 CLuaMain::~CLuaMain()
 {
+    CClientCargoManager::GetSingleton().OnLuaMainDestroy(this);
     g_pClientGame->GetRemoteCalls()->OnLuaMainDestroy(this);
     g_pClientGame->GetLatentTransferManager()->OnLuaMainDestroy(this);
     g_pClientGame->GetDebugHookManager()->OnLuaMainDestroy(this);

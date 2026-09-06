@@ -26,6 +26,8 @@
 #include "TaskSA.h"
 #include "TaskSecondarySA.h"
 #include "CAnimManagerSA.h"
+#include "CObjectSA.h"
+#include "CPedIntelligenceSA.h"
 
 extern CGameSA* pGame;
 
@@ -618,4 +620,243 @@ void CTasksSA::StaticSetHooks()
 {
     EZHookInstall(CEventHandler_ComputeDamageResponse_Mid);
     InstallTaskCarSAHooks();
+}
+
+namespace
+{
+    // Retail 1.0 US layout. Keep the animation implementation in GTA, while
+    // releasing its entity reference before it can destroy an MTA-owned object.
+    struct SCargoTask : CTaskSimpleSAInterface
+    {
+        CEntitySAInterface* entity;
+        CVector             offset;
+        unsigned char       bone, flags, padding[2];
+        float               rotation;
+        int                 animation, group, animationFlags;
+        void*               block;
+        void*               hierarchy;
+        bool                dropped, needsProcessing, disallowDrop, padding2;
+        void*               association;
+    };
+    static_assert(sizeof(SCargoTask) == 0x3C, "Retail cargo task layout changed");
+    static_assert(offsetof(SCargoTask, entity) == 8, "Retail cargo reference offset changed");
+    static_assert(offsetof(SCargoTask, dropped) == 0x34, "Retail cargo state offset changed");
+
+    struct SCargoLease
+    {
+        CObject*            object;
+        CObjectSAInterface* native;
+        bool                collision, visible, streaming, attached, stationary, movingList;
+        unsigned char       objectType;
+    };
+    std::map<CPed*, SCargoLease> cargoLeases;
+    constexpr DWORD              cargoTables[] = {0x870B2C, 0x870B50, 0x870B74};
+    DWORD                        cargoDestructors[3]{};
+
+    int CargoKind(CTaskSAInterface* task)
+    {
+        for (int i = 0; task && i < 3; ++i)
+            if (reinterpret_cast<DWORD>(task->VTBL) == cargoTables[i])
+                return i;
+        return -1;
+    }
+
+    void ReleaseCargoReference(SCargoTask* task)
+    {
+        using Release = void(__thiscall*)(SCargoTask*);
+        reinterpret_cast<Release>(0x6916E0)(task);
+    }
+
+    void* __fastcall CargoDeletingDestructor(SCargoTask* task, void*, unsigned int flags)
+    {
+        const int kind = CargoKind(task);
+        for (const auto& lease : cargoLeases)
+        {
+            if (task->entity == lease.second.native)
+            {
+                // Urgent replacement can delete the task between client pulses.
+                // The retail destructor sets bRemoveFromWorld even for mission
+                // objects, so protecting only DropEntity is insufficient.
+                ReleaseCargoReference(task);
+                break;
+            }
+        }
+        using Destructor = void*(__thiscall*)(SCargoTask*, unsigned int);
+        return reinterpret_cast<Destructor>(cargoDestructors[kind])(task, flags);
+    }
+
+    bool InstallCargoOwnershipGuard()
+    {
+        if (cargoDestructors[0])
+            return true;
+        // Refuse an incompatible executable/hook layout before modifying it.
+        for (DWORD address : cargoTables)
+        {
+            auto* table = reinterpret_cast<TaskSimpleVTBL*>(address);
+            if (table->ProcessPed != 0x693C40 || table->SetPedPosition != 0x6940A0 || table->MakeAbortable != 0x693BD0)
+                return false;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            cargoDestructors[i] = reinterpret_cast<TaskVTBL*>(cargoTables[i])->DeletingDestructor;
+            MemPut<DWORD>(cargoTables[i], reinterpret_cast<DWORD>(&CargoDeletingDestructor));
+        }
+        return true;
+    }
+
+    class CCargoTaskSA final : public CTaskSimpleSA
+    {
+    public:
+        explicit CCargoTaskSA(CObjectSAInterface* object)
+        {
+            CreateTaskInterface(object ? sizeof(SCargoTask) : sizeof(SCargoTask) + sizeof(float));
+            if (!IsValid())
+                return;
+            if (object)
+            {
+                const CVector offset(0.0f, 0.0f, 0.0f);
+                using Constructor = void(__thiscall*)(CTaskSAInterface*, CEntitySAInterface*, const CVector*, unsigned char, unsigned char, int, int, bool);
+                // Secondary partial animation permits walking while carrying.
+                reinterpret_cast<Constructor>(0x6913A0)(GetInterface(), object, &offset, 6, 1, static_cast<int>(eAnimID::ANIM_ID_CRRY_PRTIAL),
+                                                        static_cast<int>(eAnimGroup::ANIM_GROUP_CARRY), false);
+            }
+            else
+            {
+                using Constructor = void(__thiscall*)(CTaskSAInterface*);
+                reinterpret_cast<Constructor>(0x691990)(GetInterface());
+            }
+        }
+    };
+
+    CTaskManagerSA* CargoTaskManager(CPed* ped)
+    {
+        return ped && ped->GetPedIntelligence() ? dynamic_cast<CTaskManagerSA*>(ped->GetPedIntelligence()->GetTaskManager()) : nullptr;
+    }
+
+    template <typename Visitor>
+    void VisitCargoTasks(CTaskManagerSA* manager, Visitor visitor)
+    {
+        auto visit = [&](CTaskSAInterface* task)
+        {
+            // Walk live trees, never a saved task pointer: GTA may replace or
+            // clone either half of the secondary-hold/primary-putdown protocol.
+            for (unsigned int depth = 0; task && depth < 32; ++depth)
+            {
+                if (CargoKind(task) >= 0)
+                    visitor(reinterpret_cast<SCargoTask*>(task));
+                using GetSubTask = CTaskSAInterface*(__thiscall*)(CTaskSAInterface*);
+                task = reinterpret_cast<GetSubTask>(task->VTBL->GetSubTask)(task);
+            }
+        };
+        for (auto* task : manager->GetInterface()->m_tasks)
+            visit(task);
+        for (auto* task : manager->GetInterface()->m_tasksSecondary)
+            visit(task);
+    }
+}
+
+bool CTasksSA::StartPedCarryObject(CPed* ped, CObject* object)
+{
+    auto* manager = CargoTaskManager(ped);
+    auto* native = object ? object->GetObjectInterface() : nullptr;
+    if (!manager || !native || cargoLeases.count(ped) || manager->GetInterface()->m_tasksSecondary[TASK_SECONDARY_PARTIAL_ANIM])
+        return false;
+    for (const auto& lease : cargoLeases)
+        if (lease.second.native == native)
+            return false;
+    if (!InstallCargoOwnershipGuard())
+        return false;
+
+    SCargoLease lease{object,
+                      native,
+                      !!native->bUsesCollision,
+                      !!native->bIsVisible,
+                      !!native->bStreamingDontDelete,
+                      !!native->bAttachedToEntity,
+                      object->IsStatic(),
+                      native->m_pMovingList != nullptr,
+                      native->pad1};
+    cargoLeases.emplace(ped, lease);
+    // Offset 316 is the retail object type. Mission ownership prevents the
+    // native abort/drop path from converting cargo into a hidden temp object.
+    native->pad1 = 2;
+    auto* task = NewTask<CCargoTaskSA>(native);
+    if (!task)
+    {
+        CancelPedCarryObject(ped);
+        return false;
+    }
+    m_pTaskManagementSystem->AddTask(task);
+    manager->SetTaskSecondary(task, TASK_SECONDARY_PARTIAL_ANIM);
+    return true;
+}
+
+bool CTasksSA::PutDownPedObject(CPed* ped)
+{
+    if (GetPedCarryState(ped) != 1 || !IsPedScriptCommandTaskReady(ped))
+        return false;
+    auto* task = NewTask<CCargoTaskSA>(static_cast<CObjectSAInterface*>(nullptr));
+    if (!task)
+        return false;
+    m_pTaskManagementSystem->AddTask(task);
+    if (AddPedScriptCommandTask(ped, task))
+        return true;
+    task->Destroy();
+    return false;
+}
+
+int CTasksSA::GetPedCarryState(CPed* ped)
+{
+    auto  lease = cargoLeases.find(ped);
+    auto* manager = CargoTaskManager(ped);
+    if (lease == cargoLeases.end() || !manager)
+        return 0;
+    int state = 0;
+    VisitCargoTasks(manager,
+                    [&](SCargoTask* task)
+                    {
+                        if (task->entity == lease->second.native && !task->dropped)
+                            state = std::max(state, CargoKind(task) == 2 ? 2 : (task->needsProcessing || !task->association ? 3 : 1));
+                    });
+    return state;
+}
+
+void CTasksSA::CancelPedCarryObject(CPed* ped)
+{
+    auto iter = cargoLeases.find(ped);
+    if (iter == cargoLeases.end())
+        return;
+    const SCargoLease lease = iter->second;
+    if (auto* manager = CargoTaskManager(ped))
+    {
+        VisitCargoTasks(manager,
+                        [&](SCargoTask* task)
+                        {
+                            if (task->entity == lease.native)
+                            {
+                                ReleaseCargoReference(task);
+                                task->dropped = true;
+                            }
+                        });
+        // Only remove our secondary slot. Primary movement/event tasks remain
+        // owned by GTA; a released putdown completes on its next ProcessPed.
+        auto* secondary = manager->GetInterface()->m_tasksSecondary[TASK_SECONDARY_PARTIAL_ANIM];
+        if (CargoKind(secondary) == 0 && reinterpret_cast<SCargoTask*>(secondary)->dropped)
+            manager->RemoveTaskSecondary(TASK_SECONDARY_PARTIAL_ANIM);
+    }
+    lease.native->bUsesCollision = lease.collision;
+    lease.native->bIsVisible = lease.visible;
+    lease.native->bStreamingDontDelete = lease.streaming;
+    lease.native->bAttachedToEntity = lease.attached;
+    lease.native->pad1 = lease.objectType;
+    lease.object->SetStatic(lease.stationary);
+    using MovingList = void(__thiscall*)(CPhysicalSAInterface*);
+    reinterpret_cast<MovingList>(lease.movingList ? FUNC_CPhysical_AddToMovingList : FUNC_CPhysical_RemoveFromMovingList)(lease.native);
+    // Retail CPhysical::m_pEntityIgnoredCollision is at 0x128 (the legacy
+    // interface calls it m_pControlCodeNodeLink). DropEntity writes the holder
+    // without registering a reference; do not leave it pointing at a dead ped.
+    static_assert(offsetof(CPhysicalSAInterface, m_pControlCodeNodeLink) == 0x128);
+    if (reinterpret_cast<void*>(lease.native->m_pControlCodeNodeLink) == ped->GetPedInterface())
+        lease.native->m_pControlCodeNodeLink = nullptr;
+    cargoLeases.erase(iter);
 }

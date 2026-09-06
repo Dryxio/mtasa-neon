@@ -2784,6 +2784,7 @@ void CClientGame::AddBuiltInEvents()
     m_Events.AddEvent("onClientPedWasted", "", NULL, false);
     m_Events.AddEvent("onClientPedChoke", "", NULL, false);
     m_Events.AddEvent("onClientPedHeliKilled", "heli", NULL, false);
+    m_Events.AddEvent("onClientPedCarryStateChange", "object, state, reason", NULL, false);
     m_Events.AddEvent("onClientPedHitByWaterCannon", "vehicle", NULL, false);
     m_Events.AddEvent("onClientPedStep", "foot", nullptr, false);
 

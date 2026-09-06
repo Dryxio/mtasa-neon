@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include "CClientCargoManager.h"
 #include <game/RenderWare.h>
 
 #include <algorithm>
@@ -882,6 +883,7 @@ void CClientObject::Create()
 
 void CClientObject::Destroy()
 {
+    CClientCargoManager::GetSingleton().OnEntityDestroy(this);
     // If the object exists
     if (m_pObject)
     {
