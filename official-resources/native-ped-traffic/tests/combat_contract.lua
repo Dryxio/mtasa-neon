@@ -11,8 +11,8 @@ end
 local function evaluate(code)
     return assert((loadstring or load)(code))()
 end
-local server = read('test-resources/native-ped-traffic/server.lua')
-local clientCode = read('test-resources/native-ped-traffic/client.lua')
+local server = read('official-resources/native-ped-traffic/server.lua')
+local clientCode = read('official-resources/native-ped-traffic/client.lua')
 local handlers, sends, timers, hits = {}, {}, {}, {}
 root, resourceRoot = {}, {}
 config = {nativeMeleeDamageRadius=4, nativeMeleeDamageInterval=250, nativeFirearmDamageInterval=40}

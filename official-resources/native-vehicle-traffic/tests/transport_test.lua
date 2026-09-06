@@ -7,7 +7,7 @@ local function section(text, first, last)
     local a=assert(text:find(first,1,true)); local b=assert(text:find(last,a+#first, true)); return text:sub(a,b-1)
 end
 local function run(s) return assert((loadstring or load)(s))() end
-local base='test-resources/native-vehicle-traffic/'
+local base='official-resources/native-vehicle-traffic/'
 local server, clientCode=read(base..'server.lua'),read(base..'client.lua')
 dofile(base..'transport.lua')
 local transport=VehicleTrafficTransport
@@ -84,7 +84,7 @@ local trace=run(section(server,'local function trace(', 'local function finiteNu
 trace('candidate',{}); trace('population-snapshot',{}); assert(logs==0 and serializations==0,'quiet mode skips log encoding')
 trace('unit-failure',{}); trace('PASS-cleanup',{}); trace('status',{}); assert(logs==3,'errors and explicit results remain')
 debugEnabled=true; trace('candidate',{}); assert(logs==4,'debug enables routine logs')
-local pedServer=read('test-resources/native-ped-traffic/server.lua')
+local pedServer=read('official-resources/native-ped-traffic/server.lua')
 local pedLog=run(section(pedServer,'local function log(', 'local function utcTimestamp')..'\nreturn log')
 debugEnabled=false; pedLog('group-spawn',true); assert(logs==4,'forced routine ped logs suppressed')
 pedLog('cop-test FAIL',true); pedLog('couple-test CANCEL',true); assert(logs==6,'ped test results remain')

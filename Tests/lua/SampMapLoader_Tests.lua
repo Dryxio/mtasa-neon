@@ -1,4 +1,4 @@
-local loaderPath = "test-resources/samp-map-loader/loader.lua"
+local loaderPath = "official-resources/samp-map-loader/loader.lua"
 
 local function expect(condition, message)
     if not condition then

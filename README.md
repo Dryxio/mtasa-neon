@@ -147,6 +147,16 @@ Then point the agent to the generated `NEON_AGENT.md` and let it use the CLI whi
 
 **[Download Neon CLI Portable v1.0.0](https://github.com/Dryxio/mtasa-neon/releases/download/neon-cli-v1.0.0/Neon-CLI-Portable.zip)** · **[Setup and complete agent workflow](https://mtasa-neon-wiki.vercel.app/neon/cli/)**
 
+## Server resources
+
+[Official Neon resources](official-resources/README.md) are ready-to-use server
+systems, including synchronized pedestrian and vehicle traffic. The directory
+includes installation instructions and links to each resource's scope and controls.
+
+[Test resources](test-resources/README.md) contain development harnesses,
+regressions, showcases, and experimental scenarios. Install those selectively
+on a development server.
+
 ## Documentation
 
 | | |

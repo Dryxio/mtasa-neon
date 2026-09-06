@@ -939,7 +939,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -981,7 +981,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -1027,7 +1027,7 @@
           "example": "assert(setPedMissionActor(ballas, true))\nlocal token = assert(acquirePedNativeEventProfile(ballas, \"mission\"))",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "5318f4360",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -1886,7 +1886,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "65c6b103c",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -1934,7 +1934,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "65c6b103c",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -11504,7 +11504,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp",
           "sourceCommit": "28dfcff23",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ]
     },
@@ -12090,7 +12090,7 @@
           "example": "local parsed = engineParseSAMPMap(mapSource)\nif not parsed.success then\n    outputDebugString(parsed.diagnostics[1].message, 1)\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp",
           "sourceCommit": "28dfcff23",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ]
     },
@@ -17508,7 +17508,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "39f782fd9",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -17540,7 +17540,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "5318f4360",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -17595,7 +17595,7 @@
           "example": "local candidate = getAmbientPedSpawnCandidate(localPlayer.position, \"dealer\")\nif candidate then\n    outputDebugString((\"dealer model: %d\"):format(candidate.model))\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "5318f4360",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -17627,7 +17627,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "b23f57d74",
-          "testResource": "test-resources/native-vehicle-traffic"
+          "testResource": "official-resources/native-vehicle-traffic"
         }
       ]
     },
@@ -17670,7 +17670,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "b23f57d74",
-          "testResource": "test-resources/native-vehicle-traffic"
+          "testResource": "official-resources/native-vehicle-traffic"
         }
       ]
     },
@@ -17716,7 +17716,7 @@
           "example": "local model = getAmbientVehicleModelCandidate()\nif model then\n    local spawn = getAmbientVehicleSpawnCandidate(localPlayer.position, model.model)\n    if spawn then\n        outputDebugString((\"vehicle %d at %.1f, %.1f\"):format(spawn.model, spawn.x, spawn.y))\n    end\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "b23f57d74",
-          "testResource": "test-resources/native-vehicle-traffic"
+          "testResource": "official-resources/native-vehicle-traffic"
         }
       ]
     },
@@ -25425,7 +25425,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -39178,7 +39178,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "75dd85f77",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -41863,7 +41863,7 @@
           "example": "if isPedNativeAmbientCopWanderTask(cop) then\n    outputDebugString(\"cop is patrolling natively\")\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "500d3cf7e",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -41896,7 +41896,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -41929,7 +41929,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -41970,7 +41970,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "65c6b103c",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -46007,7 +46007,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -46042,7 +46042,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -46079,7 +46079,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "65c6b103c",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -46698,7 +46698,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaObjectDefs.cpp",
           "sourceCommit": "28dfcff23",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ]
     },
@@ -47337,7 +47337,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "b159bcd0c",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -47363,7 +47363,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "1004257b9",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -49185,7 +49185,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "1004257b9",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -56067,7 +56067,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaObjectDefs.cpp",
           "sourceCommit": "28dfcff23",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ]
     },
@@ -57488,7 +57488,7 @@
           "example": "if isElementStreamedIn(ped) then\n    setPedJump(ped, true)\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "adb30851a",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -58342,7 +58342,7 @@
           "example": "-- client.lua\n-- This local ped picks its own walking path instead of following Lua waypoints.\nlocal pedestrian = createPed(7, 2498.0, -1687.0, 13.5)\n\nif pedestrian then\n    assert(setPedWander(pedestrian, \"walk\", -1, true))\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "500d3cf7e",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -67763,7 +67763,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
           "sourceCommit": "b159bcd0c",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -67825,7 +67825,7 @@
           "requiresReview": false,
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },
@@ -68931,7 +68931,7 @@
           "example": "local check = validatePedNativeCouple(pedA, pedB)\nif check and check.compatible then\n    local token = acquirePedNativeCouple(pedA, pedB, check.leaderIndex)\nend",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
           "sourceCommit": "d709fa696",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ]
     },

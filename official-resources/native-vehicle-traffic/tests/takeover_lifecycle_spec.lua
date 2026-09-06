@@ -26,7 +26,7 @@ function destroyElement(v)
     if v.refuseDestroy then return false end
     v.dead=true;source=v;handlers.onElementDestroy();return true
 end
-dofile(arg[1] or "test-resources/native-vehicle-traffic/takeover_lifecycle.lua")
+dofile(arg[1] or "official-resources/native-vehicle-traffic/takeover_lifecycle.lua")
 local api=TrafficTakeoverLifecycle
 local function tick(ms) now=(now+(ms or 1000))%4294967296;api.update() end
 local v=car();check(api.retain(v,player) and api.count()==1,"pending takeover consumes shared budget")

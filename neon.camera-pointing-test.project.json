@@ -17,7 +17,7 @@
   "resources": [
     {
       "name": "camera-pointing-test",
-      "path": "test-resources/camera-pointing-test",
+      "path": "official-resources/camera-pointing-test",
       "manifest": "neon.resource.yaml"
     }
   ],

@@ -43,10 +43,10 @@ The runtime applies GTA's verified `+1.0` entry-exit Z conversion to both trigge
 Static syntax:
 
 ```sh
-luac -p test-resources/story-entry-exit-runtime/definitions.lua \
-  test-resources/story-entry-exit-runtime/server.lua \
-  test-resources/story-entry-exit-runtime/client.lua
-xmllint --noout test-resources/story-entry-exit-runtime/meta.xml
+luac -p official-resources/story-entry-exit-runtime/definitions.lua \
+  official-resources/story-entry-exit-runtime/server.lua \
+  official-resources/story-entry-exit-runtime/client.lua
+xmllint --noout official-resources/story-entry-exit-runtime/meta.xml
 ```
 
 Manual validation through a consuming mission must cover entry, exit, resource stop during both fades, caller stop while inside, attempted entry in a vehicle, wrong dimension rejection and repeated entry-exit cycles.

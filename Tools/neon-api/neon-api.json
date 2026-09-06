@@ -5768,7 +5768,7 @@
           "signature": "int|false acquirePedNativeCouple(ped a, ped b, int leaderIndex)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Pair two NPCs and GTA makes them walk together, choose their side, hold hands, and look at each other. They separate if they move too far apart.",
@@ -5874,7 +5874,7 @@
           "signature": "int|false acquirePedNativeCouplePresentation(ped a, ped b)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Opens an observer-side presentation channel so a non-syncing client can present two peds as a walking couple.",
@@ -5978,7 +5978,7 @@
           "signature": "int|false acquirePedNativeEventProfile(ped thePed, string profile)",
           "sourceCommit": "5318f4360",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Exclusively leases one of Neon's stock native-event adapters for a script ped.",
@@ -8096,7 +8096,7 @@
           "signature": "bool addPedNativeDamageResponseEvent(ped thePed, ped attacker, int weapon, int bodypart, int token)",
           "sourceCommit": "65c6b103c",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Replays GTA's civilian damage decision on the authoritative owner without applying physical damage again.",
@@ -8220,7 +8220,7 @@
           "signature": "bool addPedNativeGunAimedAtEvent(ped thePed, ped aimingPed, int token)",
           "sourceCommit": "65c6b103c",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Inserts GTA's real aimed-at event on the authoritative ambient-ped owner.",
@@ -55643,7 +55643,7 @@
           "signature": "int|false engineGetTXDIDFromName(string txdName)",
           "sourceCommit": "28dfcff23",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ],
       "description": "Resolves a loaded GTA texture-dictionary name to its current TXD slot.",
@@ -57657,7 +57657,7 @@
           "signature": "table engineParseSAMPMap(string source)",
           "sourceCommit": "28dfcff23",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ],
       "description": "Parses Texture Studio / SA-MP Pawn map source into inert objects, building removals, material overrides, and diagnostics.",
@@ -75451,7 +75451,7 @@
           "signature": "table|false, string? getAmbientPedGangGroupCandidate(Vector3 origin, int gangId [, int maxMembers = 4])",
           "sourceCommit": "39f782fd9",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Asks GTA for a native ambient gang-group placement with two to four proposed members.",
@@ -75551,7 +75551,7 @@
           "signature": "table|false getAmbientPedPopulationProfile()",
           "sourceCommit": "5318f4360",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Returns GTA's current ambient population targets, zone state, density multipliers, and gang weights.",
@@ -75651,7 +75651,7 @@
           "signature": "table|false, string? getAmbientPedSpawnCandidate(Vector3 origin [, string selection = \"auto\", int gangId = -1])",
           "sourceCommit": "5318f4360",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Ask GTA where it would naturally place an NPC near a position. The result includes the suggested skin, NPC type, position, and facing direction—without creating the NPC.",
@@ -75752,7 +75752,7 @@
           "signature": "table|false, string? getAmbientVehicleModelCandidate()",
           "sourceCommit": "b23f57d74",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-vehicle-traffic"
+          "testResource": "official-resources/native-vehicle-traffic"
         }
       ],
       "description": "Ask GTA which civilian road vehicle naturally fits the current area and population settings—without creating it.",
@@ -75843,7 +75843,7 @@
           "signature": "table|false getAmbientVehicleOccupantModelCandidate(int vehicleModelId [, int maximumOccupants = 4])",
           "sourceCommit": "b23f57d74",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-vehicle-traffic"
+          "testResource": "official-resources/native-vehicle-traffic"
         }
       ],
       "description": "Ask GTA which pedestrian skins naturally fit a vehicle, so it can be created with a suitable driver and passengers.",
@@ -75948,7 +75948,7 @@
           "signature": "table|false, string? getAmbientVehicleSpawnCandidate(Vector3 origin, int modelId)",
           "sourceCommit": "b23f57d74",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-vehicle-traffic"
+          "testResource": "official-resources/native-vehicle-traffic"
         }
       ],
       "description": "Ask GTA to choose a valid road lane, position, direction, speed, and driving style for a vehicle near the player—without creating the vehicle.",
@@ -97380,7 +97380,7 @@
           "signature": "table|false getPedNativeCoupleDiagnostic(int token)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Returns focused lease, task, and per-member diagnostics for one native couple token.",
@@ -151233,7 +151233,7 @@
           "signature": "bool isAmbientPedSphereVisible(Vector3 position, float radius)",
           "sourceCommit": "75dd85f77",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Runs GTA's camera-frustum sphere test without creating an entity.",
@@ -158904,7 +158904,7 @@
           "signature": "bool isPedNativeAmbientCopWanderTask(ped thePed)",
           "sourceCommit": "500d3cf7e",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Reports whether Neon's safe ambient-cop wander task is the ped's current primary task.",
@@ -158989,7 +158989,7 @@
           "signature": "bool isPedNativeCoupleActive(int token)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Reports whether the calling resource still owns a live native couple.",
@@ -159074,7 +159074,7 @@
           "signature": "bool isPedNativeCouplePresentationActive(int token)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Reports whether the calling resource still owns a live observer-side couple presentation.",
@@ -159167,7 +159167,7 @@
           "signature": "bool isPedNativeEventProfileActive(ped thePed, int token)",
           "sourceCommit": "65c6b103c",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Reports whether this resource's native event-profile lease is active for the current authoritative ped generation.",
@@ -221863,7 +221863,7 @@
           "signature": "bool releasePedNativeCouple(int token)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Releases a native couple lease owned by the calling resource.",
@@ -221950,7 +221950,7 @@
           "signature": "bool releasePedNativeCouplePresentation(int token)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Closes an observer-side couple presentation channel owned by the calling resource.",
@@ -222039,7 +222039,7 @@
           "signature": "bool releasePedNativeEventProfile(int token)",
           "sourceCommit": "65c6b103c",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Releases one native ped event-profile token owned by the calling resource.",
@@ -223828,7 +223828,7 @@
           "signature": "bool removeObjectMaterial(object theObject, int slot)",
           "sourceCommit": "28dfcff23",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaObjectDefs.cpp",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ],
       "description": "Removes one SA-MP-style material-slot override from a client object.",
@@ -225951,7 +225951,7 @@
           "signature": "bool resetAmbientPedPopulationModels()",
           "sourceCommit": "b159bcd0c",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Releases the stock population-model residency established by the ambient-ped update pass.",
@@ -226022,7 +226022,7 @@
           "signature": "bool resetAmbientPedPopulationZonesToBootstrap()",
           "sourceCommit": "1004257b9",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Restores the stock main.scm population-zone bootstrap inside Neon's reversible population world state.",
@@ -235654,7 +235654,7 @@
           "signature": "bool setAmbientPedPopulationZoneState(string zoneLabel, table state)",
           "sourceCommit": "1004257b9",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Overrides selected native population fields for one GTA navigation zone inside the reversible population world state.",
@@ -252985,7 +252985,7 @@
           "signature": "bool setObjectMaterial(object theObject, int slot, int sourceModel, string txdName, string textureName [, int materialColor = 0])",
           "sourceCommit": "28dfcff23",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaObjectDefs.cpp",
-          "testResource": "test-resources/samp-map-loader"
+          "testResource": "official-resources/samp-map-loader"
         }
       ],
       "description": "Applies an SA-MP-style texture and/or color override to one DFF material slot on a client object.",
@@ -256933,7 +256933,7 @@
           "signature": "bool setPedJump(ped thePed [, bool allowClimb = true])",
           "sourceCommit": "adb30851a",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Starts GTA's native jump, airborne, optional climb, and landing task chain on a ped simulated by this client.",
@@ -259411,7 +259411,7 @@
           "signature": "bool setPedWander(ped thePed [, string movement = \"walk\", int direction = -1, bool wanderSensibly = true])",
           "sourceCommit": "500d3cf7e",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Tell an NPC to wander and GTA's original pedestrian AI takes over: it follows the native path network, chooses its own direction from node to node, and keeps walking or running without Lua waypoints.",
@@ -295574,7 +295574,7 @@
           "signature": "bool updateAmbientPedPopulationModels(Vector3 origin)",
           "sourceCommit": "b159bcd0c",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Runs GTA's ped-only zone-model residency pass around an origin without enabling unmanaged population creation.",
@@ -295793,7 +295793,7 @@
           "signature": "bool updatePedNativeCouplePresentation(int token)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Refreshes the observer-side couple pairing and walk-side presentation for one token.",
@@ -298673,7 +298673,7 @@
           "signature": "table|false validatePedNativeCouple(ped a, ped b)",
           "sourceCommit": "d709fa696",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaPedDefs.cpp",
-          "testResource": "test-resources/native-ped-traffic"
+          "testResource": "official-resources/native-ped-traffic"
         }
       ],
       "description": "Pre-flight check that reports whether two peds can form a native GTA couple and which one should lead.",

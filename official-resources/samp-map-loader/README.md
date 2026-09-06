@@ -11,7 +11,7 @@ canonical SA-MP 0.3.7-R5 source package after an asset update, run:
 ```sh
 python3 utils/samp/generate_samp_resource.py \
   --samp-dir /path/to/SA-MP/SAMP \
-  --output test-resources/samp-map-loader
+  --output official-resources/samp-map-loader
 ```
 
 Deploy the generated resource, declare the `.pwn` file in the owner's resource

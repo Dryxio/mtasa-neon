@@ -183,7 +183,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "test-resources/native-ped-traffic/population_catalog.lua",
+        default=Path(__file__).resolve().parents[1] / "official-resources/native-ped-traffic/population_catalog.lua",
     )
     args = parser.parse_args()
 

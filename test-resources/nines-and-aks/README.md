@@ -140,9 +140,9 @@ Static validation:
 luac -p test-resources/nines-and-aks/shared.lua \
   test-resources/nines-and-aks/server.lua \
   test-resources/nines-and-aks/client.lua
-luac -p test-resources/story-entry-exit-runtime/definitions.lua \
-  test-resources/story-entry-exit-runtime/server.lua \
-  test-resources/story-entry-exit-runtime/client.lua
+luac -p official-resources/story-entry-exit-runtime/definitions.lua \
+  official-resources/story-entry-exit-runtime/server.lua \
+  official-resources/story-entry-exit-runtime/client.lua
 git diff --check
 ```
 

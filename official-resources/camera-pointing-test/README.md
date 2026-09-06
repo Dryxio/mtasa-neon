@@ -1,4 +1,8 @@
-# Camera pointing test
+# Camera pointing
+
+Copy `camera-pointing-test` into `mods/deathmatch/resources/`, then run
+`refresh` and `start camera-pointing-test` in the server console. The original
+directory name is retained so existing project and server settings keep working.
 
 Hold `E` while on foot to procedurally straighten the right arm toward the
 local camera direction. No ped animation is started or replaced: the resource

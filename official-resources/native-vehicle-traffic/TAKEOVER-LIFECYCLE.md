@@ -72,7 +72,7 @@ Adopted cars remain subject to the resource-lifetime caveat above.
 
 ## Verification
 
-`lua test-resources/native-vehicle-traffic/tests/takeover_lifecycle_spec.lua`
+`lua official-resources/native-vehicle-traffic/tests/takeover_lifecycle_spec.lua`
 loads the actual helper. It covers pending entry, confirmed occupancy, unexpected
 late passengers, proximity, tow and generic attachment, failed destruction,
 server-only adoption, 64 retained cars stopping/recovering refill capacity, and

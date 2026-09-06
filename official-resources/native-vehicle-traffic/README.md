@@ -141,7 +141,7 @@ Production candidate retries back off from 150 ms to at most 1 second after
 repeated misses or visibility vetoes. Population targets and candidate
 reservation limits are unchanged; harness retries retain their 50 ms interval.
 
-Run `lua test-resources/native-vehicle-traffic/tests/transport_test.lua` from
+Run `lua official-resources/native-vehicle-traffic/tests/transport_test.lua` from
 the repository root for mocked transport and logging checks. The fixture
 reduces 32 periodic events (16 vehicles over two sampling cycles) to two
 batches. This measures event envelopes, not total bytes or live-server load;

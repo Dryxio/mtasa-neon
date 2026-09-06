@@ -1,5 +1,5 @@
-local vehicle = dofile("test-resources/native-vehicle-traffic/telemetry.lua")
-local ped = dofile("test-resources/native-ped-traffic/telemetry.lua")
+local vehicle = dofile("official-resources/native-vehicle-traffic/telemetry.lua")
+local ped = dofile("official-resources/native-ped-traffic/telemetry.lua")
 
 local assertions = 0
 local function expect(label, condition)
