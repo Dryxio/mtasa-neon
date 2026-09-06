@@ -21,6 +21,9 @@ SOURCE_PREFIXES = (
     "Server/mods/deathmatch/logic/CGame.cpp",
     "Server/mods/deathmatch/logic/lua/CLuaFunctionParseHelpers.cpp",
     "Shared/mods/deathmatch/logic/Enums.cpp",
+    "Client/mods/deathmatch/logic/CClientEntity.cpp",
+    "Server/mods/deathmatch/logic/CElement.cpp",
+    "Shared/mods/deathmatch/logic/CScriptDebugging.cpp",
 )
 NEON_REPOSITORY = "https://github.com/Dryxio/mtasa-neon.git"
 UPSTREAM_REPOSITORY = "https://github.com/multitheftauto/mtasa-blue.git"
@@ -104,6 +107,9 @@ class EnumRegistration:
 class SourceSnapshot:
     revision: str
     files: Mapping[str, str]
+    # Separate from the selected registration inventory: a new emitter in an
+    # unselected C++ file must invalidate source attestations too.
+    engine_source_digest: str | None = None
 
     @property
     def digest(self) -> str:
@@ -133,6 +139,16 @@ def filesystem_snapshot(root: Path, revision: str = "working-tree") -> SourceSna
 def git_snapshot(repository: Path, reference: str) -> SourceSnapshot:
     try:
         requested_revision = _git(repository, "rev-parse", "--verify", f"{reference}^{{commit}}").strip()
+        tree = _git(repository, "ls-tree", "-r", "-z", requested_revision)
+        engine_entries = []
+        for entry in tree.split("\0"):
+            _, separator, path = entry.partition("\t")
+            if separator and (path.startswith(("Client/", "Server/", "Shared/"))
+                              or Path(path).suffix.lower() in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".inc", ".def"}):
+                engine_entries.append(entry)
+        # Git blob identities cover every core-engine file and C/C++ source or
+        # header elsewhere. Python/JSON-only tooling commits do not change it.
+        engine_source_digest = hashlib.sha256("\0".join(engine_entries).encode("utf-8")).hexdigest()
         revision = _git(repository, "log", "-1", "--format=%H", requested_revision, "--", *SOURCE_PREFIXES).strip()
         if not revision:
             revision = requested_revision
@@ -142,7 +158,7 @@ def git_snapshot(repository: Path, reference: str) -> SourceSnapshot:
             if path.endswith(".cpp")
         ]
         if not source_paths:
-            return SourceSnapshot(revision=revision, files={})
+            return SourceSnapshot(revision=revision, files={}, engine_source_digest=engine_source_digest)
         archive = subprocess.run(
             ["git", "archive", "--format=tar", requested_revision, *source_paths],
             cwd=repository,
@@ -163,7 +179,7 @@ def git_snapshot(repository: Path, reference: str) -> SourceSnapshot:
             if extracted is None:
                 continue
             files[member.name] = extracted.read().decode("utf-8", errors="strict")
-    return SourceSnapshot(revision=revision, files=files)
+    return SourceSnapshot(revision=revision, files=files, engine_source_digest=engine_source_digest)
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -689,6 +705,67 @@ def _registration_provenance(items: Iterable, snapshot: SourceSnapshot, reposito
     )
 
 
+def _load_emission_evidence() -> dict:
+    # Repository-owned source attestations, never project overrides. Any invalid
+    # or missing evidence leaves the original conflict result untouched.
+    from .jsonio import JsonDocumentError, load_json
+    try:
+        evidence = load_json(Path(__file__).resolve().parents[1] / "event-emission-evidence.json")
+    except (OSError, JsonDocumentError):
+        return {}
+    return evidence if isinstance(evidence, dict) and evidence.get("formatVersion") == 1 else {}
+
+
+def _emission_provenance(name: str, definitions: list[EventRegistration], snapshot: SourceSnapshot,
+                         repository: str, arity: int, evidence: dict) -> list[dict] | None:
+    # This is deliberately not a C++ Push-call counter. Audited branches can
+    # push nil/false alternatives or append player-only arguments. Pin the whole
+    # source snapshot and emitter files; source drift requires another review.
+    attestations = evidence.get("snapshots", [])
+    if not isinstance(attestations, list):
+        return None
+    matches = [entry for entry in attestations if isinstance(entry, dict)
+               and entry.get("repository") == repository and entry.get("revision") == snapshot.revision]
+    if (len(matches) != 1 or matches[0].get("sourceDigest") != snapshot.digest
+            or not snapshot.engine_source_digest
+            or matches[0].get("engineSourceDigest") != snapshot.engine_source_digest):
+        return None
+    events = matches[0].get("events")
+    if not isinstance(events, list):
+        return None
+    provenance = []
+    for side in {definition.side for definition in definitions}:
+        contracts = [entry for entry in events if isinstance(entry, dict)
+                     and entry.get("name") == name and entry.get("side") == side]
+        if len(contracts) != 1 or type(contracts[0].get("arity")) is not int or contracts[0]["arity"] != arity:
+            return None
+        emitters = contracts[0].get("emitters")
+        if not isinstance(emitters, list) or not emitters:
+            return None
+        paths = set()
+        for emitter in emitters:
+            if not isinstance(emitter, dict):
+                return None
+            path = emitter.get("path")
+            if not isinstance(path, str) or path in paths or path not in snapshot.files:
+                return None
+            paths.add(path)
+            source = snapshot.files[path]
+            if hashlib.sha256(source.encode("utf-8")).hexdigest() != emitter.get("sha256"):
+                return None
+            calls = re.findall(r'\bCallEvent\s*\(\s*"' + re.escape(name) + r'"', source)
+            if type(emitter.get("callCount")) is not int or emitter["callCount"] < 1 or len(calls) != emitter["callCount"]:
+                return None
+            provenance.append({"repository": repository, "revision": snapshot.revision,
+                               "path": path, "license": SOURCE_LICENSE})
+        # A newly present emitter inside the source snapshot is ambiguous until
+        # audited too. Missing sites are already rejected by source fingerprints.
+        for path, source in snapshot.files.items():
+            if re.search(r'\bCallEvent\s*\(\s*"' + re.escape(name) + r'"', source) and path not in paths:
+                return None
+    return provenance or None
+
+
 def _event_symbol(
     name: str,
     neon_items: list[EventRegistration],
@@ -697,6 +774,7 @@ def _event_symbol(
     semantic_snapshot: dict | None,
     neon: SourceSnapshot,
     upstream: SourceSnapshot,
+    emission_evidence: dict | None = None,
 ) -> dict:
     active_sides = _registration_sides(neon_items)
     inherited_sides = _registration_sides(upstream_items)
@@ -714,9 +792,25 @@ def _event_symbol(
             registration_differences.append("parameter-count")
         elif documented_arguments != list(arguments):
             registration_differences.append("parameter-names")
+    emission_sources: list[dict] = []
+    count_conflict = "parameter-count" in registration_differences
+    if count_conflict and emission_evidence:
+        proven = True
+        for items, snapshot, repository in ((neon_items, neon, NEON_REPOSITORY),
+                                             (upstream_items, upstream, UPSTREAM_REPOSITORY)):
+            if items:
+                sources = _emission_provenance(name, items, snapshot, repository, len(documented_arguments), emission_evidence)
+                if sources is None:
+                    proven = False
+                    break
+                emission_sources.extend(sources)
+        if proven:
+            count_conflict = False
+        else:
+            emission_sources = []
     if documentation and has_registration:
         compared = active_sides or inherited_sides
-        state = "conflict" if documented_sides - compared or "parameter-count" in registration_differences else "verified"
+        state = "conflict" if documented_sides - compared or count_conflict else "verified"
     elif documentation:
         state = "documented-only"
     else:
@@ -724,6 +818,7 @@ def _event_symbol(
     origin = "mta" if upstream_items or documentation else "neon"
     provenance = _registration_provenance(neon_items, neon, NEON_REPOSITORY)
     provenance.extend(_registration_provenance(upstream_items, upstream, UPSTREAM_REPOSITORY))
+    provenance.extend(emission_sources)
     if documentation and semantic_snapshot:
         provenance.append(_documentation_provenance(documentation, semantic_snapshot))
     provenance = sorted(
@@ -1003,6 +1098,7 @@ def build_catalogue(
 ) -> dict:
     neon_registrations = extract_registrations(neon)
     upstream_registrations = extract_registrations(upstream)
+    emission_evidence = _load_emission_evidence()
     neon_events = extract_event_registrations(neon)
     upstream_events = extract_event_registrations(upstream)
     neon_oop = extract_oop_registrations(neon)
@@ -1052,6 +1148,7 @@ def build_catalogue(
                 semantic_snapshot,
                 neon,
                 upstream,
+                emission_evidence,
             )
         )
     symbols.extend(_oop_symbols(neon_oop, upstream_oop, neon, upstream))
@@ -1247,7 +1344,24 @@ def catalogue_runtime_inventory_issues(catalogue: dict, snapshot: SourceSnapshot
 
 
 def catalogue_source_matches(catalogue: dict, snapshot: SourceSnapshot) -> bool:
-    return catalogue.get("sources", {}).get("neon", {}).get("registrationDigest") == snapshot.digest
+    if catalogue.get("sources", {}).get("neon", {}).get("registrationDigest") != snapshot.digest:
+        return False
+    reconciled = [symbol for symbol in catalogue.get("symbols", [])
+                  if symbol.get("kind") == "event" and symbol.get("state") == "verified"
+                  and "parameter-count" in symbol.get("registrationDifferences", [])]
+    if reconciled:
+        # Re-validating an old catalogue must not miss a new emitter merely
+        # because it lives outside the registration extraction prefixes. Git
+        # source refs provide the exhaustive fingerprint; an unpinned filesystem
+        # snapshot cannot establish this attestation and fails closed.
+        evidence = _load_emission_evidence()
+        definitions = extract_event_registrations(snapshot)
+        for symbol in reconciled:
+            selected = [item for item in definitions if item.name == symbol["name"]]
+            if _emission_provenance(symbol["name"], selected, snapshot, NEON_REPOSITORY,
+                                    len(symbol.get("parameters", [])), evidence) is None:
+                return False
+    return True
 
 
 def catalogue_semantic_issues(catalogue: dict) -> list[str]:

@@ -40,6 +40,7 @@ def _source_files() -> list[tuple[str, Path, bool]]:
         ("Tools/neon-api/README.md", TOOL_DIRECTORY / "README.md", False),
         ("Tools/neon-api/THIRD_PARTY_NOTICES.md", TOOL_DIRECTORY / "THIRD_PARTY_NOTICES.md", False),
         ("Tools/neon-api/neon-api.json", TOOL_DIRECTORY / "neon-api.json", False),
+        ("Tools/neon-api/event-emission-evidence.json", TOOL_DIRECTORY / "event-emission-evidence.json", False),
         ("Tools/neon-api/neon.py", TOOL_DIRECTORY / "neon.py", True),
     ]
     for directory, pattern in (

@@ -1,0 +1,303 @@
+{
+  "formatVersion": 1,
+  "description": "Audited emitted arities; registration text is retained separately. Valid only for exact provider/source revision and entire source snapshot digest plus emitter file hashes. No runtime or binary attestation.",
+  "snapshots": [
+    {
+      "repository": "https://github.com/Dryxio/mtasa-neon.git",
+      "revision": "27101451cad91104ccf8337b68d55af893a4db48",
+      "sourceDigest": "c3d3a6252a6b19814b7dbe0003257259032398932a7969b47dbb653e87319c52",
+      "engineSourceDigest": "9f543cf26d05443944b3fcc1fce6c4c1afd656d93841d10d08d84745be7b0aab",
+      "events": [
+        {
+          "name": "onClientPreRender",
+          "side": "client",
+          "arity": 1,
+          "review": "One time-slice number.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientGame.cpp",
+              "sha256": "fab3f4649c4d6f94e331f7e09b3c47c8ee5c8561e0f8023677ab1d3806039af1",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onClientElementDataChange",
+          "side": "client",
+          "arity": 3,
+          "review": "Set/remove both push key, previous, new value; removal pushes nil.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientEntity.cpp",
+              "sha256": "4e3b86867d668c471faab50883893e9ea7e97a6a4fd01821613faf00c8843145",
+              "callCount": 2
+            }
+          ]
+        },
+        {
+          "name": "onClientDebugMessage",
+          "side": "client",
+          "arity": 7,
+          "review": "Message, level, file-or-nil, line-or-nil, RGB. Conditional branches each fill one slot.",
+          "emitters": [
+            {
+              "path": "Shared/mods/deathmatch/logic/CScriptDebugging.cpp",
+              "sha256": "54f557f5ee61be7570a926a06d4afbbd6b129029feedff5ea9ecc5a825539353",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onClientPlayerWeaponFire",
+          "side": "client",
+          "arity": 10,
+          "review": "Seven common weapon-fire arguments, then player-only originXYZ. Ped event remains seven.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientGame.cpp",
+              "sha256": "fab3f4649c4d6f94e331f7e09b3c47c8ee5c8561e0f8023677ab1d3806039af1",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onVehicleStartEnter",
+          "side": "server",
+          "arity": 4,
+          "review": "All three entry/jacking paths push enteringPed, seat, jacked-or-false, door.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CGame.cpp",
+              "sha256": "0d6310fbb7ef48ae54c3b3922ec1ace7428c5614f933938724434b3d144e0459",
+              "callCount": 3
+            }
+          ]
+        },
+        {
+          "name": "onPlayerQuit",
+          "side": "server",
+          "arity": 3,
+          "review": "Quit type, reason-or-false, responsible-element-or-false on every branch.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CGame.cpp",
+              "sha256": "0d6310fbb7ef48ae54c3b3922ec1ace7428c5614f933938724434b3d144e0459",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onElementDataChange",
+          "side": "server",
+          "arity": 3,
+          "review": "Set/remove both push key, previous, new value; removal pushes nil.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CElement.cpp",
+              "sha256": "1442d7bca8d818d4b3e80fe3890468c426b9872846db46117c8ae0b897a052b7",
+              "callCount": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/Dryxio/mtasa-neon.git",
+      "revision": "ebd79fe6cc92a18d23ed3b74753d248521b4b5f9",
+      "sourceDigest": "caa852e1de394d155278e3c318da61b8caa97f486b8d730eb1246f75433b2bd1",
+      "engineSourceDigest": "2b1738c727f86c765e4e4360f552a53ee42d323f22415ccf86f043d02735d844",
+      "events": [
+        {
+          "name": "onClientPreRender",
+          "side": "client",
+          "arity": 1,
+          "review": "One time-slice number.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientGame.cpp",
+              "sha256": "9baaa597d0d53ea7c95b3da3fcc5366f0bb42a7b8ccd0882236635088205f393",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onClientElementDataChange",
+          "side": "client",
+          "arity": 3,
+          "review": "Set/remove both push key, previous, new value; removal pushes nil.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientEntity.cpp",
+              "sha256": "4e3b86867d668c471faab50883893e9ea7e97a6a4fd01821613faf00c8843145",
+              "callCount": 2
+            }
+          ]
+        },
+        {
+          "name": "onClientDebugMessage",
+          "side": "client",
+          "arity": 7,
+          "review": "Message, level, file-or-nil, line-or-nil, RGB. Conditional branches each fill one slot.",
+          "emitters": [
+            {
+              "path": "Shared/mods/deathmatch/logic/CScriptDebugging.cpp",
+              "sha256": "54f557f5ee61be7570a926a06d4afbbd6b129029feedff5ea9ecc5a825539353",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onClientPlayerWeaponFire",
+          "side": "client",
+          "arity": 10,
+          "review": "Seven common weapon-fire arguments, then player-only originXYZ. Ped event remains seven.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientGame.cpp",
+              "sha256": "9baaa597d0d53ea7c95b3da3fcc5366f0bb42a7b8ccd0882236635088205f393",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onVehicleStartEnter",
+          "side": "server",
+          "arity": 4,
+          "review": "All three entry/jacking paths push enteringPed, seat, jacked-or-false, door.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CGame.cpp",
+              "sha256": "0d6310fbb7ef48ae54c3b3922ec1ace7428c5614f933938724434b3d144e0459",
+              "callCount": 3
+            }
+          ]
+        },
+        {
+          "name": "onPlayerQuit",
+          "side": "server",
+          "arity": 3,
+          "review": "Quit type, reason-or-false, responsible-element-or-false on every branch.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CGame.cpp",
+              "sha256": "0d6310fbb7ef48ae54c3b3922ec1ace7428c5614f933938724434b3d144e0459",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onElementDataChange",
+          "side": "server",
+          "arity": 3,
+          "review": "Set/remove both push key, previous, new value; removal pushes nil.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CElement.cpp",
+              "sha256": "1442d7bca8d818d4b3e80fe3890468c426b9872846db46117c8ae0b897a052b7",
+              "callCount": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/multitheftauto/mtasa-blue.git",
+      "revision": "4b766ae92db1e7efbcb72b74af4fcbd4c2a17a54",
+      "sourceDigest": "f52581e58fbb0bb442b9b2ceeec01113f8c57bcff9124b4726799b9adcd252ce",
+      "engineSourceDigest": "69bdc9c15c480003d447baa5779b76d03dcbd3761ca2f2b1ad9a083146bcfb29",
+      "events": [
+        {
+          "name": "onClientPreRender",
+          "side": "client",
+          "arity": 1,
+          "review": "One time-slice number.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientGame.cpp",
+              "sha256": "2e58585c61802a716e44039308f95f44db91f183ef7896da72d0123f28462726",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onClientElementDataChange",
+          "side": "client",
+          "arity": 3,
+          "review": "Set/remove both push key, previous, new value; removal pushes nil.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientEntity.cpp",
+              "sha256": "614f82168ff8ffe35e2c5136d135062782170eea5ec07c5f0799ae9435e769f4",
+              "callCount": 2
+            }
+          ]
+        },
+        {
+          "name": "onClientDebugMessage",
+          "side": "client",
+          "arity": 7,
+          "review": "Message, level, file-or-nil, line-or-nil, RGB. Conditional branches each fill one slot.",
+          "emitters": [
+            {
+              "path": "Shared/mods/deathmatch/logic/CScriptDebugging.cpp",
+              "sha256": "e5765549c6230ae102bbba7daace15a46e647ad0cfcf653df8e167d8df1b8bda",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onClientPlayerWeaponFire",
+          "side": "client",
+          "arity": 10,
+          "review": "Seven common weapon-fire arguments, then player-only originXYZ. Ped event remains seven.",
+          "emitters": [
+            {
+              "path": "Client/mods/deathmatch/logic/CClientGame.cpp",
+              "sha256": "2e58585c61802a716e44039308f95f44db91f183ef7896da72d0123f28462726",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onVehicleStartEnter",
+          "side": "server",
+          "arity": 4,
+          "review": "All three entry/jacking paths push enteringPed, seat, jacked-or-false, door.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CGame.cpp",
+              "sha256": "aef750603c3457e93cb992ad680eebe8352870bdb7a34f654dab10aeff113477",
+              "callCount": 3
+            }
+          ]
+        },
+        {
+          "name": "onPlayerQuit",
+          "side": "server",
+          "arity": 3,
+          "review": "Quit type, reason-or-false, responsible-element-or-false on every branch.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CGame.cpp",
+              "sha256": "aef750603c3457e93cb992ad680eebe8352870bdb7a34f654dab10aeff113477",
+              "callCount": 1
+            }
+          ]
+        },
+        {
+          "name": "onElementDataChange",
+          "side": "server",
+          "arity": 3,
+          "review": "Set/remove both push key, previous, new value; removal pushes nil.",
+          "emitters": [
+            {
+              "path": "Server/mods/deathmatch/logic/CElement.cpp",
+              "sha256": "1442d7bca8d818d4b3e80fe3890468c426b9872846db46117c8ae0b897a052b7",
+              "callCount": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

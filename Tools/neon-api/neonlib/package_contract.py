@@ -32,6 +32,7 @@ REQUIRED_PACKAGE_PATHS = frozenset({
     "Tools/neon-api/README.md",
     "Tools/neon-api/THIRD_PARTY_NOTICES.md",
     "Tools/neon-api/neon-api.json",
+    "Tools/neon-api/event-emission-evidence.json",
     "Tools/neon-api/neon.py",
     "Tools/neon-api/licenses/GFDL-1.3.md",
     "Tools/neon-api/runtime-probe/client.lua",
