@@ -1,7 +1,9 @@
 <meta>
     <info author="Neon" name="Native vehicle traffic" type="script" version="2.4.1" />
     <script src="telemetry.lua" type="server" />
+    <script src="takeover_lifecycle.lua" type="server" />
     <script src="server.lua" type="server" />
+    <export function="adoptTrafficVehicle" type="server" />
     <script src="transport.lua" type="client" cache="false" />
     <script src="client.lua" type="client" cache="false" />
     <settings>

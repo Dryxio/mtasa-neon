@@ -200,7 +200,7 @@ end
 
 local function populationDesired(ps, mode)
     local demandUnits = mode == "production" and not population.demo and #populationBubbles(ps) or #ps
-    return math.min(population.cap, demandUnits * population.targetPerPlayer)
+    return math.min(TrafficTakeoverLifecycle.remaining(population.cap), demandUnits * population.targetPerPlayer)
 end
 
 local function clearTimer(unit, name)
@@ -398,7 +398,7 @@ local function productionHandoverCapacity(ps, desired)
         end
     end
     local reserveLimit = #populationBubbles(ps) * PRODUCTION_HANDOVER_RESERVE_PER_BUBBLE
-    return math.min(population.cap, desired + math.min(outgoing, reserveLimit)), outgoing
+    return math.min(TrafficTakeoverLifecycle.remaining(population.cap), desired + math.min(outgoing, reserveLimit)), outgoing
 end
 
 local function emitProductionTelemetry()
@@ -590,7 +590,7 @@ local function clearTakeovers(test, reason)
     for _, entry in ipairs(snapshot) do
         if isTimer(entry.takeover.timer) then killTimer(entry.takeover.timer) end
         takeoverVehicles[entry.vehicle] = nil
-        if isElement(entry.vehicle) then destroyElement(entry.vehicle) end
+        TrafficTakeoverLifecycle.expire(entry.vehicle)
         trace("takeover-cleanup", {reason = reason, player = isElement(entry.takeover.player) and getPlayerName(entry.takeover.player) or false})
     end
 end
@@ -718,10 +718,11 @@ local function finalizePlayerTakeover(unit, player)
     removeElementData(unit.vehicle, "neon:ambientVehicleTrafficEpoch")
     local takeover = {player = player, test = activeTest and activeTest.mode == "interaction" and activeTest or false}
     takeoverVehicles[unit.vehicle] = takeover
+    TrafficTakeoverLifecycle.retain(unit.vehicle, player)
     takeover.timer = setTimer(function(vehicle, expected)
         if takeoverVehicles[vehicle] ~= expected then return end
         takeoverVehicles[vehicle] = nil
-        if isElement(vehicle) then destroyElement(vehicle) end
+        TrafficTakeoverLifecycle.expire(vehicle)
         if expected.test and activeTest == expected.test then
             terminalTestFailure("takeover-enter-timeout")
         else
@@ -2107,7 +2108,7 @@ addEventHandler("onPlayerQuit", root, function()
         if takeover.player == source then
             if isTimer(takeover.timer) then killTimer(takeover.timer) end
             takeoverVehicles[vehicle] = nil
-            if isElement(vehicle) then destroyElement(vehicle) end
+            TrafficTakeoverLifecycle.expire(vehicle)
             trace("takeover-cleanup", {reason = "player-quit", player = getPlayerName(source)})
         end
     end
@@ -2241,6 +2242,7 @@ addEventHandler("onVehicleEnter", root, function(player, seat)
         return
     end
     if isTimer(takeover.timer) then killTimer(takeover.timer) end
+    TrafficTakeoverLifecycle.confirm(source)
     takeoverVehicles[source] = nil
     trace("PASS-takeover", {player = getPlayerName(player), vehiclePreserved = true, occupant = true})
     if takeover.test and activeTest == takeover.test then
