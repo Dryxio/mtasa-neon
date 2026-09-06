@@ -13,6 +13,7 @@
 #include "lua/CLuaFunctionParser.h"
 #include <CResource.h>
 #include <game/CRadar.h>
+#include <game/CNativeUI.h>
 
 namespace
 {
@@ -150,8 +151,15 @@ void CLuaPlayerDefs::LoadFunctions()
         CLuaCFunctions::AddFunction(name, func);
 }
 
+bool CLuaPlayerDefs::HasMissionTextLease()
+{
+    return g_missionTextLease.owner != nullptr;
+}
+
 bool CLuaPlayerDefs::AcquireMissionText(lua_State* luaVM, std::string blockName)
 {
+    if (g_pGame->GetNativeUI()->HasMessages())
+        return false;
     CResource* resource = GetCallingResource(luaVM);
     if (!resource || !g_pGame || !IsValidGxtName(blockName))
         return false;

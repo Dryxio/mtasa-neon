@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CNativeUI.h>
 #include "CNativeAITelemetry.h"
 #include <game/CAEVehicleAudioEntity.h>
 #include <game/CAnimBlendAssocGroup.h>
@@ -4938,6 +4939,10 @@ void CClientPed::ApplyControllerStateFixes(CControllerState& Current)
         bool bOnFoot = pVehicle ? false : true;
         CClientPad::ProcessAllToggledControls(Current, bOnFoot);
         CClientPad::ProcessSetAnalogControlState(Current, bOnFoot);
+        // A native menu consumes only this effective input frame. No saved
+        // bind or persistent control-disable flag needs restoration on stop.
+        if (g_pGame->GetNativeUI()->CaptureInput(Current, g_pCore->IsChatInputEnabled() || g_pCore->IsMenuVisible() || g_pCore->GetConsole()->IsVisible()))
+            Current = CControllerState{};
     }
 
     // Is the player stealth aiming?

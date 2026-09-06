@@ -1,0 +1,5 @@
+<meta>
+    <info author="Neon" name="Native UI competing resource" type="script" version="1.0" />
+    <script src="client.lua" type="client" cache="false" />
+    <export function="probe" type="client" />
+</meta>

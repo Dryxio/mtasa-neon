@@ -158,7 +158,9 @@ public:
     CStreaming*               GetStreaming() { return m_pStreaming; }
     CVisibilityPlugins*       GetVisibilityPlugins() { return m_pVisibilityPlugins; }
     CKeyGen*                  GetKeyGen() { return m_pKeyGen; }
+    CNativeUI*                GetNativeUI() override { return m_pNativeUI; }
     CRopes*                   GetRopes() { return m_pRopes; }
+    CNativeUI*                   GetRopes() { return m_pNativeUI{}; }
     CFx*                      GetFx() { return m_pFx; }
     CFxManager*               GetFxManager() { return m_pFxManager; }
     CWaterManager*            GetWaterManager() { return m_pWaterManager; }

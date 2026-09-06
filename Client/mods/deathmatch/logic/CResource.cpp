@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CNativeUI.h>
 #define DECLARE_PROFILER_SECTION_CResource
 #include "profiler/SharedUtil.Profiler.h"
 #include "CServerIdManager.h"
@@ -158,6 +159,7 @@ CResource::~CResource()
     // Mission GXT blocks and native HUD queues contain GTA-global pointers.
     // Clear this resource's prints/help before its Lua state disappears.
     CLuaPlayerDefs::ReleaseMissionTextForResource(this);
+    g_pGame->GetNativeUI()->Release(this);
 
     // Garage types are GTA-global state rather than child elements. Release
     // this resource's script control before its ownership identity disappears.

@@ -54,6 +54,7 @@
 #include "CProjectileInfoSA.h"
 #include "CRadarSA.h"
 #include "CRopesSA.h"
+#include "CNativeUISA.h"
 #include "CSettingsSA.h"
 #include "CStatsSA.h"
 #include "CTaskManagementSystemSA.h"
@@ -1039,6 +1040,7 @@ CGameSA::CGameSA()
         m_pVisibilityPlugins = new CVisibilityPluginsSA;
         m_pKeyGen = new CKeyGenSA;
         m_pRopes = new CRopesSA;
+        m_pNativeUI = new CNativeUISA;
         m_pFx = new CFxSA((CFxSAInterface*)CLASS_CFx);
         m_pFxManager = new CFxManagerSA((CFxManagerSAInterface*)CLASS_CFxManager);
         m_pWaterManager = new CWaterManagerSA();
@@ -1189,6 +1191,8 @@ CGameSA::CGameSA()
 
 CGameSA::~CGameSA()
 {
+    delete m_pNativeUI;
+    m_pNativeUI = nullptr;
     // These presentation tasks deliberately live outside the ped task tree,
     // so the resource leases retain and clean up their native IK chains.
     for (auto& [id, lease] : m_pedNativePointArmLeases)

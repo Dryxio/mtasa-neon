@@ -62,6 +62,7 @@ class CProjectileInfo;
 class CRadar;
 class CRenderWare;
 class CRopes;
+class CNativeUI;
 class CStats;
 class CStreaming;
 struct CStreamingInfo;
@@ -835,4 +836,6 @@ public:
     virtual bool UpdatePedNativePointArm(unsigned int nativePointArmId, CPed* ped, const CVector& target) = 0;
     virtual bool ReleasePedNativePointArm(unsigned int nativePointArmId, CPed* ped) = 0;
     virtual bool IsPedNativePointArmActive(unsigned int nativePointArmId, CPed* ped) const = 0;
+    // Append-only resource-owned native interface service.
+    virtual CNativeUI* GetNativeUI() = 0;
 };

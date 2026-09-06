@@ -65,5 +65,6 @@ public:
     static bool ClearMissionTexts(lua_State* luaVM);
     static bool ClearMissionHelp(lua_State* luaVM);
     static bool ReleaseMissionText(lua_State* luaVM);
+    static bool HasMissionTextLease();
     static void ReleaseMissionTextForResource(class CResource* resource);
 };
