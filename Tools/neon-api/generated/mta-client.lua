@@ -3293,6 +3293,10 @@ function Ped:isMissionActor(...) end
 
 ---@param ... unknown # OOP binding has no safe semantic signature.
 ---@return unknown
+function Ped:isNativeTaskReady(...) end
+
+---@param ... unknown # OOP binding has no safe semantic signature.
+---@return unknown
 function Ped:isOnFire(...) end
 
 --- Global binding: `mta:function:isPedOnGround` (verified).
@@ -5509,6 +5513,11 @@ function path:listDir(...) end
 ---@return integer|false # A non-zero resource-private token, or false for an invalid class, missing resource owner, or exhausted script-reference counter.
 function acquireElementStreamingLease(...) end
 
+--- `neon:function:acquireGarageControl` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function acquireGarageControl(...) end
+
 --- Exclusively loads one GTA mission GXT block for the calling resource.
 --- `neon:function:acquireMissionText` (verified).
 ---@param blockName string # Mission GXT block name, limited to GTA's seven-character key format.
@@ -5550,6 +5559,11 @@ function acquirePedNativeEventProfile(...) end
 ---@param profile string # Currently ambient-random.
 ---@return integer|false # A resource-private group token, or false when membership, ownership, streaming, or native group-slot checks fail.
 function acquirePedNativeGroup(...) end
+
+--- `neon:function:acquirePedNativePointArm` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function acquirePedNativePointArm(...) end
 
 --- Acquires the resource-exclusive GTA script camera and returns a generation token.
 --- `neon:function:acquireScriptCamera` (verified).
@@ -5644,6 +5658,11 @@ function canBrowserNavigateBack(...) end
 ---@return boolean result # Returns **true** if the browser can go to the next page, **false** otherwise.
 function canBrowserNavigateForward(...) end
 
+--- `neon:function:canPedBeDraggedOut` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function canPedBeDraggedOut(...) end
+
 --- This function checks if the given ped can fall off bikes.
 --- `mta:function:canPedBeKnockedOffBike` (verified).
 ---@param thePed ped # the ped you want to check.
@@ -5679,6 +5698,11 @@ function clearMissionHelp(...) end
 --- `neon:function:clearMissionTexts` (verified).
 ---@return boolean # true for the current text owner; false otherwise.
 function clearMissionTexts(...) end
+
+--- `neon:function:clearNativeText` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function clearNativeText(...) end
 
 --- Disarms an object, leaving it undamageable by the managed path again.
 --- `neon:function:clearObjectBreakProfile` (verified).
@@ -5759,6 +5783,11 @@ function createLight(...) end
 ---@return marker value # Returns the marker element that was created, or false if the arguments are incorrect.
 function createMarker(...) end
 
+--- `neon:function:createNativeUI` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function createNativeUI(...) end
+
 --- Fractures a streamed object into fragments cut from its own live geometry.
 --- `neon:function:createObjectBreakEffect` (verified).
 ---@param theObject object # Streamed object element.
@@ -5838,6 +5867,11 @@ function createSWATRope(...) end
 ---@param useSound? boolean # A boolean value indicating whether or not to play a sound when receiving the notification.
 ---@return boolean value # Returns true if the notification is correctly created, false otherwise.
 function createTrayNotification(...) end
+
+--- `neon:function:destroyNativeUI` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function destroyNativeUI(...) end
 
 --- This function can be used to detonate a players satchels.
 --- `mta:function:detonateSatchels` (verified).
@@ -6665,6 +6699,11 @@ function engineReplaceAnimation(...) end
 ---@return boolean result # Returns **true** if the collision was successfully replaced, **false** or [[nil]] if the collision could not be replaced for a reason.
 function engineReplaceCOL(...) end
 
+--- `neon:function:engineReplaceEncryptedModel` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function engineReplaceEncryptedModel(...) end
+
 --- This function replaces the given model with the model contained in a DFF file loaded by [[engineLoadDFF]].
 --- `mta:function:engineReplaceModel` (verified).
 ---@param theModel dff # The model to replace the given model with.
@@ -6820,6 +6859,11 @@ function engineSetCullZone(...) end
 ---@param enabled boolean # Desired state.
 ---@return boolean # true when ownership and state checks pass; false otherwise.
 function engineSetCullZoneEnabled(...) end
+
+--- `neon:function:engineSetDistantLightsAutomaticDrawDistance` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function engineSetDistantLightsAutomaticDrawDistance(...) end
 
 --- Sets the distant-light draw distance.
 --- `neon:function:engineSetDistantLightsDrawDistance` (verified).
@@ -7741,6 +7785,11 @@ function getModel2DFXProperty(...) end
 ---@param index integer # Effect index on the model.
 ---@return string|false # light, particle, roadsign, escalator, sun_glare or unknown; false for an invalid model or index.
 function getModel2DFXType(...) end
+
+--- `neon:function:getNativeUIState` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function getNativeUIState(...) end
 
 --- This function gets the distance from the [camera](/wiki/Camera "Camera") at which the world starts rendering. For more information about this please refer to [setNearClipDistance](/wiki/SetNearClipDistance "SetNearClipDistance").
 --- `mta:function:getNearClipDistance` (verified).
@@ -9791,11 +9840,26 @@ function isPedNativeEventProfileActive(...) end
 ---@return boolean # true only while the resource and native group lease are current.
 function isPedNativeGroupActive(...) end
 
+--- `neon:function:isPedNativePointArmActive` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function isPedNativePointArmActive(...) end
+
+--- `neon:function:isPedNativeTaskReady` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function isPedNativeTaskReady(...) end
+
 --- Reads the effective local never-targeted policy for a script ped.
 --- `neon:function:isPedNeverTargeted` (verified).
 ---@param thePed ped # Script ped only; players are rejected.
 ---@return boolean # The persisted scalar value when present, otherwise the live grouped/native flag; false also covers a disabled policy, unavailable native state, player, or invalid element.
 function isPedNeverTargeted(...) end
+
+--- `neon:function:isPedOnlyDamagedByPlayer` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function isPedOnlyDamagedByPlayer(...) end
 
 --- Reports the locally persisted grouped story-actor protection policy.
 --- `neon:function:isPedStoryProtected` (verified).
@@ -10190,6 +10254,11 @@ function releaseElementStreamingLease(...) end
 ---@return boolean # true when the current resource released its generation; false for a stale or foreign token.
 function releaseFileCutscene(...) end
 
+--- `neon:function:releaseGarageControl` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function releaseGarageControl(...) end
+
 --- Clears an owned native event and releases its physical mission-audio slot.
 --- `neon:function:releaseMissionAudio` (verified).
 ---@param handle integer # Owned opaque handle.
@@ -10200,6 +10269,11 @@ function releaseMissionAudio(...) end
 --- `neon:function:releaseMissionText` (verified).
 ---@return boolean # true when the calling resource released its lease; false otherwise.
 function releaseMissionText(...) end
+
+--- `neon:function:releaseNativeUI` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function releaseNativeUI(...) end
 
 --- Unregisters an owned tag from GTA's native spray path and clears its Grove-material override.
 --- `neon:function:releaseObjectGangTag` (verified).
@@ -10230,6 +10304,11 @@ function releasePedNativeEventProfile(...) end
 ---@param token integer # Token returned by acquirePedNativeGroup.
 ---@return boolean # true when the owned group was released; false for an unknown, stale, or foreign token.
 function releasePedNativeGroup(...) end
+
+--- `neon:function:releasePedNativePointArm` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function releasePedNativePointArm(...) end
 
 --- Restores captured gameplay camera state and optionally leaves a successful scene under its black fade.
 --- `neon:function:releaseScriptCamera` (verified).
@@ -11080,6 +11159,11 @@ function setPedBleeding(...) end
 ---@return boolean value # Returns true if the camera rotation was changed, false otherwise.
 function setPedCameraRotation(...) end
 
+--- `neon:function:setPedCanBeDraggedOut` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function setPedCanBeDraggedOut(...) end
+
 --- This function controls if a ped can fall of his bike by accident \- namely by banging into a wall.
 --- `mta:function:setPedCanBeKnockedOffBike` (verified).
 ---@param thePed ped # the ped whose knockoffstatus is being changed
@@ -11234,6 +11318,11 @@ function setPedNavigateTo(...) end
 ---@param neverTargeted boolean # Desired local targeting flag.
 ---@return boolean # true when the client-local policy was stored; false for a player or invalid element.
 function setPedNeverTargeted(...) end
+
+--- `neon:function:setPedOnlyDamagedByPlayer` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function setPedOnlyDamagedByPlayer(...) end
 
 --- This function allows you to set the oxygen level of a [ped](/wiki/Ped "Ped").
 --- `mta:function:setPedOxygenLevel` (verified).
@@ -11860,6 +11949,11 @@ function showMissionHelp(...) end
 ---@return boolean # true when the current text owner queued the key; false otherwise.
 function showMissionText(...) end
 
+--- `neon:function:showNativeText` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function showNativeText(...) end
+
 --- Prints world [sound](/wiki/Sound "Sound") IDs in the debug output window to help when writing scripts with [setWorldSoundEnabled](/wiki/SetWorldSoundEnabled "SetWorldSoundEnabled").
 --- `mta:function:showSound` (verified).
 ---@param state boolean # A boolean indicating if the world sound IDs should be printed in the debug window or not.
@@ -12047,11 +12141,21 @@ function updateAmbientPedPopulationModels(...) end
 ---@return boolean result # Returns **true** if successful, **false** otherwise.
 function updateElementRpHAnim(...) end
 
+--- `neon:function:updateNativeUI` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function updateNativeUI(...) end
+
 --- Refreshes the observer-side couple pairing and walk-side presentation for one token.
 --- `neon:function:updatePedNativeCouplePresentation` (verified).
 ---@param token integer # Presentation token.
 ---@return boolean # true when the presentation state was refreshed; false for an unknown, stale, or foreign token.
 function updatePedNativeCouplePresentation(...) end
+
+--- `neon:function:updatePedNativePointArm` (runtime-only).
+---@param ... unknown # Signature is opaque; no arity is asserted.
+---@return unknown
+function updatePedNativePointArm(...) end
 
 --- Pre-flight check that reports whether two peds can form a native GTA couple and which one should lead.
 --- `neon:function:validatePedNativeCouple` (verified).
