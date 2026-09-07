@@ -697,6 +697,7 @@ protected:
     void ApplyNativeEventProfileState();
     bool RefreshNativeCollisionResidency();
     void ReleaseNativeCollisionResidency(const char* reason);
+    bool HasNativeCollisionSupport();
     bool HasNativeCollisionGroundSupport();
     void UpdateNativeCollisionAuthorityFence(bool shouldFence, const char* reason);
     void ClearNativeAmbientWanderResponse();

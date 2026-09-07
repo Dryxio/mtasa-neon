@@ -6915,7 +6915,7 @@ bool CClientPed::RefreshNativeCollisionResidency()
     // called synchronously by SetSyncing, before the newly authoritative GTA
     // physical can reach its next ProcessControl tick.
     if (!m_nativeCollisionResidencyReady)
-        UpdateNativeCollisionAuthorityFence(true, "awaiting_ground_support");
+        UpdateNativeCollisionAuthorityFence(true, "awaiting_collision_support");
 
     if (!collisionStore)
     {
@@ -6947,15 +6947,15 @@ bool CClientPed::RefreshNativeCollisionResidency()
         return false;
     m_nativeCollisionResidencyNextProbeAt = now + NATIVE_COLLISION_RESIDENCY_PROBE_INTERVAL;
 
-    const bool ready = collisionStore->IsCollisionResidencyLoaded(m_nativeCollisionResidency) && HasNativeCollisionGroundSupport();
+    const bool ready = collisionStore->IsCollisionResidencyLoaded(m_nativeCollisionResidency) && HasNativeCollisionSupport();
     const bool changed = ready != m_nativeCollisionResidencyReady;
     if (changed)
     {
         m_nativeCollisionResidencyReady = ready;
         CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP,
-                                           ready ? "collision_residency_ground_ready" : "collision_residency_ground_lost", this);
+                                           ready ? "collision_residency_support_ready" : "collision_residency_support_lost", this);
     }
-    UpdateNativeCollisionAuthorityFence(!ready, ready ? "ground_ready" : "ground_lost");
+    UpdateNativeCollisionAuthorityFence(!ready, ready ? "collision_support_ready" : "collision_support_lost");
     return changed;
 }
 
@@ -6977,6 +6977,39 @@ void CClientPed::ReleaseNativeCollisionResidency(const char* reason)
     m_nativeCollisionResidencyNextProbeAt = 0;
     const SString event = reason ? SString("collision_residency_released_%s", reason) : SString("%s", "collision_residency_released");
     CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP, event, this);
+}
+
+bool CClientPed::HasNativeCollisionSupport()
+{
+    if (!m_pPlayerPed)
+        return false;
+
+    CClientVehicle* occupiedVehicle = GetOccupiedVehicle();
+    CVehicle*       nativeVehicle = m_pPlayerPed->GetVehicle();
+    if (!occupiedVehicle && !nativeVehicle)
+        return HasNativeCollisionGroundSupport();
+
+    // A ped attached to a vehicle does not have meaningful ground contact of
+    // its own: GTA disables the ped physical and the vehicle owns collision,
+    // including while it is legitimately airborne. Do not weaken the fence
+    // for a half-completed enter/exit transition, though. Both MTA's occupant
+    // graph and GTA's physical must identify the same streamed vehicle and the
+    // declared seat must point back to this ped before native authority may run.
+    const unsigned int occupiedSeat = GetOccupiedVehicleSeat();
+    CVehicle* const    occupiedNativeVehicle = occupiedVehicle ? occupiedVehicle->GetGameVehicle() : nullptr;
+    const bool         streamed = occupiedVehicle && occupiedVehicle->IsStreamedIn() && occupiedNativeVehicle;
+    const bool         vehicleMatches = streamed && occupiedNativeVehicle == nativeVehicle;
+    const bool         seatMatches = occupiedSeat != 0xFF && occupiedVehicle && occupiedVehicle->GetOccupant(occupiedSeat) == this;
+    const bool         supported = vehicleMatches && seatMatches;
+    if (IsNativeCollisionResidencyTraceEnabled())
+    {
+        g_pCore->GetConsole()->Printf(
+            "[native-collision-residency][vehicle-support] ped=%u model=%lu occupiedVehicle=%u seat=%u streamed=%s nativeVehicle=%s "
+            "vehicleMatches=%s seatMatches=%s ready=%s",
+            GetID().Value(), GetModel(), occupiedVehicle ? occupiedVehicle->GetID().Value() : INVALID_ELEMENT_ID, occupiedSeat, streamed ? "true" : "false",
+            nativeVehicle ? "true" : "false", vehicleMatches ? "true" : "false", seatMatches ? "true" : "false", supported ? "true" : "false");
+    }
+    return supported;
 }
 
 bool CClientPed::HasNativeCollisionGroundSupport()
@@ -7075,9 +7108,9 @@ void CClientPed::UpdateNativeCollisionAuthorityFence(bool shouldFence, const cha
         ApplyPhysicalFreezeState();
         if (!fence.previousStaticWaitingForCollision && !m_pPlayerPed->IsStatic())
             m_pPlayerPed->AddToMovingList();
-        CNativeAITelemetry::RecordPedEvent(ENativeAITelemetryCategory::OWNERSHIP,
-                                           reason && strcmp(reason, "ground_ready") == 0 ? "collision_authority_ground_ready" : "collision_authority_released",
-                                           this);
+        CNativeAITelemetry::RecordPedEvent(
+            ENativeAITelemetryCategory::OWNERSHIP,
+            reason && strcmp(reason, "collision_support_ready") == 0 ? "collision_authority_support_ready" : "collision_authority_released", this);
     }
 }
 
