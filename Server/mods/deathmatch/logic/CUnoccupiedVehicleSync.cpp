@@ -310,8 +310,9 @@ void CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleSync(CUnoccupiedVehicleSync
                         }
                         if (vehicle.data.bSyncVelocity)
                         {
-                            if (fabs(vehicle.data.vecVelocity.fX) <= FLOAT_EPSILON && fabs(vehicle.data.vecVelocity.fY) <= FLOAT_EPSILON &&
-                                fabs(vehicle.data.vecVelocity.fZ) <= 0.1f)
+                            // A received stop must reach observers as well as server Lua.
+                            // Suppress only an unchanged value, never zero by itself.
+                            if (pVehicle->GetVelocity() == vehicle.data.vecVelocity)
                             {
                                 vehicle.data.bSyncVelocity = false;
                             }

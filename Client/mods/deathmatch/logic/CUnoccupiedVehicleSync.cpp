@@ -306,7 +306,11 @@ bool CUnoccupiedVehicleSync::WriteVehicleInformation(NetBitStreamInterface* pBit
             pVehicle->m_LastSyncedData->vecPosition = vehicle.data.vecPosition;
         }
 
-        if (fabs(vehicle.data.vecVelocity.fX) > FLOAT_EPSILON || fabs(vehicle.data.vecVelocity.fY) > FLOAT_EPSILON || fabs(vehicle.data.vecVelocity.fZ) > 0.1f)
+        // Send the transition to rest too. Omitting zero leaves the server
+        // with the last moving velocity, blocking server-owned NPC arrivals.
+        if (fabs(vehicle.data.vecVelocity.fX) > FLOAT_EPSILON || fabs(vehicle.data.vecVelocity.fY) > FLOAT_EPSILON ||
+            fabs(vehicle.data.vecVelocity.fZ) > 0.1f || fabs(pVehicle->m_LastSyncedData->vecMoveSpeed.fX) > FLOAT_EPSILON ||
+            fabs(pVehicle->m_LastSyncedData->vecMoveSpeed.fY) > FLOAT_EPSILON || fabs(pVehicle->m_LastSyncedData->vecMoveSpeed.fZ) > 0.1f)
         {
             bSyncVehicle = true;
             vehicle.data.bSyncVelocity = true;
@@ -324,7 +328,11 @@ bool CUnoccupiedVehicleSync::WriteVehicleInformation(NetBitStreamInterface* pBit
             pVehicle->m_LastSyncedData->vecPosition = vehicle.data.vecPosition;
         }
 
-        if (fabs(vehicle.data.vecVelocity.fX) > FLOAT_EPSILON || fabs(vehicle.data.vecVelocity.fY) > FLOAT_EPSILON || fabs(vehicle.data.vecVelocity.fZ) > 0.1f)
+        // Send the transition to rest too. Omitting zero leaves the server
+        // with the last moving velocity, blocking server-owned NPC arrivals.
+        if (fabs(vehicle.data.vecVelocity.fX) > FLOAT_EPSILON || fabs(vehicle.data.vecVelocity.fY) > FLOAT_EPSILON ||
+            fabs(vehicle.data.vecVelocity.fZ) > 0.1f || fabs(pVehicle->m_LastSyncedData->vecMoveSpeed.fX) > FLOAT_EPSILON ||
+            fabs(pVehicle->m_LastSyncedData->vecMoveSpeed.fY) > FLOAT_EPSILON || fabs(pVehicle->m_LastSyncedData->vecMoveSpeed.fZ) > 0.1f)
         {
             bSyncVehicle = true;
             vehicle.data.bSyncVelocity = true;
