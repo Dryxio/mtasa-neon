@@ -218,6 +218,9 @@ public:
     // precondition so mission runtimes can wait without submitting throwaway
     // tasks or mistaking that convergence window for a permanent failure.
     virtual bool IsPedScriptCommandTaskReady(CPed* pPed) const = 0;
+
+    // Appended for TASK_ACHIEVE_HEADING without shifting existing task factories.
+    virtual CTaskSimple* CreateTaskSimpleAchieveHeading(float headingDegrees) = 0;
     // Cargo operations retain MTA ownership; state is 0 (released), 1 (holding), 2 (putting down), or 3 (starting).
     virtual bool StartPedCarryObject(CPed* ped, CObject* object) = 0;
     virtual bool PutDownPedObject(CPed* ped) = 0;

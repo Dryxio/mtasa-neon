@@ -350,3 +350,20 @@ public:
 private:
     void Initialize(CTaskSAInterface* const* pTasks, size_t uiTaskCount, bool bRepeat);
 };
+
+// Native GTA layout; keep the original vtable, clone and destructor.
+class CTaskSimpleAchieveHeadingSAInterface : public CTaskSimpleSAInterface
+{
+public:
+    float         heading;
+    float         changeRate;
+    float         tolerance;
+    unsigned char flags;
+    unsigned char padding[3];
+};
+static_assert(sizeof(CTaskSimpleAchieveHeadingSAInterface) == 0x18, "Unexpected AchieveHeading layout");
+class CTaskSimpleAchieveHeadingSA : public virtual CTaskSimpleSA
+{
+public:
+    explicit CTaskSimpleAchieveHeadingSA(float headingDegrees);
+};

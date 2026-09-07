@@ -465,3 +465,14 @@ int CTaskComplexUseSequenceSA::GetCurrentTaskIndex() const
     const auto* pInterface = static_cast<const CTaskComplexUseSequenceSAInterface*>(GetInterface());
     return pInterface ? pInterface->m_iCurrentTask : -1;
 }
+
+CTaskSimpleAchieveHeadingSA::CTaskSimpleAchieveHeadingSA(float headingDegrees)
+{
+    CreateTaskInterface(sizeof(CTaskSimpleAchieveHeadingSAInterface));
+    if (!IsValid())
+        return;
+    // 05D4 at 0x49090B converts degrees and supplies the native defaults.
+    // Calling the constructor retains GTA's IK and heading-rate cleanup.
+    using Constructor = void(__thiscall*)(CTaskSAInterface*, float, float, float);
+    reinterpret_cast<Constructor>(0x667E20)(GetInterface(), headingDegrees * (3.14159265358979323846f / 180.0f), 0.5f, 0.2f);
+}

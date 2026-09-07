@@ -622,6 +622,13 @@ void CTasksSA::StaticSetHooks()
     InstallTaskCarSAHooks();
 }
 
+CTaskSimple* CTasksSA::CreateTaskSimpleAchieveHeading(float headingDegrees)
+{
+    auto* task = NewTask<CTaskSimpleAchieveHeadingSA>(headingDegrees);
+    m_pTaskManagementSystem->AddTask(task);
+    return task;
+}
+
 namespace
 {
     // Retail 1.0 US layout. Keep the animation implementation in GTA, while
