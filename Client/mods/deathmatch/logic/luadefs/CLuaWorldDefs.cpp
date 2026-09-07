@@ -583,13 +583,69 @@ int CLuaWorldDefs::GetAmbientPedCivilianCoupleCandidate(lua_State* luaVM)
 int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
 {
     SAmbientPedPopulationProfile profile;
-    if (!g_pGame->GetAmbientPedPopulationProfile(profile))
+    const auto                   result = g_pGame->GetAmbientPedPopulationProfile(profile);
+    if (result != EAmbientPedPopulationProfileResult::Success)
     {
+        const char* reason = "unknown";
+        switch (result)
+        {
+            case EAmbientPedPopulationProfileResult::Inactive:
+                reason = "inactive";
+                break;
+            case EAmbientPedPopulationProfileResult::ZoneUnavailable:
+                reason = "zone-unavailable";
+                break;
+            case EAmbientPedPopulationProfileResult::ZoneInfoUnavailable:
+                reason = "zone-info-unavailable";
+                break;
+            case EAmbientPedPopulationProfileResult::ZonePointerInvalid:
+                reason = "zone-pointer-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::ZoneInfoPointerInvalid:
+                reason = "zone-info-pointer-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::TargetCalculationFailed:
+                reason = "target-calculation-failed";
+                break;
+            case EAmbientPedPopulationProfileResult::PedDensityInvalid:
+                reason = "ped-density-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::MaximumPedsInvalid:
+                reason = "maximum-peds-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::CreationDistanceInvalid:
+                reason = "creation-distance-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::GenerationDistanceInvalid:
+                reason = "generation-distance-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::ZoneTypeInvalid:
+                reason = "zone-type-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::TimeIndexInvalid:
+                reason = "time-index-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::WeekendInvalid:
+                reason = "weekend-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::OtherPedPercentageInvalid:
+                reason = "other-ped-percentage-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::WorldLevelInvalid:
+                reason = "world-level-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::TargetInvalid:
+                reason = "target-invalid";
+                break;
+            case EAmbientPedPopulationProfileResult::Success:
+                break;
+        }
         lua_pushboolean(luaVM, false);
-        return 1;
+        lua_pushstring(luaVM, reason);
+        return 2;
     }
 
-    lua_createtable(luaVM, 0, 20);
+    lua_createtable(luaVM, 0, 21);
     lua_pushnumber(luaVM, profile.target);
     lua_setfield(luaVM, -2, "target");
     lua_pushnumber(luaVM, profile.supportedTarget);
@@ -630,6 +686,8 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
     lua_setfield(luaVM, -2, "worldLevel");
     lua_pushinteger(luaVM, profile.copSuppressionFlags);
     lua_setfield(luaVM, -2, "copSuppressionFlags");
+    lua_pushinteger(luaVM, profile.otherPedPercentage);
+    lua_setfield(luaVM, -2, "otherPedPercentage");
     std::size_t zoneLabelLength = 0;
     while (zoneLabelLength < sizeof(profile.zoneLabel) && profile.zoneLabel[zoneLabelLength] != '\0')
         ++zoneLabelLength;
@@ -647,8 +705,7 @@ int CLuaWorldDefs::GetAmbientPedPopulationProfile(lua_State* luaVM)
 
 bool CLuaWorldDefs::UpdateAmbientPedPopulationModels(CVector origin)
 {
-    g_pGame->UpdateAmbientPedPopulationModels(origin);
-    return true;
+    return g_pGame->UpdateAmbientPedPopulationModels(origin);
 }
 
 bool CLuaWorldDefs::IsAmbientPedSphereVisible(CVector position, float radius)

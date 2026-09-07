@@ -366,12 +366,12 @@ public:
     ENativeWorldRuntimeAdmissionReadiness GetNativeWorldRuntimeAdmissionReadiness() const override;
     bool                                  ActivateNativeWorldRuntimeSelection(const SNativeWorldStartupSelection& selection, std::string& error) override;
     bool                                  ReleaseDetachedNativeWorldSession(const SNativeWorldStartupSelection& expectedSelection, std::string& error) override;
-    void                                  UpdateAmbientPedPopulationModels(const CVector& origin) override;
+    bool                                  UpdateAmbientPedPopulationModels(const CVector& origin) override;
     void                                  ResetAmbientPedPopulationModels() override;
     EAmbientPedSpawnCandidateResult       GetAmbientPedSpawnCandidate(const CVector& origin, SAmbientPedSpawnCandidate& candidate) override;
     EAmbientPedSpawnCandidateResult       GetAmbientPedSpawnCandidateForPopulation(const CVector& origin, EAmbientPedPopulationSelection selection,
                                                                                    unsigned char gangId, SAmbientPedSpawnCandidate& candidate) override;
-    bool                                  GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profile) const override;
+    EAmbientPedPopulationProfileResult    GetAmbientPedPopulationProfile(SAmbientPedPopulationProfile& profile) const override;
     bool                                  ResetAmbientPedPopulationZonesToBootstrap() override;
     bool                                  SetAmbientPedPopulationZoneState(const char* label, const SAmbientPedPopulationZoneState& state) override;
     EAmbientPedSpawnCandidateResult       GetAmbientPedGangGroupCandidate(const CVector& origin, unsigned char gangId, unsigned char maxMembers,
@@ -524,6 +524,13 @@ private:
     int              m_ambientPedDealerModel{-1};
     int              m_ambientPedCopModel{-1};
     float            m_ambientPedPopulationOriginZ{};
+    void*            m_ambientPedPopulationZone{};
+    void*            m_ambientPedPopulationZoneInfo{};
+    int              m_ambientPedPopulationZoneType{-1};
+    int              m_ambientPedPopulationTimeIndex{-1};
+    int              m_ambientPedPopulationWeekend{-1};
+    int              m_ambientPedPopulationWorldLevel{-1};
+    int              m_ambientPedPopulationOtherPercentage{-1};
     unsigned char    m_ambientPedPopulationZoneSnapshot[380][0x11]{};
     unsigned char    m_ambientPedPopulationZoneExpected[380][0x11]{};
     unsigned char    m_ambientPedPopulationModelFlagSnapshot[289]{};
