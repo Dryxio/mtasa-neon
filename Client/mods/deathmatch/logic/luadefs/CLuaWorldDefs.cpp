@@ -378,7 +378,7 @@ int CLuaWorldDefs::GetAmbientVehicleSpawnCandidate(lua_State* luaVM)
         return 2;
     }
 
-    lua_createtable(luaVM, 0, 8);
+    lua_createtable(luaVM, 0, 22);
     lua_pushinteger(luaVM, candidate.modelId);
     lua_setfield(luaVM, -2, "model");
     lua_pushnumber(luaVM, candidate.position.fX);
@@ -395,6 +395,34 @@ int CLuaWorldDefs::GetAmbientVehicleSpawnCandidate(lua_State* luaVM)
     lua_setfield(luaVM, -2, "vehicleClass");
     lua_pushinteger(luaVM, candidate.drivingStyle);
     lua_setfield(luaVM, -2, "drivingStyle");
+    lua_pushnumber(luaVM, candidate.pathLerp);
+    lua_setfield(luaVM, -2, "diagnosticPathLerp");
+    lua_pushnumber(luaVM, candidate.laneOffsetMeters);
+    lua_setfield(luaVM, -2, "diagnosticLaneOffset");
+    lua_pushinteger(luaVM, candidate.pathNodeAArea);
+    lua_setfield(luaVM, -2, "diagnosticNodeAArea");
+    lua_pushinteger(luaVM, candidate.pathNodeAId);
+    lua_setfield(luaVM, -2, "diagnosticNodeAId");
+    lua_pushinteger(luaVM, candidate.pathNodeBArea);
+    lua_setfield(luaVM, -2, "diagnosticNodeBArea");
+    lua_pushinteger(luaVM, candidate.pathNodeBId);
+    lua_setfield(luaVM, -2, "diagnosticNodeBId");
+    lua_pushinteger(luaVM, candidate.carLinkArea);
+    lua_setfield(luaVM, -2, "diagnosticCarLinkArea");
+    lua_pushinteger(luaVM, candidate.carLinkId);
+    lua_setfield(luaVM, -2, "diagnosticCarLinkId");
+    lua_pushinteger(luaVM, candidate.laneCount);
+    lua_setfield(luaVM, -2, "diagnosticLaneCount");
+    lua_pushinteger(luaVM, candidate.laneIndex);
+    lua_setfield(luaVM, -2, "diagnosticLaneIndex");
+    lua_pushnumber(luaVM, candidate.queryDirectionX);
+    lua_setfield(luaVM, -2, "diagnosticDirectionX");
+    lua_pushnumber(luaVM, candidate.queryDirectionY);
+    lua_setfield(luaVM, -2, "diagnosticDirectionY");
+    lua_pushnumber(luaVM, candidate.queryDotLimit);
+    lua_setfield(luaVM, -2, "diagnosticDotLimit");
+    lua_pushboolean(luaVM, candidate.queryRequireInsideCone);
+    lua_setfield(luaVM, -2, "diagnosticRequireInsideCone");
     return 1;
 }
 

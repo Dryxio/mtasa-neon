@@ -51,6 +51,7 @@
 #include "CPickupsSA.h"
 #include "CPlayerInfoSA.h"
 #include "CPointLightsSA.h"
+#include "CPhysicalSA.h"
 #include "CProjectileInfoSA.h"
 #include "CRadarSA.h"
 #include "CRopesSA.h"
@@ -229,8 +230,17 @@ namespace
         return true;
     }
 
-    bool GetAmbientVehicleLaneOffset(const SAmbientVehicleNodeAddressSA& from, const SAmbientVehicleNodeAddressSA& to, unsigned int modelId,
-                                     VehicleClass vehicleClass, float& offsetMeters)
+    struct SAmbientVehicleLaneSelection
+    {
+        float        offsetMeters{};
+        unsigned int carLinkArea{};
+        unsigned int carLinkId{};
+        unsigned int laneCount{};
+        unsigned int laneIndex{};
+    };
+
+    bool GetAmbientVehicleLaneSelection(const SAmbientVehicleNodeAddressSA& from, const SAmbientVehicleNodeAddressSA& to, unsigned int modelId,
+                                        VehicleClass vehicleClass, SAmbientVehicleLaneSelection& selection)
     {
         constexpr unsigned int PATH_AREA_COUNT = 64;
         constexpr unsigned int PATH_NODE_ARRAY_OFFSET = 0x804;
@@ -291,17 +301,25 @@ namespace
         const unsigned char laneFlags = carLink[0x0B];
         const unsigned int  lanesTowardAttached = laneFlags & 0x07;
         const unsigned int  lanesAwayFromAttached = (laneFlags >> 3) & 0x07;
-        const unsigned int  laneCount = attachedToTo ? lanesTowardAttached : lanesAwayFromAttached;
-        if (laneCount == 0 || ((modelId == 431 || modelId == 437) && laneCount < 2) || (vehicleClass == VehicleClass::BMX && laneCount >= 2))
+
+        // Retail GenerateOneRandomCar selects the low lane bits when the car
+        // link is attached to the target node and the high bits otherwise.
+        // Older reverse-engineered names invert every one-way carriageway.
+        selection.laneCount = attachedToTo ? lanesTowardAttached : lanesAwayFromAttached;
+        if (selection.laneCount == 0 || ((modelId == 431 || modelId == 437) && selection.laneCount < 2) ||
+            (vehicleClass == VehicleClass::BMX && selection.laneCount >= 2))
             return false;
 
-        const float oneWayOffset = lanesTowardAttached == 0      ? 0.5f - 0.5f * lanesAwayFromAttached
+        const float oneWayOffset = lanesTowardAttached == 0     ? 0.5f - 0.5f * lanesAwayFromAttached
                                    : lanesAwayFromAttached == 0 ? 0.5f - 0.5f * lanesTowardAttached
-                                                                 : static_cast<float>(carLink[0x0A]) * (1.0f / 86.4f) + 0.5f;
-        offsetMeters = (oneWayOffset + rand() % laneCount) * 5.4f;
+                                                                : static_cast<float>(carLink[0x0A]) * (1.0f / 86.4f) + 0.5f;
+        selection.carLinkArea = carLinkArea;
+        selection.carLinkId = carLinkId;
+        selection.laneIndex = rand() % selection.laneCount;
+        selection.offsetMeters = (oneWayOffset + selection.laneIndex) * 5.4f;
         if (vehicleClass == VehicleClass::BMX)
-            offsetMeters += 1.458f;
-        return std::isfinite(offsetMeters) && std::abs(offsetMeters) <= 50.0f;
+            selection.offsetMeters += 1.458f;
+        return std::isfinite(selection.offsetMeters) && std::abs(selection.offsetMeters) <= 50.0f;
     }
     constexpr std::uintptr_t GTA_NAVIGATION_ZONE_ARRAY = 0xBA3798;
     constexpr std::uintptr_t GTA_ZONE_INFO_ARRAY = 0xBA1DF0;
@@ -2366,8 +2384,59 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
         vehicleClass != VehicleClass::BIKE && vehicleClass != VehicleClass::BMX)
         return EAmbientVehicleSpawnCandidateResult::UnsupportedModel;
 
-    float       directionX = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_X);
-    float       directionY = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_Y);
+    constexpr float          SPAWN_FORWARD_NARROW = 0.85f;
+    constexpr float          SPAWN_FORWARD_WIDE = 0.707f;
+    constexpr float          FAST_PLAYER_VEHICLE_SPEED = 0.4f;
+    constexpr float          MOVING_PLAYER_VEHICLE_SPEED = 0.1f;
+    constexpr std::uintptr_t GTA_TOP_DOWN_CAMERA_HEIGHT = 0xB6F9B4;
+    constexpr std::uintptr_t GTA_TOP_DOWN_CAMERA_THRESHOLD = 0x858CAC;
+    constexpr std::uintptr_t FUNC_FindPlayerVehicle = 0x56E0D0;
+
+    float directionX = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_X);
+    float directionY = *reinterpret_cast<const float*>(GTA_CAMERA_FORWARD_Y);
+    float dotLimit = SPAWN_FORWARD_WIDE;
+    bool  requireInsideCone = (rand() & 1) == 0;
+
+    // Match GenerateOneRandomCar's directional policy. Retail does not predict
+    // a destination: at speed it biases candidates using the player's current
+    // vehicle velocity, while slow/on-foot generation alternates around the
+    // camera direction. Lua may move the query origin slightly forward solely
+    // to compensate for distributed request latency.
+    if (*reinterpret_cast<const float*>(GTA_TOP_DOWN_CAMERA_HEIGHT) < *reinterpret_cast<const float*>(GTA_TOP_DOWN_CAMERA_THRESHOLD))
+    {
+        directionX = SPAWN_FORWARD_WIDE;
+        directionY = SPAWN_FORWARD_WIDE;
+        dotLimit = -1.0f;
+        requireInsideCone = true;
+    }
+    else
+    {
+        using FindPlayerVehicle = CPhysicalSAInterface*(__cdecl*)(int, bool);
+        CPhysicalSAInterface* const playerVehicle = reinterpret_cast<FindPlayerVehicle>(FUNC_FindPlayerVehicle)(-1, false);
+        if (playerVehicle)
+        {
+            directionX = playerVehicle->m_vecLinearVelocity.fX;
+            directionY = playerVehicle->m_vecLinearVelocity.fY;
+            const float speed = std::sqrt(directionX * directionX + directionY * directionY);
+            if (std::isfinite(speed) && speed > MOVING_PLAYER_VEHICLE_SPEED)
+            {
+                directionX /= speed;
+                directionY /= speed;
+                const unsigned int branch = rand() & 3;
+                if (speed > FAST_PLAYER_VEHICLE_SPEED)
+                {
+                    dotLimit = branch <= 1 ? SPAWN_FORWARD_NARROW : SPAWN_FORWARD_WIDE;
+                    requireInsideCone = branch <= 2;
+                }
+                else
+                {
+                    dotLimit = branch == 0 ? SPAWN_FORWARD_NARROW : SPAWN_FORWARD_WIDE;
+                    requireInsideCone = branch <= 1;
+                }
+            }
+        }
+    }
+
     const float directionLength = std::sqrt(directionX * directionX + directionY * directionY);
     if (!std::isfinite(directionLength) || directionLength < 0.001f)
     {
@@ -2394,24 +2463,8 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
     using GenerateCarCreationCoors2 = bool(__cdecl*)(CVector, float, float, float, bool, float, float, CVector*, SAmbientVehicleNodeAddressSA*,
                                                      SAmbientVehicleNodeAddressSA*, float*, bool, bool);
     const auto generate = reinterpret_cast<GenerateCarCreationCoors2>(FUNC_GenerateCarCreationCoors2);
-    bool generated = generate(origin, directionX, directionY, -1.0f, true, generationMultiplier * generationBaseDistance, 38.0f, &position, &nodeA, &nodeB,
-                              &pathLerp, true, false);
-    if (!generated)
-    {
-        // Retail calls this probabilistic oracle twice per frame indefinitely.
-        // Neon has a bounded server request, so probe three additional camera
-        // sectors with a wider inner ring before reporting a normal miss.
-        constexpr float FALLBACK_ANGLES[] = {1.0471975512f, -1.0471975512f, 3.1415926536f};
-        for (float angle : FALLBACK_ANGLES)
-        {
-            const float rotatedX = directionX * std::cos(angle) - directionY * std::sin(angle);
-            const float rotatedY = directionX * std::sin(angle) + directionY * std::cos(angle);
-            generated = generate(origin, rotatedX, rotatedY, -1.0f, true, generationMultiplier * generationBaseDistance, 70.0f, &position, &nodeA, &nodeB,
-                                 &pathLerp, true, false);
-            if (generated)
-                break;
-        }
-    }
+    const bool generated = generate(origin, directionX, directionY, dotLimit, requireInsideCone, generationMultiplier * generationBaseDistance, 38.0f,
+                                    &position, &nodeA, &nodeB, &pathLerp, true, false);
     if (!generated)
     {
         // GenerateCarCreationCoors2 keeps two low-traffic and two ordinary
@@ -2448,13 +2501,13 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
     if (!std::isfinite(deltaX) || !std::isfinite(deltaY) || !std::isfinite(pathLength) || pathLength < 0.1f)
         return EAmbientVehicleSpawnCandidateResult::InvalidPathNode;
 
-    float laneOffset = 0.0f;
-    if (!GetAmbientVehicleLaneOffset(nodeA, nodeB, modelId, vehicleClass, laneOffset))
+    SAmbientVehicleLaneSelection laneSelection{};
+    if (!GetAmbientVehicleLaneSelection(nodeA, nodeB, modelId, vehicleClass, laneSelection))
         return EAmbientVehicleSpawnCandidateResult::NoPath;
     const float directionXOnRoad = deltaX / pathLength;
     const float directionYOnRoad = deltaY / pathLength;
-    position.fX += laneOffset * directionYOnRoad;
-    position.fY -= laneOffset * directionXOnRoad;
+    position.fX += laneSelection.offsetMeters * directionYOnRoad;
+    position.fY -= laneSelection.offsetMeters * directionXOnRoad;
 
     const float pathHeight = pathStart.fZ + (pathEnd.fZ - pathStart.fZ) * pathLerp;
     bool        hasGround = false;
@@ -2477,6 +2530,20 @@ EAmbientVehicleSpawnCandidateResult CGameSA::GetAmbientVehicleSpawnCandidate(con
     candidate.position = CVector(position.fX, position.fY, groundZ + centreToBase);
     candidate.rotationDegrees = rotation;
     candidate.modelId = modelId;
+    candidate.pathLerp = pathLerp;
+    candidate.laneOffsetMeters = laneSelection.offsetMeters;
+    candidate.pathNodeAArea = nodeA.area;
+    candidate.pathNodeAId = nodeA.node;
+    candidate.pathNodeBArea = nodeB.area;
+    candidate.pathNodeBId = nodeB.node;
+    candidate.carLinkArea = laneSelection.carLinkArea;
+    candidate.carLinkId = laneSelection.carLinkId;
+    candidate.laneCount = laneSelection.laneCount;
+    candidate.laneIndex = laneSelection.laneIndex;
+    candidate.queryDirectionX = directionX;
+    candidate.queryDirectionY = directionY;
+    candidate.queryDotLimit = dotLimit;
+    candidate.queryRequireInsideCone = requireInsideCone;
 
     // GenerateOneRandomCar stores an integer cruise speed. Preserve its
     // vehicle-list ranges and reductions before transporting the scalar to the

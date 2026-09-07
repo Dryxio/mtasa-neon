@@ -461,16 +461,30 @@ struct SAmbientVehicleOccupantModelCandidate
     unsigned char count{};
 };
 
-// GenerateCarCreationCoors2 owns only GTA's local path/camera query. The
-// returned scalars are safe to transport; path-node addresses deliberately
-// stay inside the proposing process because streamed path areas can differ
-// between clients and across an ownership epoch.
+// GenerateCarCreationCoors2 owns only GTA's local path/camera query. The road
+// identifiers below are diagnostic evidence from the proposing process, not a
+// portable route handle: streamed path areas can differ between clients and
+// across an ownership epoch, so callers must never feed them back into GTA.
 struct SAmbientVehicleSpawnCandidate
 {
     CVector       position{};
     float         rotationDegrees{};
     unsigned int  modelId{};
     float         cruiseSpeed{};
+    float         pathLerp{};
+    float         laneOffsetMeters{};
+    unsigned int  pathNodeAArea{};
+    unsigned int  pathNodeAId{};
+    unsigned int  pathNodeBArea{};
+    unsigned int  pathNodeBId{};
+    unsigned int  carLinkArea{};
+    unsigned int  carLinkId{};
+    unsigned int  laneCount{};
+    unsigned int  laneIndex{};
+    float         queryDirectionX{};
+    float         queryDirectionY{};
+    float         queryDotLimit{};
+    bool          queryRequireInsideCone{};
     unsigned char vehicleClass{};
     unsigned char drivingStyle{};
 };
