@@ -794,6 +794,11 @@ bool CTasksSA::StartPedCarryObject(CPed* ped, CObject* object)
         return false;
     }
     m_pTaskManagementSystem->AddTask(task);
+    // Retail ProcessPed (0x693D4E) disables collision only on its first tick.
+    // A Lua submission can precede that tick by a physics pass: the box must
+    // not become a moving platform for its holder while startup is pending.
+    // The lease above preserves the caller's collision state for all exits.
+    native->bUsesCollision = false;
     manager->SetTaskSecondary(task, TASK_SECONDARY_PARTIAL_ANIM);
     return true;
 }
