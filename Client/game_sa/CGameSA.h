@@ -160,7 +160,6 @@ public:
     CKeyGen*                  GetKeyGen() { return m_pKeyGen; }
     CNativeUI*                GetNativeUI() override { return m_pNativeUI; }
     CRopes*                   GetRopes() { return m_pRopes; }
-    CNativeUI*                   GetRopes() { return m_pNativeUI{}; }
     CFx*                      GetFx() { return m_pFx; }
     CFxManager*               GetFxManager() { return m_pFxManager; }
     CWaterManager*            GetWaterManager() { return m_pWaterManager; }
@@ -470,6 +469,7 @@ private:
     CVisibilityPlugins*                                                        m_pVisibilityPlugins;
     CKeyGen*                                                                   m_pKeyGen;
     CRopes*                                                                    m_pRopes;
+    CNativeUI*                                                                m_pNativeUI{};
     CFx*                                                                       m_pFx;
     CFxManagerSA*                                                              m_pFxManager;
     CWaterManager*                                                             m_pWaterManager;
