@@ -144,6 +144,7 @@ void CLuaVehicleDefs::LoadFunctions()
         {"getVehicleDoorLockMode", ArgumentParser<GetVehicleDoorLockMode>},
         {"getVehicleTyresCanBurst", ArgumentParser<GetVehicleTyresCanBurst>},
         {"getVehicleStraightLineDistance", ArgumentParser<GetVehicleStraightLineDistance>},
+        {"getVehicleNativeAutoPilotDiagnostic", GetVehicleNativeAutoPilotDiagnostic},
 
         // Vehicle set funcs
         {"createVehicle", CreateVehicle},
@@ -1922,6 +1923,81 @@ std::variant<bool, unsigned int> CLuaVehicleDefs::GetVehicleStraightLineDistance
     if (!distance)
         return false;
     return static_cast<unsigned int>(*distance);
+}
+
+int CLuaVehicleDefs::GetVehicleNativeAutoPilotDiagnostic(lua_State* luaVM)
+{
+    CClientVehicle*  vehicle = nullptr;
+    CScriptArgReader argStream(luaVM);
+    argStream.ReadUserData(vehicle);
+
+    if (!argStream.HasErrors())
+    {
+        const auto diagnostic = vehicle->GetNativeAutoPilotDiagnostic();
+        if (diagnostic)
+        {
+            lua_createtable(luaVM, 0, 38);
+            const auto setInteger = [luaVM](const char* name, lua_Integer value)
+            {
+                lua_pushinteger(luaVM, value);
+                lua_setfield(luaVM, -2, name);
+            };
+            const auto setBoolean = [luaVM](const char* name, bool value)
+            {
+                lua_pushboolean(luaVM, value);
+                lua_setfield(luaVM, -2, name);
+            };
+            const auto setNumber = [luaVM](const char* name, float value)
+            {
+                lua_pushnumber(luaVM, value);
+                lua_setfield(luaVM, -2, name);
+            };
+
+            setInteger("currentAddressArea", diagnostic->currentAddressArea);
+            setInteger("currentAddressNode", diagnostic->currentAddressNode);
+            setInteger("startingAddressArea", diagnostic->startingAddressArea);
+            setInteger("startingAddressNode", diagnostic->startingAddressNode);
+            setInteger("currentPathLinkArea", diagnostic->currentPathLinkArea);
+            setInteger("currentPathLinkId", diagnostic->currentPathLinkId);
+            setInteger("nextPathLinkArea", diagnostic->nextPathLinkArea);
+            setInteger("nextPathLinkId", diagnostic->nextPathLinkId);
+            setInteger("currentDirection", diagnostic->currentDirection);
+            setInteger("nextDirection", diagnostic->nextDirection);
+            setInteger("currentLane", diagnostic->currentLane);
+            setInteger("nextLane", diagnostic->nextLane);
+            setInteger("laneChangeCounter", diagnostic->laneChangeCounter);
+            setInteger("drivingStyle", diagnostic->drivingStyle);
+            setInteger("carMission", diagnostic->carMission);
+            setInteger("temporaryAction", diagnostic->temporaryAction);
+            setInteger("temporaryActionEndTime", diagnostic->temporaryActionEndTime);
+            setInteger("entityStatus", diagnostic->entityStatus);
+            setBoolean("hasContacted", diagnostic->hasContacted);
+            setBoolean("isStuck", diagnostic->isStuck);
+            setBoolean("hasHitWall", diagnostic->hasHitWall);
+            setInteger("roadJoinSequence", diagnostic->roadJoinSequence);
+            setInteger("roadJoinBranch", diagnostic->roadJoinBranch);
+            setInteger("roadJoinInputCurrentLane", diagnostic->roadJoinInputCurrentLane);
+            setInteger("roadJoinInputNextLane", diagnostic->roadJoinInputNextLane);
+            setInteger("roadJoinRetailCurrentLane", diagnostic->roadJoinRetailCurrentLane);
+            setInteger("roadJoinRetailNextLane", diagnostic->roadJoinRetailNextLane);
+            setInteger("roadJoinAppliedLane", diagnostic->roadJoinAppliedLane);
+            setInteger("roadJoinFinalCurrentLane", diagnostic->roadJoinFinalCurrentLane);
+            setInteger("roadJoinFinalNextLane", diagnostic->roadJoinFinalNextLane);
+            setInteger("roadJoinLaneCount", diagnostic->roadJoinLaneCount);
+            setBoolean("roadJoinSelectedSegmentUsable", diagnostic->roadJoinSelectedSegmentUsable);
+            setBoolean("roadJoinBestSegmentFound", diagnostic->roadJoinBestSegmentFound);
+            setNumber("roadJoinVehicleX", diagnostic->roadJoinVehicleX);
+            setNumber("roadJoinVehicleY", diagnostic->roadJoinVehicleY);
+            setNumber("roadJoinNearestLaneDistance", diagnostic->roadJoinNearestLaneDistance);
+            setNumber("roadJoinAlternateLaneDistance", diagnostic->roadJoinAlternateLaneDistance);
+            return 1;
+        }
+    }
+    else
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+
+    lua_pushboolean(luaVM, false);
+    return 1;
 }
 
 bool CLuaVehicleDefs::SetVehicleStraightLineDistance(CClientVehicle* vehicle, unsigned int distance)

@@ -62,6 +62,47 @@ struct SVehiclePhysicalProofs
     bool melee{};
 };
 
+struct SNativeVehicleAutoPilotDiagnostic
+{
+    std::uint16_t currentAddressArea{};
+    std::uint16_t currentAddressNode{};
+    std::uint16_t startingAddressArea{};
+    std::uint16_t startingAddressNode{};
+    std::uint16_t currentPathLinkArea{};
+    std::uint16_t currentPathLinkId{};
+    std::uint16_t nextPathLinkArea{};
+    std::uint16_t nextPathLinkId{};
+    std::int8_t   currentDirection{};
+    std::int8_t   nextDirection{};
+    std::int8_t   currentLane{};
+    std::int8_t   nextLane{};
+    std::int8_t   laneChangeCounter{};
+    std::uint8_t  drivingStyle{};
+    std::uint8_t  carMission{};
+    std::uint8_t  temporaryAction{};
+    std::uint32_t temporaryActionEndTime{};
+    std::uint8_t  entityStatus{};
+    bool          hasContacted{};
+    bool          isStuck{};
+    bool          hasHitWall{};
+    std::uint32_t roadJoinSequence{};
+    std::uint8_t  roadJoinBranch{};
+    std::int8_t   roadJoinInputCurrentLane{};
+    std::int8_t   roadJoinInputNextLane{};
+    std::int8_t   roadJoinRetailCurrentLane{};
+    std::int8_t   roadJoinRetailNextLane{};
+    std::int8_t   roadJoinAppliedLane{-1};
+    std::int8_t   roadJoinFinalCurrentLane{};
+    std::int8_t   roadJoinFinalNextLane{};
+    std::uint8_t  roadJoinLaneCount{};
+    bool          roadJoinSelectedSegmentUsable{};
+    bool          roadJoinBestSegmentFound{};
+    float         roadJoinVehicleX{};
+    float         roadJoinVehicleY{};
+    float         roadJoinNearestLaneDistance{};
+    float         roadJoinAlternateLaneDistance{};
+};
+
 #define SIREN_TYPE_FIRST 1
 #define SIREN_TYPE_LAST  6
 #define SIREN_ID_MAX     7
@@ -352,11 +393,12 @@ public:
 
     // Keep new cross-module methods at the end so independently built modules
     // retain every established CVehicle vtable index.
-    virtual bool      IsOnAllWheels() const = 0;
-    virtual eDoorLock GetDoorLockMode() const = 0;
-    virtual void      SetDoorLockMode(eDoorLock mode) = 0;
-    virtual void      SetPhysicalProofs(const SVehiclePhysicalProofs& proofs) = 0;
-    virtual void      SetLoadCollisionFlag(bool bLoadCollision) = 0;
+    virtual bool          IsOnAllWheels() const = 0;
+    virtual eDoorLock     GetDoorLockMode() const = 0;
+    virtual void          SetDoorLockMode(eDoorLock mode) = 0;
+    virtual void          SetPhysicalProofs(const SVehiclePhysicalProofs& proofs) = 0;
+    virtual void          SetLoadCollisionFlag(bool bLoadCollision) = 0;
     virtual unsigned char GetStraightLineDistance() const = 0;
     virtual void          SetStraightLineDistance(unsigned char distance) = 0;
+    virtual bool          GetNativeAutoPilotDiagnostic(SNativeVehicleAutoPilotDiagnostic& diagnostic) const = 0;
 };

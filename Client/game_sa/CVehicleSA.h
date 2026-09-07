@@ -27,8 +27,31 @@
 
 class CFxSystemSAInterface;
 class CTrainSAInterface;
+class CVehicleSAInterface;
 struct CColModelSAInterface;
 struct RwTexture;
+
+struct SDriveWanderRoadJoinDiagnostic
+{
+    std::uint32_t sequence{};
+    std::uint8_t  branch{};
+    std::int8_t   inputCurrentLane{};
+    std::int8_t   inputNextLane{};
+    std::int8_t   retailCurrentLane{};
+    std::int8_t   retailNextLane{};
+    std::int8_t   appliedLane{-1};
+    std::int8_t   finalCurrentLane{};
+    std::int8_t   finalNextLane{};
+    std::uint8_t  laneCount{};
+    bool          selectedSegmentUsable{};
+    bool          bestSegmentFound{};
+    float         vehicleX{};
+    float         vehicleY{};
+    float         nearestLaneDistance{};
+    float         alternateLaneDistance{};
+};
+
+bool GetDriveWanderRoadJoinDiagnostic(const CVehicleSAInterface* vehicle, SDriveWanderRoadJoinDiagnostic& diagnostic);
 
 #define SIZEOF_CHELI 2584
 
@@ -515,15 +538,71 @@ public:
         // the route reaches world collision that is not currently loaded.
         GetVehicleInterface()->b0x4000 = !bLoadCollision;
     }
-    unsigned char GetStraightLineDistance() const override
-    {
-        return *(reinterpret_cast<const unsigned char*>(GetVehicleInterface()) + 0x3DD);
-    }
-    void SetStraightLineDistance(unsigned char distance) override
+    unsigned char GetStraightLineDistance() const override { return *(reinterpret_cast<const unsigned char*>(GetVehicleInterface()) + 0x3DD); }
+    void          SetStraightLineDistance(unsigned char distance) override
     {
         // Opcode 04E0 at 0x48C1B0 writes the second SCM argument directly to
         // CVehicle+0x3DD (CAutoPilot::m_nStraightLineDistance).
         *(reinterpret_cast<unsigned char*>(GetVehicleInterface()) + 0x3DD) = distance;
+    }
+    bool GetNativeAutoPilotDiagnostic(SNativeVehicleAutoPilotDiagnostic& diagnostic) const override
+    {
+        // These fields are GTA's live CAutoPilot decision state. Exposing one
+        // coherent snapshot lets scripts distinguish an authored task change
+        // from retail lane selection or a physics/ghost transition.
+        const auto* vehicle = GetVehicleInterface();
+        if (!vehicle)
+            return false;
+
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(vehicle);
+        const auto  readU16 = [bytes](std::size_t offset) { return *reinterpret_cast<const std::uint16_t*>(bytes + offset); };
+        const auto  decodeArea = [](std::uint16_t address) { return static_cast<std::uint16_t>(address >> 10); };
+        const auto  decodeLink = [](std::uint16_t address) { return static_cast<std::uint16_t>(address & 0x03FF); };
+
+        diagnostic.currentAddressArea = readU16(0x390);
+        diagnostic.currentAddressNode = readU16(0x392);
+        diagnostic.startingAddressArea = readU16(0x394);
+        diagnostic.startingAddressNode = readU16(0x396);
+        const std::uint16_t currentPathLink = readU16(0x3A4);
+        const std::uint16_t nextPathLink = readU16(0x3A6);
+        diagnostic.currentPathLinkArea = decodeArea(currentPathLink);
+        diagnostic.currentPathLinkId = decodeLink(currentPathLink);
+        diagnostic.nextPathLinkArea = decodeArea(nextPathLink);
+        diagnostic.nextPathLinkId = decodeLink(nextPathLink);
+        diagnostic.currentDirection = *reinterpret_cast<const std::int8_t*>(bytes + 0x3B5);
+        diagnostic.nextDirection = *reinterpret_cast<const std::int8_t*>(bytes + 0x3B6);
+        diagnostic.currentLane = *reinterpret_cast<const std::int8_t*>(bytes + 0x3B7);
+        diagnostic.nextLane = *reinterpret_cast<const std::int8_t*>(bytes + 0x3B8);
+        diagnostic.drivingStyle = bytes[0x3B9];
+        diagnostic.carMission = bytes[0x3BA];
+        diagnostic.temporaryAction = bytes[0x3BB];
+        diagnostic.temporaryActionEndTime = *reinterpret_cast<const std::uint32_t*>(bytes + 0x3BC);
+        diagnostic.laneChangeCounter = *reinterpret_cast<const std::int8_t*>(bytes + 0x3E0);
+        diagnostic.entityStatus = vehicle->nStatus;
+        diagnostic.hasContacted = vehicle->bHasContacted;
+        diagnostic.isStuck = vehicle->bIsStuck;
+        diagnostic.hasHitWall = vehicle->bHasHitWall;
+        SDriveWanderRoadJoinDiagnostic roadJoin{};
+        if (GetDriveWanderRoadJoinDiagnostic(vehicle, roadJoin))
+        {
+            diagnostic.roadJoinSequence = roadJoin.sequence;
+            diagnostic.roadJoinBranch = roadJoin.branch;
+            diagnostic.roadJoinInputCurrentLane = roadJoin.inputCurrentLane;
+            diagnostic.roadJoinInputNextLane = roadJoin.inputNextLane;
+            diagnostic.roadJoinRetailCurrentLane = roadJoin.retailCurrentLane;
+            diagnostic.roadJoinRetailNextLane = roadJoin.retailNextLane;
+            diagnostic.roadJoinAppliedLane = roadJoin.appliedLane;
+            diagnostic.roadJoinFinalCurrentLane = roadJoin.finalCurrentLane;
+            diagnostic.roadJoinFinalNextLane = roadJoin.finalNextLane;
+            diagnostic.roadJoinLaneCount = roadJoin.laneCount;
+            diagnostic.roadJoinSelectedSegmentUsable = roadJoin.selectedSegmentUsable;
+            diagnostic.roadJoinBestSegmentFound = roadJoin.bestSegmentFound;
+            diagnostic.roadJoinVehicleX = roadJoin.vehicleX;
+            diagnostic.roadJoinVehicleY = roadJoin.vehicleY;
+            diagnostic.roadJoinNearestLaneDistance = roadJoin.nearestLaneDistance;
+            diagnostic.roadJoinAlternateLaneDistance = roadJoin.alternateLaneDistance;
+        }
+        return true;
     }
     bool AreDoorsUndamageable() { return m_doorsUndamageable; }
     void SetDoorsUndamageable(bool bUndamageable) { m_doorsUndamageable = bUndamageable; }

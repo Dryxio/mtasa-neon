@@ -87,6 +87,7 @@ public:
     static int                              GetVehicleDoorLockMode(CClientVehicle* vehicle);
     static bool                             GetVehicleTyresCanBurst(CClientVehicle* vehicle);
     static std::variant<bool, unsigned int> GetVehicleStraightLineDistance(CClientVehicle* vehicle);
+    LUA_DECLARE(GetVehicleNativeAutoPilotDiagnostic);
 
     LUA_DECLARE(FixVehicle);
     static bool BlowVehicle(CClientEntity* entity, std::optional<bool> withExplosion);

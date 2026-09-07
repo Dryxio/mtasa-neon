@@ -199,18 +199,19 @@ public:
     bool IsVisible();
     void SetVisible(bool bVisible);
 
-    void  SetDoorOpenRatio(unsigned char ucDoor, float fRatio, unsigned long ulDelay = 0, bool bForced = false);
-    float GetDoorOpenRatio(unsigned char ucDoor);
-    void  SetSwingingDoorsAllowed(bool bAllowed);
-    bool  AreSwingingDoorsAllowed() const;
-    void  AllowDoorRatioSetting(unsigned char ucDoor, bool bAllow, bool bAutoReallowAfterDelay = true);
-    bool  AreDoorsLocked();
-    void  SetDoorsLocked(bool bLocked);
-    int   GetDoorLockMode() const;
-    bool  SetDoorLockMode(int mode);
-    bool  SetPhysicalProofs(const SVehiclePhysicalProofs& proofs);
-    bool  SetStraightLineDistance(unsigned char distance);
-    std::optional<unsigned char> GetStraightLineDistance() const;
+    void                                             SetDoorOpenRatio(unsigned char ucDoor, float fRatio, unsigned long ulDelay = 0, bool bForced = false);
+    float                                            GetDoorOpenRatio(unsigned char ucDoor);
+    void                                             SetSwingingDoorsAllowed(bool bAllowed);
+    bool                                             AreSwingingDoorsAllowed() const;
+    void                                             AllowDoorRatioSetting(unsigned char ucDoor, bool bAllow, bool bAutoReallowAfterDelay = true);
+    bool                                             AreDoorsLocked();
+    void                                             SetDoorsLocked(bool bLocked);
+    int                                              GetDoorLockMode() const;
+    bool                                             SetDoorLockMode(int mode);
+    bool                                             SetPhysicalProofs(const SVehiclePhysicalProofs& proofs);
+    bool                                             SetStraightLineDistance(unsigned char distance);
+    std::optional<unsigned char>                     GetStraightLineDistance() const;
+    std::optional<SNativeVehicleAutoPilotDiagnostic> GetNativeAutoPilotDiagnostic() const;
 
 private:
     void SetDoorOpenRatioInterpolated(unsigned char ucDoor, float fRatio, unsigned long ulDelay);

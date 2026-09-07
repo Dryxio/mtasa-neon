@@ -868,6 +868,17 @@ std::optional<unsigned char> CClientVehicle::GetStraightLineDistance() const
     return m_scriptStraightLineDistance;
 }
 
+std::optional<SNativeVehicleAutoPilotDiagnostic> CClientVehicle::GetNativeAutoPilotDiagnostic() const
+{
+    if (!m_pVehicle)
+        return std::nullopt;
+
+    SNativeVehicleAutoPilotDiagnostic diagnostic;
+    if (!m_pVehicle->GetNativeAutoPilotDiagnostic(diagnostic))
+        return std::nullopt;
+    return diagnostic;
+}
+
 bool CClientVehicle::AreDoorsUndamageable()
 {
     return m_pVehicle ? m_pVehicle->AreDoorsUndamageable() : m_bDoorsUndamageable;

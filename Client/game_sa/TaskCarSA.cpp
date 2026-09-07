@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "TaskCarSA.h"
 
+#include <array>
 #include <limits>
 
 namespace
@@ -32,18 +33,31 @@ namespace
     constexpr unsigned int PATH_NODE_SIZE = 0x1C;
     constexpr unsigned int PATH_CAR_LINK_SIZE = 0x0E;
 
-    constexpr unsigned int VEHICLE_AUTOPILOT_CURRENT_NODE_OFFSET = 0x390;
-    constexpr unsigned int VEHICLE_AUTOPILOT_STARTING_NODE_OFFSET = 0x394;
-    constexpr unsigned int VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET = 0x3B7;
-    constexpr unsigned int VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET = 0x3B8;
-    constexpr unsigned int VEHICLE_AUTOPILOT_NEXT_LINK_DIRECTION_OFFSET = 0x3B6;
+    constexpr unsigned int  VEHICLE_AUTOPILOT_CURRENT_NODE_OFFSET = 0x390;
+    constexpr unsigned int  VEHICLE_AUTOPILOT_STARTING_NODE_OFFSET = 0x394;
+    constexpr unsigned int  VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET = 0x3B7;
+    constexpr unsigned int  VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET = 0x3B8;
+    constexpr unsigned int  VEHICLE_AUTOPILOT_NEXT_LINK_DIRECTION_OFFSET = 0x3B6;
+    constexpr unsigned int  VEHICLE_AUTOPILOT_MOVEMENT_FLAGS_OFFSET = 0x3DC;
+    constexpr unsigned char VEHICLE_AUTOPILOT_STOPPED_FLAG = 0x01;
 
-    constexpr float ROAD_JOIN_MINIMUM_FORWARD_DOT = 0.35f;
-    constexpr float ROAD_JOIN_HEADING_PENALTY = 16.0f;
-    constexpr float ROAD_JOIN_VERTICAL_TOLERANCE = 3.0f;
-    constexpr float ROAD_JOIN_VERTICAL_PENALTY = 4.0f;
-    constexpr float ROAD_JOIN_MAXIMUM_SCORE = 400.0f;
-    constexpr float ROAD_JOIN_MINIMUM_IMPROVEMENT = 1.0f;
+    constexpr float       ROAD_JOIN_MINIMUM_FORWARD_DOT = 0.35f;
+    constexpr float       ROAD_JOIN_HEADING_PENALTY = 16.0f;
+    constexpr float       ROAD_JOIN_VERTICAL_TOLERANCE = 3.0f;
+    constexpr float       ROAD_JOIN_VERTICAL_PENALTY = 4.0f;
+    constexpr float       ROAD_JOIN_MAXIMUM_SCORE = 400.0f;
+    constexpr float       ROAD_JOIN_MINIMUM_IMPROVEMENT = 1.0f;
+    constexpr std::size_t ROAD_JOIN_DIAGNOSTIC_CAPACITY = 128;
+
+    struct SRoadJoinDiagnosticSlot
+    {
+        const CVehicleSAInterface*     vehicle{};
+        SDriveWanderRoadJoinDiagnostic diagnostic{};
+    };
+
+    std::array<SRoadJoinDiagnosticSlot, ROAD_JOIN_DIAGNOSTIC_CAPACITY> g_roadJoinDiagnostics{};
+    std::size_t                                                        g_roadJoinDiagnosticIndex{};
+    std::uint32_t                                                      g_roadJoinDiagnosticSequence{};
 
     struct SCarPathNodeAddress
     {
@@ -267,7 +281,8 @@ namespace
         return found && bestScore <= ROAD_JOIN_MAXIMUM_SCORE;
     }
 
-    unsigned char FindNearestLane(const CVehicleSAInterface* vehicle, const SDirectedLaneData& laneData)
+    unsigned char FindNearestLane(const CVehicleSAInterface* vehicle, const SDirectedLaneData& laneData, float* nearestDistance = nullptr,
+                                  float* alternateDistance = nullptr)
     {
         if (!vehicle || !laneData.carLink || laneData.laneCount == 0)
             return 0;
@@ -283,6 +298,7 @@ namespace
 
         unsigned char nearestLane = 0;
         float         nearestDistanceSquared = std::numeric_limits<float>::max();
+        float         alternateDistanceSquared = std::numeric_limits<float>::max();
         for (unsigned int lane = 0; lane < laneData.laneCount; ++lane)
         {
             const float laneOffset = (oneWayOffset + lane) * 5.4f;
@@ -293,38 +309,124 @@ namespace
             const float distanceSquared = deltaX * deltaX + deltaY * deltaY;
             if (distanceSquared < nearestDistanceSquared)
             {
+                alternateDistanceSquared = nearestDistanceSquared;
                 nearestDistanceSquared = distanceSquared;
                 nearestLane = static_cast<unsigned char>(lane);
             }
+            else if (distanceSquared < alternateDistanceSquared)
+                alternateDistanceSquared = distanceSquared;
         }
+        if (nearestDistance)
+            *nearestDistance = std::sqrt(nearestDistanceSquared);
+        if (alternateDistance)
+            *alternateDistance = std::isfinite(alternateDistanceSquared) ? std::sqrt(alternateDistanceSquared) : -1.0f;
         return nearestLane;
+    }
+
+    void ApplyNearestLane(CVehicleSAInterface* vehicle, const SDirectedLaneData& laneData, SDriveWanderRoadJoinDiagnostic& diagnostic)
+    {
+        if (!vehicle || !laneData.carLink || laneData.laneCount == 0)
+            return;
+
+        auto* const         bytes = reinterpret_cast<unsigned char*>(vehicle);
+        float               nearestDistance{};
+        float               alternateDistance{};
+        const unsigned char lane = FindNearestLane(vehicle, laneData, &nearestDistance, &alternateDistance);
+        bytes[VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET] = lane;
+        bytes[VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET] = lane;
+        diagnostic.appliedLane = lane;
+        diagnostic.laneCount = static_cast<std::uint8_t>(std::min(laneData.laneCount, 255u));
+        diagnostic.nearestLaneDistance = nearestDistance;
+        diagnostic.alternateLaneDistance = alternateDistance;
+    }
+
+    void PublishRoadJoinDiagnostic(const CVehicleSAInterface* vehicle, SDriveWanderRoadJoinDiagnostic& diagnostic, std::uint8_t branch)
+    {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(vehicle);
+        diagnostic.branch = branch;
+        diagnostic.finalCurrentLane = *reinterpret_cast<const std::int8_t*>(bytes + VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET);
+        diagnostic.finalNextLane = *reinterpret_cast<const std::int8_t*>(bytes + VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET);
+        auto& slot = g_roadJoinDiagnostics[g_roadJoinDiagnosticIndex++ % g_roadJoinDiagnostics.size()];
+        slot.vehicle = vehicle;
+        slot.diagnostic = diagnostic;
+    }
+
+    void CompleteSuccessfulDriveWanderRoadJoin(CVehicleSAInterface* vehicle, SDriveWanderRoadJoinDiagnostic& diagnostic, std::uint8_t branch)
+    {
+        auto* const bytes = reinterpret_cast<unsigned char*>(vehicle);
+
+        // CreateCarForScript marks road vehicles as stopped so GTA can join
+        // them on its first AI pulse. DriveWander has already completed that
+        // join here; leaving the latch armed makes SteerAICarWithPhysics join
+        // again and reset both selected lanes to zero.
+        bytes[VEHICLE_AUTOPILOT_MOVEMENT_FLAGS_OFFSET] &= ~VEHICLE_AUTOPILOT_STOPPED_FLAG;
+        PublishRoadJoinDiagnostic(vehicle, diagnostic, branch);
     }
 
     void __cdecl JoinDriveWanderVehicleWithLegalRoadDirection(CVehicleSAInterface* vehicle)
     {
-        using JoinCarWithRoadSystem = void(__cdecl*)(CVehicleSAInterface*);
-        reinterpret_cast<JoinCarWithRoadSystem>(FUNC_CCarCtrl_JoinCarWithRoadSystem)(vehicle);
         if (!vehicle)
             return;
 
-        auto* const       bytes = reinterpret_cast<unsigned char*>(vehicle);
+        auto* const                    bytes = reinterpret_cast<unsigned char*>(vehicle);
+        SDriveWanderRoadJoinDiagnostic diagnostic{};
+        diagnostic.sequence = ++g_roadJoinDiagnosticSequence;
+        diagnostic.inputCurrentLane = *reinterpret_cast<const std::int8_t*>(bytes + VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET);
+        diagnostic.inputNextLane = *reinterpret_cast<const std::int8_t*>(bytes + VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET);
+        const CVector& position = vehicle->matrix ? vehicle->matrix->vPos : vehicle->m_transform.m_translate;
+        diagnostic.vehicleX = position.fX;
+        diagnostic.vehicleY = position.fY;
+
+        using JoinCarWithRoadSystem = void(__cdecl*)(CVehicleSAInterface*);
+        reinterpret_cast<JoinCarWithRoadSystem>(FUNC_CCarCtrl_JoinCarWithRoadSystem)(vehicle);
+        diagnostic.retailCurrentLane = *reinterpret_cast<const std::int8_t*>(bytes + VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET);
+        diagnostic.retailNextLane = *reinterpret_cast<const std::int8_t*>(bytes + VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET);
+
         auto&             currentNode = *reinterpret_cast<SCarPathNodeAddress*>(bytes + VEHICLE_AUTOPILOT_CURRENT_NODE_OFFSET);
         auto&             startingNode = *reinterpret_cast<SCarPathNodeAddress*>(bytes + VEHICLE_AUTOPILOT_STARTING_NODE_OFFSET);
         SDirectedLaneData selectedDirection{};
         float             selectedScore = std::numeric_limits<float>::max();
         const bool        selectedIsUsable = GetDirectedLaneData(currentNode, startingNode, selectedDirection) && selectedDirection.laneCount != 0 &&
                                       ScoreDirectedRoadSegment(vehicle, currentNode, startingNode, selectedDirection, selectedScore);
+        diagnostic.selectedSegmentUsable = selectedIsUsable;
 
         SCarPathNodeAddress bestFrom{};
         SCarPathNodeAddress bestTo{};
         SDirectedLaneData   bestDirection{};
         float               bestScore{};
-        if (!FindBestRoadDirection(vehicle, currentNode, startingNode, bestFrom, bestTo, bestDirection, bestScore))
+        diagnostic.bestSegmentFound = FindBestRoadDirection(vehicle, currentNode, startingNode, bestFrom, bestTo, bestDirection, bestScore);
+        if (!diagnostic.bestSegmentFound)
+        {
+            // A partially streamed path graph can prevent the global search
+            // even though retail joined a usable local segment. Do not leave
+            // the lanes at retail's forced zero in that fallback case.
+            if (selectedIsUsable)
+            {
+                ApplyNearestLane(vehicle, selectedDirection, diagnostic);
+                CompleteSuccessfulDriveWanderRoadJoin(vehicle, diagnostic, 2);
+            }
+            else
+                PublishRoadJoinDiagnostic(vehicle, diagnostic, 1);
             return;
+        }
 
         const bool sameDirection = EqualPathNodeAddresses(currentNode, bestFrom) && EqualPathNodeAddresses(startingNode, bestTo);
-        if (sameDirection || (selectedIsUsable && bestScore + ROAD_JOIN_MINIMUM_IMPROVEMENT >= selectedScore))
+        if (sameDirection)
+        {
+            // Retail JoinCarWithRoadSystem resets both autopilot lanes to zero.
+            // Script-created traffic can be seeded on any lane returned by the
+            // ambient spawn oracle, so preserve the lane nearest its physical
+            // pose even when retail selected the correct road segment.
+            ApplyNearestLane(vehicle, bestDirection, diagnostic);
+            CompleteSuccessfulDriveWanderRoadJoin(vehicle, diagnostic, 3);
             return;
+        }
+        if (selectedIsUsable && bestScore + ROAD_JOIN_MINIMUM_IMPROVEMENT >= selectedScore)
+        {
+            ApplyNearestLane(vehicle, selectedDirection, diagnostic);
+            CompleteSuccessfulDriveWanderRoadJoin(vehicle, diagnostic, 4);
+            return;
+        }
 
         // Retail ambient cars retain the exact node pair produced by the spawn
         // oracle. Script-created Wander cars instead join through the closest
@@ -337,11 +439,32 @@ namespace
         reinterpret_cast<FindLinksToGoWithTheseNodes>(FUNC_CCarCtrl_FindLinksToGoWithTheseNodes)(vehicle);
 
         if (!GetDirectedLaneData(currentNode, startingNode, bestDirection) || bestDirection.laneCount == 0)
+        {
+            PublishRoadJoinDiagnostic(vehicle, diagnostic, 5);
             return;
-        const unsigned char lane = FindNearestLane(vehicle, bestDirection);
-        bytes[VEHICLE_AUTOPILOT_CURRENT_LANE_OFFSET] = lane;
-        bytes[VEHICLE_AUTOPILOT_NEXT_LANE_OFFSET] = lane;
+        }
+        ApplyNearestLane(vehicle, bestDirection, diagnostic);
+        CompleteSuccessfulDriveWanderRoadJoin(vehicle, diagnostic, 6);
     }
+}
+
+bool GetDriveWanderRoadJoinDiagnostic(const CVehicleSAInterface* vehicle, SDriveWanderRoadJoinDiagnostic& diagnostic)
+{
+    if (!vehicle)
+        return false;
+
+    const std::size_t count = std::min(g_roadJoinDiagnosticIndex, g_roadJoinDiagnostics.size());
+    for (std::size_t offset = 0; offset < count; ++offset)
+    {
+        const std::size_t index = (g_roadJoinDiagnosticIndex - 1 - offset) % g_roadJoinDiagnostics.size();
+        const auto&       slot = g_roadJoinDiagnostics[index];
+        if (slot.vehicle == vehicle)
+        {
+            diagnostic = slot.diagnostic;
+            return true;
+        }
+    }
+    return false;
 }
 
 void InstallTaskCarSAHooks()
