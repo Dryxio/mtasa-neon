@@ -2,6 +2,28 @@
   "schema": 1,
   "releases": [
     {
+      "build": 186,
+      "date": "2026-09-07",
+      "title": "Smoother startup and gameplay",
+      "summary": "Fixed repeated “Fix configuration” prompts when starting Neon on Windows.",
+      "highlights": [
+        "More natural traffic and smoother movement for other players.",
+        "Improved pause menu responsiveness.",
+        "Fixes for radar, lighting and vehicle rendering."
+      ],
+      "sections": [
+        {
+          "label": "Fixes",
+          "tone": "players",
+          "items": [
+            "More natural traffic and smoother movement for other players.",
+            "Improved pause menu responsiveness.",
+            "Fixes for radar, lighting and vehicle rendering."
+          ]
+        }
+      ]
+    },
+    {
       "build": 185,
       "date": "2026-08-30",
       "title": "Native traffic fixes",
