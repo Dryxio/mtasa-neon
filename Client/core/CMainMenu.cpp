@@ -379,6 +379,15 @@ CMainMenu::~CMainMenu()
     delete m_pServerBrowserWeb;
     m_pServerBrowserWeb = nullptr;
 
+#ifdef CI_BUILD
+    // The CI banner also belongs to m_pBackground's child tree. Destroy it
+    // child-first before recursive teardown so its unique_ptrs cannot delete
+    // the same elements again when this destructor finishes.
+    m_pFeatureBranchAlertLabel.reset();
+    m_pFeatureBranchAlertImage.reset();
+    m_pFeatureBranchAlertTexture.reset();
+#endif
+
     auto destroyElement = [this](auto*& element)
     {
         if (!element)
