@@ -2313,7 +2313,9 @@ int CLuaEngineDefs::EngineGetVisibleTextureNames(lua_State* luaVM)
 
     if (!argStream.HasErrors())
     {
-        std::uint16_t modelId = INVALID_MODEL_ID;
+        // The renderer uses zero for an omitted model filter. Passing the invalid
+        // ID instead filters out every texture and breaks scripts' texture pickers.
+        std::uint16_t modelId = 0;
         if (strModelName == "" || ResolveEngineModelID(strModelName, modelId))
         {
             std::vector<SString> nameList;
