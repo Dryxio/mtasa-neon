@@ -14,7 +14,7 @@ class CClientCargoManager
 {
 public:
     static CClientCargoManager& GetSingleton();
-    bool                        Start(CLuaMain* owner, CClientPed* ped, CClientObject* object);
+    bool                        Start(CLuaMain* owner, CClientPed* ped, CClientObject* object, bool pickup = false);
     bool                        PutDown(CLuaMain* owner, CClientPed* ped);
     bool                        Cancel(CLuaMain* owner, CClientPed* ped);
     CClientObject*              GetObject(CClientPed* ped) const;
@@ -36,6 +36,7 @@ private:
         long long      airborneSince{};
         int            state{3};
         bool           frozen;
+        bool           pickup;
     };
     Entry*             Find(CClientPed* ped);
     void               Release(CClientPed* ped, const char* reason, bool notify);

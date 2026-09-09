@@ -47,6 +47,24 @@ put-down preserves the observed drop pose. Retail deleting destructors are guard
 mission classification alone does not prevent GTA's destructor from marking an
 unreleased object for removal. No raw pointers, opcodes or animation IDs are exposed.
 
+## Household pickup and native noise
+
+`pickUpPedObject(ped, object)` adds GTA's actual approach/height-aware pickup for
+14 stock household models plus the crate. It shares the ownership and cleanup
+rules above and adds state `picking_up` with a 15-second pickup recovery bound.
+`getPedNoiseLevel(ped[, x, y, z])` reads native event noise filtered by that
+executor, optionally at a listener position. It does not create a suspicion bar
+or replicate perception. Full model list, API semantics, native evidence,
+police limitations and deferred gameplay checks are in
+[the engine checkpoint](../../docs/development/burglary-native-2026-09-09.md).
+
+The existing fixture still exercises the immediate box API. To check the new
+native addresses and stock model mapping without launching the game:
+
+```sh
+python3 test-resources/native-cargo/tests/pickup_retail.py /path/to/gta_sa.exe /path/to/GTA/data
+```
+
 ## Server reservation example
 
 Start this resource on a development server, then use:

@@ -28,6 +28,8 @@
 #include "CAnimManagerSA.h"
 #include "CObjectSA.h"
 #include "CPedIntelligenceSA.h"
+#include "CModelInfoSA.h"
+#include <limits>
 
 extern CGameSA* pGame;
 
@@ -655,10 +657,124 @@ namespace
         CObjectSAInterface* native;
         bool                collision, visible, streaming, attached, stationary, movingList;
         unsigned char       objectType;
+        bool                liftable;
+        DWORD               pickupToken{};
+        bool                pickupSeen{};
     };
     std::map<CPed*, SCargoLease> cargoLeases;
     constexpr DWORD              cargoTables[] = {0x870B2C, 0x870B50, 0x870B74};
     DWORD                        cargoDestructors[3]{};
+
+    // Retail GoPickUpEntity is 0x34 bytes. Our private vtable/clone retains a
+    // lease generation beyond that layout so a queued script event cannot
+    // resurrect an old pickup after cancellation or reuse of the same object.
+    struct SCargoPickupTask : CTaskComplexSAInterface
+    {
+        CEntitySAInterface* entity;
+        CVector             position, pickupPosition;
+        DWORD               started;
+        int                 group;
+        bool                animationReferenced;
+        unsigned char       padding[3];
+        DWORD               token;
+    };
+    static_assert(offsetof(SCargoPickupTask, entity) == 0x0C);
+    static_assert(offsetof(SCargoPickupTask, group) == 0x2C);
+    static_assert(offsetof(SCargoPickupTask, token) == 0x34);
+    static_assert(sizeof(SCargoPickupTask) == 0x38);
+    TaskComplexVTBL pickupTable{};
+    DWORD           nextPickupToken{};
+
+    SCargoLease* ActivePickup(SCargoPickupTask* task, CPedSAInterface* ped)
+    {
+        for (auto& entry : cargoLeases)
+            if (entry.second.pickupToken && entry.second.pickupToken == task->token && entry.second.native == task->entity &&
+                entry.first->GetPedInterface() == ped)
+            {
+                entry.second.pickupSeen = true;
+                return &entry.second;
+            }
+        return nullptr;
+    }
+
+    void ConstructPickup(SCargoPickupTask* task, CEntitySAInterface* entity, int group, DWORD token)
+    {
+        using Constructor = void(__thiscall*)(SCargoPickupTask*, CEntitySAInterface*, int);
+        reinterpret_cast<Constructor>(0x6919C0)(task, entity, group);
+        task->VTBL = &pickupTable;
+        task->token = token;
+    }
+
+    CTaskSAInterface* __fastcall ClonePickup(SCargoPickupTask* task, void*)
+    {
+        using Allocate = void*(__cdecl*)(size_t);
+        auto* clone = static_cast<SCargoPickupTask*>(reinterpret_cast<Allocate>(FUNC_CTask__Operator_New)(sizeof(SCargoPickupTask)));
+        if (clone)
+            ConstructPickup(clone, task->entity, task->group, task->token);
+        return clone;
+    }
+
+    CTaskSAInterface* __fastcall FirstPickup(SCargoPickupTask* task, void*, CPedSAInterface* ped)
+    {
+        if (!ActivePickup(task, ped))
+            return nullptr;
+        using First = CTaskSAInterface*(__thiscall*)(SCargoPickupTask*, CPedSAInterface*);
+        return reinterpret_cast<First>(0x693610)(task, ped);
+    }
+
+    CTaskSAInterface* __fastcall NextPickup(SCargoPickupTask* task, void*, CPedSAInterface* ped)
+    {
+        if (!ActivePickup(task, ped))
+            return nullptr;
+        using Next = CTaskSAInterface*(__thiscall*)(SCargoPickupTask*, CPedSAInterface*);
+        return reinterpret_cast<Next>(0x691AE0)(task, ped);
+    }
+
+    CTaskSAInterface* __fastcall ControlPickup(SCargoPickupTask* task, void*, CPedSAInterface* ped)
+    {
+        if (!ActivePickup(task, ped))
+        {
+            // Cancellation already detached any live cargo leaf. Stop only our
+            // movement child; never clear the ped's unrelated primary tasks.
+            auto* child = reinterpret_cast<CTaskSAInterface*>(task->m_pSubTask);
+            if (child)
+            {
+                using Abort = bool(__thiscall*)(CTaskSAInterface*, CPedSAInterface*, int, void*);
+                reinterpret_cast<Abort>(child->VTBL->MakeAbortable)(child, ped, 2, nullptr);
+            }
+            return nullptr;
+        }
+        using Control = CTaskSAInterface*(__thiscall*)(SCargoPickupTask*, CPedSAInterface*);
+        return reinterpret_cast<Control>(0x691D50)(task, ped);
+    }
+
+    bool InstallPickupGuard()
+    {
+        if (pickupTable.Clone)
+            return true;
+        const auto& retail = *reinterpret_cast<TaskComplexVTBL*>(0x870B98);
+        if (retail.DeletingDestructor != 0x6935F0 || retail.Clone != 0x692C80 || retail.GetSubTask != 0x421190 || retail.IsSimpleTask != 0x4211A0 ||
+            retail.GetTaskType != 0x691A40 || retail.StopTimer != 0x421180 || retail.MakeAbortable != 0x4211B0 || retail.SetSubTask != 0x61A430 ||
+            retail.CreateNextSubTask != 0x691AE0 || retail.CreateFirstSubTask != 0x693610 || retail.ControlSubTask != 0x691D50)
+            return false;
+        pickupTable = retail;
+        pickupTable.Clone = reinterpret_cast<DWORD>(&ClonePickup);
+        pickupTable.CreateFirstSubTask = reinterpret_cast<DWORD>(&FirstPickup);
+        pickupTable.CreateNextSubTask = reinterpret_cast<DWORD>(&NextPickup);
+        pickupTable.ControlSubTask = reinterpret_cast<DWORD>(&ControlPickup);
+        return true;
+    }
+
+    class CCargoPickupTaskSA final : public CTaskComplexSA
+    {
+    public:
+        CCargoPickupTaskSA(CObjectSAInterface* object, DWORD token)
+        {
+            CreateTaskInterface(sizeof(SCargoPickupTask));
+            if (IsValid())
+                ConstructPickup(static_cast<SCargoPickupTask*>(GetInterface()), object, static_cast<int>(eAnimGroup::ANIM_GROUP_CARRY), token);
+        }
+    };
 
     int CargoKind(CTaskSAInterface* task)
     {
@@ -764,6 +880,16 @@ namespace
 
 bool CTasksSA::StartPedCarryObject(CPed* ped, CObject* object)
 {
+    return StartCargo(ped, object, false);
+}
+
+bool CTasksSA::PickUpPedObject(CPed* ped, CObject* object)
+{
+    return StartCargo(ped, object, true);
+}
+
+bool CTasksSA::StartCargo(CPed* ped, CObject* object, bool pickup)
+{
     auto* manager = CargoTaskManager(ped);
     auto* native = object ? object->GetObjectInterface() : nullptr;
     if (!manager || !native || cargoLeases.count(ped) || manager->GetInterface()->m_tasksSecondary[TASK_SECONDARY_PARTIAL_ANIM])
@@ -773,6 +899,14 @@ bool CTasksSA::StartPedCarryObject(CPed* ped, CObject* object)
             return false;
     if (!InstallCargoOwnershipGuard())
         return false;
+    if (pickup)
+    {
+        auto* model = pGame->GetModelInfo(object->GetModelIndex());
+        // CreateFirstSubTask dereferences the model's collision bounds.
+        if (!IsPedScriptCommandTaskReady(ped) || !model || !model->GetInterface() || !model->GetInterface()->pColModel || !InstallPickupGuard() ||
+            nextPickupToken == std::numeric_limits<DWORD>::max())
+            return false;
+    }
 
     SCargoLease lease{object,
                       native,
@@ -782,12 +916,17 @@ bool CTasksSA::StartPedCarryObject(CPed* ped, CObject* object)
                       !!native->bAttachedToEntity,
                       object->IsStatic(),
                       native->m_pMovingList != nullptr,
-                      native->pad1};
+                      native->pad1,
+                      !!native->b0x2000,
+                      pickup ? ++nextPickupToken : 0};
     cargoLeases.emplace(ped, lease);
     // Offset 316 is the retail object type. Mission ownership prevents the
     // native abort/drop path from converting cargo into a hidden temp object.
     native->pad1 = 2;
-    auto* task = NewTask<CCargoTaskSA>(native);
+    if (pickup)
+        native->b0x2000 = true;  // Retail bIsLiftable; native drop sound/visibility path.
+    CTaskSA* task =
+        pickup ? static_cast<CTaskSA*>(NewTask<CCargoPickupTaskSA>(native, lease.pickupToken)) : static_cast<CTaskSA*>(NewTask<CCargoTaskSA>(native));
     if (!task)
     {
         CancelPedCarryObject(ped);
@@ -799,7 +938,17 @@ bool CTasksSA::StartPedCarryObject(CPed* ped, CObject* object)
     // not become a moving platform for its holder while startup is pending.
     // The lease above preserves the caller's collision state for all exits.
     native->bUsesCollision = false;
-    manager->SetTaskSecondary(task, TASK_SECONDARY_PARTIAL_ANIM);
+    if (pickup)
+    {
+        if (!AddPedScriptCommandTask(ped, task))
+        {
+            task->Destroy();
+            CancelPedCarryObject(ped);
+            return false;
+        }
+    }
+    else
+        manager->SetTaskSecondary(task, TASK_SECONDARY_PARTIAL_ANIM);
     return true;
 }
 
@@ -827,10 +976,24 @@ int CTasksSA::GetPedCarryState(CPed* ped)
     VisitCargoTasks(manager,
                     [&](SCargoTask* task)
                     {
-                        if (task->entity == lease->second.native && !task->dropped)
+                        if (task->entity == lease->second.native && !task->dropped && CargoKind(task) != 1)
                             state = std::max(state, CargoKind(task) == 2 ? 2 : (task->needsProcessing || !task->association ? 3 : 1));
                     });
-    return state;
+    if (state || !lease->second.pickupToken)
+        return state;
+    for (auto* root : manager->GetInterface()->m_tasks)
+    {
+        for (unsigned int depth = 0; root && depth < 32; ++depth)
+        {
+            if (root->VTBL == &pickupTable && ActivePickup(static_cast<SCargoPickupTask*>(root), ped->GetPedInterface()))
+                return 4;  // Approach/alignment/pickup, never a completed hold.
+            using GetSubTask = CTaskSAInterface*(__thiscall*)(CTaskSAInterface*);
+            root = reinterpret_cast<GetSubTask>(root->VTBL->GetSubTask)(root);
+        }
+    }
+    // Script events can be queued. Only an observed task disappearance is a
+    // native release; an unobserved submission waits for the bounded timeout.
+    return lease->second.pickupSeen ? 0 : 3;
 }
 
 void CTasksSA::CancelPedCarryObject(CPed* ped)
@@ -861,6 +1024,7 @@ void CTasksSA::CancelPedCarryObject(CPed* ped)
     lease.native->bStreamingDontDelete = lease.streaming;
     lease.native->bAttachedToEntity = lease.attached;
     lease.native->pad1 = lease.objectType;
+    lease.native->b0x2000 = lease.liftable;
     lease.object->SetStatic(lease.stationary);
     using MovingList = void(__thiscall*)(CPhysicalSAInterface*);
     reinterpret_cast<MovingList>(lease.movingList ? FUNC_CPhysical_AddToMovingList : FUNC_CPhysical_RemoveFromMovingList)(lease.native);

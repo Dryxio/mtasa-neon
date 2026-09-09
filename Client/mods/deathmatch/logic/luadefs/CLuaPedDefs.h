@@ -151,6 +151,8 @@ public:
     static bool StopPedFacialTalk(CClientPed* ped);
     static bool SetPedShootAt(CClientPed* ped, CVector target, std::optional<int> duration, std::optional<int> burstLength);
     LUA_DECLARE(SetPedCarryObject);
+    LUA_DECLARE(PickUpPedObject);
+    LUA_DECLARE(GetPedNoiseLevel);
     LUA_DECLARE(GetPedCarriedObject);
     LUA_DECLARE(PutDownPedObject);
     LUA_DECLARE(CancelPedCarryObject);

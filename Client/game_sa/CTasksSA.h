@@ -156,4 +156,8 @@ public:
     bool PutDownPedObject(CPed* ped) override;
     int  GetPedCarryState(CPed* ped) override;
     void CancelPedCarryObject(CPed* ped) override;
+    bool PickUpPedObject(CPed* ped, CObject* object) override;
+
+private:
+    bool StartCargo(CPed* ped, CObject* object, bool pickup);
 };

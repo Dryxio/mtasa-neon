@@ -1,0 +1,649 @@
+Read-only disassembly; no execution or client launch.
+SHA256 72ae59e44c761389e354a50dc6215e964fe771121e2f4b1877273a493ceecc9b
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  6919c0: 6a ff                        	pushl	$-1
+  6919c2: 68 c8 72 84 00               	pushl	$8680136                # imm = 0x8472C8
+  6919c7: 64 a1 00 00 00 00            	movl	%fs:0, %eax
+  6919cd: 50                           	pushl	%eax
+  6919ce: 64 89 25 00 00 00 00         	movl	%esp, %fs:0
+  6919d5: 51                           	pushl	%ecx
+  6919d6: 53                           	pushl	%ebx
+  6919d7: 56                           	pushl	%esi
+  6919d8: 8b f1                        	movl	%ecx, %esi
+  6919da: 89 74 24 08                  	movl	%esi, 8(%esp)
+  6919de: e8 cd 89 f8 ff               	calll	0x61a3b0 <.text+0x2193b0>
+  6919e3: 8b 4c 24 1c                  	movl	28(%esp), %ecx
+  6919e7: 8b 54 24 20                  	movl	32(%esp), %edx
+  6919eb: 89 4e 0c                     	movl	%ecx, 12(%esi)
+  6919ee: 33 db                        	xorl	%ebx, %ebx
+  6919f0: c7 06 98 0b 87 00            	movl	$8850328, (%esi)        # imm = 0x870B98
+  6919f6: 8d 46 0c                     	leal	12(%esi), %eax
+  6919f9: b9 00 c0 79 c4               	movl	$3296313344, %ecx       # imm = 0xC479C000
+  6919fe: 89 4e 10                     	movl	%ecx, 16(%esi)
+  691a01: 89 5e 14                     	movl	%ebx, 20(%esi)
+  691a04: 89 5e 18                     	movl	%ebx, 24(%esi)
+  691a07: 89 4e 1c                     	movl	%ecx, 28(%esi)
+  691a0a: 89 5e 20                     	movl	%ebx, 32(%esi)
+  691a0d: 89 5e 24                     	movl	%ebx, 36(%esi)
+  691a10: 8b 08                        	movl	(%eax), %ecx
+  691a12: 3b cb                        	cmpl	%ebx, %ecx
+  691a14: 89 5c 24 14                  	movl	%ebx, 20(%esp)
+  691a18: 89 56 2c                     	movl	%edx, 44(%esi)
+  691a1b: 74 06                        	je	0x691a23 <.text+0x290a23>
+  691a1d: 50                           	pushl	%eax
+  691a1e: e8 4d 01 ee ff               	calll	0x571b70 <.text+0x170b70>
+  691a23: 8b 4c 24 0c                  	movl	12(%esp), %ecx
+  691a27: 89 5e 28                     	movl	%ebx, 40(%esi)
+  691a2a: 88 5e 30                     	movb	%bl, 48(%esi)
+  691a2d: 8b c6                        	movl	%esi, %eax
+  691a2f: 5e                           	popl	%esi
+  691a30: 5b                           	popl	%ebx
+  691a31: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  691a38: 83 c4 10                     	addl	$16, %esp
+  691a3b: c2 08 00                     	retl	$8
+  691a3e: 90                           	nop
+  691a3f: 90                           	nop
+  691a40: b8 36 01 00 00               	movl	$310, %eax              # imm = 0x136
+  691a45: c3                           	retl
+  691a46: 90                           	nop
+  691a47: 90                           	nop
+  691a48: 90                           	nop
+  691a49: 90                           	nop
+  691a4a: 90                           	nop
+  691a4b: 90                           	nop
+  691a4c: 90                           	nop
+  691a4d: 90                           	nop
+  691a4e: 90                           	nop
+  691a4f: 90                           	nop
+  691a50: 6a ff                        	pushl	$-1
+  691a52: 68 e8 72 84 00               	pushl	$8680168                # imm = 0x8472E8
+  691a57: 64 a1 00 00 00 00            	movl	%fs:0, %eax
+  691a5d: 50                           	pushl	%eax
+  691a5e: 64 89 25 00 00 00 00         	movl	%esp, %fs:0
+  691a65: 51                           	pushl	%ecx
+  691a66: 56                           	pushl	%esi
+  691a67: 8b f1                        	movl	%ecx, %esi
+  691a69: 89 74 24 04                  	movl	%esi, 4(%esp)
+  691a6d: c7 06 98 0b 87 00            	movl	$8850328, (%esi)        # imm = 0x870B98
+  691a73: 8b 4e 0c                     	movl	12(%esi), %ecx
+  691a76: 85 c9                        	testl	%ecx, %ecx
+  691a78: 8d 46 0c                     	leal	12(%esi), %eax
+  691a7b: c7 44 24 10 00 00 00 00      	movl	$0, 16(%esp)
+  691a83: 74 06                        	je	0x691a8b <.text+0x290a8b>
+  691a85: 50                           	pushl	%eax
+  691a86: e8 75 ff ed ff               	calll	0x571a00 <.text+0x170a00>
+  691a8b: 8a 46 30                     	movb	48(%esi), %al
+  691a8e: 84 c0                        	testb	%al, %al
+  691a90: 74 24                        	je	0x691ab6 <.text+0x290ab6>
+  691a92: 8b 46 2c                     	movl	44(%esi), %eax
+  691a95: 8b 0d 34 ea b4 00            	movl	11856436, %ecx
+  691a9b: 8d 04 80                     	leal	(%eax,%eax,4), %eax
+  691a9e: 8b 04 81                     	movl	(%ecx,%eax,4), %eax
+  691aa1: 2d a0 d4 b5 00               	subl	$11916448, %eax         # imm = 0xB5D4A0
+  691aa6: c1 f8 05                     	sarl	$5, %eax
+  691aa9: 50                           	pushl	%eax
+  691aaa: e8 21 25 e4 ff               	calll	0x4d3fd0 <.text+0xd2fd0>
+  691aaf: 83 c4 04                     	addl	$4, %esp
+  691ab2: c6 46 30 00                  	movb	$0, 48(%esi)
+  691ab6: 8b ce                        	movl	%esi, %ecx
+  691ab8: c7 44 24 10 ff ff ff ff      	movl	$4294967295, 16(%esp)   # imm = 0xFFFFFFFF
+  691ac0: e8 0b 89 f8 ff               	calll	0x61a3d0 <.text+0x2193d0>
+  691ac5: 8b 4c 24 08                  	movl	8(%esp), %ecx
+  691ac9: 5e                           	popl	%esi
+  691aca: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  691ad1: 83 c4 10                     	addl	$16, %esp
+  691ad4: c3                           	retl
+  691ad5: 90                           	nop
+  691ad6: 90                           	nop
+  691ad7: 90                           	nop
+  691ad8: 90                           	nop
+  691ad9: 90                           	nop
+  691ada: 90                           	nop
+  691adb: 90                           	nop
+  691adc: 90                           	nop
+  691add: 90                           	nop
+  691ade: 90                           	nop
+  691adf: 90                           	nop
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  692c80: 6a ff                        	pushl	$-1
+  692c82: 68 3b 74 84 00               	pushl	$8680507                # imm = 0x84743B
+  692c87: 64 a1 00 00 00 00            	movl	%fs:0, %eax
+  692c8d: 50                           	pushl	%eax
+  692c8e: 64 89 25 00 00 00 00         	movl	%esp, %fs:0
+  692c95: 51                           	pushl	%ecx
+  692c96: 56                           	pushl	%esi
+  692c97: 6a 34                        	pushl	$52
+  692c99: 8b f1                        	movl	%ecx, %esi
+  692c9b: e8 00 79 f8 ff               	calll	0x61a5a0 <.text+0x2195a0>
+  692ca0: 83 c4 04                     	addl	$4, %esp
+  692ca3: 89 44 24 04                  	movl	%eax, 4(%esp)
+  692ca7: 85 c0                        	testl	%eax, %eax
+  692ca9: c7 44 24 10 00 00 00 00      	movl	$0, 16(%esp)
+  692cb1: 74 1f                        	je	0x692cd2 <.text+0x291cd2>
+  692cb3: 8b 4e 2c                     	movl	44(%esi), %ecx
+  692cb6: 8b 56 0c                     	movl	12(%esi), %edx
+  692cb9: 51                           	pushl	%ecx
+  692cba: 52                           	pushl	%edx
+  692cbb: 8b c8                        	movl	%eax, %ecx
+  692cbd: e8 fe ec ff ff               	calll	0x6919c0 <.text+0x2909c0>
+  692cc2: 5e                           	popl	%esi
+  692cc3: 8b 4c 24 04                  	movl	4(%esp), %ecx
+  692cc7: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  692cce: 83 c4 10                     	addl	$16, %esp
+  692cd1: c3                           	retl
+  692cd2: 8b 4c 24 08                  	movl	8(%esp), %ecx
+  692cd6: 33 c0                        	xorl	%eax, %eax
+  692cd8: 5e                           	popl	%esi
+  692cd9: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  692ce0: 83 c4 10                     	addl	$16, %esp
+  692ce3: c3                           	retl
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  691ae0: 64 a1 00 00 00 00            	movl	%fs:0, %eax
+  691ae6: 6a ff                        	pushl	$-1
+  691ae8: 68 21 73 84 00               	pushl	$8680225                # imm = 0x847321
+  691aed: 50                           	pushl	%eax
+  691aee: 64 89 25 00 00 00 00         	movl	%esp, %fs:0
+  691af5: 83 ec 10                     	subl	$16, %esp
+  691af8: 56                           	pushl	%esi
+  691af9: 8b f1                        	movl	%ecx, %esi
+  691afb: 8b 46 0c                     	movl	12(%esi), %eax
+  691afe: 57                           	pushl	%edi
+  691aff: 33 ff                        	xorl	%edi, %edi
+  691b01: 85 c0                        	testl	%eax, %eax
+  691b03: 0f 84 2d 02 00 00            	je	0x691d36 <.text+0x290d36>
+  691b09: 8b 4e 08                     	movl	8(%esi), %ecx
+  691b0c: 8b 01                        	movl	(%ecx), %eax
+  691b0e: ff 50 10                     	calll	*16(%eax)
+  691b11: 2d 34 01 00 00               	subl	$308, %eax              # imm = 0x134
+  691b16: 0f 84 a7 01 00 00            	je	0x691cc3 <.text+0x290cc3>
+  691b1c: 2d 52 02 00 00               	subl	$594, %eax              # imm = 0x252
+  691b21: 0f 84 a5 00 00 00            	je	0x691bcc <.text+0x290bcc>
+  691b27: 48                           	decl	%eax
+  691b28: 0f 85 80 01 00 00            	jne	0x691cae <.text+0x290cae>
+  691b2e: 8b 4c 24 28                  	movl	40(%esp), %ecx
+  691b32: 8b 41 14                     	movl	20(%ecx), %eax
+  691b35: 85 c0                        	testl	%eax, %eax
+  691b37: 74 05                        	je	0x691b3e <.text+0x290b3e>
+  691b39: 8d 48 30                     	leal	48(%eax), %ecx
+  691b3c: eb 03                        	jmp	0x691b41 <.text+0x290b41>
+  691b3e: 83 c1 04                     	addl	$4, %ecx
+  691b41: 8b 76 0c                     	movl	12(%esi), %esi
+  691b44: 8b 46 14                     	movl	20(%esi), %eax
+  691b47: 85 c0                        	testl	%eax, %eax
+  691b49: 74 05                        	je	0x691b50 <.text+0x290b50>
+  691b4b: 83 c0 30                     	addl	$48, %eax
+  691b4e: eb 03                        	jmp	0x691b53 <.text+0x290b53>
+  691b50: 8d 46 04                     	leal	4(%esi), %eax
+  691b53: d9 40 04                     	flds	4(%eax)
+  691b56: 6a 18                        	pushl	$24
+  691b58: d8 61 04                     	fsubs	4(%ecx)
+  691b5b: d9 5c 24 2c                  	fstps	44(%esp)
+  691b5f: d9 00                        	flds	(%eax)
+  691b61: d8 21                        	fsubs	(%ecx)
+  691b63: d9 5c 24 10                  	fstps	16(%esp)
+  691b67: e8 34 8a f8 ff               	calll	0x61a5a0 <.text+0x2195a0>
+  691b6c: 83 c4 04                     	addl	$4, %esp
+  691b6f: 89 44 24 08                  	movl	%eax, 8(%esp)
+  691b73: 85 c0                        	testl	%eax, %eax
+  691b75: c7 44 24 20 00 00 00 00      	movl	$0, 32(%esp)
+  691b7d: 74 36                        	je	0x691bb5 <.text+0x290bb5>
+  691b7f: d9 44 24 0c                  	flds	12(%esp)
+  691b83: 68 6f 12 83 3a               	pushl	$981668463              # imm = 0x3A83126F
+  691b88: d9 e0                        	fchs
+  691b8a: 68 00 00 80 3f               	pushl	$1065353216             # imm = 0x3F800000
+  691b8f: d9 44 24 30                  	flds	48(%esp)
+  691b93: d9 f3                        	fpatan
+  691b95: 51                           	pushl	%ecx
+  691b96: 8b c8                        	movl	%eax, %ecx
+  691b98: d9 1c 24                     	fstps	(%esp)
+  691b9b: e8 80 62 fd ff               	calll	0x667e20 <.text+0x266e20>
+  691ba0: 8b f8                        	movl	%eax, %edi
+  691ba2: 5f                           	popl	%edi
+  691ba3: 5e                           	popl	%esi
+  691ba4: 8b 4c 24 10                  	movl	16(%esp), %ecx
+  691ba8: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  691baf: 83 c4 1c                     	addl	$28, %esp
+  691bb2: c2 04 00                     	retl	$4
+  691bb5: 33 c0                        	xorl	%eax, %eax
+  691bb7: 8b f8                        	movl	%eax, %edi
+  691bb9: 5f                           	popl	%edi
+  691bba: 5e                           	popl	%esi
+  691bbb: 8b 4c 24 10                  	movl	16(%esp), %ecx
+  691bbf: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  691bc6: 83 c4 1c                     	addl	$28, %esp
+  691bc9: c2 04 00                     	retl	$4
+  691bcc: 83 7e 2c 51                  	cmpl	$81, 44(%esi)
+  691bd0: 8b 0d 80 0a 87 00            	movl	8850048, %ecx
+  691bd6: 89 4c 24 08                  	movl	%ecx, 8(%esp)
+  691bda: 75 7b                        	jne	0x691c57 <.text+0x290c57>
+  691bdc: 8b 4e 0c                     	movl	12(%esi), %ecx
+  691bdf: 8b 41 14                     	movl	20(%ecx), %eax
+  691be2: 85 c0                        	testl	%eax, %eax
+  691be4: 8d 78 30                     	leal	48(%eax), %edi
+  691be7: 75 03                        	jne	0x691bec <.text+0x290bec>
+  691be9: 8d 79 04                     	leal	4(%ecx), %edi
+  691bec: e8 0f 37 ea ff               	calll	0x535300 <.text+0x134300>
+  691bf1: d9 40 08                     	flds	8(%eax)
+  691bf4: 8b 54 24 28                  	movl	40(%esp), %edx
+  691bf8: d8 47 08                     	fadds	8(%edi)
+  691bfb: 8b 4a 14                     	movl	20(%edx), %ecx
+  691bfe: 85 c9                        	testl	%ecx, %ecx
+  691c00: 8d 41 30                     	leal	48(%ecx), %eax
+  691c03: 75 03                        	jne	0x691c08 <.text+0x290c08>
+  691c05: 8d 42 04                     	leal	4(%edx), %eax
+  691c08: d8 50 08                     	fcoms	8(%eax)
+  691c0b: df e0                        	fnstsw	%ax
+  691c0d: f6 c4 41                     	testb	$65, %ah
+  691c10: 75 15                        	jne	0x691c27 <.text+0x290c27>
+  691c12: 8b 15 88 0a 87 00            	movl	8850056, %edx
+  691c18: dd d8                        	fstp	%st(0)
+  691c1a: c7 46 2c 53 00 00 00         	movl	$83, 44(%esi)
+  691c21: 89 54 24 08                  	movl	%edx, 8(%esp)
+  691c25: eb 30                        	jmp	0x691c57 <.text+0x290c57>
+  691c27: 85 c9                        	testl	%ecx, %ecx
+  691c29: 8d 41 30                     	leal	48(%ecx), %eax
+  691c2c: 75 03                        	jne	0x691c31 <.text+0x290c31>
+  691c2e: 8d 42 04                     	leal	4(%edx), %eax
+  691c31: d9 05 ac 6c 86 00            	flds	8809644
+  691c37: d8 c1                        	fadd	%st(1), %st
+  691c39: d9 40 08                     	flds	8(%eax)
+  691c3c: de d9                        	fcompp
+  691c3e: df e0                        	fnstsw	%ax
+  691c40: dd d8                        	fstp	%st(0)
+  691c42: f6 c4 05                     	testb	$5, %ah
+  691c45: 7a 10                        	jp	0x691c57 <.text+0x290c57>
+  691c47: a1 84 0a 87 00               	movl	8850052, %eax
+  691c4c: c7 46 2c 52 00 00 00         	movl	$82, 44(%esi)
+  691c53: 89 44 24 08                  	movl	%eax, 8(%esp)
+  691c57: 6a 4c                        	pushl	$76
+  691c59: e8 42 89 f8 ff               	calll	0x61a5a0 <.text+0x2195a0>
+  691c5e: 83 c4 04                     	addl	$4, %esp
+  691c61: 89 44 24 28                  	movl	%eax, 40(%esp)
+  691c65: 85 c0                        	testl	%eax, %eax
+  691c67: c7 44 24 20 01 00 00 00      	movl	$1, 32(%esp)
+  691c6f: 74 23                        	je	0x691c94 <.text+0x290c94>
+  691c71: 8b 4c 24 08                  	movl	8(%esp), %ecx
+  691c75: 8b 56 2c                     	movl	44(%esi), %edx
+  691c78: 51                           	pushl	%ecx
+  691c79: 52                           	pushl	%edx
+  691c7a: 8b 56 0c                     	movl	12(%esi), %edx
+  691c7d: 68 3d 01 00 00               	pushl	$317                    # imm = 0x13D
+  691c82: 6a 01                        	pushl	$1
+  691c84: 6a 06                        	pushl	$6
+  691c86: 8d 4e 10                     	leal	16(%esi), %ecx
+  691c89: 51                           	pushl	%ecx
+  691c8a: 52                           	pushl	%edx
+  691c8b: 8b c8                        	movl	%eax, %ecx
+  691c8d: e8 1e fb ff ff               	calll	0x6917b0 <.text+0x2907b0>
+  691c92: eb 02                        	jmp	0x691c96 <.text+0x290c96>
+  691c94: 33 c0                        	xorl	%eax, %eax
+  691c96: 83 c6 1c                     	addl	$28, %esi
+  691c99: 8b 0e                        	movl	(%esi), %ecx
+  691c9b: 8b 56 04                     	movl	4(%esi), %edx
+  691c9e: 8b 76 08                     	movl	8(%esi), %esi
+  691ca1: 8b f8                        	movl	%eax, %edi
+  691ca3: 83 c0 40                     	addl	$64, %eax
+  691ca6: 89 08                        	movl	%ecx, (%eax)
+  691ca8: 89 50 04                     	movl	%edx, 4(%eax)
+  691cab: 89 70 08                     	movl	%esi, 8(%eax)
+  691cae: 8b c7                        	movl	%edi, %eax
+  691cb0: 5f                           	popl	%edi
+  691cb1: 5e                           	popl	%esi
+  691cb2: 8b 4c 24 10                  	movl	16(%esp), %ecx
+  691cb6: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  691cbd: 83 c4 1c                     	addl	$28, %esp
+  691cc0: c2 04 00                     	retl	$4
+  691cc3: a1 84 cb b7 00               	movl	12045188, %eax
+  691cc8: 8b 7c 24 28                  	movl	40(%esp), %edi
+  691ccc: 89 46 28                     	movl	%eax, 40(%esi)
+  691ccf: 8b 87 7c 04 00 00            	movl	1148(%edi), %eax
+  691cd5: 6a 04                        	pushl	$4
+  691cd7: 8d 48 04                     	leal	4(%eax), %ecx
+  691cda: e8 31 fb fe ff               	calll	0x681810 <.text+0x280810>
+  691cdf: 85 c0                        	testl	%eax, %eax
+  691ce1: 75 53                        	jne	0x691d36 <.text+0x290d36>
+  691ce3: 6a 3c                        	pushl	$60
+  691ce5: e8 b6 88 f8 ff               	calll	0x61a5a0 <.text+0x2195a0>
+  691cea: 83 c4 04                     	addl	$4, %esp
+  691ced: 89 44 24 28                  	movl	%eax, 40(%esp)
+  691cf1: 85 c0                        	testl	%eax, %eax
+  691cf3: c7 44 24 20 02 00 00 00      	movl	$2, 32(%esp)
+  691cfb: 74 1e                        	je	0x691d1b <.text+0x290d1b>
+  691cfd: 8b 56 0c                     	movl	12(%esi), %edx
+  691d00: 6a 00                        	pushl	$0
+  691d02: 6a 51                        	pushl	$81
+  691d04: 68 3e 01 00 00               	pushl	$318                    # imm = 0x13E
+  691d09: 6a 01                        	pushl	$1
+  691d0b: 6a 06                        	pushl	$6
+  691d0d: 8d 4e 10                     	leal	16(%esi), %ecx
+  691d10: 51                           	pushl	%ecx
+  691d11: 52                           	pushl	%edx
+  691d12: 8b c8                        	movl	%eax, %ecx
+  691d14: e8 87 f6 ff ff               	calll	0x6913a0 <.text+0x2903a0>
+  691d19: eb 02                        	jmp	0x691d1d <.text+0x290d1d>
+  691d1b: 33 c0                        	xorl	%eax, %eax
+  691d1d: 8b 8f 7c 04 00 00            	movl	1148(%edi), %ecx
+  691d23: 6a 04                        	pushl	$4
+  691d25: 50                           	pushl	%eax
+  691d26: 83 c1 04                     	addl	$4, %ecx
+  691d29: c7 44 24 28 ff ff ff ff      	movl	$4294967295, 40(%esp)   # imm = 0xFFFFFFFF
+  691d31: e8 2a fe fe ff               	calll	0x681b60 <.text+0x280b60>
+  691d36: 8b 4c 24 18                  	movl	24(%esp), %ecx
+  691d3a: 5f                           	popl	%edi
+  691d3b: 33 c0                        	xorl	%eax, %eax
+  691d3d: 5e                           	popl	%esi
+  691d3e: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  691d45: 83 c4 1c                     	addl	$28, %esp
+  691d48: c2 04 00                     	retl	$4
+  691d4b: 90                           	nop
+  691d4c: 90                           	nop
+  691d4d: 90                           	nop
+  691d4e: 90                           	nop
+  691d4f: 90                           	nop
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  4ab900: 51                           	pushl	%ecx
+  4ab901: 53                           	pushl	%ebx
+  4ab902: 55                           	pushl	%ebp
+  4ab903: 8b e9                        	movl	%ecx, %ebp
+  4ab905: 8b 45 08                     	movl	8(%ebp), %eax
+  4ab908: 33 db                        	xorl	%ebx, %ebx
+  4ab90a: 85 c0                        	testl	%eax, %eax
+  4ab90c: c7 44 24 08 00 00 00 00      	movl	$0, 8(%esp)
+  4ab914: 7e 5e                        	jle	0x4ab974 <.text+0xaa974>
+  4ab916: 56                           	pushl	%esi
+  4ab917: 57                           	pushl	%edi
+  4ab918: 8b 7c 24 18                  	movl	24(%esp), %edi
+  4ab91c: 8d 75 0c                     	leal	12(%ebp), %esi
+  4ab91f: 90                           	nop
+  4ab920: 8b 0e                        	movl	(%esi), %ecx
+  4ab922: 8b 01                        	movl	(%ecx), %eax
+  4ab924: ff 50 28                     	calll	*40(%eax)
+  4ab927: 3b c7                        	cmpl	%edi, %eax
+  4ab929: 74 04                        	je	0x4ab92f <.text+0xaa92f>
+  4ab92b: 85 ff                        	testl	%edi, %edi
+  4ab92d: 75 38                        	jne	0x4ab967 <.text+0xaa967>
+  4ab92f: 8b 4c 24 1c                  	movl	28(%esp), %ecx
+  4ab933: 51                           	pushl	%ecx
+  4ab934: 8b 0e                        	movl	(%esi), %ecx
+  4ab936: 57                           	pushl	%edi
+  4ab937: e8 14 6f 00 00               	calll	0x4b2850 <.text+0xb1850>
+  4ab93c: d9 54 24 18                  	fsts	24(%esp)
+  4ab940: d8 1d 50 8b 85 00            	fcomps	8751952
+  4ab946: df e0                        	fnstsw	%ax
+  4ab948: f6 c4 41                     	testb	$65, %ah
+  4ab94b: 75 1a                        	jne	0x4ab967 <.text+0xaa967>
+  4ab94d: 8b 54 24 18                  	movl	24(%esp), %edx
+  4ab951: 8b 44 24 10                  	movl	16(%esp), %eax
+  4ab955: 52                           	pushl	%edx
+  4ab956: 50                           	pushl	%eax
+  4ab957: e8 f4 06 00 00               	calll	0x4ac050 <.text+0xab050>
+  4ab95c: d8 44 24 18                  	fadds	24(%esp)
+  4ab960: 83 c4 08                     	addl	$8, %esp
+  4ab963: d9 5c 24 10                  	fstps	16(%esp)
+  4ab967: 8b 45 08                     	movl	8(%ebp), %eax
+  4ab96a: 43                           	incl	%ebx
+  4ab96b: 83 c6 04                     	addl	$4, %esi
+  4ab96e: 3b d8                        	cmpl	%eax, %ebx
+  4ab970: 7c ae                        	jl	0x4ab920 <.text+0xaa920>
+  4ab972: 5f                           	popl	%edi
+  4ab973: 5e                           	popl	%esi
+  4ab974: d9 44 24 08                  	flds	8(%esp)
+  4ab978: 5d                           	popl	%ebp
+  4ab979: 5b                           	popl	%ebx
+  4ab97a: 59                           	popl	%ecx
+  4ab97b: c2 08 00                     	retl	$8
+  4ab97e: 90                           	nop
+  4ab97f: 90                           	nop
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  4b2850: 56                           	pushl	%esi
+  4b2851: 57                           	pushl	%edi
+  4b2852: 8b 7c 24 0c                  	movl	12(%esp), %edi
+  4b2856: 85 ff                        	testl	%edi, %edi
+  4b2858: 8b f1                        	movl	%ecx, %esi
+  4b285a: 74 09                        	je	0x4b2865 <.text+0xb1865>
+  4b285c: 8b 06                        	movl	(%esi), %eax
+  4b285e: ff 50 28                     	calll	*40(%eax)
+  4b2861: 3b c7                        	cmpl	%edi, %eax
+  4b2863: 75 14                        	jne	0x4b2879 <.text+0xb1879>
+  4b2865: 8b 16                        	movl	(%esi), %edx
+  4b2867: 8b ce                        	movl	%esi, %ecx
+  4b2869: ff 52 30                     	calll	*48(%edx)
+  4b286c: d8 1d 50 8b 85 00            	fcomps	8751952
+  4b2872: df e0                        	fnstsw	%ax
+  4b2874: f6 c4 44                     	testb	$68, %ah
+  4b2877: 7a 0b                        	jp	0x4b2884 <.text+0xb1884>
+  4b2879: d9 05 50 8b 85 00            	flds	8751952
+  4b287f: 5f                           	popl	%edi
+  4b2880: 5e                           	popl	%esi
+  4b2881: c2 08 00                     	retl	$8
+  4b2884: 8b 06                        	movl	(%esi), %eax
+  4b2886: 8b ce                        	movl	%esi, %ecx
+  4b2888: c7 44 24 0c 00 00 7a 44      	movl	$1148846080, 12(%esp)   # imm = 0x447A0000
+  4b2890: ff 50 04                     	calll	*4(%eax)
+  4b2893: 83 f8 3e                     	cmpl	$62, %eax
+  4b2896: 75 17                        	jne	0x4b28af <.text+0xb18af>
+  4b2898: 8b 44 24 10                  	movl	16(%esp), %eax
+  4b289c: d9 00                        	flds	(%eax)
+  4b289e: d8 66 20                     	fsubs	32(%esi)
+  4b28a1: d9 40 04                     	flds	4(%eax)
+  4b28a4: d8 66 24                     	fsubs	36(%esi)
+  4b28a7: d9 40 08                     	flds	8(%eax)
+  4b28aa: d8 66 28                     	fsubs	40(%esi)
+  4b28ad: eb 35                        	jmp	0x4b28e4 <.text+0xb18e4>
+  4b28af: 8b 16                        	movl	(%esi), %edx
+  4b28b1: 8b ce                        	movl	%esi, %ecx
+  4b28b3: ff 52 28                     	calll	*40(%edx)
+  4b28b6: 85 c0                        	testl	%eax, %eax
+  4b28b8: 74 5b                        	je	0x4b2915 <.text+0xb1915>
+  4b28ba: 8b 06                        	movl	(%esi), %eax
+  4b28bc: 8b ce                        	movl	%esi, %ecx
+  4b28be: ff 50 28                     	calll	*40(%eax)
+  4b28c1: 8b 48 14                     	movl	20(%eax), %ecx
+  4b28c4: 85 c9                        	testl	%ecx, %ecx
+  4b28c6: 74 05                        	je	0x4b28cd <.text+0xb18cd>
+  4b28c8: 8d 41 30                     	leal	48(%ecx), %eax
+  4b28cb: eb 03                        	jmp	0x4b28d0 <.text+0xb18d0>
+  4b28cd: 83 c0 04                     	addl	$4, %eax
+  4b28d0: 8b 4c 24 10                  	movl	16(%esp), %ecx
+  4b28d4: d9 01                        	flds	(%ecx)
+  4b28d6: d8 20                        	fsubs	(%eax)
+  4b28d8: d9 41 04                     	flds	4(%ecx)
+  4b28db: d8 60 04                     	fsubs	4(%eax)
+  4b28de: d9 41 08                     	flds	8(%ecx)
+  4b28e1: d8 60 08                     	fsubs	8(%eax)
+  4b28e4: d9 c0                        	fld	%st(0)
+  4b28e6: d8 c9                        	fmul	%st(1), %st
+  4b28e8: d9 c2                        	fld	%st(2)
+  4b28ea: d8 cb                        	fmul	%st(3), %st
+  4b28ec: de c1                        	faddp	%st, %st(1)
+  4b28ee: d9 c3                        	fld	%st(3)
+  4b28f0: d8 cc                        	fmul	%st(4), %st
+  4b28f2: de c1                        	faddp	%st, %st(1)
+  4b28f4: d9 fa                        	fsqrt
+  4b28f6: dd db                        	fstp	%st(3)
+  4b28f8: dd d8                        	fstp	%st(0)
+  4b28fa: dd d8                        	fstp	%st(0)
+  4b28fc: d9 54 24 0c                  	fsts	12(%esp)
+  4b2900: d8 1d 24 86 85 00            	fcomps	8750628
+  4b2906: df e0                        	fnstsw	%ax
+  4b2908: f6 c4 05                     	testb	$5, %ah
+  4b290b: 7a 08                        	jp	0x4b2915 <.text+0xb1915>
+  4b290d: c7 44 24 0c 00 00 80 3f      	movl	$1065353216, 12(%esp)   # imm = 0x3F800000
+  4b2915: 8b 16                        	movl	(%esi), %edx
+  4b2917: 8b ce                        	movl	%esi, %ecx
+  4b2919: ff 52 30                     	calll	*48(%edx)
+  4b291c: d9 44 24 0c                  	flds	12(%esp)
+  4b2920: d8 4c 24 0c                  	fmuls	12(%esp)
+  4b2924: 5f                           	popl	%edi
+  4b2925: d9 ec                        	fldlg2
+  4b2927: 5e                           	popl	%esi
+  4b2928: d9 c9                        	fxch	%st(1)
+  4b292a: d9 f1                        	fyl2x
+  4b292c: d9 54 24 08                  	fsts	8(%esp)
+  4b2930: d8 0d 2c 86 85 00            	fmuls	8750636
+  4b2936: de e9                        	fsubrp	%st, %st(1)
+  4b2938: d9 44 24 04                  	flds	4(%esp)
+  4b293c: d8 0d 58 8c 85 00            	fmuls	8752216
+  4b2942: de e9                        	fsubrp	%st, %st(1)
+  4b2944: c2 08 00                     	retl	$8
+  4b2947: 90                           	nop
+  4b2948: 90                           	nop
+  4b2949: 90                           	nop
+  4b294a: 90                           	nop
+  4b294b: 90                           	nop
+  4b294c: 90                           	nop
+  4b294d: 90                           	nop
+  4b294e: 90                           	nop
+  4b294f: 90                           	nop
+  4b2950: 56                           	pushl	%esi
+  4b2951: 8b f1                        	movl	%ecx, %esi
+  4b2953: 8b 0e                        	movl	(%esi), %ecx
+  4b2955: 85 c9                        	testl	%ecx, %ecx
+  4b2957: 74 0c                        	je	0x4b2965 <.text+0xb1965>
+  4b2959: 56                           	pushl	%esi
+  4b295a: e8 a1 f0 0b 00               	calll	0x571a00 <.text+0x170a00>
+  4b295f: c7 06 00 00 00 00            	movl	$0, (%esi)
+  4b2965: 8b 4e 04                     	movl	4(%esi), %ecx
+  4b2968: 85 c9                        	testl	%ecx, %ecx
+  4b296a: 74 0d                        	je	0x4b2979 <.text+0xb1979>
+  4b296c: 8b 01                        	movl	(%ecx), %eax
+  4b296e: 6a 01                        	pushl	$1
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  5e061d: 83 7e 1c ff                  	cmpl	$-1, 28(%esi)
+  5e0621: 75 2a                        	jne	0x5e064d <.text+0x1df64d>
+  5e0623: 8b 0d 84 cb b7 00            	movl	12045188, %ecx
+  5e0629: 8b 3f                        	movl	(%edi), %edi
+  5e062b: 89 4e 1c                     	movl	%ecx, 28(%esi)
+  5e062e: 8b 47 14                     	movl	20(%edi), %eax
+  5e0631: 85 c0                        	testl	%eax, %eax
+  5e0633: 74 05                        	je	0x5e063a <.text+0x1df63a>
+  5e0635: 83 c0 30                     	addl	$48, %eax
+  5e0638: eb 03                        	jmp	0x5e063d <.text+0x1df63d>
+  5e063a: 8d 47 04                     	leal	4(%edi), %eax
+  5e063d: 8b 10                        	movl	(%eax), %edx
+  5e063f: 89 13                        	movl	%edx, (%ebx)
+  5e0641: 8b 48 04                     	movl	4(%eax), %ecx
+  5e0644: 89 4b 04                     	movl	%ecx, 4(%ebx)
+  5e0647: 8b 50 08                     	movl	8(%eax), %edx
+  5e064a: 89 53 08                     	movl	%edx, 8(%ebx)
+  5e064d: 8b 4c 24 14                  	movl	20(%esp), %ecx
+  5e0651: 5f                           	popl	%edi
+  5e0652: 8b c6                        	movl	%esi, %eax
+  5e0654: 5e                           	popl	%esi
+  5e0655: 5d                           	popl	%ebp
+  5e0656: 5b                           	popl	%ebx
+  5e0657: 64 89 0d 00 00 00 00         	movl	%ecx, %fs:0
+  5e065e: 83 c4 10                     	addl	$16, %esp
+  5e0661: c2 10 00                     	retl	$16
+
+/Users/salimtrouve/Documents/GitHub/gta-reversed-dryxio/gta_sa_compact1.0.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  6932e5: 8b 87 40 01 00 00            	movl	320(%edi), %eax
+  6932eb: f6 c4 20                     	testb	$32, %ah
+  6932ee: 74 6c                        	je	0x69335c <.text+0x29235c>
+  6932f0: 8b 85 80 04 00 00            	movl	1152(%ebp), %eax
+  6932f6: 85 c0                        	testl	%eax, %eax
+  6932f8: 74 62                        	je	0x69335c <.text+0x29235c>
+  6932fa: 8a 44 24 60                  	movb	96(%esp), %al
+  6932fe: 84 c0                        	testb	%al, %al
+  693300: 74 5a                        	je	0x69335c <.text+0x29235c>
+  693302: 8d 54 24 14                  	leal	20(%esp), %edx
+  693306: 52                           	pushl	%edx
+  693307: 6a ff                        	pushl	$-1
+  693309: 68 00 00 70 42               	pushl	$1114636288             # imm = 0x42700000
+  69330e: 55                           	pushl	%ebp
+  69330f: 8d 4c 24 30                  	leal	48(%esp), %ecx
+  693313: c7 44 24 24 00 00 00 00      	movl	$0, 36(%esp)
+  69331b: c7 44 24 28 00 00 00 00      	movl	$0, 40(%esp)
+  693323: c7 44 24 2c 00 00 00 00      	movl	$0, 44(%esp)
+  69332b: e8 80 d2 f4 ff               	calll	0x5e05b0 <.text+0x1df5b0>
+  693330: 8d 44 24 20                  	leal	32(%esp), %eax
+  693334: 6a 00                        	pushl	$0
+  693336: 50                           	pushl	%eax
+  693337: c7 44 24 5c 00 00 00 00      	movl	$0, 92(%esp)
+  69333f: e8 0c 87 e1 ff               	calll	0x4aba50 <.text+0xaaa50>
+  693344: 8b c8                        	movl	%eax, %ecx
+  693346: e8 d5 80 e1 ff               	calll	0x4ab420 <.text+0xaa420>
+  69334b: 8d 4c 24 20                  	leal	32(%esp), %ecx
+  69334f: c7 44 24 54 ff ff ff ff      	movl	$4294967295, 84(%esp)   # imm = 0xFFFFFFFF
+  693357: e8 a4 b6 f4 ff               	calll	0x5dea00 <.text+0x1dda00>
+
+VM installed executable: SHA256 a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26; 14,383,616 bytes.
+Native-only ABI checks pass. SCM wrappers differ; three native prologues use register/flags-preserving push thunks. They rejoin at the next original instruction. No executable was modified.
+
+Build/tmp/burglary-native-20260909/gta_sa-vm.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  403c53: 53                           	pushl	%ebx
+  403c54: 9c                           	pushfl
+  403c55: f8                           	clc
+  403c56: 8b 1d a4 07 56 01            	movl	22415268, %ebx
+  403c5c: 13 1d 67 3c 74 00            	adcl	7617639, %ebx
+  403c62: 9d                           	popfl
+  403c63: 87 1c 24                     	xchgl	%ebx, (%esp)
+  403c66: e9 3c d7 28 00               	jmp	0x6913a7 <.text+0x2903a7>
+
+Build/tmp/burglary-native-20260909/gta_sa-vm.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  4072e5: 57                           	pushl	%edi
+  4072e6: 9c                           	pushfl
+  4072e7: f9                           	stc
+  4072e8: 8b 3d 58 08 56 01            	movl	22415448, %edi
+  4072ee: 1b 3d 43 40 6f 00            	sbbl	7290947, %edi
+  4072f4: 9d                           	popfl
+  4072f5: 87 3c 24                     	xchgl	%edi, (%esp)
+  4072f8: e9 fa bd 28 00               	jmp	0x6930f7 <.text+0x2920f7>
+
+Build/tmp/burglary-native-20260909/gta_sa-vm.exe:	file format coff-i386
+
+Disassembly of section .text:
+
+00401000 <.text>:
+  4040a5: 57                           	pushl	%edi
+  4040a6: 9c                           	pushfl
+  4040a7: 8b 3d b4 07 56 01            	movl	22415284, %edi
+  4040ad: 51                           	pushl	%ecx
+  4040ae: 8b 0d 8b c3 56 01            	movl	22463371, %ecx
+  4040b4: d3 c7                        	roll	%cl, %edi
+  4040b6: 59                           	popl	%ecx
+  4040b7: 9d                           	popfl
+  4040b8: 87 3c 24                     	xchgl	%edi, (%esp)
+  4040bb: e9 f7 c4 1d 00               	jmp	0x5e05b7 <.text+0x1df5b7>

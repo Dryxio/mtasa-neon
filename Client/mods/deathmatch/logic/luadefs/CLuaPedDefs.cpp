@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CEventList.h>
 #include "../CClientCargoManager.h"
 #include <game/CWeapon.h>
 #include "lua/CLuaFunctionParser.h"
@@ -323,6 +324,8 @@ void CLuaPedDefs::LoadFunctions()
         {"setPedShootAt", ArgumentParser<SetPedShootAt>},
         {"setPedTaskSequence", SetPedTaskSequence},
         {"setPedCarryObject", SetPedCarryObject},
+        {"pickUpPedObject", PickUpPedObject},
+        {"getPedNoiseLevel", GetPedNoiseLevel},
         {"getPedCarriedObject", GetPedCarriedObject},
         {"putDownPedObject", PutDownPedObject},
         {"cancelPedCarryObject", CancelPedCarryObject},
@@ -4488,6 +4491,37 @@ int CLuaPedDefs::SetPedCarryObject(lua_State* luaVM)
     args.ReadString(preset, "box");
     const bool result = !args.HasErrors() && preset == "box" && CClientCargoManager::GetSingleton().Start(m_pLuaManager->GetVirtualMachine(luaVM), ped, object);
     lua_pushboolean(luaVM, result);
+    return 1;
+}
+
+int CLuaPedDefs::PickUpPedObject(lua_State* luaVM)
+{
+    CClientPed*      ped = nullptr;
+    CClientObject*   object = nullptr;
+    CScriptArgReader args(luaVM);
+    args.ReadUserData(ped);
+    args.ReadUserData(object);
+    lua_pushboolean(luaVM, !args.HasErrors() && CClientCargoManager::GetSingleton().Start(m_pLuaManager->GetVirtualMachine(luaVM), ped, object, true));
+    return 1;
+}
+
+int CLuaPedDefs::GetPedNoiseLevel(lua_State* luaVM)
+{
+    CClientPed*      ped = nullptr;
+    CVector          position;
+    CScriptArgReader args(luaVM);
+    args.ReadUserData(ped);
+    if (lua_gettop(luaVM) > 1)
+        args.ReadVector3D(position);
+    else if (ped)
+        ped->GetPosition(position);
+    // Only the executor has authoritative native event production for a ped.
+    if (args.HasErrors() || !ped || ped->IsBeingDeleted() || !ped->IsStreamedIn() || !ped->GetGamePlayer() ||
+        !(ped->IsLocalPlayer() || (ped->GetType() == CCLIENTPED && (ped->IsLocalEntity() || ped->IsSyncing()))) || !std::isfinite(position.fX) ||
+        !std::isfinite(position.fY) || !std::isfinite(position.fZ))
+        lua_pushboolean(luaVM, false);
+    else
+        lua_pushnumber(luaVM, g_pGame->GetEventList()->GetSoundLevel(ped->GetGamePlayer(), position));
     return 1;
 }
 

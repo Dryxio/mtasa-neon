@@ -17,4 +17,5 @@ class CEventListSA : public CEventList
 {
 public:
     CEventDamage* GetEventDamage(CEventDamageSAInterface* pInterface);
+    float         GetSoundLevel(CEntity* source, const CVector& position) override;
 };

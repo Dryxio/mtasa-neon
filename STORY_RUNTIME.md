@@ -767,3 +767,16 @@ The Windows VM remains the runtime target: source changes are made in the canoni
 ## Change documentation
 
 Commits for this project should describe the prompt or goal, the gameplay or engine motivation, the architectural reasoning, the affected task/opcode contract, and exactly how the change was tested. They should also state the transversal scope of a synchronization fix, or justify why a correction is intentionally mission-specific. A green build alone is not sufficient evidence for networking or lifecycle changes.
+
+
+## Household cargo / burglary foundation (2026-09-09)
+
+`pickUpPedObject` now exposes the native approach/alignment/height-aware pickup
+for stock stealable domestic models; `getPedNoiseLevel` exposes source-filtered
+native event sound. Queued pickup clones retain a non-reused lease generation.
+See [contract, binary audit and VM checkpoint](docs/development/burglary-native-2026-09-09.md).
+The police audit confirms that solo wanted dispatch/arrest cannot be enabled on
+MTA peds by setting stars or a cop skin. Keep burglary response mission-owned.
+The user deferred all client launch, computer use and gameplay validation to
+the future burglary V1 script; no pickup or multiplayer perception playtest is
+claimed by this checkpoint.

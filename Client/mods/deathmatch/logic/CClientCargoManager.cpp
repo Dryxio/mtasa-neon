@@ -16,9 +16,35 @@ namespace
                !ped->IsGettingIntoVehicle() && !ped->GetAttachedTo() && !ped->IsInWater();
     }
 
+    bool IsPickupModel(unsigned short model)
+    {
+        // Stock furnitur.dat stealable lounge subgroups, resolved in props.ide.
+        switch (model)
+        {
+            case 1271:  // Crate, also supported by the existing immediate hold.
+            case 1719:
+            case 2028:  // Consoles.
+            case 1783:  // Video player.
+            case 1809:
+            case 2101:
+            case 2102:
+            case 2103:
+            case 2226:  // Hi-fi.
+            case 2312:
+            case 2316:
+            case 2317:
+            case 2318:
+            case 2320:
+            case 2322:  // TVs.
+                return true;
+            default:
+                return false;
+        }
+    }
+
     const char* StateName(int state)
     {
-        return state == 1 ? "holding" : state == 2 ? "putting_down" : state == 3 ? "starting" : "released";
+        return state == 1 ? "holding" : state == 2 ? "putting_down" : state == 3 ? "starting" : state == 4 ? "picking_up" : "released";
     }
 
     void Notify(CClientPed* ped, CClientObject* object, const char* state, const char* reason)
@@ -61,11 +87,11 @@ const char* CClientCargoManager::GetState(CClientPed* ped) const
     return "released";
 }
 
-bool CClientCargoManager::Start(CLuaMain* owner, CClientPed* ped, CClientObject* object)
+bool CClientCargoManager::Start(CLuaMain* owner, CClientPed* ped, CClientObject* object, bool pickup)
 {
     if (!owner || !CanExecute(ped) || !ped->IsOnGround() || Find(ped) || !object || object->IsBeingDeleted() || !object->IsStreamedIn() ||
-        !object->GetGameObject() || object->GetAttachedTo() || object->GetModel() != 1271 || ped->GetDimension() != object->GetDimension() ||
-        ped->GetInterior() != object->GetInterior())
+        !object->GetGameObject() || object->GetAttachedTo() || (pickup ? !IsPickupModel(object->GetModel()) : object->GetModel() != 1271) ||
+        ped->GetDimension() != object->GetDimension() || ped->GetInterior() != object->GetInterior())
         return false;
     CVector scale;
     object->GetScale(scale);
@@ -90,7 +116,10 @@ bool CClientCargoManager::Start(CLuaMain* owner, CClientPed* ped, CClientObject*
 
     const bool frozen = object->IsFrozen();
     object->SetFrozen(false);
-    if (!g_pGame->GetTasks()->StartPedCarryObject(ped->GetGamePlayer(), object->GetGameObject()))
+    auto*      tasks = g_pGame->GetTasks();
+    const bool accepted = pickup ? tasks->PickUpPedObject(ped->GetGamePlayer(), object->GetGameObject())
+                                 : tasks->StartPedCarryObject(ped->GetGamePlayer(), object->GetGameObject());
+    if (!accepted)
     {
         object->SetFrozen(frozen);
         return false;
@@ -103,6 +132,7 @@ bool CClientCargoManager::Start(CLuaMain* owner, CClientPed* ped, CClientObject*
     entry.health = ped->GetHealth();
     entry.started = SharedUtil::GetTickCount64_();
     entry.frozen = frozen;
+    entry.pickup = pickup;
     m_entries.push_back(entry);
     // Notify only observed native transitions in DoPulse. No synchronous Lua
     // callback may invalidate a successful start before its caller returns.
@@ -222,7 +252,8 @@ void CClientCargoManager::DoPulse()
             Release(ped, entry->state == 2 ? "put_down" : "native_release", true);
             continue;
         }
-        if ((state == 3 && now - entry->started > 5000) || (entry->putDownRequested && now - entry->putDownRequested > 8000))
+        if (((state == 3 || state == 4) && now - entry->started > (entry->pickup ? 15000 : 5000)) ||
+            (entry->putDownRequested && now - entry->putDownRequested > 8000))
         {
             Release(ped, "timeout", true);
             continue;

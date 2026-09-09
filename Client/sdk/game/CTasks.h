@@ -226,4 +226,6 @@ public:
     virtual bool PutDownPedObject(CPed* ped) = 0;
     virtual int  GetPedCarryState(CPed* ped) = 0;
     virtual void CancelPedCarryObject(CPed* ped) = 0;
+    // Appended: native approach/alignment/pickup. State 4 means picking up.
+    virtual bool PickUpPedObject(CPed* ped, CObject* object) = 0;
 };

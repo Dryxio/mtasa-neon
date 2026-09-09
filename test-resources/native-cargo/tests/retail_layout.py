@@ -31,8 +31,12 @@ for vtable in (0x870B2C, 0x870B50, 0x870B74):
     entries = struct.unpack('<9I', read(vtable, 36))
     assert entries[6:] == (0x693BD0, 0x693C40, 0x6940A0), hex(vtable)
     assert 0x400000 <= entries[0] < 0x800000, 'invalid retail deleting destructor'
-for site, target in ((0x46B090,0x6913A0), (0x46B0C4,0x691470),
-                     (0x6917D5,0x6913A0), (0x691848,0x691470), (0x6919A4,0x6913A0)):
+calls = [(0x6917D5,0x6913A0), (0x691848,0x691470), (0x6919A4,0x6913A0)]
+if '--native-only' not in sys.argv:
+    calls += [(0x46B090,0x6913A0), (0x46B0C4,0x691470)]
+else:
+    print('Direct-native mode: SCM wrapper call sites are excluded (some executables obfuscate them).')
+for site, target in calls:
     call = read(site,5)
     assert call[0] == 0xE8 and site+5+struct.unpack('<i',call[1:])[0] == target
 for site, table in ((0x6913D3,0x870B2C),(0x6917E1,0x870B50),(0x6919B1,0x870B74)):

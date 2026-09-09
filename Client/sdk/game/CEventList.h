@@ -11,6 +11,8 @@
 
 #pragma once
 
+class CEntity;
+class CVector;
 class CEventDamage;
 class CEventDamageSAInterface;
 
@@ -18,4 +20,5 @@ class CEventList
 {
 public:
     virtual CEventDamage* GetEventDamage(CEventDamageSAInterface* pInterface) = 0;
+    virtual float         GetSoundLevel(CEntity* source, const CVector& position) = 0;
 };
