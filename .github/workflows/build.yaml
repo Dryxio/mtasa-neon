@@ -291,6 +291,8 @@ jobs:
 
           $filesRoot = (Resolve-Path 'InstallFiles').Path
           $installerRoot = (Resolve-Path 'Shared\installer').Path
+          # Resolve the prerequisite once and pass an absolute path to NSIS.
+          $vc2010Installer = (Resolve-Path 'Build/runtime-prerequisites/vcredist_x86.exe').Path
           $outputDirectory = Join-Path $PWD 'InstallerOutput'
           $outputPath = Join-Path $outputDirectory 'MTA-Neon-Setup.exe'
 
@@ -393,6 +395,7 @@ jobs:
               '/DMTA_NEON' `
               '/DCLIENT_ONLY' `
               "/DFILES_ROOT=$filesRoot" `
+              "/DNEON_VC2010_INSTALLER=$vc2010Installer" `
               "/DINSTALL_OUTPUT=$outputPath" `
               "/DPRODUCT_VERSION=v1.7.0-neon-$env:NEON_BUILD_NUMBER" `
               "/DREVISION=$env:NEON_BUILD_NUMBER" `
