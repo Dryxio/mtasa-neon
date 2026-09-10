@@ -57545,7 +57545,7 @@
           "description": "Acquires the client-wide vehicle-audio lease and loads Soundize-compatible model definitions from the calling resource.",
           "example": "assert(engineLoadVehicleAudioConfig('vehicle-audio.conf'))",
           "notes": [
-            "FMOD and banks initialize lazily during the client pulse, so true does not prove that the runtime or every referenced bank can play.",
+            "Initialization is synchronous. Per-vehicle banks and samples remain lazy, so readiness does not guarantee every referenced vehicle bank/event can play.",
             "The expected content root contains base/common.bank, base/common.strings.bank, and recursively indexed banks/*.bank files with same-stem .ini metadata."
           ],
           "oopMethods": [],
@@ -57559,14 +57559,17 @@
           ],
           "provider": "neon",
           "requiresReview": false,
-          "returnDescription": "true when the caller acquired the lease and the configuration contained at least one valid vehicle definition; false for an invalid or cross-resource path, another owner, a missing manager, or parse failure.",
+          "returnDescription": "true, \"ready\" after the configuration, FMOD runtime, required plugins, audio device and base banks initialize; false, diagnostic on failure. A failed initialization releases the lease. Clients through release 186 returned only a parsing result without the readiness marker.",
           "returns": [
             {
               "type": "bool"
+            },
+            {
+              "type": "string"
             }
           ],
           "side": "client",
-          "signature": "bool engineLoadVehicleAudioConfig(string path)",
+          "signature": "bool, string engineLoadVehicleAudioConfig(string path)",
           "sourceCommit": "0418bcea7",
           "sourcePath": "Client/mods/deathmatch/logic/luadefs/CLuaEngineDefs.cpp"
         }
@@ -58026,6 +58029,9 @@
       "returns": [
         {
           "type": "bool"
+        },
+        {
+          "type": "string"
         }
       ],
       "sides": [

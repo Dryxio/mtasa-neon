@@ -15,8 +15,8 @@
       "mediaType": "text/x-lua",
       "path": "mta-client.lua",
       "schemaVersion": "1.0.0",
-      "sha256": "f387ce1c805ab455bc29276cbf8b54b31eb86477597d9eeb6f9c90eca16c7659",
-      "size": 658019
+      "sha256": "ec46a59a79034a101b6d30c58967cfb04b247722334aac870cc575a811618371",
+      "size": 658379
     },
     {
       "id": "neon:artifact:luals-server",

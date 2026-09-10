@@ -18,6 +18,10 @@ SetCompressor /SOLID lzma
 !include KBInstall.nsh
 !include MultiSzMacro.nsh
 
+!ifdef MTA_NEON
+    !include neon-vc2010.nsh
+!endif
+
 Var GTA_DIR
 Var Install_Dir
 Var CreateSMShortcuts
@@ -699,6 +703,11 @@ SectionGroup /e "$(INST_SEC_CLIENT)" SECGCLIENT
     Section "$(INST_SEC_CORE)" SEC01
         SectionIn 1 RO ; section is required
         ${LogText} "+Section begin - CLIENT CORE"
+
+        !ifdef MTA_NEON
+            ; Required for both a fresh install and the updater's in-place path.
+            Call InstallNeonVC2010
+        !endif
 
         SetShellVarContext all
 

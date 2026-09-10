@@ -6620,7 +6620,8 @@ function engineLoadTXD(...) end
 --- Acquires the client-wide vehicle-audio lease and loads Soundize-compatible model definitions from the calling resource.
 --- `neon:function:engineLoadVehicleAudioConfig` (verified).
 ---@param path string # Non-empty path to a configuration file inside the calling resource.
----@return boolean # true when the caller acquired the lease and the configuration contained at least one valid vehicle definition; false for an invalid or cross-resource path, another owner, a missing manager, or parse failure.
+---@return boolean # true, "ready" after the configuration, FMOD runtime, required plugins, audio device and base banks initialize; false, diagnostic on failure. A failed initialization releases the lease. Clients through release 186 returned only a parsing result without the readiness marker.
+---@return string # true, "ready" after the configuration, FMOD runtime, required plugins, audio device and base banks initialize; false, diagnostic on failure. A failed initialization releases the lease. Clients through release 186 returned only a parsing result without the readiness marker.
 function engineLoadVehicleAudioConfig(...) end
 
 --- Parses Texture Studio / SA-MP Pawn map source into inert objects, building removals, material overrides, and diagnostics.

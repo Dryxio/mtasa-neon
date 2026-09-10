@@ -367,33 +367,31 @@ namespace
 
         ~FmodBackend() { Shutdown(); }
 
+        const SString& GetLastError() const { return m_lastError; }
+
         bool Initialize(const SString& runtimeRoot, const SString& contentRoot)
         {
             if (m_system)
                 return true;
+            m_lastError.clear();
 
-            m_coreModule = LoadLibraryA(PathJoin(runtimeRoot, "fmod.dll"));
+            m_coreModule = LoadLibraryW(SharedUtil::FromUTF8(PathJoin(runtimeRoot, "fmod.dll")).c_str());
             if (!m_coreModule)
-                return false;
-            m_studioModule = LoadLibraryA(PathJoin(runtimeRoot, "fmodstudio.dll"));
-            if (!m_studioModule || !LoadApi())
-            {
-                Shutdown();
-                return false;
-            }
+                return Fail(SString("fmod.dll: Windows loader error %lu", GetLastErrorCode()));
+            m_studioModule = LoadLibraryW(SharedUtil::FromUTF8(PathJoin(runtimeRoot, "fmodstudio.dll")).c_str());
+            if (!m_studioModule)
+                return Fail(SString("fmodstudio.dll: Windows loader error %lu", GetLastErrorCode()));
+            if (!LoadApi())
+                return Fail("FMOD runtime API is incompatible with Neon");
 
-            if (m_studioSystemCreate(&m_system, FMOD_VERSION_COMPATIBLE) != FMOD_OK)
-            {
-                Shutdown();
-                return false;
-            }
+            int result = m_studioSystemCreate(&m_system, FMOD_VERSION_COMPATIBLE);
+            if (result != FMOD_OK)
+                return Fail(SString("FMOD Studio create: error %d", result));
 
             FmodSystem* coreSystem = nullptr;
-            if (m_studioSystemGetCoreSystem(m_system, &coreSystem) != FMOD_OK || !coreSystem)
-            {
-                Shutdown();
-                return false;
-            }
+            result = m_studioSystemGetCoreSystem(m_system, &coreSystem);
+            if (result != FMOD_OK || !coreSystem)
+                return Fail(SString("FMOD core system: error %d", result));
             m_systemSetDSPBufferSize(coreSystem, 512, 4);
             m_systemSetSoftwareFormat(coreSystem, 0, 0, 0);
 
@@ -404,11 +402,9 @@ namespace
                 return false;
             }
 
-            if (m_studioSystemInitialize(m_system, 1024, FMOD_STUDIO_INIT_NORMAL, FMOD_INIT_NORMAL, nullptr) != FMOD_OK)
-            {
-                Shutdown();
-                return false;
-            }
+            result = m_studioSystemInitialize(m_system, 1024, FMOD_STUDIO_INIT_NORMAL, FMOD_INIT_NORMAL, nullptr);
+            if (result != FMOD_OK)
+                return Fail(SString("FMOD audio device initialization: error %d", result));
 
             if (!LoadRequiredBank(PathJoin(contentRoot, "base", "common.bank"), m_commonBank) ||
                 !LoadRequiredBank(PathJoin(contentRoot, "base", "common.strings.bank"), m_commonStringsBank))
@@ -551,22 +547,51 @@ namespace
                    LoadFunction(m_coreModule, "FMOD_System_SetSoftwareFormat", m_systemSetSoftwareFormat);
         }
 
+        // Preserve the failing stage before cleanup changes the Windows error state.
+        static DWORD GetLastErrorCode() { return ::GetLastError(); }
+
+        bool Fail(const SString& message)
+        {
+            m_lastError = message;
+            Shutdown();
+            return false;
+        }
+
         bool LoadRequiredBank(const SString& path, FmodStudioBank*& bank)
         {
-            if (!FileExists(path))
+            const int result = m_studioSystemLoadBankFile(m_system, path.c_str(), FMOD_STUDIO_LOAD_BANK_NORMAL, &bank);
+            if (result != FMOD_OK)
+            {
+                m_lastError = SString("Base bank %s: FMOD error %d", std::filesystem::path(path.c_str()).filename().string().c_str(), result);
                 return false;
-            bank = LoadBank(path);
-            return bank != nullptr;
+            }
+            return true;
         }
 
         bool LoadRequiredPlugin(FmodSystem* system, const SString& path)
         {
-            if (!FileExists(path))
+            // FMOD reduces missing DLL dependencies to a generic plugin error. Ask
+            // Windows first so clean installs identify the VC++ 2010 x86 prerequisite.
+            HMODULE probe = LoadLibraryW(SharedUtil::FromUTF8(path).c_str());
+            if (!probe)
+            {
+                const DWORD loaderError = GetLastErrorCode();
+                m_lastError = SString("Plugin %s: Windows loader error %lu (requires Visual C++ 2010 SP1 x86 / MSVCR100.dll)",
+                                      std::filesystem::path(path.c_str()).filename().string().c_str(), loaderError);
                 return false;
+            }
+            FreeLibrary(probe);
             unsigned int handle = 0;
-            return m_systemLoadPlugin(system, path.c_str(), &handle, 0) == FMOD_OK;
+            const int    result = m_systemLoadPlugin(system, path.c_str(), &handle, 0);
+            if (result != FMOD_OK)
+            {
+                m_lastError = SString("Plugin %s: FMOD error %d", std::filesystem::path(path.c_str()).filename().string().c_str(), result);
+                return false;
+            }
+            return true;
         }
 
+        SString m_lastError;
         HMODULE m_coreModule = nullptr;
         HMODULE m_studioModule = nullptr;
 
@@ -697,12 +722,14 @@ struct CVehicleSoundManager::Impl
         backend.Update();
     }
 
-    bool LoadConfig(CResource* resource, const SString& path)
+    bool LoadConfig(CResource* resource, const SString& path, SString& error)
     {
+        error = "Vehicle audio configuration is unavailable or owned by another resource";
         if (!resource || path.empty() || (owner && owner != resource))
             return false;
 
         std::map<unsigned int, SoundDefinition> newDefinitions;
+        error = "Invalid or unreadable vehicle audio configuration";
         if (!LoadDefinitions(path, newDefinitions))
             return false;
 
@@ -712,6 +739,16 @@ struct CVehicleSoundManager::Impl
         contentRoot = std::filesystem::path(path.c_str()).parent_path().string().c_str();
         definitions = std::move(newDefinitions);
         IndexBanks();
+        // A successful Lua return is used as the server's preload acknowledgement.
+        // Initialize the backend here, while keeping per-vehicle samples lazy, so
+        // downloaded files can never hide a missing runtime/plugin/audio device.
+        if (!Initialize())
+        {
+            error = backend.GetLastError();
+            Deactivate();
+            return false;
+        }
+        error.clear();
         g_pCore->GetConsole()->Printf("Vehicle audio: server resource registered %u HD vehicle-audio definitions",
                                       static_cast<unsigned int>(definitions.size()));
         return true;
@@ -751,7 +788,7 @@ struct CVehicleSoundManager::Impl
         nextInitializationTick = GetTickCount64_() + 5000;
         if (!backend.Initialize(runtimeRoot, contentRoot))
         {
-            g_pCore->GetConsole()->Printf("Vehicle audio: FMOD runtime or server base banks could not be initialized");
+            g_pCore->GetConsole()->Printf("Vehicle audio: %s", backend.GetLastError().c_str());
             return false;
         }
 
@@ -1426,9 +1463,9 @@ bool CVehicleSoundManager::IsReplacingAudio(const CClientVehicle* vehicle) const
     return iterator != m_impl->vehicles.end() && iterator->second.engineEvent != nullptr;
 }
 
-bool CVehicleSoundManager::LoadServerConfig(CResource* owner, const SString& configPath)
+bool CVehicleSoundManager::LoadServerConfig(CResource* owner, const SString& configPath, SString& error)
 {
-    return m_impl->LoadConfig(owner, configPath);
+    return m_impl->LoadConfig(owner, configPath, error);
 }
 
 bool CVehicleSoundManager::ReloadServerConfig(CResource* owner)

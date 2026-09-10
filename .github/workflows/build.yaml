@@ -268,6 +268,21 @@ jobs:
         run: choco install nsis --version=3.12.0 --yes --no-progress
         shell: powershell
 
+      - name: Prepare pinned HD audio prerequisite
+        if: matrix.platform == 'win32'
+        shell: powershell
+        run: .\utils\windows-runtime\prepare-vc2010.ps1
+
+      - name: Audit packaged Windows runtime dependencies
+        if: matrix.platform == 'win32'
+        shell: powershell
+        run: |
+          python -m unittest discover -s utils/windows-runtime -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'PE audit tests failed' }
+          python utils/windows-runtime/audit-imports.py InstallFiles --vc2010-installer Build/runtime-prerequisites/vcredist_x86.exe --output Build/runtime-import-audit.json
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged runtime dependency audit failed' }
+          .\utils\windows-runtime\test-fmod-dependency.ps1 -RuntimeRoot InstallFiles/MTA/vehicle-sounds/runtime -Redistributable Build/runtime-prerequisites/vcredist_x86.exe
+
       - name: Build and inspect Neon client installer
         if: matrix.platform == 'win32'
         shell: powershell
@@ -404,6 +419,7 @@ jobs:
             throw "7-Zip could not inspect the installer (exit code $LASTEXITCODE)"
           }
           $requiredInstallerContents = @(
+            'Path = $PLUGINSDIR/vcredist_x86.exe',
             'Path = Multi Theft Auto.exe',
             'Path = MTA/core.dll',
             'Path = MTA/skygfx_mta.dll',

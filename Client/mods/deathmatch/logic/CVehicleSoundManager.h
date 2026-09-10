@@ -23,7 +23,7 @@ public:
     void DoPulse();
     bool IsReplacingAudio(const CClientVehicle* vehicle) const;
 
-    bool LoadServerConfig(CResource* owner, const SString& configPath);
+    bool LoadServerConfig(CResource* owner, const SString& configPath, SString& error);
     bool ReloadServerConfig(CResource* owner);
     bool UnloadServerConfig(CResource* owner);
     bool PlayBackfire(CResource* owner, CClientVehicle* vehicle, unsigned int mode);

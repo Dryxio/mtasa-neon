@@ -260,6 +260,7 @@ void CLuaEngineDefs::LoadFunctions()
 int CLuaEngineDefs::EngineLoadVehicleAudioConfig(lua_State* luaVM)
 {
     SString          input;
+    SString          error;
     CScriptArgReader argStream(luaVM);
     argStream.ReadString(input);
 
@@ -274,10 +275,13 @@ int CLuaEngineDefs::EngineLoadVehicleAudioConfig(lua_State* luaVM)
         // the caller unable to reload or unload the native subsystem. The sound manager can be absent while the client manager graph is being torn down,
         // so Lua calls fail cleanly instead of dereferencing a released subsystem.
         if (callerResource && vehicleSoundManager && CResourceManager::ParseResourcePathInput(input, fileResource, &filePath) &&
-            fileResource == callerResource && vehicleSoundManager->LoadServerConfig(callerResource, filePath))
+            fileResource == callerResource && vehicleSoundManager->LoadServerConfig(callerResource, filePath, error))
         {
             lua_pushboolean(luaVM, true);
-            return 1;
+            // Older clients returned only true after parsing. The explicit marker
+            // lets resources distinguish verified initialization from that legacy result.
+            lua_pushstring(luaVM, "ready");
+            return 2;
         }
         argStream.SetCustomError(input, "Unable to load vehicle audio configuration");
     }
@@ -286,7 +290,8 @@ int CLuaEngineDefs::EngineLoadVehicleAudioConfig(lua_State* luaVM)
 
     m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
     lua_pushboolean(luaVM, false);
-    return 1;
+    lua_pushstring(luaVM, error.empty() ? argStream.GetFullErrorMessage().c_str() : error.c_str());
+    return 2;
 }
 
 int CLuaEngineDefs::EngineReloadVehicleAudioConfig(lua_State* luaVM)
