@@ -55,6 +55,32 @@ class ImportsTest(unittest.TestCase):
             fixture(root / 'vendor.dll', 'KERNEL32.dll')
             self.assertEqual(audit.audit(root, policy)['findings'], [])
 
+    def test_client_scope_ignores_incomplete_server_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root / 'client.exe', 'KERNEL32.dll')
+            for architecture, machine in [('x64', 0x8664), ('arm64', 0xaa64)]:
+                server = root / 'server' / architecture
+                server.mkdir(parents=True)
+                fixture(server / 'net.dll', 'pthread.dll', machine)
+            policy = {'loaderAliases': {}, 'windows10Libraries': ['kernel32.dll'], 'existingPrerequisites': {}}
+            self.assertEqual(len(audit.audit(root, policy)['findings']), 2)
+            result = audit.audit(root, policy, client_only=True)
+            self.assertEqual(result['findings'], [])
+            self.assertEqual([row['file'] for row in result['binaries']], ['client.exe'])
+
+    def test_server_dll_cannot_mask_missing_client_dependency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root / 'client.exe', 'vendor.dll')
+            server = root / 'Server'
+            server.mkdir()
+            fixture(server / 'vendor.dll', 'KERNEL32.dll')
+            policy = {'loaderAliases': {}, 'windows10Libraries': ['kernel32.dll'], 'existingPrerequisites': {}}
+            result = audit.audit(root, policy, client_only=True)
+            self.assertEqual(result['findings'][0]['dependency'], 'vendor.dll')
+            self.assertEqual(result['findings'][0]['severity'], 'error')
+
     def test_vc2010_requires_exact_installer(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -66,12 +66,18 @@ def imports(path):
     return machine, sorted(found)
 
 
-def audit(root, policy, vc2010=None):
+def audit(root, policy, vc2010=None, *, client_only=False):
     binaries = []
     for path in sorted(root.rglob('*')):
+        relative = path.relative_to(root).as_posix().replace('\\', '/')
+        # compose_files also stages foreign-architecture server network modules.
+        # CLIENT_ONLY NSIS never ships that tree; it cannot supply client imports
+        # or create missing-dependency failures in a client installer audit.
+        if client_only and relative.split('/')[0].casefold() == 'server':
+            continue
         if path.is_file() and path.suffix.lower() in ('.exe', '.dll'):
             machine, dependencies = imports(path)
-            binaries.append({'file': path.relative_to(root).as_posix().replace('\\', '/'), 'machine': machine, 'imports': dependencies})
+            binaries.append({'file': relative, 'machine': machine, 'imports': dependencies})
     if not binaries:
         raise ValueError('No PE binaries found')
     packaged = {(Path(row['file']).name.lower(), row['machine']) for row in binaries}
@@ -92,7 +98,7 @@ def audit(root, policy, vc2010=None):
             findings.append({'file': row['file'], 'dependency': name,
                              'severity': 'warning' if name in policy['existingPrerequisites'] else 'error',
                              'reason': policy['existingPrerequisites'].get(name, 'No matching packaged DLL or verified prerequisite')})
-    return {'binaries': binaries, 'findings': findings, 'vc2010Verified': bool(vc_present)}
+    return {'binaries': binaries, 'findings': findings, 'vc2010Verified': bool(vc_present), 'scope': 'client-only' if client_only else 'all'}
 
 
 def main():
@@ -100,9 +106,11 @@ def main():
     parser.add_argument('root', type=Path)
     parser.add_argument('--vc2010-installer', type=Path)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--client-only', action='store_true',
+                        help='Match CLIENT_ONLY NSIS: exclude the top-level server tree from consumers and providers')
     args = parser.parse_args()
     policy = json.loads(Path(__file__).with_name('import-policy.json').read_text())
-    report = audit(args.root, policy, args.vc2010_installer)
+    report = audit(args.root, policy, args.vc2010_installer, client_only=args.client_only)
     if args.output:
         args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(f"Audited {len(report['binaries'])} PE binaries (normal and delayed imports)")

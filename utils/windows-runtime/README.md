@@ -23,7 +23,7 @@ The normal Windows CI executes the preparation automatically.
 
 ```powershell
 python -m unittest discover -s utils/windows-runtime -p 'test_*.py' -v
-python utils/windows-runtime/audit-imports.py InstallFiles --vc2010-installer Build/runtime-prerequisites/vcredist_x86.exe --output Build/runtime-import-audit.json
+python utils/windows-runtime/audit-imports.py InstallFiles --client-only --vc2010-installer Build/runtime-prerequisites/vcredist_x86.exe --output Build/runtime-import-audit.json
 .\utils\windows-runtime\test-fmod-dependency.ps1 -RuntimeRoot InstallFiles/MTA/vehicle-sounds/runtime -Redistributable Build/runtime-prerequisites/vcredist_x86.exe
 ```
 
@@ -32,6 +32,12 @@ search directory. Both DSP plugins must fail with Windows error 126 without
 the CRT and load with the x86 CRT extracted from the approved redistributable.
 It never renames or removes a system DLL. This reproduces the dependency issue
 on a developer machine which already has VC++ installed.
+
+The client CI passes `--client-only` to match NSIS `CLIENT_ONLY`: the top-level
+`server/` staging tree is excluded from both consumers and dependency providers.
+`compose_files` may populate it with foreign-architecture network modules without
+building their dependencies in the win32 job. Omit this option when auditing a
+complete server package; genuine missing client dependencies still fail.
 
 The Python audit walks normal and delayed PE imports, checks architecture,
 and rejects dependencies absent from the package and reviewed OS/prerequisite
