@@ -358,6 +358,43 @@ void CCameraSA::SetMatrix(CMatrix* matrix)
     }
 }
 
+void CCameraSA::CopyCameraMatrixToRWCam(bool bUpdateMatrix)
+{
+    CCameraSAInterface* pInterface = GetInterface();
+    if (pInterface)
+        reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, bool)>(0x50AFA0)(pInterface, bUpdateMatrix);
+}
+
+void CCameraSA::CalculateDerivedValues(bool bForMirror, bool bOriented)
+{
+    CCameraSAInterface* pInterface = GetInterface();
+    if (pInterface)
+        reinterpret_cast<void(__thiscall*)(CCameraSAInterface*, bool, bool)>(0x5150E0)(pInterface, bForMirror, bOriented);
+}
+
+size_t CCameraSA::GetStateSnapshotSize() const
+{
+    return sizeof(CCameraSAInterface);
+}
+
+bool CCameraSA::GetStateSnapshot(void* pBuffer, size_t uiSize) const
+{
+    if (!internalInterface || !pBuffer || uiSize != sizeof(CCameraSAInterface))
+        return false;
+
+    memcpy(pBuffer, internalInterface, sizeof(CCameraSAInterface));
+    return true;
+}
+
+bool CCameraSA::SetStateSnapshot(const void* pBuffer, size_t uiSize)
+{
+    if (!internalInterface || !pBuffer || uiSize != sizeof(CCameraSAInterface))
+        return false;
+
+    memcpy(internalInterface, pBuffer, sizeof(CCameraSAInterface));
+    return true;
+}
+
 void CCameraSA::Find3rdPersonCamTargetVector(float fDistance, CVector* vecGunMuzzle, CVector* vecSource, CVector* vecTarget)
 {
     if (!vecGunMuzzle || !vecSource || !vecTarget)

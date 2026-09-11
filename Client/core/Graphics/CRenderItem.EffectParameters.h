@@ -103,6 +103,7 @@ class CEffectParameters : public CRenderItem
 protected:
     void                 ReadParameterHandles();
     bool                 TryParseSpecialParameter(D3DXHANDLE hParameter, const D3DXPARAMETER_DESC& ParameterDesc);
+    bool                 TryParseAutomaticParameter(D3DXHANDLE hParameter, const D3DXPARAMETER_DESC& ParameterDesc);
     bool                 TryMappingParameterToRegister(D3DXHANDLE hParameter, const D3DXPARAMETER_DESC& ParameterDesc);
     void                 ReadCommonHandles();
     const SRegisterInfo* GetRegisterInfo(EStateGroup stateGroup, const SString& strName);
@@ -128,6 +129,9 @@ protected:
         D3DXHANDLE hWorld, hView, hProjection, hWorldView, hWorldViewProj;
         D3DXHANDLE hViewProj, hViewInv, hWorldInvTr, hViewInvTr;
         D3DXHANDLE hCamPos, hCamDir;
+        D3DXHANDLE hWorldInv, hWorldTr, hProjectionInv, hViewProjInv;
+        D3DXHANDLE hCamRight, hCamUp;
+        D3DXHANDLE hViewportSize, hInvViewportSize, hRenderTargetSize, hInvRenderTargetSize;
         D3DXHANDLE hTime;
         D3DXHANDLE hLightAmbient, hLightDiffuse, hLightSpecular, hLightDirection;
         D3DXHANDLE hDepthBuffer;

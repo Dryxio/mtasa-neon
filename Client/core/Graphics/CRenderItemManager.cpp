@@ -13,6 +13,7 @@
 #include <game/CSettings.h>
 #include "DXHook/CProxyDirect3DDevice9.h"
 #include "CRenderItem.EffectCloner.h"
+#include "CRenderStateScope.h"
 
 extern std::atomic<bool> g_bInMTAScene;
 extern std::atomic<bool> g_bInGTAScene;
@@ -36,6 +37,7 @@ CRenderItemManager::CRenderItemManager()
     : m_uiLastRenderTargetRetryTime(0), m_uiRenderTargetRetryDelayMs(0), m_uiRenderTargetRetryAttempts(0), m_uiRenderTargetRetryCooldownUntil(0)
 {
     m_pEffectCloner = new CEffectCloner(this);
+    m_pSceneViewShaderLayers = new SShaderItemLayers();
 }
 
 ////////////////////////////////////////////////////////////////
@@ -47,6 +49,8 @@ CRenderItemManager::CRenderItemManager()
 ////////////////////////////////////////////////////////////////
 CRenderItemManager::~CRenderItemManager()
 {
+    ForceCloseAllRenderPasses();
+    SAFE_DELETE(m_pSceneViewShaderLayers);
     SAFE_DELETE(m_pEffectCloner);
 }
 
@@ -124,6 +128,10 @@ void CRenderItemManager::OnDeviceCreate(IDirect3DDevice9* pDevice, float fViewpo
 ////////////////////////////////////////////////////////////////
 void CRenderItemManager::OnLostDevice()
 {
+    // Close any open render passes first - their captured D3D surfaces are about to be released
+    // by the individual items' own OnLostDevice() calls below.
+    ForceCloseAllRenderPasses();
+
     for (std::set<CRenderItem*>::iterator iter = m_CreatedItemList.begin(); iter != m_CreatedItemList.end();)
     {
         std::set<CRenderItem*>::iterator current = iter++;
@@ -238,6 +246,32 @@ CRenderTargetItem* CRenderItemManager::CreateRenderTarget(uint uiSizeX, uint uiS
     if (!bForce && !CanCreateRenderItem(CRenderTargetItem::GetClassId()))
         return nullptr;
 
+    // Reject an explicitly requested format the device can't actually render to, rather than
+    // letting CreateUnderlyingData's retry loop burn through several failed CreateTexture calls
+    // and return an unexplained nullptr.
+    if (bHasSurfaceFormat && m_pDevice)
+    {
+        IDirect3D9* pD3D = nullptr;
+        m_pDevice->GetDirect3D(&pD3D);
+        if (pD3D)
+        {
+            D3DDISPLAYMODE displayMode;
+            if (pD3D->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &displayMode) == D3D_OK)
+            {
+                HRESULT hrFormatCheck = pD3D->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, displayMode.Format, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE,
+                                                                (D3DFORMAT)surfaceFormat);
+                if (hrFormatCheck != D3D_OK)
+                {
+                    WriteDebugEvent(
+                        SString("CreateRenderTarget - Format %d is not supported as a render target on this GPU (0x%08x)", surfaceFormat, hrFormatCheck));
+                    SAFE_RELEASE(pD3D);
+                    return nullptr;
+                }
+            }
+        }
+        SAFE_RELEASE(pD3D);
+    }
+
     // Include in memory stats only if render target is not for MTA internal use
     bool bIncludeInMemoryStats = (bForce == false);
 
@@ -257,6 +291,419 @@ CRenderTargetItem* CRenderItemManager::CreateRenderTarget(uint uiSizeX, uint uiS
     UpdateMemoryUsage();
 
     return pRenderTargetItem;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::CreateDepthStencilTarget
+//
+////////////////////////////////////////////////////////////////
+CDepthStencilTargetItem* CRenderItemManager::CreateDepthStencilTarget(uint uiSizeX, uint uiSizeY, int surfaceFormat, bool bSampleable)
+{
+    if (!CanCreateRenderItem(CDepthStencilTargetItem::GetClassId()))
+        return nullptr;
+
+    if (bSampleable)
+    {
+        // Only one vendor FourCC format is ever discovered/valid per GPU (see
+        // CDirect3DEvents9::DiscoverReadableDepthFormat, run once at device creation for MTA's own
+        // primary-scene readable depth buffer) - the caller-supplied surfaceFormat only applies to the
+        // non-sampleable path below, since CheckDeviceFormat itself does not reliably report these
+        // formats as valid for D3DRTYPE_TEXTURE even on hardware where creating one actually works, so
+        // there is nothing more specific to validate against than "was a format discovered at all".
+        if (m_depthBufferFormat == RFORMAT_UNKNOWN)
+        {
+            WriteDebugEvent("CreateDepthStencilTarget - sampleable depth targets are not supported on this GPU");
+            return nullptr;
+        }
+        surfaceFormat = m_depthBufferFormat;
+    }
+    else
+    {
+        // Reject a format the device can't actually use as a depth-stencil surface, rather than
+        // letting CreateDepthStencilSurface fail with no explanation.
+        if (m_pDevice)
+        {
+            IDirect3D9* pD3D = nullptr;
+            m_pDevice->GetDirect3D(&pD3D);
+            if (pD3D)
+            {
+                D3DDISPLAYMODE displayMode;
+                if (pD3D->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &displayMode) == D3D_OK)
+                {
+                    HRESULT hrFormatCheck = pD3D->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, displayMode.Format, D3DUSAGE_DEPTHSTENCIL,
+                                                                    D3DRTYPE_SURFACE, (D3DFORMAT)surfaceFormat);
+                    if (hrFormatCheck != D3D_OK)
+                    {
+                        WriteDebugEvent(SString("CreateDepthStencilTarget - Format %d is not supported as a depth-stencil surface on this GPU (0x%08x)",
+                                                surfaceFormat, hrFormatCheck));
+                        SAFE_RELEASE(pD3D);
+                        return nullptr;
+                    }
+                }
+            }
+            SAFE_RELEASE(pD3D);
+        }
+    }
+
+    CDepthStencilTargetItem* pDepthStencilTargetItem = new CDepthStencilTargetItem();
+    pDepthStencilTargetItem->PostConstruct(this, uiSizeX, uiSizeY, surfaceFormat, bSampleable, true);
+
+    if (!pDepthStencilTargetItem->IsValid())
+    {
+        SAFE_RELEASE(pDepthStencilTargetItem);
+        return nullptr;
+    }
+
+    UpdateMemoryUsage();
+
+    return pDepthStencilTargetItem;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::CreateCubemapRenderTarget
+//
+// Capability-gated on Stage 1's bCubemapRenderTargetSupported/iMaxCubemapEdgeLength (populated from
+// D3DPTEXTURECAPS_CUBEMAP/MaxTextureWidth in GetDxCapabilities) - rejected outright rather than attempting
+// creation and failing with a driver-specific error on hardware that never supported it.
+//
+////////////////////////////////////////////////////////////////
+CCubemapRenderTargetItem* CRenderItemManager::CreateCubemapRenderTarget(uint uiEdgeSize, int surfaceFormat)
+{
+    if (!CanCreateRenderItem(CCubemapRenderTargetItem::GetClassId()))
+        return nullptr;
+
+    SDxCapabilities capabilities;
+    GetDxCapabilities(capabilities);
+    if (!capabilities.bCubemapRenderTargetSupported)
+    {
+        WriteDebugEvent("CreateCubemapRenderTarget - cubemap render targets are not supported on this GPU");
+        return nullptr;
+    }
+    if (uiEdgeSize == 0 || (int)uiEdgeSize > capabilities.iMaxCubemapEdgeLength)
+    {
+        WriteDebugEvent(SString("CreateCubemapRenderTarget - edge size must be between 1 and %d on this GPU", capabilities.iMaxCubemapEdgeLength));
+        return nullptr;
+    }
+
+    // Reject a format the device can't actually render a cube face to, rather than letting
+    // CreateCubeTexture's retry loop burn through several failed attempts and return an unexplained nullptr.
+    if (m_pDevice)
+    {
+        IDirect3D9* pD3D = nullptr;
+        m_pDevice->GetDirect3D(&pD3D);
+        if (pD3D)
+        {
+            D3DDISPLAYMODE displayMode;
+            if (pD3D->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &displayMode) == D3D_OK)
+            {
+                HRESULT hrFormatCheck = pD3D->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, displayMode.Format, D3DUSAGE_RENDERTARGET,
+                                                                D3DRTYPE_CUBETEXTURE, (D3DFORMAT)surfaceFormat);
+                if (hrFormatCheck != D3D_OK)
+                {
+                    WriteDebugEvent(SString("CreateCubemapRenderTarget - Format %d is not supported as a cubemap render target on this GPU (0x%08x)",
+                                            surfaceFormat, hrFormatCheck));
+                    SAFE_RELEASE(pD3D);
+                    return nullptr;
+                }
+            }
+        }
+        SAFE_RELEASE(pD3D);
+    }
+
+    CCubemapRenderTargetItem* pCubemapItem = new CCubemapRenderTargetItem();
+    pCubemapItem->PostConstruct(this, uiEdgeSize, surfaceFormat);
+
+    if (!pCubemapItem->IsValid())
+    {
+        SAFE_RELEASE(pCubemapItem);
+        return nullptr;
+    }
+
+    UpdateMemoryUsage();
+
+    return pCubemapItem;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::CreateMrtSet
+//
+// Validates target count against the device's actual NumSimultaneousRTs and
+// that every target (color and depth-stencil) shares the same dimensions -
+// both hard DX9 requirements - before creating the item. No new GPU memory
+// is allocated here; the item only references existing render targets.
+//
+////////////////////////////////////////////////////////////////
+CMrtSetItem* CRenderItemManager::CreateMrtSet(CRenderTargetItem* const targets[MAX_MRT_RENDER_TARGETS], uint uiNumTargets,
+                                              CDepthStencilTargetItem* pDepthStencilTargetItem)
+{
+    if (uiNumTargets == 0 || !targets || !targets[0])
+    {
+        WriteDebugEvent("CreateMrtSet - at least one render target is required");
+        return nullptr;
+    }
+
+    uint uiMaxSlots = std::max<uint>(1, std::min<uint>(g_pDeviceState->DeviceCaps.NumSimultaneousRTs, MAX_MRT_RENDER_TARGETS));
+    if (uiNumTargets > uiMaxSlots)
+    {
+        WriteDebugEvent(
+            SString("CreateMrtSet - %d render targets requested, but this GPU only supports %d simultaneous render targets", uiNumTargets, uiMaxSlots));
+        return nullptr;
+    }
+
+    // All targets must share the same dimensions - a hard DX9 requirement for SetRenderTarget/SetDepthStencilSurface
+    uint uiWidth = targets[0]->m_uiSizeX;
+    uint uiHeight = targets[0]->m_uiSizeY;
+    for (uint i = 1; i < uiNumTargets; i++)
+    {
+        if (!targets[i] || targets[i]->m_uiSizeX != uiWidth || targets[i]->m_uiSizeY != uiHeight)
+        {
+            WriteDebugEvent("CreateMrtSet - all render targets must have the same dimensions");
+            return nullptr;
+        }
+    }
+    if (pDepthStencilTargetItem && (pDepthStencilTargetItem->m_uiSizeX != uiWidth || pDepthStencilTargetItem->m_uiSizeY != uiHeight))
+    {
+        WriteDebugEvent("CreateMrtSet - depth-stencil target dimensions must match the color render targets");
+        return nullptr;
+    }
+
+    if (!CanCreateRenderItem(CMrtSetItem::GetClassId()))
+        return nullptr;
+
+    CMrtSetItem* pMrtSetItem = new CMrtSetItem();
+    pMrtSetItem->PostConstruct(this, targets, uiNumTargets, pDepthStencilTargetItem);
+
+    if (!pMrtSetItem->IsValid())
+    {
+        SAFE_RELEASE(pMrtSetItem);
+        return nullptr;
+    }
+
+    return pMrtSetItem;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::BeginRenderPass
+//
+// Pushes a CRenderStateScope and applies the requested targets. Every new
+// rendering feature that needs to temporarily rebind render targets/depth/
+// viewport is required to go through this (or CRenderStateScope directly for
+// internal C++-scoped uses) rather than hand-rolling GetRenderTarget/
+// SetRenderTarget pairs.
+//
+////////////////////////////////////////////////////////////////
+bool CRenderItemManager::BeginRenderPass(CRenderTargetItem* const targets[MAX_MRT_RENDER_TARGETS], uint uiNumTargets,
+                                         CDepthStencilTargetItem* pDepthStencilTargetItem, bool bClear)
+{
+    if (uiNumTargets == 0 || !targets || !targets[0] || !targets[0]->IsValid())
+    {
+        ++m_uiRenderPassFailures;
+        WriteDebugEvent("BeginRenderPass - at least one valid render target is required");
+        return false;
+    }
+
+    const size_t kMaxRenderPassNestingDepth = 4;
+    if (m_RenderPassStack.size() >= kMaxRenderPassNestingDepth)
+    {
+        ++m_uiRenderPassFailures;
+        WriteDebugEvent("BeginRenderPass - maximum render pass nesting depth exceeded");
+        return false;
+    }
+
+    uint uiMaxSlots = std::max<uint>(1, std::min<uint>(g_pDeviceState->DeviceCaps.NumSimultaneousRTs, MAX_MRT_RENDER_TARGETS));
+    if (uiNumTargets > uiMaxSlots)
+    {
+        ++m_uiRenderPassFailures;
+        WriteDebugEvent(
+            SString("BeginRenderPass - %d render targets requested, but this GPU only supports %d simultaneous render targets", uiNumTargets, uiMaxSlots));
+        return false;
+    }
+
+    uint               uiWidth = targets[0]->m_uiSizeX;
+    uint               uiHeight = targets[0]->m_uiSizeY;
+    IDirect3DSurface9* d3dTargets[MAX_MRT_RENDER_TARGETS] = {nullptr, nullptr, nullptr, nullptr};
+    d3dTargets[0] = targets[0]->m_pD3DRenderTargetSurface;
+
+    for (uint i = 1; i < uiNumTargets; i++)
+    {
+        if (!targets[i] || !targets[i]->IsValid() || targets[i]->m_uiSizeX != uiWidth || targets[i]->m_uiSizeY != uiHeight)
+        {
+            ++m_uiRenderPassFailures;
+            WriteDebugEvent("BeginRenderPass - all render targets must have the same dimensions");
+            return false;
+        }
+        d3dTargets[i] = targets[i]->m_pD3DRenderTargetSurface;
+    }
+
+    IDirect3DSurface9* pD3DDepthStencil = nullptr;
+    if (pDepthStencilTargetItem)
+    {
+        if (!pDepthStencilTargetItem->IsValid() || pDepthStencilTargetItem->m_uiSizeX != uiWidth || pDepthStencilTargetItem->m_uiSizeY != uiHeight)
+        {
+            ++m_uiRenderPassFailures;
+            WriteDebugEvent("BeginRenderPass - depth-stencil target dimensions must match the color render targets");
+            return false;
+        }
+        pD3DDepthStencil = pDepthStencilTargetItem->m_pD3DDepthStencilSurface;
+    }
+
+    if (GetDeviceCooperativeLevel("BeginRenderPass") != D3D_OK)
+    {
+        ++m_uiRenderPassFailures;
+        return false;
+    }
+
+    CRenderStateScope* pScope = new CRenderStateScope(m_pDevice);
+    if (!pScope->ApplyRenderTargets(d3dTargets, pD3DDepthStencil, uiWidth, uiHeight))
+    {
+        ++m_uiRenderPassFailures;
+        delete pScope;
+        WriteDebugEvent("BeginRenderPass - failed to apply render targets");
+        return false;
+    }
+
+    if (bClear)
+    {
+        DWORD dwClearFlags = D3DCLEAR_TARGET | (pD3DDepthStencil ? (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL) : 0);
+        m_pDevice->Clear(0, nullptr, dwClearFlags, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+    }
+
+    m_RenderPassStack.push_back(pScope);
+    ++m_uiRenderPassesStarted;
+    return true;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::EndRenderPass
+//
+////////////////////////////////////////////////////////////////
+bool CRenderItemManager::EndRenderPass()
+{
+    if (m_RenderPassStack.empty())
+    {
+        ++m_uiRenderPassFailures;
+        WriteDebugEvent("EndRenderPass - no render pass is currently open");
+        return false;
+    }
+
+    CRenderStateScope* pScope = m_RenderPassStack.back();
+    m_RenderPassStack.pop_back();
+    delete pScope;
+    return true;
+}
+
+bool CRenderItemManager::BeginSceneViewRender(CRenderTargetItem* pTarget, CDepthStencilTargetItem* pDepthStencilTargetItem, const CMatrix& cameraMatrix,
+                                              float fFOV, bool bClear)
+{
+    CRenderTargetItem* targets[MAX_MRT_RENDER_TARGETS] = {pTarget, nullptr, nullptr, nullptr};
+    if (!BeginRenderPass(targets, 1, pDepthStencilTargetItem, bClear))
+        return false;
+
+    // Camera restoration belongs to the same scope as target/depth/viewport restoration. If applying the
+    // camera fails, closing the pass immediately leaves the primary frame untouched.
+    if (!m_RenderPassStack.back()->ApplyCamera(cameraMatrix, fFOV))
+    {
+        EndRenderPass();
+        return false;
+    }
+
+    // RenderWare caches fixed-function states such as COLORVERTEX and the material-source selectors used by
+    // GTA's pre-lit meshes. IDirect3DStateBlock9::Apply bypasses both that cache and MTA's device proxy, making
+    // the next SceneView/primary render incorrectly skip state changes. Native world passes therefore leave
+    // draw state owned by RenderWare while this scope still restores all attachment and camera state.
+    m_RenderPassStack.back()->DiscardSavedDrawState();
+    return true;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::BeginCubemapFaceRender
+//
+////////////////////////////////////////////////////////////////
+bool CRenderItemManager::BeginCubemapFaceRender(CCubemapRenderTargetItem* pCubemap, uint uiFace, const CMatrix& cameraMatrix, bool bClear)
+{
+    if (!pCubemap || !pCubemap->IsValid() || uiFace >= 6)
+    {
+        ++m_uiRenderPassFailures;
+        WriteDebugEvent("BeginCubemapFaceRender - invalid cubemap or face index");
+        return false;
+    }
+
+    const size_t kMaxRenderPassNestingDepth = 4;
+    if (m_RenderPassStack.size() >= kMaxRenderPassNestingDepth)
+    {
+        ++m_uiRenderPassFailures;
+        WriteDebugEvent("BeginCubemapFaceRender - maximum render pass nesting depth exceeded");
+        return false;
+    }
+
+    if (GetDeviceCooperativeLevel("BeginCubemapFaceRender") != D3D_OK)
+    {
+        ++m_uiRenderPassFailures;
+        return false;
+    }
+
+    IDirect3DSurface9* d3dTargets[MAX_MRT_RENDER_TARGETS] = {pCubemap->m_pD3DFaceSurface[uiFace], nullptr, nullptr, nullptr};
+
+    CRenderStateScope* pScope = new CRenderStateScope(m_pDevice);
+    if (!pScope->ApplyRenderTargets(d3dTargets, pCubemap->m_pD3DDepthStencilSurface, pCubemap->m_uiEdgeSize, pCubemap->m_uiEdgeSize))
+    {
+        ++m_uiRenderPassFailures;
+        delete pScope;
+        WriteDebugEvent("BeginCubemapFaceRender - failed to apply render targets");
+        return false;
+    }
+
+    if (bClear)
+    {
+        m_pDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+    }
+
+    m_RenderPassStack.push_back(pScope);
+    ++m_uiRenderPassesStarted;
+
+    // 90 degrees is not a configurable parameter - it is the only FOV where a square target's 6 faces tile
+    // seamlessly into a full sphere. Camera restoration belongs to the same scope as target/depth/viewport
+    // restoration, exactly like BeginSceneViewRender above.
+    if (!m_RenderPassStack.back()->ApplyCamera(cameraMatrix, 90.0f))
+    {
+        EndRenderPass();
+        return false;
+    }
+
+    m_RenderPassStack.back()->DiscardSavedDrawState();
+    return true;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::ForceCloseAllRenderPasses
+//
+// Defensive cleanup for scripts that never call dxEndRenderPass (matching the
+// existing "Restore in case script forgets" RestoreDefaultRenderTarget() call
+// in CDirect3DEvents9::OnPresent) and for device loss, where the D3D surfaces
+// a scope would try to restore are about to be released anyway.
+//
+////////////////////////////////////////////////////////////////
+void CRenderItemManager::ForceCloseAllRenderPasses()
+{
+    if (m_RenderPassStack.empty())
+        return;
+
+    WriteDebugEvent(SString("ForceCloseAllRenderPasses - closing %d render pass(es) left open", (int)m_RenderPassStack.size()));
+    m_uiForcedRenderPassClosures += static_cast<uint>(m_RenderPassStack.size());
+
+    while (!m_RenderPassStack.empty())
+    {
+        CRenderStateScope* pScope = m_RenderPassStack.back();
+        m_RenderPassStack.pop_back();
+        delete pScope;
+    }
 }
 
 ////////////////////////////////////////////////////////////////
@@ -810,6 +1257,96 @@ bool CRenderItemManager::RestoreDefaultRenderTarget()
     return true;
 }
 
+bool CRenderItemManager::ApplySceneViewOutputShader(CRenderTargetItem* pSource, CRenderTargetItem* pDestination, CShaderItem* pShader,
+                                                    const SString& strInputName)
+{
+    m_strLastSceneViewOutputError.clear();
+    if (!pSource || !pDestination || !pShader || !pSource->TryEnsureValid() || !pDestination->TryEnsureValid() || !pShader->IsValid())
+    {
+        m_strLastSceneViewOutputError = "invalid output-pass render item";
+        WriteDebugEvent("ApplySceneViewOutputShader - an input render item is invalid");
+        return false;
+    }
+
+    pShader->MaybeRenewShaderInstance();
+    CShaderInstance* pInstance = pShader->m_pShaderInstance;
+    ID3DXEffect*     pEffect = pInstance && pInstance->m_pEffectWrap ? pInstance->m_pEffectWrap->m_pD3DEffect : nullptr;
+    D3DXHANDLE       hInput = pEffect ? pEffect->GetParameterByName(nullptr, strInputName) : nullptr;
+    if (!hInput)
+    {
+        m_strLastSceneViewOutputError = SString("texture parameter '%s' is unavailable", *strInputName);
+        WriteDebugEvent(SString("ApplySceneViewOutputShader - texture parameter '%s' is unavailable", *strInputName));
+        return false;
+    }
+
+    // The native secondary-world hook can leave arbitrary GTA draw state active. Preserve it independently
+    // of the render-target scope because D3D9 state blocks cover shader/blend/depth/sampler state while
+    // CRenderStateScope deliberately owns targets, viewport and transforms.
+    IDirect3DStateBlock9* pSavedDrawState = nullptr;
+    if (FAILED(m_pDevice->CreateStateBlock(D3DSBT_ALL, &pSavedDrawState)) || !pSavedDrawState)
+    {
+        m_strLastSceneViewOutputError = "could not capture D3D draw state";
+        WriteDebugEvent("ApplySceneViewOutputShader - could not capture D3D draw state");
+        return false;
+    }
+    struct CScopedDrawState
+    {
+        ~CScopedDrawState()
+        {
+            pState->Apply();
+            pState->Release();
+        }
+        IDirect3DStateBlock9* pState;
+    } savedDrawState{pSavedDrawState};
+
+    // Bind through the shader instance so ApplyShaderParameters cannot restore the effect default over
+    // the SceneView input immediately before drawing. The binding is removed after the draw, avoiding a
+    // persistent SceneView -> shader -> SceneView texture reference cycle.
+    pInstance->SetTextureValue(hInput, pSource);
+
+    CRenderTargetItem* targets[MAX_MRT_RENDER_TARGETS] = {pDestination, nullptr, nullptr, nullptr};
+    if (!BeginRenderPass(targets, 1, nullptr, true))
+    {
+        m_strLastSceneViewOutputError = "could not begin intermediate render pass";
+        pInstance->SetTextureValue(hInput, nullptr);
+        WriteDebugEvent("ApplySceneViewOutputShader - could not begin intermediate render pass");
+        return false;
+    }
+
+    CGraphics::GetSingleton().DrawMaterialImmediate(pInstance, static_cast<float>(pDestination->m_uiSizeX), static_cast<float>(pDestination->m_uiSizeY));
+    const bool bEnded = EndRenderPass();
+    pInstance->SetTextureValue(hInput, nullptr);
+    pEffect->SetTexture(hInput, nullptr);
+    if (!bEnded)
+    {
+        m_strLastSceneViewOutputError = "could not end intermediate render pass";
+        WriteDebugEvent("ApplySceneViewOutputShader - could not end intermediate render pass");
+        return false;
+    }
+
+    // D3DX leaves effect sampler bindings active after EndPass. Copying into pSource while it is still bound
+    // as a texture is an invalid read/write hazard on D3D9 and was driver-timing dependent across resource
+    // restarts. Unbind every pixel/vertex sampler before publishing; the saved state restores them on exit.
+    for (DWORD i = 0; i < 16; ++i)
+        m_pDevice->SetTexture(i, nullptr);
+    for (DWORD i = 0; i < 4; ++i)
+        m_pDevice->SetTexture(D3DVERTEXTEXTURESAMPLER0 + i, nullptr);
+
+    const HRESULT hResult = HandleStretchRect(pDestination->m_pD3DRenderTargetSurface, nullptr, pSource->m_pD3DRenderTargetSurface, nullptr, D3DTEXF_NONE);
+    if (FAILED(hResult))
+    {
+        m_strLastSceneViewOutputError = SString("final StretchRect failed: %08x", hResult);
+        WriteDebugEvent(SString("ApplySceneViewOutputShader - final StretchRect failed: %08x", hResult));
+    }
+    return SUCCEEDED(hResult);
+}
+
+bool CRenderItemManager::IsSceneViewOutputShaderValid(CShaderItem* pShader, const SString& strInputName)
+{
+    ID3DXEffect* pEffect = pShader && pShader->m_pEffectWrap ? pShader->m_pEffectWrap->m_pD3DEffect : nullptr;
+    return pEffect && pEffect->GetParameterByName(nullptr, strInputName);
+}
+
 ////////////////////////////////////////////////////////////////
 //
 // CRenderItemManager::IsUsingDefaultRenderTarget
@@ -971,7 +1508,8 @@ void CRenderItemManager::UpdateMemoryUsage()
 
         if (pRenderItem->IsA(CFileTextureItem::GetClassId()) || pRenderItem->IsA(CVectorGraphicItem::GetClassId()))
             m_iTextureMemoryKBUsed += iMemoryKBUsed;
-        else if (pRenderItem->IsA(CRenderTargetItem::GetClassId()) || pRenderItem->IsA(CScreenSourceItem::GetClassId()))
+        else if (pRenderItem->IsA(CRenderTargetItem::GetClassId()) || pRenderItem->IsA(CScreenSourceItem::GetClassId()) ||
+                 pRenderItem->IsA(CDepthStencilTargetItem::GetClassId()))
             m_iRenderTargetMemoryKBUsed += iMemoryKBUsed;
         else if (pRenderItem->IsA(CGuiFontItem::GetClassId()) || pRenderItem->IsA(CDxFontItem::GetClassId()))
             m_iFontMemoryKBUsed += iMemoryKBUsed;
@@ -1077,6 +1615,130 @@ void CRenderItemManager::GetDxStatus(SDxStatus& outStatus)
 
     if (m_TestMode == DX_TEST_MODE_NO_SHADER)
         outStatus.videoCard.strPSVersion = "0";
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CRenderItemManager::GetDxCapabilities
+//
+// Query actual device support for render-target formats, MRT and sampleable
+// depth. Computed on demand (dxGetRenderCapabilities) rather than cached, since
+// it is only ever CheckDeviceFormat calls - cheap, and only runs when a script
+// actually asks. Every later creation function (typed RT, depth target, MRT
+// set, scene view, cubemap) must validate against this instead of assuming
+// support.
+//
+////////////////////////////////////////////////////////////////
+void CRenderItemManager::GetDxCapabilities(SDxCapabilities& outCapabilities)
+{
+    outCapabilities = SDxCapabilities();
+
+    const D3DCAPS9& caps = g_pDeviceState->DeviceCaps;
+
+    int iPSMajor = (caps.PixelShaderVersion & 0xFF00) >> 8;
+    int iVSMajor = (caps.VertexShaderVersion & 0xFF00) >> 8;
+    outCapabilities.bPixelShader3Supported = iPSMajor >= 3;
+    outCapabilities.bVertexShader3Supported = iVSMajor >= 3;
+
+    outCapabilities.iMaxSimultaneousRenderTargets = caps.NumSimultaneousRTs;
+    outCapabilities.iMaxBoundRenderTargets = std::min<int>(caps.NumSimultaneousRTs, MAX_MRT_RENDER_TARGETS);
+
+    // DX9 has no per-render-target blend state - one blend setup is shared across every bound target
+    outCapabilities.bIndependentMRTBlend = false;
+    outCapabilities.bIndependentMRTWriteMasks = (caps.PrimitiveMiscCaps & D3DPMISCCAPS_INDEPENDENTWRITEMASKS) != 0;
+
+    outCapabilities.bCubemapRenderTargetSupported = (caps.TextureCaps & D3DPTEXTURECAPS_CUBEMAP) != 0;
+    outCapabilities.iMaxCubemapEdgeLength = outCapabilities.bCubemapRenderTargetSupported ? (int)caps.MaxTextureWidth : 0;
+
+    // No fixed engine-side cap on concurrent/per-frame SceneViews or cubemap face renders - each is a full
+    // secondary world pass, so cost scales directly with how many a script actually requests. -1 signals
+    // "not artificially limited" rather than reporting a specific number that would suggest a real ceiling.
+    outCapabilities.iMaxSceneViewsPerFrame = -1;
+    outCapabilities.iMaxRenderPassNestingDepth = 4;
+
+    // Reuse the readable-depth-format discovery already performed once at device
+    // creation (CDirect3DEvents9::DiscoverReadableDepthFormat -> SetDepthBufferFormat)
+    // instead of re-probing INTZ/DF24/DF16/RAWZ here.
+    outCapabilities.depthTextureSampleFormat = m_depthBufferFormat;
+    outCapabilities.bDepthTextureSamplingSupported = (m_depthBufferFormat != RFORMAT_UNKNOWN);
+
+    IDirect3D9* pD3D = nullptr;
+    if (m_pDevice)
+        m_pDevice->GetDirect3D(&pD3D);
+
+    if (pD3D)
+    {
+        D3DDISPLAYMODE displayMode;
+        if (pD3D->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &displayMode) == D3D_OK)
+        {
+            static const struct
+            {
+                D3DFORMAT   format;
+                const char* szName;
+            } formatCheckList[] = {
+                {D3DFMT_A8R8G8B8, "a8r8g8b8"},           {D3DFMT_X8R8G8B8, "x8r8g8b8"}, {D3DFMT_R5G6B5, "r5g6b5"},
+                {D3DFMT_A1R5G5B5, "a1r5g5b5"},           {D3DFMT_A4R4G4B4, "a4r4g4b4"}, {D3DFMT_A2B10G10R10, "a2b10g10r10"},
+                {D3DFMT_A2R10G10B10, "a2r10g10b10"},     {D3DFMT_A8B8G8R8, "a8b8g8r8"}, {D3DFMT_G16R16, "g16r16"},
+                {D3DFMT_A16B16G16R16, "a16b16g16r16"},   {D3DFMT_R16F, "r16f"},         {D3DFMT_G16R16F, "g16r16f"},
+                {D3DFMT_A16B16G16R16F, "a16b16g16r16f"}, {D3DFMT_R32F, "r32f"},         {D3DFMT_G32R32F, "g32r32f"},
+                {D3DFMT_A32B32G32R32F, "a32b32g32r32f"},
+            };
+
+            outCapabilities.renderTargetFormats.reserve(NUMELMS(formatCheckList));
+            for (const auto& entry : formatCheckList)
+            {
+                SDxCapabilities::SFormatCapability formatCap;
+                formatCap.strFormatName = entry.szName;
+                formatCap.bRenderable = pD3D->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, displayMode.Format, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE,
+                                                                entry.format) == D3D_OK;
+                formatCap.bTextureable =
+                    pD3D->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, displayMode.Format, 0, D3DRTYPE_TEXTURE, entry.format) == D3D_OK;
+                formatCap.bFilterable = pD3D->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, displayMode.Format, D3DUSAGE_QUERY_FILTER, D3DRTYPE_TEXTURE,
+                                                                entry.format) == D3D_OK;
+                outCapabilities.renderTargetFormats.push_back(formatCap);
+            }
+        }
+    }
+    SAFE_RELEASE(pD3D);
+}
+
+void CRenderItemManager::GetShaderDiagnostics(CShaderItem* pShaderItem, SShaderDiagnostics& outDiagnostics)
+{
+    // Keep effect internals inside core; client modules receive only a pointer-free diagnostic snapshot.
+    if (pShaderItem)
+        pShaderItem->GetDiagnostics(outDiagnostics);
+    else
+        outDiagnostics = SShaderDiagnostics();
+}
+
+void CRenderItemManager::GetRenderStatistics(SRenderStatistics& outStatistics)
+{
+    // This snapshot deliberately reports durable counters and owned objects; GPU timings will be added separately
+    // when asynchronous D3D9 query support exists, so scripts are never misled by CPU-side timing estimates.
+    outStatistics = SRenderStatistics();
+    outStatistics.uiOpenRenderPasses = static_cast<uint>(m_RenderPassStack.size());
+    outStatistics.uiRenderPassesStarted = m_uiRenderPassesStarted;
+    outStatistics.uiRenderPassFailures = m_uiRenderPassFailures;
+    outStatistics.uiForcedRenderPassClosures = m_uiForcedRenderPassClosures;
+    outStatistics.uiRenderItems = static_cast<uint>(m_CreatedItemList.size());
+    outStatistics.iTextureMemoryKB = m_iTextureMemoryKBUsed;
+    outStatistics.iRenderTargetMemoryKB = m_iRenderTargetMemoryKBUsed;
+    outStatistics.iFontMemoryKB = m_iFontMemoryKBUsed;
+    outStatistics.iFreeMemoryKB = m_iMemoryKBFreeForMTA;
+
+    for (CRenderItem* pItem : m_CreatedItemList)
+    {
+        if (pItem->IsA(CShaderItem::GetClassId()))
+            ++outStatistics.uiShaders;
+        else if (pItem->IsA(CRenderTargetItem::GetClassId()))
+            ++outStatistics.uiRenderTargets;
+        else if (pItem->IsA(CDepthStencilTargetItem::GetClassId()))
+            ++outStatistics.uiDepthTargets;
+        else if (pItem->IsA(CMrtSetItem::GetClassId()))
+            ++outStatistics.uiMrtSets;
+        else if (pItem->IsA(CScreenSourceItem::GetClassId()))
+            ++outStatistics.uiScreenSources;
+    }
 }
 
 ////////////////////////////////////////////////////////////////
