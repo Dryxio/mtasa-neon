@@ -17,6 +17,7 @@
 #include "../luadefs/CLuaClientDefs.h"
 #include "../luadefs/CLuaVectorGraphicDefs.h"
 #include "../luadefs/CLuaPostfxDefs.h"
+#include "../luadefs/CLuaRocketSoccerDefs.h"
 
 using std::list;
 
@@ -264,6 +265,7 @@ void CLuaManager::LoadCFunctions()
     CLua2DFXDefs::LoadFunctions();
     CLuaFireDefs::LoadFunctions();
     CLuaRopeDefs::LoadFunctions();
+    CLuaRocketSoccerDefs::LoadFunctions();
     CLuaNativeUIDefs::LoadFunctions();
     CLuaGUIDefs::LoadFunctions();
     CLuaMarkerDefs::LoadFunctions();

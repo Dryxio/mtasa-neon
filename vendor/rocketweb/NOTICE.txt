@@ -1,0 +1,8 @@
+RocketWeb kernel components
+
+The generated kernel and arena data originate from car-soccer.com and were
+translated with WABT wasm2c 1.0.41. Their original rights remain with their
+respective owners; inclusion does not place them under Neon's license.
+
+The wasm2c runtime is distributed under Apache License 2.0. See runtime/LICENSE
+and the individual source headers.

@@ -20,6 +20,7 @@
 #include "luadefs/CLuaElementDefs.h"
 #include "luadefs/CLuaFireDefs.h"
 #include "luadefs/CLuaRopeDefs.h"
+#include "luadefs/CLuaRocketSoccerDefs.h"
 #include "luadefs/CLuaAccountDefs.h"
 #include "luadefs/CLuaACLDefs.h"
 #include "luadefs/CLuaBanDefs.h"
@@ -226,6 +227,7 @@ void CLuaManager::LoadCFunctions()
     CLuaElementDefs::LoadFunctions();
     CLuaFireDefs::LoadFunctions();
     CLuaRopeDefs::LoadFunctions();
+    CLuaRocketSoccerDefs::LoadFunctions();
     CLuaHandlingDefs::LoadFunctions();
     CLuaMarkerDefs::LoadFunctions();
     CLuaModelDefs::LoadFunctions();

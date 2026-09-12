@@ -10,7 +10,7 @@ project "Client Deathmatch"
 
 	defines { "LUNASVG_BUILD", "LUA_USE_APICHECK", "SDK_WITH_BCRYPT" }
 	links {
-		"Lua_Client", "pcre2", "json-c", "ws2_32", "portaudio", "zlib", "cryptopp", "libspeex", "blowfish_bcrypt", "lunasvg",
+		"RocketSim", "RocketWebKernel", "Lua_Client", "pcre2", "json-c", "ws2_32", "portaudio", "zlib", "cryptopp", "libspeex", "blowfish_bcrypt", "lunasvg",
 		"../../../vendor/bass/lib/bass",
 		"../../../vendor/bass/lib/bass_fx",
 		"../../../vendor/bass/lib/bassmix",
@@ -71,6 +71,10 @@ project "Client Deathmatch"
 
 	filter "files:logic/CRuntimeColModel.cpp"
 		flags { "NoPCH" }
+
+	filter "files:logic/CRocketSoccerSimulation.cpp"
+		flags { "NoPCH" }
+		defines { "RS_DONT_LOG" }
 
 	filter "architecture:not x86"
 		flags { "ExcludeFromBuild" }

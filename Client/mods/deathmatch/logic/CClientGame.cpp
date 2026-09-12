@@ -5405,6 +5405,34 @@ bool CClientGame::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 void CClientGame::OnFilesDropped(const std::vector<SString>& paths)
 {
+    // A replay drop is an explicit local import, not an arbitrary filesystem API.
+    // Deliver only its basename and bounded bytes to the active soccer resource;
+    // the disposable browser worker parses the untrusted format off the game thread.
+    for (const SString& path : paths)
+    {
+        if (!path.EndsWithI(".replay"))
+            continue;
+        auto* resource = m_pResourceManager->GetResource("neon-rocket-soccer");
+        if (paths.size() != 1 || !resource || !resource->IsActive())
+        {
+            g_pCore->ChatEchoColor("Replay: open Rocket Soccer and drop one .replay at a time.", 255, 180, 80);
+            return;
+        }
+        constexpr size_t MAX_REPLAY_SIZE = 32 * 1024 * 1024;
+        const auto       size = FileSize(path);
+        SString          data;
+        if (size == 0 || size > MAX_REPLAY_SIZE || !FileLoad(std::nothrow, path, data) || data.empty() || data.size() > MAX_REPLAY_SIZE)
+        {
+            g_pCore->ChatEchoColor("Replay: file unreadable or larger than 32 MB.", 255, 100, 100);
+            return;
+        }
+        CLuaArguments arguments;
+        arguments.PushString(ExtractFilename(path));
+        arguments.PushString(std::string_view(data.data(), data.size()));
+        resource->GetResourceEntity()->CallEvent("onClientReplayFileDrop", arguments, false);
+        return;
+    }
+
     // WARNING: This is an intentionally insecure developer prototype for quickly
     // previewing local ped skins and animations. The server does not grant this
     // capability, the dropped files are untrusted, and replacing a base model

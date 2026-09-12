@@ -194,6 +194,7 @@ workspace "MTASA"
 		include "vendor/libspeex"
 		include "vendor/detours"
 		include "vendor/lunasvg"
+		include "vendor/rocketsim"
 		include "vendor/googletest"
 
 		if MTA_MAETRO then
@@ -217,6 +218,7 @@ workspace "MTASA"
 		include "Shared/XML"
 
 		group "Vendor"
+		include "vendor/rocketweb"
 		include "vendor/bcrypt"
 		include "vendor/cryptopp"
 		include "vendor/curl"

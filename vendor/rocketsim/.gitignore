@@ -1,0 +1,50 @@
+# CMake
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# Ninja
+.ninja*
+build.ninja
+
+# Build-related
+RocketSim.Dir/
+build/
+x86/
+x64/
+Release/
+Debug
+out/
+*.obj
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.tmp
+*.pyd
+*.whl
+
+# Arena collision mesh files
+*.cmf
+
+# Raw binary files
+*.bin
+
+# Visual Studio (not using anything VS-related)
+.vs/
+*.vcxproj
+*.sln
+*.filters
+*.user
+CMakeSettings.json
+
+# Anything starting with three underscores
+___*
