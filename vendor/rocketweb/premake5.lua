@@ -11,4 +11,7 @@ project "RocketWebKernel"
     filter "system:not windows"
         pic "On"
         buildoptions { "-ffp-contract=off" }
+    filter "system:linux"
+        -- Strict C11 hides POSIX signal-aware jumps used by the wasm trap runtime.
+        defines { "_POSIX_C_SOURCE=200809L" }
     filter {}
