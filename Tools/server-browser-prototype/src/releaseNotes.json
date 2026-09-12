@@ -4,28 +4,19 @@
     {
       "build": 187,
       "date": "2026-09-12",
-      "title": "Rocket Soccer support and PlayStation controllers",
-      "summary": "Adds native Rocket Soccer simulation and replay support for Neon servers, with direct PlayStation controller input.",
+      "title": "PS4/PS5 controllers native support",
+      "summary": "Bug fixes",
       "highlights": [
-        "Native Rocket Soccer physics and network simulation support.",
-        "Direct DualShock 4 and DualSense controller input alongside Xbox controllers.",
-        "Expanded native replay support and lighting improvements."
+        "PS4/PS5 controllers native support",
+        "Bug fixes",
+        "Faster loadings"
       ],
       "sections": [
         {
-          "label": "Gameplay and controllers",
+          "label": "Performance",
           "tone": "players",
           "items": [
-            "Adds native support for Rocket Soccer servers and their downloadable game resources.",
-            "Adds direct input for supported Sony DualShock 4, DualSense and DualSense Edge controllers, with Xbox input preserved."
-          ]
-        },
-        {
-          "label": "Server and resource support",
-          "tone": "creators",
-          "items": [
-            "Adds native Rocket Soccer simulation, multiplayer state synchronization and replay APIs.",
-            "Includes lighting and audio integration updates."
+            "Faster loadings"
           ]
         }
       ]
