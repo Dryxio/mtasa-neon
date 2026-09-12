@@ -6,6 +6,7 @@
 #include "CLuaRocketSoccerDefs.h"
 #include "../CRocketSoccerSimulation.h"
 #include "../CRocketSoccerGamepad.h"
+#include "../CRocketSonyHid.h"
 #include <Xinput.h>
 #include <exception>
 #include <cmath>
@@ -443,7 +444,11 @@ int CLuaRocketSoccerDefs::Gamepad(lua_State* vm)
                 FreeLibrary(module);
         }
     };
-    static Backend backend;
+    static Backend                      backend;
+    static RocketSoccer::SonyHidGamepad sony;
+    RocketSoccer::GamepadSnapshot       snapshot;
+    DWORD                               selectedIndex = 0;
+    const char*                         backendName = nullptr;
     if (backend.getState)
     {
         for (DWORD index = 0; index < XUSER_MAX_COUNT; ++index)
@@ -452,36 +457,44 @@ int CLuaRocketSoccerDefs::Gamepad(lua_State* vm)
             if (backend.getState(index, &state) != ERROR_SUCCESS)
                 continue;
             const auto& p = state.Gamepad;
-            const auto  snapshot = RocketSoccer::NormalizeGamepad(p.wButtons, p.bLeftTrigger, p.bRightTrigger, p.sThumbLX, p.sThumbLY, p.sThumbRX, p.sThumbRY);
-            lua_createtable(vm, 0, 5);
-            lua_pushboolean(vm, true);
-            lua_setfield(vm, -2, "connected");
-            lua_pushinteger(vm, index);
-            lua_setfield(vm, -2, "index");
-            lua_pushstring(vm, "XInput");
-            lua_setfield(vm, -2, "backend");
-            lua_createtable(vm, 4, 0);
-            for (int i = 0; i < 4; ++i)
-            {
-                lua_pushnumber(vm, snapshot.axes[i]);
-                lua_rawseti(vm, -2, i + 1);
-            }
-            lua_setfield(vm, -2, "axes");
-            lua_createtable(vm, 17, 0);
-            for (int i = 0; i < 17; ++i)
-            {
-                lua_createtable(vm, 0, 2);
-                lua_pushnumber(vm, snapshot.buttons[i]);
-                lua_setfield(vm, -2, "value");
-                lua_pushboolean(vm, snapshot.buttons[i] > 0.5f);
-                lua_setfield(vm, -2, "pressed");
-                lua_rawseti(vm, -2, i + 1);
-            }
-            lua_setfield(vm, -2, "buttons");
-            return 1;
+            snapshot = RocketSoccer::NormalizeGamepad(p.wButtons, p.bLeftTrigger, p.bRightTrigger, p.sThumbLX, p.sThumbLY, p.sThumbRX, p.sThumbRY);
+            selectedIndex = index;
+            backendName = "XInput";
+            break;
         }
     }
-    lua_pushboolean(vm, false);
+    if (!backendName && sony.Poll(snapshot, GetTickCount64_()))
+        backendName = "Sony HID";
+    if (!backendName)
+    {
+        lua_pushboolean(vm, false);
+        return 1;
+    }
+    lua_createtable(vm, 0, 5);
+    lua_pushboolean(vm, true);
+    lua_setfield(vm, -2, "connected");
+    lua_pushinteger(vm, selectedIndex);
+    lua_setfield(vm, -2, "index");
+    lua_pushstring(vm, backendName);
+    lua_setfield(vm, -2, "backend");
+    lua_createtable(vm, 4, 0);
+    for (int i = 0; i < 4; ++i)
+    {
+        lua_pushnumber(vm, snapshot.axes[i]);
+        lua_rawseti(vm, -2, i + 1);
+    }
+    lua_setfield(vm, -2, "axes");
+    lua_createtable(vm, 17, 0);
+    for (int i = 0; i < 17; ++i)
+    {
+        lua_createtable(vm, 0, 2);
+        lua_pushnumber(vm, snapshot.buttons[i]);
+        lua_setfield(vm, -2, "value");
+        lua_pushboolean(vm, snapshot.buttons[i] > 0.5f);
+        lua_setfield(vm, -2, "pressed");
+        lua_rawseti(vm, -2, i + 1);
+    }
+    lua_setfield(vm, -2, "buttons");
     return 1;
 }
 
