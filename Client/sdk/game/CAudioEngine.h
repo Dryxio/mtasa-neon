@@ -79,4 +79,6 @@ public:
     virtual void          ReportBulletHit(CEntity* pEntity, unsigned char ucSurfaceType, CVector* pvecPosition, float f_2) = 0;
     virtual void          ReportWeaponEvent(int iEvent, eWeaponType weaponType, CPhysical* pPhysical) = 0;
     virtual void          ReportVehicleMissionAudioEvent(CVehicle* vehicle, unsigned short eventId) = 0;
+    // Appended for the positional script-event opcode.
+    virtual void ReportPositionMissionAudioEvent(const CVector& position, unsigned short eventId) = 0;
 };

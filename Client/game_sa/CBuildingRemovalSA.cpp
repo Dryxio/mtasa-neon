@@ -27,6 +27,7 @@ CBuildingRemovalSA::CBuildingRemovalSA()
 
 void CBuildingRemovalSA::RemoveBuilding(uint16_t usModelToRemove, float fRange, float fX, float fY, float fZ, char cInterior, size_t* pOutAmount)
 {
+    ++m_removalRevision;
     // New building Removal
     SBuildingRemoval* pRemoval = new SBuildingRemoval();
     pRemoval->m_usModel = usModelToRemove;
@@ -168,6 +169,7 @@ void CBuildingRemovalSA::RemoveBuilding(uint16_t usModelToRemove, float fRange, 
 
 bool CBuildingRemovalSA::RestoreBuilding(uint16_t usModelToRestore, float fRange, float fX, float fY, float fZ, char cInterior, uint* pOutAmount)
 {
+    ++m_removalRevision;
     bool bSuccess = false;
     uint uiAmount = 0;
 
@@ -432,6 +434,7 @@ bool CBuildingRemovalSA::IsEntityRemoved(CEntitySAInterface* pInterface)
 // Resets deleted list
 void CBuildingRemovalSA::ClearRemovedBuildingLists(uint* pOutAmount)
 {
+    ++m_removalRevision;
     // Ensure no memory leaks by deleting items.
     uint                                                       uiAmount = 0;
     std::multimap<uint16_t, SBuildingRemoval*>::const_iterator iter = m_pBuildingRemovals->begin();

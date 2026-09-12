@@ -733,3 +733,11 @@ void CAudioEngineSA::ReportWeaponEvent(int iEvent, eWeaponType weaponType, CPhys
     }
     // clang-format on
 }
+
+void CAudioEngineSA::ReportPositionMissionAudioEvent(const CVector& position, unsigned short eventId)
+{
+    // Original opcode path calls the vector overload, retaining event-specific
+    // bank selection, attenuation and lifetime instead of playing a raw sample.
+    using Report = void(__thiscall*)(void*, unsigned short, const CVector*);
+    reinterpret_cast<Report>(FUNC_ReportMissionAudioEvent_Vector)(reinterpret_cast<void*>(CLASS_CAudioEngine), eventId, &position);
+}

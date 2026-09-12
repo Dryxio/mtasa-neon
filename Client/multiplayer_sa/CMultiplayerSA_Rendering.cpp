@@ -12,6 +12,7 @@
 #include <game/CWorld.h>
 #include <game/RenderWare.h>
 #include <array>
+#include <cmath>
 #include <new>
 extern CCoreInterface*           g_pCore;
 GameEntityRenderHandler*         pGameEntityRenderHandler = nullptr;
@@ -819,10 +820,26 @@ use_rect:
 // This is the first thing drawn by GTA
 //
 //////////////////////////////////////////////////////////////////////////////////////////
+// The original sky spans only +/-1.4 camera distances horizontally (about
+// 109 degrees). Wide scripted FOVs expose its open sides. Redirect only the
+// two sky FMUL operands: 0x859994 is a shared GTA constant, not ours to change.
+static float s_skyWidthMultiplier = 1.4f;
+
 void OnMY_CClouds_RenderSkyPolys()
 {
     if (pPreRenderSkyHandlerHandler)
         pPreRenderSkyHandlerHandler();
+
+    const float fov = *reinterpret_cast<const float*>(0x8D5038);  // CDraw::ms_fFOV
+    s_skyWidthMultiplier = 1.4f;
+    if (std::isfinite(fov) && fov > 0.0f && fov < 179.0f)
+    {
+        // Overscan also leaves room for rolled cameras. No camera or timecycle
+        // settings change; only the horizontal extent of the five sky quads.
+        const float width = 2.0f * std::tan(fov * 0.008726646259971648f);
+        if (width > s_skyWidthMultiplier)
+            s_skyWidthMultiplier = width;
+    }
 }
 
 // Hook info
@@ -1195,6 +1212,14 @@ void CMultiplayerSA::InitHooks_Rendering()
     EZHookInstall(CTimer_Suspend);
     EZHookInstall(CTimer_Resume);
     EZHookInstall(psGrabScreen);
+    // Verified against the runtime 1.0 executable: D8 0D 94 99 85 00 at
+    // 0x714841 and 0x71485E. Do not redirect an unexpected instruction stream.
+    if (*reinterpret_cast<const WORD*>(0x714841) == 0x0DD8 && *reinterpret_cast<const DWORD*>(0x714843) == 0x859994 &&
+        *reinterpret_cast<const WORD*>(0x71485E) == 0x0DD8 && *reinterpret_cast<const DWORD*>(0x714860) == 0x859994)
+    {
+        MemPut<DWORD>(0x714843, reinterpret_cast<DWORD>(&s_skyWidthMultiplier));
+        MemPut<DWORD>(0x714860, reinterpret_cast<DWORD>(&s_skyWidthMultiplier));
+    }
     EZHookInstallChecked(CClouds_RenderSkyPolys);
     EZHookInstallChecked(RwCameraSetNearClipPlane);
     EZHookInstall(RenderEffects_HeliLight);

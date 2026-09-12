@@ -28,6 +28,7 @@
 #include <core/CCoreInterface.h>
 #include <game/CCamera.h>
 #include <game/CWorld.h>
+#include "CBuildingRemovalSA.h"
 #include <game/RenderWare.h>
 #include <cstdint>
 #include <limits>
@@ -172,6 +173,12 @@ namespace
         bool       trafficLight;
         bool       trafficLightFacesEastWest;
         float      searchlightHeight;
+        // Keep IPL identity, not an entity pointer: streaming may destroy the
+        // source while its distant light remains resident.
+        int      sourceModel = -1;
+        CVector  sourcePosition;
+        uint64_t removalRevision = std::numeric_limits<uint64_t>::max();
+        bool     sourceRemoved = false;
     };
 
     using SDistantLightDefinition = DistantLights::Definition<CVector>;
@@ -381,7 +388,8 @@ namespace
     }
 
     bool AddDistantLight(const CVector& position, const SDistantLightDefinition& definition, float objectDrawDistance, bool trafficLightFacesEastWest,
-                         std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen, float searchlightHeight = 0.0f)
+                         std::unordered_set<SDistantLightKey, SDistantLightKeyHash>& seen, float searchlightHeight = 0.0f, int sourceModel = -1,
+                         CVector sourcePosition = CVector())
     {
         if (!std::isfinite(position.fX) || !std::isfinite(position.fY) || !std::isfinite(position.fZ) || std::abs(position.fX) > 1.0e7f ||
             std::abs(position.fY) > 1.0e7f || position.fZ < -15.0f || position.fZ > 1030.0f)
@@ -419,6 +427,8 @@ namespace
             definition.trafficLight,
             trafficLightFacesEastWest,
             definition.drawSearchlight ? searchlightHeight : 0.0f,
+            sourceModel,
+            sourcePosition,
         });
         return true;
     }
@@ -472,7 +482,8 @@ namespace
             const float worldOffsetX = definition.localPosition.fX * std::cos(heading) - definition.localPosition.fY * std::sin(heading);
             const float worldOffsetY = definition.localPosition.fX * std::sin(heading) + definition.localPosition.fY * std::cos(heading);
             AddDistantLight(worldPosition, definition, std::min(configuredDrawDistance, modelInfo->fLodDistanceUnscaled),
-                            std::abs(worldOffsetX) > std::abs(worldOffsetY), seen, GetSearchlightHeight(modelInfo));
+                            std::abs(worldOffsetX) > std::abs(worldOffsetY), seen, GetSearchlightHeight(modelInfo), entity->m_nModelIndex,
+                            entity->matrix ? entity->matrix->vPos : entity->m_transform.m_translate);
         }
     }
 
@@ -515,7 +526,7 @@ namespace
             const CVector worldOffset = worldPosition - instance.position;
             const float   configuredDrawDistance = definition.drawDistance > 0.0f ? definition.drawDistance : modelInfo->fLodDistanceUnscaled;
             AddDistantLight(worldPosition, definition, std::min(configuredDrawDistance, modelInfo->fLodDistanceUnscaled),
-                            std::abs(worldOffset.fX) > std::abs(worldOffset.fY), seen, GetSearchlightHeight(modelInfo));
+                            std::abs(worldOffset.fX) > std::abs(worldOffset.fY), seen, GetSearchlightHeight(modelInfo), instance.modelId, instance.position);
         }
     }
 
@@ -577,6 +588,9 @@ namespace
                 false,
                 false,
                 false,
+                0.0f,
+                modelId,
+                transformPosition(CVector()),
             });
         }
     }
@@ -1037,9 +1051,27 @@ void CCoronasSA::DoPulseDistantLights()
     candidates.clear();
     g_DistantLightConeCandidates.clear();
     candidates.reserve(std::min<std::size_t>(g_DistantLights.size(), MAX_DISTANT_LIGHT_CORONAS));
+    auto*      removals = static_cast<CBuildingRemovalSA*>(pGame->GetBuildingRemoval());
+    const auto removalRevision = removals->GetRemovalRevision();
     for (std::size_t i = 0; i < g_DistantLights.size(); ++i)
     {
-        const SDistantLight& light = g_DistantLights[i];
+        SDistantLight& light = g_DistantLights[i];
+        // Refresh only when the registry changes, avoiding thousands of spatial
+        // removal searches per frame in dense cities. This
+        // also covers removal before enabling 2DFX, restoreWorldModel, and
+        // restoreAllWorldModels without rebuilding all cached light sources.
+        if (light.sourceModel >= 0 && light.removalRevision != removalRevision)
+        {
+            SIPLInst source{};
+            source.m_nModelIndex = light.sourceModel;
+            source.m_pPosition = light.sourcePosition;
+            // Only exterior sources are admitted by the capture/pool paths.
+            source.m_nAreaCode = 0;
+            light.sourceRemoved = removals->IsRemovedModelInRadius(&source);
+            light.removalRevision = removalRevision;
+        }
+        if (light.sourceRemoved)
+            continue;
         if (light.trafficLight && !IsTrafficLightOn(light, minute))
             continue;
 

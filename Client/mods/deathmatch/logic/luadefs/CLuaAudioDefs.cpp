@@ -165,69 +165,71 @@ namespace
 
 void CLuaAudioDefs::LoadFunctions()
 {
-    constexpr static const std::pair<const char*, lua_CFunction> functions[]{// Audio funcs
-                                                                             {"playSoundFrontEnd", PlaySoundFrontEnd},
-                                                                             {"playMissionPassedTune", ArgumentParser<PlayMissionPassedTune>},
-                                                                             {"setAmbientSoundEnabled", SetAmbientSoundEnabled},
-                                                                             {"isAmbientSoundEnabled", IsAmbientSoundEnabled},
-                                                                             {"resetAmbientSounds", ResetAmbientSounds},
-                                                                             {"setWorldSoundEnabled", SetWorldSoundEnabled},
-                                                                             {"isWorldSoundEnabled", IsWorldSoundEnabled},
-                                                                             {"resetWorldSounds", ResetWorldSounds},
-                                                                             {"playSFX", PlaySFX},
-                                                                             {"playSFX3D", PlaySFX3D},
-                                                                             {"getSFXStatus", GetSFXStatus},
-                                                                             {"requestMissionAudio", ArgumentParser<RequestMissionAudio>},
-                                                                             {"isMissionAudioLoaded", ArgumentParser<IsMissionAudioLoaded>},
-                                                                             {"playMissionAudio", ArgumentParser<PlayMissionAudio>},
-                                                                             {"isMissionAudioFinished", ArgumentParser<IsMissionAudioFinished>},
-                                                                             {"releaseMissionAudio", ArgumentParser<ReleaseMissionAudio>},
-                                                                             {"reportVehicleMissionAudioEvent", ArgumentParser<ReportVehicleMissionAudioEvent>},
+    constexpr static const std::pair<const char*, lua_CFunction> functions[]{
+        // Audio funcs
+        {"playSoundFrontEnd", PlaySoundFrontEnd},
+        {"playMissionPassedTune", ArgumentParser<PlayMissionPassedTune>},
+        {"setAmbientSoundEnabled", SetAmbientSoundEnabled},
+        {"isAmbientSoundEnabled", IsAmbientSoundEnabled},
+        {"resetAmbientSounds", ResetAmbientSounds},
+        {"setWorldSoundEnabled", SetWorldSoundEnabled},
+        {"isWorldSoundEnabled", IsWorldSoundEnabled},
+        {"resetWorldSounds", ResetWorldSounds},
+        {"playSFX", PlaySFX},
+        {"playSFX3D", PlaySFX3D},
+        {"getSFXStatus", GetSFXStatus},
+        {"requestMissionAudio", ArgumentParser<RequestMissionAudio>},
+        {"isMissionAudioLoaded", ArgumentParser<IsMissionAudioLoaded>},
+        {"playMissionAudio", ArgumentParser<PlayMissionAudio>},
+        {"isMissionAudioFinished", ArgumentParser<IsMissionAudioFinished>},
+        {"releaseMissionAudio", ArgumentParser<ReleaseMissionAudio>},
+        {"reportPositionMissionAudioEvent", ArgumentParser<ReportPositionMissionAudioEvent>},
+        {"reportVehicleMissionAudioEvent", ArgumentParser<ReportVehicleMissionAudioEvent>},
 
-                                                                             // Sound effects and synth funcs
-                                                                             {"playSound", PlaySound},
-                                                                             {"playSound3D", PlaySound3D},
-                                                                             {"stopSound", StopSound},
-                                                                             {"setSoundPosition", SetSoundPosition},
-                                                                             {"getSoundPosition", GetSoundPosition},
-                                                                             {"getSoundLength", GetSoundLength},
-                                                                             {"getSoundBufferLength", GetSoundBufferLength},
-                                                                             {"setSoundLooped", ArgumentParser<SetSoundLooped>},
-                                                                             {"isSoundLooped", ArgumentParser<IsSoundLooped>},
-                                                                             {"setSoundPaused", SetSoundPaused},
-                                                                             {"isSoundPaused", IsSoundPaused},
-                                                                             {"setSoundVolume", SetSoundVolume},
-                                                                             {"getSoundVolume", GetSoundVolume},
-                                                                             {"setSoundSpeed", SetSoundSpeed},
-                                                                             {"getSoundSpeed", GetSoundSpeed},
-                                                                             {"setSoundProperties", SetSoundProperties},
-                                                                             {"getSoundProperties", GetSoundProperties},
-                                                                             {"getSoundFFTData", GetSoundFFTData},
-                                                                             {"getSoundWaveData", GetSoundWaveData},
-                                                                             {"getSoundLevelData", GetSoundLevelData},
-                                                                             {"getSoundBPM", GetSoundBPM},
-                                                                             {"setSoundPanningEnabled", SetSoundPanEnabled},
-                                                                             {"isSoundPanningEnabled", IsSoundPanEnabled},
-                                                                             {"setSoundMinDistance", SetSoundMinDistance},
-                                                                             {"getSoundMinDistance", GetSoundMinDistance},
-                                                                             {"setSoundMaxDistance", SetSoundMaxDistance},
-                                                                             {"getSoundMaxDistance", GetSoundMaxDistance},
-                                                                             {"getSoundMetaTags", GetSoundMetaTags},
-                                                                             {"setSoundEffectEnabled", SetSoundEffectEnabled},
-                                                                             {"getSoundEffects", GetSoundEffects},
-                                                                             {"setSoundEffectParameter", SetSoundEffectParameter},
-                                                                             {"getSoundEffectParameters", GetSoundEffectParameters},
-                                                                             {"setSoundPan", SetSoundPan},
-                                                                             {"getSoundPan", GetSoundPan},
+        // Sound effects and synth funcs
+        {"playSound", PlaySound},
+        {"playSound3D", PlaySound3D},
+        {"stopSound", StopSound},
+        {"setSoundPosition", SetSoundPosition},
+        {"getSoundPosition", GetSoundPosition},
+        {"getSoundLength", GetSoundLength},
+        {"getSoundBufferLength", GetSoundBufferLength},
+        {"setSoundLooped", ArgumentParser<SetSoundLooped>},
+        {"isSoundLooped", ArgumentParser<IsSoundLooped>},
+        {"setSoundPaused", SetSoundPaused},
+        {"isSoundPaused", IsSoundPaused},
+        {"setSoundVolume", SetSoundVolume},
+        {"getSoundVolume", GetSoundVolume},
+        {"setSoundSpeed", SetSoundSpeed},
+        {"getSoundSpeed", GetSoundSpeed},
+        {"setSoundProperties", SetSoundProperties},
+        {"getSoundProperties", GetSoundProperties},
+        {"getSoundFFTData", GetSoundFFTData},
+        {"getSoundWaveData", GetSoundWaveData},
+        {"getSoundLevelData", GetSoundLevelData},
+        {"getSoundBPM", GetSoundBPM},
+        {"setSoundPanningEnabled", SetSoundPanEnabled},
+        {"isSoundPanningEnabled", IsSoundPanEnabled},
+        {"setSoundMinDistance", SetSoundMinDistance},
+        {"getSoundMinDistance", GetSoundMinDistance},
+        {"setSoundMaxDistance", SetSoundMaxDistance},
+        {"getSoundMaxDistance", GetSoundMaxDistance},
+        {"getSoundMetaTags", GetSoundMetaTags},
+        {"setSoundEffectEnabled", SetSoundEffectEnabled},
+        {"getSoundEffects", GetSoundEffects},
+        {"setSoundEffectParameter", SetSoundEffectParameter},
+        {"getSoundEffectParameters", GetSoundEffectParameters},
+        {"setSoundPan", SetSoundPan},
+        {"getSoundPan", GetSoundPan},
 
-                                                                             // Radio funcs
-                                                                             {"setRadioChannel", SetRadioChannel},
-                                                                             {"getRadioChannel", GetRadioChannel},
-                                                                             {"getRadioChannelName", GetRadioChannelName},
+        // Radio funcs
+        {"setRadioChannel", SetRadioChannel},
+        {"getRadioChannel", GetRadioChannel},
+        {"getRadioChannelName", GetRadioChannelName},
 
-                                                                             // Dev funcs
-                                                                             {"showSound", ArgumentParser<ShowSound>},
-                                                                             {"isShowSoundEnabled", ArgumentParser<IsShowSoundEnabled>}};
+        // Dev funcs
+        {"showSound", ArgumentParser<ShowSound>},
+        {"isShowSoundEnabled", ArgumentParser<IsShowSoundEnabled>}};
 
     // Add functions
     for (const auto& [name, func] : functions)
@@ -301,15 +303,18 @@ void CLuaAudioDefs::AddClass(lua_State* luaVM)
     lua_registerclass(luaVM, "Sound3D", "Sound");
 }
 
-std::variant<unsigned int, bool> CLuaAudioDefs::RequestMissionAudio(lua_State* luaVM, unsigned int eventId)
+std::variant<unsigned int, bool> CLuaAudioDefs::RequestMissionAudio(lua_State* luaVM, unsigned int eventId, std::optional<unsigned int> preferredSlot)
 {
     CResource*    resource = GetCallingResource(luaVM);
     CAudioEngine* audio = GetAudioEngine();
-    if (!resource || !audio || !IsSupportedMissionAudioEvent(eventId))
+    if (!resource || !audio || !IsSupportedMissionAudioEvent(eventId) || (preferredSlot && *preferredSlot >= MISSION_AUDIO_SLOT_COUNT))
         return false;
 
     for (unsigned int slotId = 0; slotId < g_missionAudioSlots.size(); ++slotId)
     {
+        // Bank events reference authored native slots. Never evict another owner.
+        if (preferredSlot && slotId != *preferredSlot)
+            continue;
         if (!IsSlotSafelyReusable(audio, slotId))
             continue;
 
@@ -2923,4 +2928,14 @@ bool CLuaAudioDefs::ShowSound(bool state)
 bool CLuaAudioDefs::IsShowSoundEnabled()
 {
     return g_pClientGame->GetShowSound();
+}
+
+bool CLuaAudioDefs::ReportPositionMissionAudioEvent(CVector position, unsigned int eventId)
+{
+    CAudioEngine* audio = GetAudioEngine();
+    if (!audio || !std::isfinite(position.fX) || !std::isfinite(position.fY) || !std::isfinite(position.fZ) || eventId < SCRIPT_EVENT_FIRST ||
+        eventId > SCRIPT_EVENT_LAST)
+        return false;
+    audio->ReportPositionMissionAudioEvent(position, static_cast<unsigned short>(eventId));
+    return true;
 }
