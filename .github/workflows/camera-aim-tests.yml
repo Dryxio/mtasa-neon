@@ -1,0 +1,40 @@
+name: Camera aim tests
+
+on:
+  push:
+    paths:
+      - 'Client/game_sa/CameraAimMath.h'
+      - 'Client/game_sa/CCamSA.*'
+      - 'Client/sdk/game/CCam.h'
+      - 'Client/mods/deathmatch/logic/luadefs/CLuaCameraDefs.*'
+      - 'Tests/standalone/camera-aim/**'
+      - 'test-resources/camera-aim-recoil/**'
+      - '.github/workflows/camera-aim-tests.yml'
+  pull_request:
+    paths:
+      - 'Client/game_sa/CameraAimMath.h'
+      - 'Client/game_sa/CCamSA.*'
+      - 'Client/sdk/game/CCam.h'
+      - 'Client/mods/deathmatch/logic/luadefs/CLuaCameraDefs.*'
+      - 'Tests/standalone/camera-aim/**'
+      - 'test-resources/camera-aim-recoil/**'
+      - '.github/workflows/camera-aim-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  camera-aim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check world-space orientation, limits and invalid input
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -IClient/game_sa Tests/standalone/camera-aim/math.cpp -o /tmp/camera-aim-test
+          /tmp/camera-aim-test
+      - name: Check test resource syntax with Lua 5.1
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.1
+          luac5.1 -p test-resources/camera-aim-recoil/client.lua

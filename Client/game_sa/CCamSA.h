@@ -155,11 +155,17 @@ public:
     bool                    m_bFirstPersonRunAboutActive;  // 564
 };
 static_assert(sizeof(CCamSAInterface) == 0x238, "Invalid size for CCamSAInterface");
+// Scripted aim must touch exactly the fields consumed by the native camera
+// processors. A layout drift would corrupt camera state despite a valid size.
+static_assert(offsetof(CCamSAInterface, m_fVerticalAngle) == 0xAC, "Invalid camera pitch offset");
+static_assert(offsetof(CCamSAInterface, m_fHorizontalAngle) == 0xBC, "Invalid camera heading offset");
+static_assert(offsetof(CCamSAInterface, m_nCamBumpedTime) == 0x120, "Invalid camera bump offset");
 
 class CCamSA : public CCam
 {
 private:
     CCamSAInterface* m_pInterface;
+    bool             GetAimLimits(float& minimum, float& maximum, bool& runabout) const;
 
 public:
     CCamSA(CCamSAInterface* pInterface) : m_pInterface(pInterface)
@@ -212,4 +218,6 @@ public:
 
     CEntity* GetTargetEntity() const override;
     void     SetTargetEntity(CEntity* pEntity) override;
+    bool     GetAimDirection(float& horizontal, float& vertical) override;
+    bool     SetAimDirection(float horizontal, float vertical) override;
 };

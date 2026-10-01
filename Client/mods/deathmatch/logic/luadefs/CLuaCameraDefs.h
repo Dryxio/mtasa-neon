@@ -46,6 +46,8 @@ public:
     // Cam do funcs
     static bool ShakeCamera(float radius, std::optional<float> x, std::optional<float> y, std::optional<float> z) noexcept;
     static bool ResetShakeCamera() noexcept;
+    LUA_DECLARE(GetCameraAimDirection);
+    LUA_DECLARE(SetCameraAimDirection);
 
     static std::variant<unsigned int, bool> AcquireScriptCamera(lua_State* luaVM, std::optional<bool> inhibitControls);
     static bool                             ReleaseScriptCamera(lua_State* luaVM, unsigned int token, std::optional<bool> preserveFade);

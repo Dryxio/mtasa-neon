@@ -30,4 +30,10 @@ public:
     virtual void         SetDirection(float fHorizontal, float fVertical) = 0;
     virtual CEntity*     GetTargetEntity() const = 0;
     virtual void         SetTargetEntity(CEntity* pEntity) = 0;
+
+    // Local gameplay aim in degrees. Unlike SetDirection, these reject camera
+    // states that would overwrite the requested angle and enforce native limits.
+    // Append new slots so existing camera consumers retain their ABI layout.
+    virtual bool GetAimDirection(float& horizontal, float& vertical) = 0;
+    virtual bool SetAimDirection(float horizontal, float vertical) = 0;
 };

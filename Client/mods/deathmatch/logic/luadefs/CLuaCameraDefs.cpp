@@ -45,6 +45,20 @@ namespace
         CClientCamera* camera = g_pClientGame->GetManager()->GetCamera();
         return camera && camera->IsScriptCameraActive();
     }
+
+    CCam* GetLocalAimCamera()
+    {
+        auto* localPlayer = g_pClientGame->GetPlayerManager()->GetLocalPlayer();
+        auto* camera = g_pClientGame->GetManager()->GetCamera();
+        auto* nativeCamera = g_pGame->GetCamera();
+        // A script lease may target the player too. Target identity alone must
+        // never grant this API control over another resource's camera.
+        if (!localPlayer || localPlayer->IsDead() || !camera || (camera->GetFocusedPlayer() && camera->GetFocusedPlayer() != localPlayer) ||
+            camera->IsInFixedMode() || camera->IsScriptCameraActive() || !nativeCamera || nativeCamera->IsInTransition())
+            return nullptr;
+        auto* cam = nativeCamera->GetCam(nativeCamera->GetActiveCam());
+        return cam && localPlayer->GetGamePlayer() && cam->GetTargetEntity() == localPlayer->GetGamePlayer() ? cam : nullptr;
+    }
 }
 
 void CLuaCameraDefs::LoadFunctions()
@@ -74,6 +88,8 @@ void CLuaCameraDefs::LoadFunctions()
 
         {"shakeCamera", ArgumentParser<ShakeCamera>},
         {"resetShakeCamera", ArgumentParser<ResetShakeCamera>},
+        {"getCameraAimDirection", GetCameraAimDirection},
+        {"setCameraAimDirection", SetCameraAimDirection},
 
         {"acquireScriptCamera", ArgumentParser<AcquireScriptCamera>},
         {"releaseScriptCamera", ArgumentParser<ReleaseScriptCamera>},
@@ -882,4 +898,36 @@ bool CLuaCameraDefs::ReleaseFileCutscene(lua_State* luaVM, unsigned int token, s
     CResource*     owner = GetCallingResource(luaVM);
     CClientCamera* camera = GetOwnedFileCutscene(luaVM, token);
     return camera && camera->ReleaseScriptCamera(owner, token, preserveFade.value_or(false));
+}
+
+int CLuaCameraDefs::GetCameraAimDirection(lua_State* luaVM)
+{
+    float horizontal, vertical;
+    auto* cam = GetLocalAimCamera();
+    if (cam && cam->GetAimDirection(horizontal, vertical))
+    {
+        lua_pushnumber(luaVM, horizontal);
+        lua_pushnumber(luaVM, vertical);
+        return 2;
+    }
+    lua_pushboolean(luaVM, false);
+    return 1;
+}
+
+int CLuaCameraDefs::SetCameraAimDirection(lua_State* luaVM)
+{
+    float            horizontal, vertical;
+    CScriptArgReader args(luaVM);
+    args.ReadNumber(horizontal);
+    args.ReadNumber(vertical);
+    if (args.HasErrors())
+    {
+        m_pScriptDebugging->LogCustom(luaVM, args.GetFullErrorMessage());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
+
+    auto* cam = GetLocalAimCamera();
+    lua_pushboolean(luaVM, cam && cam->SetAimDirection(horizontal, vertical));
+    return 1;
 }
