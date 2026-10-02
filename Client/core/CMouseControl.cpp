@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/MouseSensitivity.h>
 #include "CMouseControl.h"
 #include <windowsx.h>
 #include <game/CGame.h>
@@ -90,6 +91,10 @@ bool CMouseControl::ProcessMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam)
     fX *= MOUSE_CONTROL_MULTIPLIER;
 
     float fMouseSensitivity = g_pCore->GetGame()->GetSettings()->GetMouseSensitivity();
+    // Mouse steering historically consumes the OLD normalized slider scale.
+    // Extending the camera range must not change existing vehicle controls.
+    const float rawSensitivity = MouseSensitivity::Minimum + fMouseSensitivity * (MouseSensitivity::HorizontalMaximum - MouseSensitivity::Minimum);
+    fMouseSensitivity = std::clamp((rawSensitivity - 0.000312f) / (MouseSensitivity::HorizontalMaximum - 0.000312f), 0.0f, 1.0f);
     fX *= fMouseSensitivity;
 
     m_usLeftStickX += fX * 128;

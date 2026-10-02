@@ -38,6 +38,7 @@ public:
     float GetVerticalAimSensitivityRawValue();
     void  SetVerticalAimSensitivityRawValue(float fRawValue);
     void  SetVerticalAimSensitivitySameAsHorizontal(bool enabled) override;
+    void  SetAimSensitivityMultipliers(float aiming, float sniper) override;
 
     // CControllerConfigManagerSA
     void ApplySteerAndFlyWithMouseSettings();

@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/MouseSensitivity.h>
 #include "CDistantLightPreferences.h"
 #include <algorithm>
 #include <cmath>
@@ -711,6 +712,32 @@ void CSettings::CreateGUI()
     pTabAudio = m_pTabAudio = m_pTabs->CreateTab(_("Audio"));
     pTabBinds = m_pTabBinds = m_pTabs->CreateTab(_("Binds"));
     pTabControls = m_pTabControls = m_pTabs->CreateTab(_("Controls"));
+    CGUITab*   pTabMouse = m_pTabs->CreateTab(_("Mouse"));
+    const auto addMouseEdit = [&](const char* label, float y)
+    {
+        auto* text = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabMouse, label));
+        text->SetPosition(CVector2D(16, y));
+        text->AutoSize();
+        auto* field = reinterpret_cast<CGUIEdit*>(pManager->CreateEdit(pTabMouse));
+        field->SetPosition(CVector2D(std::max(220.0f, tabPanelSize.fX - 160.0f), y));
+        field->SetSize(CVector2D(130, 24));
+        field->SetMaxLength(16);
+        field->SetTextChangedHandler(GUI_CALLBACK(&CSettings::OnPreciseMouseChanged, this));
+        return field;
+    };
+    m_pPreciseMouse = addMouseEdit(_("Mouse sensitivity (0-100%):"), 20);
+    m_pPreciseVertical = addMouseEdit(_("Vertical sensitivity (0-100%):"), 56);
+    m_pAimingMultiplier = addMouseEdit(_("Aiming multiplier (0.01-2x):"), 92);
+    m_pSniperMultiplier = addMouseEdit(_("Sniper multiplier (0.01-2x):"), 128);
+    auto* mouseHelp = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(
+        pTabMouse,
+        _("Mouse input only. Aiming and sniper multipliers are independent.\nVertical sensitivity is ignored while the axes are linked in Controls.")));
+    mouseHelp->SetPosition(CVector2D(16, 168));
+    mouseHelp->SetSize(CVector2D(std::max(0.0f, tabPanelSize.fX - 32), 64));
+    auto* mouseDefaults = reinterpret_cast<CGUIButton*>(pManager->CreateButton(pTabMouse, _("Load defaults")));
+    mouseDefaults->SetPosition(CVector2D(16, 248));
+    mouseDefaults->AutoSize(nullptr, 20.0f, 8.0f);
+    mouseDefaults->SetClickHandler(GUI_CALLBACK(&CSettings::OnMouseDefaultsClick, this));
     m_pTabInterface = m_pTabs->CreateTab(_("Interface"));
     m_pTabBrowser = m_pTabs->CreateTab(_("Web Browser"));
     pTabAdvanced = m_pTabAdvanced = m_pTabs->CreateTab(_("Advanced"));
@@ -790,11 +817,11 @@ void CSettings::CreateGUI()
     const float     mouseSliderWidth = ComputeSliderWidth(tabPanelSize.fX, mouseSliderPos.fX, 160.0f);
     m_pMouseSensitivity->SetSize(CVector2D(mouseSliderWidth, 20.0f));
     m_pMouseSensitivity->GetSize(vecSize);
-    m_pMouseSensitivity->SetProperty("StepSize", "0.01");
+    m_pMouseSensitivity->SetProperty("StepSize", "0.000001");
 
     m_pLabelMouseSensitivityValue = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabControls, "0%"));
     m_pLabelMouseSensitivityValue->SetPosition(CVector2D(mouseSliderPos.fX + vecSize.fX + kSliderLabelSpacing, mouseSliderPos.fY));
-    m_pLabelMouseSensitivityValue->AutoSize("100%");
+    m_pLabelMouseSensitivityValue->AutoSize("100.0000%");
     FinalizeSliderRow(tabPanelSize.fX, m_pMouseSensitivity, m_pLabelMouseSensitivityValue, 160.0f, kSliderLabelSpacing, m_pLabelMouseSensitivity);
     vecTemp.fX = 16;
     vecTemp.fY += 24.f;
@@ -811,11 +838,11 @@ void CSettings::CreateGUI()
     const float     verticalSliderWidth = ComputeSliderWidth(tabPanelSize.fX, verticalSliderPos.fX, 160.0f);
     m_pVerticalAimSensitivity->SetSize(CVector2D(verticalSliderWidth, 20.0f));
     m_pVerticalAimSensitivity->GetSize(vecSize);
-    m_pVerticalAimSensitivity->SetProperty("StepSize", "0.01");
+    m_pVerticalAimSensitivity->SetProperty("StepSize", "0.000001");
 
     m_pLabelVerticalAimSensitivityValue = reinterpret_cast<CGUILabel*>(pManager->CreateLabel(pTabControls, "0%"));
     m_pLabelVerticalAimSensitivityValue->SetPosition(CVector2D(verticalSliderPos.fX + vecSize.fX + kSliderLabelSpacing, verticalSliderPos.fY));
-    m_pLabelVerticalAimSensitivityValue->AutoSize("100%");
+    m_pLabelVerticalAimSensitivityValue->AutoSize("100.0000%");
     FinalizeSliderRow(tabPanelSize.fX, m_pVerticalAimSensitivity, m_pLabelVerticalAimSensitivityValue, 160.0f, kSliderLabelSpacing,
                       m_pLabelVerticalAimSensitivity);
     vecTemp.fY += 30.f;
@@ -3424,7 +3451,6 @@ bool CSettings::OnAxisSelectClick(CGUIElement* pElement)
 //
 bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)
 {
-    CGameSettings*            gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
     CControllerConfigManager* pController = g_pCore->GetGame()->GetControllerConfigManager();
 
     // Load the default settings
@@ -3433,9 +3459,6 @@ bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)
     CVARS_SET("fly_with_mouse", false);
     CVARS_SET("steer_with_mouse", false);
     CVARS_SET("classic_controls", false);
-    pController->SetVerticalAimSensitivity(0.5f);
-    CVARS_SET("vertical_aim_sensitivity", pController->GetVerticalAimSensitivityRawValue());
-    gameSettings->SetMouseSensitivity(0.5f);
 
     // Set game vars
     pController->SetMouseInverted(CVARS_GET_VALUE<bool>("invert_mouse"));
@@ -3451,8 +3474,8 @@ bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)
     m_pSteerWithMouse->SetSelected(CVARS_GET_VALUE<bool>("steer_with_mouse"));
     m_pStandardControls->SetSelected(!CVARS_GET_VALUE<bool>("classic_controls"));
     m_pClassicControls->SetSelected(CVARS_GET_VALUE<bool>("classic_controls"));
-    m_pMouseSensitivity->SetScrollPosition(gameSettings->GetMouseSensitivity());
-    m_pVerticalAimSensitivity->SetScrollPosition(pController->GetVerticalAimSensitivity());
+    // Sensitivity defaults are a draft so Cancel preserves the applied response.
+    OnMouseDefaultsClick(nullptr);
     m_pCheckboxVerticalAimSensitivity->SetSelected(CVARS_GET_VALUE<bool>("use_mouse_sensitivity_for_aiming"));
     m_pVerticalAimSensitivity->SetEnabled(!m_pCheckboxVerticalAimSensitivity->GetSelected());
 
@@ -4602,6 +4625,10 @@ bool CSettings::OnOKButtonClick(CGUIElement* pElement)
 {
     CMainMenu* pMainMenu = CLocalGUI::GetSingleton().GetMainMenu();
 
+    // Reject the draft before key binds or joypad settings can be committed.
+    if (!ValidateMouseSettings())
+        return true;
+
     // Process keybinds
     ProcessKeyBinds();
     ProcessJoypad();
@@ -4740,8 +4767,11 @@ void CSettings::LoadData()
     CControllerConfigManager* pController = g_pCore->GetGame()->GetControllerConfigManager();
 
     m_pMouseSensitivity->SetScrollPosition(gameSettings->GetMouseSensitivity());
+    OnMouseSensitivityChanged(nullptr);
+    LoadMouseMultipliers();
     pController->SetVerticalAimSensitivityRawValue(CVARS_GET_VALUE<float>("vertical_aim_sensitivity"));
     m_pVerticalAimSensitivity->SetScrollPosition(pController->GetVerticalAimSensitivity());
+    OnVerticalAimSensitivityChanged(nullptr);
 
     CVARS_GET("use_mouse_sensitivity_for_aiming", bVar);
     m_pCheckboxVerticalAimSensitivity->SetSelected(bVar);
@@ -5071,8 +5101,14 @@ void CSettings::SaveData()
     pController->SetFlyWithMouse(m_pFlyWithMouse->GetSelected());
     CVARS_SET("classic_controls", m_pClassicControls->GetSelected());
     pController->SetClassicControls(m_pClassicControls->GetSelected());
+    float aiming = 1.0f, sniper = 1.0f;
+    MouseSensitivity::Parse(m_pAimingMultiplier->GetText().c_str(), 0.01f, 2.0f, aiming);
+    MouseSensitivity::Parse(m_pSniperMultiplier->GetText().c_str(), 0.01f, 2.0f, sniper);
+    CVARS_SET("aiming_mouse_multiplier", SString("%.9g", aiming));
+    CVARS_SET("sniper_mouse_multiplier", SString("%.9g", sniper));
+    pController->SetAimSensitivityMultipliers(aiming, sniper);
     pController->SetVerticalAimSensitivity(m_pVerticalAimSensitivity->GetScrollPosition());
-    CVARS_SET("vertical_aim_sensitivity", pController->GetVerticalAimSensitivityRawValue());
+    CVARS_SET("vertical_aim_sensitivity", SString("%.9g", pController->GetVerticalAimSensitivityRawValue()));
     CVARS_SET("use_mouse_sensitivity_for_aiming", m_pCheckboxVerticalAimSensitivity->GetSelected());
     pController->SetVerticalAimSensitivitySameAsHorizontal(m_pCheckboxVerticalAimSensitivity->GetSelected());
 
@@ -6304,16 +6340,74 @@ bool CSettings::OnAnisotropicChanged(CGUIElement* pElement)
 
 bool CSettings::OnMouseSensitivityChanged(CGUIElement* pElement)
 {
-    int iMouseSensitivity = (m_pMouseSensitivity->GetScrollPosition()) * 100;
-
-    m_pLabelMouseSensitivityValue->SetText(SString("%i%%", iMouseSensitivity).c_str());
+    const float value = m_pMouseSensitivity->GetScrollPosition() * 100.0f;
+    m_pLabelMouseSensitivityValue->SetText(SString("%.4f%%", value));
+    if (!m_bUpdatingMouseFields)
+    {
+        m_bUpdatingMouseFields = true;
+        m_pPreciseMouse->SetText(SString("%.9g", value));
+        m_bUpdatingMouseFields = false;
+    }
     return true;
 }
 
 bool CSettings::OnVerticalAimSensitivityChanged(CGUIElement* pElement)
 {
-    int iSensitivity = m_pVerticalAimSensitivity->GetScrollPosition() * 100;
-    m_pLabelVerticalAimSensitivityValue->SetText(SString("%i%%", iSensitivity));
+    const float value = m_pVerticalAimSensitivity->GetScrollPosition() * 100.0f;
+    m_pLabelVerticalAimSensitivityValue->SetText(SString("%.4f%%", value));
+    if (!m_bUpdatingMouseFields)
+    {
+        m_bUpdatingMouseFields = true;
+        m_pPreciseVertical->SetText(SString("%.9g", value));
+        m_bUpdatingMouseFields = false;
+    }
+    return true;
+}
+
+void CSettings::LoadMouseMultipliers()
+{
+    m_pAimingMultiplier->SetText(SString("%.9g", MouseSensitivity::Multiplier(CVARS_GET_VALUE<float>("aiming_mouse_multiplier"))));
+    m_pSniperMultiplier->SetText(SString("%.9g", MouseSensitivity::Multiplier(CVARS_GET_VALUE<float>("sniper_mouse_multiplier"))));
+}
+
+bool CSettings::OnPreciseMouseChanged(CGUIElement* element)
+{
+    if (m_bUpdatingMouseFields)
+        return true;
+    float value;
+    auto* edit = element == m_pPreciseMouse ? m_pPreciseMouse : element == m_pPreciseVertical ? m_pPreciseVertical : nullptr;
+    if (edit && MouseSensitivity::Parse(edit->GetText().c_str(), 0.0f, 100.0f, value))
+    {
+        // Keep the user's partially typed text; only the valid slider draft moves.
+        m_bUpdatingMouseFields = true;
+        (edit == m_pPreciseMouse ? m_pMouseSensitivity : m_pVerticalAimSensitivity)->SetScrollPosition(value / 100.0f);
+        m_bUpdatingMouseFields = false;
+    }
+    return true;
+}
+
+bool CSettings::ValidateMouseSettings()
+{
+    float value;
+    if (MouseSensitivity::Parse(m_pPreciseMouse->GetText().c_str(), 0.0f, 100.0f, value) &&
+        MouseSensitivity::Parse(m_pPreciseVertical->GetText().c_str(), 0.0f, 100.0f, value) &&
+        MouseSensitivity::Parse(m_pAimingMultiplier->GetText().c_str(), 0.01f, 2.0f, value) &&
+        MouseSensitivity::Parse(m_pSniperMultiplier->GetText().c_str(), 0.01f, 2.0f, value))
+        return true;
+    CCore::GetSingleton().ShowMessageBox(_("Error"), _("Enter valid mouse sensitivities (0-100) and multipliers (0.01-2) in the Mouse tab."),
+                                         MB_BUTTON_OK | MB_ICON_INFO);
+    return false;
+}
+
+bool CSettings::OnMouseDefaultsClick(CGUIElement*)
+{
+    // Unlike the historical Controls reset, these edits remain a draft until OK.
+    m_pMouseSensitivity->SetScrollPosition(MouseSensitivity::HorizontalDefault);
+    m_pVerticalAimSensitivity->SetScrollPosition(MouseSensitivity::VerticalDefault);
+    OnMouseSensitivityChanged(nullptr);
+    OnVerticalAimSensitivityChanged(nullptr);
+    m_pAimingMultiplier->SetText("1");
+    m_pSniperMultiplier->SetText("1");
     return true;
 }
 

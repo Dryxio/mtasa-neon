@@ -321,9 +321,11 @@ function ControlsSettings({ state, onChange, onAction }: SettingsSectionProps) {
       <ToggleRow id="controls.invertMouse" value={Boolean(values['controls.invertMouse'])} onChange={onChange} />
       <ToggleRow id="controls.steerWithMouse" value={Boolean(values['controls.steerWithMouse'])} onChange={onChange} />
       <ToggleRow id="controls.flyWithMouse" value={Boolean(values['controls.flyWithMouse'])} onChange={onChange} />
-      <RangeRow id="controls.mouseSensitivity" value={Number(values['controls.mouseSensitivity'])} min={0} max={100} step={1} suffix="%" onChange={onChange} />
+      <PreciseMouseRow id="controls.mouseSensitivity" value={Number(values['controls.mouseSensitivity'])} min={0} max={100} step={0.0001} suffix="%" onChange={onChange} />
+      <PreciseMouseRow id="controls.aimingMultiplier" value={Number(values['controls.aimingMultiplier'])} min={0.01} max={2} step={0.0001} suffix="x" onChange={onChange} />
+      <PreciseMouseRow id="controls.sniperMultiplier" value={Number(values['controls.sniperMultiplier'])} min={0.01} max={2} step={0.0001} suffix="x" onChange={onChange} />
       <ToggleRow id="controls.useMouseSensitivityForAiming" value={linkedAim} onChange={onChange} />
-      <RangeRow id="controls.verticalAimSensitivity" value={Number(values['controls.verticalAimSensitivity'])} min={0} max={100} step={1}
+      <PreciseMouseRow id="controls.verticalAimSensitivity" value={Number(values['controls.verticalAimSensitivity'])} min={0} max={100} step={0.0001}
         suffix="%" disabled={linkedAim} onChange={onChange} />
     </SettingsGroup>
     <SettingsGroup title="Joypad" caption={state.joypad.connected ? `${state.joypad.name} · axis binding and defaults are immediate actions` : 'No joypad detected — connect one and restart MTA.'}>
@@ -588,6 +590,29 @@ function TextRow({ id, value, maxLength, disabled = false, onChange }: RowProps 
         onChange={(event) => onChange(id, event.target.value)} />
     </SettingRow>
   )
+}
+
+function PreciseMouseRow({ id, value, min, max, step, suffix, disabled = false, onChange }: RowProps & {
+  value: number; min: number; max: number; step: number; suffix?: string
+}) {
+  const [text, setText] = useState(() => value.toFixed(4))
+  useEffect(() => setText(value.toFixed(4)), [value])
+  const commit = () => {
+    if (text === value.toFixed(4)) return
+    const parsed = Number(text)
+    if (text.trim() !== '' && Number.isFinite(parsed) && parsed >= min && parsed <= max) onChange(id, parsed)
+    else setText(value.toFixed(4))
+  }
+  return <SettingRow id={id} disabled={disabled}>
+    <div className="settings-range">
+      <input type="range" aria-label={SETTINGS_COPY[id].label} value={value} min={min} max={max} step={step} disabled={disabled}
+        onChange={(event) => onChange(id, Number(event.target.value))} />
+      <input type="number" aria-label={`${SETTINGS_COPY[id].label} precise value`} value={text} min={min} max={max} step={step}
+        disabled={disabled} style={{ width: 110 }} onChange={(event) => setText(event.target.value)} onBlur={commit}
+        onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit() } }} />
+      <span>{suffix}</span>
+    </div>
+  </SettingRow>
 }
 
 function NumberRow({ id, value, min, max, step, suffix, disabled = false, onChange }: RowProps & {

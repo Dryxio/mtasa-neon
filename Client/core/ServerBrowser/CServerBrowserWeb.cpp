@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/MouseSensitivity.h>
 #include "../CDistantLightPreferences.h"
 #include "CServerBrowserWeb.h"
 
@@ -945,15 +946,17 @@ public:
         bool audioMuteMta{};
         bool audioMuteVoice{};
 
-        bool controlsInvertMouse{};
-        bool controlsSteerWithMouse{};
-        bool controlsFlyWithMouse{};
-        int  controlsMouseSensitivity{50};
-        int  controlsVerticalAimSensitivity{50};
-        bool controlsUseMouseSensitivityForAiming{};
-        bool controlsClassic{};
-        int  controlsJoypadDeadZone{15};
-        int  controlsJoypadSaturation{100};
+        bool  controlsInvertMouse{};
+        bool  controlsSteerWithMouse{};
+        bool  controlsFlyWithMouse{};
+        float controlsMouseSensitivity{MouseSensitivity::HorizontalDefault * 100.0f};
+        float controlsVerticalAimSensitivity{MouseSensitivity::VerticalDefault * 100.0f};
+        float controlsAimingMultiplier{1.0f};
+        float controlsSniperMultiplier{1.0f};
+        bool  controlsUseMouseSensitivityForAiming{};
+        bool  controlsClassic{};
+        int   controlsJoypadDeadZone{15};
+        int   controlsJoypadSaturation{100};
 
         std::string   interfaceLocale{"en_US"};
         std::string   interfaceSkin{"Default"};
@@ -2184,9 +2187,12 @@ private:
         controller->SetClassicControls(m_draft.controlsClassic);
         settings->SetMouseSensitivity(m_draft.controlsMouseSensitivity / 100.0f);
         controller->SetVerticalAimSensitivity(m_draft.controlsVerticalAimSensitivity / 100.0f);
-        CVARS_SET("vertical_aim_sensitivity", controller->GetVerticalAimSensitivityRawValue());
+        CVARS_SET("vertical_aim_sensitivity", SString("%.9g", controller->GetVerticalAimSensitivityRawValue()));
         CVARS_SET("use_mouse_sensitivity_for_aiming", m_draft.controlsUseMouseSensitivityForAiming);
         controller->SetVerticalAimSensitivitySameAsHorizontal(m_draft.controlsUseMouseSensitivityForAiming);
+        CVARS_SET("aiming_mouse_multiplier", SString("%.9g", m_draft.controlsAimingMultiplier));
+        CVARS_SET("sniper_mouse_multiplier", SString("%.9g", m_draft.controlsSniperMultiplier));
+        controller->SetAimSensitivityMultipliers(m_draft.controlsAimingMultiplier, m_draft.controlsSniperMultiplier);
         GetJoystickManager()->SetDeadZone(m_draft.controlsJoypadDeadZone);
         GetJoystickManager()->SetSaturation(m_draft.controlsJoypadSaturation);
         GetJoystickManager()->SaveToXML();
@@ -2518,6 +2524,8 @@ private:
         destination.controlsInvertMouse = source.controlsInvertMouse;
         destination.controlsSteerWithMouse = source.controlsSteerWithMouse;
         destination.controlsFlyWithMouse = source.controlsFlyWithMouse;
+        destination.controlsAimingMultiplier = source.controlsAimingMultiplier;
+        destination.controlsSniperMultiplier = source.controlsSniperMultiplier;
         destination.controlsMouseSensitivity = source.controlsMouseSensitivity;
         destination.controlsVerticalAimSensitivity = source.controlsVerticalAimSensitivity;
         destination.controlsUseMouseSensitivityForAiming = source.controlsUseMouseSensitivityForAiming;
@@ -2607,6 +2615,7 @@ private:
                copy.audioMuteMaster == left.audioMuteMaster && copy.audioMuteRadio == left.audioMuteRadio && copy.audioMuteSfx == left.audioMuteSfx &&
                copy.audioMuteMta == left.audioMuteMta && copy.audioMuteVoice == left.audioMuteVoice && copy.controlsInvertMouse == left.controlsInvertMouse &&
                copy.controlsSteerWithMouse == left.controlsSteerWithMouse && copy.controlsFlyWithMouse == left.controlsFlyWithMouse &&
+               copy.controlsAimingMultiplier == left.controlsAimingMultiplier && copy.controlsSniperMultiplier == left.controlsSniperMultiplier &&
                copy.controlsMouseSensitivity == left.controlsMouseSensitivity && copy.controlsVerticalAimSensitivity == left.controlsVerticalAimSensitivity &&
                copy.controlsUseMouseSensitivityForAiming == left.controlsUseMouseSensitivityForAiming && copy.controlsClassic == left.controlsClassic &&
                copy.controlsJoypadDeadZone == left.controlsJoypadDeadZone && copy.controlsJoypadSaturation == left.controlsJoypadSaturation &&
@@ -2777,8 +2786,6 @@ private:
             {"audio.mtaVolume", &SState::audioMtaVolume, 0, 100},
             {"audio.voiceVolume", &SState::audioVoiceVolume, 0, 100},
             {"audio.userTrackMode", &SState::audioUserTrackMode, 0, 2},
-            {"controls.mouseSensitivity", &SState::controlsMouseSensitivity, 0, 100},
-            {"controls.verticalAimSensitivity", &SState::controlsVerticalAimSensitivity, 0, 100},
             {"controls.joypadDeadZone", &SState::controlsJoypadDeadZone, 0, 49},
             {"controls.joypadSaturation", &SState::controlsJoypadSaturation, 0, 100},
             {"interface.chatFont", &SState::interfaceChatFont, 0, 3},
@@ -2827,6 +2834,10 @@ private:
             float           step;
         };
         static constexpr SFloatBinding floatBindings[] = {
+            {"controls.mouseSensitivity", &SState::controlsMouseSensitivity, 0.0f, 100.0f, 0.0001f},
+            {"controls.verticalAimSensitivity", &SState::controlsVerticalAimSensitivity, 0.0f, 100.0f, 0.0001f},
+            {"controls.aimingMultiplier", &SState::controlsAimingMultiplier, 0.01f, 2.0f, 0.0001f},
+            {"controls.sniperMultiplier", &SState::controlsSniperMultiplier, 0.01f, 2.0f, 0.0001f},
             {"interface.chatScaleX", &SState::interfaceChatScaleX, 0.5f, 3.0f, 0.1f},
             {"interface.chatScaleY", &SState::interfaceChatScaleY, 0.5f, 3.0f, 0.1f},
             {"interface.chatWidth", &SState::interfaceChatWidth, 0.5f, 4.0f, 0.1f},
@@ -2929,6 +2940,8 @@ private:
         CVARS_GET("fly_with_mouse", state.controlsFlyWithMouse);
         CVARS_GET("classic_controls", state.controlsClassic);
         CVARS_GET("use_mouse_sensitivity_for_aiming", state.controlsUseMouseSensitivityForAiming);
+        state.controlsAimingMultiplier = MouseSensitivity::Multiplier(CVARS_GET_VALUE<float>("aiming_mouse_multiplier"));
+        state.controlsSniperMultiplier = MouseSensitivity::Multiplier(CVARS_GET_VALUE<float>("sniper_mouse_multiplier"));
         state.controlsJoypadDeadZone = std::clamp(GetJoystickManager()->GetDeadZone(), 0, 49);
         state.controlsJoypadSaturation = std::clamp(GetJoystickManager()->GetSaturation(), 0, 100);
 
@@ -3004,9 +3017,9 @@ private:
             state.audioRadioAutotune = gameSettings->IsRadioAutotuneEnabled();
             state.audioUserTrackAutoScan = gameSettings->IsUsertrackAutoScan();
             state.audioUserTrackMode = static_cast<int>(gameSettings->GetUsertrackMode());
-            state.controlsMouseSensitivity = QuantizeInteger(gameSettings->GetMouseSensitivity() * 100.0, 0, 100, 1);
+            state.controlsMouseSensitivity = gameSettings->GetMouseSensitivity() * 100.0f;
             if (CControllerConfigManager* controller = game->GetControllerConfigManager())
-                state.controlsVerticalAimSensitivity = QuantizeInteger(controller->GetVerticalAimSensitivity() * 100.0, 0, 100, 1);
+                state.controlsVerticalAimSensitivity = controller->GetVerticalAimSensitivity() * 100.0f;
             bool windowed = false;
             bool fullscreenMinimize = false;
             int  fullscreenStyle = FULLSCREEN_STANDARD;
@@ -4505,8 +4518,10 @@ void CServerBrowserWeb::QueueSettingsState(bool initial)
     AddBoolean(values, "controls.invertMouse", state.controlsInvertMouse);
     AddBoolean(values, "controls.steerWithMouse", state.controlsSteerWithMouse);
     AddBoolean(values, "controls.flyWithMouse", state.controlsFlyWithMouse);
-    AddInteger(values, "controls.mouseSensitivity", state.controlsMouseSensitivity);
-    AddInteger(values, "controls.verticalAimSensitivity", state.controlsVerticalAimSensitivity);
+    AddDouble(values, "controls.aimingMultiplier", state.controlsAimingMultiplier);
+    AddDouble(values, "controls.sniperMultiplier", state.controlsSniperMultiplier);
+    AddDouble(values, "controls.mouseSensitivity", state.controlsMouseSensitivity);
+    AddDouble(values, "controls.verticalAimSensitivity", state.controlsVerticalAimSensitivity);
     AddBoolean(values, "controls.useMouseSensitivityForAiming", state.controlsUseMouseSensitivityForAiming);
     AddBoolean(values, "controls.classicControls", state.controlsClassic);
     AddInteger(values, "controls.joypadDeadZone", state.controlsJoypadDeadZone);

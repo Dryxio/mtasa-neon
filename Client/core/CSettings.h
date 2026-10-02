@@ -481,6 +481,18 @@ protected:
     bool OnUpdateButtonClick(CGUIElement* pElement);
     bool OnCachePathShowButtonClick(CGUIElement* pElement);
     bool OnMouseSensitivityChanged(CGUIElement* pElement);
+    bool OnPreciseMouseChanged(CGUIElement* pElement);
+    bool OnMouseDefaultsClick(CGUIElement* pElement);
+    bool ValidateMouseSettings();
+    void LoadMouseMultipliers();
+
+    CGUIEdit* m_pPreciseMouse = nullptr;
+    CGUIEdit* m_pPreciseVertical = nullptr;
+    CGUIEdit* m_pAimingMultiplier = nullptr;
+    CGUIEdit* m_pSniperMultiplier = nullptr;
+    bool m_bUpdatingMouseFields = false;
+
+
     bool OnVerticalAimSensitivityChanged(CGUIElement* pElement);
     bool OnBrowserBlacklistAdd(CGUIElement* pElement);
     bool OnBrowserBlacklistRemove(CGUIElement* pElement);

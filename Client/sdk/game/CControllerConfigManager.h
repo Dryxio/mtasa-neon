@@ -207,4 +207,6 @@ public:
     virtual float GetVerticalAimSensitivityRawValue() = 0;
     virtual void  SetVerticalAimSensitivityRawValue(float fRawValue) = 0;
     virtual void  SetVerticalAimSensitivitySameAsHorizontal(bool enable) = 0;
+    // Appended to preserve existing SDK slots. Values scale mouse input only.
+    virtual void SetAimSensitivityMultipliers(float aiming, float sniper) = 0;
 };

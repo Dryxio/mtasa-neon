@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/MouseSensitivity.h>
 #include <core/CCoreInterface.h>
 #include "CAudioEngineSA.h"
 #include "CCoronasSA.h"
@@ -25,9 +26,9 @@
 extern CCoreInterface* g_pCore;
 extern CGameSA*        pGame;
 
-static const float MOUSE_SENSITIVITY_MIN = 0.000312f;
+static const float MOUSE_SENSITIVITY_MIN = MouseSensitivity::Minimum;
 static const float MOUSE_SENSITIVITY_DEFAULT = 0.0025f;
-static const float MOUSE_SENSITIVITY_MAX = MOUSE_SENSITIVITY_DEFAULT * 2 - MOUSE_SENSITIVITY_MIN;
+static const float MOUSE_SENSITIVITY_MAX = MouseSensitivity::HorizontalMaximum;
 
 #define VAR_CurVideoMode   (*((uint*)(0x08D6220)))
 #define VAR_SavedVideoMode (*((uint*)(0x0BA6820)))
@@ -287,7 +288,9 @@ float CSettingsSA::GetMouseSensitivity()
 
 void CSettingsSA::SetMouseSensitivity(float fSensitivity)
 {
-    float fRawValue = Lerp(MOUSE_SENSITIVITY_MIN, fSensitivity, MOUSE_SENSITIVITY_MAX);
+    if (!std::isfinite(fSensitivity))
+        return;
+    float fRawValue = Lerp(MOUSE_SENSITIVITY_MIN, std::clamp(fSensitivity, 0.0f, 1.0f), MOUSE_SENSITIVITY_MAX);
     MemPutFast<float>(VAR_fMouseSensitivity, fRawValue);
 }
 

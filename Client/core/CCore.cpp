@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/MouseSensitivity.h>
 #include "CDistantLightPreferences.h"
 #include "CNativeWorldAuthorizationStore.h"
 #include "SharedUtil.Hash.h"
@@ -2002,6 +2003,7 @@ void CCore::ApplyGameSettings()
     pGameSettings->SetDynamicPedShadowsEnabled(bVal);
     pController->SetVerticalAimSensitivityRawValue(CVARS_GET_VALUE<float>("vertical_aim_sensitivity"));
     pController->SetVerticalAimSensitivitySameAsHorizontal(CVARS_GET_VALUE<bool>("use_mouse_sensitivity_for_aiming"));
+    pController->SetAimSensitivityMultipliers(CVARS_GET_VALUE<float>("aiming_mouse_multiplier"), CVARS_GET_VALUE<float>("sniper_mouse_multiplier"));
     CVARS_GET("mastervolume", fVal);
     pGameSettings->SetRadioVolume(CVARS_GET_VALUE<float>("radiovolume") * fVal * 64.0f);
     pGameSettings->SetSFXVolume(CVARS_GET_VALUE<float>("sfxvolume") * fVal * 64.0f);

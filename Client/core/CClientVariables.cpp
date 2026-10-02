@@ -422,6 +422,8 @@ void CClientVariables::LoadDefaults()
         Get("borderless_enable_srgb", legacyEnable);
         Set("borderless_apply_windowed", legacyEnable);
     }
+    DEFAULT("aiming_mouse_multiplier", 1.0f);
+    DEFAULT("sniper_mouse_multiplier", 1.0f);
     DEFAULT("vertical_aim_sensitivity", 0.0015f);  // 0.0015f is GTA default setting
     DEFAULT("process_priority", 0);                // 0-normal 1-above normal 2-high
     DEFAULT("process_dpi_aware", false);           // Enable DPI awareness in core initialization

@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/MouseSensitivity.h>
 #include "CControllerConfigManagerSA.h"
 
 #define VAR_InputType                  ((BYTE*)(0xB6EC2E))
@@ -19,13 +20,65 @@
 #define VAR_VerticalAimSensitivity     ((float*)(0xB6EC18))
 #define VAR_HorizontalMouseSensitivity 0xB6EC1C
 
-static const float VERTICAL_AIM_SENSITIVITY_MIN = 0.000312f;
+static const float VERTICAL_AIM_SENSITIVITY_MIN = MouseSensitivity::Minimum;
 static const float VERTICAL_AIM_SENSITIVITY_DEFAULT = 0.0015f;
-static const float VERTICAL_AIM_SENSITIVITY_MAX = VERTICAL_AIM_SENSITIVITY_DEFAULT * 2 - VERTICAL_AIM_SENSITIVITY_MIN;
+static const float VERTICAL_AIM_SENSITIVITY_MAX = MouseSensitivity::VerticalMaximum;
+
+namespace
+{
+    // Stable storage: native operands must never point at a stack or settings draft.
+    float g_AimingMouseCoefficient = MouseSensitivity::NativeAimCoefficient;
+    float g_SniperMouseCoefficient = MouseSensitivity::NativeAimCoefficient;
+    float g_UnscaledMouseCoefficient = MouseSensitivity::NativeAimCoefficient;
+
+    // These two sites replace ONLY the FOV coefficient in the mouse branch.
+    // Process_M16_1stPerson also handles cameras/helicannons, and the runabout
+    // routine handles rockets; keep those modes at the original coefficient.
+    // CALL adds a return address, but this helper uses no native stack operands.
+    // Preserve EFLAGS/GPRs and exactly the original one-FMUL x87 stack effect.
+    // clang-format off
+    __declspec(naked) void ScopedMouseCoefficient()
+    {
+        MTA_VERIFY_HOOK_LOCAL_SIZE;
+        __asm
+        {
+            pushfd
+            cmp word ptr [esi + 0Ch], 7
+            je scoped
+            cmp word ptr [esi + 0Ch], 34
+            je scoped
+            cmp word ptr [esi + 0Ch], 39
+            je scoped
+            cmp word ptr [esi + 0Ch], 42
+            je scoped
+            fmul dword ptr [g_UnscaledMouseCoefficient]
+            popfd
+            ret
+        scoped:
+            fmul dword ptr [g_SniperMouseCoefficient]
+            popfd
+            ret
+        }
+    }
+    // clang-format on
+}
+
+void CControllerConfigManagerSA::SetAimSensitivityMultipliers(float aiming, float sniper)
+{
+    g_AimingMouseCoefficient = MouseSensitivity::NativeAimCoefficient * MouseSensitivity::Multiplier(aiming);
+    g_SniperMouseCoefficient = MouseSensitivity::NativeAimCoefficient * MouseSensitivity::Multiplier(sniper);
+}
 
 CControllerConfigManagerSA::CControllerConfigManagerSA()
 {
     m_bSuspendSteerAndFlyWithMouse = false;
+    // SensFix also patches adjacent joypad calculations and a shared GTA constant.
+    // Only redirect the mouse calculation here; XY linking/inversion stay native.
+    MemPut<std::uintptr_t>(0x522265, reinterpret_cast<std::uintptr_t>(&g_AimingMouseCoefficient));
+    HookInstallCall(0x510C10, reinterpret_cast<DWORD>(&ScopedMouseCoefficient));
+    MemPut<BYTE>(0x510C15, 0x90);
+    HookInstallCall(0x50F030, reinterpret_cast<DWORD>(&ScopedMouseCoefficient));
+    MemPut<BYTE>(0x50F035, 0x90);
     // Get initial settings
     m_bSteerWithMouse = *VAR_FlyWithMouse != 0;
     m_bFlyWithMouse = *VAR_SteerWithMouse != 0;
@@ -144,7 +197,9 @@ float CControllerConfigManagerSA::GetVerticalAimSensitivity()
 
 void CControllerConfigManagerSA::SetVerticalAimSensitivity(float fSensitivity)
 {
-    float fRawValue = Lerp(VERTICAL_AIM_SENSITIVITY_MIN, fSensitivity, VERTICAL_AIM_SENSITIVITY_MAX);
+    if (!std::isfinite(fSensitivity))
+        return;
+    float fRawValue = Lerp(VERTICAL_AIM_SENSITIVITY_MIN, std::clamp(fSensitivity, 0.0f, 1.0f), VERTICAL_AIM_SENSITIVITY_MAX);
     SetVerticalAimSensitivityRawValue(fRawValue);
 }
 
@@ -156,7 +211,8 @@ float CControllerConfigManagerSA::GetVerticalAimSensitivityRawValue()
 
 void CControllerConfigManagerSA::SetVerticalAimSensitivityRawValue(float fRawValue)
 {
-    MemPutFast<float>(VAR_VerticalAimSensitivity, fRawValue);
+    if (std::isfinite(fRawValue))
+        MemPutFast<float>(VAR_VerticalAimSensitivity, std::clamp(fRawValue, VERTICAL_AIM_SENSITIVITY_MIN, VERTICAL_AIM_SENSITIVITY_MAX));
 }
 
 void CControllerConfigManagerSA::SetVerticalAimSensitivitySameAsHorizontal(bool enabled)

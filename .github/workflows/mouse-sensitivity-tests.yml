@@ -1,0 +1,24 @@
+name: Mouse sensitivity tests
+on:
+  push:
+    paths:
+      - 'Client/sdk/game/MouseSensitivity.h'
+      - 'Tests/standalone/mouse-sensitivity/**'
+      - '.github/workflows/mouse-sensitivity-tests.yml'
+  pull_request:
+    paths:
+      - 'Client/sdk/game/MouseSensitivity.h'
+      - 'Tests/standalone/mouse-sensitivity/**'
+      - '.github/workflows/mouse-sensitivity-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  settings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check defaults, precision and invalid input
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined Tests/standalone/mouse-sensitivity/settings.cpp -o /tmp/mouse-settings
+          /tmp/mouse-settings
