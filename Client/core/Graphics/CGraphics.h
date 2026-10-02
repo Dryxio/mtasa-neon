@@ -130,6 +130,7 @@ public:
                      bool bRelativeUV = true);
     void DrawTextureRaw(IDirect3DTexture9* texture, unsigned int textureWidth, unsigned int textureHeight, float fX, float fY, float fWidth, float fHeight,
                         DWORD dwColor = 0xFFFFFFFF);
+    void DrawMaterialImmediate(CMaterialItem* pMaterial, float fWidth, float fHeight);
 
     // Interface functions
     void SetCursorPosition(int iX, int iY, DWORD Flags);

@@ -654,6 +654,9 @@ void CDirect3DEvents9::OnPresent(IDirect3DDevice9* pDevice, IDirect3DDevice9* pS
     // Restore in case script forgets
     CGraphics::GetSingleton().GetRenderItemManager()->RestoreDefaultRenderTarget();
 
+    // Close any dxBeginRenderPass left open in case script forgets dxEndRenderPass
+    CGraphics::GetSingleton().GetRenderItemManager()->ForceCloseAllRenderPasses();
+
     // Must do this before GUI draw to prevent NVidia performance problems
     CGraphics::GetSingleton().GetRenderItemManager()->FlushNonAARenderTarget();
 

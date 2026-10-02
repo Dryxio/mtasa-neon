@@ -521,6 +521,35 @@ bool CEffectParameters::ApplyCommonHandles()
         m_pD3DEffect->SetMatrix(m_CommonHandles.hViewProj, &matViewProj);
     }
 
+    if (m_CommonHandles.hWorldInv)
+    {
+        D3DXMATRIX matWorldInv;
+        if (D3DXMatrixInverse(&matWorldInv, NULL, &matWorld))
+            m_pD3DEffect->SetMatrix(m_CommonHandles.hWorldInv, &matWorldInv);
+    }
+
+    if (m_CommonHandles.hWorldTr)
+    {
+        D3DXMATRIX matWorldTr;
+        D3DXMatrixTranspose(&matWorldTr, &matWorld);
+        m_pD3DEffect->SetMatrix(m_CommonHandles.hWorldTr, &matWorldTr);
+    }
+
+    if (m_CommonHandles.hProjectionInv)
+    {
+        D3DXMATRIX matProjectionInv;
+        if (D3DXMatrixInverse(&matProjectionInv, NULL, &matProjection))
+            m_pD3DEffect->SetMatrix(m_CommonHandles.hProjectionInv, &matProjectionInv);
+    }
+
+    if (m_CommonHandles.hViewProjInv)
+    {
+        D3DXMATRIX matViewProj = matView * matProjection;
+        D3DXMATRIX matViewProjInv;
+        if (D3DXMatrixInverse(&matViewProjInv, NULL, &matViewProj))
+            m_pD3DEffect->SetMatrix(m_CommonHandles.hViewProjInv, &matViewProjInv);
+    }
+
     D3DXMATRIX  matViewInv;
     D3DXMATRIX* pmatViewInv = NULL;
     if (m_CommonHandles.hViewInv)
@@ -565,6 +594,56 @@ bool CEffectParameters::ApplyCommonHandles()
 
         D3DXVECTOR3 vecCamDir(matViewInv.m[2][0], matViewInv.m[2][1], matViewInv.m[2][2]);
         m_pD3DEffect->SetFloatArray(m_CommonHandles.hCamDir, (float*)&vecCamDir, 3);
+    }
+
+    if (m_CommonHandles.hCamRight || m_CommonHandles.hCamUp)
+    {
+        if (!pmatViewInv)
+            pmatViewInv = D3DXMatrixInverse(&matViewInv, NULL, &matView);
+
+        if (pmatViewInv && m_CommonHandles.hCamRight)
+        {
+            D3DXVECTOR3 vecCamRight(matViewInv.m[0][0], matViewInv.m[0][1], matViewInv.m[0][2]);
+            m_pD3DEffect->SetFloatArray(m_CommonHandles.hCamRight, (float*)&vecCamRight, 3);
+        }
+        if (pmatViewInv && m_CommonHandles.hCamUp)
+        {
+            D3DXVECTOR3 vecCamUp(matViewInv.m[1][0], matViewInv.m[1][1], matViewInv.m[1][2]);
+            m_pD3DEffect->SetFloatArray(m_CommonHandles.hCamUp, (float*)&vecCamUp, 3);
+        }
+    }
+
+    if (m_CommonHandles.hViewportSize || m_CommonHandles.hInvViewportSize)
+    {
+        D3DVIEWPORT9 viewport = {};
+        if (SUCCEEDED(pDevice->GetViewport(&viewport)) && viewport.Width && viewport.Height)
+        {
+            const float size[] = {static_cast<float>(viewport.Width), static_cast<float>(viewport.Height)};
+            const float inverseSize[] = {1.0f / size[0], 1.0f / size[1]};
+            if (m_CommonHandles.hViewportSize)
+                m_pD3DEffect->SetFloatArray(m_CommonHandles.hViewportSize, size, 2);
+            if (m_CommonHandles.hInvViewportSize)
+                m_pD3DEffect->SetFloatArray(m_CommonHandles.hInvViewportSize, inverseSize, 2);
+        }
+    }
+
+    if (m_CommonHandles.hRenderTargetSize || m_CommonHandles.hInvRenderTargetSize)
+    {
+        IDirect3DSurface9* pRenderTarget = nullptr;
+        if (SUCCEEDED(pDevice->GetRenderTarget(0, &pRenderTarget)) && pRenderTarget)
+        {
+            D3DSURFACE_DESC desc = {};
+            if (SUCCEEDED(pRenderTarget->GetDesc(&desc)) && desc.Width && desc.Height)
+            {
+                const float size[] = {static_cast<float>(desc.Width), static_cast<float>(desc.Height)};
+                const float inverseSize[] = {1.0f / size[0], 1.0f / size[1]};
+                if (m_CommonHandles.hRenderTargetSize)
+                    m_pD3DEffect->SetFloatArray(m_CommonHandles.hRenderTargetSize, size, 2);
+                if (m_CommonHandles.hInvRenderTargetSize)
+                    m_pD3DEffect->SetFloatArray(m_CommonHandles.hInvRenderTargetSize, inverseSize, 2);
+            }
+            pRenderTarget->Release();
+        }
     }
 
     // Set time
@@ -1007,6 +1086,11 @@ void CEffectParameters::ReadParameterHandles()
         if (TryMappingParameterToRegister(hParameter, ParameterDesc))
             continue;
 
+        // New automatic values are annotation-only. This keeps ordinary parameter names writable through
+        // dxSetShaderValue and avoids expanding the legacy implicit-name behavior.
+        if (TryParseAutomaticParameter(hParameter, ParameterDesc))
+            continue;
+
         // Otherwise, assume its standard parameter
         if (AddStandardParameter(hParameter, ParameterDesc))
             continue;
@@ -1073,6 +1157,65 @@ bool CEffectParameters::TryParseSpecialParameter(D3DXHANDLE hParameter, const D3
         }
         return true;
     }
+    return false;
+}
+
+bool CEffectParameters::TryParseAutomaticParameter(D3DXHANDLE hParameter, const D3DXPARAMETER_DESC& ParameterDesc)
+{
+    SString strSemantic;
+    for (uint i = 0; i < ParameterDesc.Annotations; ++i)
+    {
+        SString       strValue;
+        const SString strName = GetAnnotationNameAndValue(hParameter, i, strValue);
+        if (strName.CompareI("mtaSemantic"))
+        {
+            strSemantic = strValue.ToUpper();
+            break;
+        }
+    }
+
+    if (strSemantic.empty())
+        return false;
+
+    struct SAutomaticHandle
+    {
+        D3DXHANDLE& hHandle;
+        const char* szSemantic;
+        bool        bMatrix;
+        uint        uiComponents;
+    } handles[] = {
+        {m_CommonHandles.hWorldInv, "WORLDINVERSE", true, 16},
+        {m_CommonHandles.hWorldTr, "WORLDTRANSPOSE", true, 16},
+        {m_CommonHandles.hProjectionInv, "PROJECTIONINVERSE", true, 16},
+        {m_CommonHandles.hViewProjInv, "VIEWPROJECTIONINVERSE", true, 16},
+        {m_CommonHandles.hCamRight, "CAMERARIGHT", false, 3},
+        {m_CommonHandles.hCamUp, "CAMERAUP", false, 3},
+        {m_CommonHandles.hViewportSize, "VIEWPORTSIZE", false, 2},
+        {m_CommonHandles.hInvViewportSize, "INVERSEVIEWPORTSIZE", false, 2},
+        {m_CommonHandles.hRenderTargetSize, "RENDERTARGETSIZE", false, 2},
+        {m_CommonHandles.hInvRenderTargetSize, "INVERSERENDERTARGETSIZE", false, 2},
+    };
+
+    for (SAutomaticHandle& automatic : handles)
+    {
+        if (strSemantic != automatic.szSemantic)
+            continue;
+
+        const bool bMatrixClass = ParameterDesc.Class == D3DXPC_MATRIX_ROWS || ParameterDesc.Class == D3DXPC_MATRIX_COLUMNS;
+        const bool bValidMatrix = automatic.bMatrix && bMatrixClass && ParameterDesc.Rows == 4 && ParameterDesc.Columns == 4;
+        const bool bValidVector = !automatic.bMatrix && ParameterDesc.Class == D3DXPC_VECTOR && ParameterDesc.Columns >= automatic.uiComponents;
+        if (ParameterDesc.Type != D3DXPT_FLOAT || (!bValidMatrix && !bValidVector))
+        {
+            WriteDebugEvent(SString("Shader automatic semantic %s has an incompatible parameter type", *strSemantic));
+            return false;
+        }
+
+        automatic.hHandle = hParameter;
+        m_bUsesCommonHandles = true;
+        return true;
+    }
+
+    WriteDebugEvent(SString("Shader automatic semantic %s is not supported", *strSemantic));
     return false;
 }
 

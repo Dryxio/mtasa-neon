@@ -386,6 +386,14 @@ const char* CLuaClassDefs::GetEntityClass(CClientEntity* pEntity)
             return "DxScreenSource";
         case CCLIENTRENDERTARGET:
             return "DxRenderTarget";
+        case CCLIENTDEPTHSTENCILTARGET:
+            return "DxDepthStencilTarget";
+        case CCLIENTMRTSET:
+            return "DxMrtSet";
+        case CCLIENTSCENEVIEW:
+            return "DxSceneView";
+        case CCLIENTCUBEMAPRENDERTARGET:
+            return "DxCubemapRenderTarget";
         case CCLIENTBROWSER:
             return "Browser";
     }

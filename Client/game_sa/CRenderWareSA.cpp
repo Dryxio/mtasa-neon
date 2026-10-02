@@ -1075,3 +1075,8 @@ void CRenderWareSA::RwMatrixSetScale(RwMatrix& rwInOutMatrix, const CVector& vec
     rwInOutMatrix.up = (RwV3d&)matTemp.vFront;
     rwInOutMatrix.at = (RwV3d&)matTemp.vUp;
 }
+
+bool CRenderWareSA::SetD3D9Transform(uint uiState, const void* pMatrix)
+{
+    return pMatrix && RwD3D9SetTransform(uiState, pMatrix) != 0;
+}

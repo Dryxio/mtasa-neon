@@ -101,6 +101,9 @@ public:
     void               GetTxdTextures(std::vector<RwTexture*>& outTextureList, ushort usTxdId);
     static void        GetTxdTextures(std::vector<RwTexture*>& outTextureList, RwTexDictionary* pTXD);
     const char*        GetTextureName(CD3DDUMMY* pD3DData);
+    int                GetRenderingEntityType() const override { return m_iRenderingEntityType; }
+    CClientEntityBase* GetRenderingClientEntity() const override { return m_pRenderingClientEntity; }
+    void               OnShaderReplacementResolved(bool bUsesVertexShader) override;
     void               SetRenderingClientEntity(CClientEntityBase* pClientEntity, ushort usModelId, int iTypeMask);
     SShaderItemLayers* GetAppliedShaderForD3DData(CD3DDUMMY* pD3DData);
     void               AppendAdditiveMatch(CSHADERDUMMY* pShaderData, CClientEntityBase* pClientEntity, const char* strTextureNameMatch, float fShaderPriority,
@@ -119,6 +122,7 @@ public:
     void RwMatrixSetPosition(RwMatrix& rwInOutMatrix, const CVector& vecPosition);
     void RwMatrixGetScale(const RwMatrix& rwMatrix, CVector& vecOutScale);
     void RwMatrixSetScale(RwMatrix& rwInOutMatrix, const CVector& vecScale);
+    bool SetD3D9Transform(uint uiState, const void* pMatrix) override;
 
     // CRenderWareSA methods
     RwTexture*          RightSizeTexture(RwTexture* pTexture, uint uiSizeLimit, SString& strError);

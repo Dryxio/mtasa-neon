@@ -26,6 +26,10 @@ CClientRenderElementManager::CClientRenderElementManager(CClientManager* pClient
     m_uiStatsTextureCount = 0;
     m_uiStatsShaderCount = 0;
     m_uiStatsRenderTargetCount = 0;
+    m_uiStatsDepthStencilTargetCount = 0;
+    m_uiStatsMrtSetCount = 0;
+    m_uiStatsSceneViewCount = 0;
+    m_uiStatsCubemapRenderTargetCount = 0;
     m_uiStatsScreenSourceCount = 0;
     m_uiStatsWebBrowserCount = 0;
     m_uiStatsVectorGraphicCount = 0;
@@ -192,6 +196,267 @@ CClientRenderTarget* CClientRenderElementManager::CreateRenderTarget(uint uiSize
 
 ////////////////////////////////////////////////////////////////
 //
+// CClientRenderElementManager::CreateDepthStencilTarget
+//
+//
+//
+////////////////////////////////////////////////////////////////
+CClientDepthStencilTarget* CClientRenderElementManager::CreateDepthStencilTarget(uint uiSizeX, uint uiSizeY, _D3DFORMAT surfaceFormat, bool bSampleable)
+{
+    // Create the item
+    CDepthStencilTargetItem* pDepthStencilTargetItem = m_pRenderItemManager->CreateDepthStencilTarget(uiSizeX, uiSizeY, surfaceFormat, bSampleable);
+
+    // Check create worked
+    if (!pDepthStencilTargetItem)
+        return NULL;
+
+    // Create the element
+    CClientDepthStencilTarget* pDepthStencilTargetElement = new CClientDepthStencilTarget(m_pClientManager, INVALID_ELEMENT_ID, pDepthStencilTargetItem);
+
+    // Add to this manager's list
+    MapSet(m_ItemElementMap, pDepthStencilTargetItem, pDepthStencilTargetElement);
+
+    // Update stats
+    m_uiStatsDepthStencilTargetCount++;
+
+    return pDepthStencilTargetElement;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CClientRenderElementManager::CreateMrtSet
+//
+//
+//
+////////////////////////////////////////////////////////////////
+CClientMrtSet* CClientRenderElementManager::CreateMrtSet(CClientRenderTarget* const targets[MAX_MRT_RENDER_TARGETS], uint uiNumTargets,
+                                                         CClientDepthStencilTarget* pDepthStencilTarget)
+{
+    CRenderTargetItem* itemTargets[MAX_MRT_RENDER_TARGETS] = {nullptr, nullptr, nullptr, nullptr};
+    for (uint i = 0; i < uiNumTargets && i < MAX_MRT_RENDER_TARGETS; i++)
+        itemTargets[i] = targets[i] ? targets[i]->GetRenderTargetItem() : nullptr;
+
+    CDepthStencilTargetItem* pDepthStencilTargetItem = pDepthStencilTarget ? pDepthStencilTarget->GetDepthStencilTargetItem() : nullptr;
+
+    // Create the item
+    CMrtSetItem* pMrtSetItem = m_pRenderItemManager->CreateMrtSet(itemTargets, uiNumTargets, pDepthStencilTargetItem);
+
+    // Check create worked
+    if (!pMrtSetItem)
+        return NULL;
+
+    // Create the element
+    CClientMrtSet* pMrtSetElement = new CClientMrtSet(m_pClientManager, INVALID_ELEMENT_ID, pMrtSetItem);
+
+    // Add to this manager's list
+    MapSet(m_ItemElementMap, pMrtSetItem, pMrtSetElement);
+
+    // Update stats
+    m_uiStatsMrtSetCount++;
+
+    return pMrtSetElement;
+}
+
+CClientSceneView* CClientRenderElementManager::CreateSceneView(uint uiSizeX, uint uiSizeY, _D3DFORMAT colorFormat, _D3DFORMAT depthFormat,
+                                                               bool bSampleableDepth)
+{
+    // No fixed count cap - creation is still bounded by CanCreateRenderItem's existing memory accounting
+    // (via CreateRenderTarget/CreateDepthStencilTarget below), and per-frame render cost is bounded only by
+    // how many views a script actually requests a render for, not by how many exist.
+    CRenderTargetItem* pRenderTargetItem = m_pRenderItemManager->CreateRenderTarget(uiSizeX, uiSizeY, true, true, colorFormat);
+    if (!pRenderTargetItem)
+        return nullptr;
+
+    // bSampleableDepth is what makes a SceneView usable as a shadow-map camera: the depth buffer a shadow
+    // pass writes is also what a later pass needs to sample when comparing depths. Ordinary SceneViews
+    // leave this false, unchanged from before this parameter existed.
+    CDepthStencilTargetItem* pDepthStencilTargetItem = m_pRenderItemManager->CreateDepthStencilTarget(uiSizeX, uiSizeY, depthFormat, bSampleableDepth);
+    if (!pDepthStencilTargetItem)
+    {
+        SAFE_RELEASE(pRenderTargetItem);
+        return nullptr;
+    }
+
+    CClientSceneView* pSceneView = new CClientSceneView(m_pClientManager, INVALID_ELEMENT_ID, pRenderTargetItem, pDepthStencilTargetItem);
+    MapSet(m_ItemElementMap, pRenderTargetItem, pSceneView);
+    m_SceneViews.insert(pSceneView);
+    ++m_uiStatsSceneViewCount;
+    return pSceneView;
+}
+
+bool CClientRenderElementManager::SetSceneViewOutputShader(CClientSceneView* pSceneView, CShaderItem* pShaderItem, const SString& strInputName)
+{
+    if (!m_pRenderItemManager->IsSceneViewOutputShaderValid(pShaderItem, strInputName))
+        return false;
+
+    CRenderTargetItem* pSource = pSceneView->GetRenderTargetItem();
+    CRenderTargetItem* pIntermediate = m_pRenderItemManager->CreateRenderTarget(pSource->m_uiSizeX, pSource->m_uiSizeY, true, true, pSource->m_eSurfaceFormat);
+    if (!pIntermediate)
+        return false;
+
+    // The SceneView takes ownership of the newly-created private target. It is deliberately not mapped to
+    // a Lua element, so scripts cannot bind it and create a feedback hazard behind the scheduler's back.
+    pSceneView->SetOutputShader(pShaderItem, pIntermediate, strInputName);
+    return true;
+}
+
+bool CClientRenderElementManager::RenderRequestedSceneView()
+{
+    // Consume requests before entering each native world pass. Lua cannot run from this loop, and the
+    // multiplayer recursion guard rejects any accidental nested render. No fixed per-frame cap - every view
+    // with a pending request renders every frame; cost scales directly with how many a script actually asks for.
+    bool       bAnyRendered = false;
+    const uint uiFrame = ++m_uiSceneViewSchedulerFrame;
+    const uint uiTickCount = GetTickCount32();
+    for (CClientSceneView* pSceneView : m_SceneViews)
+    {
+        if (!pSceneView->ShouldRender(uiFrame, uiTickCount))
+            continue;
+
+        const bool bBegan = m_pRenderItemManager->BeginSceneViewRender(pSceneView->GetRenderTargetItem(), pSceneView->GetDepthStencilTargetItem(),
+                                                                       pSceneView->GetCameraMatrix(), pSceneView->GetFOV(), false);
+        bool       bRendered = false;
+        pSceneView->SetLastRenderError(bBegan ? "secondary scene render failed" : "could not begin scene-view render pass");
+        if (bBegan)
+        {
+            // A non-null context, including an empty one, intentionally suppresses global world shader
+            // assignments for this view. Scope restoration is unconditional so the primary camera resumes
+            // using the ordinary global matcher even when the native secondary render fails.
+            struct CScopedSceneViewShaderContext
+            {
+                CScopedSceneViewShaderContext(CRenderItemManagerInterface* pManager, const std::vector<SSceneViewShaderAssignment>& assignments)
+                    : m_pManager(pManager)
+                {
+                    m_pManager->SetSceneViewShaderContext(&assignments);
+                }
+                ~CScopedSceneViewShaderContext() { m_pManager->SetSceneViewShaderContext(nullptr); }
+                CRenderItemManagerInterface* m_pManager;
+            } shaderContext(m_pRenderItemManager, pSceneView->GetShaderAssignments());
+
+            g_pMultiplayer->SetSceneViewProjection(pSceneView->IsOrthographic(), pSceneView->GetOrthographicWidth(), pSceneView->GetOrthographicHeight(),
+                                                   pSceneView->GetOrthographicNearClip(), pSceneView->GetOrthographicFarClip());
+            bRendered = g_pMultiplayer->RenderSecondaryScene();
+            if (!bRendered)
+                pSceneView->SetLastRenderError(g_pMultiplayer->GetLastSecondarySceneRenderError());
+            m_pRenderItemManager->EndRenderPass();
+            if (bRendered && pSceneView->GetOutputShaderItem())
+            {
+                bRendered = m_pRenderItemManager->ApplySceneViewOutputShader(pSceneView->GetRenderTargetItem(), pSceneView->GetPostProcessTargetItem(),
+                                                                             pSceneView->GetOutputShaderItem(), pSceneView->GetOutputShaderInputName());
+                pSceneView->SetLastRenderError(bRendered ? SString() : m_pRenderItemManager->GetLastSceneViewOutputError());
+            }
+            else if (bRendered)
+                pSceneView->SetLastRenderError("");
+        }
+        pSceneView->OnRenderCompleted(bRendered, uiFrame, uiTickCount);
+        bAnyRendered |= bRendered;
+    }
+    return bAnyRendered;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CClientRenderElementManager::CreateCubemapRenderTarget
+//
+////////////////////////////////////////////////////////////////
+CClientCubemapRenderTarget* CClientRenderElementManager::CreateCubemapRenderTarget(uint uiEdgeSize, _D3DFORMAT surfaceFormat)
+{
+    CCubemapRenderTargetItem* pCubemapItem = m_pRenderItemManager->CreateCubemapRenderTarget(uiEdgeSize, surfaceFormat);
+    if (!pCubemapItem)
+        return nullptr;
+
+    CClientCubemapRenderTarget* pCubemap = new CClientCubemapRenderTarget(m_pClientManager, INVALID_ELEMENT_ID, pCubemapItem);
+    MapSet(m_ItemElementMap, pCubemapItem, pCubemap);
+    m_Cubemaps.insert(pCubemap);
+    ++m_uiStatsCubemapRenderTargetCount;
+    return pCubemap;
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CClientRenderElementManager::RenderRequestedCubemaps
+//
+// Face indices and directions match D3DCUBEMAP_FACES (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z). Up vectors
+// avoid the degenerate parallel-to-front case the same way SceneView cameras already have to for a
+// straight-up/down look direction - (0,0,1) works for every horizontal face, but the vertical (+Z/-Z)
+// faces need (0,1,0) instead since their own front direction IS (0,0,1)/(0,0,-1).
+//
+////////////////////////////////////////////////////////////////
+bool CClientRenderElementManager::RenderRequestedCubemaps()
+{
+    static const struct
+    {
+        CVector front;
+        CVector up;
+    } faceDirections[6] = {
+        {CVector(1, 0, 0), CVector(0, 0, 1)},  {CVector(-1, 0, 0), CVector(0, 0, 1)}, {CVector(0, 1, 0), CVector(0, 0, 1)},
+        {CVector(0, -1, 0), CVector(0, 0, 1)}, {CVector(0, 0, 1), CVector(0, 1, 0)},  {CVector(0, 0, -1), CVector(0, 1, 0)},
+    };
+
+    // No fixed per-frame cap - every requested face renders every frame; cost scales directly with how many
+    // a script actually requests. GetRequestedFaces/ClearRenderedFaces are split (rather than one
+    // consume-and-clear call) so a face that fails to begin its render pass - eg. device not ready - stays
+    // queued for the next frame instead of being silently dropped.
+    bool bAnyRendered = false;
+    for (CClientCubemapRenderTarget* pCubemap : m_Cubemaps)
+    {
+        const uint8 uiRequestedMask = pCubemap->GetRequestedFaces();
+        if (!uiRequestedMask)
+            continue;
+        if (!pCubemap->IsPositionConfigured())
+        {
+            pCubemap->SetLastRenderError("cubemap camera position has not been configured");
+            pCubemap->OnRenderCompleted(false);
+            continue;
+        }
+
+        uint8 uiRenderedMask = 0;
+        bool  bAllRequestedRendered = true;
+        for (uint uiFace = 0; uiFace < 6; ++uiFace)
+        {
+            if (!(uiRequestedMask & (1 << uiFace)))
+                continue;
+
+            CMatrix matrix;
+            matrix.vPos = pCubemap->GetCameraPosition();
+            matrix.vFront = faceDirections[uiFace].front;
+            matrix.vUp = faceDirections[uiFace].up;
+            matrix.OrthoNormalize(CMatrix::AXIS_FRONT, CMatrix::AXIS_UP);
+
+            g_pMultiplayer->SetSceneViewSquarePerspective(true);
+            g_pMultiplayer->SetSceneViewProjection(false, 0.0f, 0.0f, pCubemap->GetNearClip(), pCubemap->GetFarClip());
+
+            const bool bBegan = m_pRenderItemManager->BeginCubemapFaceRender(pCubemap->GetCubemapRenderTargetItem(), uiFace, matrix, true);
+            bool       bRendered = false;
+            if (bBegan)
+            {
+                // No per-cubemap world-shader assignment set exists yet (unlike SceneView) - always render
+                // with the unmodified GTA material path rather than risk inheriting a stale context left
+                // over from a preceding SceneView render this same frame.
+                m_pRenderItemManager->SetSceneViewShaderContext(nullptr);
+                bRendered = g_pMultiplayer->RenderSecondaryScene();
+                if (!bRendered)
+                    pCubemap->SetLastRenderError(g_pMultiplayer->GetLastSecondarySceneRenderError());
+                m_pRenderItemManager->EndRenderPass();
+                uiRenderedMask |= (1 << uiFace);
+            }
+            else
+                pCubemap->SetLastRenderError("could not begin cubemap face render pass");
+
+            g_pMultiplayer->SetSceneViewSquarePerspective(false);
+
+            bAllRequestedRendered &= bRendered;
+            bAnyRendered |= bRendered;
+        }
+
+        pCubemap->ClearRenderedFaces(uiRenderedMask);
+        pCubemap->OnRenderCompleted(bAllRequestedRendered);
+    }
+    return bAnyRendered;
+}
+
+////////////////////////////////////////////////////////////////
+//
 // CClientRenderElementManager::CreateScreenSource
 //
 //
@@ -335,8 +600,32 @@ void CClientRenderElementManager::Remove(CClientRenderElement* pElement)
         m_uiStatsGuiFontCount--;
     else if (pElement->IsA(CClientShader::GetClassId()))
         m_uiStatsShaderCount--;
+    else if (pElement->IsA(CClientSceneView::GetClassId()))
+    {
+        m_SceneViews.erase(static_cast<CClientSceneView*>(pElement));
+        m_uiStatsSceneViewCount--;
+
+        // Stage 1 has one shared native off-screen raster pair, also used by cube-map face rendering (see
+        // RenderRequestedCubemaps - it goes through the exact same RenderSecondaryScene() call). Once the
+        // last owner of either kind disappears (normally because a resource stopped), release that pair
+        // immediately instead of retaining GPU memory until the multiplayer module or D3D device is reset.
+        if (m_SceneViews.empty() && m_Cubemaps.empty() && g_pMultiplayer)
+            g_pMultiplayer->ReleaseSecondarySceneResources();
+    }
+    else if (pElement->IsA(CClientCubemapRenderTarget::GetClassId()))
+    {
+        m_Cubemaps.erase(static_cast<CClientCubemapRenderTarget*>(pElement));
+        m_uiStatsCubemapRenderTargetCount--;
+
+        if (m_SceneViews.empty() && m_Cubemaps.empty() && g_pMultiplayer)
+            g_pMultiplayer->ReleaseSecondarySceneResources();
+    }
     else if (pElement->IsA(CClientRenderTarget::GetClassId()))
         m_uiStatsRenderTargetCount--;
+    else if (pElement->IsA(CClientDepthStencilTarget::GetClassId()))
+        m_uiStatsDepthStencilTargetCount--;
+    else if (pElement->IsA(CClientMrtSet::GetClassId()))
+        m_uiStatsMrtSetCount--;
     else if (pElement->IsA(CClientScreenSource::GetClassId()))
         m_uiStatsScreenSourceCount--;
     else if (pElement->IsA(CClientWebBrowser::GetClassId()))

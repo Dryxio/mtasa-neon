@@ -252,6 +252,11 @@ void CEffectTemplate::CreateUnderlyingData(const SString& strFile, const SString
     }
     SAFE_RELEASE(pBufferErrors);
 
+    // Preserve D3DX warnings/errors separately from strOutStatus. Historically
+    // successful compilation replaces strOutStatus with the selected technique
+    // name, which made non-fatal compiler warnings impossible to inspect later.
+    m_strCompileLog = strOutStatus;
+
     if (!m_pD3DEffect)
     {
         if (strOutStatus.empty())
