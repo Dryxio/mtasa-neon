@@ -281,7 +281,7 @@ export const actions = {
   },
 
   copyServerLink(server: ServerItem): Promise<boolean> {
-    return backend.copyServerLink({ ip: server.ip, port: server.gamePort })
+    return backend.copyServerLink({ ip: server.publicHost || server.ip, port: server.gamePort })
   },
 
   /** Ferme le navigateur (retour au menu côté natif). */

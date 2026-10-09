@@ -42,6 +42,7 @@ interface NativeServer {
   id: string
   serverId?: string
   ip: string
+  publicHost?: string
   port: number
   httpPort: number
   name: string
@@ -113,6 +114,7 @@ export class CefBackend implements BrowserBackend {
     return {
       id: native.id,
       ip: native.ip,
+      publicHost: native.publicHost || undefined,
       gamePort: native.port,
       httpPort: native.httpPort || undefined,
       name: native.name,

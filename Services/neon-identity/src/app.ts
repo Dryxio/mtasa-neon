@@ -1,3 +1,5 @@
+import { resolvePublicHost, resolvePublicEndpoint, type PublicHostResolver } from "./server-public-host.js";
+
 import { randomUUID } from "node:crypto";
 
 import cookie from "@fastify/cookie";
@@ -53,6 +55,7 @@ export interface AppDependencies {
     policy: DiscordIdentityPolicy;
     ticketSigner: TicketSigner;
     aseProbe?: AseProbe;
+    publicHostResolver?: PublicHostResolver;
     serverAssetFetcher?: ServerAssetFetcher;
     now?: () => Date;
     logger?: FastifyServerOptions["logger"];
@@ -215,9 +218,9 @@ export async function buildApp(dependencies: AppDependencies) {
             }
 
             // Nginx overwrites X-Real-IP with the actual TCP peer. The service
-            // binds to loopback, so accepting only this header prevents a
-            // server from publishing somebody else's public endpoint.
-            const address = registrationAddress(request.headers);
+            // binds to loopback. This is the default publication address; a
+            // signed relay declaration below requires separate DNS/ASE proof.
+            let address = registrationAddress(request.headers);
             if (!address) return reply.code(403).send({ error: "public_ipv4_required" });
 
             let serverId: string;
@@ -241,6 +244,16 @@ export async function buildApp(dependencies: AppDependencies) {
                 signedNonce = proof.nonce;
             } else {
                 serverId = "";
+            }
+
+            const publicHost = parsed.data.registry_protocol === 2 ? parsed.data.public_host : undefined;
+            if (publicHost) {
+                // A relay may differ from the heartbeat's source IP. Only a
+                // signed identity can choose it, and ASE must confirm that same
+                // identity at the resolved public endpoint before it is leased.
+                const resolved = await resolvePublicEndpoint(publicHost, dependencies.publicHostResolver ?? resolvePublicHost);
+                if (!resolved) return reply.code(422).send({ error: "invalid_public_host_resolution" });
+                address = resolved;
             }
 
             if (!(await aseProbe(address, parsed.data.game_port, parsed.data.server_version, parsed.data.registry_protocol === 2 ? serverId : undefined))) {
@@ -307,6 +320,7 @@ export async function buildApp(dependencies: AppDependencies) {
             await store.upsertRegisteredServer({
                 id: serverId,
                 endpoint,
+                publicHost: publicHost ?? null,
                 registryProtocol: parsed.data.registry_protocol,
                 httpPort: parsed.data.http_port,
                 serverVersion: parsed.data.server_version,

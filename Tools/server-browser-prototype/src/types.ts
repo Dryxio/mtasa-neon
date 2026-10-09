@@ -52,6 +52,8 @@ export interface ServerItem {
   /** Clé stable "ip:gamePort" — identique à la clé du client natif. */
   id: string
   ip: string
+  /** Verified public DNS label; ip remains the registry-approved relay endpoint. */
+  publicHost?: string
   gamePort: number
   httpPort?: number
 

@@ -146,6 +146,7 @@ public:
     void                              SetAutomaticNeonAuthServerId(std::string serverId) { m_neonAuthServerId = std::move(serverId); }
     bool                              GetNeonRegistryEnabled() const noexcept { return m_neonRegistryEnabled; }
     const std::string&                GetNeonRegistryUrl() const noexcept { return m_neonRegistryUrl; }
+    const std::string&                GetNeonRegistryPublicHost() const { return m_neonRegistryPublicHost; }
     const std::string&                GetNeonRegistryTagline() const noexcept { return m_neonRegistryTagline; }
     const std::string&                GetNeonRegistryDescription() const noexcept { return m_neonRegistryDescription; }
     const std::vector<SString>&       GetNeonRegistryCountries() const noexcept { return m_neonRegistryCountries; }
@@ -270,6 +271,7 @@ private:
     std::string                m_neonAuthPublicKey;
     bool                       m_neonAuthAutomatic{};
     bool                       m_neonRegistryEnabled{true};
+    std::string                m_neonRegistryPublicHost;
     std::string                m_neonRegistryUrl;
     std::string                m_neonRegistryTagline;
     std::string                m_neonRegistryDescription;

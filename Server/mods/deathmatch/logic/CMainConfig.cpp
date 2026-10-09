@@ -11,6 +11,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <PublicServerHost.h>
 #include "CMainConfig.h"
 #include "CBandwidthSettings.h"
 #include "CTickRateSettings.h"
@@ -463,6 +464,15 @@ bool CMainConfig::Load()
             value.clear();
         }
     };
+    // Never silently discard an invalid relay declaration: falling back to
+    // source-IP publication could expose the origin the owner meant to hide.
+    const int publicHostResult = GetString(m_pRootNode, "neon_registry_public_host", m_neonRegistryPublicHost, 0, 253);
+    if (publicHostResult == INVALID_VALUE ||
+        (!m_neonRegistryPublicHost.empty() && (!Neon::IsPublicServerHost(m_neonRegistryPublicHost) || !m_neonAuthAutomatic)))
+    {
+        CLogger::ErrorPrintf("neon_registry_public_host requires a lowercase DNS hostname and automatic Neon Identity (neon_auth optional or required)\n");
+        return false;
+    }
     readOptionalRegistryString("neon_registry_tagline", m_neonRegistryTagline, 160);
     readOptionalRegistryString("neon_registry_description", m_neonRegistryDescription, 600);
     readOptionalRegistryString("neon_registry_website", m_neonRegistryWebsite, 2048);

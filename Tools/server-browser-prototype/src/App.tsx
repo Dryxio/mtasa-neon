@@ -40,7 +40,8 @@ export function App() {
   useEffect(() => {
     if (!directAddress) return
     const matchingServer = [...state.servers.values()].find(
-      (server) => server.ip.toLowerCase() === directAddress.ip && server.gamePort === directAddress.port,
+      (server) => (server.ip.toLowerCase() === directAddress.ip || server.publicHost === directAddress.ip) &&
+        server.gamePort === directAddress.port,
     )
     if (matchingServer && matchingServer.id !== state.selectedId) actions.select(matchingServer.id)
   }, [directAddress, state.selectedId, state.servers])

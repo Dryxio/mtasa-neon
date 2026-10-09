@@ -86,6 +86,56 @@ describe("Neon Identity HTTP contract", () => {
     let discord: FakeDiscordClient;
     let signer: TicketSigner;
     let publicKey: CryptoKey;
+    const resolveHost = vi.fn<(host: string) => Promise<string[]>>();
+    const probe = vi.fn<(address: string, port: number, version: string, id?: string) => Promise<boolean>>();
+
+    async function sendRelayHeartbeat(publicHost = "server.example.com", signatureValid = true) {
+        const keys = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true });
+        const key = (await exportJWK(keys.publicKey)).x!;
+        const timestamp = "1785758400";
+        const nonce = Buffer.alloc(16, 5).toString("base64url");
+        const rawBody = JSON.stringify({
+            registry_protocol: 2, game_port: 22003, http_port: 22005,
+            server_version: "1.7.0-9.99999", name: "Relay server",
+            auth_enabled: true, published: true, public_host: publicHost,
+        });
+        const signature = Buffer.from(await crypto.subtle.sign("Ed25519", keys.privateKey,
+            Buffer.from(serverHeartbeatSigningMessage(timestamp, nonce, rawBody)))).toString("base64url");
+        return app.inject({ method: "POST", url: "/v1/server-registry/heartbeat", payload: rawBody,
+            headers: { "content-type": "application/json", "x-real-ip": "203.0.113.99",
+                "x-neon-server-key": key, "x-neon-server-timestamp": timestamp,
+                "x-neon-server-nonce": nonce, "x-neon-server-signature": signatureValid ? signature : "invalid" },
+        });
+    }
+
+    it("publishes only the verified relay and binds its identity lease to that endpoint", async () => {
+        const response = await sendRelayHeartbeat();
+        expect(response.statusCode).toBe(202);
+        const { server_id: id, endpoint } = response.json();
+        expect(endpoint).toBe("203.0.113.10:22003");
+        expect(probe).toHaveBeenCalledWith("203.0.113.10", 22003, "1.7.0-9.99999", id);
+        const catalog = (await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" })).json();
+        expect(catalog.servers[0]).toMatchObject({ public_host: "server.example.com", endpoints: [endpoint] });
+        expect(JSON.stringify(catalog)).not.toContain("203.0.113.99");
+        expect(await store.isServerEndpointAuthorized(id, endpoint, new Date("2026-08-03T12:00:01Z"))).toBe(true);
+        expect(await store.isServerEndpointAuthorized(id, "203.0.113.99:22003", new Date("2026-08-03T12:00:01Z"))).toBe(false);
+    });
+
+    it("does not resolve unsigned declarations or lease a relay with the wrong ASE identity", async () => {
+        expect((await sendRelayHeartbeat("server.example.com", false)).statusCode).toBe(401);
+        expect(resolveHost).not.toHaveBeenCalled();
+        probe.mockResolvedValue(false);
+        expect((await sendRelayHeartbeat()).statusCode).toBe(422);
+        expect((await app.inject({ method: "GET", url: "/.well-known/neon-server-registry" })).json().servers).toEqual([]);
+    });
+
+    it.each([["127.0.0.1"], ["10.0.0.1"], ["203.0.113.10", "203.0.113.11"], []])(
+        "rejects unsafe or ambiguous public DNS results: %j", async (...addresses) => {
+            resolveHost.mockResolvedValue(addresses as string[]);
+            expect((await sendRelayHeartbeat()).statusCode).toBe(422);
+            expect(probe).not.toHaveBeenCalled();
+        },
+    );
 
     beforeEach(async () => {
         const keys = await generateKeyPair("EdDSA", { crv: "Ed25519", extractable: true });
@@ -95,14 +145,17 @@ describe("Neon Identity HTTP contract", () => {
         signer = await TicketSigner.create(privateJwk, config.issuer, config.ticketKeyId, config.ticketTtlSeconds);
         store = new MemoryIdentityStore();
         discord = new FakeDiscordClient();
+        resolveHost.mockReset().mockResolvedValue(["203.0.113.10"]);
+        probe.mockReset().mockImplementation(async (address, port, version) =>
+            address === "203.0.113.10" && (port === 22003 || port === 22004) && version === "1.7.0-9.99999");
         app = await buildApp({
             config,
             store,
             discord,
             policy: new AllowAllDiscordPolicy(),
             ticketSigner: signer,
-            aseProbe: async (address, port, version) =>
-                address === "203.0.113.10" && (port === 22003 || port === 22004) && version === "1.7.0-9.99999",
+            aseProbe: probe,
+            publicHostResolver: resolveHost,
             serverAssetFetcher: async (sourceUrl, createdAt) => ({
                 hash: sourceUrl.includes("banner") ? "b".repeat(64) : "a".repeat(64),
                 mimeType: "image/png",

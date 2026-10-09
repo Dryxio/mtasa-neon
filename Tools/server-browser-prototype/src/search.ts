@@ -44,7 +44,7 @@ export const DEFAULT_FILTERS: BrowserFilters = {
 
 function matchesQuery(server: ServerItem, query: ParsedQuery): boolean {
   for (const term of query.text) {
-    const haystack = `${server.name} ${server.tagline} ${server.description} ${server.gameMode} ${server.ip}`.toLowerCase()
+    const haystack = `${server.name} ${server.tagline} ${server.description} ${server.gameMode} ${server.ip} ${server.publicHost ?? ''}`.toLowerCase()
     if (!haystack.includes(term)) return false
   }
   for (const lang of query.langs) {

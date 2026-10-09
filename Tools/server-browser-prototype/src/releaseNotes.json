@@ -2,6 +2,45 @@
   "schema": 1,
   "releases": [
     {
+      "build": 188,
+      "date": "2026-10-09",
+      "title": "Public server domains and precise mouse controls",
+      "summary": "Servers can publish a verified public domain, with improved mouse controls and animation fixes for players.",
+      "highlights": [
+        "Server owners can display a public domain and use an owner-managed relay.",
+        "More precise mouse sensitivity controls and independent aim multipliers.",
+        "Fixed custom partial animations leaving pedestrians rigid."
+      ],
+      "sections": [
+        {
+          "label": "Server browser",
+          "tone": "players",
+          "items": [
+            "Display and copy a verified public server domain.",
+            "Existing servers remain compatible; updating the server is required only to enable the new domain setting."
+          ]
+        },
+        {
+          "label": "For server owners",
+          "tone": "servers",
+          "items": [
+            "Optional neon_registry_public_host setting requires automatic Neon Identity and a single public IPv4 DNS answer.",
+            "The registry verifies the server identity at the relay endpoint before publishing it. Invalid domain configurations are rejected instead of falling back to the origin address.",
+            "Relay hosting, firewall rules and DDoS protection remain the server owner's responsibility."
+          ]
+        },
+        {
+          "label": "Controls and fixes",
+          "tone": "players",
+          "items": [
+            "More precise mouse sensitivity settings with separate aim multipliers.",
+            "Client scripting can read guarded local gameplay aim angles.",
+            "Fixed custom partial animations leaving pedestrians rigid."
+          ]
+        }
+      ]
+    },
+    {
       "build": 187,
       "date": "2026-09-12",
       "title": "PS4/PS5 controllers native support",

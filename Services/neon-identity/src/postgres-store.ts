@@ -26,6 +26,7 @@ interface AccountRow extends QueryResultRow {
 }
 
 interface RegisteredServerRow extends QueryResultRow {
+    public_host: string | null;
     server_id: string;
     endpoint: string;
     registry_protocol: number;
@@ -68,6 +69,7 @@ function toAccount(row: AccountRow): NeonAccount {
 function toRegisteredServer(row: RegisteredServerRow): RegisteredServer {
     return {
         id: row.server_id,
+        publicHost: row.public_host,
         endpoint: row.endpoint,
         registryProtocol: row.registry_protocol,
         httpPort: row.http_port,
@@ -281,10 +283,11 @@ export class PostgresIdentityStore implements IdentityStore {
             await client.query(
             `INSERT INTO neon_registered_servers
                 (server_id, endpoint, registry_protocol, http_port, server_version, name, tagline, description,
-                 countries, languages, links, accent, logo_asset_hash, banner_asset_hash, first_seen_at, last_seen_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16)
+                 countries, languages, links, accent, logo_asset_hash, banner_asset_hash, first_seen_at, last_seen_at, public_host)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17)
              ON CONFLICT (server_id) DO UPDATE SET
                 endpoint = EXCLUDED.endpoint,
+                public_host = EXCLUDED.public_host,
                 registry_protocol = EXCLUDED.registry_protocol,
                 http_port = EXCLUDED.http_port,
                 server_version = EXCLUDED.server_version,
@@ -315,6 +318,7 @@ export class PostgresIdentityStore implements IdentityStore {
                 server.bannerAssetHash,
                 server.firstSeenAt,
                 server.lastSeenAt,
+                server.publicHost ?? null,
                 ],
             );
         });
@@ -326,7 +330,7 @@ export class PostgresIdentityStore implements IdentityStore {
 
     async listRegisteredServers(activeSince: Date, now: Date): Promise<RegisteredServer[]> {
         const result = await this.#pool.query<RegisteredServerRow>(
-            `SELECT s.server_id, s.endpoint, s.registry_protocol, s.http_port, s.server_version, s.name, s.tagline, s.description,
+            `SELECT s.public_host, s.server_id, s.endpoint, s.registry_protocol, s.http_port, s.server_version, s.name, s.tagline, s.description,
                     s.countries, s.languages, s.links, s.accent, s.logo_asset_hash, s.banner_asset_hash, s.first_seen_at, s.last_seen_at
                FROM neon_registered_servers s
                LEFT JOIN neon_server_endpoint_leases l ON l.server_id = s.server_id AND l.endpoint = s.endpoint

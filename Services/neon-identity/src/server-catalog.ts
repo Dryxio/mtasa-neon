@@ -3,6 +3,11 @@ import { z } from "zod";
 import { isCanonicalIpv4Endpoint, SERVER_ID_PATTERN } from "./config.js";
 import type { RegisteredServer } from "./model.js";
 
+// A hostname only: no URL, port, IP literal or ambiguous numeric suffix.
+export const publicHostSchema = z.string().max(253).regex(
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
+);
+
 const countryCodeSchema = z.string().regex(/^[A-Z]{2}$/);
 const publicUrlSchema = z.url().max(2_048).refine((value) => new URL(value).protocol === "https:", {
     message: "Public server links must use HTTPS",
@@ -21,6 +26,7 @@ const publicServerLinkSchema = z
 const publicServerSchema = z
     .object({
         id: z.string().regex(SERVER_ID_PATTERN),
+        public_host: publicHostSchema.optional(),
         endpoints: z.array(z.string().refine(isCanonicalIpv4Endpoint)).min(1).max(16),
         name: z.string().trim().min(1).max(120),
         tagline: z.string().trim().min(1).max(160),
@@ -59,6 +65,7 @@ export const serverHeartbeatSchema = z.discriminatedUnion("registry_protocol", [
     serverHeartbeatBaseSchema.extend({ registry_protocol: z.literal(1) }).strict(),
     serverHeartbeatBaseSchema.extend({
         registry_protocol: z.literal(2),
+        public_host: publicHostSchema.optional(),
         auth_enabled: z.boolean(),
         published: z.boolean(),
     }).strict(),
@@ -125,6 +132,7 @@ export function buildPublicServerCatalog(
         servers: servers.map((server) => ({
             id: server.id,
             endpoints: [server.endpoint],
+            ...(server.publicHost ? { public_host: server.publicHost } : {}),
             name: server.name,
             tagline: server.tagline,
             description: server.description,

@@ -76,7 +76,7 @@ export function DetailsPanel({
     copyResetTimer.current = setTimeout(() => setCopyState('idle'), 1600)
   }
 
-  const serverLink = formatNeonServerLink({ ip: server.ip, port: server.gamePort })
+  const serverLink = formatNeonServerLink({ ip: server.publicHost || server.ip, port: server.gamePort })
 
   return (
     <aside className="details">

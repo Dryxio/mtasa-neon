@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <PublicServerHost.h>
 #include <game/MouseSensitivity.h>
 #include "../CDistantLightPreferences.h"
 #include "CServerBrowserWeb.h"
@@ -469,6 +470,7 @@ struct SNeonServerLink
 
 struct SNeonServerMetadata
 {
+    std::string                  publicHost;
     std::string                  serverId;
     std::string                  name;
     std::string                  tagline;
@@ -713,6 +715,13 @@ private:
                 !ReadJsonString(server, "description", metadata.description, 2048) || !ReadJsonStringArray(server, "countries", metadata.countries, 16, 2) ||
                 !ReadJsonStringArray(server, "languages", metadata.languages, 16, 64))
                 return false;
+
+            json_object* publicHost = nullptr;
+            if (json_object_object_get_ex(server, "public_host", &publicHost))
+            {
+                if (!ReadJsonString(server, "public_host", metadata.publicHost, 253) || !Neon::IsPublicServerHost(metadata.publicHost))
+                    return false;
+            }
 
             json_object* accent = nullptr;
             if (json_object_object_get_ex(server, "accent", &accent))
@@ -4427,6 +4436,7 @@ void CServerBrowserWeb::QueueServer(const CServerListItem& server)
     AddString(value, "id", server.GetEndpoint());
     AddString(value, "serverId", metadata->serverId);
     AddString(value, "ip", server.strHost);
+    AddString(value, "publicHost", metadata->publicHost);
     AddInteger(value, "port", server.usGamePort);
     AddInteger(value, "httpPort", server.m_usHttpPort);
     AddString(value, "name", metadata->name);

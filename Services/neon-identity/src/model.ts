@@ -52,6 +52,7 @@ export interface RegisteredServerLink {
 }
 
 export interface RegisteredServer {
+    publicHost?: string | null;
     id: string;
     endpoint: string;
     registryProtocol: number;

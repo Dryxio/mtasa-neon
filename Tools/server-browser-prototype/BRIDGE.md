@@ -102,6 +102,12 @@ et aucun scan ASE n'est lancé.
 }
 ```
 
+`publicHost` est un champ optionnel venant du `public_host` vérifié par le registre.
+L'interface l'utilise pour l'adresse affichée, la recherche et le lien copié ; vide
+ou absent, elle utilise `ip`. `ip` reste l'adresse publique vérifiée (celle du
+relais s'il est configuré). Connexion, favoris, identifiant `id` et requêtes ASE
+continuent d'utiliser cette IPv4, sans résoudre de nouveau le domaine dans la liste.
+
 `ping: -1` = pas (encore) de réponse. `state` ∈ `queued` / `online` /
 `offline`. `verified: false` = compteur joueurs non vérifié (affiché `x / y *`
 en ambre).

@@ -195,6 +195,10 @@ SString CNeonServerAnnouncer::BuildHeartbeatBody() const
     json_object_object_add(root, "registry_protocol", json_object_new_int(m_identity ? 2 : 1));
     if (m_identity)
     {
+        // Only signed registry identities may publish a relay endpoint that
+        // differs from the heartbeat source. The registry verifies DNS + ASE.
+        if (!m_config.GetNeonRegistryPublicHost().empty())
+            AddString(root, "public_host", m_config.GetNeonRegistryPublicHost());
         json_object_object_add(root, "auth_enabled", json_object_new_boolean(true));
         json_object_object_add(root, "published", json_object_new_boolean(m_config.GetNeonRegistryEnabled()));
     }
@@ -237,6 +241,9 @@ SString CNeonServerAnnouncer::BuildHeartbeatBody() const
 
 bool CNeonServerAnnouncer::IsEnabled() const
 {
+    // Fail closed even if identity initialization changes after config validation.
+    if (!m_config.GetNeonRegistryPublicHost().empty() && !m_identity)
+        return false;
     return (m_config.GetNeonRegistryEnabled() || m_identity) && (m_config.GetAseInternetListenEnabled() || m_config.GetAseInternetPushEnabled());
 }
 

@@ -141,7 +141,7 @@ versioned presentation document rather than an authorization source:
 ```
 
 The catalogue is populated by public Neon server heartbeats. A heartbeat is
-bound to the TCP source address inserted by the trusted reverse proxy, then the
+bound by default to the TCP source address inserted by the trusted reverse proxy, then the
 service probes the corresponding MTA ASE endpoint (`game_port + 123`) and
 requires the current `NeonRegistryProtocol` ASE rule before it publishes
 anything. It expires after five minutes without renewal. This makes
@@ -269,6 +269,35 @@ HTTPS. Artwork is optional and its source URL is replaced by the cached
 Identity URL before publication. Empty optional fields receive conservative service defaults. The
 official heartbeat URL is compiled as the default; a private deployment can
 override it with `<neon_registry_url>`.
+
+## Public domain and owner-managed relays
+
+With automatic Neon Identity enabled (`<neon_auth>optional</neon_auth>` or
+`required`, without legacy manual identity fields), set `<neon_registry_public_host>server.example.com</neon_registry_public_host>`
+in `mtaserver.conf`. Use a lowercase DNS hostname without a scheme, path or port
+(IDNs must use ASCII punycode). Leave it empty to preserve source-IP discovery. Invalid hostnames or a configured
+hostname without automatic Identity stop server startup instead of publishing the origin.
+Deploy migration `005_server_public_host.sql` and the updated Identity service
+before enabling the setting on servers; the updated client/browser displays and
+copies the domain. Older clients continue using the published IPv4 endpoint.
+
+The registry resolves the hostname to exactly one public IPv4 and probes ASE at
+that address, requiring the same server identity as the signed heartbeat. The
+published catalogue and authentication lease contain the verified relay endpoint,
+not the heartbeat's source IP. Browser queries, connections, favourites and ticket
+requests continue using that verified IPv4; copied links use the domain. DNS is
+checked again on each heartbeat. Multiple A records and IPv6-only names are not
+supported. Keep the relay's public game/HTTP ports equal to the configured server
+ports; ASE uses the game port plus 123. A DNS/probe failure rejects the heartbeat;
+the previous listing expires normally rather than falling back to the origin IP.
+
+Owners provide and protect the UDP/TCP relay, route traffic to the origin, and
+block direct origin access. An HTTP-only reverse proxy is insufficient. Check
+other publication paths separately: the classic MTA master list, external resource
+download URLs, other services and historical DNS can still reveal an origin IP.
+This setting does not configure networking, suppress those publications or provide
+DDoS protection. Neon Identity necessarily sees the heartbeat's source IP, but
+does not publish it when the public hostname is verified.
 
 ## Local setup
 
