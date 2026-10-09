@@ -19,10 +19,12 @@ CATALOG_PATH = (
 
 
 class ReleaseCatalogTests(unittest.TestCase):
-    def test_repository_catalog_is_valid_and_prepares_build_187(self) -> None:
+    def test_repository_catalog_is_valid_and_retains_build_187(self) -> None:
         releases = release_catalog.load_catalog(CATALOG_PATH)
-        self.assertEqual(releases[0].build, 187)
-        self.assertEqual(releases[0].display_version, "2026.09.12.187")
+        # New releases prepend entries; validate the historical identity without
+        # pinning the moving catalogue head to the release that added this test.
+        release = release_catalog.release_for_build(releases, 187)
+        self.assertEqual(release.display_version, "2026.09.12.187")
 
     def test_next_build_ignores_ci_and_legacy_tags(self) -> None:
         tags = [
