@@ -65,6 +65,9 @@ Only edits and fingerprints are distributed, not the original graph files.
   cannot edit the same region. The effective pedestrian graph must have equal-cost
   reciprocal links, as required by GTA's path reconstruction.
 - Streaming reloads reapply the patch and recheck the base fingerprint.
+  A rejected reload invalidates the lease. Previously published node addresses
+  remain backed by storage even if the replacement graph is shorter; changing
+  that base requires a client restart before patches can be admitted again.
 - Added node storage and IDs remain reserved for the process lifetime. Unload
   turns them into non-spawnable, disconnected tombstones. The identical patch
   can be restarted, but a different patch adding nodes to the same region

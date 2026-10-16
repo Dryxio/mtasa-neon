@@ -74,7 +74,9 @@ namespace
         std::uint16_t*             originalNaviLinks{};
         std::uint8_t *             originalLengths{}, *originalIntersections{};
         unsigned                   count{}, vehicles{}, addresses{}, cars{}, highWater{};
-        bool                       loaded{}, published{}, retainedFirstNodes{};
+        bool                       loaded{}, published{}, retainedFirstNodes{}, faulted{};
+        Node*                      rejectedNodes{};
+        unsigned                   rejectedCount{}, rejectedPeds{};
         std::array<bool, MaxNodes> edited{};
         // Addresses and node storage never move after publication. Removed
         // custom nodes become inert tombstones, so a task's saved CNodeAddress
@@ -108,6 +110,7 @@ namespace
         bool                      m_busy{}, m_hooks{};
         bool                      Install(std::string&);
         void                      Capture(unsigned);
+        void                      ProtectRejectedReload(unsigned);
         void                      Publish(unsigned, const Area*);
         void                      Restore(Lease&);
         void                      Validate(const Patch&);
@@ -226,6 +229,8 @@ namespace
     void Service::Capture(unsigned a)
     {
         auto& r = m_regions[a];
+        if (r.faulted)
+            throw std::runtime_error("base-region-changed-restart-client");
         if (r.loaded)
             return;
         const unsigned count = NodeCount(a), vehicles = VehicleCount(a), addresses = AddressCount(a), cars = CarCount(a);
@@ -284,10 +289,45 @@ namespace
         r.highWater = std::max(r.highWater, count);
         r.loaded = true;
     }
+    void Service::ProtectRejectedReload(unsigned a)
+    {
+        auto& r = m_regions[a];
+        if (!r.nodes || r.loaded || r.rejectedNodes)
+            return;
+        // A rejected base must never become admissible again in this process:
+        // native tasks can retain addresses from the former graph indefinitely.
+        r.faulted = true;
+        if (!Nodes(a) || NodeCount(a) >= r.highWater)
+            return;
+        // GTA checks the region pointer, not the node count, when consuming
+        // saved route/wander addresses. Even a failed reload therefore needs
+        // the old address range backed by storage. Leave the new native links
+        // untouched and pad only its node array with inert old-address slots.
+        // This path allocates nothing and does not trust the rejected topology.
+        r.rejectedNodes = Nodes(a);
+        r.rejectedCount = NodeCount(a);
+        r.rejectedPeds = PedCount(a);
+        std::copy_n(r.rejectedNodes, r.rejectedCount, r.nodes.get());
+        for (unsigned i = r.rejectedCount; i < r.highWater; ++i)
+        {
+            auto& n = r.nodes[i];
+            std::fill(n.begin(), n.begin() + 8, 0);
+            Put16(n, 14, 0x7FFE);
+            Put16(n, 16, 0);
+            Put16(n, 18, a);
+            Put16(n, 20, i);
+            n[24] = 0x20;
+            n[25] = 0x05;
+            n[26] = 0;
+        }
+        Nodes(a) = r.nodes.get();
+        NodeCount(a) = r.highWater;
+        PedCount(a) = r.rejectedPeds + r.highWater - r.rejectedCount;
+    }
     void Service::Publish(unsigned a, const Area* patch)
     {
         auto& r = m_regions[a];
-        if (!r.loaded || !r.nodes)
+        if (!r.loaded || !r.nodes || r.faulted)
             return;
         // Preserve GTA's current vehicle and dynamic-link state. Only the
         // pedestrian records owned by the patch differ from the baseline.
@@ -384,6 +424,16 @@ namespace
     void Service::Unloading(unsigned a)
     {
         auto& r = m_regions[a];
+        if (r.rejectedNodes)
+        {
+            // The loader's replacement allocation is still owned by GTA.
+            // Restore exactly that allocation for native delete[], never the
+            // previous stream generation or our process-lifetime safety slab.
+            Nodes(a) = r.rejectedNodes;
+            NodeCount(a) = r.rejectedCount;
+            PedCount(a) = r.rejectedPeds;
+            r.rejectedNodes = nullptr;
+        }
         if (!r.loaded)
             return;
         if (r.published)
@@ -437,6 +487,7 @@ namespace
         }
         catch (const std::exception& e)
         {
+            ProtectRejectedReload(a);
             for (auto& item : m_leases)
                 if (item.second.patch.areas.count(a))
                 {
