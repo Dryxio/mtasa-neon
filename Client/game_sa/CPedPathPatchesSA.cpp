@@ -3,7 +3,6 @@
 #include "CGameSA.h"
 #include "PedPathPatchFormat.h"
 #include "SharedUtil.Hash.h"
-#include "SharedUtil.MemAccess.hpp"
 #include <array>
 #include <memory>
 
