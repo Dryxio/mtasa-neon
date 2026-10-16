@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <game/CPedPathPatches.h>
 #include <game/CNativeUI.h>
 #define DECLARE_PROFILER_SECTION_CResource
 #include "profiler/SharedUtil.Profiler.h"
@@ -132,6 +133,9 @@ CResource::CResource(unsigned short usNetID, const char* szResourceName, CClient
 
 CResource::~CResource()
 {
+    // Restore the graph before resource tasks and their owning Lua state disappear.
+    g_pGame->GetPedPathPatches()->Unload(this);
+
     RevokeNeonAssetPackage();
 
     // Resource stop invalidates this offer immediately. The manager retains

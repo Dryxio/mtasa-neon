@@ -159,6 +159,7 @@ public:
     CVisibilityPlugins*       GetVisibilityPlugins() { return m_pVisibilityPlugins; }
     CKeyGen*                  GetKeyGen() { return m_pKeyGen; }
     CNativeUI*                GetNativeUI() override { return m_pNativeUI; }
+    CPedPathPatches*          GetPedPathPatches() override;
     CRopes*                   GetRopes() { return m_pRopes; }
     CFx*                      GetFx() { return m_pFx; }
     CFxManager*               GetFxManager() { return m_pFxManager; }

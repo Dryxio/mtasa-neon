@@ -37,6 +37,7 @@
 #include "CFxSA.h"
 #include "CFxSystemSA.h"
 #include "CGameSA.h"
+#include "CPedPathPatchesSA.h"
 #include "CGaragesSA.h"
 #include "CHandlingManagerSA.h"
 #include "CHudSA.h"
@@ -4702,4 +4703,9 @@ bool CGameSA::DeleteFileCutscene()
     g_managedFileCutsceneBlockingModel = UINT_MAX;
     g_managedFileCutsceneBlockingRefs = 0;
     return deleted;
+}
+
+CPedPathPatches* CGameSA::GetPedPathPatches()
+{
+    return GetPedPathPatchesSA();
 }

@@ -1,0 +1,7 @@
+<meta>
+    <info author="Neon" name="Pedestrian path patch test" type="script" />
+    <script src="fixture.lua" type="shared" />
+    <script src="client.lua" type="client" cache="false" />
+    <script src="server.lua" type="server" />
+    <file src="detour.npp" />
+</meta>

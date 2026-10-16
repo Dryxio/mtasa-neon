@@ -14,6 +14,10 @@ class CLuaWorldDefs : public CLuaDefs
 {
 public:
     static void LoadFunctions();
+    LUA_DECLARE(EngineLoadPedPathPatch);
+    LUA_DECLARE(EngineUnloadPedPathPatch);
+    LUA_DECLARE(EngineGetPedPathPatchRevision);
+    LUA_DECLARE(EngineGetPedPathGraphRevision);
 
     LUA_DECLARE(GetTime);
     LUA_DECLARE(GetGroundPosition);

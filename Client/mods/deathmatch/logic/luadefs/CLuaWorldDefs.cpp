@@ -9,6 +9,8 @@
 
 #include "StdInc.h"
 #include <game/CSettings.h>
+#include <game/CPedPathPatches.h>
+#include "PedPathPatchFormat.h"
 #include <game/CWeather.h>
 #include <game/CColPoint.h>
 #include <game/CCoronas.h>
@@ -52,6 +54,10 @@ namespace
 void CLuaWorldDefs::LoadFunctions()
 {
     constexpr static const std::pair<const char*, lua_CFunction> functions[]{
+        {"engineLoadPedPathPatch", EngineLoadPedPathPatch},
+        {"engineUnloadPedPathPatch", EngineUnloadPedPathPatch},
+        {"engineGetPedPathPatchRevision", EngineGetPedPathPatchRevision},
+        {"engineGetPedPathGraphRevision", EngineGetPedPathGraphRevision},
         // World get functions
         {"getTime", GetTime},
         {"getColorFilter", ArgumentParser<GetColorFilter>},
@@ -3105,4 +3111,61 @@ CLuaMultiReturn<bool, CClientEntity*, int, float, float, float, float, float, fl
             ConvertRadiansToDegrees(result.entityRotation.fZ),
             result.lodID,
             result.type};
+}
+
+int CLuaWorldDefs::EngineLoadPedPathPatch(lua_State* luaVM)
+{
+    SString          input;
+    CScriptArgReader reader(luaVM);
+    reader.ReadString(input);
+    CResource*  owner = GetCallingResource(luaVM);
+    CResource*  fileOwner = owner;
+    SString     path, bytes;
+    std::string revision, error = "invalid-resource-path";
+    if (!reader.HasErrors() && owner && CResourceManager::ParseResourcePathInput(input, fileOwner, &path) && fileOwner == owner)
+    {
+        if (!FileLoad(std::nothrow, path, bytes, PedPathPatch::MaxFileSize + 1))
+            error = "patch-file-unavailable-or-too-large";
+        else if (g_pGame->GetPedPathPatches()->Load(owner, bytes.data(), bytes.size(), revision, error))
+        {
+            lua_pushboolean(luaVM, true);
+            lua_pushlstring(luaVM, revision.data(), revision.size());
+            return 2;
+        }
+    }
+    lua_pushboolean(luaVM, false);
+    lua_pushlstring(luaVM, error.data(), error.size());
+    return 2;
+}
+
+int CLuaWorldDefs::EngineUnloadPedPathPatch(lua_State* luaVM)
+{
+    lua_pushboolean(luaVM, g_pGame->GetPedPathPatches()->Unload(GetCallingResource(luaVM)));
+    return 1;
+}
+
+int CLuaWorldDefs::EngineGetPedPathPatchRevision(lua_State* luaVM)
+{
+    std::string revision, error;
+    if (g_pGame->GetPedPathPatches()->GetRevision(GetCallingResource(luaVM), revision, error))
+    {
+        lua_pushlstring(luaVM, revision.data(), revision.size());
+        return 1;
+    }
+    lua_pushboolean(luaVM, false);
+    lua_pushlstring(luaVM, error.data(), error.size());
+    return 2;
+}
+
+int CLuaWorldDefs::EngineGetPedPathGraphRevision(lua_State* luaVM)
+{
+    std::string revision, error;
+    if (g_pGame->GetPedPathPatches()->GetGraphRevision(revision, error))
+    {
+        lua_pushlstring(luaVM, revision.data(), revision.size());
+        return 1;
+    }
+    lua_pushboolean(luaVM, false);
+    lua_pushlstring(luaVM, error.data(), error.size());
+    return 2;
 }

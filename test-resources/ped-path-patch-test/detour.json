@@ -1,0 +1,113 @@
+{
+  "areas": [
+    {
+      "area": 14,
+      "nodes": [
+        {
+          "id": 1469,
+          "position": [
+            1954.5,
+            -1820.375,
+            12.5
+          ],
+          "width": 16,
+          "flood": 5,
+          "enabled": true,
+          "links": [
+            {
+              "area": 14,
+              "node": 1473,
+              "length": 17,
+              "flags": 0
+            },
+            {
+              "area": 14,
+              "node": 2454,
+              "length": 6,
+              "flags": 0
+            }
+          ]
+        },
+        {
+          "id": 1614,
+          "position": [
+            1953.0,
+            -1795.0,
+            12.5
+          ],
+          "width": 16,
+          "flood": 5,
+          "enabled": true,
+          "links": [
+            {
+              "area": 14,
+              "node": 1622,
+              "length": 21,
+              "flags": 3
+            },
+            {
+              "area": 14,
+              "node": 1619,
+              "length": 11,
+              "flags": 0
+            },
+            {
+              "area": 14,
+              "node": 2455,
+              "length": 4,
+              "flags": 0
+            }
+          ]
+        },
+        {
+          "id": 2454,
+          "position": [
+            1948.5,
+            -1820.375,
+            12.5
+          ],
+          "width": 16,
+          "flood": 5,
+          "links": [
+            {
+              "area": 14,
+              "node": 1469,
+              "length": 6,
+              "flags": 0
+            },
+            {
+              "area": 14,
+              "node": 2455,
+              "length": 25,
+              "flags": 0
+            }
+          ]
+        },
+        {
+          "id": 2455,
+          "position": [
+            1948.5,
+            -1795.0,
+            12.5
+          ],
+          "width": 16,
+          "flood": 5,
+          "links": [
+            {
+              "area": 14,
+              "node": 2454,
+              "length": 25,
+              "flags": 0
+            },
+            {
+              "area": 14,
+              "node": 1614,
+              "length": 4,
+              "flags": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

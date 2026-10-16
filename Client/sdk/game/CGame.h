@@ -23,6 +23,7 @@
 #include "CWeaponInfo.h"
 #include "enums/SystemState.h"
 
+class CPedPathPatches;
 class C3DMarkers;
 class CAEAudioHardware;
 class CAERadioTrackManager;
@@ -874,4 +875,6 @@ public:
     virtual bool IsPedNativePointArmActive(unsigned int nativePointArmId, CPed* ped) const = 0;
     // Append-only resource-owned native interface service.
     virtual CNativeUI* GetNativeUI() = 0;
+    // Resource-owned pedestrian path overlays; append-only published ABI.
+    virtual CPedPathPatches* GetPedPathPatches() = 0;
 };
