@@ -45,7 +45,16 @@ addEventHandler('pathpatch:taskResult', resourceRoot, function(id, accepted, gra
     if not ok then ready[client]=false end
 end)
 addCommandHandler('pathpatch', function(player, _, action)
-    if not isElement(player) or not ready[player] then return end
+    if not isElement(player) then return end
+    if action == 'visit' then
+        local p = fixture.start
+        setElementDimension(player, 0)
+        setElementInterior(player, 0)
+        setElementPosition(player, p[1]+3, p[2], p[3]+2)
+        triggerClientEvent(player, 'pathpatch:prepare', resourceRoot)
+        return
+    end
+    if not ready[player] then outputChatBox('Run /pathpatch visit and wait for collision readiness.', player); return end
     if action == 'handoff' then
         for _, other in ipairs(getElementsByType('player')) do
             if other ~= owner and ready[other] and assign(other) then return end

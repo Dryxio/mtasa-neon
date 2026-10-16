@@ -91,17 +91,23 @@ reproducible fixture, not the author's unavailable Seven/Alhambra assets.
    build together. Start the resource on the test server and connect two clients.
 2. Both clients must report the same revision as `fixture.lua`. A mismatched
    base graph must report an error, not partial success.
-3. `/pathpatch` spawns a shared ped and dispatches native navigation near
+3. Both players run `/pathpatch visit` to stream the fixture location. Wait for
+   `building collision ready: true` on both clients. Each client creates a building collision barrier and checks that it blocks
+   the direct segment while leaving the detour clear. Readiness stays false if
+   this collision check fails. A frozen object would not suffice: GTA ignores
+   CObjects in the native short-route shortcut.
+4. `/pathpatch` spawns a shared ped and dispatches native navigation near
    X=1954, Y=-1820. Observe the detour through X=1948.5 and return to vanilla.
    The test reports task acceptance, not arrival success: visually verify the
-   route and compare owner/observer positions.
-4. `/pathpatch handoff` transfers to another nearby ready client. Repeat while
+   safe obstacle avoidance and compare owner/observer positions. GTA may shorten
+   clear portions of the path; exact traversal of every node is not required.
+5. `/pathpatch handoff` transfers to another nearby ready client. Repeat while
    the pedestrian is on an added node. `/pathpatch wander` exercises wandering.
-5. Travel far enough to unload the region, return, and run `/pathpatchstatus`
-   followed by navigation again. Restart the resource and repeat.
-6. `/pathpatchunload` during navigation must not crash; `/pathpatchload` reloads
+6. Travel far enough to unload the region, return with `/pathpatch visit`, wait
+   for collision readiness, then run `/pathpatchstatus` and navigation again. Restart the resource and repeat.
+7. `/pathpatchunload` during navigation must not crash; `/pathpatchload` reloads
    the identical patch. Restart/disconnect/reconnect and repeat several times.
-7. Run vanilla vehicle traffic through the region; check driving, lanes and
+8. Run vanilla vehicle traffic through the region; check driving, lanes and
    traffic lights. Exercise a malformed/truncated file and overlapping resources:
    refusal must leave the previous graph untouched.
 
