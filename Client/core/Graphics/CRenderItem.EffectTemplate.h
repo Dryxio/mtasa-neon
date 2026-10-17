@@ -37,6 +37,7 @@ class CEffectTemplate : public CEffectParameters
 
     bool                       m_bHaveFilesChanged;
     SString                    m_strTechniqueName;
+    SString                    m_strCompileLog;
     std::map<SString, SString> m_FileMD5Map;
     CTickCount                 m_TickCountLastUsed;
     uint                       m_uiCloneCount;

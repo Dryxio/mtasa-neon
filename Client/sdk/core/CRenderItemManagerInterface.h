@@ -29,6 +29,9 @@ class CTextureItem;
 class CShaderItem;
 class CShaderInstance;
 class CRenderTargetItem;
+class CDepthStencilTargetItem;
+class CCubemapRenderTargetItem;
+class CMrtSetItem;
 class CScreenSourceItem;
 class CWebBrowserItem;
 class CRenderItemManager;
@@ -36,7 +39,20 @@ class CD3DDUMMY;
 class CEffectCloner;
 class CPixels;
 class CClientEntityBase;
+class CMatrix;
 struct SShaderItemLayers;
+
+struct SSceneViewShaderAssignment
+{
+    CShaderItem* pShaderItem = nullptr;
+    SString      strTextureNameMatch;
+    // nullptr means the assignment applies to every matching texture in the scene view (global), matching
+    // engineApplyShaderToWorldTexture's default. A specific target restricts it to that element only.
+    CClientEntityBase* pTargetEntity = nullptr;
+    // Mirrors engineApplyShaderToWorldTexture's appendLayers: when false and pTargetEntity is set, a
+    // matching global (no-target) assignment is excluded for that element's own textures.
+    bool bAppendLayers = true;
+};
 typedef CShaderItem CSHADERDUMMY;
 enum eAspectRatio;
 class CWebViewInterface;
@@ -138,6 +154,102 @@ struct SDxStatus
     } settings;
 };
 
+// Also used by later MRT/render-pass work (dxCreateMrtSet slot count, CRenderStateScope target array size)
+#define MAX_MRT_RENDER_TARGETS 4
+
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+//
+// SDxCapabilities - Actual device-queried support for the expanded rendering API.
+// Populated on demand (dxGetRenderCapabilities); never assume a feature works just
+// because a format/function accepting it exists - check the relevant flag first.
+//
+struct SDxCapabilities
+{
+    bool bPixelShader3Supported = false;
+    bool bVertexShader3Supported = false;
+
+    int  iMaxSimultaneousRenderTargets = 1;  // Raw hardware limit (D3DCAPS9::NumSimultaneousRTs)
+    int  iMaxBoundRenderTargets = 1;         // min(hardware limit, MAX_MRT_RENDER_TARGETS) - what dxCreateMrtSet actually allows
+    bool bIndependentMRTBlend = false;       // Always false - DX9 has no per-render-target blend state
+    bool bIndependentMRTWriteMasks = false;  // D3DPMISCCAPS_INDEPENDENTWRITEMASKS
+
+    ERenderFormat depthTextureSampleFormat = RFORMAT_UNKNOWN;  // RFORMAT_UNKNOWN if no sampleable depth format is usable
+    bool          bDepthTextureSamplingSupported = false;
+
+    bool bCubemapRenderTargetSupported = false;
+    int  iMaxCubemapEdgeLength = 0;
+
+    int iMaxSceneViewsPerFrame = -1;     // -1 = no fixed engine-side cap; bounded only by device/performance
+    int iMaxRenderPassNestingDepth = 0;  // Fixed cap
+
+    struct SFormatCapability
+    {
+        SString strFormatName;
+        bool    bRenderable = false;   // Usable as a render-target color format
+        bool    bTextureable = false;  // Usable as a regular (non-render-target) texture
+        bool    bFilterable = false;   // Supports linear filtering when sampled
+    };
+    std::vector<SFormatCapability> renderTargetFormats;
+};
+
+// A Lua-safe snapshot of D3DX effect metadata. It intentionally contains only
+// copied strings/numbers, never D3DX handles or device pointers, so diagnostics
+// cannot be used to mutate renderer state outside the normal shader API.
+struct SShaderDiagnostics
+{
+    struct STechnique
+    {
+        SString strName;
+        uint    uiPassCount = 0;
+        bool    bValid = false;
+    };
+
+    struct SParameter
+    {
+        SString strName;
+        SString strSemantic;
+        SString strAutomaticSemantic;
+        SString strClass;
+        SString strType;
+        uint    uiRows = 0;
+        uint    uiColumns = 0;
+        uint    uiElements = 0;
+        uint    uiAnnotations = 0;
+    };
+
+    bool                    bCompiled = false;
+    bool                    bUsesVertexShader = false;
+    bool                    bUsesDepthBuffer = false;
+    bool                    bUsesMultipleRenderTargets = false;
+    long                    lCreateHResult = 0;
+    SString                 strSourceIdentifier;
+    SString                 strCompileLog;
+    SString                 strSelectedTechnique;
+    SString                 strVertexShaderProfile;
+    SString                 strPixelShaderProfile;
+    std::vector<STechnique> techniques;
+    std::vector<SParameter> parameters;
+};
+
+struct SRenderStatistics
+{
+    uint uiOpenRenderPasses = 0;
+    uint uiRenderPassesStarted = 0;
+    uint uiRenderPassFailures = 0;
+    uint uiForcedRenderPassClosures = 0;
+    uint uiRenderItems = 0;
+    uint uiShaders = 0;
+    uint uiRenderTargets = 0;
+    uint uiDepthTargets = 0;
+    uint uiMrtSets = 0;
+    uint uiScreenSources = 0;
+    int  iTextureMemoryKB = 0;
+    int  iRenderTargetMemoryKB = 0;
+    int  iFontMemoryKB = 0;
+    int  iFreeMemoryKB = 0;
+};
+
 using EffectMacroList = std::vector<std::pair<SString, SString>>;
 
 ////////////////////////////////////////////////////////////////
@@ -153,17 +265,34 @@ public:
     virtual ~CRenderItemManagerInterface() {}
 
     // CRenderItemManagerInterface
-    virtual void                DoPulse() = 0;
-    virtual CDxFontItem*        CreateDxFont(const SString& strFullFilePath, uint uiSize, bool bBold, DWORD ulQuality = DEFAULT_QUALITY) = 0;
-    virtual CGuiFontItem*       CreateGuiFont(const SString& strFullFilePath, const SString& strFontName, uint uiSize) = 0;
-    virtual CTextureItem*       CreateTexture(const SString& strFullFilePath, const CPixels* pPixels = NULL, bool bMipMaps = true, uint uiSizeX = RDEFAULT,
-                                              uint uiSizeY = RDEFAULT, ERenderFormat format = RFORMAT_UNKNOWN, ETextureAddress textureAddress = TADDRESS_WRAP,
-                                              ETextureType textureType = TTYPE_TEXTURE, uint uiVolumeDepth = 1) = 0;
-    virtual CShaderItem*        CreateShader(const SString& strFile, const SString& strRootPath, bool bIsRawData, SString& strOutStatus, float fPriority,
-                                             float fMaxDistance, bool bLayered, bool bDebug, int iTypeMask, const EffectMacroList& macros) = 0;
-    virtual CRenderTargetItem*  CreateRenderTarget(uint uiSizeX, uint uiSizeY, bool bHasSurfaceFormat, bool bWithAlphaChannel, int surfaceFormat,
-                                                   bool bForce = false) = 0;
-    virtual CScreenSourceItem*  CreateScreenSource(uint uiSizeX, uint uiSizeY) = 0;
+    virtual void                     DoPulse() = 0;
+    virtual CDxFontItem*             CreateDxFont(const SString& strFullFilePath, uint uiSize, bool bBold, DWORD ulQuality = DEFAULT_QUALITY) = 0;
+    virtual CGuiFontItem*            CreateGuiFont(const SString& strFullFilePath, const SString& strFontName, uint uiSize) = 0;
+    virtual CTextureItem*            CreateTexture(const SString& strFullFilePath, const CPixels* pPixels = NULL, bool bMipMaps = true, uint uiSizeX = RDEFAULT,
+                                                   uint uiSizeY = RDEFAULT, ERenderFormat format = RFORMAT_UNKNOWN, ETextureAddress textureAddress = TADDRESS_WRAP,
+                                                   ETextureType textureType = TTYPE_TEXTURE, uint uiVolumeDepth = 1) = 0;
+    virtual CShaderItem*             CreateShader(const SString& strFile, const SString& strRootPath, bool bIsRawData, SString& strOutStatus, float fPriority,
+                                                  float fMaxDistance, bool bLayered, bool bDebug, int iTypeMask, const EffectMacroList& macros) = 0;
+    virtual CRenderTargetItem*       CreateRenderTarget(uint uiSizeX, uint uiSizeY, bool bHasSurfaceFormat, bool bWithAlphaChannel, int surfaceFormat,
+                                                        bool bForce = false) = 0;
+    virtual CDepthStencilTargetItem* CreateDepthStencilTarget(uint uiSizeX, uint uiSizeY, int surfaceFormat, bool bSampleable) = 0;
+    virtual CCubemapRenderTargetItem* CreateCubemapRenderTarget(uint uiEdgeSize, int surfaceFormat) = 0;
+    virtual CMrtSetItem*              CreateMrtSet(CRenderTargetItem* const targets[MAX_MRT_RENDER_TARGETS], uint uiNumTargets,
+                                                   CDepthStencilTargetItem* pDepthStencilTargetItem) = 0;
+    virtual CScreenSourceItem*        CreateScreenSource(uint uiSizeX, uint uiSizeY) = 0;
+    virtual bool BeginRenderPass(CRenderTargetItem* const targets[MAX_MRT_RENDER_TARGETS], uint uiNumTargets, CDepthStencilTargetItem* pDepthStencilTargetItem,
+                                 bool bClear) = 0;
+    virtual bool BeginSceneViewRender(CRenderTargetItem* pTarget, CDepthStencilTargetItem* pDepthStencilTargetItem, const CMatrix& cameraMatrix, float fFOV,
+                                      bool bClear) = 0;
+    // Cube faces reuse the same CRenderStateScope-backed pass mechanism as BeginSceneViewRender/BeginRenderPass,
+    // but bind a raw D3D9 surface (one face of the cube texture, plus a depth-stencil shared across all 6 faces
+    // since they render sequentially, never simultaneously) instead of going through a CRenderTargetItem. FOV is
+    // always exactly 90 degrees against the cubemap's square edge size, the only configuration that tiles
+    // seamlessly across all 6 faces - callers do not choose it.
+    virtual bool                BeginCubemapFaceRender(CCubemapRenderTargetItem* pCubemap, uint uiFace, const CMatrix& cameraMatrix, bool bClear) = 0;
+    virtual bool                EndRenderPass() = 0;
+    virtual uint                GetRenderPassDepth() = 0;
+    virtual void                ForceCloseAllRenderPasses() = 0;
     virtual CWebBrowserItem*    CreateWebBrowser(uint uiSizeX, uint uiSizeY) = 0;
     virtual CVectorGraphicItem* CreateVectorGraphic(uint uiSizeX, uint uiSizeY) = 0;
     virtual bool                SetRenderTarget(CRenderTargetItem* pItem, bool bClear) = 0;
@@ -173,14 +302,21 @@ public:
     virtual void                UpdateBackBufferCopy() = 0;
     virtual void                UpdateScreenSource(CScreenSourceItem* pScreenSourceItem, bool bResampleNow) = 0;
     virtual SShaderItemLayers*  GetAppliedShaderForD3DData(CD3DDUMMY* pD3DData) = 0;
-    virtual bool                ApplyShaderItemToWorldTexture(CShaderItem* pShaderItem, const SString& strTextureNameMatch, CClientEntityBase* pClientEntity,
-                                                              bool bAppendLayers) = 0;
+    virtual void                SetSceneViewShaderContext(const std::vector<SSceneViewShaderAssignment>* pAssignments) = 0;
+    virtual bool ApplySceneViewOutputShader(CRenderTargetItem* pSource, CRenderTargetItem* pDestination, CShaderItem* pShader, const SString& strInputName) = 0;
+    virtual bool IsSceneViewOutputShaderValid(CShaderItem* pShader, const SString& strInputName) = 0;
+    virtual const SString& GetLastSceneViewOutputError() const = 0;
+    virtual bool           ApplyShaderItemToWorldTexture(CShaderItem* pShaderItem, const SString& strTextureNameMatch, CClientEntityBase* pClientEntity,
+                                                         bool bAppendLayers) = 0;
     virtual bool           RemoveShaderItemFromWorldTexture(CShaderItem* pShaderItem, const SString& strTextureNameMatch, CClientEntityBase* pClientEntity) = 0;
     virtual void           RemoveClientEntityRefs(CClientEntityBase* pClientEntity) = 0;
     virtual void           GetVisibleTextureNames(std::vector<SString>& outNameList, const SString& strTextureNameMatch, ushort usModelID) = 0;
     virtual eDxTestMode    GetTestMode() = 0;
     virtual void           SetTestMode(eDxTestMode testMode) = 0;
     virtual void           GetDxStatus(SDxStatus& outStatus) = 0;
+    virtual void           GetDxCapabilities(SDxCapabilities& outCapabilities) = 0;
+    virtual void           GetShaderDiagnostics(CShaderItem* pShaderItem, SShaderDiagnostics& outDiagnostics) = 0;
+    virtual void           GetRenderStatistics(SRenderStatistics& outStatistics) = 0;
     virtual CEffectCloner* GetEffectCloner() = 0;
     virtual void           PreDrawWorld() = 0;
     virtual void           SetDepthBufferFormat(ERenderFormat depthBufferFormat) = 0;
@@ -245,6 +381,9 @@ enum eRenderItemClassTypes
     CLASS_CVectorGraphicItem,
     CLASS_CFileTextureItem,
     CLASS_CRenderTargetItem,
+    CLASS_CDepthStencilTargetItem,
+    CLASS_CCubemapRenderTargetItem,
+    CLASS_CMrtSetItem,
     CLASS_CScreenSourceItem,
     CLASS_CWebBrowserItem,
 };
@@ -390,6 +529,7 @@ class CShaderItem : public CMaterialItem
     virtual void SetTessellation(uint uiTessellationX, uint uiTessellationY);
     virtual void SetTransform(const SShaderTransform& transform);
     virtual bool GetUsesVertexShader();
+    void         GetDiagnostics(SShaderDiagnostics& outDiagnostics) const;
 
     CEffectWrap* m_pEffectWrap;
     float        m_fPriority;
@@ -398,6 +538,7 @@ class CShaderItem : public CMaterialItem
     float        m_fMaxDistanceSq;
     bool         m_bLayered;
     int          m_iTypeMask;
+    SString      m_strSourceIdentifier;
 
     // This is used as the current render material
     // If the shader wants to change a parameter, and the instance is refed by something else, then the shader must clone a new instance for itself
@@ -533,6 +674,106 @@ class CRenderTargetItem : public CTextureItem
     IDirect3DSurface9* m_pD3DReadSurface;
     uint               m_uiLastEnsureAttempt;
     uint               m_uiEnsureDelayMs;
+};
+
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+//
+// CDepthStencilTargetItem - A standalone depth-stencil surface, not tied to any
+// particular color render target. Used as the depth attachment for render
+// passes / scene views / MRT sets that need their own depth buffer.
+//
+// Extends CTextureItem (not CRenderItem directly) purely to reuse the existing texture-value machinery -
+// dxSetShaderValue, CShaderInstance's texture comparison/storage, dxDrawImage - for free once bSampleable
+// is true. For the non-sampleable path m_pD3DTexture (inherited) simply stays null, identical to how this
+// item behaved before sampling existed.
+//
+// The sampleable path reuses the exact same vendor FourCC technique (INTZ/DF24/DF16/RAWZ) and format
+// already discovered once at device creation for MTA's own primary-scene readable depth buffer (see
+// CDirect3DEvents9::DiscoverReadableDepthFormat -> CRenderItemManager::SetDepthBufferFormat) - a texture
+// created with D3DUSAGE_DEPTHSTENCIL and one of these formats can be bound as a real depth-stencil target
+// AND sampled in a shader, which a plain CreateDepthStencilSurface() surface never can. Requesting
+// bSampleable when the GPU never resolved a working format is rejected with an explicit error rather than
+// silently returning a non-sampleable surface while claiming it can be sampled.
+//
+class CDepthStencilTargetItem : public CTextureItem
+{
+    DECLARE_CLASS(CDepthStencilTargetItem, CTextureItem)
+    CDepthStencilTargetItem() : ClassInit(this), m_uiLastEnsureAttempt(0), m_uiEnsureDelayMs(0) {}
+    virtual void PostConstruct(CRenderItemManager* pManager, uint uiSizeX, uint uiSizeY, int surfaceFormat, bool bSampleable, bool bIncludeInMemoryStats);
+    virtual void PreDestruct();
+    virtual bool IsValid();
+    virtual void OnLostDevice();
+    virtual void OnResetDevice();
+    void         CreateUnderlyingData();
+    void         ReleaseUnderlyingData();
+
+    // m_uiSizeX/m_uiSizeY are inherited from CMaterialItem, not redeclared here - CShaderItem::SetValue
+    // mirrors a shader's first-declared-texture size through a CTextureItem*, and a same-named member
+    // redeclared in this derived class would shadow the inherited one instead of the one that lookup
+    // through a CTextureItem* actually resolves to, silently leaving the inherited copy at zero.
+    int                m_eFormat;
+    bool               m_bSampleable;
+    IDirect3DSurface9* m_pD3DDepthStencilSurface;
+    uint               m_uiLastEnsureAttempt;
+    uint               m_uiEnsureDelayMs;
+};
+
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+//
+// CCubemapRenderTargetItem - A render-to-cubemap target. Wraps an IDirect3DCubeTexture9 (cube textures
+// already exist as a texture *type* in the engine, TTYPE_CUBETEXTURE, just not yet as a render target)
+// plus one cached render-target surface per face and a single depth-stencil surface shared across all 6
+// faces - they are always rendered sequentially within one BeginCubemapFaceRender/EndRenderPass pair each,
+// never simultaneously, so one shared depth buffer is sufficient and saves 5/6 of the depth memory a
+// separate surface per face would cost.
+//
+// Face indices match D3DCUBEMAP_FACES (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z), each rendered from the same
+// fixed probe position with a 90-degree FOV - the only configuration where all 6 faces tile seamlessly.
+//
+class CCubemapRenderTargetItem : public CTextureItem
+{
+    DECLARE_CLASS(CCubemapRenderTargetItem, CTextureItem)
+    CCubemapRenderTargetItem() : ClassInit(this) {}
+    virtual void PostConstruct(CRenderItemManager* pManager, uint uiEdgeSize, int surfaceFormat);
+    virtual void PreDestruct();
+    virtual bool IsValid();
+    virtual void OnLostDevice();
+    virtual void OnResetDevice();
+    void         CreateUnderlyingData();
+    void         ReleaseUnderlyingData();
+
+    uint               m_uiEdgeSize;
+    int                m_eSurfaceFormat;
+    IDirect3DSurface9* m_pD3DFaceSurface[6];
+    IDirect3DSurface9* m_pD3DDepthStencilSurface;
+};
+
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+//
+// CMrtSetItem - A validated group of up to MAX_MRT_RENDER_TARGETS color
+// render targets plus an optional depth-stencil target, bindable together in
+// one dxBeginRenderPass call. Holds references (AddRef/Release) to existing
+// render-item objects rather than owning any D3D resource of its own -
+// validation (matching dimensions, device-supported slot count) happens once
+// at creation (CRenderItemManager::CreateMrtSet), not per-frame.
+//
+class CMrtSetItem : public CRenderItem
+{
+    DECLARE_CLASS(CMrtSetItem, CRenderItem)
+    CMrtSetItem() : ClassInit(this) {}
+    virtual void PostConstruct(CRenderItemManager* pManager, CRenderTargetItem* const targets[MAX_MRT_RENDER_TARGETS], uint uiNumTargets,
+                               CDepthStencilTargetItem* pDepthStencilTargetItem);
+    virtual void PreDestruct();
+    virtual bool IsValid();
+    virtual void OnLostDevice();
+    virtual void OnResetDevice();
+
+    CRenderTargetItem*       m_ColorTargets[MAX_MRT_RENDER_TARGETS];
+    uint                     m_uiNumTargets;
+    CDepthStencilTargetItem* m_pDepthStencilTarget;
 };
 
 ////////////////////////////////////////////////////////////////

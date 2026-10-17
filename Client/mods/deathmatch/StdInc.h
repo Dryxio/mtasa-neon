@@ -86,10 +86,14 @@
 #include <CClientWater.h>
 #include <CClientWeapon.h>
 #include <CClientRenderElement.h>
+#include <CClientMrtSet.h>
 #include <CClientDxFont.h>
 #include <CClientGuiFont.h>
 #include <CClientMaterial.h>
 #include <CClientTexture.h>
+#include <CClientDepthStencilTarget.h>
+#include <CClientSceneView.h>
+#include <CClientCubemapRenderTarget.h>
 #include <CClientShader.h>
 #include <CClientWebBrowser.h>
 #include <CClientSearchLight.h>

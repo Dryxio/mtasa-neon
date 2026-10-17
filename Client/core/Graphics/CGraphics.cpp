@@ -1227,6 +1227,16 @@ void CGraphics::DrawTextureQueued(float fX, float fY, float fWidth, float fHeigh
     AddQueueItem(Item, bPostGUI);
 }
 
+void CGraphics::DrawMaterialImmediate(CMaterialItem* pMaterial, float fWidth, float fHeight)
+{
+    // Scene-view post-processing runs between native world passes, where queuing the draw would execute
+    // after its private target has already been restored. Flush immediately while the scoped target is bound.
+    // Use overwrite semantics so inherited GTA depth, alpha-test or blend state cannot discard the quad.
+    SetBlendModeRenderStates(EBlendMode::OVERWRITE);
+    m_pTileBatcher->AddTile(0.0f, 0.0f, fWidth, fHeight, 0.0f, 0.0f, 1.0f, 1.0f, pMaterial, 0.0f, 0.0f, 0.0f, 0xFFFFFFFF);
+    m_pTileBatcher->Flush();
+}
+
 void CGraphics::DrawStringQueued(float fLeft, float fTop, float fRight, float fBottom, unsigned long dwColor, const char* szText, float fScaleX, float fScaleY,
                                  unsigned long ulFormat, ID3DXFont* pDXFont, bool bPostGUI, bool bColorCoded, bool bSubPixelPositioning, float fRotation,
                                  float fRotationCenterX, float fRotationCenterY, float fLineHeight)
@@ -1730,6 +1740,11 @@ void CGraphics::OnDeviceCreate(IDirect3DDevice9* pDevice)
 
 void CGraphics::OnDeviceInvalidate(IDirect3DDevice9* pDevice)
 {
+    // RenderWare camera rasters wrap default-pool D3D9 surfaces. Release the secondary-view pair before
+    // the regular render items so no stale RW raster can retain a surface across Reset().
+    if (g_pCore && g_pCore->GetMultiplayer())
+        g_pCore->GetMultiplayer()->ReleaseSecondarySceneResources();
+
     for (int i = 0; i < NUM_FONTS; i++)
     {
         if (m_pDXFonts[i])

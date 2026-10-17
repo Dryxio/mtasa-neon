@@ -28,11 +28,176 @@ void CShaderItem::PostConstruct(CRenderItemManager* pManager, const SString& str
     m_fMaxDistanceSq = fMaxDistance * fMaxDistance;
     m_bLayered = bLayered;
     m_iTypeMask = iTypeMask;
+    if (bIsRawData)
+        m_strSourceIdentifier = "<raw-data>";
+    else
+        m_strSourceIdentifier = strFile;
 
     Super::PostConstruct(pManager);
 
     // Initial creation of d3d data
     CreateUnderlyingData(strFile, strRootPath, bIsRawData, strOutStatus, bDebug, macros);
+}
+
+namespace
+{
+    SString EffectClassToString(D3DXPARAMETER_CLASS parameterClass)
+    {
+        switch (parameterClass)
+        {
+            case D3DXPC_SCALAR:
+                return "scalar";
+            case D3DXPC_VECTOR:
+                return "vector";
+            case D3DXPC_MATRIX_ROWS:
+                return "matrix_rows";
+            case D3DXPC_MATRIX_COLUMNS:
+                return "matrix_columns";
+            case D3DXPC_OBJECT:
+                return "object";
+            case D3DXPC_STRUCT:
+                return "struct";
+            default:
+                return "unknown";
+        }
+    }
+
+    SString EffectTypeToString(D3DXPARAMETER_TYPE parameterType)
+    {
+        switch (parameterType)
+        {
+            case D3DXPT_VOID:
+                return "void";
+            case D3DXPT_BOOL:
+                return "bool";
+            case D3DXPT_INT:
+                return "int";
+            case D3DXPT_FLOAT:
+                return "float";
+            case D3DXPT_STRING:
+                return "string";
+            case D3DXPT_TEXTURE:
+                return "texture";
+            case D3DXPT_TEXTURE1D:
+                return "texture1d";
+            case D3DXPT_TEXTURE2D:
+                return "texture2d";
+            case D3DXPT_TEXTURE3D:
+                return "texture3d";
+            case D3DXPT_TEXTURECUBE:
+                return "texturecube";
+            case D3DXPT_SAMPLER:
+                return "sampler";
+            case D3DXPT_SAMPLER1D:
+                return "sampler1d";
+            case D3DXPT_SAMPLER2D:
+                return "sampler2d";
+            case D3DXPT_SAMPLER3D:
+                return "sampler3d";
+            case D3DXPT_SAMPLERCUBE:
+                return "samplercube";
+            case D3DXPT_PIXELSHADER:
+                return "pixelshader";
+            case D3DXPT_VERTEXSHADER:
+                return "vertexshader";
+            case D3DXPT_PIXELFRAGMENT:
+                return "pixelfragment";
+            case D3DXPT_VERTEXFRAGMENT:
+                return "vertexfragment";
+            case D3DXPT_UNSUPPORTED:
+                return "unsupported";
+            default:
+                return "unknown";
+        }
+    }
+
+    SString ShaderVersionToString(DWORD version)
+    {
+        return SString("%d.%d", D3DSHADER_VERSION_MAJOR(version), D3DSHADER_VERSION_MINOR(version));
+    }
+}
+
+////////////////////////////////////////////////////////////////
+//
+// CShaderItem::GetDiagnostics
+//
+// Copies effect metadata into a pointer-free structure suitable for Lua.
+//
+////////////////////////////////////////////////////////////////
+void CShaderItem::GetDiagnostics(SShaderDiagnostics& outDiagnostics) const
+{
+    outDiagnostics = SShaderDiagnostics();
+    outDiagnostics.strSourceIdentifier = m_strSourceIdentifier;
+
+    if (!m_pEffectWrap || !m_pEffectWrap->m_pEffectTemplate)
+        return;
+
+    CEffectTemplate* pTemplate = m_pEffectWrap->m_pEffectTemplate;
+    ID3DXEffect*     pEffect = pTemplate->m_pD3DEffect;
+    if (!pEffect)
+        return;
+
+    outDiagnostics.bCompiled = true;
+    outDiagnostics.bUsesVertexShader = pTemplate->m_bUsesVertexShader;
+    outDiagnostics.bUsesDepthBuffer = pTemplate->m_bUsesDepthBuffer;
+    outDiagnostics.bUsesMultipleRenderTargets = !pTemplate->m_SecondaryRenderTargetList.empty();
+    outDiagnostics.lCreateHResult = pTemplate->m_CreateHResult;
+    outDiagnostics.strCompileLog = pTemplate->m_strCompileLog;
+    outDiagnostics.strSelectedTechnique = pTemplate->m_strTechniqueName;
+    outDiagnostics.strVertexShaderProfile = ShaderVersionToString(g_pDeviceState->DeviceCaps.VertexShaderVersion);
+    outDiagnostics.strPixelShaderProfile = ShaderVersionToString(g_pDeviceState->DeviceCaps.PixelShaderVersion);
+
+    D3DXEFFECT_DESC effectDesc{};
+    if (FAILED(pEffect->GetDesc(&effectDesc)))
+        return;
+
+    outDiagnostics.techniques.reserve(effectDesc.Techniques);
+    for (UINT i = 0; i < effectDesc.Techniques; ++i)
+    {
+        D3DXHANDLE         hTechnique = pEffect->GetTechnique(i);
+        D3DXTECHNIQUE_DESC techniqueDesc{};
+        if (!hTechnique || FAILED(pEffect->GetTechniqueDesc(hTechnique, &techniqueDesc)))
+            continue;
+
+        SShaderDiagnostics::STechnique technique;
+        technique.strName = techniqueDesc.Name ? techniqueDesc.Name : "";
+        technique.uiPassCount = techniqueDesc.Passes;
+        technique.bValid = SUCCEEDED(pEffect->ValidateTechnique(hTechnique));
+        outDiagnostics.techniques.push_back(std::move(technique));
+    }
+
+    outDiagnostics.parameters.reserve(effectDesc.Parameters);
+    for (UINT i = 0; i < effectDesc.Parameters; ++i)
+    {
+        D3DXHANDLE         hParameter = pEffect->GetParameter(nullptr, i);
+        D3DXPARAMETER_DESC parameterDesc{};
+        if (!hParameter || FAILED(pEffect->GetParameterDesc(hParameter, &parameterDesc)))
+            continue;
+
+        SShaderDiagnostics::SParameter parameter;
+        parameter.strName = parameterDesc.Name ? parameterDesc.Name : "";
+        parameter.strSemantic = parameterDesc.Semantic ? parameterDesc.Semantic : "";
+        for (uint annotationIndex = 0; annotationIndex < parameterDesc.Annotations; ++annotationIndex)
+        {
+            D3DXHANDLE         hAnnotation = pEffect->GetAnnotation(hParameter, annotationIndex);
+            D3DXPARAMETER_DESC annotationDesc = {};
+            if (!hAnnotation || FAILED(pEffect->GetParameterDesc(hAnnotation, &annotationDesc)) || !annotationDesc.Name ||
+                !SStringX(annotationDesc.Name).CompareI("mtaSemantic"))
+                continue;
+
+            LPCSTR szValue = nullptr;
+            if (SUCCEEDED(pEffect->GetString(hAnnotation, &szValue)) && szValue)
+                parameter.strAutomaticSemantic = szValue;
+            break;
+        }
+        parameter.strClass = EffectClassToString(parameterDesc.Class);
+        parameter.strType = EffectTypeToString(parameterDesc.Type);
+        parameter.uiRows = parameterDesc.Rows;
+        parameter.uiColumns = parameterDesc.Columns;
+        parameter.uiElements = parameterDesc.Elements;
+        parameter.uiAnnotations = parameterDesc.Annotations;
+        outDiagnostics.parameters.push_back(std::move(parameter));
+    }
 }
 
 ////////////////////////////////////////////////////////////////

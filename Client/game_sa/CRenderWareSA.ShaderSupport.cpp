@@ -464,6 +464,14 @@ SShaderItemLayers* CRenderWareSA::GetAppliedShaderForD3DData(CD3DDUMMY* pD3DData
     return &pInfoLayers->output;
 }
 
+void CRenderWareSA::OnShaderReplacementResolved(bool bUsesVertexShader)
+{
+    // Ped rendering can have a GTA vertex shader active. Custom vertex shaders need the same conflict
+    // handling whether they came from the global matcher or an isolated SceneView matcher.
+    if (m_iRenderingEntityType == TYPE_MASK_PED && bUsesVertexShader)
+        DisableGTAVertexShadersForAWhile();
+}
+
 ////////////////////////////////////////////////////////////////
 //
 // CRenderWareSA::AppendAdditiveMatch
