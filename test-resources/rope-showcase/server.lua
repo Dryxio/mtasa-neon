@@ -51,7 +51,7 @@ local function restore()
     state.saved = nil
 end
 
-local function start(player)
+local function start(player, mode)
     if state.running then
         outputChatBox("[ROPE SHOWCASE] Another showcase is already running.", player, 255, 90, 90)
         return
@@ -86,7 +86,7 @@ local function start(player)
     state.startTimer = setTimer(function()
         if state.running and state.player == player and isElement(player) then
             state.startTimer = nil
-            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, RUNWAY_Z, SHOW_DIMENSION)
+            triggerClientEvent(player, "ropeShowcase:start", resourceRoot, CENTER_X, CENTER_Y, RUNWAY_Z, SHOW_DIMENSION, mode)
         end
     end, 350, 1)
 end
@@ -104,12 +104,12 @@ addCommandHandler("ropeshow", function(player, _, action)
         return
     end
 
-    if action ~= "start" then
-        outputChatBox("[ROPE SHOWCASE] Usage: /ropeshow [start|stop]", player, 255, 200, 80)
+    if action ~= "start" and action ~= "interactive" then
+        outputChatBox("[ROPE SHOWCASE] Usage: /ropeshow [start|stop|interactive]", player, 255, 200, 80)
         return
     end
 
-    start(player)
+    start(player, action == "interactive" and "interactive" or "auto")
 end)
 
 addEvent("ropeShowcase:ready", true)

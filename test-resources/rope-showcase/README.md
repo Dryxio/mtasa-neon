@@ -1,57 +1,97 @@
 # Managed rope showcase
 
-A cinematic visual demo for the managed Rope API.
+A broad-audience cinematic demo for the managed Rope API, built to show not only the native GTA rope types but how Neon's engine-level systems compose with each other.
 
 ## Run
 
-Start `rope-showcase`, join the server, then run:
-
 ```text
+start rope-showcase
 /ropeshow
 ```
 
-Stop/reset early with:
+For the player-controlled version:
+
+```text
+/ropeshow interactive
+```
+
+The interactive scene keeps a mini-magnet with a crate and a wrecking ball
+active at the same time. Select the rig with `1` (harness) or `2` (wrecking
+ball), move its holder with `ZQSD`, and change rope length with `A`/`E`.
+`LMB` attaches the crate to the harness and `R` releases it. A stationary
+managed fire is placed between the starting point and the far side of the
+runway; crossing it automatically ignites the carried crate. The wrecking
+ball samples the swept rope-end segment and fractures the caravan
+automatically on contact, without a manual trigger key.
+
+Stop early with:
 
 ```text
 /ropeshow stop
 ```
 
-The resource moves the player into an isolated dimension, hides the normal HUD/chat, runs the sequence, then restores the original player state automatically.
+The resource stages the hidden player in its own dimension on the same clear Verdant Meadows runway used by the 2DFX and fracture showcases, switches the local scene to night, hides HUD/chat, then restores everything when the sequence ends.
 
-## Location
+## Design rule
 
-The scene uses the same clear Las Venturas runway coordinates as `2dfx-showcase`:
+The Rope API stays the subject of every shot. Secondary Neon APIs are only used as visible consequences or environmental dressing.
 
-```text
-center ~= 262.375, 2502.074, 16.484
-```
+Only **one native rope is active at a time**. Each act creates its holder, rope and payload immediately before the shot, waits for the native lease to become active, then destroys the whole act behind a short black cut before creating the next one.
 
-It remains in its own showcase dimension, so the Rope and 2DFX resources do not share runtime entities.
+Holder translation uses MTA's `moveObject` rather than per-frame teleports. Rope length remains script-controlled, while GTA's native `CRope` solver is left to produce the suspended motion.
 
-## What the shot shows
+## Act 1 — Mini Magnet / control
 
-The three native rope types are separated into clear left/center/right demonstrations with world-space labels:
+A crate is clearly resting on the runway with the mini-magnet several metres above it.
 
-1. **Left — Wrecking Ball**: a `wreckingBall` rope uses GTA's native weighted ball hook. The invisible physical holder moves laterally so the ball visibly swings. Its rope length is explicitly shortened so the native ball remains well above the runway instead of initializing below terrain.
-2. **Center — Mini Magnet**: the crate begins resting on the runway. During the center close-up it is unfrozen immediately before `attachElementToRope`, picked up by the `miniMagnet`, hoisted by shortening the rope, translated smoothly, and released in the final wide shot.
-3. **Right — Harness**: the Bobcat also begins resting on the runway. It is not attached during setup. As the right-side close-up begins, the vehicle is unfrozen, attached to the `harness`, then visibly lifted by shortening the rope.
+1. the rope lengthens vertically until the magnet reaches the crate;
+2. `attachElementToRope` gives the crate to GTA's native rope physics;
+3. the rope shortens and hoists it;
+4. the holder performs one smooth `moveObject` translation so the suspended crate follows and swings;
+5. once the pickup is established, a **client-local managed fire** is created with the crate as its target, so the same moving payload visibly burns without enabling damage or spread;
+6. `detachElementFromRope` releases the still-burning crate.
 
-The camera first establishes all three setups, then gives each one its own close-up before returning to a final wide shot. Camera endpoints and holder motion are continuous across shot boundaries to avoid showcase-only snap/stutter artifacts.
+The shot demonstrates pickup/release, live rope length, moving holders, carried-object physics and managed-fire targeting without changing the main Rope story.
 
-Payloads are kept frozen only while they are static runway props. Once a native rope takes ownership, they are unfrozen so the Rope solver is not fighting MTA's frozen-element state.
+## Act 2 — Wrecking Ball / destruction
 
-## Native-holder safety
+A native wrecking-ball hook faces GTA model **3175**, the same air-stream/caravan-style model used by `break-showcase`. A small flock of managed birds circles the target.
 
-Native GTA rope types 1 through 7 require a valid physical holder: `CRope::Update` dereferences `m_pRopeHolder` during its force pass. The showcase therefore uses three invisible client-local physical holder objects. `swat` remains the only free world-anchored native type.
+1. the ball is held still long enough to identify the native weighted hook;
+2. the holder pulls back, then performs one fast `moveObject` launch across the target;
+3. the script samples the real rope-end position with `getRopePositionAt`;
+4. when the ball reaches the target radius, `createObjectBreakEffect` fractures the caravan from its live RenderWare geometry with 56 fragments;
+5. the nearby managed birds immediately accelerate outward/upward from the impact.
 
-Synchronized object/vehicle authority, leasing and multiplayer behavior are covered separately by `rope-test`; this resource is deliberately a deterministic visual demo.
+This is the hero shot: **native rope physics -> visible impact -> runtime fracture -> reactive flock**. A late fallback impact exists only so a recording cannot end with no break if the native swing varies slightly on a machine.
+
+## Act 3 — Harness / scale
+
+A Bobcat is grounded from its real bounding box and parked under the harness. Two real GTA lamp posts frame the scene.
+
+1. the harness starts clearly above the vehicle;
+2. the rope descends vertically;
+3. the Bobcat is unfrozen only immediately before `attachElementToRope`;
+4. the rope shortens and visibly lifts the vehicle off its wheels;
+5. the holder then performs one smooth sideways `moveObject` transport while the vehicle hangs;
+6. the lamp posts use their **native model 2DFX light**, recolored to an amber `warnlight` with larger corona/range for subtle construction-site dressing.
+
+The final card summarizes the composition shown in the clip: objects, vehicles, fracture, fire, birds and native 2DFX around the Rope API.
+
+## Safety / cleanup
+
+Native GTA rope types 1 through 7 require a valid physical holder because `CRope::Update` dereferences `m_pRopeHolder` during its force pass. Every act uses an invisible client-local physical holder. `swat` remains the free world-anchored native type.
+
+All fires, birds, break effects, ropes, payloads and local scenery are resource-owned and destroyed between acts. The 1226 2DFX mutations are explicitly reset during cleanup, and the player's original local time is restored at the end.
+
+Synchronized authority, leasing, lifetime and multiplayer correctness remain the responsibility of `rope-test`; this resource is the visual composition demo.
 
 ## Before recording
 
-After rebuilding the Rope safety fix, run:
+Use a client containing the merged Rope holder-safety fix, then run:
 
 ```text
 /ropetest all
 ```
 
-and confirm there are no `FAIL` lines, especially the missing-holder regression and local physical-pickup checks.
+and confirm there are no `FAIL` lines before recording `/ropeshow`.
